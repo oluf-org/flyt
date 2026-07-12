@@ -1,0 +1,15 @@
+{
+  "comment": "Committed defaults for worker assignment per pipeline node; settings.json in the app's userData folder overrides these (edit via the in-app Settings panel). Providers: 'mock' (no API key needed), 'anthropic' (needs ANTHROPIC_API_KEY), 'openrouter' (key saved via Settings).",
+  "workers": {
+    "planner":  { "provider": "mock", "model": "mock-large" },
+    "router":   { "provider": "mock", "model": "mock-small" },
+    "executor": { "provider": "mock", "model": "mock-large" },
+    "verifier": { "provider": "mock", "model": "mock-small" }
+  },
+  "anthropicExample": {
+    "planner":  { "provider": "anthropic", "model": "claude-fable-5" },
+    "router":   { "provider": "anthropic", "model": "claude-haiku-4-5-20251001" },
+    "executor": { "provider": "anthropic", "model": "claude-sonnet-5" },
+    "verifier": { "provider": "anthropic", "model": "claude-haiku-4-5-20251001" }
+  }
+}
