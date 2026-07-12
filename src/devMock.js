@@ -48,6 +48,37 @@ const mockModels = [
   { id: 'meta-llama/llama-3.1-8b-instruct', name: 'Meta: Llama 3.1 8B Instruct', contextLength: 131072, supportsTools: false }
 ];
 
+// In-memory flow store mirroring core/flowstore.js.
+const mockFlows = {
+  'flow-demo': {
+    id: 'flow-demo',
+    name: 'Demo flow',
+    nodes: [
+      { id: 'input-1', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: { text: 'Write a launch tweet for LLM Flow.' } },
+      { id: 'task-a', type: 'agentTask', kind: 'user', position: { x: 0, y: 130 }, data: { title: 'Draft tweet', goal: 'Draft a 280-char tweet', constraints: [], worker: { provider: 'mock', model: 'mock-large' } } },
+      { id: 'output-1', type: 'output', kind: 'user', position: { x: 0, y: 260 }, data: {} }
+    ],
+    edges: [
+      { id: 'e-input-1-task-a', source: 'input-1', target: 'task-a' },
+      { id: 'e-task-a-output-1', source: 'task-a', target: 'output-1' }
+    ]
+  }
+};
+const mockBuiltinFlow = () => ({
+  id: 'builtin-linear', name: 'Linear pipeline', builtin: true,
+  nodes: [
+    { id: 'brief', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: { title: 'Brief', text: '' } },
+    { id: 'planner', type: 'aiStep', kind: 'ai', position: { x: 0, y: 110 }, data: { title: 'Planning', role: 'plan', system: '' } },
+    { id: 'verifier', type: 'aiStep', kind: 'ai', position: { x: 0, y: 220 }, data: { title: 'Verification', role: 'verify', system: '' } },
+    { id: 'result', type: 'output', kind: 'user', position: { x: 0, y: 330 }, data: { title: 'Result' } }
+  ],
+  edges: [
+    { id: 'e1', source: 'brief', target: 'planner' },
+    { id: 'e2', source: 'planner', target: 'verifier' },
+    { id: 'e3', source: 'verifier', target: 'result' }
+  ]
+});
+
 export function installDevMock() {
   window.llmflow = {
     listRuns: async () => Object.keys(snapshots).sort(),
@@ -67,6 +98,22 @@ export function installDevMock() {
     listModels: async () => {
       if (!mockSettings.hasKey) throw new Error('No OpenRouter API key saved. Add one in Settings first.');
       return mockModels;
-    }
+    },
+    listFlows: async () => [
+      { id: 'builtin-linear', name: 'Linear pipeline', builtin: true },
+      ...Object.values(mockFlows).map(f => ({ id: f.id, name: f.name, builtin: false }))
+    ],
+    loadFlow: async id => id === 'builtin-linear' ? mockBuiltinFlow() : structuredClone(mockFlows[id]),
+    saveFlow: async flow => { mockFlows[flow.id] = structuredClone(flow); return flow; },
+    newFlow: async () => {
+      const id = 'flow-' + Date.now().toString(36);
+      mockFlows[id] = {
+        id, name: 'Untitled flow',
+        nodes: [{ id: 'input-1', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: { text: '' } }],
+        edges: []
+      };
+      return structuredClone(mockFlows[id]);
+    },
+    deleteFlow: async id => { delete mockFlows[id]; }
   };
 }

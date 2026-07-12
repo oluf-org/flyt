@@ -361,6 +361,84 @@ kbd.shortcut {
 /* state: pending — recedes, doesn't disappear */
 .status-pending { opacity: .62; box-shadow: none; }
 
+/* ---------- flow builder ---------- */
+/* Two box categories on one neutral card: kind is read from a small mono
+   badge + icon-chip shape (user = rounded square, ai = circle). No new hues —
+   ai borrows the accent tint, user stays neutral. */
+
+.node-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.node-kind {
+  flex: none;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 8.5px; letter-spacing: .08em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 4px;
+  color: var(--chip-tx); background: var(--chip);
+}
+.node-kind.kind-ai { color: var(--accent); background: var(--accent-soft); }
+.flow-node.kind-ai .node-icon { border-radius: 50%; }
+
+/* editor bar: sits where the approval bar does, same rhythm */
+.editor-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px;
+  background: var(--side);
+  border-bottom: 1px solid var(--border);
+  color: var(--tx); font-size: 13px;
+}
+.editor-hint { color: var(--dim); font-size: 12.5px; }
+.flow-name {
+  width: 200px;
+  background: var(--card); color: var(--tx);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 10px; font-size: 12px;
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.flow-name:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.palette { display: flex; gap: 6px; }
+.palette-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; font-size: 12px;
+}
+.palette-icon { color: var(--chip-tx); font-size: 13px; }
+
+.save-dot {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10.5px; color: var(--faint);
+}
+.save-dot.saved { color: var(--ok); }
+
+/* sidebar flow list */
+.section-row { display: flex; align-items: center; justify-content: space-between; }
+button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
+.flow-list { padding: 6px 16px 4px; display: flex; flex-direction: column; gap: 2px; max-height: 168px; overflow-y: auto; flex: none; }
+.flow-item { display: flex; align-items: center; gap: 8px; font-family: inherit; font-size: 12.5px; }
+.flow-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* node editor fields in the inspector */
+.node-editor input:not([type="checkbox"]), .node-editor textarea, .node-editor select {
+  width: 100%;
+  background: var(--card); color: var(--tx);
+  border: 1px solid var(--border); border-radius: 9px;
+  padding: 8px 11px; font: inherit; font-size: 12.5px; line-height: 1.5;
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.node-editor textarea { resize: vertical; }
+.node-editor input::placeholder, .node-editor textarea::placeholder { color: var(--faint); }
+.node-editor input:focus, .node-editor textarea:focus, .node-editor select:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.node-editor input:disabled, .node-editor textarea:disabled, .node-editor select:disabled { opacity: .55; }
+.worker-picker { display: flex; gap: 8px; }
+.worker-picker select { width: auto; flex: none; }
+.worker-picker input { flex: 1; min-width: 0; }
+.check-row {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 12.5px; color: var(--tx); cursor: pointer;
+}
+.check-row input { accent-color: var(--accent); }
+
 /* ---------- inspector ---------- */
 
 .inspector {

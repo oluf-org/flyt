@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('llmflow', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
   listModels: () => ipcRenderer.invoke('models:list'),
+  listFlows: () => ipcRenderer.invoke('flow:list'),
+  loadFlow: (id) => ipcRenderer.invoke('flow:load', id),
+  saveFlow: (flow) => ipcRenderer.invoke('flow:save', flow),
+  newFlow: () => ipcRenderer.invoke('flow:new'),
+  deleteFlow: (id) => ipcRenderer.invoke('flow:delete', id),
   setTitleBarTheme: (mode) => ipcRenderer.invoke('titlebar:setTheme', mode),
   onRunUpdate: (cb) => {
     const handler = (_e, payload) => cb(payload);

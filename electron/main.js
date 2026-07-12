@@ -4,12 +4,14 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { RunStore } from '../core/state.js';
 import { Pipeline } from '../core/pipeline.js';
+import { FlowStore } from '../core/flowstore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, '..');
 
 const baseConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'config.json'), 'utf8'));
 const store = new RunStore(path.join(projectRoot, 'runs'));
+const flows = new FlowStore(path.join(projectRoot, 'flows'));
 
 // --- Settings & secrets ---
 // settings.json lives in userData (never the repo). Shape:
@@ -107,6 +109,16 @@ ipcMain.handle('run:list', () => store.listRuns());
 ipcMain.handle('run:snapshot', (_e, runId) => store.snapshot(runId));
 ipcMain.handle('run:openFolder', (_e, runId) => shell.openPath(store.runDir(runId)));
 ipcMain.handle('config:get', () => ({ workers: publicSettings().workers }));
+
+// --- Flow definitions (editable workflow graphs) ---
+ipcMain.handle('flow:list', () => flows.list());
+ipcMain.handle('flow:load', (_e, id) => flows.load(id));
+ipcMain.handle('flow:save', (_e, flow) => flows.save(flow));
+ipcMain.handle('flow:new', () => {
+  const { provider, model } = runtimeConfig.workers.executor;
+  return flows.create({ provider, model });
+});
+ipcMain.handle('flow:delete', (_e, id) => flows.remove(id));
 
 ipcMain.handle('settings:get', () => publicSettings());
 

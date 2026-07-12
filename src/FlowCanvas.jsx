@@ -1,6 +1,7 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { ReactFlow, Background, Controls, Handle, Position } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { TYPE_META, nodeLabel, nodeSub } from './flowTypes.js';
 
 // Derives the node graph from the run snapshot (pure function of file state).
 // Layout follows the design system: vertical, top→down —
@@ -39,17 +40,20 @@ function StatusGlyph({ status }) {
   return <span className="node-status" />;
 }
 
-function NodeCard({ data, vertical }) {
+function NodeCard({ data, vertical, noTarget, noSource }) {
   return (
-    <div className={`flow-node status-${data.status}` + (data.selected ? ' selected' : '')}>
-      <Handle type="target" position={vertical ? Position.Top : Position.Left} />
+    <div className={`flow-node status-${data.status}` + (data.kind ? ` kind-${data.kind}` : '') + (data.selected ? ' selected' : '')}>
+      {!noTarget && <Handle type="target" position={vertical ? Position.Top : Position.Left} />}
       <span className="node-icon">{data.icon}</span>
       <div className="node-text">
-        <div className="node-title">{data.label}</div>
+        <div className="node-title-row">
+          <div className="node-title">{data.label}</div>
+          {data.kind && <span className={`node-kind kind-${data.kind}`}>{data.kind}</span>}
+        </div>
         <div className="node-sub">{data.sub}</div>
       </div>
       <StatusGlyph status={data.status} />
-      <Handle type="source" position={vertical ? Position.Bottom : Position.Right} />
+      {!noSource && <Handle type="source" position={vertical ? Position.Bottom : Position.Right} />}
     </div>
   );
 }
@@ -58,6 +62,97 @@ const nodeTypes = {
   stage: props => <NodeCard {...props} vertical />,
   task: props => <NodeCard {...props} vertical />
 };
+
+// Editor node: same neutral card, handles depend on the node type
+// (input has no target, output has no source).
+const editorNodeTypes = {
+  editable: props => (
+    <NodeCard
+      {...props}
+      vertical
+      noTarget={props.data.nodeType === 'input'}
+      noSource={props.data.nodeType === 'output'}
+    />
+  )
+};
+
+// Editable canvas over a flow DEFINITION (not run state). Authoritative state
+// is the flow object owned by App; React Flow changes are folded back into it
+// and persisted upstream (debounced save in App).
+export function FlowEditor({ flow, selectedNode, onSelect, onChangeFlow, readOnly }) {
+  const nodes = useMemo(() => flow.nodes.map(n => ({
+    id: n.id,
+    type: 'editable',
+    position: n.position,
+    selected: n.id === selectedNode,
+    data: {
+      label: nodeLabel(n),
+      sub: nodeSub(n),
+      icon: TYPE_META[n.type]?.icon ?? '▢',
+      kind: n.kind,
+      nodeType: n.type,
+      status: 'idle',
+      selected: n.id === selectedNode
+    }
+  })), [flow.nodes, selectedNode]);
+
+  const edges = useMemo(() => flow.edges.map(e => ({ ...e })), [flow.edges]);
+
+  const onNodesChange = useCallback(changes => {
+    if (readOnly) return;
+    onChangeFlow(f => {
+      let ns = f.nodes, es = f.edges, deselect = false;
+      for (const c of changes) {
+        if (c.type === 'position' && c.position) {
+          ns = ns.map(n => n.id === c.id ? { ...n, position: c.position } : n);
+        } else if (c.type === 'remove') {
+          ns = ns.filter(n => n.id !== c.id);
+          es = es.filter(e => e.source !== c.id && e.target !== c.id);
+          deselect = true;
+        }
+      }
+      if (deselect) onSelect(null);
+      return ns === f.nodes && es === f.edges ? f : { ...f, nodes: ns, edges: es };
+    });
+  }, [onChangeFlow, onSelect, readOnly]);
+
+  const onEdgesChange = useCallback(changes => {
+    if (readOnly) return;
+    const removed = new Set(changes.filter(c => c.type === 'remove').map(c => c.id));
+    if (!removed.size) return;
+    onChangeFlow(f => ({ ...f, edges: f.edges.filter(e => !removed.has(e.id)) }));
+  }, [onChangeFlow, readOnly]);
+
+  const onConnect = useCallback(({ source, target }) => {
+    if (readOnly || !source || !target || source === target) return;
+    onChangeFlow(f => {
+      if (f.edges.some(e => e.source === source && e.target === target)) return f;
+      return { ...f, edges: [...f.edges, { id: `e-${source}-${target}`, source, target }] };
+    });
+  }, [onChangeFlow, readOnly]);
+
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      nodeTypes={editorNodeTypes}
+      onNodesChange={onNodesChange}
+      onEdgesChange={onEdgesChange}
+      onConnect={onConnect}
+      onNodeClick={(_e, node) => onSelect(node.id)}
+      onPaneClick={() => onSelect(null)}
+      nodesDraggable={!readOnly}
+      nodesConnectable={!readOnly}
+      deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
+      fitView
+      fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
+      proOptions={{ hideAttribution: true }}
+    >
+      <Background gap={20} size={1.1} />
+      <Controls showInteractive={false} />
+    </ReactFlow>
+  );
+}
 
 export default function FlowCanvas({ snapshot, selectedNode, onSelect }) {
   const { nodes, edges } = useMemo(() => buildGraph(snapshot, selectedNode), [snapshot, selectedNode]);

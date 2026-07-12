@@ -1,4 +1,5 @@
 import React from 'react';
+import { TYPE_META, AI_ROLES, nodeLabel } from './flowTypes.js';
 
 // Right-hand panel: shows the artifacts and retrospective for whichever node
 // is selected on the canvas. Everything shown here is read straight from the
@@ -100,6 +101,173 @@ export default function Inspector({ snapshot, selectedNode }) {
             <pre>{body}</pre>
           </section>
         ))}
+      </div>
+    </aside>
+  );
+}
+
+// --- Flow-definition editing (flow builder view) ---
+// Same aside, but the sections are editable fields writing through to the
+// flow definition via onChangeData. Worker pickers mirror the Settings page.
+
+const MOCK_MODELS = ['mock-large', 'mock-small'];
+
+function WorkerPicker({ worker, models, onChange, idPrefix }) {
+  const w = worker?.provider ? worker : { provider: 'mock', model: 'mock-large' };
+  const setProvider = provider => {
+    if (provider === 'mock') onChange({ provider, model: MOCK_MODELS.includes(w.model) ? w.model : MOCK_MODELS[0] });
+    else onChange({ provider, model: MOCK_MODELS.includes(w.model) ? (models[0]?.id ?? '') : w.model });
+  };
+  return (
+    <div className="worker-picker">
+      <select value={w.provider} onChange={e => setProvider(e.target.value)} aria-label="provider">
+        <option value="mock">mock</option>
+        <option value="openrouter">openrouter</option>
+      </select>
+      {w.provider === 'mock' ? (
+        <select value={w.model} onChange={e => onChange({ ...w, model: e.target.value })} aria-label="model">
+          {MOCK_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+      ) : (
+        <>
+          <input
+            list={`${idPrefix}-models`}
+            value={w.model}
+            placeholder={models.length ? 'Pick or type a model id' : 'e.g. openai/gpt-4o-mini'}
+            onChange={e => onChange({ ...w, model: e.target.value })}
+            aria-label="model"
+          />
+          <datalist id={`${idPrefix}-models`}>
+            {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </datalist>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function FlowInspector({ flow, selectedNode, models, onChangeData, onDeleteNode, readOnly }) {
+  const node = flow.nodes.find(n => n.id === selectedNode);
+
+  if (!node) {
+    return (
+      <aside className="inspector">
+        <div className="inspector-header">
+          <span className="node-icon">✏</span>
+          <div className="inspector-title">
+            <h2>{flow.name}</h2>
+            <div className="node-sub">flow · {flow.nodes.length} nodes · {flow.edges.length} edges</div>
+          </div>
+          {flow.builtin && <span className="status-pill pill-neutral">built-in</span>}
+        </div>
+        <div className="inspector-body">
+          <section>
+            <h3>Flow</h3>
+            <pre>{flow.builtin
+              ? 'The classic planner → router → executor → verifier pipeline. Read-only: run it from the New run box.'
+              : 'Select a node to edit it, drag between handles to connect, or add nodes from the bar above the canvas.'}</pre>
+          </section>
+        </div>
+      </aside>
+    );
+  }
+
+  const meta = TYPE_META[node.type] ?? { icon: '▢', label: node.type };
+  const set = patch => onChangeData(node.id, patch);
+  const d = node.data ?? {};
+
+  return (
+    <aside className="inspector">
+      <div className="inspector-header">
+        <span className="node-icon">{meta.icon}</span>
+        <div className="inspector-title">
+          <h2>{nodeLabel(node)}</h2>
+          <div className="node-sub">{meta.label.toLowerCase()} · {node.kind}</div>
+        </div>
+        <span className={'status-pill ' + (node.kind === 'ai' ? 'pill-accent' : 'pill-neutral')}>{node.kind}</span>
+      </div>
+      <div className="inspector-body node-editor">
+        {readOnly && (
+          <section><h3>Read-only</h3><pre>Built-in flow nodes cannot be edited.</pre></section>
+        )}
+
+        {node.type === 'input' && (
+          <section>
+            <h3>Brief text</h3>
+            <textarea
+              rows={7}
+              placeholder="What should this flow work on?"
+              value={d.text ?? ''}
+              disabled={readOnly}
+              onChange={e => set({ text: e.target.value })}
+            />
+          </section>
+        )}
+
+        {node.type === 'agentTask' && <>
+          <section>
+            <h3>Title</h3>
+            <input value={d.title ?? ''} disabled={readOnly} onChange={e => set({ title: e.target.value })} />
+          </section>
+          <section>
+            <h3>Goal</h3>
+            <textarea rows={4} placeholder="What must this task produce?" value={d.goal ?? ''} disabled={readOnly}
+              onChange={e => set({ goal: e.target.value })} />
+          </section>
+          <section>
+            <h3>Constraints — one per line</h3>
+            <textarea rows={3} value={(d.constraints ?? []).join('\n')} disabled={readOnly}
+              onChange={e => set({ constraints: e.target.value.split('\n').map(s => s.trim()).filter(Boolean) })} />
+          </section>
+          <section>
+            <h3>Worker</h3>
+            <WorkerPicker worker={d.worker} models={models} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+          </section>
+        </>}
+
+        {node.type === 'aiStep' && <>
+          <section>
+            <h3>Title</h3>
+            <input value={d.title ?? ''} placeholder="AI step" disabled={readOnly} onChange={e => set({ title: e.target.value })} />
+          </section>
+          <section>
+            <h3>Role</h3>
+            <select value={d.role ?? 'custom'} disabled={readOnly} onChange={e => set({ role: e.target.value })}>
+              {AI_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </section>
+          <section>
+            <h3>System prompt — blank uses the role default</h3>
+            <textarea rows={5} value={d.system ?? ''} disabled={readOnly} onChange={e => set({ system: e.target.value })} />
+          </section>
+          <section>
+            <h3>Worker</h3>
+            <WorkerPicker worker={d.worker} models={models} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+          </section>
+        </>}
+
+        {node.type === 'output' && (
+          <section>
+            <h3>Output</h3>
+            <pre>Collects every upstream node's output into result.md when the flow runs.</pre>
+          </section>
+        )}
+
+        {(node.type === 'agentTask' || node.type === 'aiStep') && !readOnly && (
+          <section>
+            <label className="check-row">
+              <input type="checkbox" checked={Boolean(d.requiresApproval)}
+                onChange={e => set({ requiresApproval: e.target.checked })} />
+              Pause for human approval before this step
+            </label>
+          </section>
+        )}
+
+        {!readOnly && (
+          <section>
+            <button className="reject" onClick={() => onDeleteNode(node.id)}>Delete node</button>
+          </section>
+        )}
       </div>
     </aside>
   );
