@@ -176,6 +176,9 @@ export default function FlowCanvas({ snapshot, selectedNode, onSelect }) {
 }
 
 function buildGraph(snapshot, selectedNode) {
+  // Flow runs carry their definition in the run dir; render that graph with
+  // live per-node statuses instead of the classic linear stages.
+  if (snapshot.flow) return buildFlowRunGraph(snapshot, selectedNode);
   const { meta, tasks, retrospectives } = snapshot;
   const STEP_Y = 104;
 
@@ -239,4 +242,32 @@ function buildGraph(snapshot, selectedNode) {
 
 function workerSub(kind, retro) {
   return retro?.model ? `${kind} · ${retro.model.provider}/${retro.model.model}` : `${kind} · idle`;
+}
+
+function buildFlowRunGraph(snapshot, selectedNode) {
+  const { flow, meta } = snapshot;
+  const statusOf = id => {
+    const s = meta.nodeStatus?.[id] ?? 'pending';
+    return s === 'queued' ? 'pending' : s;
+  };
+  const nodes = flow.nodes.map(n => ({
+    id: n.id,
+    type: 'stage',
+    position: n.position,
+    data: {
+      label: nodeLabel(n),
+      sub: nodeSub(n),
+      icon: TYPE_META[n.type]?.icon ?? '▢',
+      kind: n.kind,
+      status: statusOf(n.id),
+      selected: selectedNode === n.id
+    }
+  }));
+  const edges = flow.edges.map(e => ({
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    animated: statusOf(e.target) === 'active'
+  }));
+  return { nodes, edges };
 }

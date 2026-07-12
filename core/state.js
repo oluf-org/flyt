@@ -77,6 +77,39 @@ export class RunStore {
     return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
   }
 
+  // --- flow runs: the executed flow definition + per-node outputs ---
+  writeFlow(runId, flow) {
+    writeJson(path.join(this.runDir(runId), 'flow.json'), flow);
+  }
+  readFlow(runId) {
+    const p = path.join(this.runDir(runId), 'flow.json');
+    return fs.existsSync(p) ? readJson(p) : null;
+  }
+  nodeOutputPath(runId, nodeId) {
+    return path.join(this.runDir(runId), 'nodes', `${String(nodeId).replace(/[^a-zA-Z0-9_-]/g, '_')}.md`);
+  }
+  writeNodeOutput(runId, nodeId, markdown) {
+    const p = this.nodeOutputPath(runId, nodeId);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, markdown, 'utf8');
+  }
+  readNodeOutput(runId, nodeId) {
+    const p = this.nodeOutputPath(runId, nodeId);
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+  }
+  readNodeOutputs(runId) {
+    const dir = path.join(this.runDir(runId), 'nodes');
+    if (!fs.existsSync(dir)) return {};
+    const out = {};
+    for (const f of fs.readdirSync(dir)) {
+      if (f.endsWith('.md')) out[f.replace(/\.md$/, '')] = fs.readFileSync(path.join(dir, f), 'utf8');
+    }
+    return out;
+  }
+  writeResult(runId, markdown) {
+    fs.writeFileSync(path.join(this.runDir(runId), 'result.md'), markdown, 'utf8');
+  }
+
   // --- retrospectives: the structured backbone every node must emit ---
   writeRetrospective(runId, name, retro) {
     writeJson(path.join(this.runDir(runId), 'retrospectives', `${name}.json`), retro);
@@ -108,7 +141,10 @@ export class RunStore {
       retrospectives: this.readRetrospectives(runId),
       taskOutputs: Object.fromEntries(
         (this.readTasks(runId)?.tasks ?? []).map(t => [t.id, this.readTaskOutput(runId, t.id)])
-      )
+      ),
+      // Flow runs only (null/empty for classic pipeline runs).
+      flow: this.readFlow(runId),
+      nodeOutputs: this.readNodeOutputs(runId)
     };
   }
 

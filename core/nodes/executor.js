@@ -22,8 +22,10 @@ export async function runExecutorTask(store, runId, taskId, config = {}) {
     else if (input === 'plan.md') contextParts.push(`--- plan.md ---\n${store.readPlan(runId)}`);
     else {
       const m = input.match(/task-\d+/);
-      const out = m ? store.readTaskOutput(runId, m[0]) : null;
-      if (out) contextParts.push(`--- ${m[0]} output ---\n${out}`);
+      // Not a task reference: flow runs may name an upstream flow-node id
+      // whose output lives in nodes/<id>.md.
+      const out = m ? store.readTaskOutput(runId, m[0]) : store.readNodeOutput?.(runId, input);
+      if (out) contextParts.push(`--- ${m ? m[0] + ' output' : input} ---\n${out}`);
     }
   }
 

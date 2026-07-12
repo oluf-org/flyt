@@ -25,7 +25,7 @@ function statusPill(status) {
 }
 
 export default function Inspector({ snapshot, selectedNode }) {
-  const { meta, prompt, plan, tasks, retrospectives, taskOutputs } = snapshot;
+  const { meta, prompt, plan, tasks, retrospectives, taskOutputs, flow, nodeOutputs } = snapshot;
 
   let title = 'Run overview';
   let icon = '◆';
@@ -33,12 +33,39 @@ export default function Inspector({ snapshot, selectedNode }) {
   let status = meta.stage;
   let sections = [];
 
+  const flowNode = flow?.nodes?.find(n => n.id === selectedNode);
+
   if (!selectedNode) {
     sections = [
       ['Stage', meta.stage + (meta.error ? ` — ${meta.error}` : '')],
       ['Run ID', meta.runId],
+      flow ? ['Flow', `${flow.name} · ${flow.nodes.length} nodes`] : null,
       ['Prompt', prompt]
     ];
+  } else if (flowNode) {
+    // Flow-run node: artifacts by node type, straight from the run's files.
+    title = nodeLabel(flowNode);
+    icon = TYPE_META[flowNode.type]?.icon ?? '▢';
+    typeLabel = `${TYPE_META[flowNode.type]?.label.toLowerCase() ?? flowNode.type} · ${flowNode.kind}`;
+    status = meta.nodeStatus?.[selectedNode];
+    if (flowNode.type === 'input') {
+      sections = [['prompt.md', prompt]];
+    } else if (flowNode.type === 'agentTask') {
+      const task = tasks?.tasks.find(t => t.id === flowNode.data?.taskId);
+      sections = [
+        ['Goal', flowNode.data?.goal || '(none)'],
+        flowNode.data?.constraints?.length ? ['Constraints', flowNode.data.constraints.join('\n')] : null,
+        task ? [`Output — ${task.id}`, taskOutputs?.[task.id] ?? '(not yet produced)'] : ['Output', '(task not yet created)'],
+        task ? retroSection(retrospectives?.[`executor-${task.id}`]) : null
+      ];
+    } else if (flowNode.type === 'aiStep') {
+      sections = [
+        [`nodes/${flowNode.id}.md`, nodeOutputs?.[flowNode.id] ?? '(not yet produced)'],
+        retroSection(retrospectives?.[flowNode.id])
+      ];
+    } else {
+      sections = [['result.md', nodeOutputs?.[flowNode.id] ?? '(not yet produced)']];
+    }
   } else if (selectedNode === 'prompt') {
     title = 'Prompt';
     ({ icon, typeLabel } = NODE_META.prompt);

@@ -114,6 +114,7 @@ export function installDevMock() {
       };
       return structuredClone(mockFlows[id]);
     },
-    deleteFlow: async id => { delete mockFlows[id]; }
+    deleteFlow: async id => { delete mockFlows[id]; },
+    runFlow: async () => Object.keys(snapshots).sort().at(-1)
   };
 }

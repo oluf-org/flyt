@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('llmflow', {
   saveFlow: (flow) => ipcRenderer.invoke('flow:save', flow),
   newFlow: () => ipcRenderer.invoke('flow:new'),
   deleteFlow: (id) => ipcRenderer.invoke('flow:delete', id),
+  runFlow: (id) => ipcRenderer.invoke('flow:run', id),
   setTitleBarTheme: (mode) => ipcRenderer.invoke('titlebar:setTheme', mode),
   onRunUpdate: (cb) => {
     const handler = (_e, payload) => cb(payload);

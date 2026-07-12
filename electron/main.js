@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { RunStore } from '../core/state.js';
 import { Pipeline } from '../core/pipeline.js';
 import { FlowStore } from '../core/flowstore.js';
+import { FlowRunner } from '../core/flowRunner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, '..');
@@ -73,12 +74,14 @@ const CHROME = {
 };
 
 let win = null;
-const pipeline = new Pipeline(store, runtimeConfig, runId => {
+const pushUpdate = runId => {
   // Push every state change to the renderer as a full file-state snapshot.
   if (win && !win.isDestroyed()) {
     win.webContents.send('run:update', { runId, snapshot: store.snapshot(runId) });
   }
-});
+};
+const pipeline = new Pipeline(store, runtimeConfig, pushUpdate);
+const flowRunner = new FlowRunner(store, runtimeConfig, pushUpdate);
 
 function createWindow() {
   win = new BrowserWindow({
@@ -103,8 +106,18 @@ function createWindow() {
 
 // --- IPC surface (thin: everything else lives in core/) ---
 ipcMain.handle('run:start', (_e, prompt) => pipeline.start(prompt));
-ipcMain.handle('run:approve', (_e, runId) => pipeline.approvePlan(runId));
-ipcMain.handle('run:reject', (_e, runId, reason) => pipeline.rejectPlan(runId, reason));
+// Approval routes to whichever engine owns the run (flow runs carry a flowId).
+ipcMain.handle('run:approve', (_e, runId) =>
+  flowRunner.owns(runId) ? flowRunner.approvePlan(runId) : pipeline.approvePlan(runId));
+ipcMain.handle('run:reject', (_e, runId, reason) =>
+  flowRunner.owns(runId) ? flowRunner.rejectPlan(runId, reason) : pipeline.rejectPlan(runId, reason));
+ipcMain.handle('flow:run', (_e, flowId) => {
+  const flow = flows.load(flowId);
+  // The built-in flow IS the classic pipeline — run it via run:start so its
+  // behavior stays byte-for-byte identical.
+  if (flow.builtin) throw new Error('Run the built-in pipeline from the New run box.');
+  return flowRunner.start(flow);
+});
 ipcMain.handle('run:list', () => store.listRuns());
 ipcMain.handle('run:snapshot', (_e, runId) => store.snapshot(runId));
 ipcMain.handle('run:openFolder', (_e, runId) => shell.openPath(store.runDir(runId)));

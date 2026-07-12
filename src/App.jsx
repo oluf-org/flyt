@@ -188,6 +188,19 @@ export default function App() {
     setSelectedNode(null);
   };
 
+  const runFlow = async () => {
+    if (!flow || flow.builtin || busy) return;
+    setBusy(true);
+    try {
+      await flushSave();
+      const runId = await window.llmflow.runFlow(flow.id);
+      await openRun(runId);
+      await refreshRuns();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const startRun = async () => {
     if (!prompt.trim() || busy) return;
     setBusy(true);
@@ -315,6 +328,9 @@ export default function App() {
                 </div>
                 <div className="toolbar-spacer" />
                 <span className={'save-dot' + (flowSaved ? ' saved' : '')}>{flowSaved ? 'Saved' : 'Saving…'}</span>
+                <button className="primary" onClick={runFlow} disabled={busy || flow.nodes.length === 0}>
+                  {busy ? 'Starting…' : 'Run flow'}
+                </button>
                 <button className="reject" onClick={deleteFlow}>Delete flow</button>
               </>}
             </div>
