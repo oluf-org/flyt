@@ -82,11 +82,19 @@ const CHROME = {
 };
 
 let win = null;
+// Coalesce bursts of state changes (parallel waves, streaming chunks) into at
+// most one snapshot push per run per tick window: the snapshot is built from
+// file state when the timer fires, so the last write always wins.
+const pendingPush = new Map(); // runId -> timer
+const PUSH_COALESCE_MS = 80;
 const pushUpdate = runId => {
-  // Push every state change to the renderer as a full file-state snapshot.
-  if (win && !win.isDestroyed()) {
-    win.webContents.send('run:update', { runId, snapshot: store.snapshot(runId) });
-  }
+  if (pendingPush.has(runId)) return;
+  pendingPush.set(runId, setTimeout(() => {
+    pendingPush.delete(runId);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('run:update', { runId, snapshot: store.snapshot(runId) });
+    }
+  }, PUSH_COALESCE_MS));
 };
 const pipeline = new Pipeline(store, runtimeConfig, pushUpdate);
 const flowRunner = new FlowRunner(store, runtimeConfig, pushUpdate);

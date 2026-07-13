@@ -11,11 +11,12 @@
 //   aiStep    -> one callModel() with context assembled from upstream outputs
 //   output    -> collects upstream outputs into result.md
 //
-// Scheduling is a dynamic topological walk: after every node the runner
-// re-derives "which node is ready next" from the current flow. That is what
+// Scheduling is a dynamic topological walk: after every wave the runner
+// re-derives "which nodes are ready" from the current flow. That is what
 // lets a plan-eval node materialize new nodes mid-run (they join the walk),
-// and lets step-eval verdicts re-run an upstream node before continuing.
-// Execution is still strictly sequential (a deliberate MVP constraint).
+// and lets step-eval verdicts requeue an upstream node before continuing.
+// Independent aiSteps run concurrently (bounded by config.maxParallel,
+// default 4); gates, plan-eval, and executor tasks stay sequential.
 //
 // Reflective-pattern support (see FLOW_NODES.md for the contracts):
 //   plan-eval -> strict JSON contract parsed by core/planEval.js; valid nodes
@@ -29,6 +30,7 @@ import { runExecutorTask } from './nodes/executor.js';
 import { executeTool } from './tools/index.js';
 import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives } from './planEval.js';
 import { createNodeFromTemplate, getTemplate } from '../src/flowTypes.js';
+import { layoutPositions } from '../src/flowLayout.js';
 
 const DEFAULT_SYSTEM = {
   plan: [
@@ -284,16 +286,40 @@ export class FlowRunner {
       this.store.appendLog(runId, { event: 'flow_run_resumed', completed: completed.size, total: flow.nodes.length });
     }
 
-    // Dynamic topological walk: readiness is recomputed after every node so
-    // nodes materialized by plan-eval mid-run join the schedule.
+    // Dynamic topological walk: readiness is recomputed after every wave so
+    // nodes materialized by plan-eval mid-run join the schedule, and nodes a
+    // step-eval sends back for retry (postProcess requeue) re-enter it.
+    const maxParallel = Math.max(1, Number(this.config.maxParallel ?? 4));
     for (;;) {
       const nodesById = new Map(flow.nodes.map(n => [n.id, n]));
       const order = topoSort(flow); // also validates: throws on cycles
-      const node = order.find(n => !completed.has(n.id) &&
+      const ready = order.filter(n => !completed.has(n.id) &&
         flow.edges.every(e =>
           e.target !== n.id || completed.has(e.source) || !nodesById.has(e.source)));
-      if (!node) break;
+      if (!ready.length) break;
 
+      // Wave selection: independent aiSteps that neither mutate shared run
+      // state (plan-eval rewrites the flow, agentTask appends to tasks.json)
+      // nor pause at a gate run concurrently; everything else runs alone.
+      const parallelSafe = n => n.type === 'aiStep'
+        && (n.data?.role ?? 'custom') !== 'plan-eval'
+        && !n.data?.requiresApproval;
+      const safe = ready.filter(parallelSafe);
+      const batch = safe.length > 1 ? safe.slice(0, maxParallel) : [ready[0]];
+
+      if (batch.length > 1) {
+        this.store.appendLog(runId, { event: 'wave_start', nodes: batch.map(n => n.id) });
+        const results = await Promise.allSettled(batch.map(n => this.runNode(runId, flow, n, opts)));
+        batch.forEach((n, i) => { if (results[i].status === 'fulfilled') completed.add(n.id); });
+        const rejected = results.find(r => r.status === 'rejected');
+        if (rejected) throw rejected.reason;
+        for (let i = 0; i < batch.length; i++) {
+          if (!await this.applyPost(runId, flow, batch[i], results[i].value, opts, completed)) return;
+        }
+        continue;
+      }
+
+      const node = batch[0];
       if (!await this.gate(runId, node)) return; // rejected at a checkpoint
       const outcome = await this.runNode(runId, flow, node, opts);
       if (node.type === 'agentTask') {
@@ -302,7 +328,7 @@ export class FlowRunner {
         if (!await this.runPendingTasks(runId, opts.taskIdByNode)) return;
       }
       completed.add(node.id);
-      if (!await this.postProcess(runId, flow, node, outcome, opts)) return;
+      if (!await this.applyPost(runId, flow, node, outcome, opts, completed)) return;
     }
 
     this.store.setStage(runId, 'done', { currentTaskId: null });
@@ -328,7 +354,20 @@ export class FlowRunner {
   }
 
   // React to a node's structured outcome (stitch fix tasks, step-eval
-  // verdicts). Returns false when the run must stop.
+  // verdicts) and fold the result back into the scheduler's bookkeeping:
+  // a step-eval retry un-completes the target + eval nodes so the main walk
+  // re-runs them with normal status handling. Returns false to stop the run.
+  async applyPost(runId, flow, node, outcome, opts, completed) {
+    const post = await this.postProcess(runId, flow, node, outcome, opts);
+    if (!post.ok) return false;
+    for (const id of post.requeue ?? []) {
+      completed.delete(id);
+      this.setNodeStatus(runId, id, 'pending');
+    }
+    return true;
+  }
+
+  // Returns { ok, requeue?: nodeIds[] }.
   async postProcess(runId, flow, node, outcome, opts) {
     if (outcome?.fixTasks?.length) {
       for (const ft of outcome.fixTasks) {
@@ -341,20 +380,24 @@ export class FlowRunner {
           ok: rec.ok, created: rec.result?.created, error: rec.error
         });
       }
-      if (!await this.runPendingTasks(runId, opts.taskIdByNode)) return false;
+      if (!await this.runPendingTasks(runId, opts.taskIdByNode)) return { ok: false };
     }
     if (outcome?.stepEval) return this.handleStepEval(runId, flow, node, outcome.stepEval, opts);
-    return true;
+    return { ok: true };
   }
 
   // Act on a structured step-eval verdict:
   //   pass     -> continue
   //   retry    -> bounded re-run of the evaluated upstream node with the
-  //               guidance persisted as retry-for-<node>.md, then re-evaluate
+  //               guidance persisted as retry-for-<node>.md, then re-evaluate.
+  //               Implemented as a requeue: the target and this eval node are
+  //               un-completed so the main walk re-runs both in order (no
+  //               recursion, normal scheduler status bookkeeping).
   //   escalate -> pause at the human approval gate (approve = continue)
+  // Returns { ok, requeue? }.
   async handleStepEval(runId, flow, node, evalResult, opts) {
     const { verdict, reason, guidance } = evalResult;
-    if (verdict === 'pass') return true;
+    if (verdict === 'pass') return { ok: true };
 
     // The evaluated node: the last upstream work node (aiStep doing real work
     // or an agentTask) feeding this step-eval.
@@ -381,23 +424,20 @@ export class FlowRunner {
       this.store.writeNodeOutput(runId, `retry-for-${target.id}`, guidanceText);
       this.store.appendLog(runId, { event: 'step_eval_retry', node: node.id, target: target.id, attempt: used + 1, reason });
 
-      if (target.type === 'aiStep') {
-        await this.runNode(runId, flow, target, opts);
-      } else {
-        // agentTask: reset its task to pending with the guidance as an extra
-        // input, then run it through the executor again.
+      if (target.type === 'agentTask') {
+        // Reset the node's task to pending with the guidance as an extra
+        // input; the requeued walk runs it through the executor again.
         const doc = this.store.readTasks(runId);
         const t = doc?.tasks.find(t => t.id === opts.taskIdByNode.get(target.id));
         if (t) {
           t.status = 'pending';
           if (!t.inputs.includes(`retry-for-${target.id}`)) t.inputs.push(`retry-for-${target.id}`);
           this.store.writeTasks(runId, doc);
-          if (!await this.runPendingTasks(runId, opts.taskIdByNode)) return false;
         }
       }
-      // Re-evaluate the fresh output with the same step-eval node.
-      const again = await this.runNode(runId, flow, node, opts);
-      return this.postProcess(runId, flow, node, again, opts);
+      // Un-complete the work node and this eval node: the scheduler re-runs
+      // the target (which picks up retry-for-<id>.md), then re-evaluates.
+      return { ok: true, requeue: [target.id, node.id] };
     }
 
     // escalate — explicitly requested, retry budget exhausted, or no target.
@@ -413,12 +453,12 @@ export class FlowRunner {
       this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
       this.setNodeStatus(runId, node.id, 'failed');
       this.notify(runId);
-      return false;
+      return { ok: false };
     }
     this.store.appendLog(runId, { event: 'human_decision', decision: 'approved', node: node.id, context: 'step-eval escalation' });
     this.store.setStage(runId, 'execution', { pendingNodeId: null, pendingGateKind: null });
     this.setNodeStatus(runId, node.id, 'done');
-    return true;
+    return { ok: true };
   }
 
   // Optional human checkpoint before a node. Returns false when rejected.
@@ -591,9 +631,21 @@ export class FlowRunner {
         retryGuidance ? `RETRY GUIDANCE (a previous attempt was rejected — fix this):\n${retryGuidance}` : ''
       ].filter(Boolean).join('\n\n');
 
+      // Incremental output: stream the partial text into the node's output
+      // file (throttled) so the inspector shows work as it happens. onText
+      // receives the full accumulated text, so each write is consistent.
+      let lastFlush = 0;
+      const onText = textSoFar => {
+        const now = Date.now();
+        if (now - lastFlush < 250) return;
+        lastFlush = now;
+        this.store.writeNodeOutput(runId, node.id, textSoFar);
+        this.notify(runId);
+      };
+
       let result;
       try {
-        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg });
+        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText });
       } catch (err) {
         const msg = String(err?.message ?? err);
         this.store.appendLog(runId, { event: 'node_error', node: node.id, role, error: msg });
@@ -738,7 +790,11 @@ export class FlowRunner {
     const meta = this.store.readMeta(runId);
     const current = meta.currentNodeId;
     this.store.setStage(runId, 'failed', { error: String(err?.message ?? err) });
-    if (current) this.setNodeStatus(runId, current, 'failed');
+    // In a parallel wave currentNodeId is just the last node that went
+    // active — it may have finished fine. Only flag it if it's still active.
+    if (current && this.store.readMeta(runId).nodeStatus?.[current] === 'active') {
+      this.setNodeStatus(runId, current, 'failed');
+    }
     this.notify(runId);
   }
 
@@ -818,23 +874,8 @@ export class FlowRunner {
       }
     }
 
-    // Depth (longest dependency chain) drives the canvas layout.
-    const depth = new Map();
-    const depthOf = id => {
-      if (depth.has(id)) return depth.get(id);
-      const d = Math.max(0, ...[...depsFor.get(id)].map(p => depthOf(p) + 1));
-      depth.set(id, d);
-      return d;
-    };
-    specs.forEach(s => depthOf(s.id));
-
-    const base = planEvalNode.position ?? { x: 0, y: 0 };
-    const perDepthIndex = new Map();
     const created = [];
     for (const s of specs) {
-      const d = depth.get(s.id);
-      const idx = perDepthIndex.get(d) ?? 0;
-      perDepthIndex.set(d, idx + 1);
       const tmpl = getTemplate(s.template);
       // A generated node without an explicit contextSpec at least gets the
       // task list, keeping "minimal declared context" the default.
@@ -843,7 +884,7 @@ export class FlowRunner {
         : undefined);
       created.push(createNodeFromTemplate(s.template, {
         id: s.id,
-        position: { x: base.x + 40 + 260 * idx, y: base.y + 130 * (d + 1) },
+        position: { x: 0, y: 0 }, // real position assigned by the layout pass below
         data: {
           title: s.title || (s.taskRef ? `${tmpl.label} (${s.taskRef})` : tmpl.label),
           goal: s.goal || (s.taskRef ? `Complete ${s.taskRef} exactly as defined in tasks.md.` : ''),
@@ -876,6 +917,11 @@ export class FlowRunner {
 
     flow.nodes.push(...created);
     flow.edges.push(...edges);
+    // Re-layout the run's display copy so generated nodes slot into clean
+    // dependency layers instead of overlapping the authored ones. This only
+    // touches flow.json inside the run dir — never the saved flow definition.
+    const pos = layoutPositions(flow);
+    for (const n of flow.nodes) n.position = pos.get(n.id) ?? n.position;
     this.store.writeFlow(runId, flow);
     const meta = this.store.readMeta(runId);
     this.store.writeMeta(runId, {

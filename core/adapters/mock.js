@@ -1,7 +1,7 @@
 // Mock adapter: lets the whole pipeline run end-to-end with no API key.
 // It keys off the "ROLE:" marker each node puts in its system prompt and
 // returns plausible, correctly-shaped output for that node type.
-export async function mockAdapter({ system, prompt }) {
+export async function mockAdapter({ system, prompt, onText }) {
   await sleep(600 + Math.random() * 900); // simulate latency so the canvas animates
   let role = (system.match(/ROLE:\s*([\w-]+)/) ?? [])[1] ?? 'generic';
   // Also recognize explicit role in the prompt/context for flow aiSteps that put role in user message
@@ -148,6 +148,18 @@ No larger gaps — no corrective task nodes created.
 
 The explicit per-file context descriptions worked: only the listed files were required.`
   }[role] ?? `(mock output for role "${role}")`;
+
+  // Simulate streaming: surface the text in growing prefixes so the
+  // incremental-output path (onText contract in adapters/index.js) can be
+  // exercised with no API key.
+  if (onText) {
+    const step = Math.max(20, Math.ceil(text.length / 8));
+    for (let end = step; end < text.length; end += step) {
+      onText(text.slice(0, end));
+      await sleep(80);
+    }
+    onText(text);
+  }
 
   return { text, usage: { input_tokens: 100, output_tokens: 200 } };
 }

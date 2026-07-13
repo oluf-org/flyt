@@ -380,11 +380,13 @@ kbd.shortcut {
 /* editor bar: sits where the approval bar does, same rhythm */
 .editor-bar {
   display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap; row-gap: 8px;
   padding: 10px 16px;
   background: var(--side);
   border-bottom: 1px solid var(--border);
   color: var(--tx); font-size: 13px;
 }
+.palette { flex-wrap: wrap; row-gap: 6px; }
 .editor-hint { color: var(--dim); font-size: 12.5px; }
 .flow-name {
   width: 200px;

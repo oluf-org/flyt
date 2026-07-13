@@ -166,14 +166,15 @@ export class RunStore {
 
   // Full snapshot for the UI.
   snapshot(runId) {
+    const tasks = this.readTasks(runId);
     return {
       meta: this.readMeta(runId),
       prompt: this.readPrompt(runId),
       plan: this.readPlan(runId),
-      tasks: this.readTasks(runId),
+      tasks,
       retrospectives: this.readRetrospectives(runId),
       taskOutputs: Object.fromEntries(
-        (this.readTasks(runId)?.tasks ?? []).map(t => [t.id, this.readTaskOutput(runId, t.id)])
+        (tasks?.tasks ?? []).map(t => [t.id, this.readTaskOutput(runId, t.id)])
       ),
       // Flow runs only (null/empty for classic pipeline runs).
       flow: this.readFlow(runId),

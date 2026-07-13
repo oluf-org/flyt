@@ -2,6 +2,7 @@ import React, { useCallback, useMemo } from 'react';
 import { ReactFlow, Background, Controls, Handle, Position } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { TYPE_META, nodeLabel, nodeSub } from './flowTypes.js';
+import { wouldCreateCycle } from './flowLayout.js';
 
 // Derives the node graph from the run snapshot (pure function of file state).
 // Layout follows the design system: vertical, top→down —
@@ -58,22 +59,28 @@ function NodeCard({ data, vertical, noTarget, noSource }) {
   );
 }
 
-const nodeTypes = {
-  stage: props => <NodeCard {...props} vertical />,
-  task: props => <NodeCard {...props} vertical />
-};
+// Snapshot pushes rebuild every node's data object; memoize on the rendered
+// fields so unchanged cards skip re-rendering (positions are applied by the
+// React Flow wrapper, not by NodeCard, so they don't belong in the compare).
+const cardEqual = (prev, next) =>
+  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType']
+    .every(k => prev.data[k] === next.data[k]);
+
+const StageNode = React.memo(props => <NodeCard {...props} vertical />, cardEqual);
+
+const nodeTypes = { stage: StageNode, task: StageNode };
 
 // Editor node: same neutral card, handles depend on the node type
 // (input has no target, output has no source).
 const editorNodeTypes = {
-  editable: props => (
+  editable: React.memo(props => (
     <NodeCard
       {...props}
       vertical
       noTarget={props.data.nodeType === 'input'}
       noSource={props.data.nodeType === 'output'}
     />
-  )
+  ), cardEqual)
 };
 
 // Editable canvas over a flow DEFINITION (not run state). Authoritative state
@@ -127,9 +134,18 @@ export function FlowEditor({ flow, selectedNode, onSelect, onChangeFlow, readOnl
     if (readOnly || !source || !target || source === target) return;
     onChangeFlow(f => {
       if (f.edges.some(e => e.source === source && e.target === target)) return f;
+      if (wouldCreateCycle(f.edges, source, target)) return f;
       return { ...f, edges: [...f.edges, { id: `e-${source}-${target}`, source, target }] };
     });
   }, [onChangeFlow, readOnly]);
+
+  // Live drag feedback: refuse duplicate edges and anything that would close
+  // a cycle (topoSort rejects cyclic flows at run time — block them here).
+  const isValidConnection = useCallback(({ source, target }) =>
+    Boolean(source && target) && source !== target &&
+    !flow.edges.some(e => e.source === source && e.target === target) &&
+    !wouldCreateCycle(flow.edges, source, target),
+  [flow.edges]);
 
   return (
     <ReactFlow
@@ -139,6 +155,7 @@ export function FlowEditor({ flow, selectedNode, onSelect, onChangeFlow, readOnl
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
+      isValidConnection={isValidConnection}
       onNodeClick={(_e, node) => onSelect(node.id)}
       onPaneClick={() => onSelect(null)}
       nodesDraggable={!readOnly}

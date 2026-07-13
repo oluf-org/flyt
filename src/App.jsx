@@ -3,6 +3,7 @@ import FlowCanvas, { FlowEditor } from './FlowCanvas.jsx';
 import Inspector, { FlowInspector } from './Inspector.jsx';
 import Settings from './Settings.jsx';
 import { TYPE_META, NODE_TEMPLATES, createNodeFromTemplate } from './flowTypes.js';
+import { layoutPositions } from './flowLayout.js';
 
 function setTheme(mode) { // 'light' | 'dark'
   document.documentElement.dataset.theme = mode;
@@ -39,6 +40,12 @@ export default function App() {
   const [defaultWorker, setDefaultWorker] = useState({ provider: 'mock', model: 'mock-large' });
   const flowRef = useRef(null);
   const saveTimer = useRef(null);
+  // Undo/redo over flow edits. Bursts of changes (a node drag emits one per
+  // frame) coalesce into a single history entry via the time gate.
+  const undoStack = useRef([]);
+  const redoStack = useRef([]);
+  const lastHistoryPush = useRef(0);
+  const [historySize, setHistorySize] = useState({ undo: 0, redo: 0 });
 
   const toggleTheme = () => {
     const next = theme === 'light' ? 'dark' : 'light';
@@ -94,23 +101,66 @@ export default function App() {
     }
   }, [refreshFlows]);
 
+  const schedulePersist = useCallback(next => {
+    flowRef.current = next;
+    setFlowSaved(false);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      saveTimer.current = null;
+      await window.llmflow.saveFlow(flowRef.current);
+      setFlowSaved(true);
+      refreshFlows(); // name may have changed
+    }, 500);
+  }, [refreshFlows]);
+
   const changeFlow = useCallback(updater => {
     setFlow(prev => {
       if (!prev) return prev;
       const next = typeof updater === 'function' ? updater(prev) : updater;
       if (next === prev || next.builtin) return next;
-      flowRef.current = next;
-      setFlowSaved(false);
-      clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(async () => {
-        saveTimer.current = null;
-        await window.llmflow.saveFlow(flowRef.current);
-        setFlowSaved(true);
-        refreshFlows(); // name may have changed
-      }, 500);
+      const now = Date.now();
+      if (now - lastHistoryPush.current > 400) {
+        undoStack.current.push(prev);
+        if (undoStack.current.length > 100) undoStack.current.shift();
+      }
+      lastHistoryPush.current = now;
+      redoStack.current = [];
+      setHistorySize({ undo: undoStack.current.length, redo: 0 });
+      schedulePersist(next);
       return next;
     });
-  }, [refreshFlows]);
+  }, [schedulePersist]);
+
+  const resetHistory = useCallback(() => {
+    undoStack.current = [];
+    redoStack.current = [];
+    lastHistoryPush.current = 0;
+    setHistorySize({ undo: 0, redo: 0 });
+  }, []);
+
+  const undo = useCallback(() => {
+    const cur = flowRef.current;
+    if (!cur || cur.builtin || !undoStack.current.length) return;
+    const target = undoStack.current.pop();
+    redoStack.current.push(cur);
+    lastHistoryPush.current = 0; // next edit starts a fresh history entry
+    setHistorySize({ undo: undoStack.current.length, redo: redoStack.current.length });
+    schedulePersist(target);
+    setFlow(target);
+    setSelectedNode(sel => sel && target.nodes.some(n => n.id === sel) ? sel : null);
+  }, [schedulePersist]);
+
+  const redo = useCallback(() => {
+    const cur = flowRef.current;
+    if (!cur || cur.builtin || !redoStack.current.length) return;
+    const target = redoStack.current.pop();
+    undoStack.current.push(cur);
+    lastHistoryPush.current = 0;
+    setHistorySize({ undo: undoStack.current.length, redo: redoStack.current.length });
+    schedulePersist(target);
+    setFlow(target);
+    setSelectedNode(sel => sel && target.nodes.some(n => n.id === sel) ? sel : null);
+  }, [schedulePersist]);
 
   const openFlow = useCallback(async id => {
     await flushSave();
@@ -121,7 +171,23 @@ export default function App() {
     setActiveFlowId(id);
     setActiveRunId(null);
     setSelectedNode(null);
-  }, [flushSave]);
+    resetHistory();
+  }, [flushSave, resetHistory]);
+
+  // Undo/redo shortcuts while editing a flow (skip when typing in a field so
+  // native text undo keeps working).
+  useEffect(() => {
+    const onKey = e => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if (key === 'y' || (key === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
 
   const openRun = useCallback(async id => {
     await flushSave();
@@ -147,8 +213,14 @@ export default function App() {
     setFlow(null);
     setActiveFlowId(null);
     setSelectedNode(null);
+    resetHistory();
     refreshFlows();
   };
+
+  const autoLayout = () => changeFlow(f => {
+    const pos = layoutPositions(f);
+    return { ...f, nodes: f.nodes.map(n => ({ ...n, position: pos.get(n.id) ?? n.position })) };
+  });
 
   const addNode = type => {
     const meta = TYPE_META[type];
@@ -366,6 +438,9 @@ export default function App() {
                   })}
                 </div>
                 <div className="toolbar-spacer" />
+                <button className="ghost mini" onClick={undo} disabled={historySize.undo === 0} title="Undo (Ctrl+Z)">↩ Undo</button>
+                <button className="ghost mini" onClick={redo} disabled={historySize.redo === 0} title="Redo (Ctrl+Y)">↪ Redo</button>
+                <button className="ghost mini" onClick={autoLayout} title="Arrange nodes into dependency layers">Auto-layout</button>
                 <span className={'save-dot' + (flowSaved ? ' saved' : '')}>{flowSaved ? 'Saved' : 'Saving…'}</span>
                 <button className="primary" onClick={runFlow} disabled={busy || flow.nodes.length === 0}>
                   {busy ? 'Starting…' : 'Run flow'}

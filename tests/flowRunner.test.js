@@ -158,6 +158,98 @@ test('plan-eval re-asks once with the validation errors on malformed output', as
   assert.match(store.readNodeOutput(runId, 'plan-eval-errors'), /resolved/);
 });
 
+// --- parallel waves ---
+
+test('independent aiSteps run concurrently as one wave', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  let inFlight = 0;
+  let maxInFlight = 0;
+  setScript(async () => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise(r => setTimeout(r, 120));
+    inFlight -= 1;
+    return 'step output';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('a', 'aiStep', { role: 'execute', title: 'A' }),
+     node('b', 'aiStep', { role: 'execute', title: 'B' }),
+     node('c', 'aiStep', { role: 'execute', title: 'C' }),
+     node('out', 'output')],
+    [edge('in', 'a'), edge('in', 'b'), edge('in', 'c'),
+     edge('a', 'out'), edge('b', 'out'), edge('c', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.equal(maxInFlight, 3, 'all three independent steps should be in flight together');
+  assert.ok(readLog(store, runId).some(e => e.event === 'wave_start' && e.nodes.length === 3));
+  for (const id of ['a', 'b', 'c']) assert.match(store.readNodeOutput(runId, id), /step output/);
+});
+
+test('maxParallel caps the wave size', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig({ maxParallel: 2 }));
+  let inFlight = 0;
+  let maxInFlight = 0;
+  setScript(async () => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise(r => setTimeout(r, 60));
+    inFlight -= 1;
+    return 'step output';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('a', 'aiStep', {}), node('b', 'aiStep', {}), node('c', 'aiStep', {}),
+     node('out', 'output')],
+    [edge('in', 'a'), edge('in', 'b'), edge('in', 'c'),
+     edge('a', 'out'), edge('b', 'out'), edge('c', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.ok(maxInFlight <= 2, `expected at most 2 in flight, saw ${maxInFlight}`);
+});
+
+test('a failure inside a wave fails the run', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(async ({ prompt }) => {
+    if (prompt.includes('GOAL:\nboom')) throw new Error('provider exploded');
+    return 'ok';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('a', 'aiStep', { title: 'A' }),
+     node('b', 'aiStep', { title: 'B', goal: 'boom' }),
+     node('out', 'output')],
+    [edge('in', 'a'), edge('in', 'b'), edge('a', 'out'), edge('b', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'failed');
+  assert.equal(store.readMeta(runId).nodeStatus.b, 'failed');
+});
+
+// --- incremental output (adapter onText streaming) ---
+
+test('aiStep streams partial output into the node file while the call runs', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(async ({ onText }) => {
+    onText('partial text so far');
+    await new Promise(r => setTimeout(r, 400));
+    return 'final full text';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('step', 'aiStep', { role: 'execute' }),
+     node('out', 'output')],
+    [edge('in', 'step'), edge('in', 'out'), edge('step', 'out')]);
+  const runId = runner.start(flow);
+  const partial = await waitFor(() => store.readNodeOutput(runId, 'step'), { label: 'partial node output' });
+  assert.match(partial, /partial text so far/);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.equal(store.readNodeOutput(runId, 'step'), 'final full text');
+});
+
 // --- step-eval retry loop ---
 
 test('step-eval retry re-runs the work node with persisted guidance, then passes', async () => {

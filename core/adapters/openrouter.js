@@ -8,9 +8,12 @@
 //                               OpenAI function-tool definitions. The raw
 //                               assistant message comes back so the loop can
 //                               echo tool_calls and read finish_reason.
-export async function openrouterAdapter({ model, system, prompt, messages, tools, maxTokens, apiKey }) {
+export async function openrouterAdapter({ model, system, prompt, messages, tools, maxTokens, apiKey, onText }) {
   if (!apiKey) throw new Error('OpenRouter API key is not set. Add it in Settings, or switch the worker to the "mock" provider.');
 
+  // Stream only the single-shot shape: the agent loop needs the raw
+  // tool_calls message back, which the non-streaming response provides.
+  const stream = Boolean(onText) && !tools?.length;
   const body = {
     model,
     max_tokens: maxTokens,
@@ -20,6 +23,7 @@ export async function openrouterAdapter({ model, system, prompt, messages, tools
     ]
   };
   if (tools?.length) body.tools = tools;
+  if (stream) body.stream = true;
 
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -36,6 +40,26 @@ export async function openrouterAdapter({ model, system, prompt, messages, tools
     const errBody = await res.text();
     throw new Error(`OpenRouter API ${res.status}: ${errBody.slice(0, 500)}`);
   }
+
+  if (stream) {
+    let text = '';
+    let usage = null;
+    let finishReason = null;
+    for await (const event of sseEvents(res.body)) {
+      if (event === '[DONE]') break;
+      let chunk;
+      try { chunk = JSON.parse(event); } catch { continue; }
+      const choice = chunk.choices?.[0];
+      if (choice?.delta?.content) {
+        text += choice.delta.content;
+        onText(text);
+      }
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      if (chunk.usage) usage = chunk.usage;
+    }
+    return { text, usage, finishReason, message: { role: 'assistant', content: text } };
+  }
+
   const data = await res.json();
   const choice = data.choices?.[0];
   if (!choice?.message) throw new Error(`OpenRouter returned no choices: ${JSON.stringify(data).slice(0, 300)}`);
@@ -45,4 +69,19 @@ export async function openrouterAdapter({ model, system, prompt, messages, tools
     finishReason: choice.finish_reason ?? null,
     message: choice.message
   };
+}
+
+// Parse an SSE byte stream into the `data:` payload strings.
+export async function* sseEvents(readable) {
+  const decoder = new TextDecoder();
+  let buf = '';
+  for await (const chunk of readable) {
+    buf += decoder.decode(chunk, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx).replace(/\r$/, '');
+      buf = buf.slice(idx + 1);
+      if (line.startsWith('data:')) yield line.slice(5).trim();
+    }
+  }
 }
