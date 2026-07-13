@@ -123,6 +123,21 @@ const DEFAULT_SYSTEM = {
   ].join('\n')
 };
 
+// Unified worker resolution for aiStep AND agentTask nodes:
+//   1. an explicit worker set on the node wins,
+//   2. otherwise the node's category picks from config.categoryWorkers
+//      (the plan-eval pattern: category drives model selection),
+//   3. otherwise the configured executor default.
+export function resolveWorker(node, config) {
+  const w = node?.data?.worker;
+  if (w?.provider && w?.model) return { provider: w.provider, model: w.model };
+  const cat = node?.data?.category;
+  const pref = cat ? config.categoryWorkers?.[cat] : null;
+  if (pref?.provider && pref?.model) return { provider: pref.provider, model: pref.model };
+  const d = config.workers.executor;
+  return { provider: d.provider, model: d.model };
+}
+
 // Kahn topological sort over the flow; throws on cycles.
 export function topoSort(flow) {
   const indegree = new Map(flow.nodes.map(n => [n.id, 0]));
@@ -186,9 +201,50 @@ export class FlowRunner {
   }
   resolveGate(runId, approved) {
     const resolve = this.gates.get(runId);
-    if (!resolve) throw new Error('No pending approval for this run (flow runs cannot resume after an app restart).');
-    this.gates.delete(runId);
-    resolve(approved);
+    if (resolve) {
+      this.gates.delete(runId);
+      resolve(approved);
+      return;
+    }
+    // No live gate (the app restarted while the run was paused): the gate
+    // state lives in meta.json (stage awaiting_approval + pendingNodeId +
+    // pendingGateKind), so resume the run from its persisted file state.
+    this.resumeFromGate(runId, approved);
+  }
+
+  // Resume a flow run that was paused at an approval gate when the app died.
+  // completed/taskIdByNode are rebuilt from meta.nodeStatus and flow.json in
+  // execute(); retry budgets reset (they are bounded either way).
+  resumeFromGate(runId, approved) {
+    const meta = this.store.readMeta(runId);
+    if (!meta?.flowId || meta.stage !== 'awaiting_approval') {
+      throw new Error('No pending approval for this run.');
+    }
+    const flow = this.store.readFlow(runId);
+    if (!flow) throw new Error(`Run ${runId} has no flow.json; cannot resume.`);
+    const nodeId = meta.pendingNodeId;
+    const kind = meta.pendingGateKind ?? 'pre';
+
+    if (!approved) {
+      this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
+      if (nodeId) this.setNodeStatus(runId, nodeId, kind === 'escalation' ? 'failed' : 'pending');
+      this.notify(runId);
+      return;
+    }
+
+    this.store.appendLog(runId, {
+      event: 'human_decision', decision: 'approved', node: nodeId,
+      context: kind === 'escalation' ? 'step-eval escalation (resumed after restart)' : 'checkpoint (resumed after restart)'
+    });
+    const extra = { pendingNodeId: null, pendingGateKind: null };
+    if (kind === 'pre' && nodeId) {
+      // Remember the decision so the pre-node gate() doesn't pause again on
+      // the resumed walk.
+      extra.approvedGates = [...(meta.approvedGates ?? []), nodeId];
+    }
+    this.store.writeMeta(runId, { ...this.store.readMeta(runId), ...extra });
+    if (kind === 'escalation' && nodeId) this.setNodeStatus(runId, nodeId, 'done');
+    this.execute(runId, flow, true).catch(err => this.fail(runId, err));
   }
 
   setNodeStatus(runId, nodeId, status, extra = {}) {
@@ -201,7 +257,7 @@ export class FlowRunner {
     this.notify(runId);
   }
 
-  async execute(runId, flow) {
+  async execute(runId, flow, resume = false) {
     this.store.setStage(runId, 'execution');
     this.notify(runId);
 
@@ -215,6 +271,18 @@ export class FlowRunner {
     };
     const opts = { taskIdByNode: new Map(), nextTaskId, retryBudget: new Map() };
     const completed = new Set();
+
+    // Resuming from persisted state (after an app restart): completed nodes
+    // come from meta.nodeStatus, and agentTask -> task mappings from the
+    // taskIds recorded in the run's flow.json.
+    if (resume) {
+      const meta = this.store.readMeta(runId);
+      for (const n of flow.nodes) {
+        if (meta.nodeStatus?.[n.id] === 'done') completed.add(n.id);
+        if (n.type === 'agentTask' && n.data?.taskId) opts.taskIdByNode.set(n.id, n.data.taskId);
+      }
+      this.store.appendLog(runId, { event: 'flow_run_resumed', completed: completed.size, total: flow.nodes.length });
+    }
 
     // Dynamic topological walk: readiness is recomputed after every node so
     // nodes materialized by plan-eval mid-run join the schedule.
@@ -338,17 +406,17 @@ export class FlowRunner {
       retriesUsed: used, cause: verdict === 'retry' ? 'retry budget exhausted' : 'verdict'
     });
     this.setNodeStatus(runId, node.id, 'waiting');
-    this.store.setStage(runId, 'awaiting_approval', { pendingNodeId: node.id });
+    this.store.setStage(runId, 'awaiting_approval', { pendingNodeId: node.id, pendingGateKind: 'escalation' });
     this.notify(runId);
     const approved = await new Promise(resolve => this.gates.set(runId, resolve));
     if (!approved) {
-      this.store.setStage(runId, 'rejected', { pendingNodeId: null });
+      this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
       this.setNodeStatus(runId, node.id, 'failed');
       this.notify(runId);
       return false;
     }
     this.store.appendLog(runId, { event: 'human_decision', decision: 'approved', node: node.id, context: 'step-eval escalation' });
-    this.store.setStage(runId, 'execution', { pendingNodeId: null });
+    this.store.setStage(runId, 'execution', { pendingNodeId: null, pendingGateKind: null });
     this.setNodeStatus(runId, node.id, 'done');
     return true;
   }
@@ -356,17 +424,19 @@ export class FlowRunner {
   // Optional human checkpoint before a node. Returns false when rejected.
   async gate(runId, node) {
     if (!node.data?.requiresApproval) return true;
+    // Already approved before a restart (see resumeFromGate): don't re-pause.
+    if (this.store.readMeta(runId).approvedGates?.includes(node.id)) return true;
     this.setNodeStatus(runId, node.id, 'waiting');
-    this.store.setStage(runId, 'awaiting_approval', { pendingNodeId: node.id });
+    this.store.setStage(runId, 'awaiting_approval', { pendingNodeId: node.id, pendingGateKind: 'pre' });
     this.notify(runId);
     const approved = await new Promise(resolve => this.gates.set(runId, resolve));
     if (!approved) {
-      this.store.setStage(runId, 'rejected', { pendingNodeId: null });
+      this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
       this.setNodeStatus(runId, node.id, 'pending');
       return false;
     }
     this.store.appendLog(runId, { event: 'human_decision', decision: 'approved', node: node.id });
-    this.store.setStage(runId, 'execution', { pendingNodeId: null });
+    this.store.setStage(runId, 'execution', { pendingNodeId: null, pendingGateKind: null });
     this.notify(runId);
     return true;
   }
@@ -455,6 +525,21 @@ export class FlowRunner {
     }
 
     if (node.type === 'agentTask') {
+      // Resuming after a restart: the node already contributed a task on a
+      // previous pass — reuse it instead of queueing a duplicate.
+      const priorId = node.data?.taskId;
+      const priorDoc = priorId ? this.store.readTasks(runId) : null;
+      const prior = priorDoc?.tasks.find(t => t.id === priorId);
+      if (prior) {
+        taskIdByNode.set(node.id, prior.id);
+        if (prior.status !== 'done') {
+          prior.status = 'pending';
+          this.store.writeTasks(runId, priorDoc);
+        }
+        this.store.appendLog(runId, { event: 'node_resume', node: node.id, type: 'agentTask', taskId: prior.id });
+        this.setNodeStatus(runId, node.id, 'queued');
+        return;
+      }
       const taskId = nextTaskId();
       taskIdByNode.set(node.id, taskId);
       const upstream = flow.edges.filter(e => e.source && e.target === node.id).map(e => e.source);
@@ -466,9 +551,7 @@ export class FlowRunner {
           return src.type === 'agentTask' ? `${taskIdByNode.get(srcId)} output` : srcId;
         })
         .filter(Boolean), ...specFiles];
-      const worker = node.data?.worker?.provider
-        ? { provider: node.data.worker.provider, model: node.data.worker.model }
-        : { provider: this.config.workers.executor.provider, model: this.config.workers.executor.model };
+      const worker = resolveWorker(node, this.config);
       const task = {
         id: taskId,
         title: node.data?.title || 'Task',
@@ -492,16 +575,7 @@ export class FlowRunner {
 
     if (node.type === 'aiStep') {
       const role = node.data?.role ?? 'custom';
-      let worker = node.data?.worker?.provider ? node.data.worker : this.config.workers.executor;
-
-      // Category-driven worker selection (see FLOW_NODES.md and categoryWorkers in config)
-      const cat = node.data?.category;
-      if (cat && this.config.categoryWorkers && this.config.categoryWorkers[cat]) {
-        const pref = this.config.categoryWorkers[cat];
-        if (pref.provider && pref.model) {
-          worker = { ...pref };
-        }
-      }
+      const worker = resolveWorker(node, this.config);
       const apiKey = this.config.providerKeys?.[worker.provider];
       this.store.appendLog(runId, {
         event: 'node_start', node: node.id, type: 'aiStep', role,
@@ -553,13 +627,38 @@ export class FlowRunner {
       if (role === 'plan-eval') {
         // Persist a clean sidecar for downstream consumption / inspection
         this.store.writeNodeOutput(runId, 'plan-eval', outText);
-        const mat = this.materializeGeneratedNodes(runId, flow, node, outText);
+        let mat = this.materializeGeneratedNodes(runId, flow, node, outText);
+        if (!mat.ok) {
+          // Real models sometimes emit malformed contract JSON: one bounded
+          // re-ask that feeds the validation errors back before giving up.
+          const fixed = await this.reAsk(runId, node, worker, apiKey, system, userMsg, outText, mat.errors);
+          if (fixed != null) {
+            this.store.writeNodeOutput(runId, node.id, fixed);
+            this.store.writeNodeOutput(runId, 'plan-eval', fixed);
+            mat = this.materializeGeneratedNodes(runId, flow, node, fixed);
+            if (mat.ok) {
+              this.store.writeNodeOutput(runId, 'plan-eval-errors', [
+                '# Plan-eval contract violations (resolved)',
+                '',
+                'The first attempt violated the contract; a re-ask with the validation errors produced a valid plan.'
+              ].join('\n'));
+            }
+          }
+        }
         if (!mat.ok) problems.push(...mat.errors);
         outcome.materialized = mat.ok && mat.created.length > 0;
         outcome.materializedCount = mat.created.length;
       }
       if (role === 'step-eval') {
-        const verdictObj = parseStepEvalVerdict(outText);
+        let verdictObj = parseStepEvalVerdict(outText);
+        if (!verdictObj) {
+          const fixed = await this.reAsk(runId, node, worker, apiKey, system, userMsg, outText,
+            ['no ```json block with { "verdict": "pass" | "retry" | "escalate", "reason", "guidance" } found']);
+          if (fixed != null) {
+            verdictObj = parseStepEvalVerdict(fixed);
+            if (verdictObj) this.store.writeNodeOutput(runId, node.id, fixed);
+          }
+        }
         if (verdictObj) {
           outcome.stepEval = verdictObj;
           this.store.appendLog(runId, { event: 'step_eval_verdict', node: node.id, ...verdictObj });
@@ -611,6 +710,27 @@ export class FlowRunner {
     }
 
     throw new Error(`Unknown node type "${node.type}" (node ${node.id})`);
+  }
+
+  // One bounded retry for structured-output roles: re-ask the SAME worker with
+  // its rejected output and the concrete validation errors. Returns the new
+  // output text, or null when the retry call itself failed (the caller then
+  // falls back to its graceful-degradation path).
+  async reAsk(runId, node, worker, apiKey, system, userMsg, badOutput, errors) {
+    this.store.appendLog(runId, { event: 'structured_output_reask', node: node.id, errors });
+    const prompt = [
+      userMsg,
+      `YOUR PREVIOUS ATTEMPT (rejected):\n${badOutput}`,
+      `VALIDATION ERRORS — the previous output violated the required JSON contract:\n- ${errors.join('\n- ')}`,
+      'Respond again in full, fixing every error above. Emit exactly ONE valid ```json block satisfying the contract.'
+    ].join('\n\n');
+    try {
+      const result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt });
+      return String(result.text ?? '').trim();
+    } catch (err) {
+      this.store.appendLog(runId, { event: 'structured_output_reask_failed', node: node.id, error: String(err?.message ?? err) });
+      return null;
+    }
   }
 
   fail(runId, err) {

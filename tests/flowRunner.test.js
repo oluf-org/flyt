@@ -1,0 +1,265 @@
+// Integration + unit tests for the flow graph runner (core/flowRunner.js):
+// topology, worker resolution, plan-eval materialization (incl. the bounded
+// re-ask), the step-eval retry loop, and approval-gate persistence across a
+// simulated app restart.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { FlowRunner, topoSort, resolveWorker } from '../core/flowRunner.js';
+import { makeStore, setScript, roleOf, testConfig, waitFor, waitForStage, makeFlow, node, edge } from './helpers.js';
+
+const readLog = (store, runId) =>
+  fs.readFileSync(path.join(store.runDir(runId), 'log.jsonl'), 'utf8')
+    .trim().split('\n').map(l => JSON.parse(l));
+
+// --- topoSort ---
+
+test('topoSort orders nodes by dependencies', () => {
+  const flow = makeFlow(
+    [node('c', 'output'), node('a', 'input'), node('b', 'aiStep')],
+    [edge('a', 'b'), edge('b', 'c')]);
+  assert.deepEqual(topoSort(flow).map(n => n.id), ['a', 'b', 'c']);
+});
+
+test('topoSort throws on cycles', () => {
+  const flow = makeFlow(
+    [node('a', 'aiStep'), node('b', 'aiStep')],
+    [edge('a', 'b'), edge('b', 'a')]);
+  assert.throws(() => topoSort(flow), /cycle/);
+});
+
+// --- resolveWorker ---
+
+test('resolveWorker: explicit node worker wins over category and default', () => {
+  const config = testConfig({ categoryWorkers: { documentation: { provider: 'cat', model: 'cat-m' } } });
+  const n = node('x', 'aiStep', { category: 'documentation', worker: { provider: 'exp', model: 'exp-m' } });
+  assert.deepEqual(resolveWorker(n, config), { provider: 'exp', model: 'exp-m' });
+});
+
+test('resolveWorker: category worker beats the executor default', () => {
+  const config = testConfig({ categoryWorkers: { documentation: { provider: 'cat', model: 'cat-m' } } });
+  assert.deepEqual(resolveWorker(node('x', 'aiStep', { category: 'documentation' }), config),
+    { provider: 'cat', model: 'cat-m' });
+});
+
+test('resolveWorker: falls back to the executor default', () => {
+  assert.deepEqual(resolveWorker(node('x', 'aiStep', {}), testConfig()),
+    { provider: 'script', model: 'test-model' });
+});
+
+test('agentTask nodes get their category worker (unified resolution)', async () => {
+  const store = makeStore();
+  const config = testConfig({ categoryWorkers: { 'Test-creation': { provider: 'script', model: 'cat-model' } } });
+  setScript(() => 'Task complete.');
+  const runner = new FlowRunner(store, config);
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('at', 'agentTask', { title: 'Make tests', goal: 'Write tests.', category: 'Test-creation' }),
+     node('out', 'output')],
+    [edge('in', 'at'), edge('at', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  const task = store.readTasks(runId).tasks[0];
+  assert.deepEqual(task.worker, { provider: 'script', model: 'cat-model' });
+});
+
+// --- plan-eval materialization ---
+
+const planEvalDoc = nodes => '```json\n' + JSON.stringify({ nodes }, null, 2) + '\n```';
+
+test('materializeGeneratedNodes rejects dependency cycles among generated nodes', () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  const runId = store.createRun('brief');
+  const pe = node('pe', 'aiStep', { role: 'plan-eval' });
+  const flow = makeFlow([pe, node('out', 'output')], [edge('pe', 'out')]);
+  const r = runner.materializeGeneratedNodes(runId, flow, pe, planEvalDoc([
+    { id: 'a', template: 'code-general-step', goal: 'A', dependsOn: ['b'] },
+    { id: 'b', template: 'code-general-step', goal: 'B', dependsOn: ['a'] }
+  ]));
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /cycle/);
+  assert.equal(flow.nodes.length, 2); // nothing was added
+  assert.match(store.readNodeOutput(runId, 'plan-eval-errors'), /cycle/);
+});
+
+test('materializeGeneratedNodes skips specs whose id already exists in the flow', () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  const runId = store.createRun('brief');
+  const pe = node('pe', 'aiStep', { role: 'plan-eval' });
+  const flow = makeFlow([pe, node('out', 'output')], [edge('pe', 'out')]);
+  const r = runner.materializeGeneratedNodes(runId, flow, pe, planEvalDoc([
+    { id: 'pe', template: 'code-general-step', goal: 'clashes with the plan-eval node itself' },
+    { id: 'gen-x', template: 'code-general-step', goal: 'fine' }
+  ]));
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.created.map(n => n.id), ['gen-x']);
+  // Wiring: root hangs off plan-eval, leaf feeds plan-eval's downstream target.
+  const edges = flow.edges.filter(e => e.generatedBy === 'pe');
+  assert.ok(edges.some(e => e.source === 'pe' && e.target === 'gen-x'));
+  assert.ok(edges.some(e => e.source === 'gen-x' && e.target === 'out'));
+});
+
+test('smoke: full advanced-planning flow runs to done on the mock provider', async () => {
+  const store = makeStore();
+  const config = testConfig({
+    workers: { executor: { provider: 'mock', model: 'mock-large' } }
+  });
+  const runner = new FlowRunner(store, config);
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'Build a config loader' }),
+     node('ps', 'aiStep', { role: 'plan-start', title: 'Start' }),
+     node('pe', 'aiStep', { role: 'plan-eval', title: 'Plan Eval' }),
+     node('out', 'output')],
+    [edge('in', 'ps'), edge('ps', 'pe'), edge('pe', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed'], { timeoutMs: 60000 }), 'done');
+
+  // The mock plan-eval declares gen-design -> gen-impl -> gen-docs.
+  const ranFlow = store.readFlow(runId);
+  for (const id of ['gen-design', 'gen-impl', 'gen-docs']) {
+    assert.ok(ranFlow.nodes.some(n => n.id === id), `missing materialized node ${id}`);
+    assert.ok(store.readNodeOutput(runId, id), `missing output for ${id}`);
+  }
+  const statuses = store.readMeta(runId).nodeStatus;
+  for (const [id, s] of Object.entries(statuses)) assert.equal(s, 'done', `node ${id} is ${s}`);
+  assert.ok(fs.existsSync(path.join(store.runDir(runId), 'result.md')));
+  assert.ok(readLog(store, runId).some(e => e.event === 'materialized_nodes'));
+});
+
+test('plan-eval re-asks once with the validation errors on malformed output', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  let peCalls = 0;
+  let sawErrorsInReask = false;
+  setScript(({ system, prompt }) => {
+    if (roleOf(system) === 'plan-eval') {
+      peCalls += 1;
+      if (peCalls === 1) return 'Here is my plan, in prose only. No JSON today.';
+      sawErrorsInReask = prompt.includes('VALIDATION ERRORS');
+      return planEvalDoc([{ id: 'gen-a', template: 'documentation-step', title: 'Docs', goal: 'Write the docs.' }]);
+    }
+    return 'step output';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('pe', 'aiStep', { role: 'plan-eval' }),
+     node('out', 'output')],
+    [edge('in', 'pe'), edge('pe', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.equal(peCalls, 2);
+  assert.ok(sawErrorsInReask, 're-ask prompt should include the validation errors');
+  assert.ok(store.readFlow(runId).nodes.some(n => n.id === 'gen-a'));
+  assert.equal(store.readMeta(runId).nodeStatus['gen-a'], 'done');
+  assert.ok(readLog(store, runId).some(e => e.event === 'structured_output_reask'));
+  assert.match(store.readNodeOutput(runId, 'plan-eval-errors'), /resolved/);
+});
+
+// --- step-eval retry loop ---
+
+test('step-eval retry re-runs the work node with persisted guidance, then passes', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  let workCalls = 0;
+  let evalCalls = 0;
+  setScript(({ system }) => {
+    const role = roleOf(system);
+    if (role === 'step-eval') {
+      evalCalls += 1;
+      return evalCalls === 1
+        ? '```json\n{ "verdict": "retry", "reason": "too vague", "guidance": "be concrete" }\n```'
+        : '```json\n{ "verdict": "pass", "reason": "fixed" }\n```';
+    }
+    workCalls += 1;
+    return `work attempt ${workCalls}`;
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'aiStep', { role: 'execute', title: 'Work' }),
+     node('seval', 'aiStep', { role: 'step-eval', maxRetries: 1 }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'seval'), edge('seval', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.equal(workCalls, 2, 'work node should run twice');
+  assert.equal(evalCalls, 2, 'step-eval should re-evaluate the fresh output');
+  assert.match(store.readNodeOutput(runId, 'retry-for-work'), /be concrete/);
+  assert.match(store.readNodeOutput(runId, 'work'), /attempt 2/);
+  assert.ok(readLog(store, runId).some(e => e.event === 'step_eval_retry'));
+});
+
+// --- approval-gate persistence across a simulated restart ---
+
+test('pre-node approval gate survives a restart: approve resumes to done', async () => {
+  const store = makeStore();
+  const config = testConfig();
+  setScript(() => 'step output');
+  const runner1 = new FlowRunner(store, config);
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('step', 'aiStep', { role: 'execute', requiresApproval: true }),
+     node('out', 'output')],
+    [edge('in', 'step'), edge('step', 'out')]);
+  const runId = runner1.start(flow);
+  assert.equal(await waitForStage(store, runId, ['awaiting_approval', 'failed']), 'awaiting_approval');
+  assert.equal(store.readMeta(runId).pendingGateKind, 'pre');
+
+  // "Restart": a fresh runner with empty in-memory gates, same file state.
+  const runner2 = new FlowRunner(store, config);
+  runner2.approvePlan(runId);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.match(store.readNodeOutput(runId, 'step'), /step output/);
+  assert.ok(readLog(store, runId).some(e =>
+    e.event === 'human_decision' && e.decision === 'approved' && /resumed after restart/.test(e.context ?? '')));
+});
+
+test('pre-node approval gate survives a restart: reject marks the run rejected', async () => {
+  const store = makeStore();
+  const config = testConfig();
+  setScript(() => 'step output');
+  const runner1 = new FlowRunner(store, config);
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('step', 'aiStep', { role: 'execute', requiresApproval: true }),
+     node('out', 'output')],
+    [edge('in', 'step'), edge('step', 'out')]);
+  const runId = runner1.start(flow);
+  await waitForStage(store, runId, ['awaiting_approval']);
+
+  const runner2 = new FlowRunner(store, config);
+  runner2.rejectPlan(runId, 'not like this');
+  const meta = store.readMeta(runId);
+  assert.equal(meta.stage, 'rejected');
+  assert.equal(meta.nodeStatus.step, 'pending');
+});
+
+test('step-eval escalation gate survives a restart: approve resumes to done', async () => {
+  const store = makeStore();
+  const config = testConfig();
+  setScript(({ system }) =>
+    roleOf(system) === 'step-eval'
+      ? '```json\n{ "verdict": "escalate", "reason": "human should look at this" }\n```'
+      : 'work output');
+  const runner1 = new FlowRunner(store, config);
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'aiStep', { role: 'execute' }),
+     node('seval', 'aiStep', { role: 'step-eval' }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'seval'), edge('seval', 'out')]);
+  const runId = runner1.start(flow);
+  assert.equal(await waitForStage(store, runId, ['awaiting_approval', 'failed']), 'awaiting_approval');
+  assert.equal(store.readMeta(runId).pendingGateKind, 'escalation');
+  assert.equal(store.readMeta(runId).pendingNodeId, 'seval');
+
+  const runner2 = new FlowRunner(store, config);
+  runner2.approvePlan(runId);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  const statuses = store.readMeta(runId).nodeStatus;
+  assert.equal(statuses.seval, 'done');
+  assert.equal(statuses.out, 'done');
+  assert.ok(readLog(store, runId).some(e => e.event === 'flow_run_resumed'));
+});

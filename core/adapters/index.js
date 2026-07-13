@@ -21,10 +21,39 @@ export function registerProvider(name, adapter) {
   providers[name] = adapter;
 }
 
-export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools }) {
+// Transient failures worth an automatic retry: rate limits (429), timeouts
+// (408), server errors (5xx) — adapters embed the HTTP status in the error
+// message — and network-level fetch failures.
+const TRANSIENT_RE = /\bAPI (408|429|5\d\d)\b|fetch failed|network|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket/i;
+export function isTransientError(err) {
+  return TRANSIENT_RE.test(String(err?.message ?? err));
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// retry: { attempts, baseMs } — exponential backoff with jitter between
+// attempts, only for transient errors. Permanent errors (401, bad request,
+// unknown provider) surface immediately.
+export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools, retry }) {
   const adapter = providers[provider];
   if (!adapter) throw new Error(`Unknown provider "${provider}". Available: ${Object.keys(providers).join(', ')}`);
+  const attempts = Math.max(1, retry?.attempts ?? 3);
+  const baseMs = retry?.baseMs ?? 1000;
   const started = Date.now();
-  const result = await adapter({ model, system, prompt, maxTokens, apiKey, messages, tools });
-  return { ...result, provider, model, durationMs: Date.now() - started };
+  let lastErr;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const result = await adapter({ model, system, prompt, maxTokens, apiKey, messages, tools });
+      return {
+        ...result, provider, model,
+        durationMs: Date.now() - started,
+        ...(attempt > 0 ? { retries: attempt } : {})
+      };
+    } catch (err) {
+      lastErr = err;
+      if (attempt === attempts - 1 || !isTransientError(err)) throw err;
+      await sleep(baseMs * 2 ** attempt * (1 + Math.random() * 0.25));
+    }
+  }
+  throw lastErr; // unreachable, but keeps the control flow explicit
 }

@@ -146,7 +146,7 @@ The built-in "Linear pipeline" flow visible in the editor is a **read-only emula
 - All RunStore/FlowStore operations are synchronous (`writeFileSync` etc.). Acceptable on main for orchestration, but large outputs or high tool-call volume can slow stage advancement.
 - Graphs are assumed tiny (3–6 nodes). Manual layout only. No virtualization.
 - No streaming of partial LLM results to the canvas/inspector.
-- Flow approval gates are held in an in-memory `Map` of Promises → not restartable (classic pipeline is more resilient).
+- Flow approval gates are persisted to `meta.json` (`pendingNodeId` + `pendingGateKind`): approving/rejecting after an app restart resumes the run from file state (completed nodes from `nodeStatus`, agentTask mappings from `flow.json`). Step-eval retry budgets reset on restart (they are bounded either way).
 - Task execution (both modes) is strictly sequential even though `dependsOn` exists.
 
 **Observable targets for changes:**
