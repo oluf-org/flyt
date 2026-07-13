@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo } from 'react';
-import { ReactFlow, Background, Controls, Handle, Position } from '@xyflow/react';
+import React, { useCallback, useEffect, useMemo } from 'react';
+import { ReactFlow, Background, Controls, Handle, Position, useStoreApi } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { TYPE_META, nodeLabel, nodeSub } from './flowTypes.js';
 
@@ -56,6 +56,32 @@ function NodeCard({ data, vertical, noTarget, noSource }) {
       {!noSource && <Handle type="source" position={vertical ? Position.Bottom : Position.Right} />}
     </div>
   );
+}
+
+// React Flow measures nodes with a ResizeObserver, which never delivers while
+// the document is hidden (background tab, headless/automated browser) — nodes
+// then stay unmeasured and edges are silently skipped. After each commit, force
+// a measurement pass through the store for any node still missing dimensions;
+// a no-op whenever the ResizeObserver path already did its job.
+function ForceNodeMeasurement() {
+  const store = useStoreApi();
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const { nodeLookup, domNode, updateNodeInternals } = store.getState();
+      if (!domNode) return;
+      const updates = new Map();
+      for (const el of domNode.querySelectorAll('.react-flow__node')) {
+        const id = el.getAttribute('data-id');
+        const node = nodeLookup.get(id);
+        if (node && !node.hidden && (node.measured.width === undefined || !node.internals.handleBounds)) {
+          updates.set(id, { id, nodeElement: el, force: true });
+        }
+      }
+      if (updates.size) updateNodeInternals(updates);
+    }, 0);
+    return () => clearTimeout(t);
+  });
+  return null;
 }
 
 const nodeTypes = {
@@ -148,6 +174,7 @@ export function FlowEditor({ flow, selectedNode, onSelect, onChangeFlow, readOnl
       fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
       proOptions={{ hideAttribution: true }}
     >
+      <ForceNodeMeasurement />
       <Background gap={20} size={1.1} />
       <Controls showInteractive={false} />
     </ReactFlow>
@@ -169,6 +196,7 @@ export default function FlowCanvas({ snapshot, selectedNode, onSelect }) {
       nodesDraggable={false}
       nodesConnectable={false}
     >
+      <ForceNodeMeasurement />
       <Background gap={20} size={1.1} />
       <Controls showInteractive={false} />
     </ReactFlow>
