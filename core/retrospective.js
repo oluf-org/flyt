@@ -8,12 +8,13 @@ export function makeRetrospective({
   recommendation = '', // advice for future runs — feeds historyDigest()
   model = null,    // { provider, model } that did the work (audit trail)
   usage = null,
-  durationMs = null
+  durationMs = null,
+  toolCalls = []   // [{ tool, args, ok, result|error, ms }] from the agent loop
 }) {
   return {
     node, status, problems,
     resolution: resolution || (problems.length ? '' : 'none needed'),
-    confidence, recommendation, model, usage, durationMs,
+    confidence, recommendation, model, usage, durationMs, toolCalls,
     at: new Date().toISOString()
   };
 }

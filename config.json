@@ -1,10 +1,16 @@
 {
-  "comment": "Committed defaults for worker assignment per pipeline node; settings.json in the app's userData folder overrides these (edit via the in-app Settings panel). Providers: 'mock' (no API key needed), 'anthropic' (needs ANTHROPIC_API_KEY), 'openrouter' (key saved via Settings).",
+  "comment": "Committed defaults for worker assignment per pipeline node; settings.json in the app's userData folder overrides these (edit via the in-app Settings panel). Providers: 'mock' (no API key needed), 'anthropic' (needs ANTHROPIC_API_KEY), 'openrouter' (key saved via Settings). categoryWorkers (new) are used by advanced planning flows when a node declares a category (see FLOW_NODES.md).",
   "workers": {
     "planner":  { "provider": "mock", "model": "mock-large" },
     "router":   { "provider": "mock", "model": "mock-small" },
     "executor": { "provider": "mock", "model": "mock-large" },
     "verifier": { "provider": "mock", "model": "mock-small" }
+  },
+  "categoryWorkers": {
+    "Code design": { "provider": "mock", "model": "mock-large" },
+    "Code general": { "provider": "mock", "model": "mock-large" },
+    "documentation": { "provider": "mock", "model": "mock-small" },
+    "Test-creation": { "provider": "mock", "model": "mock-large" }
   },
   "anthropicExample": {
     "planner":  { "provider": "anthropic", "model": "claude-fable-5" },

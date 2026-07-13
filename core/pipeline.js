@@ -58,9 +58,11 @@ export class Pipeline {
     await runRouter(this.store, runId, this.config);
     this.notify(runId);
 
-    const tasks = this.store.readTasks(runId).tasks;
+    // Re-read tasks.json every iteration: an agent's create_task tool call
+    // can append new tasks mid-execution, and they should run too.
     this.store.setStage(runId, 'execution');
-    for (const task of tasks) {
+    let task;
+    while ((task = this.store.readTasks(runId).tasks.find(t => t.status === 'pending'))) {
       this.store.setStage(runId, 'execution', { currentTaskId: task.id });
       this.notify(runId);
       const retro = await runExecutorTask(this.store, runId, task.id, this.config);

@@ -1,5 +1,5 @@
 import React from 'react';
-import { TYPE_META, AI_ROLES, nodeLabel } from './flowTypes.js';
+import { TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, nodeLabel } from './flowTypes.js';
 
 // Right-hand panel: shows the artifacts and retrospective for whichever node
 // is selected on the canvas. Everything shown here is read straight from the
@@ -56,6 +56,7 @@ export default function Inspector({ snapshot, selectedNode }) {
         ['Goal', flowNode.data?.goal || '(none)'],
         flowNode.data?.constraints?.length ? ['Constraints', flowNode.data.constraints.join('\n')] : null,
         task ? [`Output — ${task.id}`, taskOutputs?.[task.id] ?? '(not yet produced)'] : ['Output', '(task not yet created)'],
+        task ? toolCallsSection(retrospectives?.[`executor-${task.id}`]) : null,
         task ? retroSection(retrospectives?.[`executor-${task.id}`]) : null
       ];
     } else if (flowNode.type === 'aiStep') {
@@ -107,6 +108,7 @@ export default function Inspector({ snapshot, selectedNode }) {
       task.constraints.length ? ['Constraints', task.constraints.join('\n')] : null,
       task.dependsOn.length ? ['Depends on', task.dependsOn.join(', ')] : null,
       ['Output', taskOutputs?.[task.id] ?? '(not yet produced)'],
+      toolCallsSection(retrospectives?.[`executor-${task.id}`]),
       retroSection(retrospectives?.[`executor-${task.id}`])
     ] : [];
   }
@@ -250,6 +252,94 @@ export function FlowInspector({ flow, selectedNode, models, onChangeData, onDele
             <h3>Worker</h3>
             <WorkerPicker worker={d.worker} models={models} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
           </section>
+
+          {/* Advanced example node fields (category, template, contextSpec) — see FLOW_NODES.md */}
+          {(node.type === 'agentTask' || node.type === 'aiStep') && (
+            <>
+              <section>
+                <h3>Category (for model selection)</h3>
+                <select
+                  value={d.category ?? ''}
+                  disabled={readOnly}
+                  onChange={e => set({ category: e.target.value || undefined })}
+                >
+                  <option value="">(none)</option>
+                  {NODE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </section>
+              <section>
+                <h3>Template (from catalog — see FLOW_NODES.md)</h3>
+                <select
+                  value={d.template ?? ''}
+                  disabled={readOnly}
+                  onChange={e => {
+                    const t = e.target.value;
+                    const patch = { template: t || undefined };
+                    if (t && NODE_TEMPLATES[t]?.category) patch.category = NODE_TEMPLATES[t].category;
+                    set(patch);
+                  }}
+                >
+                  <option value="">(custom / none)</option>
+                  {Object.keys(NODE_TEMPLATES).map(k => (
+                    <option key={k} value={k}>{k} — {NODE_TEMPLATES[k].label}</option>
+                  ))}
+                </select>
+                {d.template && NODE_TEMPLATES[d.template] && (
+                  <div className="node-sub" style={{ marginTop: 4 }}>{NODE_TEMPLATES[d.template].description}</div>
+                )}
+              </section>
+              <section>
+                <h3>Context spec — explicit minimal files + descriptions (recommended for plan-start / generated nodes)</h3>
+                <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: 4 }}>
+                  Only these files (with the given descriptions) will be given to the node. See FLOW_NODES.md.
+                </div>
+                {(d.contextSpec?.files ?? []).map((f, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                    <input
+                      style={{ flex: '1 1 40%' }}
+                      placeholder="path/to/file.ts"
+                      value={f.path || ''}
+                      disabled={readOnly}
+                      onChange={e => {
+                        const files = [...(d.contextSpec?.files || [])];
+                        files[i] = { ...files[i], path: e.target.value };
+                        set({ contextSpec: { files } });
+                      }}
+                    />
+                    <input
+                      style={{ flex: '1 1 60%' }}
+                      placeholder="Description / reason for including (keeps context small)"
+                      value={f.description || ''}
+                      disabled={readOnly}
+                      onChange={e => {
+                        const files = [...(d.contextSpec?.files || [])];
+                        files[i] = { ...files[i], description: e.target.value };
+                        set({ contextSpec: { files } });
+                      }}
+                    />
+                    {!readOnly && (
+                      <button type="button" onClick={() => {
+                        const files = (d.contextSpec?.files || []).filter((_, idx) => idx !== i);
+                        set({ contextSpec: files.length ? { files } : undefined });
+                      }}>✕</button>
+                    )}
+                  </div>
+                ))}
+                {!readOnly && (
+                  <button type="button" className="ghost mini" onClick={() => {
+                    const files = [...(d.contextSpec?.files || []), { path: '', description: '' }];
+                    set({ contextSpec: { files } });
+                  }}>+ Add file</button>
+                )}
+              </section>
+              {d.generatedBy && (
+                <section>
+                  <h3>Provenance</h3>
+                  <pre>Generated by: {d.generatedBy}{d.template ? ` (template: ${d.template})` : ''}</pre>
+                </section>
+              )}
+            </>
+          )}
         </>}
 
         {node.type === 'aiStep' && <>
@@ -298,6 +388,21 @@ export function FlowInspector({ flow, selectedNode, models, onChangeData, onDele
       </div>
     </aside>
   );
+}
+
+// What the agent actually did with its tools: one entry per call, straight
+// from the executor retrospective ({ tool, args, ok, result|error, ms }).
+function toolCallsSection(retro) {
+  const calls = retro?.toolCalls;
+  if (!calls?.length) return null;
+  const lines = calls.map(c => [
+    `[${c.ok ? 'ok' : 'FAILED'}] ${c.tool}${c.ms != null ? ` · ${c.ms} ms` : ''}`,
+    c.args !== undefined ? `  args: ${JSON.stringify(c.args)}` : null,
+    c.ok
+      ? (c.result !== undefined ? `  result: ${JSON.stringify(c.result)}` : null)
+      : `  error: ${c.error}`
+  ].filter(Boolean).join('\n'));
+  return [`Tool calls (${calls.length})`, lines.join('\n\n')];
 }
 
 function retroSection(retro) {

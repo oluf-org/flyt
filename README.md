@@ -1,5 +1,9 @@
 # LLM Flow
 
+**Read [GOALS.md](./GOALS.md) first.** It is the authoritative source of project intent, principles, current architecture (classic pipeline + custom flows), maturity, and non-functional requirements — especially performance, responsiveness, and feel.
+
+**For custom flows / the flowchart canvas:** See [FLOW_NODES.md](./FLOW_NODES.md). It defines the standard example nodes (Start/Plan-Start, Plan Evaluation, template-based generated nodes with categories, Stitch, Final Evaluation, etc.), the contracts AI should use when generating nodes, and how the advanced planning + reflection pattern is intended to work.
+
 Electron MVP for AI-first task orchestration: a live flowchart canvas over a
 file-based multi-model pipeline.
 

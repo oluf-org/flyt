@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import FlowCanvas, { FlowEditor } from './FlowCanvas.jsx';
 import Inspector, { FlowInspector } from './Inspector.jsx';
 import Settings from './Settings.jsx';
-import { TYPE_META } from './flowTypes.js';
+import { TYPE_META, NODE_TEMPLATES, createNodeFromTemplate } from './flowTypes.js';
 
 function setTheme(mode) { // 'light' | 'dark'
   document.documentElement.dataset.theme = mode;
@@ -172,6 +172,29 @@ export default function App() {
     });
   };
 
+  // Add a node using one of the documented standard templates (see FLOW_NODES.md + flowTypes.NODE_TEMPLATES)
+  const addNodeFromTemplate = (tplName) => {
+    const created = createNodeFromTemplate(tplName, {
+      data: { worker: { ...defaultWorker } }
+    });
+    const meta = TYPE_META[created.type] || { kind: created.kind || 'ai' };
+    changeFlow(f => {
+      const n = f.nodes.length;
+      const id = freshNodeId(created.type);
+      setSelectedNode(id);
+      return {
+        ...f,
+        nodes: [...f.nodes, {
+          id,
+          type: created.type,
+          kind: meta.kind || created.kind || 'ai',
+          position: { x: 280, y: 40 + (n % 6) * 90 },
+          data: created.data
+        }]
+      };
+    });
+  };
+
   const changeNodeData = (nodeId, patch) => {
     changeFlow(f => ({
       ...f,
@@ -325,6 +348,22 @@ export default function App() {
                       <span className="palette-icon">{m.icon}</span>{m.label}
                     </button>
                   ))}
+                </div>
+                <div className="palette" style={{ marginTop: 4, opacity: 0.95 }}>
+                  <span className="section-label" style={{ fontSize: '11px', marginRight: 6 }}>Examples (see FLOW_NODES.md):</span>
+                  {Object.keys(NODE_TEMPLATES).map(tpl => {
+                    const t = NODE_TEMPLATES[tpl];
+                    return (
+                      <button
+                        key={tpl}
+                        className="palette-btn"
+                        onClick={() => addNodeFromTemplate(tpl)}
+                        title={`${t.label}: ${t.description}`}
+                      >
+                        <span className="palette-icon">{t.icon || '✦'}</span>{t.label}
+                      </button>
+                    );
+                  })}
                 </div>
                 <div className="toolbar-spacer" />
                 <span className={'save-dot' + (flowSaved ? ' saved' : '')}>{flowSaved ? 'Saved' : 'Saving…'}</span>

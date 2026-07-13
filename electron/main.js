@@ -43,12 +43,20 @@ function rebuildRuntimeConfig() {
       ? { provider: override.provider, model: override.model }
       : { provider: def.provider, model: def.model };
     if (w.provider === 'openrouter' && settings.openrouterApiKey) w.apiKey = settings.openrouterApiKey;
+    // Native tool-calling capability, learned from the last models:list fetch
+    // (persisted in settings.json). Unknown models fall back to the text
+    // tool protocol, which works everywhere.
+    if (w.provider === 'openrouter') w.supportsTools = Boolean(settings.modelCapabilities?.[w.model]);
     workers[name] = w;
   }
   runtimeConfig.workers = workers;
   // Per-provider key lookup for task workers persisted in runs/tasks.json,
   // which must never contain the key itself.
   runtimeConfig.providerKeys = settings.openrouterApiKey ? { openrouter: settings.openrouterApiKey } : {};
+  // Per-model tool support for task workers resolved at execution time.
+  runtimeConfig.modelCapabilities = settings.modelCapabilities ?? {};
+  // Category → worker mapping for advanced planning flows (FLOW_NODES.md)
+  runtimeConfig.categoryWorkers = baseConfig.categoryWorkers ?? {};
 }
 rebuildRuntimeConfig();
 
@@ -164,12 +172,20 @@ ipcMain.handle('models:list', async () => {
     throw new Error(`OpenRouter models ${res.status}: ${body.slice(0, 300)}`);
   }
   const data = await res.json();
-  return (data.data ?? []).map(m => ({
+  const models = (data.data ?? []).map(m => ({
     id: m.id,
     name: m.name ?? m.id,
     contextLength: m.context_length ?? null,
     supportsTools: (m.supported_parameters || []).includes('tools')
   }));
+  // Remember which models can call tools natively so the agent loop can pick
+  // the native path per worker (survives restarts via settings.json).
+  settings.modelCapabilities = Object.fromEntries(
+    models.filter(m => m.supportsTools).map(m => [m.id, true])
+  );
+  persistSettings();
+  rebuildRuntimeConfig();
+  return models;
 });
 // Re-tint the native window controls when the renderer flips theme.
 ipcMain.handle('titlebar:setTheme', (_e, mode) => {

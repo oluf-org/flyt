@@ -1,7 +1,8 @@
 // Executor node: runs ONE task from tasks.json -> tasks/<id>.md + per-task
 // retrospective. Sequential orchestration lives in pipeline.js; this module
 // only knows how to execute a single self-describing task from file state.
-import { callModel } from '../adapters/index.js';
+import { runAgent } from '../agent.js';
+import { getTools } from '../tools/index.js';
 import { makeRetrospective } from '../retrospective.js';
 
 export async function runExecutorTask(store, runId, taskId, config = {}) {
@@ -23,18 +24,43 @@ export async function runExecutorTask(store, runId, taskId, config = {}) {
     else {
       const m = input.match(/task-\d+/);
       // Not a task reference: flow runs may name an upstream flow-node id
-      // whose output lives in nodes/<id>.md.
-      const out = m ? store.readTaskOutput(runId, m[0]) : store.readNodeOutput?.(runId, input);
-      if (out) contextParts.push(`--- ${m ? m[0] + ' output' : input} ---\n${out}`);
+      // whose output lives in nodes/<id>.md, or a contextSpec file in the
+      // run's workspace/.
+      let out = m ? store.readTaskOutput(runId, m[0]) : store.readNodeOutput?.(runId, input);
+      if (out == null && !m) {
+        try { out = store.readWorkspaceFile?.(runId, input); } catch { /* escapes workspace */ }
+      }
+      if (out != null) contextParts.push(`--- ${m ? m[0] + ' output' : input} ---\n${out}`);
+      else {
+        contextParts.push(`--- ${input} ---\n[NOT FOUND: this declared input does not exist in the run yet. State any assumptions you make.]`);
+        store.appendLog(runId, { event: 'context_input_missing', node: `executor:${taskId}`, input });
+      }
     }
+  }
+
+  // Toolset: everything in the registry unless the task names a subset
+  // (task.tools: string[]). The agent loop picks native vs text protocol
+  // per worker capability.
+  const tools = getTools(task.tools);
+  const ctx = {
+    store, runId, taskId,
+    defaultWorker: {
+      provider: config.workers?.executor?.provider ?? task.worker.provider,
+      model: config.workers?.executor?.model ?? task.worker.model
+    }
+  };
+  const worker = { ...task.worker };
+  if (worker.provider === 'openrouter') {
+    worker.supportsTools = Boolean(config.modelCapabilities?.[worker.model]);
   }
 
   const system = [
     'ROLE: executor',
     'You are an execution worker in an AI orchestration pipeline.',
     'Complete exactly the task described. Produce the deliverable as Markdown.',
-    'Do not do work belonging to other tasks. Respect every constraint.'
-  ].join('\n');
+    'Do not do work belonging to other tasks. Respect every constraint.',
+    tools.length ? 'You have tools to write files, spawn follow-up tasks, and record a task spec — use them when they help the task.' : ''
+  ].filter(Boolean).join('\n');
 
   const userMsg = [
     `USER PROMPT:\n${store.readPrompt(runId)}`,
@@ -45,21 +71,26 @@ export async function runExecutorTask(store, runId, taskId, config = {}) {
   ].filter(Boolean).join('\n\n');
 
   let retro;
+  let status;
   try {
-    const result = await callModel({ ...task.worker, apiKey, system, prompt: userMsg });
+    const result = await runAgent({ worker, apiKey, system, prompt: userMsg, tools, ctx });
     store.writeTaskOutput(runId, taskId, result.text.trim());
-    task.status = 'done';
+    status = 'done';
+    const failedCalls = result.toolCalls.filter(c => !c.ok);
     retro = makeRetrospective({
       node: `executor:${taskId}`,
       status: 'success',
+      problems: failedCalls.map(c => `Tool call ${c.tool} failed: ${c.error}`),
+      resolution: failedCalls.length ? 'Errors were fed back to the model for self-correction.' : '',
       confidence: 0.75,
-      recommendation: `Task "${task.title}" completed by ${task.worker.provider}/${task.worker.model}.`,
+      recommendation: `Task "${task.title}" completed by ${task.worker.provider}/${task.worker.model}${result.toolCalls.length ? ` using ${result.toolCalls.length} tool call(s)` : ''}.`,
       model: task.worker,
       usage: result.usage,
-      durationMs: result.durationMs
+      durationMs: result.durationMs,
+      toolCalls: result.toolCalls
     });
   } catch (err) {
-    task.status = 'failed';
+    status = 'failed';
     retro = makeRetrospective({
       node: `executor:${taskId}`,
       status: 'failed',
@@ -70,7 +101,14 @@ export async function runExecutorTask(store, runId, taskId, config = {}) {
       model: task.worker
     });
   }
-  store.writeTasks(runId, tasksDoc); // persist status change
+  // Persist the status change against a FRESH read of tasks.json: a
+  // create_task tool call during this run may have appended tasks that the
+  // doc read at the top of this function doesn't contain.
+  const freshDoc = store.readTasks(runId);
+  const freshTask = freshDoc.tasks.find(t => t.id === taskId);
+  if (freshTask) freshTask.status = status;
+  store.writeTasks(runId, freshDoc);
+  task.status = status; // keep the in-memory copy consistent for callers
   store.writeRetrospective(runId, `executor-${taskId}`, retro);
   return retro;
 }

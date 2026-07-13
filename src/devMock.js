@@ -16,7 +16,16 @@ const snapshots = {
     },
     retrospectives: {
       planner: { status: 'ok', confidence: 0.92, model: { provider: 'openai', model: 'gpt-4o' }, durationMs: 1900, problems: [] },
-      router: { status: 'ok', confidence: 0.88, model: { provider: 'anthropic', model: 'claude-haiku-4-5' }, durationMs: 640, problems: [] }
+      router: { status: 'ok', confidence: 0.88, model: { provider: 'anthropic', model: 'claude-haiku-4-5' }, durationMs: 640, problems: [] },
+      'executor-task-1': {
+        status: 'success', confidence: 0.75, problems: [],
+        model: { provider: 'openai', model: 'gpt-4o' }, durationMs: 5400,
+        recommendation: 'Task "Scaffold mobile-first shell" completed using 2 tool call(s).',
+        toolCalls: [
+          { tool: 'write_task_md', args: { content: '# Spec — shell scaffold…' }, ok: true, result: { written: 'tasks/task-1.spec.md' }, ms: 3 },
+          { tool: 'write_file', args: { path: 'src/App.jsx', content: '…' }, ok: false, error: 'Invalid arguments: args.content: required property missing', ms: 1 }
+        ]
+      }
     },
     taskOutputs: { 'task-1': 'Shell scaffolded with responsive layout.' }
   },

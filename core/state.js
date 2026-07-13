@@ -69,6 +69,39 @@ export class RunStore {
     const p = path.join(this.runDir(runId), 'tasks.json');
     return fs.existsSync(p) ? readJson(p) : null;
   }
+  // Task spec markdown (written by the write_task_md tool): the agent's own
+  // structured description of the task it is executing.
+  writeTaskSpec(runId, taskId, markdown) {
+    const p = path.join(this.runDir(runId), 'tasks', `${taskId}.spec.md`);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, markdown, 'utf8');
+    return path.join('tasks', `${taskId}.spec.md`);
+  }
+
+  // --- workspace: the only place agent tools may write arbitrary files ---
+  // Resolves a tool-supplied relative path inside runs/<runId>/workspace/ and
+  // rejects anything (.., absolute paths, drive letters) that escapes it.
+  workspacePath(runId, relPath) {
+    const base = path.join(this.runDir(runId), 'workspace');
+    const resolved = path.resolve(base, String(relPath));
+    if (resolved !== base && !resolved.startsWith(base + path.sep)) {
+      throw new Error(`Path "${relPath}" escapes the run workspace`);
+    }
+    return resolved;
+  }
+  writeWorkspaceFile(runId, relPath, content) {
+    const p = this.workspacePath(runId, relPath);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, content, 'utf8');
+    return path.relative(this.runDir(runId), p).split(path.sep).join('/');
+  }
+  // Read a workspace file (throws on paths that escape the workspace,
+  // returns null when the file simply doesn't exist).
+  readWorkspaceFile(runId, relPath) {
+    const p = this.workspacePath(runId, relPath);
+    return fs.existsSync(p) && fs.statSync(p).isFile() ? fs.readFileSync(p, 'utf8') : null;
+  }
+
   writeTaskOutput(runId, taskId, markdown) {
     fs.writeFileSync(path.join(this.runDir(runId), 'tasks', `${taskId}.md`), markdown, 'utf8');
   }
