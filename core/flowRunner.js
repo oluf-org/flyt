@@ -28,9 +28,10 @@ import { callModel } from './adapters/index.js';
 import { makeRetrospective } from './retrospective.js';
 import { runExecutorTask } from './nodes/executor.js';
 import { executeTool } from './tools/index.js';
-import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives } from './planEval.js';
-import { createNodeFromTemplate, getTemplate } from '../src/flowTypes.js';
-import { layoutPositions } from '../src/flowLayout.js';
+import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, extractJson } from './planEval.js';
+import { createNodeFromTemplate, getTemplate, resolveFlow, resolveInstance, primaryPort } from '../src/flowTypes.js';
+import { layoutPositions, containerLayout } from '../src/flowLayout.js';
+import { lintFlow, RUNTIME_RULES } from './flowlang/lint.js';
 
 const DEFAULT_SYSTEM = {
   plan: [
@@ -114,6 +115,30 @@ const DEFAULT_SYSTEM = {
     'Each entry becomes a real executor task run before the flow continues.',
     'Omit the block (or emit "fixTasks": []) when nothing is needed.'
   ].join('\n'),
+  orchestrate: [
+    'ROLE: orchestrate',
+    'You are an Orchestrator node. From the brief and the upstream task list,',
+    'decide the complete set of work nodes needed and respond with ONE ```json',
+    'block satisfying the STRICT plan contract — invalid output is rejected and',
+    'the orchestrator fails:',
+    '{',
+    '  "nodes": [{',
+    '    "id": "<unique; letters/digits/_/- only>",',
+    '    "template": "<code-general-step | code-design-step | documentation-step | test-creation-step>",',
+    '    "taskRef": "task-N",',
+    '    "category": "<Code general | Code design | documentation | Test-creation>",',
+    '    "title": "<short>", "goal": "<fully self-describing>",',
+    '    "dependsOn": ["<id of a prerequisite node>"],',
+    '    "contextSpec": { "files": [{ "path": "<file>", "description": "<exactly which part is needed>" }] }',
+    '  }],',
+    '  "parallelGroups": [["task-1","task-2"],["task-3"]],',
+    '  "summary": "<one line>"',
+    '}',
+    'The nodes you declare are created inside you and run AUTOMATICALLY, without',
+    'any human review — every goal must be fully self-describing, and every',
+    'contextSpec minimal. Independent nodes run in parallel; use dependsOn (or',
+    'parallelGroups as sequential waves) only where order truly matters.'
+  ].join('\n'),
   'final-eval': [
     'ROLE: final-eval',
     'You are the final evaluation node.',
@@ -168,21 +193,36 @@ export function topoSort(flow) {
 }
 
 export class FlowRunner {
-  constructor(store, config, onUpdate = () => {}) {
+  constructor(store, config, onUpdate = () => {}, nodeStore = null) {
     this.store = store;
     this.config = config;
     this.onUpdate = onUpdate;
+    this.nodeStore = nodeStore; // Node Library (template defaults for instances)
     this.gates = new Map(); // runId -> resolve(bool) for a pending approval
   }
 
   notify(runId) { this.onUpdate(runId); }
   owns(runId) { try { return Boolean(this.store.readMeta(runId)?.flowId); } catch { return false; } }
 
-  start(flow) {
-    const input = flow.nodes.find(n => n.type === 'input');
+  // Start a run of a flow definition. Template instances are resolved
+  // against the Node Library HERE, so the run's flow.json is a fully
+  // self-contained snapshot (template edits never mutate past runs).
+  // userInput becomes the content of the flow's User Input node for this run.
+  start(flow, { userInput = '' } = {}) {
+    // Pre-run gate (REFACTOR-PLAN §4): refuse to start a structurally invalid
+    // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
+    // lint concerns; the runner has always tolerated partial flows.
+    const gate = lintFlow(flow, { templates: this.nodeStore?.listFull() ?? null, rules: RUNTIME_RULES });
+    if (!gate.ok) {
+      throw new Error(`Flow "${flow.name ?? flow.id}" failed validation:\n`
+        + gate.errors.map(e => `- [${e.rule}] ${e.message}`).join('\n'));
+    }
+    const resolved = resolveFlow(flow, this.nodeStore?.listFull() ?? []);
+    const flowCopy = JSON.parse(JSON.stringify({ ...resolved, builtin: undefined }));
+    const input = flowCopy.nodes.find(n => n.type === 'input');
+    if (input && userInput.trim()) input.data = { ...input.data, text: userInput.trim() };
     const brief = input?.data?.text?.trim() || `Flow: ${flow.name}`;
     const runId = this.store.createRun(brief);
-    const flowCopy = JSON.parse(JSON.stringify({ ...flow, builtin: undefined }));
     this.store.writeFlow(runId, flowCopy);
     this.store.writeMeta(runId, {
       ...this.store.readMeta(runId),
@@ -293,7 +333,9 @@ export class FlowRunner {
     for (;;) {
       const nodesById = new Map(flow.nodes.map(n => [n.id, n]));
       const order = topoSort(flow); // also validates: throws on cycles
-      const ready = order.filter(n => !completed.has(n.id) &&
+      // Orchestrator children (managedBy) are run by their container's inline
+      // sub-walk — the outer scheduler never picks them up.
+      const ready = order.filter(n => !completed.has(n.id) && !n.data?.managedBy &&
         flow.edges.every(e =>
           e.target !== n.id || completed.has(e.source) || !nodesById.has(e.source)));
       if (!ready.length) break;
@@ -496,11 +538,26 @@ export class FlowRunner {
       const src = flow.nodes.find(n => n.id === e.source);
       if (!src) continue;
       const label = src.data?.title?.trim() || src.type;
-      const content = src.type === 'agentTask'
-        ? this.store.readTaskOutput(runId, taskIdByNode.get(src.id) ?? '')
-        : src.type === 'input'
-          ? src.data?.text
-          : this.store.readNodeOutput(runId, src.id);
+      let content;
+      if (src.type === 'agentTask') {
+        content = this.store.readTaskOutput(runId, taskIdByNode.get(src.id) ?? '');
+      } else if (src.type === 'input') {
+        content = src.data?.text;
+      } else {
+        // The edge may pick a declared output port of the source. Auxiliary
+        // ports live in nodes/<id>.<port>.md; the primary port (or an absent
+        // sourceHandle) is the node's main output. A missing port artifact
+        // falls back to the main output rather than dropping the edge.
+        const port = e.sourceHandle;
+        const aux = port && port !== primaryPort(src)
+          ? this.store.readNodeOutput(runId, `${src.id}.${port}`)
+          : null;
+        content = aux ?? this.store.readNodeOutput(runId, src.id);
+        if (port && aux) {
+          parts.push(`--- ${label} (${src.id} · output: ${port}) ---\n${content}`);
+          continue;
+        }
+      }
       if (content) parts.push(`--- ${label} (${src.id}) ---\n${content}`);
     }
     return parts;
@@ -598,6 +655,14 @@ export class FlowRunner {
         goal: node.data?.goal || node.data?.title || '',
         inputs,
         constraints: node.data?.constraints ?? [],
+        // Template/override instructions ride along as constraints so the
+        // executor honors them without a schema change.
+        ...(node.data?.instructions?.trim()
+          ? { constraints: [...(node.data?.constraints ?? []), node.data.instructions.trim()] }
+          : {}),
+        // Tool availability comes from the node template (overridable per
+        // workflow); undefined = the full registry.
+        ...(Array.isArray(node.data?.tools) ? { tools: node.data.tools } : {}),
         dependsOn: upstream.map(srcId => taskIdByNode.get(srcId)).filter(Boolean),
         worker,
         status: 'pending'
@@ -624,10 +689,15 @@ export class FlowRunner {
       const system = node.data?.system?.trim() || DEFAULT_SYSTEM[role] || DEFAULT_SYSTEM.custom;
       const parts = this.upstreamContext(runId, flow, node, taskIdByNode);
       const retryGuidance = this.store.readNodeOutput(runId, `retry-for-${node.id}`);
+      // Planning roles learn from prior runs' retrospectives (historyDigest),
+      // matching the classic pipeline's planner behavior.
+      const history = (role === 'plan' || role === 'plan-start') ? this.store.historyDigest() : '';
       const userMsg = [
         `USER PROMPT:\n${this.store.readPrompt(runId)}`,
         node.data?.goal?.trim() ? `GOAL:\n${node.data.goal.trim()}` : '',
+        node.data?.instructions?.trim() ? `EXTRA INSTRUCTIONS (from the node template / workflow):\n${node.data.instructions.trim()}` : '',
         parts.length ? `CONTEXT:\n${parts.join('\n\n')}` : '',
+        history ? `LESSONS FROM PREVIOUS RUNS (retrospective recommendations):\n${history}` : '',
         retryGuidance ? `RETRY GUIDANCE (a previous attempt was rejected — fix this):\n${retryGuidance}` : ''
       ].filter(Boolean).join('\n\n');
 
@@ -700,6 +770,11 @@ export class FlowRunner {
         if (!mat.ok) problems.push(...mat.errors);
         outcome.materialized = mat.ok && mat.created.length > 0;
         outcome.materializedCount = mat.created.length;
+        // Auxiliary "summary" output port (see flowTypes ROLE_PORTS).
+        const summary = extractJson(this.store.readNodeOutput(runId, node.id))?.summary;
+        if (typeof summary === 'string' && summary.trim()) {
+          this.store.writeNodeOutput(runId, `${node.id}.summary`, summary.trim());
+        }
       }
       if (role === 'step-eval') {
         let verdictObj = parseStepEvalVerdict(outText);
@@ -713,6 +788,8 @@ export class FlowRunner {
         }
         if (verdictObj) {
           outcome.stepEval = verdictObj;
+          // Auxiliary "verdict" output port: just the structured decision.
+          this.store.writeNodeOutput(runId, `${node.id}.verdict`, JSON.stringify(verdictObj, null, 2));
           this.store.appendLog(runId, { event: 'step_eval_verdict', node: node.id, ...verdictObj });
         } else {
           problems.push('step-eval emitted no structured verdict JSON block; treated as pass');
@@ -749,6 +826,10 @@ export class FlowRunner {
       return outcome;
     }
 
+    if (node.type === 'orchestrator') {
+      return this.runOrchestrator(runId, flow, node, opts);
+    }
+
     if (node.type === 'output') {
       this.store.appendLog(runId, { event: 'node_start', node: node.id, type: 'output' });
       const parts = this.upstreamContext(runId, flow, node, taskIdByNode);
@@ -762,6 +843,168 @@ export class FlowRunner {
     }
 
     throw new Error(`Unknown node type "${node.type}" (node ${node.id})`);
+  }
+
+  // The Orchestrator container: one autonomous planning call decides the set
+  // of work nodes (same strict contract as plan-eval, one bounded re-ask),
+  // the nodes are materialized INSIDE the box (parentId + managedBy, never
+  // gated), executed by an inline sub-walk (parallel waves for aiSteps,
+  // sequential agent tasks), and every child's output is aggregated into the
+  // orchestrator's primary "results" output — downstream nodes only ever see
+  // the orchestrator itself. No human intervention anywhere in the loop.
+  async runOrchestrator(runId, flow, node, opts) {
+    const worker = resolveWorker(node, this.config);
+    const apiKey = this.config.providerKeys?.[worker.provider];
+    this.store.appendLog(runId, {
+      event: 'node_start', node: node.id, type: 'orchestrator',
+      worker: { provider: worker.provider, model: worker.model }
+    });
+
+    const failNode = (msg, problems = [msg]) => {
+      this.store.writeRetrospective(runId, node.id, makeRetrospective({
+        node: node.id,
+        status: 'failed',
+        problems,
+        resolution: 'Orchestrator failed; run stopped and escalated to human.',
+        confidence: 0,
+        recommendation: `Orchestrator "${node.data?.title || node.id}" failed (${worker.provider}/${worker.model}). ${msg}`,
+        model: { provider: worker.provider, model: worker.model }
+      }));
+      this.setNodeStatus(runId, node.id, 'failed');
+      return new Error(`Orchestrator ${node.id} failed: ${msg}`);
+    };
+
+    // Resume support: children already materialized on a previous pass are
+    // reused — the planning call is skipped and unfinished children re-run.
+    let children = flow.nodes.filter(n => n.data?.managedBy === node.id);
+    if (!children.length) {
+      const system = node.data?.system?.trim() || DEFAULT_SYSTEM.orchestrate;
+      const parts = this.upstreamContext(runId, flow, node, opts.taskIdByNode);
+      const userMsg = [
+        `USER PROMPT:\n${this.store.readPrompt(runId)}`,
+        node.data?.goal?.trim() ? `GOAL:\n${node.data.goal.trim()}` : '',
+        node.data?.instructions?.trim() ? `EXTRA INSTRUCTIONS (from the workflow):\n${node.data.instructions.trim()}` : '',
+        parts.length ? `CONTEXT:\n${parts.join('\n\n')}` : ''
+      ].filter(Boolean).join('\n\n');
+
+      // Stream the planning output into the "plan" sidecar as it arrives.
+      let lastFlush = 0;
+      const onText = textSoFar => {
+        const now = Date.now();
+        if (now - lastFlush < 250) return;
+        lastFlush = now;
+        this.store.writeNodeOutput(runId, `${node.id}.plan`, textSoFar);
+        this.notify(runId);
+      };
+      let result;
+      try {
+        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText });
+      } catch (err) {
+        const msg = String(err?.message ?? err);
+        this.store.appendLog(runId, { event: 'node_error', node: node.id, role: 'orchestrate', error: msg });
+        throw failNode(msg);
+      }
+      let outText = String(result.text ?? '').trim();
+      this.store.writeNodeOutput(runId, `${node.id}.plan`, outText);
+
+      const templateIds = this.nodeStore ? this.nodeStore.listFull().map(t => t.id) : [];
+      let parsed = parsePlanEval(outText, templateIds);
+      if (!parsed.ok) {
+        const fixed = await this.reAsk(runId, node, worker, apiKey, system, userMsg, outText, parsed.errors);
+        if (fixed != null) {
+          const reparsed = parsePlanEval(fixed, templateIds);
+          if (reparsed.ok) {
+            parsed = reparsed;
+            outText = fixed;
+            this.store.writeNodeOutput(runId, `${node.id}.plan`, fixed);
+          }
+        }
+      }
+      // Unlike plan-eval (which degrades gracefully), creating nodes IS the
+      // orchestrator's job — an invalid plan fails the node honestly.
+      if (!parsed.ok) throw failNode('planning output violated the node contract', parsed.errors);
+
+      const mat = this.materializeParsedNodes(runId, flow, node, parsed.plan, { parentId: node.id });
+      if (!mat.ok || !mat.created.length) {
+        throw failNode('no nodes could be materialized from the plan', mat.errors.length ? mat.errors : ['plan declared no new nodes']);
+      }
+      children = mat.created;
+
+      // Auxiliary "summary" output port: the plan summary + node inventory.
+      this.store.writeNodeOutput(runId, `${node.id}.summary`, [
+        parsed.plan.summary ?? `${children.length} node(s) orchestrated.`,
+        '',
+        ...children.map(c => `- ${c.data?.title ?? c.id} (${c.id})`)
+      ].join('\n'));
+      this.store.appendLog(runId, { event: 'orchestrator_spawned', node: node.id, children: children.map(c => c.id) });
+    } else {
+      this.store.appendLog(runId, { event: 'node_resume', node: node.id, type: 'orchestrator', children: children.length });
+    }
+
+    // The container stays visibly active while its children run.
+    this.setNodeStatus(runId, node.id, 'active');
+
+    // Inline sub-walk over the container's children: same wave semantics as
+    // the outer scheduler, scoped to the box. Already-done children (resume
+    // after a restart) are skipped.
+    const childIds = new Set(children.map(c => c.id));
+    const done = new Set(children
+      .filter(c => this.store.readMeta(runId).nodeStatus?.[c.id] === 'done')
+      .map(c => c.id));
+    const maxParallel = Math.max(1, Number(this.config.maxParallel ?? 4));
+    for (;;) {
+      const ready = children.filter(c => !done.has(c.id) &&
+        flow.edges.every(e => e.target !== c.id || !childIds.has(e.source) || done.has(e.source)));
+      if (!ready.length) break;
+      const safe = ready.filter(c => c.type === 'aiStep');
+      const batch = safe.length > 1 ? safe.slice(0, maxParallel) : [ready[0]];
+
+      if (batch.length > 1) {
+        this.store.appendLog(runId, { event: 'wave_start', container: node.id, nodes: batch.map(n => n.id) });
+        const results = await Promise.allSettled(batch.map(c => this.runNode(runId, flow, c, opts)));
+        batch.forEach((c, i) => { if (results[i].status === 'fulfilled') done.add(c.id); });
+        const rejected = results.find(r => r.status === 'rejected');
+        if (rejected) {
+          this.setNodeStatus(runId, node.id, 'failed');
+          throw rejected.reason;
+        }
+        continue;
+      }
+
+      const child = batch[0];
+      try {
+        await this.runNode(runId, flow, child, opts);
+        if (child.type === 'agentTask' && !await this.runPendingTasks(runId, opts.taskIdByNode)) {
+          throw new Error(`Orchestrator ${node.id}: child task ${child.id} failed`);
+        }
+      } catch (err) {
+        this.setNodeStatus(runId, node.id, 'failed');
+        throw err;
+      }
+      done.add(child.id);
+    }
+
+    // Aggregate every child's output into the primary "results" output.
+    const sections = children.map(c => {
+      const label = c.data?.title?.trim() || c.id;
+      const content = c.type === 'agentTask'
+        ? this.store.readTaskOutput(runId, opts.taskIdByNode.get(c.id) ?? c.data?.taskId ?? '')
+        : this.store.readNodeOutput(runId, c.id);
+      return `--- ${label} (${c.id}) ---\n\n${content ?? '(no output)'}`;
+    });
+    const title = node.data?.title?.trim() || 'Orchestrator';
+    this.store.writeNodeOutput(runId, node.id, `# ${title} — aggregated results\n\n${sections.join('\n\n')}`);
+
+    this.store.writeRetrospective(runId, node.id, makeRetrospective({
+      node: node.id,
+      status: 'success',
+      problems: [],
+      confidence: 0.75,
+      recommendation: `Orchestrator "${title}" created and ran ${children.length} node(s) autonomously (${worker.provider}/${worker.model}).`,
+      model: { provider: worker.provider, model: worker.model }
+    }));
+    this.setNodeStatus(runId, node.id, 'done');
+    return {};
   }
 
   // One bounded retry for structured-output roles: re-ask the SAME worker with
@@ -806,7 +1049,8 @@ export class FlowRunner {
   // nodes/plan-eval-errors.md + log.jsonl and the run continues without
   // generated nodes (graceful failure).
   materializeGeneratedNodes(runId, flow, planEvalNode, evalOutputText) {
-    const parsed = parsePlanEval(evalOutputText);
+    const parsed = parsePlanEval(evalOutputText,
+      this.nodeStore ? this.nodeStore.listFull().map(t => t.id) : []);
     if (!parsed.ok) {
       this.store.writeNodeOutput(runId, 'plan-eval-errors', [
         '# Plan-eval contract violations',
@@ -818,11 +1062,21 @@ export class FlowRunner {
       this.store.appendLog(runId, { event: 'materialize_failed', fromNode: planEvalNode.id, errors: parsed.errors });
       return { ok: false, errors: parsed.errors, created: [] };
     }
+    return this.materializeParsedNodes(runId, flow, planEvalNode, parsed.plan);
+  }
 
+  // Turn a validated plan into real nodes in the run's flow. Two modes:
+  //   default   — plan-eval style: roots hang off the owner, leaves feed the
+  //               owner's downstream targets, global re-layout.
+  //   parentId  — orchestrator style: children live INSIDE the owner's box
+  //               (parentId + relative grid positions), are flagged managedBy
+  //               so the outer scheduler leaves them alone, never gate, and
+  //               are NOT wired to anything outside the container.
+  materializeParsedNodes(runId, flow, ownerNode, plan, { parentId = null } = {}) {
     const existing = new Set(flow.nodes.map(n => n.id));
-    const specs = parsed.plan.nodes.filter(s => {
+    const specs = plan.nodes.filter(s => {
       if (existing.has(s.id)) {
-        this.store.appendLog(runId, { event: 'materialize_skip', fromNode: planEvalNode.id, node: s.id, reason: 'id already exists in flow' });
+        this.store.appendLog(runId, { event: 'materialize_skip', fromNode: ownerNode.id, node: s.id, reason: 'id already exists in flow' });
         return false;
       }
       return true;
@@ -847,8 +1101,8 @@ export class FlowRunner {
         if (dep && dep !== s.id) { depsFor.get(s.id).add(dep); usedExplicit = true; }
       }
     }
-    if (!usedExplicit && Array.isArray(parsed.plan.parallelGroups)) {
-      const waves = parsed.plan.parallelGroups
+    if (!usedExplicit && Array.isArray(plan.parallelGroups)) {
+      const waves = plan.parallelGroups
         .map(g => g.map(ref => idMap.get(ref)).filter(id => id && depsFor.has(id)));
       for (let i = 1; i < waves.length; i++) {
         for (const id of waves[i]) for (const prev of waves[i - 1]) depsFor.get(id).add(prev);
@@ -869,59 +1123,100 @@ export class FlowRunner {
       if (specs.some(s => cyclic(s.id))) {
         const errors = ['dependsOn: generated nodes form a dependency cycle; nothing was materialized'];
         this.store.writeNodeOutput(runId, 'plan-eval-errors', `# Plan-eval contract violations\n\n- ${errors[0]}`);
-        this.store.appendLog(runId, { event: 'materialize_failed', fromNode: planEvalNode.id, errors });
+        this.store.appendLog(runId, { event: 'materialize_failed', fromNode: ownerNode.id, errors });
         return { ok: false, errors, created: [] };
       }
     }
 
     const created = [];
     for (const s of specs) {
-      const tmpl = getTemplate(s.template);
       // A generated node without an explicit contextSpec at least gets the
       // task list, keeping "minimal declared context" the default.
       const contextSpec = s.contextSpec ?? (s.taskRef
         ? { files: [{ path: 'tasks-md', description: `The full task list from plan-start; only ${s.taskRef} is this node's assignment.` }] }
         : undefined);
-      created.push(createNodeFromTemplate(s.template, {
-        id: s.id,
-        position: { x: 0, y: 0 }, // real position assigned by the layout pass below
-        data: {
-          title: s.title || (s.taskRef ? `${tmpl.label} (${s.taskRef})` : tmpl.label),
-          goal: s.goal || (s.taskRef ? `Complete ${s.taskRef} exactly as defined in tasks.md.` : ''),
-          ...(s.category ? { category: s.category } : {}),
-          ...(contextSpec ? { contextSpec } : {}),
-          ...(s.taskRef ? { taskRef: s.taskRef } : {}),
-          generatedBy: planEvalNode.id
-        }
-      }));
+      const goal = s.goal || (s.taskRef ? `Complete ${s.taskRef} exactly as defined in tasks.md.` : '');
+
+      // Prefer the Node Library template (user-editable worker/instructions/
+      // tools apply); fall back to the built-in catalog contract otherwise.
+      const lib = this.nodeStore?.get(s.template);
+      let node;
+      if (lib) {
+        node = resolveInstance({
+          id: s.id,
+          templateId: s.template,
+          position: { x: 0, y: 0 }, // real position assigned by the layout pass below
+          overrides: {
+            title: s.title || (s.taskRef ? `${lib.name} (${s.taskRef})` : lib.name),
+            goal,
+            ...(s.category ? { category: s.category } : {}),
+            ...(contextSpec ? { contextSpec } : {})
+          }
+        }, lib);
+      } else {
+        const tmpl = getTemplate(s.template);
+        node = createNodeFromTemplate(s.template, {
+          id: s.id,
+          position: { x: 0, y: 0 },
+          data: {
+            title: s.title || (s.taskRef ? `${tmpl.label} (${s.taskRef})` : tmpl.label),
+            goal,
+            ...(s.category ? { category: s.category } : {}),
+            ...(contextSpec ? { contextSpec } : {})
+          }
+        });
+      }
+      node.data = {
+        ...node.data,
+        ...(s.taskRef ? { taskRef: s.taskRef } : {}),
+        generatedBy: ownerNode.id,
+        // Container children run autonomously: managed by the orchestrator's
+        // inline sub-walk, never pausing at an approval gate.
+        ...(parentId ? { managedBy: parentId, requiresApproval: false } : {})
+      };
+      if (parentId) {
+        node.parentId = parentId;
+        node.extent = 'parent';
+      }
+      created.push(node);
     }
 
-    // Wiring: roots hang off the plan-eval node; internal dependsOn edges;
-    // leaves feed the plan-eval node's original downstream targets (stitch /
-    // final-eval / output in the documented pattern).
-    const downstreamTargets = flow.edges.filter(e => e.source === planEvalNode.id).map(e => e.target);
+    // Wiring. Default (plan-eval): roots hang off the owner, internal
+    // dependsOn edges, leaves feed the owner's original downstream targets.
+    // Container (orchestrator): roots hang off the owner, internal edges
+    // only — downstream stays connected to the owner, which completes after
+    // its children and hands over the aggregated result.
+    const downstreamTargets = parentId ? []
+      : flow.edges.filter(e => e.source === ownerNode.id).map(e => e.target);
     const dependedOn = new Set();
     depsFor.forEach(set => set.forEach(id => dependedOn.add(id)));
     const edges = [];
     for (const n of created) {
       const deps = [...depsFor.get(n.id)];
       if (deps.length) {
-        for (const d of deps) edges.push({ id: `gen-e-${d}-${n.id}`, source: d, target: n.id, generatedBy: planEvalNode.id });
+        for (const d of deps) edges.push({ id: `gen-e-${d}-${n.id}`, source: d, target: n.id, generatedBy: ownerNode.id });
       } else {
-        edges.push({ id: `gen-e-${planEvalNode.id}-${n.id}`, source: planEvalNode.id, target: n.id, generatedBy: planEvalNode.id });
+        edges.push({ id: `gen-e-${ownerNode.id}-${n.id}`, source: ownerNode.id, target: n.id, generatedBy: ownerNode.id });
       }
       if (!dependedOn.has(n.id)) {
-        for (const t of downstreamTargets) edges.push({ id: `gen-e-${n.id}-${t}`, source: n.id, target: t, generatedBy: planEvalNode.id });
+        for (const t of downstreamTargets) edges.push({ id: `gen-e-${n.id}-${t}`, source: n.id, target: t, generatedBy: ownerNode.id });
       }
     }
 
     flow.nodes.push(...created);
     flow.edges.push(...edges);
-    // Re-layout the run's display copy so generated nodes slot into clean
-    // dependency layers instead of overlapping the authored ones. This only
-    // touches flow.json inside the run dir — never the saved flow definition.
-    const pos = layoutPositions(flow);
-    for (const n of flow.nodes) n.position = pos.get(n.id) ?? n.position;
+    if (parentId) {
+      // Grid the children inside the container and size its box to fit.
+      const { positions, box } = containerLayout(created, flow.edges);
+      for (const n of created) n.position = positions.get(n.id) ?? n.position;
+      ownerNode.data = { ...ownerNode.data, box };
+    } else {
+      // Re-layout the run's display copy so generated nodes slot into clean
+      // dependency layers instead of overlapping the authored ones. This only
+      // touches flow.json inside the run dir — never the saved flow definition.
+      const pos = layoutPositions(flow);
+      for (const n of flow.nodes) n.position = pos.get(n.id) ?? n.position;
+    }
     this.store.writeFlow(runId, flow);
     const meta = this.store.readMeta(runId);
     this.store.writeMeta(runId, {
@@ -930,8 +1225,9 @@ export class FlowRunner {
     });
     this.store.appendLog(runId, {
       event: 'materialized_nodes',
-      fromNode: planEvalNode.id,
-      nodes: created.map(n => ({ id: n.id, template: n.data.template, category: n.data.category ?? null })),
+      fromNode: ownerNode.id,
+      ...(parentId ? { container: parentId } : {}),
+      nodes: created.map(n => ({ id: n.id, template: n.data.template ?? n.data.templateId ?? null, category: n.data.category ?? null })),
       edges: edges.length
     });
     this.notify(runId);

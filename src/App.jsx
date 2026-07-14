@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import FlowCanvas, { FlowEditor } from './FlowCanvas.jsx';
 import Inspector, { FlowInspector } from './Inspector.jsx';
 import Settings from './Settings.jsx';
-import { TYPE_META, NODE_TEMPLATES, createNodeFromTemplate } from './flowTypes.js';
+import NodesPage from './NodesPage.jsx';
+import { resolveFlow } from './flowTypes.js';
 import { layoutPositions } from './flowLayout.js';
 
 function setTheme(mode) { // 'light' | 'dark'
@@ -13,33 +14,44 @@ function setTheme(mode) { // 'light' | 'dark'
 }
 
 let nodeSeq = 0;
-function freshNodeId(type) {
-  return `${type}-${Date.now().toString(36)}${(nodeSeq++).toString(36)}`;
+function freshNodeId(prefix) {
+  return `${prefix}-${Date.now().toString(36)}${(nodeSeq++).toString(36)}`;
 }
 
-// Renderer is a pure view over file state pushed from the main process:
-// run snapshots (read-only) and flow definitions (editable, autosaved).
+// One mental model (GOALS.md): a Node Library of reusable AI templates, and
+// workflows composed from them on the canvas. Renderer is a pure view over
+// file state pushed from the main process: run snapshots (read-only), flow
+// definitions (editable, autosaved), node templates (edited on the Nodes
+// page). One engine, one run entry: the run panel on the right.
 export default function App() {
   const [runIds, setRunIds] = useState([]);
   const [activeRunId, setActiveRunId] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
-  const [prompt, setPrompt] = useState('');
-  const [busy, setBusy] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showNodesPage, setShowNodesPage] = useState(false);
   const [theme, setThemeState] = useState(
     () => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
   );
+
+  // Node Library (templates) — full definitions for resolution + palette.
+  const [templates, setTemplates] = useState([]);
 
   // Flow-builder state.
   const [flowsList, setFlowsList] = useState([]);
   const [activeFlowId, setActiveFlowId] = useState(null);
   const [flow, setFlow] = useState(null);
   const [flowSaved, setFlowSaved] = useState(true);
+  const [flowLint, setFlowLint] = useState(null); // { ok, errors, warnings } for the open flow
   const [models, setModels] = useState([]);
-  const [defaultWorker, setDefaultWorker] = useState({ provider: 'mock', model: 'mock-large' });
   const flowRef = useRef(null);
   const saveTimer = useRef(null);
+
+  // Unified run entry (the run panel): workflow dropdown + user input.
+  const [runFlowId, setRunFlowId] = useState('');
+  const [runInput, setRunInput] = useState('');
+  const [busy, setBusy] = useState(false);
+
   // Undo/redo over flow edits. Bursts of changes (a node drag emits one per
   // frame) coalesce into a single history entry via the time gate.
   const undoStack = useRef([]);
@@ -60,15 +72,22 @@ export default function App() {
     setRunIds(await window.llmflow.listRuns());
   }, []);
   const refreshFlows = useCallback(async () => {
-    setFlowsList(await window.llmflow.listFlows());
+    const list = await window.llmflow.listFlows();
+    setFlowsList(list);
+    // Keep the run panel pointed at a real workflow (default pipeline first).
+    setRunFlowId(prev => list.some(f => f.id === prev) ? prev : (list[0]?.id ?? ''));
+    return list;
+  }, []);
+  const refreshTemplates = useCallback(async () => {
+    setTemplates(await window.llmflow.listNodeTemplates());
   }, []);
 
-  useEffect(() => { refreshRuns(); refreshFlows(); }, [refreshRuns, refreshFlows]);
+  useEffect(() => { refreshRuns(); refreshFlows(); refreshTemplates(); },
+    [refreshRuns, refreshFlows, refreshTemplates]);
 
   // Worker defaults + model options for the node editor's worker pickers.
   useEffect(() => {
     window.llmflow.getSettings().then(s => {
-      setDefaultWorker(s.workers.executor);
       if (s.hasKey) window.llmflow.listModels().then(setModels).catch(() => setModels([]));
     });
   }, []);
@@ -89,17 +108,26 @@ export default function App() {
   }, [activeRunId]);
 
   // --- Flow persistence: debounced autosave, flushed on view switches ---
+  // Every save re-lints the stored flow (schema + semantic rules over the
+  // *.flow.yaml source of truth) to drive the validity badge in the toolbar.
+  const refreshLint = useCallback(async id => {
+    if (!id) { setFlowLint(null); return; }
+    try { setFlowLint(await window.llmflow.lintFlow(id)); }
+    catch { setFlowLint(null); }
+  }, []);
+
   const flushSave = useCallback(async () => {
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
       saveTimer.current = null;
-      if (flowRef.current && !flowRef.current.builtin) {
+      if (flowRef.current) {
         await window.llmflow.saveFlow(flowRef.current);
         setFlowSaved(true);
         refreshFlows();
+        refreshLint(flowRef.current.id);
       }
     }
-  }, [refreshFlows]);
+  }, [refreshFlows, refreshLint]);
 
   const schedulePersist = useCallback(next => {
     flowRef.current = next;
@@ -110,14 +138,15 @@ export default function App() {
       await window.llmflow.saveFlow(flowRef.current);
       setFlowSaved(true);
       refreshFlows(); // name may have changed
+      refreshLint(flowRef.current?.id);
     }, 500);
-  }, [refreshFlows]);
+  }, [refreshFlows, refreshLint]);
 
   const changeFlow = useCallback(updater => {
     setFlow(prev => {
       if (!prev) return prev;
       const next = typeof updater === 'function' ? updater(prev) : updater;
-      if (next === prev || next.builtin) return next;
+      if (next === prev) return next;
       const now = Date.now();
       if (now - lastHistoryPush.current > 400) {
         undoStack.current.push(prev);
@@ -140,7 +169,7 @@ export default function App() {
 
   const undo = useCallback(() => {
     const cur = flowRef.current;
-    if (!cur || cur.builtin || !undoStack.current.length) return;
+    if (!cur || !undoStack.current.length) return;
     const target = undoStack.current.pop();
     redoStack.current.push(cur);
     lastHistoryPush.current = 0; // next edit starts a fresh history entry
@@ -152,7 +181,7 @@ export default function App() {
 
   const redo = useCallback(() => {
     const cur = flowRef.current;
-    if (!cur || cur.builtin || !redoStack.current.length) return;
+    if (!cur || !redoStack.current.length) return;
     const target = redoStack.current.pop();
     undoStack.current.push(cur);
     lastHistoryPush.current = 0;
@@ -170,9 +199,12 @@ export default function App() {
     setFlowSaved(true);
     setActiveFlowId(id);
     setActiveRunId(null);
+    setShowNodesPage(false);
     setSelectedNode(null);
+    setRunFlowId(id); // browsing a flow points the run panel at it
     resetHistory();
-  }, [flushSave, resetHistory]);
+    refreshLint(id);
+  }, [flushSave, resetHistory, refreshLint]);
 
   // Undo/redo shortcuts while editing a flow (skip when typing in a field so
   // native text undo keeps working).
@@ -193,8 +225,18 @@ export default function App() {
     await flushSave();
     setActiveFlowId(null);
     setFlow(null);
+    setShowNodesPage(false);
     setActiveRunId(id);
     setSelectedNode(null);
+  }, [flushSave]);
+
+  const openNodesPage = useCallback(async () => {
+    await flushSave();
+    setActiveFlowId(null);
+    setFlow(null);
+    setActiveRunId(null);
+    setSelectedNode(null);
+    setShowNodesPage(true);
   }, [flushSave]);
 
   const newFlow = async () => {
@@ -203,8 +245,18 @@ export default function App() {
     await openFlow(f.id);
   };
 
+  const duplicateFlow = async () => {
+    if (!flow) return;
+    await flushSave();
+    const fresh = await window.llmflow.newFlow();
+    const copy = { ...structuredClone(flow), id: fresh.id, name: `${flow.name} (copy)` };
+    await window.llmflow.saveFlow(copy);
+    await refreshFlows();
+    await openFlow(fresh.id);
+  };
+
   const deleteFlow = async () => {
-    if (!flow || flow.builtin) return;
+    if (!flow) return;
     if (!window.confirm(`Delete flow "${flow.name}"?`)) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = null;
@@ -222,13 +274,10 @@ export default function App() {
     return { ...f, nodes: f.nodes.map(n => ({ ...n, position: pos.get(n.id) ?? n.position })) };
   });
 
-  const addNode = type => {
-    const meta = TYPE_META[type];
-    const data =
-      type === 'input' ? { text: '' } :
-      type === 'agentTask' ? { title: 'New task', goal: '', constraints: [], worker: { ...defaultWorker } } :
-      type === 'aiStep' ? { title: '', role: 'custom', system: '', worker: { ...defaultWorker } } :
-      {};
+  // Structural nodes: every runnable workflow starts from a User Input node
+  // and ends in an Output node. The Orchestrator is the third built-in — an
+  // AI container that creates and runs its own task nodes at run time.
+  const addStructuralNode = type => {
     changeFlow(f => {
       const n = f.nodes.length;
       const id = freshNodeId(type);
@@ -236,41 +285,55 @@ export default function App() {
       return {
         ...f,
         nodes: [...f.nodes, {
-          id, type, kind: meta.kind,
+          id, type,
+          kind: type === 'orchestrator' ? 'ai' : 'user',
           position: { x: 280, y: 40 + (n % 6) * 90 },
-          data
+          data: type === 'orchestrator' ? { title: 'Orchestrator' } : {}
         }]
       };
     });
   };
 
-  // Add a node using one of the documented standard templates (see FLOW_NODES.md + flowTypes.NODE_TEMPLATES)
-  const addNodeFromTemplate = (tplName) => {
-    const created = createNodeFromTemplate(tplName, {
-      data: { worker: { ...defaultWorker } }
-    });
-    const meta = TYPE_META[created.type] || { kind: created.kind || 'ai' };
+  // Drop a Node Library template onto the canvas as a fresh instance.
+  // Overrides start empty: the node inherits the template until edited.
+  const addTemplateNode = templateId => {
     changeFlow(f => {
       const n = f.nodes.length;
-      const id = freshNodeId(created.type);
+      const id = freshNodeId(templateId);
       setSelectedNode(id);
       return {
         ...f,
         nodes: [...f.nodes, {
-          id,
-          type: created.type,
-          kind: meta.kind || created.kind || 'ai',
+          id, templateId,
           position: { x: 280, y: 40 + (n % 6) * 90 },
-          data: created.data
+          overrides: {}
         }]
       };
     });
   };
 
+  // Legacy raw nodes (aiStep/agentTask) still edit through data.
   const changeNodeData = (nodeId, patch) => {
     changeFlow(f => ({
       ...f,
       nodes: f.nodes.map(n => n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)
+    }));
+  };
+
+  // Template instances edit through overrides; undefined values remove the
+  // override (revert to the template default). Saved in this workflow only.
+  const changeNodeOverrides = (nodeId, patch) => {
+    changeFlow(f => ({
+      ...f,
+      nodes: f.nodes.map(n => {
+        if (n.id !== nodeId) return n;
+        const overrides = { ...n.overrides };
+        for (const [k, v] of Object.entries(patch)) {
+          if (v === undefined) delete overrides[k];
+          else overrides[k] = v;
+        }
+        return { ...n, overrides };
+      })
     }));
   };
 
@@ -283,26 +346,15 @@ export default function App() {
     setSelectedNode(null);
   };
 
-  const runFlow = async () => {
-    if (!flow || flow.builtin || busy) return;
+  // The one run entry: selected workflow + user input -> User Input node.
+  const startRun = async () => {
+    if (!runFlowId || busy) return;
     setBusy(true);
     try {
       await flushSave();
-      const runId = await window.llmflow.runFlow(flow.id);
+      const runId = await window.llmflow.runFlow(runFlowId, runInput.trim());
+      setRunInput('');
       await openRun(runId);
-      await refreshRuns();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const startRun = async () => {
-    if (!prompt.trim() || busy) return;
-    setBusy(true);
-    try {
-      const runId = await window.llmflow.startRun(prompt.trim());
-      await openRun(runId);
-      setPrompt('');
       await refreshRuns();
     } finally {
       setBusy(false);
@@ -310,7 +362,18 @@ export default function App() {
   };
 
   const stage = snapshot?.meta?.stage;
-  const flowView = Boolean(activeFlowId && flow);
+  const flowView = Boolean(activeFlowId && flow && !showNodesPage);
+  const runView = Boolean(activeRunId && !flowView && !showNodesPage);
+
+  // Display copy of the edited flow with template defaults merged in.
+  const resolvedFlow = useMemo(
+    () => flow ? resolveFlow(flow, templates) : null,
+    [flow, templates]
+  );
+
+  const crumb = showNodesPage ? ['Nodes'] :
+    flowView ? ['Flows', flow.name] :
+    activeRunId ? ['Runs', activeRunId] : ['Flows'];
 
   return (
     <div className="app">
@@ -321,18 +384,20 @@ export default function App() {
         </div>
         {flowView
           ? <span className="titlebar-doc mono">{flow.name}</span>
-          : activeRunId && <span className="titlebar-doc mono">{activeRunId}</span>}
+          : showNodesPage
+            ? <span className="titlebar-doc mono">Node Library</span>
+            : activeRunId && <span className="titlebar-doc mono">{activeRunId}</span>}
       </div>
 
       <header className="toolbar">
         <nav className="breadcrumb">
-          <span className="crumb-dim">{flowView ? 'Flows' : 'Runs'}</span>
-          {(flowView || activeRunId) && <>
+          <span className="crumb-dim">{crumb[0]}</span>
+          {crumb[1] && <>
             <span className="crumb-sep">/</span>
-            <span className="crumb-current">{flowView ? flow.name : activeRunId}</span>
+            <span className="crumb-current">{crumb[1]}</span>
           </>}
         </nav>
-        {!flowView && stage && <span className="stage-chip">{stage.replace(/_/g, ' ')}</span>}
+        {runView && stage && <span className="stage-chip">{stage.replace(/_/g, ' ')}</span>}
         <div className="toolbar-spacer" />
         <button type="button" className="theme-toggle" onClick={() => setShowSettings(true)} title="Providers & models">
           <span>⚙</span>
@@ -360,23 +425,24 @@ export default function App() {
                 onClick={() => openFlow(f.id)}
               >
                 <span className="flow-item-name">{f.name}</span>
-                {f.builtin && <span className="node-kind kind-user">built-in</span>}
+                {f.id === 'default-pipeline' && <span className="node-kind kind-user">default</span>}
               </div>
             ))}
+            {flowsList.length === 0 && <div className="muted">No flows yet.</div>}
           </div>
 
           <div className="sidebar-section">
-            <span className="section-label">New run</span>
-            <textarea
-              placeholder="Describe what you want done…"
-              value={prompt}
-              onChange={e => setPrompt(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) startRun(); }}
-            />
-            <button className="primary" onClick={startRun} disabled={busy || !prompt.trim()}>
-              {busy ? 'Starting…' : 'Run pipeline'}<kbd className="shortcut">⌘↵</kbd>
-            </button>
+            <div className="section-row">
+              <span className="section-label">Node Library</span>
+              <button
+                className={'ghost mini' + (showNodesPage ? ' active' : '')}
+                onClick={openNodesPage}
+              >
+                {templates.length} templates →
+              </button>
+            </div>
           </div>
+
           <div className="sidebar-section" style={{ paddingBottom: 8 }}>
             <span className="section-label">Runs</span>
           </div>
@@ -384,7 +450,7 @@ export default function App() {
             {[...runIds].reverse().map(id => (
               <div
                 key={id}
-                className={'run-item' + (id === activeRunId && !flowView ? ' active' : '')}
+                className={'run-item' + (id === activeRunId && runView ? ' active' : '')}
                 onClick={() => openRun(id)}
               >
                 {id}
@@ -392,7 +458,7 @@ export default function App() {
             ))}
             {runIds.length === 0 && <div className="muted">No runs yet.</div>}
           </div>
-          {activeRunId && !flowView && (
+          {runView && (
             <div className="sidebar-footer">
               <button className="ghost" onClick={() => window.llmflow.openRunFolder(activeRunId)}>
                 Open run folder
@@ -404,52 +470,55 @@ export default function App() {
         <main className="canvas-area">
           {flowView && (
             <div className="editor-bar">
-              {flow.builtin ? <>
-                <span className="section-label">Built-in flow</span>
-                <span className="editor-hint">Read-only — the classic pipeline. Run it from the New run box.</span>
-              </> : <>
-                <input
-                  className="flow-name mono"
-                  value={flow.name}
-                  onChange={e => changeFlow(f => ({ ...f, name: e.target.value }))}
-                  aria-label="Flow name"
-                />
-                <div className="palette">
-                  {Object.entries(TYPE_META).map(([type, m]) => (
-                    <button key={type} className="palette-btn" onClick={() => addNode(type)} title={`Add ${m.label}`}>
-                      <span className="palette-icon">{m.icon}</span>{m.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="palette" style={{ marginTop: 4, opacity: 0.95 }}>
-                  <span className="section-label" style={{ fontSize: '11px', marginRight: 6 }}>Examples (see FLOW_NODES.md):</span>
-                  {Object.keys(NODE_TEMPLATES).map(tpl => {
-                    const t = NODE_TEMPLATES[tpl];
-                    return (
-                      <button
-                        key={tpl}
-                        className="palette-btn"
-                        onClick={() => addNodeFromTemplate(tpl)}
-                        title={`${t.label}: ${t.description}`}
-                      >
-                        <span className="palette-icon">{t.icon || '✦'}</span>{t.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="toolbar-spacer" />
-                <button className="ghost mini" onClick={undo} disabled={historySize.undo === 0} title="Undo (Ctrl+Z)">↩ Undo</button>
-                <button className="ghost mini" onClick={redo} disabled={historySize.redo === 0} title="Redo (Ctrl+Y)">↪ Redo</button>
-                <button className="ghost mini" onClick={autoLayout} title="Arrange nodes into dependency layers">Auto-layout</button>
-                <span className={'save-dot' + (flowSaved ? ' saved' : '')}>{flowSaved ? 'Saved' : 'Saving…'}</span>
-                <button className="primary" onClick={runFlow} disabled={busy || flow.nodes.length === 0}>
-                  {busy ? 'Starting…' : 'Run flow'}
+              <input
+                className="flow-name mono"
+                value={flow.name}
+                onChange={e => changeFlow(f => ({ ...f, name: e.target.value }))}
+                aria-label="Flow name"
+              />
+              <div className="palette">
+                <button className="palette-btn" onClick={() => addStructuralNode('input')} title="Add a User Input node — the run panel input lands here">
+                  <span className="palette-icon">✎</span>User Input
                 </button>
-                <button className="reject" onClick={deleteFlow}>Delete flow</button>
-              </>}
+                <button className="palette-btn" onClick={() => addStructuralNode('output')} title="Add an Output node — collects upstream results">
+                  <span className="palette-icon">◎</span>Output
+                </button>
+                <button className="palette-btn" onClick={() => addStructuralNode('orchestrator')} title="Add an Orchestrator — plans autonomously and creates & runs task nodes inside its box, no human intervention">
+                  <span className="palette-icon">▦</span>Orchestrator
+                </button>
+                {templates.map(t => (
+                  <button
+                    key={t.id}
+                    className="palette-btn"
+                    onClick={() => addTemplateNode(t.id)}
+                    title={`${t.name}: ${t.description || 'Node Library template'}`}
+                  >
+                    <span className="palette-icon">{t.icon || '✦'}</span>{t.name}
+                  </button>
+                ))}
+              </div>
+              <div className="toolbar-spacer" />
+              <button className="ghost mini" onClick={undo} disabled={historySize.undo === 0} title="Undo (Ctrl+Z)">↩ Undo</button>
+              <button className="ghost mini" onClick={redo} disabled={historySize.redo === 0} title="Redo (Ctrl+Y)">↪ Redo</button>
+              <button className="ghost mini" onClick={autoLayout} title="Arrange nodes into dependency layers">Auto-layout</button>
+              <button className="ghost mini" onClick={duplicateFlow} title="Duplicate this workflow">Duplicate</button>
+              {flowLint && (flowLint.errors.length + flowLint.warnings.length > 0 ? (
+                <span
+                  className={'lint-badge' + (flowLint.ok ? ' warn' : ' error')}
+                  title={[...flowLint.errors, ...flowLint.warnings].map(f => `[${f.rule}] ${f.message}`).join('\n')}
+                >
+                  {flowLint.ok
+                    ? `⚠ ${flowLint.warnings.length} warning${flowLint.warnings.length === 1 ? '' : 's'}`
+                    : `✕ ${flowLint.errors.length} error${flowLint.errors.length === 1 ? '' : 's'}`}
+                </span>
+              ) : (
+                <span className="lint-badge ok" title="Flow passes all lint rules">✓ Valid</span>
+              ))}
+              <span className={'save-dot' + (flowSaved ? ' saved' : '')}>{flowSaved ? 'Saved' : 'Saving…'}</span>
+              <button className="reject" onClick={deleteFlow}>Delete flow</button>
             </div>
           )}
-          {!flowView && stage === 'awaiting_approval' && (
+          {runView && stage === 'awaiting_approval' && (
             <div className="approval-bar">
               <span className="section-label">Approval gate</span>
               <span>Review the work so far, then approve to continue or reject to stop.</span>
@@ -457,34 +526,70 @@ export default function App() {
               <button className="reject" onClick={() => window.llmflow.rejectPlan(activeRunId, 'Rejected by user')}>Reject</button>
             </div>
           )}
-          {flowView
-            ? <FlowEditor
-                flow={flow}
-                selectedNode={selectedNode}
-                onSelect={setSelectedNode}
-                onChangeFlow={changeFlow}
-                readOnly={Boolean(flow.builtin)}
-              />
-            : snapshot
-              ? <FlowCanvas snapshot={snapshot} selectedNode={selectedNode} onSelect={setSelectedNode} />
-              : (
-                <div className="empty-state">
-                  <span className="section-label">Nothing selected</span>
-                  Enter a prompt and run the pipeline,<br />or pick a flow to edit its graph.
-                </div>
-              )}
+          {showNodesPage
+            ? <NodesPage templates={templates} models={models} onChanged={refreshTemplates} />
+            : flowView
+              ? <FlowEditor
+                  flow={flow}
+                  resolved={resolvedFlow}
+                  selectedNode={selectedNode}
+                  onSelect={setSelectedNode}
+                  onChangeFlow={changeFlow}
+                />
+              : snapshot
+                ? <FlowCanvas snapshot={snapshot} selectedNode={selectedNode} onSelect={setSelectedNode} />
+                : (
+                  <div className="empty-state">
+                    <span className="section-label">Nothing selected</span>
+                    Pick a workflow, type your request, run it —<br />or select a flow to edit its graph.
+                  </div>
+                )}
         </main>
 
-        {flowView
-          ? <FlowInspector
-              flow={flow}
-              selectedNode={selectedNode}
-              models={models}
-              onChangeData={changeNodeData}
-              onDeleteNode={deleteNode}
-              readOnly={Boolean(flow.builtin)}
+        <div className="right-col">
+          <div className="run-panel">
+            <span className="section-label">Run a workflow</span>
+            <select
+              value={runFlowId}
+              onChange={e => setRunFlowId(e.target.value)}
+              aria-label="Workflow to run"
+            >
+              {flowsList.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+            <textarea
+              placeholder="Type what you want done — this becomes the User Input node…"
+              value={runInput}
+              onChange={e => setRunInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) startRun(); }}
             />
-          : snapshot && <Inspector snapshot={snapshot} selectedNode={selectedNode} />}
+            <button className="primary" onClick={startRun} disabled={busy || !runFlowId}>
+              {busy ? 'Starting…' : 'Run'}<kbd className="shortcut">⌘↵</kbd>
+            </button>
+          </div>
+
+          {flowView
+            ? <FlowInspector
+                flow={flow}
+                selectedNode={selectedNode}
+                models={models}
+                templates={templates}
+                onChangeData={changeNodeData}
+                onChangeOverrides={changeNodeOverrides}
+                onDeleteNode={deleteNode}
+              />
+            : snapshot && runView
+              ? <Inspector snapshot={snapshot} selectedNode={selectedNode} />
+              : (
+                <aside className="inspector">
+                  <div className="inspector-body">
+                    <section>
+                      <h3>LLM Flow</h3>
+                      <pre>{'Pick a workflow, type your request, run it.\n\nWorkflows are built from Node Library templates on the canvas; every run is a folder of plain files you can open.'}</pre>
+                    </section>
+                  </div>
+                </aside>
+              )}
+        </div>
       </div>
 
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}

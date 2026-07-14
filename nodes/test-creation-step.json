@@ -1,0 +1,18 @@
+{
+  "id": "test-creation-step",
+  "name": "Test creation",
+  "description": "Create or extend tests. Full agent executor with tools.",
+  "category": "Test-creation",
+  "icon": "☑",
+  "baseType": "agentTask",
+  "role": "execute",
+  "worker": null,
+  "instructions": "",
+  "tools": [
+    "write_file",
+    "create_task",
+    "write_task_md"
+  ],
+  "skills": [],
+  "requiresApproval": false
+}

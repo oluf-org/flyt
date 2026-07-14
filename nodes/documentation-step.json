@@ -1,0 +1,14 @@
+{
+  "id": "documentation-step",
+  "name": "Documentation",
+  "description": "Docs, README sections, comments, usage examples. Lighter/faster model often works.",
+  "category": "documentation",
+  "icon": "✦",
+  "baseType": "aiStep",
+  "role": "execute",
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false
+}

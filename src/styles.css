@@ -299,7 +299,7 @@ kbd.shortcut {
    label; state is applied via tokens — never a new hue per type. */
 
 .flow-node {
-  display: flex; align-items: center; gap: 11px; text-align: left;
+  display: flex; flex-direction: column; text-align: left;
   background: var(--card);
   border: 1px solid var(--border); border-radius: 12px;
   padding: 10px 13px;
@@ -308,6 +308,7 @@ kbd.shortcut {
   transition: background-color .24s ease, border-color .24s ease,
               color .24s ease, box-shadow .14s ease, opacity .24s ease;
 }
+.node-main { display: flex; align-items: center; gap: 11px; }
 .node-icon {
   width: 32px; height: 32px; flex: none; border-radius: 9px;
   display: grid; place-items: center;
@@ -376,6 +377,116 @@ kbd.shortcut {
 }
 .node-kind.kind-ai { color: var(--accent); background: var(--accent-soft); }
 .flow-node.kind-ai .node-icon { border-radius: 50%; }
+/* nodes whose contract lets them CREATE other nodes at run time */
+.node-kind.kind-spawn { color: var(--orch); background: var(--orch-soft); }
+
+/* ---------- output ports: what a node CREATES ---------- */
+/* One chip per declared output; each chip pairs with a bottom source handle
+   so the user picks WHICH output an edge carries. space-evenly matches the
+   (i+1)/(n+1) handle positions. */
+
+.node-ports {
+  position: relative;
+  display: flex; align-items: center; justify-content: space-evenly;
+  gap: 6px; margin-top: 10px; padding-top: 7px;
+  border-top: 1px dashed var(--border);
+}
+/* sits on the dashed rule like a fieldset legend */
+.node-ports-label {
+  position: absolute; top: -7px; left: 0;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 8px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--faint); background: var(--card); padding-right: 5px;
+  line-height: 1.4;
+}
+.node-port {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 8.5px; letter-spacing: .04em;
+  padding: 1px 6px; border-radius: 4px;
+  color: var(--chip-tx); background: var(--chip);
+  white-space: nowrap;
+}
+.react-flow__handle.port-handle {
+  width: 8px; height: 8px;
+  background: var(--card); border: 1.5px solid var(--faint);
+}
+.react-flow__handle.port-handle:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+/* ---------- orchestrator: the autonomous container ---------- */
+/* A large box that fills with AI-created task nodes at run time. While it
+   plans and runs its children, the border is a slowly rotating purple
+   conic gradient — the deliberate exception to the one-accent rule. */
+
+:root, [data-theme="light"] {
+  --orch:      #7443c9;
+  --orch-soft: #efe9f9;
+}
+[data-theme="dark"] {
+  --orch:      #a98ae6;
+  --orch-soft: #251d33;
+}
+
+@property --orch-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.orch-node {
+  position: relative;
+  display: flex; flex-direction: column;
+  min-width: 300px; min-height: 160px;
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  border: 1px dashed var(--divider); border-radius: 16px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow-rest);
+}
+.orch-node .orch-header { display: flex; align-items: center; gap: 11px; }
+.orch-node .node-icon { background: var(--orch-soft); color: var(--orch); }
+.orch-hint {
+  margin: auto; text-align: center;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; line-height: 1.8; color: var(--faint);
+}
+.orch-ports { position: absolute; bottom: 0; left: 0; right: 0; padding-bottom: 9px; }
+.orch-ports .node-ports { border-top: none; margin-top: 0; padding-top: 0; }
+.orch-ports .node-ports-label { display: none; }
+
+/* the animated gradient border, painted on a masked overlay ring —
+   the gradient exists ONLY in the active state, so an idle box can
+   never show a stray ring */
+.orch-node::before {
+  content: '';
+  position: absolute; inset: -2px;
+  border-radius: 18px;
+  padding: 2px;
+  background: none;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .3s ease;
+}
+.orch-node.status-active { border-color: transparent; }
+.orch-node.status-active::before {
+  opacity: 1;
+  background: conic-gradient(from var(--orch-angle),
+    #8b5cf6, #c084fc, #6d28d9, #a855f7, #7c3aed, #8b5cf6);
+  animation: orch-spin 3.4s linear infinite;
+}
+@keyframes orch-spin { to { --orch-angle: 360deg; } }
+/* a faint standing glow under the ring while active */
+.orch-node.status-active {
+  box-shadow: 0 0 0 4px var(--orch-soft), var(--shadow-float);
+}
+
+.orch-node.selected { border-color: var(--orch); border-style: solid; }
+.orch-node.status-done { border-style: solid; border-color: color-mix(in srgb, var(--orch) 45%, var(--border)); }
+.orch-node.status-done .node-status { color: var(--orch); }
+.orch-node.status-failed { border-style: solid; border-color: var(--err); }
+.orch-node.status-failed .node-icon { background: var(--err-soft); color: var(--err); }
+.orch-node .spinner { border-color: var(--orch-soft); border-top-color: var(--orch); }
 
 /* editor bar: sits where the approval bar does, same rhythm */
 .editor-bar {
@@ -409,6 +520,15 @@ kbd.shortcut {
   font-size: 10.5px; color: var(--faint);
 }
 .save-dot.saved { color: var(--ok); }
+
+/* flow lint badge (on-save validation of the *.flow.yaml source of truth) */
+.lint-badge {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10.5px; cursor: help; white-space: nowrap;
+}
+.lint-badge.ok { color: var(--ok); }
+.lint-badge.warn { color: var(--warn, #c9a227); }
+.lint-badge.error { color: var(--bad, #c0504d); }
 
 /* sidebar flow list */
 .section-row { display: flex; align-items: center; justify-content: space-between; }
@@ -563,6 +683,81 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   border: 1px solid var(--err); border-radius: 9px;
   word-break: break-word;
 }
+
+/* ---------- right column: run panel + inspector ---------- */
+/* The one run entry (GOALS.md): workflow dropdown + user input + Run. */
+
+.right-col {
+  width: 372px; flex: none;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--side);
+  border-left: 1px solid var(--border);
+}
+.right-col .inspector { width: auto; flex: 1; border-left: none; min-height: 0; }
+
+.run-panel {
+  flex: none;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.run-panel select {
+  background: var(--card); color: var(--tx);
+  border: 1px solid var(--border); border-radius: 9px;
+  padding: 8px 11px; font: inherit; font-size: 12.5px;
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.run-panel textarea {
+  height: 88px; resize: vertical;
+  background: var(--card); color: var(--tx);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; font: inherit; font-size: 12.5px; line-height: 1.5;
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.run-panel textarea::placeholder { color: var(--faint); }
+.run-panel select:focus, .run-panel textarea:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ---------- Nodes page (Node Library CRUD) ---------- */
+
+.nodes-page { flex: 1; min-height: 0; display: flex; }
+.nodes-list {
+  width: 264px; flex: none;
+  padding: 16px;
+  background: var(--side);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.nodes-list .section-row { margin-bottom: 10px; }
+.nodes-editor {
+  flex: 1; min-width: 0;
+  max-width: 660px;
+  overflow-y: auto;
+  padding: 8px 24px 24px;
+}
+.nodes-editor .inspector-header { padding: 16px 0 14px; margin-bottom: 8px; }
+.nodes-editor section { margin-bottom: 16px; }
+.nodes-editor h3 {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--faint); font-weight: 500; margin: 0 0 8px;
+}
+.nodes-editor-row { display: flex; gap: 12px; }
+.nodes-editor-row section { flex: 1; min-width: 0; }
+.nodes-editor-actions { display: flex; gap: 10px; }
+
+/* override marking: template default vs "override (this workflow only)" */
+.override-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 6px; padding: 1px 7px; border-radius: 10px;
+  font-size: 9.5px; letter-spacing: .05em; text-transform: none;
+  color: var(--accent); background: var(--accent-soft);
+}
+.override-tag.default { color: var(--faint); background: var(--chip); }
+.override-tag .ghost.mini { padding: 0 3px; font-size: 10px; line-height: 1; }
 
 /* ---------- reduced motion ---------- */
 

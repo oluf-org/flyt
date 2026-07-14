@@ -3,9 +3,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { RunStore } from '../core/state.js';
-import { Pipeline } from '../core/pipeline.js';
 import { FlowStore } from '../core/flowstore.js';
+import { NodeStore } from '../core/nodestore.js';
 import { FlowRunner } from '../core/flowRunner.js';
+import { lintFlow } from '../core/flowlang/lint.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, '..');
@@ -13,6 +14,8 @@ const projectRoot = path.join(__dirname, '..');
 const baseConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'config.json'), 'utf8'));
 const store = new RunStore(path.join(projectRoot, 'runs'));
 const flows = new FlowStore(path.join(projectRoot, 'flows'));
+const nodeLibrary = new NodeStore(path.join(projectRoot, 'nodes')); // seeds itself on first launch
+flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable workflow
 
 // --- Settings & secrets ---
 // settings.json lives in userData (never the repo). Shape:
@@ -96,8 +99,7 @@ const pushUpdate = runId => {
     }
   }, PUSH_COALESCE_MS));
 };
-const pipeline = new Pipeline(store, runtimeConfig, pushUpdate);
-const flowRunner = new FlowRunner(store, runtimeConfig, pushUpdate);
+const flowRunner = new FlowRunner(store, runtimeConfig, pushUpdate, nodeLibrary);
 
 function createWindow() {
   win = new BrowserWindow({
@@ -121,19 +123,12 @@ function createWindow() {
 }
 
 // --- IPC surface (thin: everything else lives in core/) ---
-ipcMain.handle('run:start', (_e, prompt) => pipeline.start(prompt));
-// Approval routes to whichever engine owns the run (flow runs carry a flowId).
-ipcMain.handle('run:approve', (_e, runId) =>
-  flowRunner.owns(runId) ? flowRunner.approvePlan(runId) : pipeline.approvePlan(runId));
-ipcMain.handle('run:reject', (_e, runId, reason) =>
-  flowRunner.owns(runId) ? flowRunner.rejectPlan(runId, reason) : pipeline.rejectPlan(runId, reason));
-ipcMain.handle('flow:run', (_e, flowId) => {
-  const flow = flows.load(flowId);
-  // The built-in flow IS the classic pipeline — run it via run:start so its
-  // behavior stays byte-for-byte identical.
-  if (flow.builtin) throw new Error('Run the built-in pipeline from the New run box.');
-  return flowRunner.start(flow);
-});
+// One engine, one entry point: pick a workflow, type a request, run it.
+// The user input becomes the flow's User Input node content for that run.
+ipcMain.handle('flow:run', (_e, flowId, userInput = '') =>
+  flowRunner.start(flows.load(flowId), { userInput: String(userInput ?? '') }));
+ipcMain.handle('run:approve', (_e, runId) => flowRunner.approvePlan(runId));
+ipcMain.handle('run:reject', (_e, runId, reason) => flowRunner.rejectPlan(runId, reason));
 ipcMain.handle('run:list', () => store.listRuns());
 ipcMain.handle('run:snapshot', (_e, runId) => store.snapshot(runId));
 ipcMain.handle('run:openFolder', (_e, runId) => shell.openPath(store.runDir(runId)));
@@ -143,11 +138,18 @@ ipcMain.handle('config:get', () => ({ workers: publicSettings().workers }));
 ipcMain.handle('flow:list', () => flows.list());
 ipcMain.handle('flow:load', (_e, id) => flows.load(id));
 ipcMain.handle('flow:save', (_e, flow) => flows.save(flow));
-ipcMain.handle('flow:new', () => {
-  const { provider, model } = runtimeConfig.workers.executor;
-  return flows.create({ provider, model });
-});
+ipcMain.handle('flow:new', () =>
+  flows.create(nodeLibrary.get('code-general-step') ? 'code-general-step' : null));
 ipcMain.handle('flow:delete', (_e, id) => flows.remove(id));
+// On-save validation for the canvas badge: full rule set, structured findings.
+ipcMain.handle('flow:lint', (_e, id) =>
+  lintFlow(flows.load(id), { templates: nodeLibrary.listFull() }));
+
+// --- Node Library (reusable AI node templates) ---
+ipcMain.handle('node:list', () => nodeLibrary.listFull());
+ipcMain.handle('node:save', (_e, tpl) => nodeLibrary.save(tpl));
+ipcMain.handle('node:new', () => nodeLibrary.create());
+ipcMain.handle('node:delete', (_e, id) => nodeLibrary.remove(id));
 
 ipcMain.handle('settings:get', () => publicSettings());
 

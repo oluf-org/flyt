@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-flow.dev/flow.schema.json",
+  "title": "Flow DSL (*.flow.yaml), version 1",
+  "type": "object",
+  "required": ["version", "id", "name", "flow"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "nodes": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
+      "additionalProperties": { "$ref": "#/$defs/node" }
+    },
+    "flow": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)?(\\s*->\\s*[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)?)+$" }
+    }
+  },
+  "$defs": {
+    "contextSpec": {
+      "type": "object",
+      "required": ["files"],
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "type": "string" },
+        "model": { "type": "string" }
+      }
+    },
+    "templateNode": {
+      "type": "object",
+      "required": ["use"],
+      "additionalProperties": false,
+      "properties": {
+        "use": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+        "title": { "type": "string" },
+        "instructions": { "type": "string" },
+        "goal": { "type": "string" },
+        "category": { "type": "string" },
+        "contextSpec": { "$ref": "#/$defs/contextSpec" },
+        "worker": { "$ref": "#/$defs/worker" },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "requiresApproval": { "type": "boolean" }
+      }
+    },
+    "rawNode": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["input", "output", "aiStep", "agentTask", "orchestrator"] },
+        "kind": { "enum": ["user", "ai"] },
+        "title": { "type": "string" },
+        "role": { "type": "string" },
+        "system": { "type": "string" },
+        "text": { "type": "string" },
+        "goal": { "type": "string" },
+        "category": { "type": "string" },
+        "contextSpec": { "$ref": "#/$defs/contextSpec" },
+        "worker": { "$ref": "#/$defs/worker" },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "constraints": { "type": "array" },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+              "label": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "requiresApproval": { "type": "boolean" }
+      }
+    },
+    "node": {
+      "oneOf": [
+        { "$ref": "#/$defs/templateNode" },
+        { "$ref": "#/$defs/rawNode" }
+      ]
+    }
+  }
+}

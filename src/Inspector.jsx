@@ -1,5 +1,8 @@
 import React from 'react';
-import { TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, nodeLabel } from './flowTypes.js';
+import {
+  TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, AGENT_TOOLS,
+  nodeLabel, isInstance, resolveInstance, nodePorts
+} from './flowTypes.js';
 
 // Right-hand panel: shows the artifacts and retrospective for whichever node
 // is selected on the canvas. Everything shown here is read straight from the
@@ -62,6 +65,18 @@ export default function Inspector({ snapshot, selectedNode }) {
     } else if (flowNode.type === 'aiStep') {
       sections = [
         [`nodes/${flowNode.id}.md`, nodeOutputs?.[flowNode.id] ?? '(not yet produced)'],
+        retroSection(retrospectives?.[flowNode.id])
+      ];
+    } else if (flowNode.type === 'orchestrator') {
+      // Port sidecars are stored with sanitized filenames (id.port -> id_port).
+      const sidecar = port => nodeOutputs?.[`${flowNode.id}_${port}`.replace(/[^a-zA-Z0-9_-]/g, '_')];
+      const children = flow.nodes.filter(n => n.data?.managedBy === flowNode.id);
+      sections = [
+        ['Orchestration plan', sidecar('plan') ?? '(not yet produced)'],
+        children.length
+          ? ['Created nodes', children.map(n => `${n.id} [${meta.nodeStatus?.[n.id] ?? 'pending'}] — ${n.data?.title ?? n.id}`).join('\n')]
+          : ['Created nodes', '(none yet — nodes appear inside the box once planning completes)'],
+        ['Aggregated results', nodeOutputs?.[flowNode.id] ?? '(not yet produced)'],
         retroSection(retrospectives?.[flowNode.id])
       ];
     } else {
@@ -141,7 +156,7 @@ export default function Inspector({ snapshot, selectedNode }) {
 
 const MOCK_MODELS = ['mock-large', 'mock-small'];
 
-function WorkerPicker({ worker, models, onChange, idPrefix }) {
+export function WorkerPicker({ worker, models, onChange, idPrefix }) {
   const w = worker?.provider ? worker : { provider: 'mock', model: 'mock-large' };
   const setProvider = provider => {
     if (provider === 'mock') onChange({ provider, model: MOCK_MODELS.includes(w.model) ? w.model : MOCK_MODELS[0] });
@@ -175,7 +190,7 @@ function WorkerPicker({ worker, models, onChange, idPrefix }) {
   );
 }
 
-export function FlowInspector({ flow, selectedNode, models, onChangeData, onDeleteNode, readOnly }) {
+export function FlowInspector({ flow, selectedNode, models, templates, onChangeData, onChangeOverrides, onDeleteNode }) {
   const node = flow.nodes.find(n => n.id === selectedNode);
 
   if (!node) {
@@ -187,23 +202,35 @@ export function FlowInspector({ flow, selectedNode, models, onChangeData, onDele
             <h2>{flow.name}</h2>
             <div className="node-sub">flow · {flow.nodes.length} nodes · {flow.edges.length} edges</div>
           </div>
-          {flow.builtin && <span className="status-pill pill-neutral">built-in</span>}
         </div>
         <div className="inspector-body">
           <section>
             <h3>Flow</h3>
-            <pre>{flow.builtin
-              ? 'The classic planner → router → executor → verifier pipeline. Read-only: run it from the New run box.'
-              : 'Select a node to edit it, drag between handles to connect, or add nodes from the bar above the canvas.'}</pre>
+            <pre>Select a node to edit it, drag between handles to connect, or add nodes from the palette above the canvas.</pre>
           </section>
         </div>
       </aside>
     );
   }
 
+  // Template instances get the override editor: template defaults come from
+  // the Node Library; every change here is saved in this workflow only.
+  if (isInstance(node)) {
+    return (
+      <InstanceInspector
+        node={node}
+        template={templates?.find(t => t.id === node.templateId) ?? null}
+        models={models}
+        onChangeOverrides={onChangeOverrides}
+        onDeleteNode={onDeleteNode}
+      />
+    );
+  }
+
   const meta = TYPE_META[node.type] ?? { icon: '▢', label: node.type };
   const set = patch => onChangeData(node.id, patch);
   const d = node.data ?? {};
+  const readOnly = false;
 
   return (
     <aside className="inspector">
@@ -221,16 +248,21 @@ export function FlowInspector({ flow, selectedNode, models, onChangeData, onDele
         )}
 
         {node.type === 'input' && (
-          <section>
-            <h3>Brief text</h3>
-            <textarea
-              rows={7}
-              placeholder="What should this flow work on?"
-              value={d.text ?? ''}
-              disabled={readOnly}
-              onChange={e => set({ text: e.target.value })}
-            />
-          </section>
+          <>
+            <section>
+              <h3>User Input</h3>
+              <pre>What you type in the run panel becomes this node&rsquo;s content for that run.</pre>
+            </section>
+            <section>
+              <h3>Fallback text — used when the run panel input is empty</h3>
+              <textarea
+                rows={5}
+                placeholder="(optional)"
+                value={d.text ?? ''}
+                onChange={e => set({ text: e.target.value })}
+              />
+            </section>
+          </>
         )}
 
         {node.type === 'agentTask' && <>
@@ -363,6 +395,35 @@ export function FlowInspector({ flow, selectedNode, models, onChangeData, onDele
           </section>
         </>}
 
+        {node.type === 'orchestrator' && <>
+          <section>
+            <h3>Orchestrator</h3>
+            <pre>{'Plans autonomously at run time: one AI call decides the work nodes, they are created inside this box and run — parallel where possible — with no human intervention. Downstream nodes receive the aggregated results.'}</pre>
+          </section>
+          <section>
+            <h3>Title</h3>
+            <input value={d.title ?? ''} placeholder="Orchestrator" onChange={e => set({ title: e.target.value })} />
+          </section>
+          <section>
+            <h3>Goal — what the orchestrated work must achieve</h3>
+            <textarea rows={3} placeholder="(optional — the upstream task list drives the plan)"
+              value={d.goal ?? ''} onChange={e => set({ goal: e.target.value || undefined })} />
+          </section>
+          <section>
+            <h3>Extra instructions — appended to the planning prompt</h3>
+            <textarea rows={4} placeholder="(optional) e.g. prefer few, larger nodes; always include a test node…"
+              value={d.instructions ?? ''} onChange={e => set({ instructions: e.target.value || undefined })} />
+          </section>
+          <section>
+            <h3>Planner worker</h3>
+            <WorkerPicker worker={d.worker} models={models} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+          </section>
+          <section>
+            <h3>Creates</h3>
+            <pre>{nodePorts(node).map(p => `${p.label} — ${p.description}`).join('\n')}</pre>
+          </section>
+        </>}
+
         {node.type === 'output' && (
           <section>
             <h3>Output</h3>
@@ -370,7 +431,7 @@ export function FlowInspector({ flow, selectedNode, models, onChangeData, onDele
           </section>
         )}
 
-        {(node.type === 'agentTask' || node.type === 'aiStep') && !readOnly && (
+        {(node.type === 'agentTask' || node.type === 'aiStep' || node.type === 'orchestrator') && !readOnly && (
           <section>
             <label className="check-row">
               <input type="checkbox" checked={Boolean(d.requiresApproval)}
@@ -385,6 +446,176 @@ export function FlowInspector({ flow, selectedNode, models, onChangeData, onDele
             <button className="reject" onClick={() => onDeleteNode(node.id)}>Delete node</button>
           </section>
         )}
+      </div>
+    </aside>
+  );
+}
+
+// --- Template-instance editor -----------------------------------------------
+// A workflow node that references a Node Library template. Fields show the
+// EFFECTIVE value; anything changed here lands in node.overrides and is
+// clearly marked "override (this workflow only)". Clearing an override
+// reverts to the template default. Templates are edited on the Nodes page.
+
+function OverrideTag({ active, onReset }) {
+  if (!active) return <span className="override-tag default">template default</span>;
+  return (
+    <span className="override-tag">
+      override (this workflow only)
+      {onReset && <button type="button" className="ghost mini" onClick={onReset} title="Revert to the template default">↺</button>}
+    </span>
+  );
+}
+
+function InstanceInspector({ node, template, models, onChangeOverrides, onDeleteNode }) {
+  const ov = node.overrides ?? {};
+  const eff = resolveInstance(node, template).data; // effective (merged) values
+  const set = patch => onChangeOverrides(node.id, patch);
+  const unset = key => onChangeOverrides(node.id, { [key]: undefined });
+
+  return (
+    <aside className="inspector">
+      <div className="inspector-header">
+        <span className="node-icon">{template?.icon ?? '✦'}</span>
+        <div className="inspector-title">
+          <h2>{eff.title}</h2>
+          <div className="node-sub">{template ? `${template.name} · from the Node Library` : `missing template "${node.templateId}"`}</div>
+        </div>
+        <span className="status-pill pill-accent">ai</span>
+      </div>
+      <div className="inspector-body node-editor">
+        {!template && (
+          <section>
+            <h3>Missing template</h3>
+            <pre>{`This node references "${node.templateId}", which no longer exists in the Node Library. Re-create it on the Nodes page or delete this node.`}</pre>
+          </section>
+        )}
+
+        <section>
+          <h3>Title <OverrideTag active={ov.title != null} onReset={() => unset('title')} /></h3>
+          <input
+            value={ov.title ?? ''}
+            placeholder={template?.name ?? node.templateId}
+            onChange={e => set({ title: e.target.value || undefined })}
+          />
+        </section>
+
+        <section>
+          <h3>Worker <OverrideTag active={ov.worker != null} onReset={() => unset('worker')} /></h3>
+          {ov.worker == null && (
+            <pre>{template?.worker
+              ? `${template.worker.provider}/${template.worker.model} (template)`
+              : 'app default worker (template)'}</pre>
+          )}
+          {ov.worker != null
+            ? <WorkerPicker worker={ov.worker} models={models} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+            : <button type="button" className="ghost mini"
+                onClick={() => set({ worker: template?.worker ?? { provider: 'mock', model: 'mock-large' } })}>
+                Override worker for this workflow
+              </button>}
+        </section>
+
+        <section>
+          <h3>Extra instructions <OverrideTag active={Boolean(ov.instructions)} onReset={() => unset('instructions')} /></h3>
+          {template?.instructions?.trim() && (
+            <pre className="muted">{`Template instructions:\n${template.instructions.trim()}`}</pre>
+          )}
+          <textarea
+            rows={4}
+            placeholder="Appended after the template's instructions — this workflow only."
+            value={ov.instructions ?? ''}
+            onChange={e => set({ instructions: e.target.value || undefined })}
+          />
+        </section>
+
+        <section>
+          <h3>Goal — what this node must produce in this workflow</h3>
+          <textarea
+            rows={3}
+            placeholder="(optional — the task description and upstream context drive the prompt)"
+            value={ov.goal ?? ''}
+            onChange={e => set({ goal: e.target.value || undefined })}
+          />
+        </section>
+
+        {template?.baseType === 'agentTask' && (
+          <section>
+            <h3>Tools <OverrideTag active={ov.tools != null} onReset={() => unset('tools')} /></h3>
+            {AGENT_TOOLS.map(tool => {
+              const effective = ov.tools ?? template?.tools ?? AGENT_TOOLS;
+              return (
+                <label className="check-row" key={tool}>
+                  <input
+                    type="checkbox"
+                    checked={effective.includes(tool)}
+                    onChange={() => {
+                      const next = effective.includes(tool)
+                        ? effective.filter(t => t !== tool)
+                        : [...effective, tool];
+                      set({ tools: next });
+                    }}
+                  />
+                  <span className="mono">{tool}</span>
+                </label>
+              );
+            })}
+          </section>
+        )}
+
+        <section>
+          <h3>Approval <OverrideTag active={ov.requiresApproval != null} onReset={() => unset('requiresApproval')} /></h3>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={Boolean(eff.requiresApproval)}
+              onChange={e => set({ requiresApproval: e.target.checked })}
+            />
+            Pause for human approval before this node runs
+          </label>
+        </section>
+
+        <section>
+          <h3>Context spec <OverrideTag active={ov.contextSpec != null} onReset={() => unset('contextSpec')} /></h3>
+          <div className="settings-hint">
+            Only these files (with the given descriptions) are given to the node. Leave empty for normal upstream context.
+          </div>
+          {(ov.contextSpec?.files ?? []).map((f, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+              <input
+                style={{ flex: '1 1 40%' }}
+                placeholder="path/to/file"
+                value={f.path || ''}
+                onChange={e => {
+                  const files = [...(ov.contextSpec?.files || [])];
+                  files[i] = { ...files[i], path: e.target.value };
+                  set({ contextSpec: { files } });
+                }}
+              />
+              <input
+                style={{ flex: '1 1 60%' }}
+                placeholder="Exactly which part is needed (keeps context small)"
+                value={f.description || ''}
+                onChange={e => {
+                  const files = [...(ov.contextSpec?.files || [])];
+                  files[i] = { ...files[i], description: e.target.value };
+                  set({ contextSpec: { files } });
+                }}
+              />
+              <button type="button" onClick={() => {
+                const files = (ov.contextSpec?.files || []).filter((_, idx) => idx !== i);
+                set({ contextSpec: files.length ? { files } : undefined });
+              }}>✕</button>
+            </div>
+          ))}
+          <button type="button" className="ghost mini" onClick={() => {
+            const files = [...(ov.contextSpec?.files || []), { path: '', description: '' }];
+            set({ contextSpec: { files } });
+          }}>+ Add file</button>
+        </section>
+
+        <section>
+          <button className="reject" onClick={() => onDeleteNode(node.id)}>Delete node</button>
+        </section>
       </div>
     </aside>
   );

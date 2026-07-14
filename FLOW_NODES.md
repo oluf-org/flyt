@@ -225,6 +225,57 @@ Usually placed before the final `output` collector.
 
 ---
 
+### 7. Orchestrator Node (autonomous container)
+
+**type:** `orchestrator` (built-in structural node, kind `ai` — added from the
+palette like User Input / Output, not from the Node Library)
+
+**Input:** the brief + upstream context (typically `tasks.md` from Plan-Start).
+
+**Output ports:**
+- `results` (primary) — the aggregated outputs of every node it created
+- `summary` — the orchestration plan summary + node inventory
+
+**Behavior:** one planning call (role `orchestrate`, same strict JSON contract
+as plan-eval, one bounded re-ask) decides the set of work nodes. They are
+materialized **inside the orchestrator's box** (`parentId` + `managedBy`) and
+executed by an inline sub-walk — parallel waves for independent aiSteps,
+sequential agent tasks — with **no human intervention**: children never pause
+at approval gates. When every child is done, their outputs are aggregated into
+`nodes/<id>.md`; downstream nodes only ever see the orchestrator itself.
+Unlike plan-eval (which degrades gracefully), an invalid plan **fails the
+node** — creating nodes is its entire job.
+
+On the canvas the box shows its children live and gets an animated purple
+gradient border while active. Artifacts: `nodes/<id>.plan.md` (the streamed
+planning output), `nodes/<id>.summary.md`, `nodes/<id>.md` (aggregate).
+
+---
+
+## Output Ports — what every node CREATES
+
+Every node declares named outputs (`src/flowTypes.js` `ROLE_PORTS` /
+`TYPE_PORTS`; Node Library templates may override with an `outputs` array).
+The first port is the **primary** output (`nodes/<id>.md`); auxiliary ports
+are written as `nodes/<id>.<port>.md`:
+
+| node | ports |
+|---|---|
+| plan-start | `tasks` |
+| plan-eval | `plan` (primary), `summary` |
+| step-eval | `report` (primary), `verdict` (the structured JSON decision) |
+| stitch / final-eval / verify | `report` |
+| work steps / agent tasks | `result` |
+| orchestrator | `results` (primary), `summary` |
+
+On the canvas each node shows a "creates" footer with one chip per port and
+one bottom **source handle per port** — drag an edge from a specific handle to
+send that output downstream. The edge stores `sourceHandle`; edges without one
+carry the primary output (legacy behavior, nothing to migrate). A missing port
+artifact falls back to the primary output rather than dropping the edge.
+
+---
+
 ## Strict JSON Contracts (implemented in `core/planEval.js`)
 
 These are enforced at runtime. Invalid output is rejected as a whole, the
@@ -359,16 +410,21 @@ All the above node kinds support `data.requiresApproval`. Evaluation nodes that 
 
 ---
 
-## Current Implementation Status (as of this doc)
+## Current Implementation Status (updated 2026-07-14)
 
-- Catalog and visual types: defined in `src/flowTypes.js`
+- **This catalog now lives in the Node Library** (`nodes/<id>.json`, managed on
+  the Nodes page, seeded from `src/flowTypes.js` `SEED_NODE_TEMPLATES`).
+  Workflow nodes are template instances (`templateId` + per-workflow
+  `overrides`); `resolveFlow()` merges them at edit/run time. Plan-eval may
+  reference any library template id in addition to the built-in names above.
 - Strict contracts + parsers: `core/planEval.js` (plan-eval, step-eval verdict, stitch fixTasks)
-- Runner: dynamic topological walk with real materialization, minimal-context
-  resolution, honest aiStep failure handling, bounded step-eval retry /
-  escalation, and stitch fix tasks via `create_task`: `core/flowRunner.js`
-- Editor support: `src/FlowInspector.jsx` + palette in `App.jsx`
+- Runner: dynamic topological walk with real materialization (library
+  templates preferred), minimal-context resolution, honest aiStep failure
+  handling, bounded step-eval retry / escalation, and stitch fix tasks via
+  `create_task`: `core/flowRunner.js`
+- Editor support: instance/override inspector in `src/Inspector.jsx` + library palette in `App.jsx`
 - Mock outputs that exercise the pattern (incl. structured verdicts): `core/adapters/mock.js`
-- Example flow(s): in `flows/`
+- Shipped flow: `flows/default-pipeline.json` (the classic pipeline as library nodes)
 
 See the code and run a flow using these roles/templates to observe the produced artifacts.
 

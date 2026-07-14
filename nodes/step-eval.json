@@ -1,0 +1,14 @@
+{
+  "id": "step-eval",
+  "name": "Step evaluation",
+  "description": "Review the preceding node: pass, bounded auto-retry with guidance, or escalate to human.",
+  "category": null,
+  "icon": "⚖",
+  "baseType": "aiStep",
+  "role": "step-eval",
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false
+}

@@ -1,0 +1,14 @@
+{
+  "id": "stitch",
+  "name": "Stitch",
+  "description": "Review prior outputs, make small fixes, or create corrective fix tasks.",
+  "category": null,
+  "icon": "🧵",
+  "baseType": "aiStep",
+  "role": "stitch",
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false
+}

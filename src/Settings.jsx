@@ -1,14 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
-// Settings panel: OpenRouter API key + per-node worker assignment.
+// Settings panel: OpenRouter API key + default worker assignment.
 // The renderer never sees the stored key — only a hasKey flag comes back
 // over IPC, and saving sends the key one way into the main process.
-const WORKER_NODES = ['planner', 'router', 'executor', 'verifier'];
+const WORKER_NODES = ['executor'];
 const WORKER_HINTS = {
-  planner: 'Writes the plan',
-  router: 'Splits plan into tasks',
-  executor: 'Runs each task',
-  verifier: 'Checks the outputs'
+  executor: 'Default worker — used when a node template sets no worker'
 };
 const MOCK_MODELS = ['mock-large', 'mock-small'];
 
@@ -155,9 +152,9 @@ export default function Settings({ onClose }) {
 
           <section>
             <div className="settings-section-head">
-              <span className="section-label">Workers</span>
+              <span className="section-label">Default worker</span>
             </div>
-            <p className="settings-hint">Assign a provider and model to each pipeline node.</p>
+            <p className="settings-hint">Used whenever a node template (or workflow override) doesn&rsquo;t pick its own model.</p>
             {workers && WORKER_NODES.map(node => (
               <div className="worker-row" key={node}>
                 <div className="worker-name">

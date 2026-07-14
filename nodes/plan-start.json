@@ -1,0 +1,14 @@
+{
+  "id": "plan-start",
+  "name": "Plan",
+  "description": "Produces tasks.md with well-defined tasks and explicit per-file context descriptions.",
+  "category": null,
+  "icon": "▶",
+  "baseType": "aiStep",
+  "role": "plan-start",
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false
+}

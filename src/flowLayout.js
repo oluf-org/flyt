@@ -29,8 +29,11 @@ export function wouldCreateCycle(edges, source, target) {
 // a Map<nodeId, {x, y}> so callers decide how to apply it (immutably in the
 // editor, in place on the runner's flow copy).
 export function layoutPositions(flow, { xGap = 260, yGap = 130, x0 = 40, y0 = 40 } = {}) {
-  const ids = new Set(flow.nodes.map(n => n.id));
-  const parents = new Map(flow.nodes.map(n => [n.id, []]));
+  // Container children (parentId) hold positions RELATIVE to their parent —
+  // leave them out of the top-level layout entirely.
+  const nodes = flow.nodes.filter(n => !n.parentId);
+  const ids = new Set(nodes.map(n => n.id));
+  const parents = new Map(nodes.map(n => [n.id, []]));
   for (const e of flow.edges) {
     if (ids.has(e.source) && ids.has(e.target)) parents.get(e.target).push(e.source);
   }
@@ -48,10 +51,10 @@ export function layoutPositions(flow, { xGap = 260, yGap = 130, x0 = 40, y0 = 40
     depth.set(id, d);
     return d;
   };
-  flow.nodes.forEach(n => depthOf(n.id));
+  nodes.forEach(n => depthOf(n.id));
 
   const rows = new Map();
-  for (const n of flow.nodes) {
+  for (const n of nodes) {
     const d = depth.get(n.id);
     if (!rows.has(d)) rows.set(d, []);
     rows.get(d).push(n);
@@ -66,4 +69,52 @@ export function layoutPositions(flow, { xGap = 260, yGap = 130, x0 = 40, y0 = 40
     row.forEach((n, i) => positions.set(n.id, { x: rowX0 + i * xGap, y: y0 + d * yGap }));
   }
   return positions;
+}
+
+// Grid layout for the CHILDREN of an orchestrator container: dependency
+// waves become rows inside the box, positions are relative to the parent.
+// Returns { positions: Map<id,{x,y}>, box: {w,h} } — the box is sized to fit.
+export function containerLayout(children, edges, {
+  xGap = 250, yGap = 96, padX = 22, padTop = 58, padBottom = 46, cardW = 230
+} = {}) {
+  const ids = new Set(children.map(n => n.id));
+  const parents = new Map(children.map(n => [n.id, []]));
+  for (const e of edges) {
+    if (ids.has(e.source) && ids.has(e.target)) parents.get(e.target).push(e.source);
+  }
+  const depth = new Map();
+  const visiting = new Set();
+  const depthOf = id => {
+    if (depth.has(id)) return depth.get(id);
+    if (visiting.has(id)) return 0;
+    visiting.add(id);
+    const d = Math.max(0, ...parents.get(id).map(p => depthOf(p) + 1));
+    visiting.delete(id);
+    depth.set(id, d);
+    return d;
+  };
+  children.forEach(n => depthOf(n.id));
+
+  const rows = new Map();
+  for (const n of children) {
+    const d = depth.get(n.id);
+    if (!rows.has(d)) rows.set(d, []);
+    rows.get(d).push(n);
+  }
+  const widest = Math.max(1, ...[...rows.values()].map(r => r.length));
+  const innerW = (widest - 1) * xGap + cardW;
+  const centerX = padX + innerW / 2;
+
+  const positions = new Map();
+  for (const [d, row] of rows) {
+    const rowX0 = centerX - ((row.length - 1) * xGap + cardW) / 2;
+    row.forEach((n, i) => positions.set(n.id, { x: rowX0 + i * xGap, y: padTop + d * yGap }));
+  }
+  return {
+    positions,
+    box: {
+      w: padX * 2 + innerW,
+      h: padTop + (rows.size - 1) * yGap + 72 + padBottom
+    }
+  };
 }

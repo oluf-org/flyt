@@ -1,0 +1,14 @@
+{
+  "id": "code-general-step",
+  "name": "Code (general)",
+  "description": "Straightforward implementation work. Balanced model is usually sufficient.",
+  "category": "Code general",
+  "icon": "✦",
+  "baseType": "aiStep",
+  "role": "execute",
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false
+}

@@ -1,7 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('llmflow', {
-  startRun: (prompt) => ipcRenderer.invoke('run:start', prompt),
   approvePlan: (runId) => ipcRenderer.invoke('run:approve', runId),
   rejectPlan: (runId, reason) => ipcRenderer.invoke('run:reject', runId, reason),
   listRuns: () => ipcRenderer.invoke('run:list'),
@@ -16,7 +15,12 @@ contextBridge.exposeInMainWorld('llmflow', {
   saveFlow: (flow) => ipcRenderer.invoke('flow:save', flow),
   newFlow: () => ipcRenderer.invoke('flow:new'),
   deleteFlow: (id) => ipcRenderer.invoke('flow:delete', id),
-  runFlow: (id) => ipcRenderer.invoke('flow:run', id),
+  lintFlow: (id) => ipcRenderer.invoke('flow:lint', id),
+  runFlow: (id, userInput) => ipcRenderer.invoke('flow:run', id, userInput),
+  listNodeTemplates: () => ipcRenderer.invoke('node:list'),
+  saveNodeTemplate: (tpl) => ipcRenderer.invoke('node:save', tpl),
+  newNodeTemplate: () => ipcRenderer.invoke('node:new'),
+  deleteNodeTemplate: (id) => ipcRenderer.invoke('node:delete', id),
   setTitleBarTheme: (mode) => ipcRenderer.invoke('titlebar:setTheme', mode),
   onRunUpdate: (cb) => {
     const handler = (_e, payload) => cb(payload);

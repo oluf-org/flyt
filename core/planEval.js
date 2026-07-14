@@ -46,13 +46,16 @@ function validateContextSpec(cs, at, errors) {
 
 // The strict plan-eval contract. Any violation rejects the WHOLE document
 // (no partial materialization) so generated flows are always well-formed.
-export function parsePlanEval(text) {
+// extraTemplateIds extends the valid template names with the Node Library's
+// (user-editable) catalog on top of the built-in one.
+export function parsePlanEval(text, extraTemplateIds = []) {
   const obj = extractJson(text);
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
     return { ok: false, errors: ['no JSON object found in plan-eval output (expected a ```json block or raw JSON)'] };
   }
   const errors = [];
-  const knownTemplates = Object.keys(NODE_TEMPLATES);
+  const knownTemplates = [...new Set([...Object.keys(NODE_TEMPLATES), ...extraTemplateIds])];
+  const isKnownTemplate = t => knownTemplates.includes(t);
 
   if (!Array.isArray(obj.nodes) || obj.nodes.length === 0) {
     errors.push('nodes: required non-empty array of { id, template, ... }');
@@ -71,7 +74,7 @@ export function parsePlanEval(text) {
     }
     if (!isStr(n.template)) {
       errors.push(`${at}.template: required string`);
-    } else if (!NODE_TEMPLATES[n.template.trim()]) {
+    } else if (!isKnownTemplate(n.template.trim())) {
       errors.push(`${at}.template: unknown "${n.template.trim()}" (known: ${knownTemplates.join(', ')})`);
     }
     if (n.category != null && !NODE_CATEGORIES.includes(n.category)) {

@@ -4,19 +4,101 @@
 // See also FLOW_NODES.md for the full human + AI-readable contracts of the
 // standard example nodes and the recommended reflective planning pattern.
 export const TYPE_META = {
-  input:      { icon: '✎', kind: 'user', label: 'Input',           sub: 'brief · user text' },
-  agentTask:  { icon: '☑', kind: 'user', label: 'Agent task',      sub: 'task · for the executor' },
-  aiStep:     { icon: '✦', kind: 'ai',   label: 'AI step',         sub: 'llm · model call' },
-  output:     { icon: '◎', kind: 'user', label: 'Output',          sub: 'result · collects upstream' },
-
-  // Prominent example / standard nodes (visual affordances + labels).
-  // Most are realized at runtime as aiStep with a specific role or as
-  // agentTask, but having dedicated entries makes the palette and docs clear.
-  planStart:  { icon: '▶', kind: 'ai',   label: 'Start / Planner', sub: 'plan · tasks.md + context specs' },
-  planEval:   { icon: '▤⇄', kind: 'ai',   label: 'Plan Evaluation', sub: 'eval · structure + categories + nodes' },
-  stitch:     { icon: '🧵', kind: 'ai',   label: 'Stitch',          sub: 'integrate + repair' },
-  finalEval:  { icon: '✓◌', kind: 'ai',   label: 'Final Evaluation', sub: 'completeness + deltas' }
+  input:        { icon: '✎', kind: 'user', label: 'User Input',   sub: 'run request · from the run panel' },
+  agentTask:    { icon: '☑', kind: 'user', label: 'Agent task',   sub: 'task · for the executor' },
+  aiStep:       { icon: '✦', kind: 'ai',   label: 'AI step',      sub: 'llm · model call' },
+  orchestrator: { icon: '▦', kind: 'ai',   label: 'Orchestrator', sub: 'container · creates & runs task nodes' },
+  output:       { icon: '◎', kind: 'user', label: 'Output',       sub: 'result · collects upstream' }
 };
+
+// Tools an agentTask node may be granted (core/tools/index.js registry).
+export const AGENT_TOOLS = ['write_file', 'create_task', 'write_task_md'];
+
+// --- Output ports: what each node CREATES -----------------------------------
+//
+// Every node declares named outputs. The FIRST port is the primary output
+// (nodes/<id>.md); auxiliary ports are written as nodes/<id>.<port>.md by the
+// runner. Edges may carry sourceHandle = <port id> to pick which output feeds
+// the target; edges without one use the primary output (legacy behavior).
+// Node Library templates may override these with an `outputs` array.
+export const ROLE_PORTS = {
+  'plan-start': [
+    { id: 'tasks', label: 'tasks.md', description: 'Structured task list with per-task minimal context specs.' }
+  ],
+  'plan-eval': [
+    { id: 'plan', label: 'plan json', description: 'The validated node-creation contract (nodes, waves, categories).' },
+    { id: 'summary', label: 'summary', description: 'One-line summary of the evaluated plan.' }
+  ],
+  'step-eval': [
+    { id: 'report', label: 'report', description: 'The evaluation report for the preceding node.' },
+    { id: 'verdict', label: 'verdict', description: 'Structured pass / retry / escalate verdict (JSON).' }
+  ],
+  stitch: [
+    { id: 'report', label: 'stitch-report', description: 'Coherence review across the prior parallel work.' }
+  ],
+  'final-eval': [
+    { id: 'report', label: 'final-eval.md', description: 'Completeness verdict + documented differences from the plan.' }
+  ],
+  plan: [
+    { id: 'plan', label: 'plan.md', description: 'The produced plan.' }
+  ],
+  verify: [
+    { id: 'report', label: 'report', description: 'PASS/FAIL verification report.' }
+  ],
+  execute: [
+    { id: 'result', label: 'result', description: 'The produced deliverable.' }
+  ],
+  custom: [
+    { id: 'result', label: 'result', description: 'The produced deliverable.' }
+  ]
+};
+
+export const TYPE_PORTS = {
+  input: [{ id: 'prompt', label: 'prompt', description: 'The run request text.' }],
+  agentTask: [{ id: 'result', label: 'result', description: 'The executor task output.' }],
+  orchestrator: [
+    { id: 'results', label: 'results', description: 'Aggregated outputs of every node this orchestrator created and ran.' },
+    { id: 'summary', label: 'summary', description: 'The orchestration plan summary + node inventory.' }
+  ],
+  output: []
+};
+
+// The declared outputs of a node: explicit template outputs win, then the
+// structural type, then the AI role. Total — always returns an array.
+export function nodePorts(node) {
+  if (!node) return [];
+  const explicit = node.data?.outputs;
+  if (Array.isArray(explicit) && explicit.length) return explicit;
+  if (node.type && node.type in TYPE_PORTS && node.type !== 'agentTask') return TYPE_PORTS[node.type];
+  if (node.type === 'agentTask') return TYPE_PORTS.agentTask;
+  const role = node.data?.role ?? 'custom';
+  return ROLE_PORTS[role] ?? ROLE_PORTS.custom;
+}
+
+// The primary (first-declared) output port id, or null for sink nodes.
+export function primaryPort(node) {
+  return nodePorts(node)[0]?.id ?? null;
+}
+
+// True for nodes whose contract lets them create other nodes at run time.
+export function createsNodes(node) {
+  if (node?.type === 'orchestrator') return true;
+  const role = node?.data?.role;
+  return role === 'plan-eval' || role === 'stitch';
+}
+
+// Validate/normalize a template's declared outputs ({ id, label?, description? }[]).
+export function normalizeOutputs(outputs) {
+  if (!Array.isArray(outputs)) return null;
+  const clean = outputs
+    .filter(o => o && typeof o.id === 'string' && /^[a-zA-Z0-9_-]+$/.test(o.id.trim()))
+    .map(o => ({
+      id: o.id.trim(),
+      label: typeof o.label === 'string' && o.label.trim() ? o.label.trim() : o.id.trim(),
+      ...(typeof o.description === 'string' && o.description.trim() ? { description: o.description.trim() } : {})
+    }));
+  return clean.length ? clean : null;
+}
 
 export const AI_ROLES = ['plan', 'execute', 'verify', 'custom', 'plan-start', 'plan-eval', 'step-eval', 'stitch', 'final-eval'];
 
@@ -144,6 +226,7 @@ export function createNodeFromTemplate(name, overrides = {}) {
 
 export function nodeLabel(node) {
   if (node.data?.title?.trim()) return node.data.title.trim();
+  if (node.data?.templateName) return node.data.templateName;
   const byTemplate = node.data?.template && NODE_TEMPLATES[node.data.template]?.label;
   return byTemplate || TYPE_META[node.type]?.label || node.type;
 }
@@ -152,11 +235,13 @@ export function nodeSub(node) {
   const d = node.data || {};
   const w = d.worker;
   const workerText = w?.provider ? `${w.provider}/${w.model}` : 'default worker';
-
-  // Surface template + category when present (very useful for generated nodes)
-  const tmpl = d.template ? NODE_TEMPLATES[d.template] : null;
   const cat = d.category ? `${d.category} · ` : '';
 
+  // Library template instances: show template name + effective worker.
+  if (d.templateId) return `${cat}${d.templateName ?? d.templateId} · ${workerText}`;
+
+  // Legacy catalog nodes (generated nodes carry data.template)
+  const tmpl = d.template ? NODE_TEMPLATES[d.template] : null;
   if (tmpl) {
     return `${cat}${tmpl.label} · ${workerText}`;
   }
@@ -168,7 +253,130 @@ export function nodeSub(node) {
   return TYPE_META[node.type]?.sub ?? '';
 }
 
-// Convenience: list of template names that are primarily for the advanced planning pattern
-export const PLANNING_NODE_TEMPLATES = [
-  'plan-start', 'plan-eval', 'step-eval', 'stitch', 'final-eval'
-];
+// --- Node Library: template seed catalog + instance resolution -------------
+//
+// The Node Library (core/nodestore.js, nodes/<id>.json) holds reusable AI
+// node templates. A workflow node is an INSTANCE of a template:
+//
+//   { id, templateId, position, overrides: { title?, worker?, instructions?,
+//     tools?, requiresApproval?, goal?, category?, contextSpec? } }
+//
+// Overrides live in that workflow's flows/<id>.json only and never write
+// back to the template. resolveFlow() merges template defaults with the
+// instance overrides into the runtime node shape ({ id, type, kind,
+// position, data }) that the runner and canvas operate on. Structural nodes
+// (input/output) and legacy raw nodes pass through untouched.
+
+// Seed catalog for the Node Library — the FLOW_NODES.md standard nodes.
+// core/nodestore.js writes these to nodes/<id>.json on first launch; after
+// that the files are the source of truth and the user can edit them freely.
+export const SEED_NODE_TEMPLATES = [
+  {
+    id: 'plan-start', name: 'Plan', category: null, icon: '▶',
+    baseType: 'aiStep', role: 'plan-start',
+    description: 'Produces tasks.md with well-defined tasks and explicit per-file context descriptions.'
+  },
+  {
+    id: 'plan-eval', name: 'Plan evaluation', category: null, icon: '▤⇄',
+    baseType: 'aiStep', role: 'plan-eval',
+    description: 'Consumes tasks.md; emits dependency order, task categories, and the work nodes to create.'
+  },
+  {
+    id: 'code-general-step', name: 'Code (general)', category: 'Code general', icon: '✦',
+    baseType: 'aiStep', role: 'execute',
+    description: 'Straightforward implementation work. Balanced model is usually sufficient.'
+  },
+  {
+    id: 'code-design-step', name: 'Code (design)', category: 'Code design', icon: '✦',
+    baseType: 'aiStep', role: 'execute',
+    description: 'Architecture, interfaces, data models. Prefer a stronger model.'
+  },
+  {
+    id: 'documentation-step', name: 'Documentation', category: 'documentation', icon: '✦',
+    baseType: 'aiStep', role: 'execute',
+    description: 'Docs, README sections, comments, usage examples. Lighter/faster model often works.'
+  },
+  {
+    id: 'test-creation-step', name: 'Test creation', category: 'Test-creation', icon: '☑',
+    baseType: 'agentTask', role: 'execute', tools: [...AGENT_TOOLS],
+    description: 'Create or extend tests. Full agent executor with tools.'
+  },
+  {
+    id: 'step-eval', name: 'Step evaluation', category: null, icon: '⚖',
+    baseType: 'aiStep', role: 'step-eval',
+    description: 'Review the preceding node: pass, bounded auto-retry with guidance, or escalate to human.'
+  },
+  {
+    id: 'stitch', name: 'Stitch', category: null, icon: '🧵',
+    baseType: 'aiStep', role: 'stitch',
+    description: 'Review prior outputs, make small fixes, or create corrective fix tasks.'
+  },
+  {
+    id: 'final-eval', name: 'Final evaluation', category: null, icon: '✓◌',
+    baseType: 'aiStep', role: 'final-eval',
+    description: 'Evaluate completeness against the original plan; document differences and reasoning.'
+  }
+].map(t => ({ worker: null, instructions: '', tools: null, skills: [], requiresApproval: false, ...t }));
+
+// Fill in the optional template fields so every consumer sees one shape.
+export function normalizeTemplate(tpl) {
+  return {
+    id: tpl.id,
+    name: tpl.name ?? tpl.id,
+    description: tpl.description ?? '',
+    category: tpl.category ?? null,
+    icon: tpl.icon ?? '✦',
+    baseType: tpl.baseType === 'agentTask' ? 'agentTask' : 'aiStep',
+    role: tpl.role ?? 'custom',
+    worker: tpl.worker?.provider && tpl.worker?.model
+      ? { provider: tpl.worker.provider, model: tpl.worker.model } : null,
+    instructions: tpl.instructions ?? '',
+    tools: Array.isArray(tpl.tools) ? tpl.tools.filter(t => AGENT_TOOLS.includes(t)) : null,
+    skills: Array.isArray(tpl.skills) ? tpl.skills.map(String) : [],
+    requiresApproval: Boolean(tpl.requiresApproval),
+    outputs: normalizeOutputs(tpl.outputs)
+  };
+}
+
+// True when the flow node is a template instance (vs structural/legacy raw).
+export const isInstance = node => Boolean(node?.templateId);
+
+// Merge a template with one instance's overrides into the runtime node
+// shape. A missing template resolves to a clearly-flagged custom aiStep so
+// the flow still loads (and the run fails honestly at that node).
+export function resolveInstance(node, tpl) {
+  const t = tpl ? normalizeTemplate(tpl) : null;
+  const ov = node.overrides ?? {};
+  const type = (t?.baseType) === 'agentTask' ? 'agentTask' : 'aiStep';
+  const instructions = [t?.instructions, ov.instructions]
+    .filter(s => typeof s === 'string' && s.trim()).join('\n\n');
+  const data = {
+    templateId: node.templateId,
+    templateName: t?.name ?? node.templateId,
+    icon: t?.icon ?? '✦',
+    title: ov.title ?? t?.name ?? node.templateId,
+    role: t?.role ?? 'custom',
+    worker: ov.worker ?? t?.worker ?? null,
+    ...(instructions ? { instructions } : {}),
+    ...(ov.category ?? t?.category ? { category: ov.category ?? t.category } : {}),
+    ...((ov.tools ?? t?.tools) ? { tools: ov.tools ?? t.tools } : {}),
+    ...((ov.skills ?? t?.skills)?.length ? { skills: ov.skills ?? t.skills } : {}),
+    requiresApproval: ov.requiresApproval ?? t?.requiresApproval ?? false,
+    ...(t?.outputs?.length ? { outputs: t.outputs } : {}),
+    ...(ov.goal ? { goal: ov.goal } : {}),
+    ...(ov.contextSpec ? { contextSpec: ov.contextSpec } : {}),
+    ...(t ? {} : { missingTemplate: true })
+  };
+  return { id: node.id, type, kind: 'ai', position: node.position, data };
+}
+
+// Resolve every template instance in a flow against the library. Structural
+// (input/output) and already-resolved/legacy nodes pass through unchanged.
+export function resolveFlow(flow, templates = []) {
+  const byId = new Map(templates.map(t => [t.id, t]));
+  return {
+    ...flow,
+    nodes: (flow.nodes ?? []).map(n =>
+      isInstance(n) ? resolveInstance(n, byId.get(n.templateId)) : n)
+  };
+}

@@ -1,211 +1,154 @@
 # LLM Flow — Goals & Architecture
 
-**Project:** llm-flow  
-**Status (as of 2026-07-13):** Early MVP (3 git commits total)  
+**Project:** llm-flow
+**Status (as of 2026-07-14):** Product refocus implemented — Node Library + one engine ship; `core/pipeline.js` retired (see "Migration" below)
 **Primary audience:** Future AI agents and human contributors. **Read this file first.**
 
-> **One-sentence vision:**  
-> An Electron desktop application that lets people visually author, inspect, and execute multi-model AI orchestration workflows on a live flowchart canvas, with radical transparency achieved through a file-based single source of truth.
->
-> **For the flowchart / custom flows:** See `FLOW_NODES.md` for the documented standard example nodes (plan-start, plan-eval, categorized template work nodes, stitch, final-eval, …) and the intended reflective planning pattern that lets AI safely create and categorize nodes.
+> **One-sentence vision:**
+> An easy-to-use desktop app for AI workflows: you build workflows from a library of reusable AI node templates, pick a workflow from a dropdown, type what you want, and watch it execute transparently on a live canvas.
+
+---
+
+## The Product Refocus (2026-07-14)
+
+The original MVP grew two parallel systems (a hardcoded classic pipeline and a custom flow engine) plus an ad-hoc node catalog. That made the app conceptually messy. The refocus collapses everything into **one simple mental model**:
+
+1. **Node Library** — reusable AI node templates (Code, Documentation, Test, …), managed on their own page, separate from any workflow.
+2. **Workflows** — graphs composed by picking nodes from the library and wiring them on the canvas.
+3. **Run** — select a workflow from a dropdown, enter your request, run it.
+
+There is **one execution engine**. The classic linear pipeline (plan → approve → route → execute → verify) is no longer special-cased code; it ships as a **pre-built default workflow** made of library nodes. `core/pipeline.js` is retired once parity is reached.
 
 ---
 
 ## Non-Negotiable Principles
 
-These are the soul of the project. Any proposed change should be judged against them:
+Unchanged. Judge every change against these:
 
-1. **File-based state is the single source of truth.**  
-   Every stage (planner, router, executor tasks, verifier, aiSteps, etc.) communicates **only** by reading and writing plain files under `runs/<runId>/` (prompt.md, plan.md, tasks.json, tasks/*.md, nodes/*.md, retrospectives/*.json, result.md, log.jsonl, flow.json, meta.json).  
-   No hidden in-memory coordination between modules. This enables inspectability ("Open run folder"), reproducibility, resumability in principle, and auditability.
-
-2. **Human oversight by default.**  
-   There is an approval checkpoint after planning. Custom flows support per-node `requiresApproval`. The UI makes the current stage, errors, and artifacts obvious.
-
-3. **Model-agnostic and multi-model by design.**  
-   Different workers (provider + model) can be assigned per classic stage or per custom node. Adapters live in `core/adapters/`. The system must not assume a single model or provider.
-
-4. **Self-describing artifacts.**  
-   Tasks carry `goal`, `inputs`, `constraints`, `dependsOn`, `worker`. Every node emits a structured retrospective before the pipeline/flow advances. History from prior retrospectives can inform future planning (`historyDigest`).
-
-5. **Inspectability > convenience.**  
-   "Open run folder" is a first-class action. Artifacts must remain human-readable Markdown/JSON even when produced by LLMs.
-
-6. **Deliberate separation of concerns.**  
-   Nodes (planner, router, executor, verifier, aiStep) are independent modules. The classic `Pipeline` and custom `FlowRunner` are separate execution engines that happen to share the same file contract.
-
-7. **Performance, responsiveness, and feel are incredibly important.**  
-   See the Quality Attributes section below. Slow AI steps are acceptable; a janky or confusing UI is not.
+1. **File-based state is the single source of truth.** All coordination between modules happens through plain files under `runs/<runId>/`. No hidden in-memory coordination. Node templates and workflows are also plain files (`nodes/<id>.json`, `flows/<id>.json`).
+2. **Human oversight by default.** Approval gates are per-node (`requiresApproval`); the default workflow keeps the post-planning gate.
+3. **Model-agnostic and multi-model by design.** The worker (provider + model) is a property of the node template, overridable per workflow.
+4. **Self-describing artifacts.** Tasks carry goal, inputs, constraints, dependsOn, worker. Every executed node emits a structured retrospective.
+5. **Inspectability > convenience.** "Open run folder" stays first-class; artifacts stay human-readable Markdown/JSON.
+6. **Ease of use is now a first-class principle.** A new user should understand the app in one sentence: *pick a workflow, type your request, run it.* Complexity (prompts, context assembly, task decomposition) is the system's job, not the user's.
+7. **Performance, responsiveness, and feel are incredibly important.** Slow AI steps are acceptable; a janky or confusing UI is not.
 
 ---
 
-## Current Realization (What Ships Today)
+## Core Concepts
 
-### Two Co-Existing Execution Modes
+### 1. AI Node Templates (the Node Library)
 
-**1. Classic Linear Pipeline** (the original MVP, still primary for reliability)
-- Hardcoded sequence in `core/pipeline.js`:
-  `prompt → planning (LLM) → awaiting_approval (human gate) → routing (LLM → tasks.json) → execution (sequential agent tasks with tools) → verification (LLM) → done | failed | rejected`
-- Uses the full agent loop (`core/agent.js`) only for executor tasks.
-- Retrospectives + history feed only the classic planner today.
+Pre-defined, reusable node types that live **outside** any workflow, created and managed on a dedicated **Nodes page**. Examples: Code (general), Code (design), Documentation, Test-creation, Plan, Evaluation, Stitch.
 
-**2. Custom Graph Flows** (newer capability)
-- User-authored DAGs persisted in `flows/<id>.json`.
-- Node types (see `src/flowTypes.js` and the full catalog + contracts in `FLOW_NODES.md`):
-  - `input` — user brief (becomes the prompt)
-  - `agentTask` — contributes a self-describing task executed by the existing executor (full tools + agent loop)
-  - `aiStep` — direct single-shot `callModel` with assembled upstream context (plan/execute/verify/custom roles + advanced roles: plan-start, plan-eval, step-eval, stitch, final-eval)
-  - `output` — collects upstream into `result.md`
-- **Standard example nodes** (documented in `FLOW_NODES.md`): plan-start, plan-eval, template-based work nodes (categorized Code general / Code design / documentation / Test-creation), step-eval, stitch, final-eval. These are the nodes an AI can pick from or generate. The recommended advanced pattern is the reflective planning + minimal-context + repair loop (Start produces scoped `tasks.md` → Plan-Eval declares parallel/seq + categories + template nodes → work with `contextSpec` → Stitch + evals → Final-Eval that notes differences + reasoning).
-- Execution in `core/flowRunner.js`:
-  - Topological sort
-  - Phase 1: non-task-dependent nodes + agentTask registration
-  - Phase 2: run contributed + dynamically created tasks (sequential)
-  - Phase 3: downstream nodes that need real task outputs
-  - Optional per-node approval gates
-  - Materialization of AI-generated nodes (plan-eval can cause nodes to be added to the run's `flow.json`)
-- Custom flows can mix user-defined structure with the powerful executor.
+A node template defines:
 
-The built-in "Linear pipeline" flow visible in the editor is a **read-only emulation**. Running it from the flow editor throws; use the "New run" prompt box instead. This preserves identical behavior for the classic path.
+- **Name, category, icon** — how it appears in the palette.
+- **Worker (provider + model)** — which model runs it.
+- **Optional extra instructions** — short guidance appended to the auto-generated prompt.
+- **Tool availability** — which agent tools (write_file, create_task, …) the node may use.
+- **Skills** — optional skills/capabilities attached to the node.
 
-### UI (React + React Flow)
+**Crucially, templates do not contain hand-written prompts.** The model generates its own prompt from the task description and upstream context. The template constrains *how* (model, tools, instructions, skills), the task defines *what*.
 
-- Dual mode in one window (`src/App.jsx`):
-  - Flow editing (palette, drag, connect, inspector fields, autosave, "Run flow")
-  - Run viewing (live canvas driven by file snapshots pushed over IPC)
-- Canvas: vertical/top-down cards with icons, mono sub-labels (worker or kind), status glyphs (✓ active spinner ⏸ ✕), animated edges only for the active item.
-- Sidebar: flows list, new prompt + "Run pipeline", run history, "Open run folder".
-- Inspector: shows live file artifacts (plan, tasks, outputs, retrospectives, tool calls) or editable node fields (for flows).
-- Theming (light/dark) with native titlebar sync.
-- Polish: 240ms theme/status transitions, 140ms micro interactions, single continuous animation policy, reduced-motion support.
+Templates persist as files (e.g. `nodes/<id>.json`) per principle 1.
 
-### Core Contracts & Implementation Notes
+### 2. Workflows
 
-- `core/state.js` (RunStore) — pure sync filesystem contract. All readers/writers go through here.
-- `core/flowstore.js` — same philosophy for flow definitions + `builtinLinearFlow()`.
-- Every node emits a retrospective via `makeRetrospective()` before advancing.
-- Agent tooling (`write_file`, `create_task`, `write_task_md`) is sandboxed to the run's `workspace/`.
-- Two agent protocols: native OpenAI tools (when supported) and a text ` ```tool ` protocol.
-- Updates: main process pushes full `store.snapshot(runId)` on every meaningful change.
+A workflow is a DAG built by picking node templates from the library and wiring them on the canvas. The **Flows section in the sidebar is for browsing and creating workflows** — it is a catalog, not a run surface.
 
-### Maturity & How Long It's Come
+- Workflow nodes are **instances of templates**. An instance may carry **small local overrides** (model, instructions, tools, approval). Overrides are saved **in that workflow only** (`flows/<id>.json`) and never write back to the template or leak to other workflows.
+- Every runnable workflow starts from a **User Input node** and ends in an **Output node**.
+- The classic pipeline ships as a read-write pre-built workflow ("Default pipeline") composed of library nodes — users can duplicate and modify it like any other.
 
-- **3 commits total** (baseline linear MVP → flow builder UI + persistence → full graph runner).
-- Development visible in `runs/` directories from ~July 9–12 2026.
-- Rapid iteration: the file-based contract and retrospective system were present from the first commit. The visual canvas and custom flows were added on top without breaking the original pipeline.
-- Current state: functional end-to-end with mock provider (real providers work with keys). Both execution modes can be exercised. Many deliberate "extension points" remain unimplemented (see below).
+### 3. Running a Workflow
+
+The run panel (right side) has:
+
+- A **workflow dropdown** — select which workflow to run.
+- A **text input field** — what you type here becomes the content of the workflow's **User Input node** for that run.
+- A **Run button**.
+
+No separate "run pipeline" vs "run flow" paths. One dropdown, one input, one engine (`core/flowRunner.js`).
 
 ---
 
-## Node Types & Contracts
+## UI / Interaction Model (target)
 
-(See `src/flowTypes.js`, `FLOW_NODES.md` for the polished example nodes + pattern, `core/flowRunner.js` comments, `README.md` "Contracts every node obeys")
-
-**Classic stages** (for reference): prompt, planner, router, execution (with per-task nodes), verifier.
-
-**Custom flow nodes**:
-- Tasks are (or become) fully self-describing.
-- `aiStep` nodes receive `USER PROMPT` + labeled upstream outputs via `upstreamContext()`.
-- Every executed node (or task) writes a retrospective.
-- `dependsOn` and `inputs` are honored for ordering and context.
+- **Sidebar:** Flows section (browse/create/duplicate workflows), Runs history, link to the Nodes page.
+- **Nodes page:** create/edit/delete node templates; shows category, model, tools, skills.
+- **Canvas (edit mode):** palette lists library node templates; drag to instantiate; inspector edits per-instance overrides and clearly marks "override (this workflow only)" vs template defaults.
+- **Canvas (run mode):** live view driven by file snapshots over IPC; status glyphs; single continuous animation for the active node.
+- **Run panel (right):** workflow dropdown + user input field + run button; the input visibly maps to the User Input node.
+- **Inspector:** live artifacts (plan, tasks, outputs, retrospectives, tool calls) during runs; template/override fields when editing.
 
 ---
 
-## UI / Interaction Model
+## Execution Model
 
-- Sidebar navigation between Flows and Runs.
-- Canvas is always the source of truth for layout in edit mode (positions persisted).
-- Selection drives the inspector.
-- Approval bars appear contextually.
-- "Save" dot + debounced persistence for flows.
-- Everything that can be derived is derived from files (renderer is a pure view).
+One engine: `core/flowRunner.js` (topological walk, agentTask phases, per-node approval gates, retrospectives, materialization of AI-generated nodes). The reflective planning pattern in `FLOW_NODES.md` (plan-start → plan-eval → categorized work nodes with minimal `contextSpec` → stitch/step-eval → final-eval) remains the recommended shape for complex workflows and is expressed entirely with library node templates.
+
+Prompt assembly per node: task description + upstream context (`upstreamContext()`) + template instructions + instance override instructions → model generates its own working prompt. Context stays minimal via per-task `Context files:` declarations.
+
+---
+
+## Migration From Current State
+
+All six steps landed on 2026-07-14 (branch `flow-builder`):
+
+1. **Node Library backend** ✅ — `core/nodestore.js` mirroring `flowstore.js`; `nodes/*.json` seeded from the FLOW_NODES.md catalog (plan-start, plan-eval, code-general, code-design, documentation, test-creation, step-eval, stitch, final-eval).
+2. **Nodes page UI** ✅ — `src/NodesPage.jsx`: CRUD for templates (name, category, worker, instructions, tools, skills, approval).
+3. **Instance/override model** ✅ — workflow nodes store `templateId` + `overrides`; `resolveFlow()` in `src/flowTypes.js` merges them; the inspector marks "override (this workflow only)" vs template defaults.
+4. **Unified run entry** ✅ — run panel (right): workflow dropdown + user input → User Input node; the separate "New run" prompt path is gone.
+5. **Default pipeline as workflow** ✅ — shipped as `flows/default-pipeline.json` (User Input → Plan → gated Plan evaluation → Final evaluation → Output) with parity verified in tests (post-planning gate, retrospectives, historyDigest); `core/pipeline.js` and the read-only builtin emulation are deleted.
+6. **Cleanup** ✅ — dual-mode branching removed from `src/App.jsx`; README/GOALS/FLOW_NODES updated.
+
+Remaining known gap: template `skills` are stored/edited but not yet injected into execution.
 
 ---
 
 ## Quality Attributes (Non-Functional Requirements)
 
-**Performance, responsiveness, and general feel are incredibly important.**
+Unchanged in spirit; ease of use added.
 
-### Stated Intent
-> The application must feel crisp and trustworthy even though individual AI steps are slow. The UI must remain interactive (switching views, inspecting past runs, editing other flows) while a run is in progress. Stage and task status must reflect within one animation frame of the underlying file write. Only one element on screen should ever be in continuous motion. File artifacts must remain small enough and human-readable enough that "open run folder" is a first-class debugging experience.
+> The application must feel crisp and trustworthy even though individual AI steps are slow. The UI must remain interactive while a run is in progress. Status must reflect within one animation frame of the underlying file write. Only one element on screen should ever be in continuous motion. "Open run folder" must remain a first-class debugging experience.
 
-### Current Implementation
-**Strengths (intentional):**
-- Careful CSS transition policy (see `src/styles.css`).
-- Only the active node/edge shows continuous animation (spinner or `animated` edge).
-- Debounced (500ms) flow autosave.
-- Mock adapter sleeps deliberately so UI progress is visible.
-- Full-snapshot push keeps the React side a pure view.
-- Reduced-motion media query support.
+**Known gaps & risks (still apply):** no performance budgets/instrumentation; full-snapshot IPC on every mutation; synchronous filesystem ops in RunStore/FlowStore; sequential task execution despite `dependsOn`; tiny-graph assumption, manual layout; no streaming output.
 
-**Known gaps & risks (documented so future work respects them):**
-- No performance budgets or instrumentation.
-- Every mutation → full JSON snapshot → IPC → React render + React Flow node/edge recreation.
-- Inspector `<pre>` blocks have limited height but can contain large LLM output.
-- `upstreamContext` and `snapshot()` re-read files on demand (repeats work).
-- All RunStore/FlowStore operations are synchronous (`writeFileSync` etc.). Acceptable on main for orchestration, but large outputs or high tool-call volume can slow stage advancement.
-- Graphs are assumed tiny (3–6 nodes). Manual layout only. No virtualization.
-- No streaming of partial LLM results to the canvas/inspector.
-- Flow approval gates are persisted to `meta.json` (`pendingNodeId` + `pendingGateKind`): approving/rejecting after an app restart resumes the run from file state (completed nodes from `nodeStatus`, agentTask mappings from `flow.json`). Step-eval retry budgets reset on restart (they are bounded either way).
-- Task execution (both modes) is strictly sequential even though `dependsOn` exists.
-
-**Observable targets for changes:**
-- Adding a run with 15–20 tasks or a 12-node custom flow should not make the canvas or inspector feel laggy.
-- Status updates after an IPC `run:update` should be visually immediate.
-- The user should be able to browse other runs or edit a different flow while one is executing.
-- "Open run folder" must still be useful when outputs are non-trivial.
+**Observable targets:** a 12-node workflow or 15–20-task run must not make the canvas laggy; status updates visually immediate; browsing/editing must stay possible during a run.
 
 ---
 
-## MVP Scope & Explicit Non-Goals / Deliberate Extension Points
+## Explicit Non-Goals (unchanged)
 
-**In scope for MVP (current reality):**
-- Classic pipeline + basic custom graph execution with the four node types.
-- File transparency, human approval gates, retrospectives, multi-worker assignment.
-- Live canvas visualization + basic editing + persistence.
-- Mock + OpenRouter + Anthropic adapters.
-- Tool use inside executor/agentTasks.
-
-**Explicitly not goals today (or only aspirational):**
-- Full general-purpose visual programming (loops, conditionals, sub-flows, data transformation nodes).
-- True parallel task execution.
-- Streaming LLM output or live token-by-token UI.
-- Automatic adaptive re-planning from retrospectives (only `historyDigest` feed exists).
-- Restart-resilient long-running flow approvals.
-- Large graphs, cost tracking, model A/B testing, auto-layout.
-- Database or in-memory alternative to the file contract (philosophical choice).
-- Production security / sandboxing beyond current workspace path checks.
-
-**Deliberate extension points (from README and code comments):**
-- Replace `pipeline.js` with a general graph walker (partially realized by FlowRunner).
-- Parallel execution using `dependsOn`.
-- More providers via `adapters/index.js#registerProvider`.
-- Retrospective-driven modules that rewrite plans/tasks.
-- Richer editing surface on the canvas.
+Full general-purpose visual programming (loops, conditionals, sub-flows); true parallel execution; streaming token-by-token UI; automatic adaptive re-planning; large graphs, cost tracking, A/B testing, auto-layout; any non-file state store; production-grade sandboxing.
 
 ---
 
 ## How to Keep This Document Alive
 
-- Update the "Status (as of ...)" line and add a short "Last verified against <short-sha>" note on significant changes.
-- Any edit to `core/{state,flowRunner,pipeline,flowstore}` or the canvas execution/visualization paths should prompt a review of the relevant sections.
-- For future AI work: the first instruction should be "Read GOALS.md in full before making any changes or suggestions."
+- Update the "Status (as of ...)" line on significant changes.
+- Any edit to `core/{state,flowRunner,flowstore,nodestore}` or the canvas/run-entry paths should prompt a review of the relevant sections.
+- For future AI work: the first instruction is "Read GOALS.md in full before making any changes or suggestions."
 
 ---
 
-## Quick Start for Humans & Machines
+## Quick Start
 
 ```sh
 npm install
 npm run dev          # hot-reload Vite + Electron
-# or
-npm start
 ```
 
-Use the mock provider (default) for exploration. Edit `config.json` or use the in-app Settings for real models.
+Use the mock provider (default) for exploration. Edit `config.json` or in-app Settings for real models. The filesystem under `runs/`, `flows/`, and `nodes/` is the best documentation of what the system actually does.
 
-The filesystem under `runs/` and `flows/` is the best documentation of what the system actually does.
+## Flow DSL
 
----
-
-*This document exists so that future AI models (and humans) have clear, stable context about intent, constraints, and non-functional priorities — especially performance, responsiveness, and feel.*
+Workflows are stored as `flows/<id>.flow.yaml` — a text-based, AI-authorable
+DSL (spec: `FLOW_LANG.md`). The script is the source of truth for structure;
+canvas positions live in `flows/<id>.layout.json`, written only by the app.
+`npm run flow -- lint <file> --json` is the machine gate: an AI authors a
+flow, lints until `ok: true`, and the app picks it up automatically. Legacy
+`flows/*.json` still load and are migrated on save (or via
+`npm run flow -- migrate`). Principle #1 is unchanged — the DSL file is just
+a better file.
