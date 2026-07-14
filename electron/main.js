@@ -6,7 +6,9 @@ import { RunStore } from '../core/state.js';
 import { FlowStore } from '../core/flowstore.js';
 import { NodeStore } from '../core/nodestore.js';
 import { FlowRunner } from '../core/flowRunner.js';
-import { lintFlow } from '../core/flowlang/lint.js';
+import { lintFlow, lintText } from '../core/flowlang/lint.js';
+import { parseFlow } from '../core/flowlang/parse.js';
+import { serializeFlow } from '../core/flowlang/serialize.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, '..');
@@ -144,6 +146,37 @@ ipcMain.handle('flow:delete', (_e, id) => flows.remove(id));
 // On-save validation for the canvas badge: full rule set, structured findings.
 ipcMain.handle('flow:lint', (_e, id) =>
   lintFlow(flows.load(id), { templates: nodeLibrary.listFull() }));
+
+// Raw YAML source for the code viewer/editor. Allows users (and AIs) to inspect
+// and hand-edit the canonical *.flow.yaml while the canvas works on the model.
+ipcMain.handle('flow:toYaml', (_e, flow) => {
+  try { return serializeFlow(flow); }
+  catch (e) { throw new Error('serialize: ' + e.message); }
+});
+ipcMain.handle('flow:saveFromYaml', (_e, id, yamlText) => {
+  if (typeof yamlText !== 'string') throw new Error('yamlText must be a string');
+  const parsed = parseFlow(yamlText); // validates + produces canonical model (no pos)
+  // Preserve any existing layout positions for nodes that survive the edit.
+  let layout = {};
+  try {
+    layout = JSON.parse(fs.readFileSync(flows.layoutPath(id), 'utf8')) || {};
+  } catch {}
+  const nodes = parsed.nodes.map((n, i) => {
+    const p = layout[n.id] || (n.position ?? { x: 140 + (i % 5) * 30, y: 60 + Math.floor(i / 5) * 110 });
+    return { ...n, position: { x: Math.round(p.x), y: Math.round(p.y) } };
+  });
+  return flows.save({ ...parsed, nodes });
+});
+ipcMain.handle('flow:lintYaml', (_e, yamlText) =>
+  lintText(yamlText, { templates: nodeLibrary.listFull() }));
+
+// Exact on-disk source (the committed *.flow.yaml). Useful to see what was
+// last persisted vs the live in-memory model.
+ipcMain.handle('flow:loadSource', (_e, id) => {
+  const p = flows.flowPath(id);
+  if (!fs.existsSync(p)) throw new Error('No .flow.yaml for ' + id);
+  return fs.readFileSync(p, 'utf8');
+});
 
 // --- Node Library (reusable AI node templates) ---
 ipcMain.handle('node:list', () => nodeLibrary.listFull());

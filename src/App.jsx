@@ -3,6 +3,7 @@ import FlowCanvas, { FlowEditor } from './FlowCanvas.jsx';
 import Inspector, { FlowInspector } from './Inspector.jsx';
 import Settings from './Settings.jsx';
 import NodesPage from './NodesPage.jsx';
+import FlowYamlEditor from './FlowYamlEditor.jsx';
 import { resolveFlow } from './flowTypes.js';
 import { layoutPositions } from './flowLayout.js';
 
@@ -44,6 +45,7 @@ export default function App() {
   const [flowSaved, setFlowSaved] = useState(true);
   const [flowLint, setFlowLint] = useState(null); // { ok, errors, warnings } for the open flow
   const [models, setModels] = useState([]);
+  const [flowViewMode, setFlowViewMode] = useState('canvas'); // 'canvas' | 'yaml'
   const flowRef = useRef(null);
   const saveTimer = useRef(null);
 
@@ -51,6 +53,9 @@ export default function App() {
   const [runFlowId, setRunFlowId] = useState('');
   const [runInput, setRunInput] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Activity bar state for IDE-style navigation (PoC)
+  const [activeActivity, setActiveActivity] = useState('flows'); // 'flows' | 'runs' | 'library'
 
   // Undo/redo over flow edits. Bursts of changes (a node drag emits one per
   // frame) coalesce into a single history entry via the time gate.
@@ -167,6 +172,18 @@ export default function App() {
     setHistorySize({ undo: 0, redo: 0 });
   }, []);
 
+  // Used by the YAML editor after a manual save-from-yaml succeeds.
+  const reloadCurrentFlow = useCallback(async () => {
+    if (!activeFlowId) return;
+    const f = await window.llmflow.loadFlow(activeFlowId);
+    flowRef.current = f;
+    setFlow(f);
+    setFlowSaved(true);
+    refreshLint(activeFlowId);
+    // keep selected if the node still exists
+    setSelectedNode(sel => sel && f.nodes.some(n => n.id === sel) ? sel : null);
+  }, [activeFlowId, refreshLint]);
+
   const undo = useCallback(() => {
     const cur = flowRef.current;
     if (!cur || !undoStack.current.length) return;
@@ -202,6 +219,8 @@ export default function App() {
     setShowNodesPage(false);
     setSelectedNode(null);
     setRunFlowId(id); // browsing a flow points the run panel at it
+    setFlowViewMode('canvas');
+    setActiveActivity('flows');
     resetHistory();
     refreshLint(id);
   }, [flushSave, resetHistory, refreshLint]);
@@ -228,6 +247,7 @@ export default function App() {
     setShowNodesPage(false);
     setActiveRunId(id);
     setSelectedNode(null);
+    setActiveActivity('runs');
   }, [flushSave]);
 
   const openNodesPage = useCallback(async () => {
@@ -237,6 +257,7 @@ export default function App() {
     setActiveRunId(null);
     setSelectedNode(null);
     setShowNodesPage(true);
+    setActiveActivity('library');
   }, [flushSave]);
 
   const newFlow = async () => {
@@ -410,60 +431,109 @@ export default function App() {
       </header>
 
       <div className="app-body">
+        {/* Activity bar (IDE-style quick nav) - PoC for better flow switching */}
+        <div className="activity-bar">
+          <button
+            className={'activity-btn' + (activeActivity === 'flows' ? ' active' : '')}
+            onClick={() => setActiveActivity('flows')}
+            title="Flows"
+          >
+            📁
+          </button>
+          <button
+            className={'activity-btn' + (activeActivity === 'library' ? ' active' : '')}
+            onClick={() => { setActiveActivity('library'); if (!showNodesPage) openNodesPage(); }}
+            title="Node Library"
+          >
+            📚
+          </button>
+          <button
+            className={'activity-btn' + (activeActivity === 'runs' ? ' active' : '')}
+            onClick={() => setActiveActivity('runs')}
+            title="Runs"
+          >
+            📜
+          </button>
+          <div className="activity-spacer" />
+          <button
+            className="activity-btn"
+            onClick={() => setShowSettings(true)}
+            title="Settings"
+          >
+            ⚙
+          </button>
+        </div>
+
         <aside className="sidebar">
-          <div className="sidebar-section">
-            <div className="section-row">
-              <span className="section-label">Flows</span>
-              <button className="ghost mini" onClick={newFlow}>＋ New flow</button>
-            </div>
-          </div>
-          <div className="flow-list">
-            {flowsList.map(f => (
-              <div
-                key={f.id}
-                className={'run-item flow-item' + (f.id === activeFlowId ? ' active' : '')}
-                onClick={() => openFlow(f.id)}
-              >
-                <span className="flow-item-name">{f.name}</span>
-                {f.id === 'default-pipeline' && <span className="node-kind kind-user">default</span>}
+          {activeActivity === 'flows' && (
+            <>
+              <div className="sidebar-section">
+                <div className="section-row">
+                  <span className="section-label">Flows</span>
+                  <button className="ghost mini" onClick={newFlow}>＋ New</button>
+                </div>
               </div>
-            ))}
-            {flowsList.length === 0 && <div className="muted">No flows yet.</div>}
-          </div>
+              <div className="flow-list">
+                {flowsList.map(f => (
+                  <div
+                    key={f.id}
+                    className={'run-item flow-item' + (f.id === activeFlowId ? ' active' : '')}
+                    onClick={() => openFlow(f.id)}
+                  >
+                    <span className="flow-item-name">{f.name}</span>
+                    {f.id === 'default-pipeline' && <span className="node-kind kind-user">default</span>}
+                  </div>
+                ))}
+                {flowsList.length === 0 && <div className="muted">No flows yet.</div>}
+              </div>
+              <div className="sidebar-section">
+                <button className="ghost mini" onClick={openNodesPage} style={{ width: '100%', marginTop: 8 }}>
+                  Open Node Library →
+                </button>
+              </div>
+            </>
+          )}
 
-          <div className="sidebar-section">
-            <div className="section-row">
+          {activeActivity === 'library' && (
+            <div className="sidebar-section" style={{ padding: '16px' }}>
               <span className="section-label">Node Library</span>
-              <button
-                className={'ghost mini' + (showNodesPage ? ' active' : '')}
-                onClick={openNodesPage}
-              >
-                {templates.length} templates →
+              <p style={{ color: 'var(--dim)', fontSize: '12px', margin: '12px 0' }}>
+                Manage reusable AI node templates.
+              </p>
+              <button className="primary" onClick={openNodesPage} style={{ width: '100%' }}>
+                Open full Library ({templates.length})
               </button>
-            </div>
-          </div>
-
-          <div className="sidebar-section" style={{ paddingBottom: 8 }}>
-            <span className="section-label">Runs</span>
-          </div>
-          <div className="run-list">
-            {[...runIds].reverse().map(id => (
-              <div
-                key={id}
-                className={'run-item' + (id === activeRunId && runView ? ' active' : '')}
-                onClick={() => openRun(id)}
-              >
-                {id}
+              <div style={{ marginTop: 16, fontSize: '11px', color: 'var(--faint)' }}>
+                Templates appear in the palette when editing flows.
               </div>
-            ))}
-            {runIds.length === 0 && <div className="muted">No runs yet.</div>}
-          </div>
-          {runView && (
-            <div className="sidebar-footer">
-              <button className="ghost" onClick={() => window.llmflow.openRunFolder(activeRunId)}>
-                Open run folder
-              </button>
             </div>
+          )}
+
+          {activeActivity === 'runs' && (
+            <>
+              <div className="sidebar-section" style={{ paddingBottom: 8 }}>
+                <span className="section-label">Runs</span>
+              </div>
+              <div className="run-list">
+                {[...runIds].reverse().map(id => (
+                  <div
+                    key={id}
+                    className={'run-item' + (id === activeRunId && runView ? ' active' : '')}
+                    onClick={() => openRun(id)}
+                  >
+                    {id}
+                  </div>
+                ))}
+                {runIds.length === 0 && <div className="muted">No runs yet.</div>}
+              </div>
+              {runView && (
+                <div className="sidebar-footer">
+                  <button className="ghost" onClick={() => window.llmflow.openRunFolder(activeRunId)}>
+                    Open run folder
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </aside>
 
@@ -476,32 +546,70 @@ export default function App() {
                 onChange={e => changeFlow(f => ({ ...f, name: e.target.value }))}
                 aria-label="Flow name"
               />
-              <div className="palette">
-                <button className="palette-btn" onClick={() => addStructuralNode('input')} title="Add a User Input node — the run panel input lands here">
-                  <span className="palette-icon">✎</span>User Input
+              <div className="view-switch" role="tablist" aria-label="Editor view">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={flowViewMode === 'canvas'}
+                  className={'view-btn' + (flowViewMode === 'canvas' ? ' active' : '')}
+                  onClick={() => setFlowViewMode('canvas')}
+                  title="Visual flow editor"
+                >
+                  <span className="view-btn-glyph" aria-hidden>▦</span>Canvas
                 </button>
-                <button className="palette-btn" onClick={() => addStructuralNode('output')} title="Add an Output node — collects upstream results">
-                  <span className="palette-icon">◎</span>Output
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={flowViewMode === 'split'}
+                  className={'view-btn' + (flowViewMode === 'split' ? ' active' : '')}
+                  onClick={() => setFlowViewMode('split')}
+                  title="Canvas and YAML side by side"
+                >
+                  <span className="view-btn-glyph" aria-hidden>◫</span>Split
                 </button>
-                <button className="palette-btn" onClick={() => addStructuralNode('orchestrator')} title="Add an Orchestrator — plans autonomously and creates & runs task nodes inside its box, no human intervention">
-                  <span className="palette-icon">▦</span>Orchestrator
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={flowViewMode === 'yaml'}
+                  className={'view-btn' + (flowViewMode === 'yaml' ? ' active' : '')}
+                  onClick={() => setFlowViewMode('yaml')}
+                  title="View and edit the raw .flow.yaml definition"
+                >
+                  <span className="view-btn-glyph" aria-hidden>{'{ }'}</span>YAML
                 </button>
-                {templates.map(t => (
-                  <button
-                    key={t.id}
-                    className="palette-btn"
-                    onClick={() => addTemplateNode(t.id)}
-                    title={`${t.name}: ${t.description || 'Node Library template'}`}
-                  >
-                    <span className="palette-icon">{t.icon || '✦'}</span>{t.name}
-                  </button>
-                ))}
               </div>
+              {flowViewMode !== 'yaml' && (
+                <div className="palette">
+                  <button className="palette-btn" onClick={() => addStructuralNode('input')} title="Add a User Input node — the run panel input lands here">
+                    <span className="palette-icon">✎</span>User Input
+                  </button>
+                  <button className="palette-btn" onClick={() => addStructuralNode('output')} title="Add an Output node — collects upstream results">
+                    <span className="palette-icon">◎</span>Output
+                  </button>
+                  <button className="palette-btn" onClick={() => addStructuralNode('orchestrator')} title="Add an Orchestrator — plans autonomously and creates & runs task nodes inside its box, no human intervention">
+                    <span className="palette-icon">▦</span>Orchestrator
+                  </button>
+                  {templates.map(t => (
+                    <button
+                      key={t.id}
+                      className="palette-btn"
+                      onClick={() => addTemplateNode(t.id)}
+                      title={`${t.name}: ${t.description || 'Node Library template'}`}
+                    >
+                      <span className="palette-icon">{t.icon || '✦'}</span>{t.name}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="toolbar-spacer" />
-              <button className="ghost mini" onClick={undo} disabled={historySize.undo === 0} title="Undo (Ctrl+Z)">↩ Undo</button>
-              <button className="ghost mini" onClick={redo} disabled={historySize.redo === 0} title="Redo (Ctrl+Y)">↪ Redo</button>
-              <button className="ghost mini" onClick={autoLayout} title="Arrange nodes into dependency layers">Auto-layout</button>
-              <button className="ghost mini" onClick={duplicateFlow} title="Duplicate this workflow">Duplicate</button>
+              {flowViewMode !== 'yaml' && (
+                <>
+                  <button className="ghost mini" onClick={undo} disabled={historySize.undo === 0} title="Undo (Ctrl+Z)">↩ Undo</button>
+                  <button className="ghost mini" onClick={redo} disabled={historySize.redo === 0} title="Redo (Ctrl+Y)">↪ Redo</button>
+                  <button className="ghost mini" onClick={autoLayout} title="Arrange nodes into dependency layers">Auto-layout</button>
+                  <button className="ghost mini" onClick={duplicateFlow} title="Duplicate this workflow">Duplicate</button>
+                </>
+              )}
               {flowLint && (flowLint.errors.length + flowLint.warnings.length > 0 ? (
                 <span
                   className={'lint-badge' + (flowLint.ok ? ' warn' : ' error')}
@@ -529,13 +637,38 @@ export default function App() {
           {showNodesPage
             ? <NodesPage templates={templates} models={models} onChanged={refreshTemplates} />
             : flowView
-              ? <FlowEditor
-                  flow={flow}
-                  resolved={resolvedFlow}
-                  selectedNode={selectedNode}
-                  onSelect={setSelectedNode}
-                  onChangeFlow={changeFlow}
-                />
+              ? (flowViewMode === 'yaml'
+                  ? <FlowYamlEditor
+                      flow={flow}
+                      onApplied={reloadCurrentFlow}
+                    />
+                  : flowViewMode === 'split'
+                    ? <div className="split-view">
+                        <div className="split-pane split-canvas">
+                          <FlowEditor
+                            flow={flow}
+                            resolved={resolvedFlow}
+                            selectedNode={selectedNode}
+                            onSelect={setSelectedNode}
+                            onChangeFlow={changeFlow}
+                          />
+                        </div>
+                        <div className="split-gutter" aria-hidden />
+                        <div className="split-pane split-yaml">
+                          <FlowYamlEditor
+                            flow={flow}
+                            onApplied={reloadCurrentFlow}
+                            embedded
+                          />
+                        </div>
+                      </div>
+                    : <FlowEditor
+                        flow={flow}
+                        resolved={resolvedFlow}
+                        selectedNode={selectedNode}
+                        onSelect={setSelectedNode}
+                        onChangeFlow={changeFlow}
+                      />)
               : snapshot
                 ? <FlowCanvas snapshot={snapshot} selectedNode={selectedNode} onSelect={setSelectedNode} />
                 : (
