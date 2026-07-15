@@ -113,6 +113,8 @@ export function installDevMock() {
     approvePlan: async () => {},
     rejectPlan: async () => {},
     openRunFolder: async () => {},
+    pickWorkspace: async () => null, // no native folder picker in the browser dev shell
+    openWorkspace: async () => {},
     onRunUpdate: () => () => {},
     getConfig: async () => ({ workers: structuredClone(mockSettings.workers) }),
     getSettings: async () => structuredClone(mockSettings),

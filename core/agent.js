@@ -8,9 +8,24 @@
 // Both paths share the same registry, the same validation, the same
 // executeTool wrapper, and the same iteration cap.
 import { callModel } from './adapters/index.js';
-import { executeTool } from './tools/index.js';
+import { executeTool, DESTRUCTIVE_TOOLS } from './tools/index.js';
 
 const MAX_ITERATIONS = 8;
+
+// Per-tool-call approval gate (V1 task 4). When the run supplies ctx.approveToolCall
+// (an agentTask node flagged approveToolCalls), pause before every DESTRUCTIVE
+// tool call and wait for a human decision. Rejection throws a marked error that
+// aborts the task — the caller reports it as an abort, not a model failure.
+async function gateToolCall(ctx, name, args) {
+  if (!ctx?.approveToolCall || !DESTRUCTIVE_TOOLS.has(name)) return;
+  const approved = await ctx.approveToolCall({ tool: name, args });
+  if (!approved) {
+    throw Object.assign(
+      new Error(`Tool call "${name}" was rejected at the approval gate — task aborted.`),
+      { toolRejected: true }
+    );
+  }
+}
 
 export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx }) {
   const started = Date.now();
@@ -61,10 +76,14 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx }) {
     // model can self-correct).
     messages.push({ role: 'assistant', content: res.message.content ?? null, tool_calls: calls });
     for (const call of calls) {
+      const name = call.function?.name;
       let args, record;
       try { args = JSON.parse(call.function?.arguments || '{}'); }
-      catch (err) { record = { tool: call.function?.name, ok: false, error: `Arguments were not valid JSON: ${err.message}`, ms: 0 }; }
-      record = record ?? await executeTool(call.function?.name, args, ctx);
+      catch (err) { record = { tool: name, ok: false, error: `Arguments were not valid JSON: ${err.message}`, ms: 0 }; }
+      if (!record) {
+        await gateToolCall(ctx, name, args); // may throw toolRejected to abort the task
+        record = await executeTool(name, args, ctx);
+      }
       toolCalls.push(record);
       messages.push({
         role: 'tool',
@@ -110,8 +129,10 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx }) {
     let record;
     try {
       const parsed = JSON.parse(match[1]);
+      await gateToolCall(ctx, parsed.tool, parsed.args ?? {}); // may throw toolRejected to abort the task
       record = await executeTool(parsed.tool, parsed.args ?? {}, ctx);
     } catch (err) {
+      if (err.toolRejected) throw err; // the abort must propagate, not be logged as a bad tool block
       record = { tool: '(unparsed)', ok: false, error: `Tool block was not valid JSON: ${err.message}`, ms: 0 };
       ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: ctx.taskId ? `executor:${ctx.taskId}` : undefined, ...record });
     }

@@ -11,7 +11,7 @@ want, and watch it execute transparently on a live canvas.
 **One mental model:**
 
 1. **Node Library** — reusable AI node templates (Code, Documentation, Test, …), managed on the Nodes page, stored as `nodes/<id>.json`.
-2. **Workflows** — DAGs composed by picking templates from the library and wiring them on the canvas (`flows/<id>.json`). Workflow nodes are template *instances*; small per-workflow overrides (model, instructions, tools, approval) never write back to the template.
+2. **Workflows** — DAGs composed by picking templates from the library and wiring them on the canvas. Each workflow is a text-based, AI-authorable DSL file (`flows/<id>.flow.yaml`, spec: [FLOW_LANG.md](./FLOW_LANG.md)) with canvas positions in a `flows/<id>.layout.json` sidecar written only by the app. Workflow nodes are template *instances*; small per-workflow overrides (model, instructions, tools, approval) never write back to the template.
 3. **Run** — one entry point: select a workflow, type your request (it becomes the workflow's User Input node), press Run. One engine: `core/flowRunner.js`.
 
 The classic pipeline (plan → *human approval* → route → execute → verify)
@@ -38,7 +38,8 @@ writing files:
 
 ```
 nodes/<id>.json        Node Library: one reusable AI node template per file
-flows/<id>.json        workflow definitions (template instances + overrides)
+flows/<id>.flow.yaml   workflow definitions (DSL: template instances + overrides)
+flows/<id>.layout.json canvas positions (app-written sidecar; presentation only)
 runs/<runId>/
   prompt.md            the user request (the User Input node's content)
   flow.json            the resolved workflow this run executes (self-contained snapshot)
@@ -59,7 +60,8 @@ the UI), reproducible, and resumable — approval gates survive an app restart.
 - `core/` — model-agnostic orchestration. No Electron imports; runnable headless.
   - `state.js` — `RunStore`, the file-based state contract everything shares
   - `nodestore.js` — `NodeStore`, the Node Library (seeds itself from the FLOW_NODES.md catalog)
-  - `flowstore.js` — `FlowStore`, workflow definitions + the shipped Default pipeline
+  - `flowstore.js` — `FlowStore`, workflow definitions + the shipped Default pipeline (reads/writes the `.flow.yaml` DSL + `.layout.json` sidecar; legacy `.json` flows still load and migrate on save)
+  - `flowlang/` — the Flow DSL: parse / serialize / lint / migrate + `npm run flow` CLI (spec: `FLOW_LANG.md`)
   - `flowRunner.js` — THE execution engine: topological walk, parallel waves, per-node approval gates, retrospectives, materialization of AI-generated nodes
   - `planEval.js` — strict JSON contracts for plan-eval / step-eval / stitch outputs
   - `nodes/executor.js` + `agent.js` + `tools/` — the agent executor for `agentTask` nodes

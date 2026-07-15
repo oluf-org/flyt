@@ -563,7 +563,7 @@ function InstanceInspector({ node, template, models, onChangeOverrides, onDelete
         )}
 
         <section>
-          <h3>Approval <OverrideTag active={ov.requiresApproval != null} onReset={() => unset('requiresApproval')} /></h3>
+          <h3>Approval <OverrideTag active={ov.requiresApproval != null || ov.approveToolCalls != null} onReset={() => { unset('requiresApproval'); unset('approveToolCalls'); }} /></h3>
           <label className="check-row">
             <input
               type="checkbox"
@@ -571,6 +571,14 @@ function InstanceInspector({ node, template, models, onChangeOverrides, onDelete
               onChange={e => set({ requiresApproval: e.target.checked })}
             />
             Pause for human approval before this node runs
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={Boolean(eff.approveToolCalls)}
+              onChange={e => set({ approveToolCalls: e.target.checked })}
+            />
+            Pause before each file/shell tool call (approve every write &amp; command)
           </label>
         </section>
 

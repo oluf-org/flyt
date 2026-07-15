@@ -30,7 +30,7 @@ function loadTemplates() {
   return new NodeStore(path.join(projectRoot, 'nodes')).listFull();
 }
 
-const COMMON_OVERRIDES = ['title', 'worker', 'instructions', 'requiresApproval', 'goal', 'category', 'contextSpec', 'skills'];
+const COMMON_OVERRIDES = ['title', 'worker', 'instructions', 'requiresApproval', 'approveToolCalls', 'goal', 'category', 'contextSpec', 'skills'];
 
 function templateInfo(t) {
   return {

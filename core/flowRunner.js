@@ -208,7 +208,10 @@ export class FlowRunner {
   // against the Node Library HERE, so the run's flow.json is a fully
   // self-contained snapshot (template edits never mutate past runs).
   // userInput becomes the content of the flow's User Input node for this run.
-  start(flow, { userInput = '' } = {}) {
+  // workspace (an absolute path to a bound project folder, already validated +
+  // .llmflow/-provisioned by the caller) is recorded in meta.json so the run,
+  // its tools, and the UI all know which real repo it operates on (D15).
+  start(flow, { userInput = '', workspace = null } = {}) {
     // Pre-run gate (REFACTOR-PLAN §4): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
@@ -228,9 +231,10 @@ export class FlowRunner {
       ...this.store.readMeta(runId),
       flowId: flow.id,
       flowName: flow.name,
+      ...(workspace ? { workspace } : {}),
       nodeStatus: Object.fromEntries(flow.nodes.map(n => [n.id, 'pending']))
     });
-    this.store.appendLog(runId, { event: 'flow_run_created', flowId: flow.id, nodes: flow.nodes.length, edges: flow.edges.length });
+    this.store.appendLog(runId, { event: 'flow_run_created', flowId: flow.id, workspace: workspace ?? null, nodes: flow.nodes.length, edges: flow.edges.length });
     this.notify(runId);
     this.execute(runId, flowCopy).catch(err => this.fail(runId, err));
     return runId;
@@ -266,6 +270,20 @@ export class FlowRunner {
     if (!flow) throw new Error(`Run ${runId} has no flow.json; cannot resume.`);
     const nodeId = meta.pendingNodeId;
     const kind = meta.pendingGateKind ?? 'pre';
+
+    // A tool gate paused mid-executor; that call stack died with the app and
+    // can't be resumed. Abort the task honestly rather than pretending to
+    // approve/reject an in-flight tool call.
+    if (kind === 'tool') {
+      this.store.appendLog(runId, { event: 'tool_gate_abandoned', node: nodeId, reason: 'app restarted during tool approval' });
+      this.store.setStage(runId, 'failed', {
+        pendingNodeId: null, pendingGateKind: null, pendingToolCall: null,
+        error: 'The app restarted while a tool call was awaiting approval; the task was aborted. Re-run the flow.'
+      });
+      if (nodeId) this.setNodeStatus(runId, nodeId, 'failed');
+      this.notify(runId);
+      return;
+    }
 
     if (!approved) {
       this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
@@ -367,7 +385,7 @@ export class FlowRunner {
       if (node.type === 'agentTask') {
         // Run the contributed task (and anything it spawns via create_task)
         // through the existing executor before anything downstream.
-        if (!await this.runPendingTasks(runId, opts.taskIdByNode)) return;
+        if (!await this.runPendingTasks(runId, opts.taskIdByNode, flow)) return;
       }
       completed.add(node.id);
       if (!await this.applyPost(runId, flow, node, outcome, opts, completed)) return;
@@ -378,20 +396,55 @@ export class FlowRunner {
   }
 
   // Run every pending task in tasks.json through the executor. Returns false
-  // (and fails the run) when a task fails.
-  async runPendingTasks(runId, taskIdByNode) {
+  // (and fails the run) when a task fails. A node flagged approveToolCalls gets
+  // a per-tool approval gate wired into its executor context (V1 task 4).
+  async runPendingTasks(runId, taskIdByNode, flow = null) {
     let task;
     while ((task = this.store.readTasks(runId)?.tasks.find(t => t.status === 'pending'))) {
       const nodeId = [...taskIdByNode.entries()].find(([, tid]) => tid === task.id)?.[0];
+      const node = nodeId && flow ? flow.nodes.find(n => n.id === nodeId) : null;
       if (nodeId) this.setNodeStatus(runId, nodeId, 'active', { currentTaskId: task.id });
-      const retro = await runExecutorTask(this.store, runId, task.id, this.config);
+      const gateOpts = node?.data?.approveToolCalls
+        ? { approveToolCall: call => this.toolGate(runId, node, call) }
+        : {};
+      const retro = await runExecutorTask(this.store, runId, task.id, this.config, gateOpts);
       if (nodeId) this.setNodeStatus(runId, nodeId, retro.status === 'failed' ? 'failed' : 'done', { currentTaskId: null });
       if (retro.status === 'failed') {
-        this.store.setStage(runId, 'failed', { error: `Task ${task.id} failed: ${retro.problems.join('; ')}` });
+        // A human tool-gate rejection already set stage 'rejected'; don't
+        // clobber it with a generic failure.
+        if (!retro.aborted) {
+          this.store.setStage(runId, 'failed', { error: `Task ${task.id} failed: ${retro.problems.join('; ')}` });
+        }
         this.notify(runId);
         return false;
       }
     }
+    return true;
+  }
+
+  // Per-tool-call approval gate: pause the run before a node's destructive tool
+  // call and wait for a human decision, reusing the same gate promise + IPC as
+  // the pre-node gate. Approve -> the tool runs; reject -> false (the agent loop
+  // throws an abort). The pending call is surfaced in meta for the UI.
+  async toolGate(runId, node, call) {
+    const summary = call.tool === 'bash' ? call.args?.command : call.args?.path;
+    this.setNodeStatus(runId, node.id, 'waiting');
+    this.store.appendLog(runId, { event: 'tool_gate_pause', node: node.id, tool: call.tool, summary: summary ?? null });
+    this.store.setStage(runId, 'awaiting_approval', {
+      pendingNodeId: node.id, pendingGateKind: 'tool',
+      pendingToolCall: { tool: call.tool, summary: summary ?? null }
+    });
+    this.notify(runId);
+    const approved = await new Promise(resolve => this.gates.set(runId, resolve));
+    if (!approved) {
+      this.store.appendLog(runId, { event: 'tool_gate_decision', node: node.id, tool: call.tool, decision: 'rejected' });
+      this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null, pendingToolCall: null });
+      this.setNodeStatus(runId, node.id, 'failed');
+      return false;
+    }
+    this.store.appendLog(runId, { event: 'tool_gate_decision', node: node.id, tool: call.tool, decision: 'approved' });
+    this.store.setStage(runId, 'execution', { pendingNodeId: null, pendingGateKind: null, pendingToolCall: null });
+    this.setNodeStatus(runId, node.id, 'active');
     return true;
   }
 
@@ -422,7 +475,7 @@ export class FlowRunner {
           ok: rec.ok, created: rec.result?.created, error: rec.error
         });
       }
-      if (!await this.runPendingTasks(runId, opts.taskIdByNode)) return { ok: false };
+      if (!await this.runPendingTasks(runId, opts.taskIdByNode, flow)) return { ok: false };
     }
     if (outcome?.stepEval) return this.handleStepEval(runId, flow, node, outcome.stepEval, opts);
     return { ok: true };
@@ -974,7 +1027,7 @@ export class FlowRunner {
       const child = batch[0];
       try {
         await this.runNode(runId, flow, child, opts);
-        if (child.type === 'agentTask' && !await this.runPendingTasks(runId, opts.taskIdByNode)) {
+        if (child.type === 'agentTask' && !await this.runPendingTasks(runId, opts.taskIdByNode, flow)) {
           throw new Error(`Orchestrator ${node.id}: child task ${child.id} failed`);
         }
       } catch (err) {

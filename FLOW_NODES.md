@@ -11,7 +11,7 @@
 
 The **flowchart** system consists of:
 
-- The visual editor (`src/FlowCanvas.jsx` + `FlowEditor`, `src/App.jsx`) for authoring static DAG definitions stored in `flows/<id>.json`.
+- The visual editor (`src/FlowCanvas.jsx` + `FlowEditor`, `src/App.jsx`) for authoring static DAG definitions stored as the Flow DSL `flows/<id>.flow.yaml` (+ a `flows/<id>.layout.json` position sidecar; spec: `FLOW_LANG.md`). Legacy `flows/<id>.json` still loads and migrates on save.
 - The execution engine (`core/flowRunner.js`) that performs a topological walk, with special phases for `agentTask` nodes (which feed the existing powerful executor + tools).
 - All coordination through plain files under `runs/<runId>/` (the single source of truth).
 
@@ -66,6 +66,8 @@ This pattern makes it safe and effective for an AI to *emit* flow fragments, bec
 These are **example / standard nodes**. They are the reference set that AI should pick from or categorize work into. They are implemented primarily as `aiStep` (or `agentTask`) nodes carrying a `role` and/or `template` + rich `data`.
 
 They appear in the editor palette (via `TYPE_META`) and have first-class support in the inspector.
+
+> **Library templates vs. engine types.** Nodes 1–6 below are **Node Library templates** (`nodes/<id>.json` — the nine seeded templates). `orchestrator` (§7), along with `input` and `output`, are **engine/DSL node *types*, not Node Library templates**: they are built-in structural nodes added from the palette directly, not instantiated from the library. See `PRODUCT-SPEC.md` §5.
 
 ### 1. Start / Plan-Start Node
 
@@ -150,7 +152,7 @@ These are **not** a single type — they are concrete instances created from the
 
 | Template name         | Base     | Category        | Purpose                              | Prefers          |
 |-----------------------|----------|-----------------|--------------------------------------|------------------|
-| `code-general-step`   | aiStep or agentTask | Code general   | Straightforward implementation work | balanced model   |
+| `code-general-step`   | aiStep   | Code general   | Straightforward implementation work | balanced model   |
 | `code-design-step`    | aiStep   | Code design     | Interfaces, architecture, data models | stronger model   |
 | `documentation-step`  | aiStep   | documentation   | Docs, READMEs, comments              | lighter/faster   |
 | `test-creation-step`  | agentTask| Test-creation   | Unit/integration tests + fixtures    | code-capable     |
@@ -424,7 +426,7 @@ All the above node kinds support `data.requiresApproval`. Evaluation nodes that 
   `create_task`: `core/flowRunner.js`
 - Editor support: instance/override inspector in `src/Inspector.jsx` + library palette in `App.jsx`
 - Mock outputs that exercise the pattern (incl. structured verdicts): `core/adapters/mock.js`
-- Shipped flow: `flows/default-pipeline.json` (the classic pipeline as library nodes)
+- Shipped flow: `flows/default-pipeline.flow.yaml` (the classic pipeline as library nodes)
 
 See the code and run a flow using these roles/templates to observe the produced artifacts.
 

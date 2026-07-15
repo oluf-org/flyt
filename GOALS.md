@@ -25,7 +25,7 @@ There is **one execution engine**. The classic linear pipeline (plan → approve
 
 Unchanged. Judge every change against these:
 
-1. **File-based state is the single source of truth.** All coordination between modules happens through plain files under `runs/<runId>/`. No hidden in-memory coordination. Node templates and workflows are also plain files (`nodes/<id>.json`, `flows/<id>.json`).
+1. **File-based state is the single source of truth.** All coordination between modules happens through plain files under `runs/<runId>/`. No hidden in-memory coordination. Node templates and workflows are also plain files (`nodes/<id>.json`, `flows/<id>.flow.yaml` + a `flows/<id>.layout.json` sidecar; see the Flow DSL section).
 2. **Human oversight by default.** Approval gates are per-node (`requiresApproval`); the default workflow keeps the post-planning gate.
 3. **Model-agnostic and multi-model by design.** The worker (provider + model) is a property of the node template, overridable per workflow.
 4. **Self-describing artifacts.** Tasks carry goal, inputs, constraints, dependsOn, worker. Every executed node emits a structured retrospective.
@@ -57,7 +57,7 @@ Templates persist as files (e.g. `nodes/<id>.json`) per principle 1.
 
 A workflow is a DAG built by picking node templates from the library and wiring them on the canvas. The **Flows section in the sidebar is for browsing and creating workflows** — it is a catalog, not a run surface.
 
-- Workflow nodes are **instances of templates**. An instance may carry **small local overrides** (model, instructions, tools, approval). Overrides are saved **in that workflow only** (`flows/<id>.json`) and never write back to the template or leak to other workflows.
+- Workflow nodes are **instances of templates**. An instance may carry **small local overrides** (model, instructions, tools, approval). Overrides are saved **in that workflow only** (`flows/<id>.flow.yaml`) and never write back to the template or leak to other workflows.
 - Every runnable workflow starts from a **User Input node** and ends in an **Output node**.
 - The classic pipeline ships as a read-write pre-built workflow ("Default pipeline") composed of library nodes — users can duplicate and modify it like any other.
 
@@ -78,7 +78,7 @@ No separate "run pipeline" vs "run flow" paths. One dropdown, one input, one eng
 - **Sidebar:** Flows section (browse/create/duplicate workflows), Runs history, link to the Nodes page.
 - **Nodes page:** create/edit/delete node templates; shows category, model, tools, skills.
 - **Canvas (edit mode):** palette lists library node templates; drag to instantiate; inspector edits per-instance overrides and clearly marks "override (this workflow only)" vs template defaults.
-- **Canvas (run mode):** live view driven by file snapshots over IPC; status glyphs; single continuous animation for the active node.
+- **Canvas (run mode):** live view driven by file snapshots over IPC; status glyphs; deliberate, legible animation for active node(s) — when nodes run in parallel, several may animate at once (see the "feel" policy in Quality Attributes).
 - **Run panel (right):** workflow dropdown + user input field + run button; the input visibly maps to the User Input node.
 - **Inspector:** live artifacts (plan, tasks, outputs, retrospectives, tool calls) during runs; template/override fields when editing.
 
@@ -100,7 +100,7 @@ All six steps landed on 2026-07-14 (branch `flow-builder`):
 2. **Nodes page UI** ✅ — `src/NodesPage.jsx`: CRUD for templates (name, category, worker, instructions, tools, skills, approval).
 3. **Instance/override model** ✅ — workflow nodes store `templateId` + `overrides`; `resolveFlow()` in `src/flowTypes.js` merges them; the inspector marks "override (this workflow only)" vs template defaults.
 4. **Unified run entry** ✅ — run panel (right): workflow dropdown + user input → User Input node; the separate "New run" prompt path is gone.
-5. **Default pipeline as workflow** ✅ — shipped as `flows/default-pipeline.json` (User Input → Plan → gated Plan evaluation → Final evaluation → Output) with parity verified in tests (post-planning gate, retrospectives, historyDigest); `core/pipeline.js` and the read-only builtin emulation are deleted.
+5. **Default pipeline as workflow** ✅ — shipped as `flows/default-pipeline.flow.yaml` (User Input → Plan → gated Plan evaluation → Final evaluation → Output) with parity verified in tests (post-planning gate, retrospectives, historyDigest); `core/pipeline.js` and the read-only builtin emulation are deleted.
 6. **Cleanup** ✅ — dual-mode branching removed from `src/App.jsx`; README/GOALS/FLOW_NODES updated.
 
 Remaining known gap: template `skills` are stored/edited but not yet injected into execution.
@@ -111,7 +111,7 @@ Remaining known gap: template `skills` are stored/edited but not yet injected in
 
 Unchanged in spirit; ease of use added.
 
-> The application must feel crisp and trustworthy even though individual AI steps are slow. The UI must remain interactive while a run is in progress. Status must reflect within one animation frame of the underlying file write. Only one element on screen should ever be in continuous motion. "Open run folder" must remain a first-class debugging experience.
+> The application must feel crisp and trustworthy even though individual AI steps are slow. The UI must remain interactive while a run is in progress. Status must reflect within one animation frame of the underlying file write. Animation must be deliberate and legible — avoid a screen full of competing motion — but there is no absolute one-animation rule: when nodes run in parallel, showing several as active at once is correct (see `DESIGN-SPEC.md` §2.2 / `DECISIONS.md` D9). "Open run folder" must remain a first-class debugging experience.
 
 **Known gaps & risks (still apply):** no performance budgets/instrumentation; full-snapshot IPC on every mutation; synchronous filesystem ops in RunStore/FlowStore; sequential task execution despite `dependsOn`; tiny-graph assumption, manual layout; no streaming output.
 

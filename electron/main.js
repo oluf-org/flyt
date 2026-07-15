@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Menu, dialog } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +6,7 @@ import { RunStore } from '../core/state.js';
 import { FlowStore } from '../core/flowstore.js';
 import { NodeStore } from '../core/nodestore.js';
 import { FlowRunner } from '../core/flowRunner.js';
+import { Workspace } from '../core/workspace.js';
 import { lintFlow, lintText } from '../core/flowlang/lint.js';
 import { parseFlow } from '../core/flowlang/parse.js';
 import { serializeFlow } from '../core/flowlang/serialize.js';
@@ -127,13 +128,36 @@ function createWindow() {
 // --- IPC surface (thin: everything else lives in core/) ---
 // One engine, one entry point: pick a workflow, type a request, run it.
 // The user input becomes the flow's User Input node content for that run.
-ipcMain.handle('flow:run', (_e, flowId, userInput = '') =>
-  flowRunner.start(flows.load(flowId), { userInput: String(userInput ?? '') }));
+ipcMain.handle('flow:run', (_e, flowId, userInput = '', workspaceDir = null) => {
+  // Bind the target workspace at run time (D15): validate the folder, create
+  // its .llmflow/ config dir, and pass the confined absolute root to the runner
+  // so it lands in meta.json. Workspace stays optional — mock/no-file flows run
+  // without one.
+  let workspace = null;
+  if (workspaceDir) workspace = new Workspace(workspaceDir).ensure().root;
+  return flowRunner.start(flows.load(flowId), { userInput: String(userInput ?? ''), workspace });
+});
 ipcMain.handle('run:approve', (_e, runId) => flowRunner.approvePlan(runId));
 ipcMain.handle('run:reject', (_e, runId, reason) => flowRunner.rejectPlan(runId, reason));
 ipcMain.handle('run:list', () => store.listRuns());
 ipcMain.handle('run:snapshot', (_e, runId) => store.snapshot(runId));
 ipcMain.handle('run:openFolder', (_e, runId) => shell.openPath(store.runDir(runId)));
+
+// --- Workspace binding (target project folder for a run) ---
+ipcMain.handle('workspace:pick', async () => {
+  const res = await dialog.showOpenDialog(win, {
+    title: 'Choose a target workspace',
+    properties: ['openDirectory', 'createDirectory']
+  });
+  if (res.canceled || !res.filePaths?.length) return null;
+  return res.filePaths[0];
+});
+// Reveal a run's bound workspace in the OS file manager; path comes from
+// meta.json (never trusting a renderer-supplied path).
+ipcMain.handle('workspace:open', (_e, runId) => {
+  const dir = store.readMeta(runId)?.workspace;
+  return dir ? shell.openPath(dir) : null;
+});
 ipcMain.handle('config:get', () => ({ workers: publicSettings().workers }));
 
 // --- Flow definitions (editable workflow graphs) ---

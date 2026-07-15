@@ -10,6 +10,7 @@
   --app-dim:     #7f8a85;  /* top chrome secondary             */
 
   --side:        #f3f5f4;  /* panels: sidebar, inspector, toolbar */
+  --rail:        #eceeec;  /* activity rail — recessed a hair below --side */
   --canvas:      #f8faf9;  /* flow canvas plane                */
   --dot:         #e1e8e5;  /* canvas dot-grid                  */
 
@@ -45,6 +46,7 @@
   --app-dim:     #6f7d76;
 
   --side:        #141a17;
+  --rail:        #101613;  /* activity rail — recessed a hair below --side */
   --canvas:      #0e1310;
   --dot:         #212a25;
 
@@ -227,7 +229,10 @@ kbd.shortcut {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.run-list { flex: 1; overflow-y: auto; padding: 6px 16px 12px; display: flex; flex-direction: column; gap: 2px; }
+.run-list, .explorer-list {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 6px 16px 12px; display: flex; flex-direction: column; gap: 2px;
+}
 .run-item {
   padding: 7px 10px; border-radius: 8px; cursor: pointer;
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
@@ -242,42 +247,58 @@ kbd.shortcut {
 .sidebar-footer { padding: 12px 16px; border-top: 1px solid var(--border); }
 .sidebar-footer button { width: 100%; }
 
-/* ---------- activity bar (IDE nav PoC) ---------- */
+/* ---------- activity bar (primary navigation rail) ---------- */
+/* The one persistent way to move between the app's three sections — Flows,
+   Library, Runs — plus Settings pinned at the foot. A single accent-soft pill
+   slides between the active item (the deliberate motion); the icon + label
+   tint to the accent. Everything else stays neutral. */
+
 .activity-bar {
-  width: 52px;
-  flex: none;
-  background: var(--app);
+  width: 68px; flex: none;
+  background: var(--rail);
   border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 10px 0;
-  gap: 4px;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 10px 0 12px;
+  -webkit-user-select: none; user-select: none;
 }
+
+.activity-group { position: relative; display: flex; flex-direction: column; align-items: center; width: 100%; }
+
+/* the sliding pill — sits behind the active button, moves one 58px slot at a
+   time; the accent strip on its left edge is the IDE "you are here" cue */
+.activity-indicator {
+  position: absolute; left: 8px; right: 8px; top: 6px; height: 46px;
+  border-radius: 12px; background: var(--accent-soft);
+  transform: translateY(calc(var(--active-index, 0) * 58px));
+  transition: transform .22s cubic-bezier(.4, 0, .2, 1);
+  pointer-events: none;
+}
+.activity-indicator::before {
+  content: ''; position: absolute; left: -8px; top: 9px; bottom: 9px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--accent);
+}
+.activity-indicator[data-hidden="true"] { opacity: 0; }
+
 .activity-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  font-size: 16px;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--app-dim);
-  cursor: pointer;
-  transition: background-color .14s ease, color .14s ease, border-color .14s ease;
+  position: relative; z-index: 1;
+  width: 100%; height: 58px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  background: transparent; border: none; padding: 0;
+  color: var(--dim); cursor: pointer;
+  transition: color .14s ease, transform .14s ease;
 }
-.activity-btn:hover {
-  background: var(--chip);
-  color: var(--tx);
-  border-color: var(--border);
-}
-.activity-btn.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.activity-spacer { flex: 1; }
+.activity-btn svg { width: 21px; height: 21px; display: block; }
+.activity-label { font-size: 9.5px; font-weight: 600; letter-spacing: .01em; line-height: 1; }
+.activity-btn:hover { color: var(--tx); }
+.activity-btn:active { transform: translateY(1px); }
+.activity-btn.active { color: var(--accent); }
+.activity-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 12px; }
+
+.activity-spacer { flex: 1; min-height: 8px; }
+
+/* Settings, pinned at the foot — a utility, so it sits outside the sliding
+   group and never carries the active pill. */
+.activity-btn.utility { height: 52px; }
 
 /* ---------- canvas area ---------- */
 
@@ -570,7 +591,6 @@ kbd.shortcut {
 /* sidebar flow list */
 .section-row { display: flex; align-items: center; justify-content: space-between; }
 button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
-.flow-list { padding: 6px 16px 4px; display: flex; flex-direction: column; gap: 2px; max-height: 168px; overflow-y: auto; flex: none; }
 .flow-item { display: flex; align-items: center; gap: 8px; font-family: inherit; font-size: 12.5px; }
 .flow-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -757,18 +777,38 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* Workspace binding: folder picker in the run panel + its readout. */
+.workspace-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 11.5px;
+}
+.workspace-row .ghost { flex: none; }
+.workspace-path {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-width: 0; color: var(--tx);
+}
+.workspace-path .mono {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 160px; direction: rtl; /* keep the tail (the folder name) visible */
+}
+button.link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--faint); font: inherit; font-size: 11px;
+  transition: color .14s ease;
+}
+button.link:hover { color: var(--accent); }
+.workspace-binding {
+  display: flex; flex-direction: column; gap: 3px;
+  margin-bottom: 10px; min-width: 0;
+}
+.workspace-binding .workspace-path {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; color: var(--faint); display: block;
+}
+
 /* ---------- Nodes page (Node Library CRUD) ---------- */
 
-.nodes-page { flex: 1; min-height: 0; display: flex; }
-.nodes-list {
-  width: 264px; flex: none;
-  padding: 16px;
-  background: var(--side);
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
-  display: flex; flex-direction: column; gap: 2px;
-}
-.nodes-list .section-row { margin-bottom: 10px; }
+.nodes-page { flex: 1; min-height: 0; display: flex; justify-content: center; }
 .nodes-editor {
   flex: 1; min-width: 0;
   max-width: 660px;
@@ -1074,4 +1114,5 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
     animation-iteration-count: 1 !important;
   }
   .spinner { animation: none; border-top-color: var(--accent); }
+  .activity-indicator { transition: none; }
 }

@@ -1,6 +1,7 @@
 # Refactor Plan — Flow DSL (`*.flow.yaml`)
 
-**Status:** Proposed (2026-07-14)
+**Status:** Implemented (proposed 2026-07-14; shipped in `core/flowlang/`). This is the historical design record; `FLOW_LANG.md` is the current source of truth for the DSL.
+**Implementation note:** the `yaml`/`ajv` dependencies proposed below were **not** added. To keep the dependency footprint at zero, the DSL ships with a hand-written strict-subset YAML parser (`core/flowlang/yaml.js`) and a custom schema validator (`core/flowlang/validate.js`) instead of ajv. Everything else landed as described.
 **Goal:** Workflows are defined in a text-based, AI-authorable DSL. The canvas stays as the visualization/editor, but the script is the source of truth for *structure* (nodes + relations). Visual placement lives outside the script. A static linter lets an AI verify a workflow is correct before it ever runs.
 
 ---
@@ -76,13 +77,14 @@ Grammar of a `flow` entry: `source[.port] -> target [-> target2 ...]` (chains al
 New module: `core/flowlang/`
 - `parse.js` — YAML → canonical object (the same shape `flowRunner` consumes today, minus positions). Deterministic, no side effects.
 - `serialize.js` — canonical object → YAML. **Round-trip stable**: parse(serialize(x)) ≡ x, key order fixed, so diffs stay clean and AI edits don't churn the file.
-- `schema.json` — JSON Schema (draft 2020-12) for the DSL, validated with `ajv`.
+- `yaml.js` — strict-subset YAML parser (block maps/lists, inline `{}`/`[]`, quoted strings, literal blocks, comments). No external YAML dependency.
+- `schema.json` — the DSL schema, validated by the custom `validate.js` (draft-2020-12-style checks; **not** ajv).
 - `lint.js` — semantic rules on top of schema (below).
 - `cli.js` — `npm run flow -- lint <file>` for AI/CI use.
 
-`core/flowstore.js` becomes format-aware: reads both `.json` (legacy) and `.flow.yaml`; writes `.flow.yaml` + `.layout.json`. The canonical in-memory object stays what it is today, so `flowRunner.js` (1227 lines) needs near-zero changes.
+`core/flowstore.js` becomes format-aware: reads both `.json` (legacy) and `.flow.yaml`; writes `.flow.yaml` + `.layout.json`. The canonical in-memory object stays what it is today, so `flowRunner.js` needs near-zero changes.
 
-Dependency added: `yaml`, `ajv` (both tiny, no native deps).
+Dependencies added: **none** — the parser (`yaml.js`) and validator (`validate.js`) are hand-written to avoid pulling in `yaml`/`ajv`.
 
 ---
 
@@ -90,7 +92,7 @@ Dependency added: `yaml`, `ajv` (both tiny, no native deps).
 
 Two layers, one command. Output is both human text and `--json` (machine-readable: `{ok, errors: [{rule, severity, nodeId?, edge?, message}]}`) so an AI can act on it programmatically. Non-zero exit code on error.
 
-**Layer 1 — schema (ajv):** structure, required fields, types, override keys allowed per `baseType`, version field.
+**Layer 1 — schema (`validate.js`):** structure, required fields, types, override keys allowed per `baseType`, version field.
 
 **Layer 2 — semantic rules:**
 

@@ -2,27 +2,27 @@ import React, { useEffect, useState } from 'react';
 import { WorkerPicker } from './Inspector.jsx';
 import { AI_ROLES, NODE_CATEGORIES, AGENT_TOOLS } from './flowTypes.js';
 
-// Node Library page: create/edit/delete the reusable AI node templates that
-// workflows are composed from. Templates are plain files (nodes/<id>.json);
-// this page is a thin CRUD editor over them. Templates carry no hand-written
-// prompts — instructions are short guidance appended to the auto-generated
-// prompt; the template constrains HOW (model, tools, skills), never WHAT.
+// Node Library editor: edit/save/delete the reusable AI node template selected
+// in the explorer (the list lives in the sidebar so Library shares the one
+// explorer→editor model with Flows and Runs). Templates are plain files
+// (nodes/<id>.json); this is a thin CRUD editor over them. Templates carry no
+// hand-written prompts — instructions are short guidance appended to the
+// auto-generated prompt; the template constrains HOW (model, tools, skills),
+// never WHAT.
 
 const BASE_TYPES = [
   { value: 'aiStep', label: 'AI step — single model call' },
   { value: 'agentTask', label: 'Agent task — full executor with tools' }
 ];
 
-export default function NodesPage({ templates, models, onChanged }) {
-  const [selectedId, setSelectedId] = useState(templates[0]?.id ?? null);
+export default function NodesPage({ templates, selectedId, models, onChanged, onSelect }) {
   const [draft, setDraft] = useState(null);
   const [saved, setSaved] = useState(true);
   const [error, setError] = useState('');
 
   // Load the selected template into the draft (fresh copy, never live-edited).
   useEffect(() => {
-    const tpl = templates.find(t => t.id === selectedId) ?? templates[0] ?? null;
-    if (tpl && tpl.id !== selectedId) setSelectedId(tpl.id);
+    const tpl = templates.find(t => t.id === selectedId) ?? null;
     setDraft(tpl ? structuredClone(tpl) : null);
     setSaved(true);
     setError('');
@@ -42,17 +42,11 @@ export default function NodesPage({ templates, models, onChanged }) {
     }
   };
 
-  const create = async () => {
-    const tpl = await window.llmflow.newNodeTemplate();
-    await onChanged();
-    setSelectedId(tpl.id);
-  };
-
   const remove = async () => {
     if (!draft) return;
     if (!window.confirm(`Delete node template "${draft.name}"?\n\nWorkflows using it will flag the missing template.`)) return;
     await window.llmflow.deleteNodeTemplate(draft.id);
-    setSelectedId(null);
+    onSelect?.(null);
     await onChanged();
   };
 
@@ -65,25 +59,6 @@ export default function NodesPage({ templates, models, onChanged }) {
 
   return (
     <div className="nodes-page">
-      <div className="nodes-list">
-        <div className="section-row">
-          <span className="section-label">Node Library</span>
-          <button className="ghost mini" onClick={create}>＋ New node</button>
-        </div>
-        {templates.map(t => (
-          <div
-            key={t.id}
-            className={'run-item flow-item' + (t.id === selectedId ? ' active' : '')}
-            onClick={() => setSelectedId(t.id)}
-          >
-            <span className="palette-icon">{t.icon}</span>
-            <span className="flow-item-name">{t.name}</span>
-            {t.category && <span className="node-kind kind-ai">{t.category}</span>}
-          </div>
-        ))}
-        {templates.length === 0 && <div className="muted">No node templates yet.</div>}
-      </div>
-
       {draft ? (
         <div className="nodes-editor node-editor">
           <div className="inspector-header">
@@ -190,6 +165,14 @@ export default function NodesPage({ templates, models, onChanged }) {
                 onChange={e => set({ requiresApproval: e.target.checked })}
               />
               Pause for human approval before this node runs (default)
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={Boolean(draft.approveToolCalls)}
+                onChange={e => set({ approveToolCalls: e.target.checked })}
+              />
+              Pause before each file/shell tool call (approve every write &amp; command)
             </label>
           </section>
 

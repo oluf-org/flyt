@@ -19,6 +19,47 @@ function freshNodeId(prefix) {
   return `${prefix}-${Date.now().toString(36)}${(nodeSeq++).toString(36)}`;
 }
 
+// --- Activity rail: refined line icons in the app's geometric language.
+// Stroke-based, currentColor, so they tint to --accent when active and inherit
+// the theme everywhere else. No emoji — they'd break the Slate & Sage feel. ---
+const RailIcon = {
+  // Flows — a small workflow graph (one node branching to two)
+  flows: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="5" r="2.3" /><circle cx="6" cy="18.5" r="2.3" /><circle cx="18" cy="18.5" r="2.3" />
+      <path d="M12 7.3v3.2M12 10.5 6.9 16.4M12 10.5l5.1 5.9" />
+    </svg>
+  ),
+  // Library — a grid of template tiles
+  library: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true">
+      <rect x="4" y="4" width="7" height="7" rx="1.6" /><rect x="13" y="4" width="7" height="7" rx="1.6" />
+      <rect x="4" y="13" width="7" height="7" rx="1.6" /><rect x="13" y="13" width="7" height="7" rx="1.6" />
+    </svg>
+  ),
+  // Runs — run history (clock with a back-arrow)
+  runs: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3.5 8.3A9 9 0 1 1 3 12" /><path d="M3.2 4v4.3h4.3" /><path d="M12 7.6V12l3 1.8" />
+    </svg>
+  ),
+  // Settings — a gear (utility, foot of the rail)
+  settings: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  )
+};
+
+// The three primary sections, in rail order. Each is a self-contained mode
+// with its own explorer list + remembered selection (Ctrl+1/2/3).
+const NAV = [
+  { key: 'flows', label: 'Flows', hint: 'Flows  (Ctrl+1)' },
+  { key: 'library', label: 'Library', hint: 'Node Library  (Ctrl+2)' },
+  { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+3)' }
+];
+
 // One mental model (GOALS.md): a Node Library of reusable AI templates, and
 // workflows composed from them on the canvas. Renderer is a pure view over
 // file state pushed from the main process: run snapshots (read-only), flow
@@ -30,7 +71,6 @@ export default function App() {
   const [snapshot, setSnapshot] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [showNodesPage, setShowNodesPage] = useState(false);
   const [theme, setThemeState] = useState(
     () => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
   );
@@ -52,10 +92,15 @@ export default function App() {
   // Unified run entry (the run panel): workflow dropdown + user input.
   const [runFlowId, setRunFlowId] = useState('');
   const [runInput, setRunInput] = useState('');
+  const [workspaceDir, setWorkspaceDir] = useState(''); // bound target project folder (optional)
   const [busy, setBusy] = useState(false);
 
-  // Activity bar state for IDE-style navigation (PoC)
-  const [activeActivity, setActiveActivity] = useState('flows'); // 'flows' | 'runs' | 'library'
+  // Primary navigation. The active section drives which explorer list shows and
+  // which document the main area renders; each section keeps its own selection
+  // (activeFlowId / activeRunId / selectedTemplateId) so switching sections and
+  // coming back is lossless.
+  const [activeActivity, setActiveActivity] = useState('flows'); // 'flows' | 'library' | 'runs'
+  const [selectedTemplateId, setSelectedTemplateId] = useState(null);
 
   // Undo/redo over flow edits. Bursts of changes (a node drag emits one per
   // frame) coalesce into a single history entry via the time gate.
@@ -215,8 +260,6 @@ export default function App() {
     setFlow(f);
     setFlowSaved(true);
     setActiveFlowId(id);
-    setActiveRunId(null);
-    setShowNodesPage(false);
     setSelectedNode(null);
     setRunFlowId(id); // browsing a flow points the run panel at it
     setFlowViewMode('canvas');
@@ -240,25 +283,54 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo]);
 
+  // Keep the Library selection pointed at a real template: default to the first
+  // one, and recover if the selected template is deleted elsewhere.
+  useEffect(() => {
+    if (selectedTemplateId && templates.some(t => t.id === selectedTemplateId)) return;
+    setSelectedTemplateId(templates[0]?.id ?? null);
+  }, [templates, selectedTemplateId]);
+
   const openRun = useCallback(async id => {
     await flushSave();
-    setActiveFlowId(null);
-    setFlow(null);
-    setShowNodesPage(false);
     setActiveRunId(id);
     setSelectedNode(null);
     setActiveActivity('runs');
   }, [flushSave]);
 
-  const openNodesPage = useCallback(async () => {
+  // Switch section via the rail / shortcuts. Selections persist per section;
+  // we only drop the canvas node selection, which is section-specific.
+  const goActivity = useCallback(async key => {
     await flushSave();
-    setActiveFlowId(null);
-    setFlow(null);
-    setActiveRunId(null);
     setSelectedNode(null);
-    setShowNodesPage(true);
+    setActiveActivity(key);
+  }, [flushSave]);
+
+  const openTemplate = useCallback(async id => {
+    await flushSave();
+    setSelectedTemplateId(id);
+    setSelectedNode(null);
     setActiveActivity('library');
   }, [flushSave]);
+
+  const newTemplate = useCallback(async () => {
+    const tpl = await window.llmflow.newNodeTemplate();
+    await refreshTemplates();
+    setSelectedTemplateId(tpl.id);
+    setActiveActivity('library');
+  }, [refreshTemplates]);
+
+  // Section shortcuts: Ctrl/Cmd + 1/2/3 jump between Flows / Library / Runs.
+  useEffect(() => {
+    const onKey = e => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      const idx = { '1': 0, '2': 1, '3': 2 }[e.key];
+      if (idx === undefined) return;
+      e.preventDefault();
+      goActivity(NAV[idx].key);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [goActivity]);
 
   const newFlow = async () => {
     const f = await window.llmflow.newFlow();
@@ -373,7 +445,7 @@ export default function App() {
     setBusy(true);
     try {
       await flushSave();
-      const runId = await window.llmflow.runFlow(runFlowId, runInput.trim());
+      const runId = await window.llmflow.runFlow(runFlowId, runInput.trim(), workspaceDir || null);
       setRunInput('');
       await openRun(runId);
       await refreshRuns();
@@ -383,8 +455,10 @@ export default function App() {
   };
 
   const stage = snapshot?.meta?.stage;
-  const flowView = Boolean(activeFlowId && flow && !showNodesPage);
-  const runView = Boolean(activeRunId && !flowView && !showNodesPage);
+  const flowView = activeActivity === 'flows' && Boolean(activeFlowId && flow);
+  const runView = activeActivity === 'runs' && Boolean(activeRunId);
+  const libraryView = activeActivity === 'library';
+  const selectedTemplate = templates.find(t => t.id === selectedTemplateId) ?? null;
 
   // Display copy of the edited flow with template defaults merged in.
   const resolvedFlow = useMemo(
@@ -392,9 +466,11 @@ export default function App() {
     [flow, templates]
   );
 
-  const crumb = showNodesPage ? ['Nodes'] :
-    flowView ? ['Flows', flow.name] :
-    activeRunId ? ['Runs', activeRunId] : ['Flows'];
+  const activeIndex = NAV.findIndex(n => n.key === activeActivity);
+  const crumb =
+    libraryView ? ['Library', selectedTemplate?.name].filter(Boolean) :
+    activeActivity === 'runs' ? (activeRunId ? ['Runs', activeRunId] : ['Runs']) :
+    flowView ? ['Flows', flow.name] : ['Flows'];
 
   return (
     <div className="app">
@@ -405,9 +481,9 @@ export default function App() {
         </div>
         {flowView
           ? <span className="titlebar-doc mono">{flow.name}</span>
-          : showNodesPage
-            ? <span className="titlebar-doc mono">Node Library</span>
-            : activeRunId && <span className="titlebar-doc mono">{activeRunId}</span>}
+          : libraryView
+            ? <span className="titlebar-doc mono">{selectedTemplate?.name ?? 'Node Library'}</span>
+            : runView && <span className="titlebar-doc mono">{activeRunId}</span>}
       </div>
 
       <header className="toolbar">
@@ -420,10 +496,6 @@ export default function App() {
         </nav>
         {runView && stage && <span className="stage-chip">{stage.replace(/_/g, ' ')}</span>}
         <div className="toolbar-spacer" />
-        <button type="button" className="theme-toggle" onClick={() => setShowSettings(true)} title="Providers & models">
-          <span>⚙</span>
-          Settings
-        </button>
         <button type="button" className="theme-toggle" onClick={toggleTheme} title="Toggle appearance">
           <span>{theme === 'light' ? '☾' : '☀'}</span>
           {theme === 'light' ? 'Dark' : 'Light'}
@@ -431,38 +503,40 @@ export default function App() {
       </header>
 
       <div className="app-body">
-        {/* Activity bar (IDE-style quick nav) - PoC for better flow switching */}
-        <div className="activity-bar">
-          <button
-            className={'activity-btn' + (activeActivity === 'flows' ? ' active' : '')}
-            onClick={() => setActiveActivity('flows')}
-            title="Flows"
-          >
-            📁
-          </button>
-          <button
-            className={'activity-btn' + (activeActivity === 'library' ? ' active' : '')}
-            onClick={() => { setActiveActivity('library'); if (!showNodesPage) openNodesPage(); }}
-            title="Node Library"
-          >
-            📚
-          </button>
-          <button
-            className={'activity-btn' + (activeActivity === 'runs' ? ' active' : '')}
-            onClick={() => setActiveActivity('runs')}
-            title="Runs"
-          >
-            📜
-          </button>
+        {/* Primary navigation rail — the one persistent way between sections */}
+        <nav className="activity-bar" aria-label="Primary">
+          <div className="activity-group">
+            <div
+              className="activity-indicator"
+              data-hidden={activeIndex < 0 ? 'true' : 'false'}
+              style={{ '--active-index': Math.max(activeIndex, 0) }}
+              aria-hidden="true"
+            />
+            {NAV.map(item => (
+              <button
+                key={item.key}
+                type="button"
+                className={'activity-btn' + (activeActivity === item.key ? ' active' : '')}
+                aria-current={activeActivity === item.key ? 'page' : undefined}
+                onClick={() => goActivity(item.key)}
+                title={item.hint}
+              >
+                {RailIcon[item.key]}
+                <span className="activity-label">{item.label}</span>
+              </button>
+            ))}
+          </div>
           <div className="activity-spacer" />
           <button
-            className="activity-btn"
+            type="button"
+            className="activity-btn utility"
             onClick={() => setShowSettings(true)}
-            title="Settings"
+            title="Settings — providers & models"
           >
-            ⚙
+            {RailIcon.settings}
+            <span className="activity-label">Settings</span>
           </button>
-        </div>
+        </nav>
 
         <aside className="sidebar">
           {activeActivity === 'flows' && (
@@ -473,7 +547,7 @@ export default function App() {
                   <button className="ghost mini" onClick={newFlow}>＋ New</button>
                 </div>
               </div>
-              <div className="flow-list">
+              <div className="explorer-list">
                 {flowsList.map(f => (
                   <div
                     key={f.id}
@@ -486,27 +560,32 @@ export default function App() {
                 ))}
                 {flowsList.length === 0 && <div className="muted">No flows yet.</div>}
               </div>
-              <div className="sidebar-section">
-                <button className="ghost mini" onClick={openNodesPage} style={{ width: '100%', marginTop: 8 }}>
-                  Open Node Library →
-                </button>
-              </div>
             </>
           )}
 
           {activeActivity === 'library' && (
-            <div className="sidebar-section" style={{ padding: '16px' }}>
-              <span className="section-label">Node Library</span>
-              <p style={{ color: 'var(--dim)', fontSize: '12px', margin: '12px 0' }}>
-                Manage reusable AI node templates.
-              </p>
-              <button className="primary" onClick={openNodesPage} style={{ width: '100%' }}>
-                Open full Library ({templates.length})
-              </button>
-              <div style={{ marginTop: 16, fontSize: '11px', color: 'var(--faint)' }}>
-                Templates appear in the palette when editing flows.
+            <>
+              <div className="sidebar-section">
+                <div className="section-row">
+                  <span className="section-label">Node Library</span>
+                  <button className="ghost mini" onClick={newTemplate}>＋ New</button>
+                </div>
               </div>
-            </div>
+              <div className="explorer-list">
+                {templates.map(t => (
+                  <div
+                    key={t.id}
+                    className={'run-item flow-item' + (t.id === selectedTemplateId ? ' active' : '')}
+                    onClick={() => openTemplate(t.id)}
+                  >
+                    <span className="palette-icon">{t.icon || '✦'}</span>
+                    <span className="flow-item-name">{t.name}</span>
+                    {t.category && <span className="node-kind kind-ai">{t.category}</span>}
+                  </div>
+                ))}
+                {templates.length === 0 && <div className="muted">No node templates yet.</div>}
+              </div>
+            </>
           )}
 
           {activeActivity === 'runs' && (
@@ -514,7 +593,7 @@ export default function App() {
               <div className="sidebar-section" style={{ paddingBottom: 8 }}>
                 <span className="section-label">Runs</span>
               </div>
-              <div className="run-list">
+              <div className="explorer-list">
                 {[...runIds].reverse().map(id => (
                   <div
                     key={id}
@@ -528,9 +607,20 @@ export default function App() {
               </div>
               {runView && (
                 <div className="sidebar-footer">
+                  {snapshot?.meta?.workspace && (
+                    <div className="workspace-binding" title={snapshot.meta.workspace}>
+                      <span className="section-label">Workspace</span>
+                      <span className="mono workspace-path">{snapshot.meta.workspace}</span>
+                    </div>
+                  )}
                   <button className="ghost" onClick={() => window.llmflow.openRunFolder(activeRunId)}>
                     Open run folder
                   </button>
+                  {snapshot?.meta?.workspace && (
+                    <button className="ghost" onClick={() => window.llmflow.openWorkspace(activeRunId)}>
+                      Open workspace
+                    </button>
+                  )}
                 </div>
               )}
             </>
@@ -628,14 +718,31 @@ export default function App() {
           )}
           {runView && stage === 'awaiting_approval' && (
             <div className="approval-bar">
-              <span className="section-label">Approval gate</span>
-              <span>Review the work so far, then approve to continue or reject to stop.</span>
+              <span className="section-label">
+                {snapshot?.meta?.pendingGateKind === 'tool' ? 'Tool approval' : 'Approval gate'}
+              </span>
+              {snapshot?.meta?.pendingGateKind === 'tool' && snapshot?.meta?.pendingToolCall
+                ? (
+                  <span>
+                    This node wants to run <span className="mono">{snapshot.meta.pendingToolCall.tool}</span>
+                    {snapshot.meta.pendingToolCall.summary
+                      ? <> on <span className="mono">{snapshot.meta.pendingToolCall.summary}</span></>
+                      : null}. Approve to run it, or reject to abort the task.
+                  </span>
+                )
+                : <span>Review the work so far, then approve to continue or reject to stop.</span>}
               <button className="primary" onClick={() => window.llmflow.approvePlan(activeRunId)}>Approve</button>
               <button className="reject" onClick={() => window.llmflow.rejectPlan(activeRunId, 'Rejected by user')}>Reject</button>
             </div>
           )}
-          {showNodesPage
-            ? <NodesPage templates={templates} models={models} onChanged={refreshTemplates} />
+          {libraryView
+            ? <NodesPage
+                templates={templates}
+                selectedId={selectedTemplateId}
+                models={models}
+                onChanged={refreshTemplates}
+                onSelect={setSelectedTemplateId}
+              />
             : flowView
               ? (flowViewMode === 'yaml'
                   ? <FlowYamlEditor
@@ -669,14 +776,23 @@ export default function App() {
                         onSelect={setSelectedNode}
                         onChangeFlow={changeFlow}
                       />)
-              : snapshot
+              : runView && snapshot
                 ? <FlowCanvas snapshot={snapshot} selectedNode={selectedNode} onSelect={setSelectedNode} />
-                : (
-                  <div className="empty-state">
-                    <span className="section-label">Nothing selected</span>
-                    Pick a workflow, type your request, run it —<br />or select a flow to edit its graph.
-                  </div>
-                )}
+                : activeActivity === 'runs'
+                  ? (
+                    <div className="empty-state">
+                      <span className="section-label">Runs</span>
+                      {activeRunId
+                        ? <>Loading run <span className="mono">{activeRunId}</span>…</>
+                        : <>Select a run to inspect its graph —<br />or start one from the panel on the right.</>}
+                    </div>
+                  )
+                  : (
+                    <div className="empty-state">
+                      <span className="section-label">Flows</span>
+                      Select a flow to edit its graph —<br />or press ＋ New to start one.
+                    </div>
+                  )}
         </main>
 
         <div className="right-col">
@@ -695,6 +811,26 @@ export default function App() {
               onChange={e => setRunInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) startRun(); }}
             />
+            <div className="workspace-row">
+              <button
+                className="ghost"
+                onClick={async () => {
+                  const dir = await window.llmflow.pickWorkspace();
+                  if (dir) setWorkspaceDir(dir);
+                }}
+                title="Bind this run to a real project folder"
+              >
+                {workspaceDir ? 'Change workspace…' : 'Choose workspace…'}
+              </button>
+              {workspaceDir
+                ? (
+                  <span className="workspace-path" title={workspaceDir}>
+                    <span className="mono">{workspaceDir.split(/[\\/]/).pop()}</span>
+                    <button className="link" onClick={() => setWorkspaceDir('')} title="Clear workspace">✕</button>
+                  </span>
+                )
+                : <span className="muted">No workspace (files stay in the run folder)</span>}
+            </div>
             <button className="primary" onClick={startRun} disabled={busy || !runFlowId}>
               {busy ? 'Starting…' : 'Run'}<kbd className="shortcut">⌘↵</kbd>
             </button>

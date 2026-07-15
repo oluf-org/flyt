@@ -13,7 +13,7 @@ import { DSL_VERSION } from './parse.js';
 // fields, then anything else alphabetically. Purely cosmetic but FIXED.
 const FIELD_ORDER = [
   'title', 'role', 'category', 'system', 'instructions', 'goal', 'contextSpec',
-  'text', 'worker', 'tools', 'skills', 'constraints', 'outputs', 'requiresApproval'
+  'text', 'worker', 'tools', 'skills', 'constraints', 'outputs', 'requiresApproval', 'approveToolCalls'
 ];
 const fieldRank = k => {
   const i = FIELD_ORDER.indexOf(k);

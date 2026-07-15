@@ -62,7 +62,8 @@
         "worker": { "$ref": "#/$defs/worker" },
         "tools": { "type": "array", "items": { "type": "string" } },
         "skills": { "type": "array", "items": { "type": "string" } },
-        "requiresApproval": { "type": "boolean" }
+        "requiresApproval": { "type": "boolean" },
+        "approveToolCalls": { "type": "boolean" }
       }
     },
     "rawNode": {
@@ -94,7 +95,8 @@
             }
           }
         },
-        "requiresApproval": { "type": "boolean" }
+        "requiresApproval": { "type": "boolean" },
+        "approveToolCalls": { "type": "boolean" }
       }
     },
     "node": {

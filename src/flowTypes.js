@@ -12,7 +12,7 @@ export const TYPE_META = {
 };
 
 // Tools an agentTask node may be granted (core/tools/index.js registry).
-export const AGENT_TOOLS = ['write_file', 'create_task', 'write_task_md'];
+export const AGENT_TOOLS = ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md'];
 
 // --- Output ports: what each node CREATES -----------------------------------
 //
@@ -316,7 +316,7 @@ export const SEED_NODE_TEMPLATES = [
     baseType: 'aiStep', role: 'final-eval',
     description: 'Evaluate completeness against the original plan; document differences and reasoning.'
   }
-].map(t => ({ worker: null, instructions: '', tools: null, skills: [], requiresApproval: false, ...t }));
+].map(t => ({ worker: null, instructions: '', tools: null, skills: [], requiresApproval: false, approveToolCalls: false, ...t }));
 
 // Fill in the optional template fields so every consumer sees one shape.
 export function normalizeTemplate(tpl) {
@@ -334,6 +334,7 @@ export function normalizeTemplate(tpl) {
     tools: Array.isArray(tpl.tools) ? tpl.tools.filter(t => AGENT_TOOLS.includes(t)) : null,
     skills: Array.isArray(tpl.skills) ? tpl.skills.map(String) : [],
     requiresApproval: Boolean(tpl.requiresApproval),
+    approveToolCalls: Boolean(tpl.approveToolCalls),
     outputs: normalizeOutputs(tpl.outputs)
   };
 }
@@ -362,6 +363,7 @@ export function resolveInstance(node, tpl) {
     ...((ov.tools ?? t?.tools) ? { tools: ov.tools ?? t.tools } : {}),
     ...((ov.skills ?? t?.skills)?.length ? { skills: ov.skills ?? t.skills } : {}),
     requiresApproval: ov.requiresApproval ?? t?.requiresApproval ?? false,
+    approveToolCalls: ov.approveToolCalls ?? t?.approveToolCalls ?? false,
     ...(t?.outputs?.length ? { outputs: t.outputs } : {}),
     ...(ov.goal ? { goal: ov.goal } : {}),
     ...(ov.contextSpec ? { contextSpec: ov.contextSpec } : {}),

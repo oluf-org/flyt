@@ -4,8 +4,9 @@
 import { runAgent } from '../agent.js';
 import { getTools } from '../tools/index.js';
 import { makeRetrospective } from '../retrospective.js';
+import { Workspace } from '../workspace.js';
 
-export async function runExecutorTask(store, runId, taskId, config = {}) {
+export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null } = {}) {
   const tasksDoc = store.readTasks(runId);
   const task = tasksDoc.tasks.find(t => t.id === taskId);
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
@@ -42,8 +43,20 @@ export async function runExecutorTask(store, runId, taskId, config = {}) {
   // (task.tools: string[]). The agent loop picks native vs text protocol
   // per worker capability.
   const tools = getTools(task.tools);
+  // Bind the run's target workspace (V1 task 1) so file tools act on the real
+  // project. A missing/moved folder degrades gracefully: the file tools fall
+  // back to the run's own workspace sandbox instead of failing the task.
+  let workspace = null;
+  const wsPath = store.readMeta(runId)?.workspace;
+  if (wsPath) {
+    try { workspace = new Workspace(wsPath); }
+    catch (err) { store.appendLog(runId, { event: 'workspace_unavailable', path: wsPath, error: String(err?.message ?? err) }); }
+  }
   const ctx = {
-    store, runId, taskId,
+    store, runId, taskId, workspace,
+    // Present only when the node opted into per-tool approval: the agent loop
+    // calls it before each destructive tool call (V1 task 4).
+    approveToolCall,
     defaultWorker: {
       provider: config.workers?.executor?.provider ?? task.worker.provider,
       model: config.workers?.executor?.model ?? task.worker.model
@@ -91,15 +104,23 @@ export async function runExecutorTask(store, runId, taskId, config = {}) {
     });
   } catch (err) {
     status = 'failed';
+    const aborted = Boolean(err?.toolRejected);
     retro = makeRetrospective({
       node: `executor:${taskId}`,
       status: 'failed',
       problems: [String(err.message ?? err)],
-      resolution: 'Task marked failed; pipeline escalates to human.',
+      resolution: aborted
+        ? 'A tool call was rejected at the approval gate; task aborted by the human.'
+        : 'Task marked failed; pipeline escalates to human.',
       confidence: 0,
-      recommendation: `Task "${task.title}" failed — inspect log.jsonl and retry with a different worker.`,
+      recommendation: aborted
+        ? `Task "${task.title}" was aborted — a destructive tool call was rejected at the approval gate.`
+        : `Task "${task.title}" failed — inspect log.jsonl and retry with a different worker.`,
       model: task.worker
     });
+    // Flag human rejections so the runner keeps the "rejected" stage the tool
+    // gate set, rather than overwriting it with a generic "failed".
+    if (aborted) retro.aborted = true;
   }
   // Persist the status change against a FRESH read of tasks.json: a
   // create_task tool call during this run may have appended tasks that the
