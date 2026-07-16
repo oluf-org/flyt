@@ -8,9 +8,10 @@ import { Workspace } from '../workspace.js';
 import { loadSkills, withSkillsSection } from '../skills.js';
 
 // onText (optional): the caller's streaming sink for partial model output (V1
-// task 8). Forwarded to the agent loop untouched — where the partial text is
-// written, and how often, is the caller's business, not this module's.
-export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null } = {}) {
+// task 8). onRetry (optional): fires per transient-error backoff (V1 task 11).
+// Both are forwarded to the agent loop untouched — what to do with them is the
+// caller's business, not this module's.
+export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null } = {}) {
   const tasksDoc = store.readTasks(runId);
   const task = tasksDoc.tasks.find(t => t.id === taskId);
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
@@ -105,7 +106,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   let retro;
   let status;
   try {
-    const result = await runAgent({ worker, apiKey, system, prompt: userMsg, tools, ctx, onText });
+    const result = await runAgent({ worker, apiKey, system, prompt: userMsg, tools, ctx, onText, onRetry });
     // Authoritative write: onText may have left the last turn's partial text
     // (or a tool block) in this file, and this is what replaces it.
     store.writeTaskOutput(runId, taskId, result.text.trim());

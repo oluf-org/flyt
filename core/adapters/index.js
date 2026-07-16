@@ -40,7 +40,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // retry: { attempts, baseMs } — exponential backoff with jitter between
 // attempts, only for transient errors. Permanent errors (401, bad request,
 // unknown provider) surface immediately.
-export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools, retry, onText }) {
+//
+// onRetry({ attempt, attempts, delayMs, error }) — fires before each backoff
+// sleep. Retries are otherwise invisible: a successful call reports a `retries`
+// count, but a call that exhausts its budget just throws, so the attempts that
+// led there left no trace and "did backoff actually run?" could only be guessed
+// from wall-clock timing. Callers log it (V1 task 11).
+export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools, retry, onText, onRetry }) {
   const adapter = providers[provider];
   if (!adapter) throw new Error(`Unknown provider "${provider}". Available: ${Object.keys(providers).join(', ')}`);
   const attempts = Math.max(1, retry?.attempts ?? 3);
@@ -58,7 +64,9 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
     } catch (err) {
       lastErr = err;
       if (attempt === attempts - 1 || !isTransientError(err)) throw err;
-      await sleep(baseMs * 2 ** attempt * (1 + Math.random() * 0.25));
+      const delayMs = Math.round(baseMs * 2 ** attempt * (1 + Math.random() * 0.25));
+      onRetry?.({ attempt: attempt + 1, attempts, delayMs, error: String(err?.message ?? err).slice(0, 300) });
+      await sleep(delayMs);
     }
   }
   throw lastErr; // unreachable, but keeps the control flow explicit

@@ -135,6 +135,38 @@ test('openrouter: an HTTP error carries the status, and 429 retries while 401 do
   assert.equal(calls.length, 1, 'a bad key must not be retried');
 });
 
+// Real 429s are routine (a live run hit one on the first try), and without this
+// a retry left no trace: a recovered call reports only a `retries` count, and an
+// exhausted one just throws. "Did backoff run?" was answerable only by timing.
+test('onRetry reports every backoff, including the ones that end in failure', async () => {
+  stubFetch(() => errRes(429, 'rate limited'));
+  const seen = [];
+  await assert.rejects(() => callModel({
+    provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k',
+    retry: { attempts: 3, baseMs: 10 }, onRetry: i => seen.push(i)
+  }), /429/);
+  // Three attempts, so two backoffs — the last failure throws rather than sleeps.
+  assert.equal(seen.length, 2);
+  assert.deepEqual(seen.map(s => s.attempt), [1, 2]);
+  assert.equal(seen[0].attempts, 3);
+  assert.ok(seen[1].delayMs > seen[0].delayMs, 'backoff must grow');
+  assert.match(seen[0].error, /429/);
+});
+
+test('onRetry stays silent when a call succeeds first time or fails permanently', async () => {
+  stubFetch(() => jsonRes({ choices: [{ message: { content: 'ok' } }] }));
+  const seen = [];
+  await callModel({ provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k', onRetry: i => seen.push(i) });
+  assert.deepEqual(seen, []);
+
+  stubFetch(() => errRes(401, 'bad key'));
+  await assert.rejects(() => callModel({
+    provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k',
+    retry: { attempts: 3, baseMs: 1 }, onRetry: i => seen.push(i)
+  }), /401/);
+  assert.deepEqual(seen, [], 'a permanent error is not a retry');
+});
+
 test('openrouter: a response with no choices fails loudly', async () => {
   stubFetch(() => jsonRes({ error: { message: 'nope' } }));
   await assert.rejects(

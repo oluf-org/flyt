@@ -239,6 +239,15 @@ export class FlowRunner {
     };
   }
 
+  // Log each transient-error retry the adapter backs off through (V1 task 11).
+  // Without this a retry leaves no trace: a call that recovers reports only a
+  // `retries` count, and one that exhausts its budget just throws, so "did
+  // backoff actually run under real latency?" was answerable only by timing the
+  // wall clock. Real 429s are routine, so this belongs in the audit log.
+  retryLogger(runId, nodeId) {
+    return info => this.store.appendLog(runId, { event: 'model_retry', node: nodeId, ...info });
+  }
+
   // The run's bound project, or null when it has none / the folder is gone.
   // Never throws: a missing workspace degrades the run, it doesn't kill it.
   workspaceFor(runId) {
@@ -589,6 +598,7 @@ export class FlowRunner {
       // Parallel tasks each stream into their own tasks/<id>.md, so they can't
       // scribble over one another.
       onText: this.streamInto(runId, t => this.store.writeTaskOutput(runId, task.id, t)),
+      onRetry: this.retryLogger(runId, `executor:${task.id}`),
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };
     ledger.begin(task.id);
@@ -1055,7 +1065,7 @@ export class FlowRunner {
 
       let result;
       try {
-        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText });
+        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText, onRetry: this.retryLogger(runId, node.id) });
       } catch (err) {
         const msg = String(err?.message ?? err);
         this.store.appendLog(runId, { event: 'node_error', node: node.id, role, error: msg });
@@ -1233,7 +1243,7 @@ export class FlowRunner {
       const onText = this.streamInto(runId, t => this.store.writeNodeOutput(runId, `${node.id}.plan`, t));
       let result;
       try {
-        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText });
+        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText, onRetry: this.retryLogger(runId, node.id) });
       } catch (err) {
         const msg = String(err?.message ?? err);
         this.store.appendLog(runId, { event: 'node_error', node: node.id, role: 'orchestrate', error: msg });
