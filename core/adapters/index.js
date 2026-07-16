@@ -8,11 +8,21 @@
 // messages/tools are the agent-loop shape (see core/agent.js); adapters that
 // don't understand them (mock) simply ignore them.
 //
-// onText(textSoFar) — incremental output. Adapters that can stream call it
-// with the FULL accumulated text after each chunk (not a delta), so a
+// onText(textSoFar, opts) — incremental output. Adapters that can stream call
+// it with the FULL accumulated text after each chunk (not a delta), so a
 // transparent retry after a mid-stream failure simply starts over and the
 // consumer's last write is always a consistent prefix of the final text.
 // Adapters that can't stream never call it; the final result is unchanged.
+//
+// opts.final marks the LAST emit of a call, and consumers must not throttle it
+// away. Consumers throttle on the reasoning that dropping a chunk is safe
+// because the caller's own write afterwards is authoritative — true for a
+// single-shot call, false inside an agent loop, where each intermediate turn is
+// superseded by the NEXT turn rather than by any write. Without a guaranteed
+// last emit, a turn's most informative state is exactly the state that gets
+// dropped: a tool call's name arrives first and claims the throttle window, and
+// its arguments — the part that says what the agent is actually doing — stream
+// in behind it and vanish.
 import { anthropicAdapter } from './anthropic.js';
 import { openrouterAdapter } from './openrouter.js';
 import { mockAdapter } from './mock.js';

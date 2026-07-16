@@ -163,7 +163,7 @@ The explicit per-file context descriptions worked: only the listed files were re
       onText(reply.text.slice(0, end));
       await sleep(80);
     }
-    onText(reply.text);
+    onText(reply.text, { final: true });
   }
 
   return reply;

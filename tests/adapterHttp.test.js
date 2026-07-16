@@ -98,7 +98,10 @@ test('openrouter: streams growing text and reports usage', async () => {
   assert.equal(calls[0].body.stream, true);
   // onText gets the FULL text so far, not deltas (the contract every consumer
   // relies on to treat each flush as a consistent prefix).
-  assert.deepEqual(seen, ['Hel', 'Hello w', 'Hello world']);
+  assert.deepEqual(seen.slice(0, 3), ['Hel', 'Hello w', 'Hello world']);
+  // ...and the last emit is always repeated as `final`, because the adapter
+  // cannot know whether the consumer throttled the identical one away.
+  assert.equal(seen.at(-1), 'Hello world');
   assert.equal(r.text, 'Hello world');
   assert.equal(r.finishReason, 'stop');
   assert.deepEqual(r.usage, { prompt_tokens: 3, completion_tokens: 4 });
@@ -113,14 +116,16 @@ test('openrouter: asks for usage when streaming', async () => {
   assert.deepEqual(calls[0].body.stream_options, { include_usage: true });
 });
 
-test('openrouter: a tool-enabled call is not streamed (the loop needs the raw message)', async () => {
+// Without onText there is nobody watching, so there is nothing to stream for —
+// the simpler non-streaming response is used, tools or not.
+test('openrouter: a call with no onText is not streamed, tools or not', async () => {
   stubFetch(() => jsonRes({ choices: [{ message: { content: 'x', tool_calls: [] }, finish_reason: 'stop' }] }));
   await callModel({
     provider: 'openrouter', model: 'm', messages: [{ role: 'user', content: 'p' }],
     tools: [{ type: 'function', function: { name: 'f', description: '', parameters: {} } }],
-    apiKey: 'k', onText: () => { throw new Error('must not stream'); }
+    apiKey: 'k'
   });
-  assert.ok(!calls[0].body.stream, 'streaming must stay off while tools are in play');
+  assert.ok(!calls[0].body.stream);
   assert.equal(calls[0].body.tools.length, 1);
 });
 
@@ -329,7 +334,8 @@ test('anthropic: streams text deltas and merges usage across events', async () =
   const seen = [];
   const r = await callModel({ provider: 'anthropic', model: 'm', prompt: 'p', apiKey: 'k', onText: t => seen.push(t) });
   assert.equal(calls[0].body.stream, true);
-  assert.deepEqual(seen, ['Ada ', 'Ada Lovelace']);
+  assert.deepEqual(seen.slice(0, 2), ['Ada ', 'Ada Lovelace']);
+  assert.equal(seen.at(-1), 'Ada Lovelace'); // always re-emitted as final
   assert.equal(r.text, 'Ada Lovelace');
   // input from message_start, output from message_delta: both halves survive.
   assert.deepEqual(r.usage, { input_tokens: 11, output_tokens: 4 });
@@ -470,4 +476,147 @@ test('toolProtocol names the path a worker will take', async () => {
   assert.equal(toolProtocol({ provider: 'anthropic', supportsTools: true }), 'text', 'native is openrouter-only today');
   assert.equal(toolProtocol({ provider: 'mock' }), 'text');
   assert.equal(toolProtocol(undefined), 'text');
+});
+
+// --- streaming a tool-using turn (V1 task 12) -----------------------------
+
+// This path used to refuse to stream whenever tools were present. Once the work
+// templates became agentTasks, that meant every coding node was silent and the
+// live panel went blank for exactly the nodes doing the work.
+test('native tool calls stream, and reassemble into the message the loop echoes', async () => {
+  stubFetch(() => sseRes([
+    { choices: [{ delta: { content: 'Writing it now.' } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'write_file', arguments: '{"path":' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"src/a.js",' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"content":"x"}' } }] } }] },
+    { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+    { choices: [], usage: { total_tokens: 12 } },
+    '[DONE]'
+  ]));
+  const seen = [];
+  const r = await callModel({
+    provider: 'openrouter', model: 'm', messages: [{ role: 'user', content: 'p' }],
+    tools: [{ type: 'function', function: { name: 'write_file', description: '', parameters: {} } }],
+    apiKey: 'k', onText: t => seen.push(t)
+  });
+
+  assert.equal(calls[0].body.stream, true, 'a tool-using turn must stream');
+  assert.equal(r.finishReason, 'tool_calls');
+  assert.deepEqual(r.usage, { total_tokens: 12 });
+  // The id/name arrive once; the arguments fragments concatenate in order.
+  assert.deepEqual(r.message.tool_calls, [{
+    id: 'call_1', type: 'function',
+    function: { name: 'write_file', arguments: '{"path":"src/a.js","content":"x"}' }
+  }]);
+  assert.equal(JSON.parse(r.message.tool_calls[0].function.arguments).path, 'src/a.js');
+  // `text` stays the model's real content, not the rendered view.
+  assert.equal(r.text, 'Writing it now.');
+  assert.equal(r.message.content, 'Writing it now.');
+  // ...but the watcher saw the call assemble, argument by argument.
+  assert.ok(seen.length >= 4);
+  assert.match(seen.at(-1), /Writing it now\./);
+  // A completed call renders as real lines, not an escaped JSON blob: a file's
+  // content arrives with its newlines escaped and is unreadable dumped raw.
+  assert.ok(seen.at(-1).includes('→ write_file\npath: src/a.js\ncontent: x'));
+});
+
+test('a turn that is only tool calls still streams something watchable', async () => {
+  stubFetch(() => sseRes([
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', type: 'function', function: { name: 'bash', arguments: '{"command":"npm test"}' } }] } }] },
+    { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+    '[DONE]'
+  ]));
+  const seen = [];
+  const r = await callModel({
+    provider: 'openrouter', model: 'm', messages: [{ role: 'user', content: 'p' }],
+    tools: [{ type: 'function', function: { name: 'bash', description: '', parameters: {} } }],
+    apiKey: 'k', onText: t => seen.push(t)
+  });
+  assert.equal(r.text, '', 'no prose in this turn');
+  assert.equal(r.message.content, null, 'the API wants null, not empty string, alongside tool_calls');
+  assert.ok(seen.at(-1).includes('→ bash\ncommand: npm test'));
+  // A tool-only turn is a real answer: it must NOT trip the empty-stream guard.
+  assert.equal(r.message.tool_calls.length, 1);
+});
+
+test('parallel tool calls in one turn reassemble by index, in order', async () => {
+  stubFetch(() => sseRes([
+    { choices: [{ delta: { tool_calls: [
+      { index: 1, id: 'b', type: 'function', function: { name: 'read_file', arguments: '{"p":2}' } },
+      { index: 0, id: 'a', type: 'function', function: { name: 'read_file', arguments: '{"p":' } }
+    ] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '1}' } }] } }] },
+    { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+    '[DONE]'
+  ]));
+  const r = await callModel({
+    provider: 'openrouter', model: 'm', messages: [{ role: 'user', content: 'p' }],
+    tools: [{ type: 'function', function: { name: 'read_file', description: '', parameters: {} } }],
+    apiKey: 'k', onText: () => {}
+  });
+  assert.deepEqual(r.message.tool_calls.map(c => [c.id, c.function.arguments]),
+    [['a', '{"p":1}'], ['b', '{"p":2}']], 'index orders the calls, not arrival');
+});
+
+// The end-to-end shape: a streamed tool turn must drive the agent loop exactly
+// as the non-streamed one did — same echo, same role:'tool' reply.
+test('the agent loop runs a full round trip over a STREAMED tool turn', async () => {
+  const store = { appendLog: () => {}, writeTaskSpec: () => 'tasks/task-1.spec.md' };
+  stubFetch(({ n }) => (n === 1
+    ? sseRes([
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'write_task_md', arguments: '{"content":' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"# Spec"}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }] }, '[DONE]'
+    ])
+    : sseRes([{ choices: [{ delta: { content: 'All done.' }, finish_reason: 'stop' }] }, '[DONE]'])));
+
+  const { getTools } = await import('../core/tools/index.js');
+  const out = await runAgent({
+    worker: { provider: 'openrouter', model: 'tool-model', supportsTools: true },
+    apiKey: 'k', system: 'S', prompt: 'P',
+    tools: getTools(['write_task_md']),
+    ctx: { store, runId: 'r1', taskId: 'task-1' },
+    onText: () => {}
+  });
+  assert.equal(out.text, 'All done.');
+  assert.equal(out.toolCalls[0].ok, true, 'the reassembled arguments must parse and execute');
+  const second = calls[1].body.messages;
+  assert.equal(second.at(-2).tool_calls[0].id, 'c1');
+  assert.equal(second.at(-1).tool_call_id, 'c1');
+});
+
+// A file's content reaches us as a JSON string, so its newlines arrive escaped.
+// Dumped raw that reads as one long \n-littered line — watchable only in the
+// most literal sense. Built with JSON.stringify, exactly as a provider builds it.
+test('a completed tool call renders readably, with real newlines', async () => {
+  const args = JSON.stringify({ path: 'a.js', content: 'line1\nline2' });
+  stubFetch(() => sseRes([
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', type: 'function', function: { name: 'write_file', arguments: args } }] } }] },
+    { choices: [{ delta: {}, finish_reason: 'tool_calls' }] }, '[DONE]'
+  ]));
+  const seen = [];
+  const r = await callModel({
+    provider: 'openrouter', model: 'm', messages: [{ role: 'user', content: 'p' }],
+    tools: [{ type: 'function', function: { name: 'write_file', description: '', parameters: {} } }],
+    apiKey: 'k', onText: t => seen.push(t)
+  });
+  assert.equal(seen.at(-1), '→ write_file\npath: a.js\ncontent: line1\nline2');
+  assert.ok(!seen.at(-1).includes('\\n'), 'no escaped newlines survive into the watched view');
+  // The reassembled arguments stay byte-exact — the pretty view is a view only.
+  assert.equal(r.message.tool_calls[0].function.arguments, args);
+});
+
+// Mid-assembly the JSON cannot parse yet; show it raw rather than nothing.
+test('an incomplete tool call still shows raw while it assembles', async () => {
+  stubFetch(() => sseRes([
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', type: 'function', function: { name: 'write_file', arguments: '{"path":"a.' } }] } }] },
+    { choices: [{ delta: {}, finish_reason: 'tool_calls' }] }, '[DONE]'
+  ]));
+  const seen = [];
+  await callModel({
+    provider: 'openrouter', model: 'm', messages: [{ role: 'user', content: 'p' }],
+    tools: [{ type: 'function', function: { name: 'write_file', description: '', parameters: {} } }],
+    apiKey: 'k', onText: t => seen.push(t)
+  });
+  assert.equal(seen[0], '→ write_file({"path":"a.)'); // raw, paren and all
 });

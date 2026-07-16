@@ -230,9 +230,16 @@ export class FlowRunner {
   // call returns is authoritative.
   streamInto(runId, write) {
     let lastFlush = 0;
-    return textSoFar => {
+    return (textSoFar, opts) => {
       const now = Date.now();
-      if (now - lastFlush < STREAM_FLUSH_MS) return;
+      // A call's LAST emit is never dropped. Throttling rests on "the caller's
+      // write afterwards is authoritative", which holds for a single-shot call
+      // but not inside an agent loop: an intermediate turn is superseded by the
+      // next turn, not by any write. Dropping its final state meant a tool call
+      // showed as "→ write_file()" — the name arrives first and takes the flush
+      // window, and the arguments, the part that says what the agent is doing,
+      // streamed in behind it and were thrown away (V1 task 12).
+      if (!opts?.final && now - lastFlush < STREAM_FLUSH_MS) return;
       lastFlush = now;
       write(textSoFar);
       this.notify(runId);

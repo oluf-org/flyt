@@ -484,3 +484,32 @@ test('the executor logs which tool protocol it used', async () => {
   // The 'script' test provider isn't openrouter, so it takes the text path.
   assert.equal(start.protocol, 'text');
 });
+
+// streamInto throttles on the reasoning that the caller's write afterwards is
+// authoritative — true for one call, false inside an agent loop, where a turn is
+// superseded by the NEXT turn. So the last emit of a call must never be dropped:
+// a tool call's name arrives first and takes the flush window, and its arguments
+// stream in behind it (V1 task 12).
+test('streamInto never throttles away the final emit of a call', () => {
+  const store = makeStore();
+  const runId = store.createRun('b');
+  const runner = new FlowRunner(store, testConfig());
+  const written = [];
+  const sink = runner.streamInto(runId, t => written.push(t));
+
+  sink('→ write_file(');                       // first: flushes
+  sink('→ write_file({"path":"a.js"');         // within 250ms: dropped
+  sink('→ write_file({"path":"a.js"})', { final: true }); // must land regardless
+
+  assert.deepEqual(written, ['→ write_file(', '→ write_file({"path":"a.js"})']);
+});
+
+test('streamInto still throttles the noisy middle of a stream', () => {
+  const store = makeStore();
+  const runId = store.createRun('b');
+  const runner = new FlowRunner(store, testConfig());
+  const written = [];
+  const sink = runner.streamInto(runId, t => written.push(t));
+  for (let i = 0; i < 50; i++) sink('chunk ' + i);
+  assert.equal(written.length, 1, '50 rapid chunks must not become 50 writes + 50 IPC pushes');
+});

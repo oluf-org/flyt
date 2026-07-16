@@ -47,6 +47,7 @@ export async function anthropicAdapter({ model, system, prompt, maxTokens, apiKe
       if (msg.type === 'message_delta' && msg.usage) usage = { ...usage, ...msg.usage };
       if (msg.type === 'error') throw new Error(`Anthropic API stream error: ${JSON.stringify(msg.error).slice(0, 500)}`);
     }
+    onText(text, { final: true }); // the consumer must not throttle the last state away
     return { text, usage };
   }
 
