@@ -435,3 +435,34 @@ test('step-eval escalation gate survives a restart: approve resumes to done', as
   assert.equal(statuses.out, 'done');
   assert.ok(readLog(store, runId).some(e => e.event === 'flow_run_resumed'));
 });
+
+// A node whose model returns nothing must fail loudly. It used to be recorded
+// as success with a 0-byte output file, which then became the context every
+// downstream node read (V1 task 11 — seen on a real provider).
+test('an aiStep whose model returns an empty response fails instead of succeeding', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(() => '   \n  ');
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }), node('step', 'aiStep', { role: 'execute' }), node('out', 'output')],
+    [edge('in', 'step'), edge('step', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'failed');
+  assert.equal(store.readMeta(runId).nodeStatus.step, 'failed');
+  assert.match(store.readMeta(runId).error, /empty response/);
+  assert.equal(store.readRetrospectives(runId).step.status, 'failed');
+});
+
+test('an agentTask whose agent returns an empty response fails instead of succeeding', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(() => '');
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'agentTask', { title: 'W', goal: 'do it' }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'failed');
+  assert.equal(store.readTasks(runId).tasks[0].status, 'failed');
+});

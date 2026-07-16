@@ -599,6 +599,7 @@ export class FlowRunner {
       // scribble over one another.
       onText: this.streamInto(runId, t => this.store.writeTaskOutput(runId, task.id, t)),
       onRetry: this.retryLogger(runId, `executor:${task.id}`),
+      retry: this.config.retry,
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };
     ledger.begin(task.id);
@@ -1065,7 +1066,15 @@ export class FlowRunner {
 
       let result;
       try {
-        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText, onRetry: this.retryLogger(runId, node.id) });
+        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText, onRetry: this.retryLogger(runId, node.id), retry: this.config.retry });
+        // A call that comes back with nothing is not a success. Recording one as
+        // success wrote a 0-byte artifact, marked the node done, and handed
+        // emptiness to every downstream node — the run read as healthy the whole
+        // way while producing nothing. Only ever seen against a real provider;
+        // the mock always answers, which is why this survived to V1 task 11.
+        if (!String(result.text ?? '').trim()) {
+          throw new Error(`${worker.provider}/${worker.model} returned an empty response`);
+        }
       } catch (err) {
         const msg = String(err?.message ?? err);
         this.store.appendLog(runId, { event: 'node_error', node: node.id, role, error: msg });
@@ -1243,7 +1252,7 @@ export class FlowRunner {
       const onText = this.streamInto(runId, t => this.store.writeNodeOutput(runId, `${node.id}.plan`, t));
       let result;
       try {
-        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText, onRetry: this.retryLogger(runId, node.id) });
+        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText, onRetry: this.retryLogger(runId, node.id), retry: this.config.retry });
       } catch (err) {
         const msg = String(err?.message ?? err);
         this.store.appendLog(runId, { event: 'node_error', node: node.id, role: 'orchestrate', error: msg });
@@ -1372,7 +1381,8 @@ export class FlowRunner {
       'Respond again in full, fixing every error above. Emit exactly ONE valid ```json block satisfying the contract.'
     ].join('\n\n');
     try {
-      const result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt });
+      const result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt,
+        onRetry: this.retryLogger(runId, node.id), retry: this.config.retry });
       return String(result.text ?? '').trim();
     } catch (err) {
       this.store.appendLog(runId, { event: 'structured_output_reask_failed', node: node.id, error: String(err?.message ?? err) });

@@ -11,6 +11,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { callModel } from '../core/adapters/index.js';
 import { runAgent } from '../core/agent.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // --- fetch stubbing -------------------------------------------------------
 
@@ -106,7 +108,7 @@ test('openrouter: streams growing text and reports usage', async () => {
 // every streamed call would report null usage and the retrospectives that
 // account for tokens would quietly read zero.
 test('openrouter: asks for usage when streaming', async () => {
-  stubFetch(() => sseRes(['[DONE]']));
+  stubFetch(() => sseRes([{ choices: [{ delta: { content: 'x' }, finish_reason: 'stop' }] }, '[DONE]']));
   await callModel({ provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k', onText: () => {} });
   assert.deepEqual(calls[0].body.stream_options, { include_usage: true });
 });
@@ -165,6 +167,79 @@ test('onRetry stays silent when a call succeeds first time or fails permanently'
     retry: { attempts: 3, baseMs: 1 }, onRetry: i => seen.push(i)
   }), /401/);
   assert.deepEqual(seen, [], 'a permanent error is not a retry');
+});
+
+// --- Retry-After: listening to the provider instead of guessing ------------
+
+const withHeaders = (status, body, headers) => ({
+  ok: false, status,
+  headers: { get: k => headers[k.toLowerCase()] ?? null },
+  text: async () => body, json: async () => ({})
+});
+
+test('a Retry-After header overrides a shorter guessed backoff', async () => {
+  stubFetch(() => withHeaders(429, 'slow down', { 'retry-after': '7' }));
+  const seen = [];
+  await assert.rejects(() => callModel({
+    provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k',
+    retry: { attempts: 2, baseMs: 1, maxMs: 60000 }, onRetry: i => { seen.push(i); throw new Error('stop'); }
+  }), /stop|429/);
+  assert.equal(seen[0].retryAfterMs, 7000);
+  assert.equal(seen[0].delayMs, 7000, 'the provider knows when its window reopens; we do not');
+});
+
+// OpenRouter is a gateway: an upstream 429 arrives with the hint in the BODY,
+// not as a header. This is the exact shape a live run returned.
+test('an upstream hint nested in the error body is honored too', async () => {
+  const body = JSON.stringify({
+    error: { message: 'Provider returned error', code: 429, metadata: { raw: 'rate-limited upstream', retry_after_seconds: 3 } }
+  });
+  stubFetch(() => withHeaders(429, body, {}));
+  const seen = [];
+  await assert.rejects(() => callModel({
+    provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k',
+    retry: { attempts: 2, baseMs: 1, maxMs: 60000 }, onRetry: i => { seen.push(i); throw new Error('stop'); }
+  }), /stop|429/);
+  assert.equal(seen[0].retryAfterMs, 3000);
+});
+
+test('a hint shorter than the backoff does not shrink it', async () => {
+  stubFetch(() => withHeaders(429, 'x', { 'retry-after': '1' }));
+  const seen = [];
+  await assert.rejects(() => callModel({
+    provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k',
+    retry: { attempts: 2, baseMs: 5000, maxMs: 60000 }, onRetry: i => { seen.push(i); throw new Error('stop'); }
+  }), /stop|429/);
+  assert.ok(seen[0].delayMs >= 5000, 'backoff still applies when the hint is shorter');
+});
+
+// A provider asking for an hour must not be able to park a run for one.
+test('maxMs caps an outsized Retry-After', async () => {
+  stubFetch(() => withHeaders(429, 'x', { 'retry-after': '3600' }));
+  const seen = [];
+  await assert.rejects(() => callModel({
+    provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k',
+    retry: { attempts: 2, baseMs: 1, maxMs: 250 }, onRetry: i => { seen.push(i); throw new Error('stop'); }
+  }), /stop|429/);
+  assert.equal(seen[0].delayMs, 250);
+});
+
+test('parseRetryAfter handles the HTTP-date form and absent/garbage hints', async () => {
+  const { parseRetryAfter } = await import('../core/adapters/http.js');
+  const hdr = v => ({ headers: { get: k => (k.toLowerCase() === 'retry-after' ? v : null) } });
+  const at = new Date(Date.now() + 5000).toUTCString();
+  const ms = parseRetryAfter(hdr(at), '');
+  assert.ok(ms > 3000 && ms <= 5000, `HTTP-date should resolve to ~5s, got ${ms}`);
+  assert.equal(parseRetryAfter(hdr(null), 'not json'), null);
+  assert.equal(parseRetryAfter({}, ''), null);
+  assert.equal(parseRetryAfter(hdr('nonsense'), '{}'), null);
+});
+
+test('the shipped retry budget is 5 attempts, and config.json exposes it', async () => {
+  const { DEFAULT_RETRY } = await import('../core/adapters/index.js');
+  assert.equal(DEFAULT_RETRY.attempts, 5);
+  const cfg = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'config.json'), 'utf8'));
+  assert.deepEqual(cfg.retry, DEFAULT_RETRY, 'config.json must ship the same policy the code defaults to');
 });
 
 test('openrouter: a response with no choices fails loudly', async () => {
@@ -349,4 +424,37 @@ test('native tool-calling: a failed tool comes back to the model instead of kill
   assert.equal(out.text, 'recovered');
   assert.equal(out.toolCalls[0].ok, false);
   assert.match(JSON.parse(calls[1].body.messages.at(-1).content).error, /not valid JSON/);
+});
+
+// --- an empty response is a failure, not a success ------------------------
+
+// A live run spent 103s on a stream that delivered nothing, and the node was
+// recorded 'success' with a 0-byte artifact and null usage — then fed that
+// emptiness downstream. The mock always answers, so only a real provider could
+// surface this (V1 task 11).
+test('openrouter: a stream that delivers nothing is a transient failure, not an empty answer', async () => {
+  stubFetch(() => sseRes(['[DONE]']));
+  await assert.rejects(() => callModel({
+    provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k',
+    onText: () => {}, retry: { attempts: 1 }
+  }), /ended without any content/);
+});
+
+test('openrouter: an empty completion WITH a finish reason is a real answer, and stands', async () => {
+  stubFetch(() => sseRes([{ choices: [{ delta: {}, finish_reason: 'stop' }] }, '[DONE]']));
+  const r = await callModel({ provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k', onText: () => {}, retry: { attempts: 1 } });
+  assert.equal(r.text, '');
+  assert.equal(r.finishReason, 'stop');
+});
+
+test('an empty stream is retried, and recovers', async () => {
+  stubFetch(({ n }) => (n === 1
+    ? sseRes(['[DONE]'])
+    : sseRes([{ choices: [{ delta: { content: 'real answer' }, finish_reason: 'stop' }] }, '[DONE]'])));
+  const r = await callModel({
+    provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k',
+    onText: () => {}, retry: { attempts: 3, baseMs: 1 }
+  });
+  assert.equal(r.text, 'real answer');
+  assert.equal(r.retries, 1);
 });

@@ -11,7 +11,7 @@ import { loadSkills, withSkillsSection } from '../skills.js';
 // task 8). onRetry (optional): fires per transient-error backoff (V1 task 11).
 // Both are forwarded to the agent loop untouched — what to do with them is the
 // caller's business, not this module's.
-export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null } = {}) {
+export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, retry = null } = {}) {
   const tasksDoc = store.readTasks(runId);
   const task = tasksDoc.tasks.find(t => t.id === taskId);
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
@@ -106,7 +106,13 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   let retro;
   let status;
   try {
-    const result = await runAgent({ worker, apiKey, system, prompt: userMsg, tools, ctx, onText, onRetry });
+    const result = await runAgent({ worker, apiKey, system, prompt: userMsg, tools, ctx, onText, onRetry, retry: retry ?? config.retry });
+    // An agent that produced no deliverable has not done the task, whatever the
+    // transport says. Marking it done would leave the streamed partial (or a
+    // 0-byte file) standing as the task's output and let dependents run on it.
+    if (!String(result.text ?? '').trim()) {
+      throw new Error(`${worker.provider}/${worker.model} returned an empty response`);
+    }
     // Authoritative write: onText may have left the last turn's partial text
     // (or a tool block) in this file, and this is what replaces it.
     store.writeTaskOutput(runId, taskId, result.text.trim());

@@ -6,6 +6,7 @@
 // the app was silently dropped and every Anthropic run failed as unconfigured.
 // ANTHROPIC_API_KEY remains a fallback for running from a shell.
 import { sseEvents } from './openrouter.js';
+import { apiError } from './http.js';
 
 export async function anthropicAdapter({ model, system, prompt, maxTokens, apiKey, onText }) {
   const key = apiKey || process.env.ANTHROPIC_API_KEY;
@@ -29,8 +30,7 @@ export async function anthropicAdapter({ model, system, prompt, maxTokens, apiKe
   });
 
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Anthropic API ${res.status}: ${body.slice(0, 500)}`);
+    throw apiError('Anthropic', res, await res.text());
   }
 
   if (stream) {

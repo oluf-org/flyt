@@ -8,6 +8,8 @@
 //                               OpenAI function-tool definitions. The raw
 //                               assistant message comes back so the loop can
 //                               echo tool_calls and read finish_reason.
+import { apiError } from './http.js';
+
 export async function openrouterAdapter({ model, system, prompt, messages, tools, maxTokens, apiKey, onText }) {
   if (!apiKey) throw new Error('OpenRouter API key is not set. Add it in Settings, or switch the worker to the "mock" provider.');
 
@@ -46,8 +48,7 @@ export async function openrouterAdapter({ model, system, prompt, messages, tools
   });
 
   if (!res.ok) {
-    const errBody = await res.text();
-    throw new Error(`OpenRouter API ${res.status}: ${errBody.slice(0, 500)}`);
+    throw apiError('OpenRouter', res, await res.text());
   }
 
   if (stream) {
@@ -65,6 +66,17 @@ export async function openrouterAdapter({ model, system, prompt, messages, tools
       }
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       if (chunk.usage) usage = chunk.usage;
+    }
+    // A stream that delivered no content AND no finish reason did not complete:
+    // the upstream opened it and dropped it. Returning { text: '' } here looked
+    // like a successful empty answer — a live run spent 103s on one, wrote a
+    // 0-byte artifact, marked the node done and fed emptiness downstream. Fail
+    // instead, and mark it transient so the retry budget gets a real attempt.
+    if (!text && !finishReason) {
+      throw Object.assign(
+        new Error('OpenRouter stream ended without any content or a finish reason (upstream cut the response)'),
+        { transient: true }
+      );
     }
     return { text, usage, finishReason, message: { role: 'assistant', content: text } };
   }
