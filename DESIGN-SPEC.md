@@ -93,6 +93,27 @@ Example rules the matrix should express: "model X is strong at language Y → pr
 
 ---
 
+---
+
+## 4.1 The real-model path (BYO-key) — [BUILT] (V1 task 11, D18)
+
+The default provider is `mock`, which is why this needed validating on its own: **the mock always answers, always cheaply, and never rate-limits**, so it masked every defect below. Two halves.
+
+**Offline — the contract.** `tests/adapterHttp.test.js` stubs `globalThis.fetch` and runs the adapters' real code against canned responses, pinning what had never been asserted: request shape and headers per provider, SSE parsing, the `onText` full-text-not-deltas contract, streaming suppressed while tools are in play, retry classification (429/529 retried, 401 not), and the NATIVE tool round trip — the `tool_calls` echo plus the `role:'tool'` reply keyed by id that a provider 400s on if you get it wrong. No key, no network.
+
+**Live — validated on `openai/gpt-5.6-luna-pro` via a user-supplied OpenRouter key.** Both acceptance flows pass: the **Default pipeline** end to end (11 nodes: plan → gate → approve → plan-eval materialising 6 nodes from the strict JSON contract → work → verify → result), and an **agentTask-heavy flow** bound to a real project, which read the repo's existing style, wrote `src/slugify.js` and `README-slugify.md` into it, and self-corrected through a failed `read_file`. Token streaming, parallel waves, retry/backoff and cost accounting all confirmed against the real API.
+
+**Five defects only a real provider could surface:**
+- **Anthropic dropped the caller's key.** `callModel` had always forwarded `apiKey`; the adapter read only `process.env` — so a key saved in the app did nothing (D18's whole premise).
+- **Streamed calls asked for no usage.** The adapter *read* a usage chunk it never requested (`stream_options.include_usage`), so every streamed call recorded null tokens/cost. Since aiSteps and agent tasks stream by default, that was every real call.
+- **`categoryWorkers` pinned work nodes to mock** — see §4.
+- **`Retry-After` ignored, budget 3 attempts / ~3.3s.** The provider states when to retry (as a header, or nested in the body when OpenRouter relays an upstream 429); we guessed instead. Now parsed and honored, capped by `maxMs`, budget 5 attempts / ~15s, tunable via `config.json` `retry`.
+- **An empty response counted as success.** A live node spent 103s on a stream that delivered nothing and was recorded `success` with a 0-byte artifact — then fed that emptiness downstream as context. A stream ending with no content *and* no `finish_reason` is now a transient failure; the runner and executor fail a node whose model returns nothing.
+
+**Observability added, because the acceptance was otherwise unverifiable:** `model_retry` logs every backoff (a recovered call reported only a count; an exhausted one just threw), and `node_start` now records `protocol: native | text | none` — the log said *that* tools were called, never *how*, so the two paths were indistinguishable after the fact.
+
+**Known gap:** native tool-calling is OpenRouter-only (`toolProtocol()`); Anthropic always takes the text path, and Anthropic has no key field in Settings, so its only BYO-key route is `ANTHROPIC_API_KEY`.
+
 ## 5. Sub-agents & the orchestrator hierarchy — [PARTIAL] → [PLANNED]
 
 In this app, **a node is an agent.** Spawning a node and spawning an agent are the same act: the new node/agent gets its own *limited context* scoped to its single task.
@@ -233,7 +254,8 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | Mid-run node materialization | BUILT | `plan-eval` + orchestrator spawn nodes |
 | Orchestrator node (spawns children, inline sub-walk) | PARTIAL | Seed of sub-agents; no depth/budget guard yet |
 | Agent loop + tool registry (native + text) | BUILT | `write_file`, `create_task`, `write_task_md` |
-| Adapters (mock/anthropic/openrouter), retry/backoff | BUILT | Default = mock |
+| Adapters (mock/anthropic/openrouter), retry/backoff | BUILT | Default = mock; contract pinned + validated live (§4.1) |
+| BYO-key real-model path | BUILT | V1 task 11 — both acceptance flows pass on a real model (§4.1) |
 | Streaming (`onText` contract) | BUILT | Runner + executor consume it; live panel in the right column (§6) |
 | Retrospectives + `historyDigest` | BUILT | One-way into planning today |
 | Approval gates + restart resume | BUILT | Completed steps survive a crash; explicit Resume (§10). Pending *tool* gates still abandon |

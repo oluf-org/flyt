@@ -96,7 +96,7 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 ### D18 — Business model: BYO key now, capped-key subscription at ship
 **Context.** Users add their own OpenRouter/Anthropic key today.
 **Decision.** Keep **bring-your-own-key** near term. At ship, a **~$20/month subscription issues a key capped at ~$20 of OpenRouter spend** — bounding inference cost by construction.
-**Status.** Provisional (mechanics Open — Q-P4).
+**Status.** Provisional (mechanics Open — Q-P4). The BYO-key path itself is **validated** (V1 task 11): both acceptance flows run end to end on a real OpenRouter key, and five bugs that had made it silently unreliable are fixed — see `DESIGN-SPEC.md` §4.1. Anthropic BYO-key remains env-var-only (no Settings field).
 
 ### D19 — Distribution is not on the radar
 **Context.** No packaging config; version `0.1.0`.
