@@ -458,3 +458,16 @@ test('an empty stream is retried, and recovers', async () => {
   assert.equal(r.text, 'real answer');
   assert.equal(r.retries, 1);
 });
+
+// The audit log said THAT tools were called, never HOW — so after a live run
+// the native and text paths were indistinguishable and "did native run?" could
+// only be inferred from the model catalogue (V1 task 11).
+test('toolProtocol names the path a worker will take', async () => {
+  const { toolProtocol } = await import('../core/agent.js');
+  assert.equal(toolProtocol({ provider: 'openrouter', supportsTools: true }), 'native');
+  assert.equal(toolProtocol({ provider: 'openrouter', supportsTools: false }), 'text');
+  assert.equal(toolProtocol({ provider: 'openrouter' }), 'text', 'unknown capability falls back to text');
+  assert.equal(toolProtocol({ provider: 'anthropic', supportsTools: true }), 'text', 'native is openrouter-only today');
+  assert.equal(toolProtocol({ provider: 'mock' }), 'text');
+  assert.equal(toolProtocol(undefined), 'text');
+});

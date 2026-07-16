@@ -466,3 +466,21 @@ test('an agentTask whose agent returns an empty response fails instead of succee
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'failed');
   assert.equal(store.readTasks(runId).tasks[0].status, 'failed');
 });
+
+// node_start must record which tool protocol the executor used, so a real run
+// is auditable after the fact rather than inferred (V1 task 11).
+test('the executor logs which tool protocol it used', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(() => 'done');
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'b' }),
+     node('w', 'agentTask', { title: 'W', goal: 'g' }),
+     node('out', 'output')],
+    [edge('in', 'w'), edge('w', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  const start = readLog(store, runId).find(e => e.event === 'node_start' && e.node === 'executor:task-1');
+  // The 'script' test provider isn't openrouter, so it takes the text path.
+  assert.equal(start.protocol, 'text');
+});

@@ -1,7 +1,7 @@
 // Executor node: runs ONE task from tasks.json -> tasks/<id>.md + per-task
 // retrospective. Sequential orchestration lives in pipeline.js; this module
 // only knows how to execute a single self-describing task from file state.
-import { runAgent } from '../agent.js';
+import { runAgent, toolProtocol } from '../agent.js';
 import { getTools } from '../tools/index.js';
 import { makeRetrospective } from '../retrospective.js';
 import { Workspace } from '../workspace.js';
@@ -20,7 +20,26 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   // provider from the runtime config at call time.
   const apiKey = config.providerKeys?.[task.worker.provider];
 
-  store.appendLog(runId, { event: 'node_start', node: `executor:${taskId}`, worker: task.worker });
+  // Native tool-calling is available per MODEL, learned from the provider's
+  // catalogue (settings.modelCapabilities); anything unknown falls back to the
+  // text protocol, which works everywhere.
+  const worker = { ...task.worker };
+  if (worker.provider === 'openrouter') {
+    worker.supportsTools = Boolean(config.modelCapabilities?.[worker.model]);
+  }
+
+  // Toolset: everything in the registry unless the task names a subset
+  // (task.tools: string[]).
+  const tools = getTools(task.tools);
+
+  // `protocol` records HOW this agent will call its tools. The log said only
+  // that tools were called, so the native and text paths were indistinguishable
+  // after the fact and "did native actually run?" could only be inferred from
+  // the catalogue (V1 task 11).
+  store.appendLog(runId, {
+    event: 'node_start', node: `executor:${taskId}`, worker: task.worker,
+    protocol: tools.length ? toolProtocol(worker) : 'none'
+  });
 
   // Assemble the task's full context from files — no hidden state.
   const contextParts = [];
@@ -44,10 +63,6 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     }
   }
 
-  // Toolset: everything in the registry unless the task names a subset
-  // (task.tools: string[]). The agent loop picks native vs text protocol
-  // per worker capability.
-  const tools = getTools(task.tools);
   // Bind the run's target workspace (V1 task 1) so file tools act on the real
   // project. A missing/moved folder degrades gracefully: the file tools fall
   // back to the run's own workspace sandbox instead of failing the task.
@@ -70,11 +85,6 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
       model: config.workers?.executor?.model ?? task.worker.model
     }
   };
-  const worker = { ...task.worker };
-  if (worker.provider === 'openrouter') {
-    worker.supportsTools = Boolean(config.modelCapabilities?.[worker.model]);
-  }
-
   // Skills the task carries (from its node's template) resolved against the
   // bound project's .llmflow/skills/ (V1 task 10). Logged either way, so an
   // attached-but-absent skill is distinguishable in the audit log from one

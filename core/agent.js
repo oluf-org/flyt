@@ -34,13 +34,20 @@ async function gateToolCall(ctx, name, args) {
 // across the whole loop. A consumer mirroring it into a file therefore shows
 // the current turn — including the ```tool block the agent is about to run —
 // and must treat its own write after runAgent returns as the authoritative one.
+// Which of the two protocols a worker will use for tools. Exported so callers
+// can record it: the audit log said THAT an agent called tools but never HOW,
+// so the two paths were indistinguishable after the fact and "did the native
+// path actually run?" could only be inferred from the model catalogue.
+export const toolProtocol = worker =>
+  (worker?.provider === 'openrouter' && worker?.supportsTools) ? 'native' : 'text';
+
 export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, retry }) {
   const started = Date.now();
   if (!tools.length) {
     const r = await callModel({ ...worker, apiKey, system, prompt, onText, onRetry, retry });
     return { text: r.text, toolCalls: [], usage: r.usage, durationMs: r.durationMs };
   }
-  const native = worker.provider === 'openrouter' && worker.supportsTools;
+  const native = toolProtocol(worker) === 'native';
   const out = native
     ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry })
     : await textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry });
