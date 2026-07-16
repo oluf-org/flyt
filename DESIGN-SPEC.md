@@ -79,7 +79,9 @@ Design intent: make context strategy *data* (a node output), consistent with the
 
 ## 4. Model routing (the multi-model core) — [PARTIAL] → [PLANNED]
 
-**Today:** routing is **static**. `config.json` sets a default `executor` worker and `categoryWorkers` per category (Code design, Code general, documentation, Test-creation). A node template can set its own worker; instances can override per workflow. Everything currently defaults to the `mock` provider.
+**Today:** routing is **static**, resolved by `resolveWorker()`: an explicit worker on the node wins, then `config.categoryWorkers[category]`, then `config.workers.executor`. A node template can set its own worker; instances can override per workflow. The default `executor` is `mock`, and Settings overrides it.
+
+`categoryWorkers` **ships empty on purpose** (V1 task 11). It is read from `config.json` only and is *not* overridable from Settings, so anything it names is pinned regardless of the user's key — and it shipped mapping all four categories to `mock`. That meant a user who saved a real key and pointed the executor at a real model still had every *categorised* node — including `test-creation-step`, the only tool-using `agentTask` template — answer with "(mock output)": the BYO-key path was silently broken for exactly the templates that do the coding work. Empty means categories fall through to the executor, so one Settings change reaches the whole app. The mechanism is unchanged (V1 keeps static category routing — see `categoryWorkersExample`).
 
 **[PLANNED] — Routing as policy over a capability matrix.** A matrix maps *(task type / language / complexity / cost ceiling)* → preferred model, seeded and refined by the ranking data from `PRODUCT-SPEC.md` §7.2. Routing policy:
 1. **Matrix-first (the ~90% case).** Static rules resolve the obvious calls — known-good language, complexity tier, cost ceiling. Fast, no extra model call.

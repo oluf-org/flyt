@@ -48,6 +48,35 @@ test('resolveWorker: falls back to the executor default', () => {
     { provider: 'script', model: 'test-model' });
 });
 
+// The BYO-key trap (V1 task 11). categoryWorkers is read from config.json and
+// is NOT overridable from Settings, so anything it names is pinned for good.
+// It shipped mapping every category to the mock provider, which meant a user
+// who saved a real key and pointed the executor at a real model still had every
+// categorised work node — including test-creation-step, the only tool-using
+// agentTask template — silently answer with "(mock output)". Shipping it empty
+// is what makes one Settings change reach the whole app.
+test('resolveWorker: an unmapped category follows the executor, so a real key reaches work nodes', () => {
+  const shipped = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'config.json'), 'utf8'));
+  assert.deepEqual(shipped.categoryWorkers, {},
+    'config.json must not pin categories to a provider: Settings cannot override them');
+
+  const userConfig = { ...shipped, workers: { executor: { provider: 'openrouter', model: 'real/model' } } };
+  for (const category of ['Code design', 'Code general', 'documentation', 'Test-creation']) {
+    assert.deepEqual(resolveWorker(node('x', 'agentTask', { category }), userConfig),
+      { provider: 'openrouter', model: 'real/model' }, `category "${category}" must follow the executor`);
+  }
+});
+
+// The mechanism itself stays (V1 keeps static category routing) — an explicit
+// mapping still wins for anyone who hand-edits config.json.
+test('resolveWorker: an explicitly mapped category still overrides the executor', () => {
+  const config = testConfig({ categoryWorkers: { documentation: { provider: 'x', model: 'cheap' } } });
+  assert.deepEqual(resolveWorker(node('d', 'aiStep', { category: 'documentation' }), config),
+    { provider: 'x', model: 'cheap' });
+  assert.deepEqual(resolveWorker(node('c', 'aiStep', { category: 'Code general' }), config),
+    { provider: 'script', model: 'test-model' });
+});
+
 test('agentTask nodes get their category worker (unified resolution)', async () => {
   const store = makeStore();
   const config = testConfig({ categoryWorkers: { 'Test-creation': { provider: 'script', model: 'cat-model' } } });

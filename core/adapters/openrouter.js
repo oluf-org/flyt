@@ -23,7 +23,16 @@ export async function openrouterAdapter({ model, system, prompt, messages, tools
     ]
   };
   if (tools?.length) body.tools = tools;
-  if (stream) body.stream = true;
+  if (stream) {
+    body.stream = true;
+    // Ask for the trailing usage chunk. A streamed response carries no token
+    // counts unless requested, and this adapter has always read one out of the
+    // stream — so without this every streamed call reported null usage and the
+    // retrospectives that account for tokens quietly recorded nothing. Now that
+    // aiSteps AND agent tasks stream by default (V1 task 8), that was every
+    // real-model call. (OpenAI-compatible; confirm against the live API.)
+    body.stream_options = { include_usage: true };
+  }
 
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',

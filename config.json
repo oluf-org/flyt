@@ -1,14 +1,16 @@
 {
-  "comment": "Committed defaults for worker assignment; settings.json in the app's userData folder overrides these (edit via the in-app Settings panel). Providers: 'mock' (no API key needed), 'anthropic' (needs ANTHROPIC_API_KEY), 'openrouter' (key saved via Settings). The executor worker is the app-wide default used when a node template sets no worker; categoryWorkers apply when a node declares a category (see FLOW_NODES.md).",
+  "comment": "Committed defaults for worker assignment; settings.json in the app's userData folder overrides the executor worker (edit via the in-app Settings panel). Providers: 'mock' (no API key needed), 'anthropic' (key via Settings or ANTHROPIC_API_KEY), 'openrouter' (key saved via Settings). The executor worker is the app-wide default, used when a node template sets no worker of its own.",
   "workers": {
     "executor": { "provider": "mock", "model": "mock-large" }
   },
-  "categoryWorkers": {
-    "Code design": { "provider": "mock", "model": "mock-large" },
-    "Code general": { "provider": "mock", "model": "mock-large" },
-    "documentation": { "provider": "mock", "model": "mock-small" },
-    "Test-creation": { "provider": "mock", "model": "mock-large" }
+
+  "categoryWorkersComment": "Optional per-category model routing: a node declaring a category resolves here before falling back to workers.executor (FLOW_NODES.md). EMPTY on purpose. This map is read from this file only and is NOT overridable from Settings, so whatever it names is pinned: it shipped mapping every category to 'mock', which silently forced each categorised work node onto the mock provider no matter what key the user saved — a real run just produced '(mock output)'. Empty means categories follow the executor worker, so one Settings change points the whole app at a real model. See categoryWorkersExample to pin one deliberately.",
+  "categoryWorkers": {},
+
+  "categoryWorkersExample": {
+    "documentation": { "provider": "openrouter", "model": "some/cheap-model" }
   },
+
   "anthropicExample": {
     "executor": { "provider": "anthropic", "model": "claude-sonnet-5" }
   }

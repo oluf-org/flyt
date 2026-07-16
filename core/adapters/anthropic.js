@@ -1,16 +1,21 @@
 // Anthropic adapter. Uses the raw Messages API via fetch — no SDK needed.
-// Requires ANTHROPIC_API_KEY in the environment.
+//
+// The key follows the BYO-key contract (D18): whatever the caller passes wins,
+// because that is the key the user saved in the app and callModel has always
+// forwarded it. Reading only process.env — as this did — meant a key entered in
+// the app was silently dropped and every Anthropic run failed as unconfigured.
+// ANTHROPIC_API_KEY remains a fallback for running from a shell.
 import { sseEvents } from './openrouter.js';
 
-export async function anthropicAdapter({ model, system, prompt, maxTokens, onText }) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set. Set it or switch config.json to the "mock" provider.');
+export async function anthropicAdapter({ model, system, prompt, maxTokens, apiKey, onText }) {
+  const key = apiKey || process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error('Anthropic API key is not set. Add it in Settings, or set ANTHROPIC_API_KEY.');
 
   const stream = Boolean(onText);
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
-      'x-api-key': apiKey,
+      'x-api-key': key,
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json'
     },
