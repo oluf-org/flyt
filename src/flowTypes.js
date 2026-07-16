@@ -270,6 +270,23 @@ export function nodeSub(node) {
 // Seed catalog for the Node Library — the FLOW_NODES.md standard nodes.
 // core/nodestore.js writes these to nodes/<id>.json on first launch; after
 // that the files are the source of truth and the user can edit them freely.
+//
+// The work templates are agentTasks, not aiSteps (V1 task 12). An aiStep calls
+// the model directly and never enters the agent loop, so it cannot hold a tool
+// at all — which meant the templates that are supposed to DO the work could only
+// emit markdown describing it. The file and bash tools built in V1 tasks 2/3
+// existed but nothing in the library could reach them: out of the box the coding
+// agent could not read a repo or run a test.
+//
+// Tool grants follow what each tool can actually reach:
+//   - read_file / create_file / write_file resolve through Workspace.resolve(),
+//     which confines them to the bound project (traversal and symlink escapes
+//     rejected). Safe to run unattended, which is what the library already did.
+//   - bash is NOT confined — it only *starts* in the workspace and can `cd ..`
+//     (see core/tools/bash.js). Its own guard is the approval gate, so every
+//     template granting it ships approveToolCalls: true. Turn it off per node
+//     for an unattended run — that is D16's "skippable by choice", the right way
+//     round: a default that asks, not a default that acts.
 export const SEED_NODE_TEMPLATES = [
   {
     id: 'plan-start', name: 'Plan', category: null, icon: '▶',
@@ -283,23 +300,32 @@ export const SEED_NODE_TEMPLATES = [
   },
   {
     id: 'code-general-step', name: 'Code (general)', category: 'Code general', icon: '✦',
-    baseType: 'aiStep', role: 'execute',
-    description: 'Straightforward implementation work. Balanced model is usually sufficient.'
+    baseType: 'agentTask', role: 'execute',
+    tools: ['read_file', 'create_file', 'write_file', 'write_task_md'],
+    description: 'Straightforward implementation work: reads the project and writes the code. Balanced model is usually sufficient.'
   },
   {
     id: 'code-design-step', name: 'Code (design)', category: 'Code design', icon: '✦',
-    baseType: 'aiStep', role: 'execute',
-    description: 'Architecture, interfaces, data models. Prefer a stronger model.'
+    baseType: 'agentTask', role: 'execute',
+    // Read-only by design: a design step explores the codebase and produces a
+    // design, it does not edit. Holding no destructive tool also keeps it
+    // ungated, so design nodes still fan out in parallel.
+    tools: ['read_file', 'write_task_md'],
+    description: 'Architecture, interfaces, data models: reads the project, produces a design. Prefer a stronger model.'
   },
   {
     id: 'documentation-step', name: 'Documentation', category: 'documentation', icon: '✦',
-    baseType: 'aiStep', role: 'execute',
-    description: 'Docs, README sections, comments, usage examples. Lighter/faster model often works.'
+    baseType: 'agentTask', role: 'execute',
+    tools: ['read_file', 'create_file', 'write_file'],
+    description: 'Docs, README sections, usage examples: reads the code, writes the docs. Lighter/faster model often works.'
   },
   {
     id: 'test-creation-step', name: 'Test creation', category: 'Test-creation', icon: '☑',
-    baseType: 'agentTask', role: 'execute', tools: [...AGENT_TOOLS],
-    description: 'Create or extend tests. Full agent executor with tools.'
+    baseType: 'agentTask', role: 'execute',
+    tools: ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md'],
+    // The one template that can run commands, so the one that ships gated.
+    approveToolCalls: true,
+    description: 'Create or extend tests, and run them. Can execute shell commands, so it asks before each destructive call — untick to run unattended.'
   },
   {
     id: 'step-eval', name: 'Step evaluation', category: null, icon: '⚖',

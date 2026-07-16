@@ -909,6 +909,18 @@ export class FlowRunner {
   // output (nodes/<id>.md), a task output (tasks/<id>.md). Null = not found.
   resolveContextFile(runId, rawPath) {
     const p = String(rawPath).trim();
+    // The BOUND PROJECT first. When a run is pointed at a real repo, a planner
+    // declaring "Context files: src/types.ts" means that repo's file. This
+    // resolved only against the run's own sandbox, so every contextSpec naming a
+    // real project file came back [NOT FOUND] — the minimal-context mechanism
+    // couldn't see the project it was aimed at (V1 task 12).
+    const ws = this.workspaceFor(runId);
+    if (ws) {
+      try {
+        const c = ws.readFile(p);
+        if (c != null) return { content: c, source: `${p} (project)` };
+      } catch { /* escapes the project root — fall through to the other roots */ }
+    }
     try {
       const c = this.store.readWorkspaceFile(runId, p);
       if (c != null) return { content: c, source: `workspace/${p}` };

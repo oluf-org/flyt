@@ -10,5 +10,6 @@
   "instructions": "",
   "tools": null,
   "skills": [],
-  "requiresApproval": false
+  "requiresApproval": false,
+  "approveToolCalls": false
 }

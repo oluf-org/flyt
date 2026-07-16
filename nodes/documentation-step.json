@@ -1,14 +1,19 @@
 {
   "id": "documentation-step",
   "name": "Documentation",
-  "description": "Docs, README sections, comments, usage examples. Lighter/faster model often works.",
+  "description": "Docs, README sections, usage examples: reads the code, writes the docs. Lighter/faster model often works.",
   "category": "documentation",
   "icon": "✦",
-  "baseType": "aiStep",
+  "baseType": "agentTask",
   "role": "execute",
   "worker": null,
   "instructions": "",
-  "tools": null,
+  "tools": [
+    "read_file",
+    "create_file",
+    "write_file"
+  ],
   "skills": [],
-  "requiresApproval": false
+  "requiresApproval": false,
+  "approveToolCalls": false
 }

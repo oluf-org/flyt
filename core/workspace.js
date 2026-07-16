@@ -52,6 +52,15 @@ export class Workspace {
     writeJson(this.configPath, cfg);
   }
 
+  // Read a confined file from the bound project, or null when it isn't there.
+  // Mirrors RunStore.readWorkspaceFile, but against the REAL project rather
+  // than the run's sandbox — which is what a contextSpec naming "src/types.ts"
+  // has always meant (V1 task 12). Throws only when the path escapes the root.
+  readFile(relPath) {
+    const p = this.resolve(relPath);
+    return fs.existsSync(p) && fs.statSync(p).isFile() ? fs.readFileSync(p, 'utf8') : null;
+  }
+
   // Confined path resolution against the workspace root: rejects traversal
   // (..), absolute paths, drive-letter escapes, null bytes, AND symlink escapes
   // (a link planted inside the workspace that points outside it). Every

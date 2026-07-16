@@ -41,6 +41,18 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     protocol: tools.length ? toolProtocol(worker) : 'none'
   });
 
+  // Bind the run's target workspace (V1 task 1) so file tools act on the real
+  // project. A missing/moved folder degrades gracefully: the file tools fall
+  // back to the run's own workspace sandbox instead of failing the task.
+  // Bound BEFORE context assembly, because a declared input may name a file in
+  // that project (see below).
+  let workspace = null;
+  const wsPath = store.readMeta(runId)?.workspace;
+  if (wsPath) {
+    try { workspace = new Workspace(wsPath); }
+    catch (err) { store.appendLog(runId, { event: 'workspace_unavailable', path: wsPath, error: String(err?.message ?? err) }); }
+  }
+
   // Assemble the task's full context from files — no hidden state.
   const contextParts = [];
   for (const input of task.inputs) {
@@ -48,10 +60,16 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     else if (input === 'plan.md') contextParts.push(`--- plan.md ---\n${store.readPlan(runId)}`);
     else {
       const m = input.match(/task-\d+/);
-      // Not a task reference: flow runs may name an upstream flow-node id
-      // whose output lives in nodes/<id>.md, or a contextSpec file in the
-      // run's workspace/.
+      // Not a task reference: flow runs may name an upstream flow-node id whose
+      // output lives in nodes/<id>.md, or a contextSpec file — which means a
+      // file in the BOUND PROJECT first, and only then the run's own sandbox.
+      // Reading just the sandbox meant a task declaring "src/types.ts" was told
+      // it did not exist while the repo it was bound to held exactly that file
+      // (V1 task 12).
       let out = m ? store.readTaskOutput(runId, m[0]) : store.readNodeOutput?.(runId, input);
+      if (out == null && !m && workspace) {
+        try { out = workspace.readFile(input); } catch { /* escapes the project root */ }
+      }
       if (out == null && !m) {
         try { out = store.readWorkspaceFile?.(runId, input); } catch { /* escapes workspace */ }
       }
@@ -61,16 +79,6 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
         store.appendLog(runId, { event: 'context_input_missing', node: `executor:${taskId}`, input });
       }
     }
-  }
-
-  // Bind the run's target workspace (V1 task 1) so file tools act on the real
-  // project. A missing/moved folder degrades gracefully: the file tools fall
-  // back to the run's own workspace sandbox instead of failing the task.
-  let workspace = null;
-  const wsPath = store.readMeta(runId)?.workspace;
-  if (wsPath) {
-    try { workspace = new Workspace(wsPath); }
-    catch (err) { store.appendLog(runId, { event: 'workspace_unavailable', path: wsPath, error: String(err?.message ?? err) }); }
   }
   const ctx = {
     store, runId, taskId, workspace,

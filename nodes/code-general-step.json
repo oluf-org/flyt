@@ -1,14 +1,20 @@
 {
   "id": "code-general-step",
   "name": "Code (general)",
-  "description": "Straightforward implementation work. Balanced model is usually sufficient.",
+  "description": "Straightforward implementation work: reads the project and writes the code. Balanced model is usually sufficient.",
   "category": "Code general",
   "icon": "✦",
-  "baseType": "aiStep",
+  "baseType": "agentTask",
   "role": "execute",
   "worker": null,
   "instructions": "",
-  "tools": null,
+  "tools": [
+    "read_file",
+    "create_file",
+    "write_file",
+    "write_task_md"
+  ],
   "skills": [],
-  "requiresApproval": false
+  "requiresApproval": false,
+  "approveToolCalls": false
 }

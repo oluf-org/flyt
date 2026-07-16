@@ -202,3 +202,77 @@ test('the same template picks up whichever project it is bound to', async () => 
   // Never both in one prompt: each run sees only its own project's expertise.
   assert.ok(!seen.some(s => s.includes('ALPHA') && s.includes('BETA')));
 });
+
+// --- contextSpec must read the BOUND PROJECT (V1 task 12) ---
+
+// A planner declaring "Context files: src/types.ts" means the file in the repo
+// the run is pointed at. Resolution used to consult only runs/<id>/workspace/,
+// so every contextSpec naming a real project file came back [NOT FOUND] — the
+// minimal-context mechanism could not see the project it was aimed at.
+test('an aiStep contextSpec reads the file out of the bound project', async () => {
+  const store = makeStore();
+  const ws = new Workspace(tmpDir()).ensure();
+  fs.mkdirSync(path.join(ws.root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(ws.root, 'src', 'types.ts'), 'export interface AppConfig { PORT: number }', 'utf8');
+
+  const runner = new FlowRunner(store, testConfig());
+  let sawPrompt = null;
+  setScript(({ prompt }) => { sawPrompt = prompt; return 'done'; });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('step', 'aiStep', {
+       role: 'execute',
+       contextSpec: { files: [{ path: 'src/types.ts', description: 'the config interface' }] }
+     }),
+     node('out', 'output')],
+    [edge('in', 'step'), edge('step', 'out')]);
+  const runId = runner.start(flow, { workspace: ws.root });
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+
+  assert.match(sawPrompt, /interface AppConfig/, 'the project file must reach the model');
+  assert.doesNotMatch(sawPrompt, /NOT FOUND/);
+});
+
+test('a contextSpec path that escapes the project is not resolved', async () => {
+  const store = makeStore();
+  const ws = new Workspace(tmpDir()).ensure();
+  const secret = path.join(ws.root, '..', 'outside-secret.txt');
+  fs.writeFileSync(secret, 'TOP SECRET', 'utf8');
+  try {
+    const runner = new FlowRunner(store, testConfig());
+    let sawPrompt = null;
+    setScript(({ prompt }) => { sawPrompt = prompt; return 'done'; });
+    const flow = makeFlow(
+      [node('in', 'input', { text: 'b' }),
+       node('step', 'aiStep', { role: 'execute', contextSpec: { files: [{ path: '../outside-secret.txt' }] } }),
+       node('out', 'output')],
+      [edge('in', 'step'), edge('step', 'out')]);
+    const runId = runner.start(flow, { workspace: ws.root });
+    assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+    assert.doesNotMatch(sawPrompt, /TOP SECRET/, 'confinement must hold for context reads too');
+    assert.match(sawPrompt, /NOT FOUND/);
+  } finally { fs.rmSync(secret, { force: true }); }
+});
+
+// The executor resolves a task's declared inputs the same way, and had the same
+// blind spot — it only ever consulted the run sandbox.
+test('an agentTask declared input reads the file out of the bound project', async () => {
+  const store = makeStore();
+  const ws = new Workspace(tmpDir()).ensure();
+  fs.writeFileSync(path.join(ws.root, 'STYLE.md'), 'House rule: tabs, never spaces.', 'utf8');
+
+  const runner = new FlowRunner(store, testConfig());
+  let sawPrompt = null;
+  setScript(({ prompt }) => { sawPrompt = prompt; return 'Task complete.'; });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'agentTask', {
+       title: 'W', goal: 'g',
+       contextSpec: { files: [{ path: 'STYLE.md', description: 'house style' }] }
+     }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'out')]);
+  const runId = runner.start(flow, { workspace: ws.root });
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.match(sawPrompt, /tabs, never spaces/);
+});

@@ -65,7 +65,7 @@ test('resolveFlow merges overrides over template defaults; structural nodes pass
   const r = resolveFlow(flow, [{ ...tpl, instructions: 'template guidance' }]);
   const [inn, a, b] = r.nodes;
   assert.equal(inn.type, 'input'); // untouched
-  assert.equal(a.type, 'aiStep');
+  assert.equal(a.type, tpl.baseType); // whatever the template declares, not a hardcoded shape
   assert.equal(a.data.title, 'Code (general)');
   assert.equal(a.data.category, 'Code general');
   assert.equal(a.data.requiresApproval, false);
@@ -140,9 +140,13 @@ test('default pipeline parity: user input, post-planning gate, retrospectives, h
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
 
   // The generated node ran, the output collected, retrospectives emitted.
-  assert.ok(store.readNodeOutput(runId, 'gen-docs'));
+  // documentation-step is an agentTask (V1 task 12), so its work IS a task: the
+  // output lands in tasks/<id>.md and the retrospective is executor-<taskId>.
+  const docsTask = store.readTasks(runId).tasks.find(t => t.title === 'Docs');
+  assert.ok(docsTask, 'the generated documentation node queued a task');
+  assert.ok(store.readTaskOutput(runId, docsTask.id), 'the generated node produced output');
   const retros = store.readRetrospectives(runId);
-  for (const id of ['plan', 'route', 'verify', 'gen-docs']) {
+  for (const id of ['plan', 'route', 'verify', `executor-${docsTask.id}`]) {
     assert.ok(retros[id], `retrospective for ${id}`);
   }
   assert.ok(fs.existsSync(path.join(store.runDir(runId), 'result.md')));
@@ -184,7 +188,9 @@ test('template + override instructions reach the model prompt; agentTask templat
   const workPrompt = prompts.find(p => p.includes('TPL-GUIDANCE')) ?? '';
   assert.match(workPrompt, /TPL-GUIDANCE[\s\S]*OV-GUIDANCE/);
   // The agentTask instance became a real executor task with the tool subset.
-  const task = store.readTasks(runId).tasks[0];
+  // Found by name, not index: code-general-step is an agentTask too now and
+  // queues its own task first (V1 task 12).
+  const task = store.readTasks(runId).tasks.find(t => t.title === 'Test creation');
   assert.deepEqual(task.tools, ['write_file']);
   assert.equal(store.readMeta(runId).nodeStatus.tests, 'done');
 });

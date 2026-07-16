@@ -1,7 +1,7 @@
 {
   "id": "test-creation-step",
   "name": "Test creation",
-  "description": "Create or extend tests. Full agent executor with tools.",
+  "description": "Create or extend tests, and run them. Can execute shell commands, so it asks before each destructive call — untick to run unattended.",
   "category": "Test-creation",
   "icon": "☑",
   "baseType": "agentTask",
@@ -9,10 +9,14 @@
   "worker": null,
   "instructions": "",
   "tools": [
+    "read_file",
+    "create_file",
     "write_file",
+    "bash",
     "create_task",
     "write_task_md"
   ],
   "skills": [],
-  "requiresApproval": false
+  "requiresApproval": false,
+  "approveToolCalls": true
 }
