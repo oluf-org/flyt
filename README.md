@@ -81,10 +81,19 @@ the UI), reproducible, and resumable — approval gates survive an app restart.
    defines *what*. No hand-written prompts in templates.
 4. Every model call is logged (`log.jsonl`) with worker, node, and outcome.
 
+### Skills — per-project expertise
+
+A node template attaches skills **by name**; the bound project supplies them as
+`.llmflow/skills/<name>.md`, committed alongside its code. At run time each name
+is resolved against the run's workspace and appended to that node's prompt, so
+one template ("Code (general)", say) follows whichever project it is pointed at.
+A name the project doesn't define is skipped and recorded in `log.jsonl`
+(`skills_injected` / `skill_missing`) — never silently. Skills add instructions
+only; what an agent may *do* stays governed by the template's tool allowlist and
+the approval gates.
+
 ### Deliberate extension points (not built yet)
 
-- Skills attached to node templates are stored and displayed but not yet
-  injected into execution.
 - Model registry / more providers (`core/adapters/index.js#registerProvider`)
 - Adaptive re-planning from retrospectives (write a module that reads
   `retrospectives/` and rewrites `plan.md` / `tasks.json`)

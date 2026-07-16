@@ -23,6 +23,11 @@ export class Workspace {
 
   get configDir() { return path.join(this.root, '.llmflow'); }
   get configPath() { return path.join(this.configDir, 'config.json'); }
+  // Skills a node template can attach by name (core/skills.js). Not created by
+  // ensure(): an empty directory wouldn't survive a commit anyway, and this
+  // shouldn't litter every repo it binds to. Projects create it when they have
+  // something to say.
+  get skillsDir() { return path.join(this.configDir, 'skills'); }
 
   // Create .llmflow/ (+ a default config.json) on first bind; idempotent, so
   // re-binding an already-configured project leaves its config untouched.

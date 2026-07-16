@@ -150,9 +150,15 @@ export default function NodesPage({ templates, selectedId, models, onChanged, on
 
           <section>
             <h3>Skills — comma-separated (optional)</h3>
+            <div className="settings-hint">
+              Expertise the <em>bound project</em> supplies. Each name loads{' '}
+              <span className="mono">.llmflow/skills/&lt;name&gt;.md</span> from the run's workspace and
+              appends it to this node's prompt — so the same template follows each project's own
+              conventions. A name with no file is skipped and recorded in the run log.
+            </div>
             <input
               value={(draft.skills ?? []).join(', ')}
-              placeholder="e.g. refactoring, api-design"
+              placeholder="e.g. house-style, api-design"
               onChange={e => set({ skills: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
             />
           </section>

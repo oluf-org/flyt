@@ -143,6 +143,27 @@ D4 makes the canvas the **live transparency view of execution**. The run view is
 
 ---
 
+## 6.2 Skills — [BUILT] (V1 task 10)
+
+**Was:** `skills: string[]` was plumbed the whole way — `nodes/*.json` → `normalizeTemplate` → `resolveInstance` → `node.data.skills` → the run's `flow.json`, editable on the Nodes page and in the DSL — and then read by nothing. The last mile was missing, but so was the feature itself: a skill was a bare *name* with no body, no store, and no definition anywhere.
+
+**The design.** A template attaches a skill **by name**; the **bound project** supplies it as `.llmflow/skills/<name>.md` (D15 — per-project config is version-controllable and travels with the repo). That indirection is the point: templates and workflows stay workspace-agnostic (Q-D5), while what they *do* adapts per project. The same "Code (general)" node follows this repo's conventions because this repo committed them next to its code. The same flow run against two projects behaves differently — there's a test for exactly that.
+
+**Assembly** (`core/skills.js`): `loadSkills(workspace, names)` → `{ found, missing }`; `withSkillsSection(system, found)` appends a labelled block to the **system** prompt (skills are *how*, and the base prompt is kept, not replaced). Two call sites, because there are two execution paths:
+- `aiStep` / `orchestrator` → `FlowRunner.applySkills()` resolves against `meta.workspace`.
+- `agentTask` → the skill names ride on the **task** (like `tools` and the approval gate), because the executor runs from `tasks.json` alone and never sees the node; `runExecutorTask` resolves them against the workspace it already binds.
+
+**Rules that matter:**
+- **Instructions only, never tools.** A skill cannot widen the tool set: the template's `tools` allowlist plus the approval gates are the safety envelope (V1 task 4), and expertise that could quietly expand what an agent may *do* would undermine it.
+- **Never silent.** Every hit logs `skills_injected`, every miss logs `skill_missing` **with a reason** (no workspace bound / no such file / invalid name). A skill doing nothing was the original bug, so an absent skill must be distinguishable in the audit log from one that applied.
+- **Never fatal.** A missing skill degrades the node (it runs without that expertise); it does not fail the run.
+- **Confined twice.** Skill names come from templates and flow YAML — i.e. from users — and are interpolated into a path, so they are validated against `^[a-zA-Z0-9_-]+$` *and* resolved through `Workspace.resolve()` (which also catches symlink escapes).
+- An **empty** skill file counts as missing rather than as silent success.
+
+`.llmflow/skills/` is deliberately **not** created by `Workspace.ensure()`: an empty directory wouldn't survive a commit, and binding shouldn't litter every repo it touches.
+
+---
+
 ## 7. The Toolbox — [PARTIAL] → [PLANNED]
 
 **Today [PARTIAL]:** a real tool registry exists (`core/tools/index.js`): a tool is `{ name, description, parameters (JSON Schema), run(args, ctx) }`; `ctx = { store, runId, taskId, defaultWorker }` gives sandboxed access to the run's files; every call is validated and logged to `log.jsonl`. Registered tools:
@@ -201,6 +222,7 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 |---|---|---|
 | File-based state, RunStore/NodeStore/FlowStore | BUILT | Single source of truth |
 | Node Library + Nodes page (9 templates) | BUILT | Template/instance/override model |
+| Template `skills` injected into execution | BUILT | V1 task 10 — project supplies `.llmflow/skills/<name>.md` (§6.2) |
 | Canvas (React Flow), Inspector, run panel, Settings | BUILT | Canvas is authoring + run view |
 | Run view mode (header, live panel, spawned tasks, outcome) | BUILT | V1 task 9 — see §6.1 |
 | Flow DSL (`.flow.yaml`), lint/parse/serialize/migrate/CLI | BUILT | See `FLOW_LANG.md` |

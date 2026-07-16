@@ -29,6 +29,8 @@
 import { callModel } from './adapters/index.js';
 import { makeRetrospective } from './retrospective.js';
 import { runExecutorTask } from './nodes/executor.js';
+import { Workspace } from './workspace.js';
+import { loadSkills, withSkillsSection } from './skills.js';
 import { createWriteLedger } from './writeLedger.js';
 import { executeTool } from './tools/index.js';
 import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, extractJson } from './planEval.js';
@@ -235,6 +237,32 @@ export class FlowRunner {
       write(textSoFar);
       this.notify(runId);
     };
+  }
+
+  // The run's bound project, or null when it has none / the folder is gone.
+  // Never throws: a missing workspace degrades the run, it doesn't kill it.
+  workspaceFor(runId) {
+    const p = this.store.readMeta(runId)?.workspace;
+    if (!p) return null;
+    try { return new Workspace(p); }
+    catch { return null; }
+  }
+
+  // Attach a node's template-declared skills to its system prompt, resolved
+  // from the bound project (V1 task 10, core/skills.js). Logged either way:
+  // skills silently doing nothing was the original bug, so an attached skill
+  // that couldn't be found has to be visible in the audit log rather than
+  // being indistinguishable from one that worked.
+  applySkills(runId, nodeId, system, names) {
+    if (!names?.length) return system;
+    const { found, missing } = loadSkills(this.workspaceFor(runId), names);
+    if (found.length) {
+      this.store.appendLog(runId, { event: 'skills_injected', node: nodeId, skills: found.map(s => s.name) });
+    }
+    for (const m of missing) {
+      this.store.appendLog(runId, { event: 'skill_missing', node: nodeId, skill: m.name, reason: m.reason });
+    }
+    return withSkillsSection(system, found);
   }
 
   // Start walking a flow, tracking liveness for its whole lifetime — including
@@ -973,6 +1001,10 @@ export class FlowRunner {
         // Tool availability comes from the node template (overridable per
         // workflow); undefined = the full registry.
         ...(Array.isArray(node.data?.tools) ? { tools: node.data.tools } : {}),
+        // Skills ride on the task for the same reason tools do: the executor
+        // runs from tasks.json alone and never sees the node. Resolved against
+        // the bound project at execution time, not here (V1 task 10).
+        ...(node.data?.skills?.length ? { skills: node.data.skills } : {}),
         // The gate travels with the task, not the node: create_task copies it
         // onto anything this task spawns, so delegated work can't slip past the
         // approval the node asked for (see gateFor in runPendingTasks).
@@ -1000,7 +1032,9 @@ export class FlowRunner {
         event: 'node_start', node: node.id, type: 'aiStep', role,
         worker: { provider: worker.provider, model: worker.model }
       });
-      const system = node.data?.system?.trim() || DEFAULT_SYSTEM[role] || DEFAULT_SYSTEM.custom;
+      const system = this.applySkills(runId, node.id,
+        node.data?.system?.trim() || DEFAULT_SYSTEM[role] || DEFAULT_SYSTEM.custom,
+        node.data?.skills);
       const parts = this.upstreamContext(runId, flow, node, taskIdByNode);
       const retryGuidance = this.store.readNodeOutput(runId, `retry-for-${node.id}`);
       // Planning roles learn from prior runs' retrospectives (historyDigest),
@@ -1184,7 +1218,9 @@ export class FlowRunner {
     // reused — the planning call is skipped and unfinished children re-run.
     let children = flow.nodes.filter(n => n.data?.managedBy === node.id);
     if (!children.length) {
-      const system = node.data?.system?.trim() || DEFAULT_SYSTEM.orchestrate;
+      const system = this.applySkills(runId, node.id,
+        node.data?.system?.trim() || DEFAULT_SYSTEM.orchestrate,
+        node.data?.skills);
       const parts = this.upstreamContext(runId, flow, node, opts.taskIdByNode);
       const userMsg = [
         `USER PROMPT:\n${this.store.readPrompt(runId)}`,

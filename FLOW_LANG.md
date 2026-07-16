@@ -65,6 +65,11 @@ Template instances (`use:`) accept these overrides: `title`, `worker`
 `category`, `contextSpec`, `skills`, and — on agentTask templates only —
 `tools` (registry: `write_file`, `create_task`, `write_task_md`).
 
+`skills` names expertise the **bound project** supplies as
+`.llmflow/skills/<name>.md`; it is appended to that node's prompt at run time,
+so the same flow adapts to whichever project it runs against. See
+`DESIGN-SPEC.md` §6.2.
+
 Raw nodes (`type:`) are the structural/legacy shape: `input`, `output`,
 `aiStep`, `agentTask`, `orchestrator`, with their data fields flattened
 (`role`, `system`, `text`, `goal`, `worker`, ...). Prefer templates; raw

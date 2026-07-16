@@ -47,7 +47,7 @@ A node template defines:
 - **Worker (provider + model)** — which model runs it.
 - **Optional extra instructions** — short guidance appended to the auto-generated prompt.
 - **Tool availability** — which agent tools (write_file, create_task, …) the node may use.
-- **Skills** — optional skills/capabilities attached to the node.
+- **Skills** — reusable expertise attached to the node *by name*; the bound project supplies the content as `.llmflow/skills/<name>.md`. The template says which expertise it wants, the project says what that means here.
 
 **Crucially, templates do not contain hand-written prompts.** The model generates its own prompt from the task description and upstream context. The template constrains *how* (model, tools, instructions, skills), the task defines *what*.
 
@@ -103,7 +103,7 @@ All six steps landed on 2026-07-14 (branch `flow-builder`):
 5. **Default pipeline as workflow** ✅ — shipped as `flows/default-pipeline.flow.yaml` (User Input → Plan → gated Plan evaluation → Final evaluation → Output) with parity verified in tests (post-planning gate, retrospectives, historyDigest); `core/pipeline.js` and the read-only builtin emulation are deleted.
 6. **Cleanup** ✅ — dual-mode branching removed from `src/App.jsx`; README/GOALS/FLOW_NODES updated.
 
-Remaining known gap: template `skills` are stored/edited but not yet injected into execution.
+Template `skills` are injected into execution as of V1 task 10 — the bound project supplies each one as `.llmflow/skills/<name>.md`, so a template names the expertise it wants and each repo answers with its own. See `DESIGN-SPEC.md` §6.2.
 
 ---
 

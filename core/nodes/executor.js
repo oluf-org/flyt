@@ -5,6 +5,7 @@ import { runAgent } from '../agent.js';
 import { getTools } from '../tools/index.js';
 import { makeRetrospective } from '../retrospective.js';
 import { Workspace } from '../workspace.js';
+import { loadSkills, withSkillsSection } from '../skills.js';
 
 // onText (optional): the caller's streaming sink for partial model output (V1
 // task 8). Forwarded to the agent loop untouched — where the partial text is
@@ -73,13 +74,25 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     worker.supportsTools = Boolean(config.modelCapabilities?.[worker.model]);
   }
 
-  const system = [
+  // Skills the task carries (from its node's template) resolved against the
+  // bound project's .llmflow/skills/ (V1 task 10). Logged either way, so an
+  // attached-but-absent skill is distinguishable in the audit log from one
+  // that applied — a skill that silently did nothing was the original bug.
+  const { found: skills, missing: missingSkills } = loadSkills(workspace, task.skills);
+  if (skills.length) {
+    store.appendLog(runId, { event: 'skills_injected', node: `executor:${taskId}`, skills: skills.map(s => s.name) });
+  }
+  for (const m of missingSkills) {
+    store.appendLog(runId, { event: 'skill_missing', node: `executor:${taskId}`, skill: m.name, reason: m.reason });
+  }
+
+  const system = withSkillsSection([
     'ROLE: executor',
     'You are an execution worker in an AI orchestration pipeline.',
     'Complete exactly the task described. Produce the deliverable as Markdown.',
     'Do not do work belonging to other tasks. Respect every constraint.',
     tools.length ? 'You have tools to write files, spawn follow-up tasks, and record a task spec — use them when they help the task.' : ''
-  ].filter(Boolean).join('\n');
+  ].filter(Boolean).join('\n'), skills);
 
   const userMsg = [
     `USER PROMPT:\n${store.readPrompt(runId)}`,
