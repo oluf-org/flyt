@@ -5,6 +5,9 @@ import Settings from './Settings.jsx';
 import NodesPage from './NodesPage.jsx';
 import FlowYamlEditor from './FlowYamlEditor.jsx';
 import LiveStream from './LiveStream.jsx';
+import RunBar from './RunBar.jsx';
+import RunResult from './RunResult.jsx';
+import { isTerminal } from './runProgress.js';
 import { resolveFlow } from './flowTypes.js';
 import { layoutPositions } from './flowLayout.js';
 import { mergeSnapshot } from '../core/snapshotDiff.js';
@@ -101,6 +104,8 @@ export default function App() {
   const [workspaceDir, setWorkspaceDir] = useState(''); // bound target project folder (optional)
   const [busy, setBusy] = useState(false);
   const [resuming, setResuming] = useState(false); // continuing an interrupted run
+  // Explicitly reopened the run form while watching a live run (see `watching`).
+  const [newRunOpen, setNewRunOpen] = useState(false);
 
   // Primary navigation. The active section drives which explorer list shows and
   // which document the main area renders; each section keeps its own selection
@@ -334,6 +339,7 @@ export default function App() {
     setActiveRunId(id);
     setSelectedNode(null);
     setActiveActivity('runs');
+    setNewRunOpen(false); // a fresh run is for watching, not for starting another
   }, [flushSave]);
 
   // Switch section via the rail / shortcuts. Selections persist per section;
@@ -505,6 +511,11 @@ export default function App() {
   const stage = snapshot?.meta?.stage;
   const flowView = activeActivity === 'flows' && Boolean(activeFlowId && flow);
   const runView = activeActivity === 'runs' && Boolean(activeRunId);
+  // Watching a run in flight is a different job from starting one. While the
+  // run is live the "Run a workflow" form collapses to a button so the column
+  // belongs to live output; it comes back on its own once the run settles.
+  const watching = runView && Boolean(snapshot) && !isTerminal(stage);
+  const showRunForm = !watching || newRunOpen;
   const libraryView = activeActivity === 'library';
   const selectedTemplate = templates.find(t => t.id === selectedTemplateId) ?? null;
 
@@ -653,24 +664,6 @@ export default function App() {
                 ))}
                 {runIds.length === 0 && <div className="muted">No runs yet.</div>}
               </div>
-              {runView && (
-                <div className="sidebar-footer">
-                  {snapshot?.meta?.workspace && (
-                    <div className="workspace-binding" title={snapshot.meta.workspace}>
-                      <span className="section-label">Workspace</span>
-                      <span className="mono workspace-path">{snapshot.meta.workspace}</span>
-                    </div>
-                  )}
-                  <button className="ghost" onClick={() => window.llmflow.openRunFolder(activeRunId)}>
-                    Open run folder
-                  </button>
-                  {snapshot?.meta?.workspace && (
-                    <button className="ghost" onClick={() => window.llmflow.openWorkspace(activeRunId)}>
-                      Open workspace
-                    </button>
-                  )}
-                </div>
-              )}
             </>
           )}
         </aside>
@@ -764,6 +757,13 @@ export default function App() {
               <button className="reject" onClick={deleteFlow}>Delete flow</button>
             </div>
           )}
+          {runView && snapshot && (
+            <RunBar
+              snapshot={snapshot}
+              onOpenFolder={() => window.llmflow.openRunFolder(activeRunId)}
+              onOpenWorkspace={() => window.llmflow.openWorkspace(activeRunId)}
+            />
+          )}
           {runView && snapshot?.meta?.interrupted && (
             <div className="approval-bar">
               <span className="section-label">Interrupted</span>
@@ -856,7 +856,15 @@ export default function App() {
         </main>
 
         <div className="right-col">
-          <div className="run-panel">
+          {!showRunForm && (
+            <button className="new-run-btn" onClick={() => setNewRunOpen(true)}>
+              <span aria-hidden>＋</span> New run
+            </button>
+          )}
+          {/* Conditionally rendered, not [hidden]: .run-panel sets display:flex,
+              which beats the UA stylesheet's [hidden] { display: none }. Every
+              field's state lives in App, so unmounting loses nothing. */}
+          {showRunForm && <div className="run-panel">
             <span className="section-label">Run a workflow</span>
             <select
               value={runFlowId}
@@ -894,11 +902,13 @@ export default function App() {
             <button className="primary" onClick={startRun} disabled={busy || !runFlowId}>
               {busy ? 'Starting…' : 'Run'}<kbd className="shortcut">⌘↵</kbd>
             </button>
-          </div>
+          </div>}
 
-          {/* Live token output, self-hiding: it renders only while a node is
-              actually producing, so it costs nothing when nothing is working. */}
+          {/* One slot, two states: live token output while nodes are producing
+              (self-hiding when none are), and the run's outcome once it settles.
+              Both render only in the run view. */}
           {runView && snapshot && <LiveStream snapshot={snapshot} />}
+          {runView && snapshot && <RunResult snapshot={snapshot} />}
 
           {flowView
             ? <FlowInspector

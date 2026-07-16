@@ -3,6 +3,7 @@ import {
   TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, AGENT_TOOLS,
   nodeLabel, isInstance, resolveInstance, nodePorts
 } from './flowTypes.js';
+import { outputKey } from './runGraph.js';
 
 // Right-hand panel: shows the artifacts and retrospective for whichever node
 // is selected on the canvas. Everything shown here is read straight from the
@@ -69,7 +70,7 @@ export default function Inspector({ snapshot, selectedNode }) {
       ];
     } else if (flowNode.type === 'orchestrator') {
       // Port sidecars are stored with sanitized filenames (id.port -> id_port).
-      const sidecar = port => nodeOutputs?.[`${flowNode.id}_${port}`.replace(/[^a-zA-Z0-9_-]/g, '_')];
+      const sidecar = port => nodeOutputs?.[outputKey(`${flowNode.id}.${port}`)];
       const children = flow.nodes.filter(n => n.data?.managedBy === flowNode.id);
       sections = [
         ['Orchestration plan', sidecar('plan') ?? '(not yet produced)'],

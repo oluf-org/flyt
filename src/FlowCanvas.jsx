@@ -3,6 +3,12 @@ import { ReactFlow, Background, Controls, Handle, Position } from '@xyflow/react
 import '@xyflow/react/dist/style.css';
 import { TYPE_META, nodeLabel, nodeSub, nodePorts, createsNodes } from './flowTypes.js';
 import { wouldCreateCycle } from './flowLayout.js';
+import { spawnedTasks, taskNodeStatus } from './runGraph.js';
+
+// The run-time-spawned task column: gap from the right edge of the authored
+// graph, and the vertical pitch between stacked tasks.
+const SPAWN_DX = 260;
+const SPAWN_DY = 88;
 
 // Derives the node graph from the run snapshot (pure function of file state).
 // Layout follows the design system: vertical, top→down —
@@ -38,6 +44,10 @@ function StatusGlyph({ status }) {
   if (status === 'active') return <span className="node-status"><span className="spinner" /></span>;
   if (status === 'waiting') return <span className="node-status">⏸</span>;
   if (status === 'failed') return <span className="node-status">✕</span>;
+  // queued: the node has contributed its task and is waiting for the executor
+  // to claim it. Distinct from pending (not reached yet) — it used to be
+  // flattened into it, which made a node that had done its part look untouched.
+  if (status === 'queued') return <span className="node-status" title="Queued — waiting for a worker">⋯</span>;
   return <span className="node-status" />;
 }
 
@@ -360,10 +370,7 @@ function workerSub(kind, retro) {
 
 function buildFlowRunGraph(snapshot, selectedNode) {
   const { flow, meta } = snapshot;
-  const statusOf = id => {
-    const s = meta.nodeStatus?.[id] ?? 'pending';
-    return s === 'queued' ? 'pending' : s;
-  };
+  const statusOf = id => meta.nodeStatus?.[id] ?? 'pending';
   const childrenOf = id => flow.nodes.some(n => n.parentId === id);
   const nodes = flow.nodes.map(n => ({
     id: n.id,
@@ -395,5 +402,51 @@ function buildFlowRunGraph(snapshot, selectedNode) {
       ...(e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}),
       animated: statusOf(e.target) === 'active'
     }));
+
+  // Tasks an agent spawned at run time (V1 task 9). They have no node in the
+  // definition — they didn't exist when the flow was authored — so they are
+  // derived here. Without this an agent delegating its work showed nothing.
+  //
+  // They get their OWN column clear of the authored graph rather than an offset
+  // from the node that caused them: the flow's own layout already owns that
+  // space, and hanging them off their owner dropped them on top of whatever sat
+  // to its right. The dashed edge carries the ownership; position doesn't have
+  // to. Everything is measured from top-level nodes only — an orchestrator
+  // child's position is relative to its parent box, not the canvas.
+  const spawned = spawnedTasks(snapshot);
+  if (spawned.length) {
+    const byId = new Map(flow.nodes.map(n => [n.id, n]));
+    const top = flow.nodes.filter(n => !n.parentId);
+    const colX = Math.max(0, ...top.map(n => (n.position?.x ?? 0) + (n.data?.box?.w ?? 0))) + SPAWN_DX;
+    const colY = Math.min(0, ...top.map(n => n.position?.y ?? 0));
+    spawned.forEach(({ task, ownerNodeId }, i) => {
+      const status = taskNodeStatus(task.status);
+      nodes.push({
+        id: task.id,
+        type: 'task',
+        position: { x: colX, y: colY + i * SPAWN_DY },
+        draggable: false,
+        data: {
+          label: task.title || task.id,
+          sub: `spawned task · ${task.worker?.provider}/${task.worker?.model}`,
+          icon: TYPE_META.agentTask.icon,
+          kind: 'ai',
+          status,
+          ports: [],
+          selected: selectedNode === task.id
+        }
+      });
+      // An untraceable task is still shown, just without a line home.
+      if (ownerNodeId && byId.has(ownerNodeId)) {
+        edges.push({
+          id: `e-spawn-${ownerNodeId}-${task.id}`,
+          source: ownerNodeId,
+          target: task.id,
+          className: 'edge-spawned', // dashed: created at run time, not authored
+          animated: status === 'active'
+        });
+      }
+    });
+  }
   return { nodes, edges };
 }

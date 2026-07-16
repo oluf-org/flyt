@@ -130,6 +130,19 @@ Because partial text lands in the *same* files as final output, this needed no n
 
 ---
 
+## 6.1 The run view — [BUILT] (V1 task 9, the view-mode half of D5)
+
+D4 makes the canvas the **live transparency view of execution**. The run view is the frame around it that answers what the canvas can't, without the user opening the run folder:
+
+- **Run header** (`src/RunBar.jsx`, derived by `src/runProgress.js`): flow name, a progress meter over `flow.nodes`, `done/total`, how many nodes are working, how many agent tasks are executing, waiting/failed counts, a live elapsed clock, and the ways out to the files (Open run folder / Open workspace). The clock ticks only while the run is live — a finished run's elapsed is frozen at its last write, not still counting. The denominator counts `flow.nodes`, **not** `meta.nodeStatus` keys: nodes materialized mid-run join the flow before they get a status entry, and counting keys would read `2/2` with three nodes still to run.
+- **Watching ≠ starting.** While a run is live the "Run a workflow" form collapses to a `＋ New run` button and the column belongs to live output; it returns on its own once the run settles. (Conditionally rendered rather than `[hidden]` — `.run-panel` sets `display:flex`, which beats the UA stylesheet's `[hidden] { display: none }`.)
+- **Run-time-spawned tasks are visible** (`src/runGraph.js`). A task an agent creates via `create_task`, and the fix tasks a `stitch` node creates, have no node in the flow definition — they didn't exist when it was authored — so the canvas showed nothing while they called tools and wrote to the workspace. They are now derived from the snapshot and drawn in their **own column** clear of the authored graph, each dashed-linked back to the node that caused it. Ownership walks `createdBy`, which names *either* a parent task (an agent calling the tool) *or* a node (the runner spawning on a node's behalf — stitch fix tasks pass the node id as `ctx.taskId`); both shapes resolve, cycles are hop-capped, and an untraceable task is still drawn rather than dropped.
+- **`queued` is its own state.** It used to be flattened into `pending`, so a node that had handed its task to the executor looked untouched. It is durable mainly when a gated task holds the queue (waves are capped at `maxParallel`, so a wave never queues more than the scheduler immediately claims).
+- **The outcome** (`src/RunResult.jsx`) takes the live panel's slot once the run settles: the Output node's markdown on success, the error on failure, the rejection on a rejected gate. The Output node writes identical content to `nodes/<id>.md` and `result.md`, so this reads the snapshot the renderer already has.
+- **Multi-active animation** (D9): parallel nodes each spin — verified with four concurrent agentTasks — and the live panel follows one at a time rather than ping-ponging.
+
+---
+
 ## 7. The Toolbox — [PARTIAL] → [PLANNED]
 
 **Today [PARTIAL]:** a real tool registry exists (`core/tools/index.js`): a tool is `{ name, description, parameters (JSON Schema), run(args, ctx) }`; `ctx = { store, runId, taskId, defaultWorker }` gives sandboxed access to the run's files; every call is validated and logged to `log.jsonl`. Registered tools:
@@ -189,6 +202,7 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | File-based state, RunStore/NodeStore/FlowStore | BUILT | Single source of truth |
 | Node Library + Nodes page (9 templates) | BUILT | Template/instance/override model |
 | Canvas (React Flow), Inspector, run panel, Settings | BUILT | Canvas is authoring + run view |
+| Run view mode (header, live panel, spawned tasks, outcome) | BUILT | V1 task 9 — see §6.1 |
 | Flow DSL (`.flow.yaml`), lint/parse/serialize/migrate/CLI | BUILT | See `FLOW_LANG.md` |
 | One engine, dynamic topological walk | BUILT | `core/flowRunner.js` |
 | Parallel `aiStep` + `agentTask` execution (`maxParallel` 4) | BUILT | Atomic task claiming; gated tasks stay solo (§2.1) |
@@ -208,7 +222,7 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | Safety: command-guard node, opt-out, diff preview | PLANNED | Approvals + run-scoped sandbox today |
 | Model comparison / ranking mode | PLANNED | Feeds routing matrix |
 | Streaming status-summary sidebar | PLANNED | After single-node streaming |
-| AI-helper workflow builder + view mode | PLANNED | Canvas is manual today |
+| AI-helper workflow builder | PLANNED | Canvas is manual today; the view-mode half of D5 is done (§6.1) |
 | Subscription / capped-key backend | PLANNED | BYO key today |
 | Packaging / distribution | NOT STARTED | Explicitly not on radar |
 

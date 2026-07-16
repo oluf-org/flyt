@@ -8,10 +8,7 @@
 // snapshot already carries the live text, and a streaming flush ships only the
 // one changed entry (core/snapshotDiff.js).
 import { TYPE_META, nodeLabel } from './flowTypes.js';
-
-// nodes/<id>.md filenames are sanitized (core/state.js nodeOutputPath), so the
-// port sidecar "orch-1.plan" is keyed as "orch-1_plan" in the snapshot.
-const outputKey = id => String(id).replace(/[^a-zA-Z0-9_-]/g, '_');
+import { outputKey } from './runGraph.js';
 
 // Returns [{ key, label, sub, icon, text }] — two kinds, keyed differently on
 // purpose:

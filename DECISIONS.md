@@ -31,7 +31,7 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 ### D5 — Workflow authoring: manual canvas today, AI-helper builder + view mode planned
 **Context.** Canvas is the only authoring surface now; DSL is AI-authorable text.
 **Decision.** Keep the canvas, add an **AI helper as the builder**, and a distinct **view mode** for runs. Canvas and DSL remain two views of the same file; humans use canvas, AI writes DSL.
-**Status.** Provisional (UX undesigned — Q-P5).
+**Status.** **View mode done** (V1 task 9) — run header with progress/elapsed, the run form collapsing while watching, run-time-spawned tasks drawn on the canvas, and the outcome surfaced on completion; see `DESIGN-SPEC.md` §6.1. The **AI-helper builder** remains Provisional and out of V1 (UX undesigned — Q-P5).
 
 ### D6 — Workflow selection: curated dropdown, not per-request generation
 **Context.** The DSL being AI-authorable raised the option of generating a workflow per request.
@@ -117,7 +117,7 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 - **Q-P2.** What ease-of-entry (quick/cheap/easy-to-start) bar must the app clear to survive, and how is it measured?
 - **Q-P3.** Is a decomposed-vs-single-prompt comparison mode a v1 feature or a research aside?
 - **Q-P4.** Subscription mechanics: key issuance, metering, cap-exhaustion mid-run, abuse prevention.
-- **Q-P5.** What does the "AI helper as builder" authoring UX look like, and how does it relate to view mode?
+- **Q-P5.** What does the "AI helper as builder" authoring UX look like? *(Half answered: view mode is built and defined — `DESIGN-SPEC.md` §6.1 — so the remaining question is the builder itself and how it hands off to that view.)*
 
 **Design (from `DESIGN-SPEC.md` §12):**
 - ~~**Q-D1.** Parallel `agentTask`/executor execution: readable concurrent log, multi-active status, workspace write-isolation.~~ **Resolved** (V1 task 6): atomic task claiming + bounded parallel drain; log safe by sync append + per-task attribution; status via persisted `running` + `nodeStatus`. The write hazard landed as **detection** (`core/writeLedger.js` flags concurrent same-path writes), not isolation — per-task worktrees remain post-V1.
