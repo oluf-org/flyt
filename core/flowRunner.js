@@ -153,6 +153,11 @@ const DEFAULT_SYSTEM = {
   ].join('\n')
 };
 
+// How often a token stream may reach the disk and the renderer. Every flush is
+// a file write plus an IPC push, and adapters call onText per chunk — at real
+// token rates that is hundreds of calls a second. 250ms still reads as live.
+const STREAM_FLUSH_MS = 250;
+
 // Unified worker resolution for aiStep AND agentTask nodes:
 //   1. an explicit worker set on the node wins,
 //   2. otherwise the node's category picks from config.categoryWorkers
@@ -213,6 +218,24 @@ export class FlowRunner {
 
   notify(runId) { this.onUpdate(runId); }
   owns(runId) { try { return Boolean(this.store.readMeta(runId)?.flowId); } catch { return false; } }
+
+  // Build an onText handler (the adapter contract in adapters/index.js) that
+  // mirrors partial model output into the run's files as it arrives, so a live
+  // run is watchable rather than silent until a node completes (D10, V1 task 8).
+  // Throttled to STREAM_FLUSH_MS. Dropping chunks is safe precisely because
+  // onText hands over the FULL text so far rather than a delta: every flush is
+  // a complete prefix, the next supersedes it, and the caller's write once the
+  // call returns is authoritative.
+  streamInto(runId, write) {
+    let lastFlush = 0;
+    return textSoFar => {
+      const now = Date.now();
+      if (now - lastFlush < STREAM_FLUSH_MS) return;
+      lastFlush = now;
+      write(textSoFar);
+      this.notify(runId);
+    };
+  }
 
   // Start walking a flow, tracking liveness for its whole lifetime — including
   // while it sits paused at a gate (execute() is still awaiting, so the run is
@@ -523,15 +546,22 @@ export class FlowRunner {
   // Run one already-claimed task to completion. Never rejects: the outcome
   // comes back as a record so the scheduler can keep draining the other
   // in-flight tasks instead of losing them to an exception.
-  async runClaimedTask(runId, task, taskIdByNode, flow, ledger) {
+  // `gate` is { node } when this task's tool calls must be approved (node is
+  // only the pause's attribution target and may be null), or null when they
+  // run unattended. The caller decides — see gateFor in runPendingTasks.
+  async runClaimedTask(runId, task, taskIdByNode, flow, ledger, gate = null) {
     const nodeId = [...taskIdByNode.entries()].find(([, tid]) => tid === task.id)?.[0];
-    const node = nodeId && flow ? flow.nodes.find(n => n.id === nodeId) : null;
     if (nodeId) this.setNodeStatus(runId, nodeId, 'active', { currentTaskId: task.id });
     const opts = {
       ledger,
-      ...(node?.data?.approveToolCalls
-        ? { approveToolCall: call => this.toolGate(runId, node, call) }
-        : {})
+      // Mirror the agent's reply into the task's output file as it streams, so
+      // a long tool-using task is watchable instead of silent (V1 task 8). Each
+      // agent turn restarts the text (see runAgent), so what shows is the turn
+      // in progress — including the tool block it is about to ask approval for.
+      // Parallel tasks each stream into their own tasks/<id>.md, so they can't
+      // scribble over one another.
+      onText: this.streamInto(runId, t => this.store.writeTaskOutput(runId, task.id, t)),
+      ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };
     ledger.begin(task.id);
     try {
@@ -558,9 +588,9 @@ export class FlowRunner {
   // Returns false (and fails the run) when a task fails.
   //
   // Two things stay serialized on purpose:
-  //   - a task whose node opted into approveToolCalls runs ALONE, because the
-  //     gate promise (this.gates) is per-run — two tasks pausing at once would
-  //     collide over it. Same reason the outer walk keeps gated nodes solo.
+  //   - a gated task runs ALONE, because the gate promise (this.gates) is
+  //     per-run — two tasks pausing at once would collide over it. Same reason
+  //     the outer walk keeps gated nodes solo.
   //   - once a task fails we stop claiming, but still await the in-flight ones
   //     so no task keeps writing after the run is marked failed.
   async runPendingTasks(runId, taskIdByNode, flow = null) {
@@ -570,7 +600,34 @@ export class FlowRunner {
       const nodeId = [...taskIdByNode.entries()].find(([, tid]) => tid === task.id)?.[0];
       return nodeId && flow ? flow.nodes.find(n => n.id === nodeId) : null;
     };
-    const isGated = task => Boolean(nodeFor(task)?.data?.approveToolCalls);
+
+    // Does this task's tool calls need approval? The flag lives on the TASK
+    // (persisted when an agentTask node queues it, and inherited by anything
+    // create_task spawns) rather than being re-derived from the node graph: a
+    // spawned task has no node of its own, so reading the gate off the graph let
+    // an agent delegate its destructive work to a child and have it run against
+    // the real workspace unapproved. Tasks recorded before the flag existed fall
+    // back to their node.
+    const isGated = task => Boolean(task.approveToolCalls ?? nodeFor(task)?.data?.approveToolCalls);
+
+    // The gate to run a claimed task under, or null when it is unattended. The
+    // node is the pause's attribution target only: walk createdBy up to the
+    // nearest ancestor that has one, so a spawned task pauses under the node
+    // whose gate it inherited. Gating never depends on finding one — toolGate
+    // takes a null node and simply skips the canvas highlight.
+    const gateFor = task => {
+      if (!isGated(task)) return null;
+      const own = nodeFor(task);
+      if (own) return { node: own };
+      const byId = new Map((this.store.readTasks(runId)?.tasks ?? []).map(t => [t.id, t]));
+      let t = byId.get(task.createdBy);
+      for (let hops = 0; t && hops < 100; hops++) {
+        const n = nodeFor(t);
+        if (n) return { node: n };
+        t = byId.get(t.createdBy);
+      }
+      return { node: null };
+    };
 
     const running = new Map(); // taskId -> Promise<outcome>
     let failure = null;
@@ -580,7 +637,7 @@ export class FlowRunner {
         // A gated task may only start when nothing else is in flight.
         const task = this.claimNextTask(runId, t => !isGated(t) || running.size === 0);
         if (!task) break;
-        running.set(task.id, this.runClaimedTask(runId, task, taskIdByNode, flow, ledger));
+        running.set(task.id, this.runClaimedTask(runId, task, taskIdByNode, flow, ledger, gateFor(task)));
         if (isGated(task)) break; // keep it alone until it settles
       }
       if (!running.size) break;
@@ -610,29 +667,33 @@ export class FlowRunner {
     return true;
   }
 
-  // Per-tool-call approval gate: pause the run before a node's destructive tool
-  // call and wait for a human decision, reusing the same gate promise + IPC as
-  // the pre-node gate. Approve -> the tool runs; reject -> false (the agent loop
-  // throws an abort). The pending call is surfaced in meta for the UI.
+  // Per-tool-call approval gate: pause the run before a gated task's
+  // destructive tool call and wait for a human decision, reusing the same gate
+  // promise + IPC as the pre-node gate. Approve -> the tool runs; reject ->
+  // false (the agent loop throws an abort). The pending call is surfaced in
+  // meta for the UI. `node` is the pause's attribution target and may be null
+  // (a task that inherited its gate but maps to no node) — the pause itself
+  // still happens; only the canvas highlight is skipped.
   async toolGate(runId, node, call) {
     const summary = call.tool === 'bash' ? call.args?.command : call.args?.path;
-    this.setNodeStatus(runId, node.id, 'waiting');
-    this.store.appendLog(runId, { event: 'tool_gate_pause', node: node.id, tool: call.tool, summary: summary ?? null });
+    const nodeId = node?.id ?? null;
+    if (nodeId) this.setNodeStatus(runId, nodeId, 'waiting');
+    this.store.appendLog(runId, { event: 'tool_gate_pause', node: nodeId, tool: call.tool, summary: summary ?? null });
     this.store.setStage(runId, 'awaiting_approval', {
-      pendingNodeId: node.id, pendingGateKind: 'tool',
+      pendingNodeId: nodeId, pendingGateKind: 'tool',
       pendingToolCall: { tool: call.tool, summary: summary ?? null }
     });
     this.notify(runId);
     const approved = await new Promise(resolve => this.gates.set(runId, resolve));
     if (!approved) {
-      this.store.appendLog(runId, { event: 'tool_gate_decision', node: node.id, tool: call.tool, decision: 'rejected' });
+      this.store.appendLog(runId, { event: 'tool_gate_decision', node: nodeId, tool: call.tool, decision: 'rejected' });
       this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null, pendingToolCall: null });
-      this.setNodeStatus(runId, node.id, 'failed');
+      if (nodeId) this.setNodeStatus(runId, nodeId, 'failed');
       return false;
     }
-    this.store.appendLog(runId, { event: 'tool_gate_decision', node: node.id, tool: call.tool, decision: 'approved' });
+    this.store.appendLog(runId, { event: 'tool_gate_decision', node: nodeId, tool: call.tool, decision: 'approved' });
     this.store.setStage(runId, 'execution', { pendingNodeId: null, pendingGateKind: null, pendingToolCall: null });
-    this.setNodeStatus(runId, node.id, 'active');
+    if (nodeId) this.setNodeStatus(runId, nodeId, 'active');
     return true;
   }
 
@@ -912,6 +973,10 @@ export class FlowRunner {
         // Tool availability comes from the node template (overridable per
         // workflow); undefined = the full registry.
         ...(Array.isArray(node.data?.tools) ? { tools: node.data.tools } : {}),
+        // The gate travels with the task, not the node: create_task copies it
+        // onto anything this task spawns, so delegated work can't slip past the
+        // approval the node asked for (see gateFor in runPendingTasks).
+        ...(node.data?.approveToolCalls ? { approveToolCalls: true } : {}),
         dependsOn: upstream.map(srcId => taskIdByNode.get(srcId)).filter(Boolean),
         worker,
         status: 'pending'
@@ -950,17 +1015,9 @@ export class FlowRunner {
         retryGuidance ? `RETRY GUIDANCE (a previous attempt was rejected — fix this):\n${retryGuidance}` : ''
       ].filter(Boolean).join('\n\n');
 
-      // Incremental output: stream the partial text into the node's output
-      // file (throttled) so the inspector shows work as it happens. onText
-      // receives the full accumulated text, so each write is consistent.
-      let lastFlush = 0;
-      const onText = textSoFar => {
-        const now = Date.now();
-        if (now - lastFlush < 250) return;
-        lastFlush = now;
-        this.store.writeNodeOutput(runId, node.id, textSoFar);
-        this.notify(runId);
-      };
+      // Incremental output: stream the partial text into the node's output file
+      // so the inspector and the live panel show work as it happens.
+      const onText = this.streamInto(runId, t => this.store.writeNodeOutput(runId, node.id, t));
 
       let result;
       try {
@@ -1137,14 +1194,7 @@ export class FlowRunner {
       ].filter(Boolean).join('\n\n');
 
       // Stream the planning output into the "plan" sidecar as it arrives.
-      let lastFlush = 0;
-      const onText = textSoFar => {
-        const now = Date.now();
-        if (now - lastFlush < 250) return;
-        lastFlush = now;
-        this.store.writeNodeOutput(runId, `${node.id}.plan`, textSoFar);
-        this.notify(runId);
-      };
+      const onText = this.streamInto(runId, t => this.store.writeNodeOutput(runId, `${node.id}.plan`, t));
       let result;
       try {
         result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText });

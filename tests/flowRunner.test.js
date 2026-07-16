@@ -250,6 +250,57 @@ test('aiStep streams partial output into the node file while the call runs', asy
   assert.equal(store.readNodeOutput(runId, 'step'), 'final full text');
 });
 
+// The path that matters most for V1: an agentTask is the long, tool-using one,
+// and it was the silent one — runAgent never forwarded onText.
+test('agentTask streams the agent turn into the task output while the call runs', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(async ({ onText }) => {
+    onText('partial agent reply');
+    await new Promise(r => setTimeout(r, 400));
+    return 'final agent deliverable';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'agentTask', { title: 'Worker', goal: 'do the work' }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'out')]);
+  const runId = runner.start(flow);
+  const partial = await waitFor(() => store.readTaskOutput(runId, 'task-1'), { label: 'partial task output' });
+  assert.match(partial, /partial agent reply/);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.equal(store.readTaskOutput(runId, 'task-1'), 'final agent deliverable');
+});
+
+// The multi-turn contract: onText streams the turn IN PROGRESS, so a turn that
+// ends in a tool call is visible (that transparency is the point — you watch
+// the agent decide), and the executor's write after the loop is what lands.
+test('a tool-calling turn streams, then the final reply supersedes it', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  const turn1 = 'Recording the spec first.\n```tool\n{"tool":"write_task_md","args":{"content":"# Spec"}}\n```';
+  setScript(async ({ prompt, onText }) => {
+    if (prompt.includes('TOOL RESULT')) return 'final deliverable';
+    onText(turn1);
+    await new Promise(r => setTimeout(r, 400));
+    return turn1;
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'agentTask', { title: 'Worker', goal: 'do the work' }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'out')]);
+  const runId = runner.start(flow);
+  const mid = await waitFor(() => {
+    const t = store.readTaskOutput(runId, 'task-1');
+    return t?.includes('write_task_md') ? t : null;
+  }, { label: 'the streamed tool block' });
+  assert.match(mid, /Recording the spec first/);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  // No tool block left behind: the last turn's real deliverable replaced it.
+  assert.equal(store.readTaskOutput(runId, 'task-1'), 'final deliverable');
+});
+
 // --- step-eval retry loop ---
 
 test('step-eval retry re-runs the work node with persisted guidance, then passes', async () => {

@@ -6,7 +6,10 @@ import { getTools } from '../tools/index.js';
 import { makeRetrospective } from '../retrospective.js';
 import { Workspace } from '../workspace.js';
 
-export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null } = {}) {
+// onText (optional): the caller's streaming sink for partial model output (V1
+// task 8). Forwarded to the agent loop untouched — where the partial text is
+// written, and how often, is the caller's business, not this module's.
+export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null } = {}) {
   const tasksDoc = store.readTasks(runId);
   const task = tasksDoc.tasks.find(t => t.id === taskId);
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
@@ -89,7 +92,9 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   let retro;
   let status;
   try {
-    const result = await runAgent({ worker, apiKey, system, prompt: userMsg, tools, ctx });
+    const result = await runAgent({ worker, apiKey, system, prompt: userMsg, tools, ctx, onText });
+    // Authoritative write: onText may have left the last turn's partial text
+    // (or a tool block) in this file, and this is what replaces it.
     store.writeTaskOutput(runId, taskId, result.text.trim());
     status = 'done';
     const failedCalls = result.toolCalls.filter(c => !c.ok);

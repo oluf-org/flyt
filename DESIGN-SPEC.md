@@ -111,15 +111,22 @@ In this app, **a node is an agent.** Spawning a node and spawning an agent are t
 
 ---
 
-## 6. Streaming & live output — [PARTIAL] → [PLANNED]
+## 6. Streaming & live output — [BUILT] (V1 task 8, D10)
 
-**Today:** the adapter layer already supports streaming. `callModel({ ..., onText })` is defined so streaming adapters call `onText(fullAccumulatedText)` after each chunk (full text, not deltas, so a mid-stream retry is always a consistent prefix). **But `onText` is not consumed** by the runner/executor/UI — output appears only when a node completes. With the mock provider this is masked by deliberate latency + edge animation ("good theater"); with real models it means minutes of apparent silence.
+**Adapters** call `onText(fullAccumulatedText)` after each chunk — full text, not deltas, so any single flush is a consistent prefix and a mid-stream retry simply starts over. That property is what lets consumers throttle: dropping a chunk is safe because the next one supersedes it.
 
-**[PLANNED] — surface streaming in v1.** Token streaming is a **v1 requirement**, not later polish. Intended UX:
-- A **sidebar showing the latest streaming update** (the currently-working node's live output).
+**The runner consumes it.** `FlowRunner.streamInto(runId, write)` builds the `onText` handler: it mirrors partial text into the same file the finished node writes, then notifies, throttled to 250ms (every flush is a file write plus an IPC push). Three call sites:
+- `aiStep` → `nodes/<id>.md`
+- `orchestrator` planning turn → the `nodes/<id>.plan` sidecar
+- `agentTask`/executor → `tasks/<taskId>.md`, threaded `runClaimedTask` → `runExecutorTask` → `runAgent` → both tool protocols
+
+Because partial text lands in the *same* files as final output, this needed no new channel: the snapshot already carries it and a flush ships only the changed entry (§10). The executor's write when the agent loop returns is authoritative.
+
+**Multi-turn semantics.** `onText` streams the turn *in progress*, not the whole loop — each agent turn is a fresh call, so the text restarts from empty. A turn ending in a `tool` block is therefore visible (you watch the agent decide to call `write_file`, and it stays on screen while its approval gate is pending), then the next turn replaces it. The NATIVE tool path stays silent for now: the loop needs the raw `tool_calls` message back, which only the non-streaming response carries. `onText` is forwarded anyway, so that becomes an adapter change alone.
+
+**UI:** a **live panel** in the right column (`src/LiveStream.jsx`, with `src/runStreams.js` deciding what counts as working). It renders only while something is producing, so its presence *is* the working signal — which is what earns it the two animations in the app (the pulse and the caret). Work is keyed by **task** for agentTasks (an agentTask's work IS its task, and a `create_task` child has no node at all) and by **node** for aiStep/orchestrator. Under parallel waves it lists one chip per working node and follows whichever is producing, staying put while that one is still moving rather than ping-ponging every push; clicking a chip pins it.
+
 - **Future:** a *status sidebar* that runs a summarizer over *all* currently-active nodes, giving a running digest of everything in flight during parallel execution.
-
-Wiring: consume `onText` in the executor/runner → write incremental `nodes/<id>.md` → push to the renderer. The IPC side of this is done: pushes are incremental (§10), so a streaming chunk ships only the changed node's output rather than the whole run.
 
 ---
 
@@ -189,7 +196,7 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | Orchestrator node (spawns children, inline sub-walk) | PARTIAL | Seed of sub-agents; no depth/budget guard yet |
 | Agent loop + tool registry (native + text) | BUILT | `write_file`, `create_task`, `write_task_md` |
 | Adapters (mock/anthropic/openrouter), retry/backoff | BUILT | Default = mock |
-| Streaming (`onText` contract) | PARTIAL | Adapter-ready; not surfaced in UI |
+| Streaming (`onText` contract) | BUILT | Runner + executor consume it; live panel in the right column (§6) |
 | Retrospectives + `historyDigest` | BUILT | One-way into planning today |
 | Approval gates + restart resume | BUILT | Completed steps survive a crash; explicit Resume (§10). Pending *tool* gates still abandon |
 | Two-tier orchestrator depth guard | PLANNED | Design rule; not enforced in code |

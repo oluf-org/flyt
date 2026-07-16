@@ -27,16 +27,23 @@ async function gateToolCall(ctx, name, args) {
   }
 }
 
-export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx }) {
+// onText is the adapter streaming contract (adapters/index.js) forwarded to
+// every turn of the loop, so a tool-using task is watchable instead of silent
+// for minutes (D10). It streams the text of the turn IN PROGRESS: each turn is
+// a fresh call, so the accumulated text restarts from empty rather than growing
+// across the whole loop. A consumer mirroring it into a file therefore shows
+// the current turn — including the ```tool block the agent is about to run —
+// and must treat its own write after runAgent returns as the authoritative one.
+export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText }) {
   const started = Date.now();
   if (!tools.length) {
-    const r = await callModel({ ...worker, apiKey, system, prompt });
+    const r = await callModel({ ...worker, apiKey, system, prompt, onText });
     return { text: r.text, toolCalls: [], usage: r.usage, durationMs: r.durationMs };
   }
   const native = worker.provider === 'openrouter' && worker.supportsTools;
   const out = native
-    ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx })
-    : await textLoop({ worker, apiKey, system, prompt, tools, ctx });
+    ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText })
+    : await textLoop({ worker, apiKey, system, prompt, tools, ctx, onText });
   return { ...out, durationMs: Date.now() - started };
 }
 
@@ -51,7 +58,7 @@ function addUsage(total, usage) {
 }
 
 // --- NATIVE path: OpenAI function-tool format over the messages API ---
-async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx }) {
+async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText }) {
   const messages = [
     { role: 'system', content: system },
     { role: 'user', content: prompt }
@@ -65,7 +72,12 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx }) {
   let lastText = '';
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const res = await callModel({ ...worker, apiKey, messages, tools: oaTools });
+    // onText rides along, but today's adapters decline to stream a tool-enabled
+    // call (the loop needs the raw tool_calls message back, which only the
+    // non-streaming response carries) — so this path stays silent until an
+    // adapter can reassemble tool_calls from deltas. Honoring the contract here
+    // means that becomes an adapter change alone.
+    const res = await callModel({ ...worker, apiKey, messages, tools: oaTools, onText });
     usage = addUsage(usage, res.usage);
     lastText = res.text || lastText;
     const calls = res.message?.tool_calls;
@@ -112,7 +124,7 @@ export function textProtocolInstructions(tools) {
   ].join('\n');
 }
 
-async function textLoop({ worker, apiKey, system, prompt, tools, ctx }) {
+async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText }) {
   const fullSystem = system + '\n\n' + textProtocolInstructions(tools);
   const toolCalls = [];
   let usage = null;
@@ -120,7 +132,7 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx }) {
   let lastText = '';
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const res = await callModel({ ...worker, apiKey, system: fullSystem, prompt: transcript });
+    const res = await callModel({ ...worker, apiKey, system: fullSystem, prompt: transcript, onText });
     usage = addUsage(usage, res.usage);
     lastText = res.text;
     const match = res.text.match(TOOL_BLOCK);

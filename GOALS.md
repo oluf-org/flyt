@@ -113,7 +113,9 @@ Unchanged in spirit; ease of use added.
 
 > The application must feel crisp and trustworthy even though individual AI steps are slow. The UI must remain interactive while a run is in progress. Status must reflect within one animation frame of the underlying file write. Animation must be deliberate and legible — avoid a screen full of competing motion — but there is no absolute one-animation rule: when nodes run in parallel, showing several as active at once is correct (see `DESIGN-SPEC.md` §2.2 / `DECISIONS.md` D9). "Open run folder" must remain a first-class debugging experience.
 
-**Known gaps & risks (still apply):** no performance budgets/instrumentation; full-snapshot IPC on every mutation; synchronous filesystem ops in RunStore/FlowStore; sequential task execution despite `dependsOn`; tiny-graph assumption, manual layout; no streaming output.
+**Known gaps & risks:** no performance budgets/instrumentation; synchronous filesystem ops in RunStore/FlowStore (the full async rework is post-V1); tiny-graph assumption, manual layout.
+
+**Resolved since:** full-snapshot IPC on every mutation → incremental diffed pushes (V1 task 5); sequential task execution despite `dependsOn` → bounded-parallel agentTasks (V1 task 6, D7); no streaming output → the runner consumes `onText` and the live panel surfaces it (V1 task 8, D10).
 
 **Observable targets:** a 12-node workflow or 15–20-task run must not make the canvas laggy; status updates visually immediate; browsing/editing must stay possible during a run.
 

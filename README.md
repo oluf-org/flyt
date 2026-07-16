@@ -45,7 +45,7 @@ runs/<runId>/
   flow.json            the resolved workflow this run executes (self-contained snapshot)
   plan.md              planning output (human-approved before routing)
   tasks.json           self-describing executor tasks with worker assignment
-  tasks/<task-id>.md   executor output per task
+  tasks/<task-id>.md   executor output per task (streamed while running)
   nodes/<node-id>.md   per-node outputs (streamed while running)
   retrospectives/*.json  structured retrospective per node
   meta.json            run position (stage, per-node status, errors)

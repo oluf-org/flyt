@@ -14,9 +14,10 @@ export async function mockAdapter({ system, prompt, onText }) {
   // When the agent loop's text protocol is active (core/agent.js injects a
   // TOOL PROTOCOL section), an executor emits one example tool call first so
   // the whole registry + text path can be exercised with no API key.
+  let reply = null;
   if (role === 'executor' && system.includes('TOOL PROTOCOL')) {
-    if (!prompt.includes('TOOL RESULT')) {
-      return {
+    reply = !prompt.includes('TOOL RESULT')
+      ? {
         text: [
           'I will save my working notes to the workspace first.',
           '```tool',
@@ -24,12 +25,11 @@ export async function mockAdapter({ system, prompt, onText }) {
           '```'
         ].join('\n'),
         usage: { input_tokens: 100, output_tokens: 60 }
+      }
+      : {
+        text: `## Result\n\n(mock output) Completed the assigned task for: ${goal}\n\n- Wrote working notes to workspace/notes.md via the write_file tool\n- Respected the listed constraints`,
+        usage: { input_tokens: 160, output_tokens: 200 }
       };
-    }
-    return {
-      text: `## Result\n\n(mock output) Completed the assigned task for: ${goal}\n\n- Wrote working notes to workspace/notes.md via the write_file tool\n- Respected the listed constraints`,
-      usage: { input_tokens: 160, output_tokens: 200 }
-    };
   }
 
   const text = {
@@ -149,19 +149,24 @@ No larger gaps — no corrective task nodes created.
 The explicit per-file context descriptions worked: only the listed files were required.`
   }[role] ?? `(mock output for role "${role}")`;
 
+  reply ??= { text, usage: { input_tokens: 100, output_tokens: 200 } };
+
   // Simulate streaming: surface the text in growing prefixes so the
   // incremental-output path (onText contract in adapters/index.js) can be
-  // exercised with no API key.
+  // exercised with no API key. Every role streams, the executor's tool-calling
+  // turns included — those are what an agentTask's live output actually shows
+  // (V1 task 8), so a mock that skipped them would hide the feature on exactly
+  // the path it matters most.
   if (onText) {
-    const step = Math.max(20, Math.ceil(text.length / 8));
-    for (let end = step; end < text.length; end += step) {
-      onText(text.slice(0, end));
+    const step = Math.max(20, Math.ceil(reply.text.length / 8));
+    for (let end = step; end < reply.text.length; end += step) {
+      onText(reply.text.slice(0, end));
       await sleep(80);
     }
-    onText(text);
+    onText(reply.text);
   }
 
-  return { text, usage: { input_tokens: 100, output_tokens: 200 } };
+  return reply;
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));

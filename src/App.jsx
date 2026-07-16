@@ -4,6 +4,7 @@ import Inspector, { FlowInspector } from './Inspector.jsx';
 import Settings from './Settings.jsx';
 import NodesPage from './NodesPage.jsx';
 import FlowYamlEditor from './FlowYamlEditor.jsx';
+import LiveStream from './LiveStream.jsx';
 import { resolveFlow } from './flowTypes.js';
 import { layoutPositions } from './flowLayout.js';
 import { mergeSnapshot } from '../core/snapshotDiff.js';
@@ -174,7 +175,11 @@ export default function App() {
       if (!cur || cur.meta?.runId !== runId) return;
       if (payload.base !== cur.rev) {
         window.llmflow.getSnapshot(runId).then(s => {
-          if (snapRef.current?.meta?.runId === runId) setSnapshot(s);
+          // Ignore a resync that lost a race: another fetch (or the patch
+          // stream) may have already carried this run past the rev we asked
+          // for, and applying it would rewind the view.
+          const now = snapRef.current;
+          if (now?.meta?.runId === runId && (now.rev ?? 0) <= s.rev) setSnapshot(s);
         });
         return;
       }
@@ -184,7 +189,11 @@ export default function App() {
 
   useEffect(() => {
     if (!activeRunId) { setSnapshot(null); return; }
-    window.llmflow.getSnapshot(activeRunId).then(setSnapshot);
+    // Switching runs faster than a fetch resolves must not land the old run's
+    // snapshot on the new view.
+    let cancelled = false;
+    window.llmflow.getSnapshot(activeRunId).then(s => { if (!cancelled) setSnapshot(s); });
+    return () => { cancelled = true; };
   }, [activeRunId]);
 
   // --- Flow persistence: debounced autosave, flushed on view switches ---
@@ -886,6 +895,10 @@ export default function App() {
               {busy ? 'Starting…' : 'Run'}<kbd className="shortcut">⌘↵</kbd>
             </button>
           </div>
+
+          {/* Live token output, self-hiding: it renders only while a node is
+              actually producing, so it costs nothing when nothing is working. */}
+          {runView && snapshot && <LiveStream snapshot={snapshot} />}
 
           {flowView
             ? <FlowInspector

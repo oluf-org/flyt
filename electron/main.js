@@ -15,6 +15,24 @@ import { diffSnapshot } from '../core/snapshotDiff.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, '..');
 
+// One instance per runs/ directory, claimed before anything reads or writes it.
+// runs/ is a shared mutable store and liveness is tracked in process memory
+// (FlowRunner.live), so a second instance cannot tell a run this process is
+// actively executing from one left behind by a crash: its startup
+// reconcileInterrupted would rewind the first instance's in-flight tasks to
+// 'pending' underneath it, and offer the user a Resume that re-runs real
+// bash/write_file calls against the bound repo from a second process. Bail out
+// and surface the existing window instead.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+app.on('second-instance', () => {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.focus();
+});
+
 const baseConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'config.json'), 'utf8'));
 const store = new RunStore(path.join(projectRoot, 'runs'));
 const flows = new FlowStore(path.join(projectRoot, 'flows'));
@@ -172,10 +190,23 @@ ipcMain.handle('run:reject', (_e, runId, reason) => flowRunner.rejectPlan(runId,
 // not re-executed (V1 task 7).
 ipcMain.handle('run:resume', (_e, runId) => flowRunner.resume(runId));
 ipcMain.handle('run:list', () => store.listRuns());
-// Full snapshot stamped with the run's current rev, so a renderer that fetches
-// it (on first view or after a missed patch) has a baseline the incremental
-// pushes can build on.
-ipcMain.handle('run:snapshot', (_e, runId) => ({ ...store.snapshot(runId), rev: revOf(runId) }));
+// Full snapshot + the rev naming it, for a renderer that fetches one (on first
+// view or after a missed patch). The two are minted from the SAME instant and
+// recorded as this run's baseline, because the whole patch scheme rests on a rev
+// identifying exactly one snapshot on both sides: a patch is "current minus
+// baseline", so it only converges when the receiver's content at `base` IS the
+// baseline it was diffed against. Reading files fresh but stamping them with the
+// last *pushed* rev labelled two different instants the same — anything that
+// changed and changed back in between (a task going running -> pending -> running
+// across a step-eval requeue) was then absent from the patch and never repaired,
+// leaving the canvas silently stale until an unrelated change happened to resend
+// the field.
+ipcMain.handle('run:snapshot', (_e, runId) => {
+  const snapshot = store.snapshot(runId);
+  const rev = revOf(runId) + 1;
+  runChannels.set(runId, { snapshot, rev });
+  return { ...snapshot, rev };
+});
 ipcMain.handle('run:openFolder', (_e, runId) => shell.openPath(store.runDir(runId)));
 
 // --- Workspace binding (target project folder for a run) ---

@@ -88,6 +88,49 @@ test('no gate flag: destructive tools run without pausing', async () => {
   assert.equal(fs.readFileSync(path.join(proj, 'target.txt'), 'utf8'), 'written by agent\n');
 });
 
+// The gate has to survive delegation. A gated agent can call create_task (not
+// itself destructive), and the spawned task has no flow node of its own — so a
+// gate derived from the node graph simply wasn't there for it, and its
+// write_file hit the real workspace unapproved. The flag now rides on the task
+// and create_task copies it onto whatever it spawns.
+test('tool gate: a task spawned by a gated node inherits the gate', async () => {
+  const { store, proj, ws, runner } = boundRunner();
+  // No `tools` restriction, so the agent has the full registry incl. create_task.
+  const flow = makeFlow(
+    [ node('in', 'input', { text: 'edit the repo' }),
+      node('work', 'agentTask', { title: 'Editor', goal: 'delegate the work', approveToolCalls: true }),
+      node('out', 'output') ],
+    [ edge('in', 'work'), edge('work', 'out') ]);
+
+  setScript(({ prompt }) => {
+    const title = (prompt.match(/TASK:\s*(.+)/) ?? [])[1]?.trim();
+    if (title === 'Editor') {
+      return prompt.includes('TOOL RESULT')
+        ? '## Delegated'
+        : '```tool\n{"tool":"create_task","args":{"title":"Delegate","goal":"write a file"}}\n```';
+    }
+    return prompt.includes('TOOL RESULT')
+      ? '## Done'
+      : '```tool\n{"tool":"write_file","args":{"path":"delegated.txt","content":"via subtask\\n"}}\n```';
+  });
+
+  const runId = runner.start(flow, { workspace: ws.root });
+
+  // The spawned task's write must pause, not sail through.
+  const meta = await waitForToolGate(store, runId);
+  assert.equal(meta.pendingToolCall.tool, 'write_file');
+  assert.equal(meta.pendingToolCall.summary, 'delegated.txt');
+  assert.equal(fs.existsSync(path.join(proj, 'delegated.txt')), false);
+
+  const spawned = store.readTasks(runId).tasks.find(t => t.title === 'Delegate');
+  assert.equal(spawned.approveToolCalls, true, 'create_task must copy the gate onto the child');
+  assert.equal(spawned.createdBy, 'task-1');
+
+  runner.rejectPlan(runId, 'no');
+  assert.equal(await waitForStage(store, runId, ['done', 'failed', 'rejected']), 'rejected');
+  assert.equal(fs.existsSync(path.join(proj, 'delegated.txt')), false); // still never written
+});
+
 test('confinement: null bytes and traversal are rejected', () => {
   const ws = new Workspace(tmpDir()).ensure();
   assert.throws(() => ws.resolve('a\0b'), /null byte/);

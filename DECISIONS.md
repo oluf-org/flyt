@@ -56,7 +56,7 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 ### D10 — Streaming is a v1 requirement
 **Context.** Adapters support `onText` streaming; the UI doesn't consume it, so real-model runs look idle.
 **Decision.** Ship **token streaming in v1** — a sidebar showing the latest update; later, a status sidebar that summarizes all active nodes.
-**Status.** Decided; the IPC/snapshot rework it depended on is **done** (V1 task 5 — Q-D7 resolved). Surfacing streaming in the UI remains V1 task 8.
+**Status.** **Done** (V1 task 8). The runner consumes `onText` into the run's own artifact files and the live panel shows the working node's output; the agentTask/executor path streams too, so the coding loop is watchable. The status-summary-over-all-active-nodes sidebar stays post-V1. See `DESIGN-SPEC.md` §6.
 
 ### D11 — Context via an explicit analysis step
 **Context.** `upstreamContext()` over-concatenates unless a `contextSpec` is set.

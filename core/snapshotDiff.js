@@ -40,10 +40,17 @@ export function diffSnapshot(prev, next) {
 }
 
 // Apply a patch (from diffSnapshot) onto a prior snapshot, returning a new
-// object so React sees a fresh reference. Because each patch encodes
-// "current minus baseline", applying it to any state at/after that baseline
-// converges to the current snapshot — which is what makes coalesced pushes and
-// mid-run view switches safe.
+// object so React sees a fresh reference.
+//
+// A patch encodes "current minus baseline", so it reproduces the current
+// snapshot ONLY when applied to the baseline it was diffed against. It does not
+// converge from an arbitrary intermediate state: a field that changed and then
+// changed back between baseline and current is absent from the patch (the diff
+// is even null), so a receiver holding the intermediate value keeps it — see the
+// A-B-A test in tests/snapshotDiff.test.js. That is why a rev must name exactly
+// one snapshot on both sides, and why run:snapshot mints its content and rev
+// together (electron/main.js) rather than pairing fresh content with the last
+// pushed rev. Callers that can't guarantee the baseline must resync, not patch.
 export function mergeSnapshot(prev, patch) {
   if (!prev || !patch) return prev;
   const next = { ...prev };
