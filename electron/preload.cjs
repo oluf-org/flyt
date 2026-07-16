@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('llmflow', {
   approvePlan: (runId) => ipcRenderer.invoke('run:approve', runId),
   rejectPlan: (runId, reason) => ipcRenderer.invoke('run:reject', runId, reason),
+  resumeRun: (runId) => ipcRenderer.invoke('run:resume', runId),
   listRuns: () => ipcRenderer.invoke('run:list'),
   getSnapshot: (runId) => ipcRenderer.invoke('run:snapshot', runId),
   openRunFolder: (runId) => ipcRenderer.invoke('run:openFolder', runId),

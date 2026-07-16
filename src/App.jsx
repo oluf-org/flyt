@@ -6,6 +6,7 @@ import NodesPage from './NodesPage.jsx';
 import FlowYamlEditor from './FlowYamlEditor.jsx';
 import { resolveFlow } from './flowTypes.js';
 import { layoutPositions } from './flowLayout.js';
+import { mergeSnapshot } from '../core/snapshotDiff.js';
 
 function setTheme(mode) { // 'light' | 'dark'
   document.documentElement.dataset.theme = mode;
@@ -69,6 +70,10 @@ export default function App() {
   const [runIds, setRunIds] = useState([]);
   const [activeRunId, setActiveRunId] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
+  // Mirror of `snapshot` for the incremental-update handler to read without a
+  // stale closure: it needs the currently-viewed run + rev to decide whether an
+  // incoming patch applies and lines up (see onRunUpdate below).
+  const snapRef = useRef(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [theme, setThemeState] = useState(
@@ -94,6 +99,7 @@ export default function App() {
   const [runInput, setRunInput] = useState('');
   const [workspaceDir, setWorkspaceDir] = useState(''); // bound target project folder (optional)
   const [busy, setBusy] = useState(false);
+  const [resuming, setResuming] = useState(false); // continuing an interrupted run
 
   // Primary navigation. The active section drives which explorer list shows and
   // which document the main area renders; each section keeps its own selection
@@ -142,13 +148,37 @@ export default function App() {
     });
   }, []);
 
+  // Keep snapRef in step with the rendered snapshot so the update handler reads
+  // a fresh baseline (pushes are ≥80ms apart, so this is settled between them).
+  useEffect(() => { snapRef.current = snapshot; }, [snapshot]);
+
+  // Incremental run updates (V1 task 5): the main process pushes either a full
+  // snapshot (rev/base) or a patch (only the changed slice) with the rev it
+  // targets and the base rev it was diffed against. We apply patches on top of
+  // the currently-viewed run's snapshot; a base that doesn't line up means we
+  // missed one (e.g. a push during a run switch), so we resync from files.
   useEffect(() => {
-    return window.llmflow.onRunUpdate(({ runId, snapshot }) => {
+    return window.llmflow.onRunUpdate(payload => {
+      const { runId } = payload;
       refreshRuns();
       setActiveRunId(prev => prev ?? runId);
-      // Only mirror updates for the run being viewed.
-      setSnapshot(prev => (runId === (prevActive(prev) ?? runId)) ? snapshot : prev);
-      function prevActive(s) { return s?.meta?.runId; }
+      const cur = snapRef.current;
+      // Only mirror the run being viewed (or the very first one to appear).
+      if (cur?.meta?.runId && cur.meta.runId !== runId) return;
+      if (payload.full) {
+        setSnapshot({ ...payload.full, rev: payload.rev });
+        return;
+      }
+      // A patch with no baseline for this run yet: the activeRunId effect will
+      // fetch the full snapshot.
+      if (!cur || cur.meta?.runId !== runId) return;
+      if (payload.base !== cur.rev) {
+        window.llmflow.getSnapshot(runId).then(s => {
+          if (snapRef.current?.meta?.runId === runId) setSnapshot(s);
+        });
+        return;
+      }
+      setSnapshot({ ...mergeSnapshot(cur, payload.patch), rev: payload.rev });
     });
   }, [refreshRuns]);
 
@@ -454,6 +484,15 @@ export default function App() {
     }
   };
 
+  // Continue a run the app died in the middle of. The main process keeps the
+  // completed nodes and picks the walk up from there (V1 task 7).
+  const resumeRun = async () => {
+    if (!activeRunId || resuming) return;
+    setResuming(true);
+    try { await window.llmflow.resumeRun(activeRunId); }
+    finally { setResuming(false); }
+  };
+
   const stage = snapshot?.meta?.stage;
   const flowView = activeActivity === 'flows' && Boolean(activeFlowId && flow);
   const runView = activeActivity === 'runs' && Boolean(activeRunId);
@@ -714,6 +753,18 @@ export default function App() {
               ))}
               <span className={'save-dot' + (flowSaved ? ' saved' : '')}>{flowSaved ? 'Saved' : 'Saving…'}</span>
               <button className="reject" onClick={deleteFlow}>Delete flow</button>
+            </div>
+          )}
+          {runView && snapshot?.meta?.interrupted && (
+            <div className="approval-bar">
+              <span className="section-label">Interrupted</span>
+              <span>
+                The app closed while this run was working. Its finished steps are kept —
+                resuming continues from where it stopped.
+              </span>
+              <button className="primary" onClick={resumeRun} disabled={resuming}>
+                {resuming ? 'Resuming…' : 'Resume'}
+              </button>
             </div>
           )}
           {runView && stage === 'awaiting_approval' && (

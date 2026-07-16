@@ -15,8 +15,10 @@
 // re-derives "which nodes are ready" from the current flow. That is what
 // lets a plan-eval node materialize new nodes mid-run (they join the walk),
 // and lets step-eval verdicts requeue an upstream node before continuing.
-// Independent aiSteps run concurrently (bounded by config.maxParallel,
-// default 4); gates, plan-eval, and executor tasks stay sequential.
+// Independent aiSteps AND agentTasks run concurrently (bounded by
+// config.maxParallel, default 4); gates, plan-eval, and tool-gated tasks
+// stay sequential. Queued agent tasks are claimed atomically out of
+// tasks.json and drained with the same bound (see runPendingTasks).
 //
 // Reflective-pattern support (see FLOW_NODES.md for the contracts):
 //   plan-eval -> strict JSON contract parsed by core/planEval.js; valid nodes
@@ -27,6 +29,7 @@
 import { callModel } from './adapters/index.js';
 import { makeRetrospective } from './retrospective.js';
 import { runExecutorTask } from './nodes/executor.js';
+import { createWriteLedger } from './writeLedger.js';
 import { executeTool } from './tools/index.js';
 import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, extractJson } from './planEval.js';
 import { createNodeFromTemplate, getTemplate, resolveFlow, resolveInstance, primaryPort } from '../src/flowTypes.js';
@@ -192,6 +195,9 @@ export function topoSort(flow) {
   return order.map(id => byId.get(id));
 }
 
+// Stages a run can't continue from: the walk is over, one way or another.
+export const TERMINAL_STAGES = new Set(['done', 'failed', 'rejected']);
+
 export class FlowRunner {
   constructor(store, config, onUpdate = () => {}, nodeStore = null) {
     this.store = store;
@@ -199,10 +205,100 @@ export class FlowRunner {
     this.onUpdate = onUpdate;
     this.nodeStore = nodeStore; // Node Library (template defaults for instances)
     this.gates = new Map(); // runId -> resolve(bool) for a pending approval
+    // Runs this process is currently walking. Process state, not file state:
+    // it's exactly what's lost in a crash, which is what makes an interrupted
+    // run identifiable (see reconcileInterrupted).
+    this.live = new Set();
   }
 
   notify(runId) { this.onUpdate(runId); }
   owns(runId) { try { return Boolean(this.store.readMeta(runId)?.flowId); } catch { return false; } }
+
+  // Start walking a flow, tracking liveness for its whole lifetime — including
+  // while it sits paused at a gate (execute() is still awaiting, so the run is
+  // live and must not be resumable from underneath itself).
+  launch(runId, flow, resume = false) {
+    this.live.add(runId);
+    this.execute(runId, flow, resume)
+      .catch(err => this.fail(runId, err))
+      .finally(() => this.live.delete(runId));
+  }
+
+  // At startup nothing is live yet, so any run left in a non-terminal stage was
+  // cut off by the app dying — mark it so the UI can offer Resume (D17, V1
+  // task 7). awaiting_approval is deliberately excluded: those runs already
+  // have a way back (approve/reject → resumeFromGate), and a tool gate must
+  // stay abandonable rather than look resumable.
+  reconcileInterrupted() {
+    const marked = [];
+    for (const runId of this.store.listRuns()) {
+      let meta;
+      try { meta = this.store.readMeta(runId); } catch { continue; }
+      if (!meta?.flowId || meta.interrupted) continue;
+      if (TERMINAL_STAGES.has(meta.stage) || meta.stage === 'awaiting_approval') continue;
+      if (this.live.has(runId)) continue;
+      this.store.writeMeta(runId, { ...meta, interrupted: true });
+      this.store.appendLog(runId, { event: 'run_interrupted', stage: meta.stage });
+      this.rewindInFlight(runId);
+      marked.push(runId);
+    }
+    return marked;
+  }
+
+  // Rewind whatever was mid-flight when the process died — its call stack is
+  // gone, so it has to run again. Done here (the moment we know the run is
+  // dead) rather than at resume, so an interrupted run reads honestly the
+  // instant it's reopened: nothing spins, because nothing is running.
+  //   - node statuses that aren't 'done' go back to 'pending'
+  //   - tasks stuck at 'running' return to the queue for re-claiming, including
+  //     agent-spawned tasks that have no node of their own
+  // Returns how many completed nodes were preserved. Idempotent.
+  rewindInFlight(runId) {
+    const doc = this.store.readTasks(runId);
+    if (doc) {
+      const requeued = doc.tasks.filter(t => t.status === 'running');
+      if (requeued.length) {
+        for (const t of requeued) t.status = 'pending';
+        this.store.writeTasks(runId, doc);
+        this.store.appendLog(runId, { event: 'tasks_requeued', tasks: requeued.map(t => t.id) });
+      }
+    }
+    const meta = this.store.readMeta(runId);
+    const nodeStatus = Object.fromEntries(Object.entries(meta.nodeStatus ?? {})
+      .map(([id, s]) => [id, s === 'done' ? 'done' : 'pending']));
+    this.store.writeMeta(runId, { ...meta, nodeStatus, currentTaskId: null, currentNodeId: null });
+    this.notify(runId);
+    return Object.values(nodeStatus).filter(s => s === 'done').length;
+  }
+
+  // Why this run can't be resumed, or null when it can.
+  resumeBlocker(runId) {
+    let meta;
+    try { meta = this.store.readMeta(runId); } catch { return 'Run not found.'; }
+    if (!meta?.flowId) return 'Only flow runs can be resumed.';
+    if (this.live.has(runId)) return 'That run is already running.';
+    if (meta.stage === 'awaiting_approval') return 'This run is paused at an approval gate — approve or reject it instead.';
+    if (TERMINAL_STAGES.has(meta.stage)) return `This run already finished (${meta.stage}).`;
+    if (!this.store.readFlow(runId)) return 'This run has no flow.json; it cannot be resumed.';
+    return null;
+  }
+
+  // Resume a run the app died in the middle of (V1 task 7). Completed nodes are
+  // NOT re-executed: execute(resume) rebuilds `completed` from meta.nodeStatus,
+  // so the walk picks up exactly where it stopped. The rewind is normally
+  // already done by reconcileInterrupted at startup; repeating it here is a
+  // no-op that keeps resume correct on its own.
+  resume(runId) {
+    const blocker = this.resumeBlocker(runId);
+    if (blocker) throw new Error(blocker);
+    const flow = this.store.readFlow(runId);
+    const kept = this.rewindInFlight(runId);
+    this.store.writeMeta(runId, { ...this.store.readMeta(runId), interrupted: false, error: null });
+    this.store.appendLog(runId, { event: 'flow_run_resume_requested', keptCompleted: kept });
+    this.notify(runId);
+    this.launch(runId, flow, true);
+    return runId;
+  }
 
   // Start a run of a flow definition. Template instances are resolved
   // against the Node Library HERE, so the run's flow.json is a fully
@@ -236,7 +332,7 @@ export class FlowRunner {
     });
     this.store.appendLog(runId, { event: 'flow_run_created', flowId: flow.id, workspace: workspace ?? null, nodes: flow.nodes.length, edges: flow.edges.length });
     this.notify(runId);
-    this.execute(runId, flowCopy).catch(err => this.fail(runId, err));
+    this.launch(runId, flowCopy);
     return runId;
   }
 
@@ -302,9 +398,9 @@ export class FlowRunner {
       // the resumed walk.
       extra.approvedGates = [...(meta.approvedGates ?? []), nodeId];
     }
-    this.store.writeMeta(runId, { ...this.store.readMeta(runId), ...extra });
+    this.store.writeMeta(runId, { ...this.store.readMeta(runId), ...extra, interrupted: false });
     if (kind === 'escalation' && nodeId) this.setNodeStatus(runId, nodeId, 'done');
-    this.execute(runId, flow, true).catch(err => this.fail(runId, err));
+    this.launch(runId, flow, true);
   }
 
   setNodeStatus(runId, nodeId, status, extra = {}) {
@@ -358,12 +454,14 @@ export class FlowRunner {
           e.target !== n.id || completed.has(e.source) || !nodesById.has(e.source)));
       if (!ready.length) break;
 
-      // Wave selection: independent aiSteps that neither mutate shared run
-      // state (plan-eval rewrites the flow, agentTask appends to tasks.json)
-      // nor pause at a gate run concurrently; everything else runs alone.
-      const parallelSafe = n => n.type === 'aiStep'
-        && (n.data?.role ?? 'custom') !== 'plan-eval'
-        && !n.data?.requiresApproval;
+      // Wave selection: independent nodes that neither rewrite the flow
+      // (plan-eval) nor pause at a gate run concurrently; everything else runs
+      // alone. agentTask belongs here too (D7, V1 task 6): its runNode only
+      // queues a task into tasks.json — a synchronous, therefore atomic,
+      // append — and the queued tasks then execute in parallel below.
+      const parallelSafe = n => !n.data?.requiresApproval && (
+        (n.type === 'aiStep' && (n.data?.role ?? 'custom') !== 'plan-eval')
+        || n.type === 'agentTask');
       const safe = ready.filter(parallelSafe);
       const batch = safe.length > 1 ? safe.slice(0, maxParallel) : [ready[0]];
 
@@ -373,6 +471,10 @@ export class FlowRunner {
         batch.forEach((n, i) => { if (results[i].status === 'fulfilled') completed.add(n.id); });
         const rejected = results.find(r => r.status === 'rejected');
         if (rejected) throw rejected.reason;
+        // agentTasks in the wave only queued their work; run the queue (itself
+        // bounded-parallel) before anything downstream sees their outputs.
+        if (batch.some(n => n.type === 'agentTask')
+          && !await this.runPendingTasks(runId, opts.taskIdByNode, flow)) return;
         for (let i = 0; i < batch.length; i++) {
           if (!await this.applyPost(runId, flow, batch[i], results[i].value, opts, completed)) return;
         }
@@ -395,30 +497,116 @@ export class FlowRunner {
     this.notify(runId);
   }
 
-  // Run every pending task in tasks.json through the executor. Returns false
-  // (and fails the run) when a task fails. A node flagged approveToolCalls gets
-  // a per-tool approval gate wired into its executor context (V1 task 4).
-  async runPendingTasks(runId, taskIdByNode, flow = null) {
-    let task;
-    while ((task = this.store.readTasks(runId)?.tasks.find(t => t.status === 'pending'))) {
-      const nodeId = [...taskIdByNode.entries()].find(([, tid]) => tid === task.id)?.[0];
-      const node = nodeId && flow ? flow.nodes.find(n => n.id === nodeId) : null;
-      if (nodeId) this.setNodeStatus(runId, nodeId, 'active', { currentTaskId: task.id });
-      const gateOpts = node?.data?.approveToolCalls
+  // Atomically claim the next runnable pending task, or null when there is
+  // none. The read-modify-write of tasks.json is fully SYNCHRONOUS, so Node
+  // runs it to completion before any other continuation can interleave: two
+  // concurrent schedulers can never claim the same task. Claiming flips the
+  // task to 'running', which is also what drives multi-active task status in
+  // the UI (V1 task 6).
+  //
+  // A task is runnable when every dependsOn is 'done' (an unknown id is
+  // ignored rather than deadlocking) and `canClaim` accepts it.
+  claimNextTask(runId, canClaim = () => true) {
+    const doc = this.store.readTasks(runId);
+    if (!doc) return null;
+    const byId = new Map(doc.tasks.map(t => [t.id, t]));
+    const task = doc.tasks.find(t => t.status === 'pending'
+      && (t.dependsOn ?? []).every(d => !byId.has(d) || byId.get(d).status === 'done')
+      && canClaim(t));
+    if (!task) return null;
+    task.status = 'running';
+    this.store.writeTasks(runId, doc);
+    this.store.appendLog(runId, { event: 'task_claimed', task: task.id, node: `executor:${task.id}` });
+    return task;
+  }
+
+  // Run one already-claimed task to completion. Never rejects: the outcome
+  // comes back as a record so the scheduler can keep draining the other
+  // in-flight tasks instead of losing them to an exception.
+  async runClaimedTask(runId, task, taskIdByNode, flow, ledger) {
+    const nodeId = [...taskIdByNode.entries()].find(([, tid]) => tid === task.id)?.[0];
+    const node = nodeId && flow ? flow.nodes.find(n => n.id === nodeId) : null;
+    if (nodeId) this.setNodeStatus(runId, nodeId, 'active', { currentTaskId: task.id });
+    const opts = {
+      ledger,
+      ...(node?.data?.approveToolCalls
         ? { approveToolCall: call => this.toolGate(runId, node, call) }
-        : {};
-      const retro = await runExecutorTask(this.store, runId, task.id, this.config, gateOpts);
-      if (nodeId) this.setNodeStatus(runId, nodeId, retro.status === 'failed' ? 'failed' : 'done', { currentTaskId: null });
-      if (retro.status === 'failed') {
-        // A human tool-gate rejection already set stage 'rejected'; don't
-        // clobber it with a generic failure.
-        if (!retro.aborted) {
-          this.store.setStage(runId, 'failed', { error: `Task ${task.id} failed: ${retro.problems.join('; ')}` });
-        }
-        this.notify(runId);
-        return false;
-      }
+        : {})
+    };
+    ledger.begin(task.id);
+    try {
+      const retro = await runExecutorTask(this.store, runId, task.id, this.config, opts);
+      if (nodeId) this.setNodeStatus(runId, nodeId, retro.status === 'failed' ? 'failed' : 'done');
+      return { taskId: task.id, ok: retro.status !== 'failed', retro };
+    } catch (err) {
+      // runExecutorTask folds model/tool errors into a failed retrospective, so
+      // reaching here means something unexpected threw. Mark the task failed so
+      // it is never re-claimed and its dependents stay blocked.
+      const doc = this.store.readTasks(runId);
+      const t = doc?.tasks.find(t => t.id === task.id);
+      if (t) { t.status = 'failed'; this.store.writeTasks(runId, doc); }
+      this.store.appendLog(runId, { event: 'task_error', task: task.id, error: String(err?.message ?? err) });
+      if (nodeId) this.setNodeStatus(runId, nodeId, 'failed');
+      return { taskId: task.id, ok: false, error: String(err?.message ?? err) };
+    } finally {
+      ledger.end(task.id);
     }
+  }
+
+  // Drain tasks.json through the executor with bounded parallelism (D7, V1
+  // task 6): independent tasks run concurrently up to config.maxParallel.
+  // Returns false (and fails the run) when a task fails.
+  //
+  // Two things stay serialized on purpose:
+  //   - a task whose node opted into approveToolCalls runs ALONE, because the
+  //     gate promise (this.gates) is per-run — two tasks pausing at once would
+  //     collide over it. Same reason the outer walk keeps gated nodes solo.
+  //   - once a task fails we stop claiming, but still await the in-flight ones
+  //     so no task keeps writing after the run is marked failed.
+  async runPendingTasks(runId, taskIdByNode, flow = null) {
+    const maxParallel = Math.max(1, Number(this.config.maxParallel ?? 4));
+    const ledger = createWriteLedger();
+    const nodeFor = task => {
+      const nodeId = [...taskIdByNode.entries()].find(([, tid]) => tid === task.id)?.[0];
+      return nodeId && flow ? flow.nodes.find(n => n.id === nodeId) : null;
+    };
+    const isGated = task => Boolean(nodeFor(task)?.data?.approveToolCalls);
+
+    const running = new Map(); // taskId -> Promise<outcome>
+    let failure = null;
+
+    for (;;) {
+      while (!failure && running.size < maxParallel) {
+        // A gated task may only start when nothing else is in flight.
+        const task = this.claimNextTask(runId, t => !isGated(t) || running.size === 0);
+        if (!task) break;
+        running.set(task.id, this.runClaimedTask(runId, task, taskIdByNode, flow, ledger));
+        if (isGated(task)) break; // keep it alone until it settles
+      }
+      if (!running.size) break;
+      if (running.size > 1) {
+        this.store.appendLog(runId, { event: 'task_wave', tasks: [...running.keys()] });
+      }
+      const outcome = await Promise.race(running.values());
+      running.delete(outcome.taskId);
+      if (!outcome.ok && !failure) failure = outcome;
+    }
+
+    // The batch has drained; no task is current any more.
+    const meta = this.store.readMeta(runId);
+    if (meta?.currentTaskId) this.store.writeMeta(runId, { ...meta, currentTaskId: null });
+
+    if (failure) {
+      // A human tool-gate rejection already set stage 'rejected'; don't
+      // clobber it with a generic failure.
+      if (!failure.retro?.aborted) {
+        const why = failure.retro ? failure.retro.problems.join('; ') : failure.error;
+        this.store.setStage(runId, 'failed', { error: `Task ${failure.taskId} failed: ${why}` });
+      }
+      this.notify(runId);
+      return false;
+    }
+    this.notify(runId);
     return true;
   }
 
@@ -682,11 +870,19 @@ export class FlowRunner {
       const prior = priorDoc?.tasks.find(t => t.id === priorId);
       if (prior) {
         taskIdByNode.set(node.id, prior.id);
-        if (prior.status !== 'done') {
-          prior.status = 'pending';
-          this.store.writeTasks(runId, priorDoc);
+        this.store.appendLog(runId, {
+          event: 'node_resume', node: node.id, type: 'agentTask',
+          taskId: prior.id, taskStatus: prior.status
+        });
+        // The task already finished on the previous pass (the app died between
+        // the task's last write and this node being marked done): the node's
+        // work IS the task, so honor it as done instead of re-running it.
+        if (prior.status === 'done') {
+          this.setNodeStatus(runId, node.id, 'done');
+          return;
         }
-        this.store.appendLog(runId, { event: 'node_resume', node: node.id, type: 'agentTask', taskId: prior.id });
+        prior.status = 'pending';
+        this.store.writeTasks(runId, priorDoc);
         this.setNodeStatus(runId, node.id, 'queued');
         return;
       }
@@ -1009,7 +1205,9 @@ export class FlowRunner {
       const ready = children.filter(c => !done.has(c.id) &&
         flow.edges.every(e => e.target !== c.id || !childIds.has(e.source) || done.has(e.source)));
       if (!ready.length) break;
-      const safe = ready.filter(c => c.type === 'aiStep');
+      // Children are never gated (the container runs autonomously), so both
+      // aiStep and agentTask children are wave-safe (V1 task 6).
+      const safe = ready.filter(c => c.type === 'aiStep' || c.type === 'agentTask');
       const batch = safe.length > 1 ? safe.slice(0, maxParallel) : [ready[0]];
 
       if (batch.length > 1) {
@@ -1020,6 +1218,11 @@ export class FlowRunner {
         if (rejected) {
           this.setNodeStatus(runId, node.id, 'failed');
           throw rejected.reason;
+        }
+        if (batch.some(c => c.type === 'agentTask')
+          && !await this.runPendingTasks(runId, opts.taskIdByNode, flow)) {
+          this.setNodeStatus(runId, node.id, 'failed');
+          throw new Error(`Orchestrator ${node.id}: a child task failed`);
         }
         continue;
       }

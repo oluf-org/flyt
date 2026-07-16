@@ -159,6 +159,12 @@ export class RunStore {
   }
 
   // --- audit log: every AI action observable ---
+  // Safe under the concurrent writers that parallel agentTasks introduce (V1
+  // task 6): appendFileSync opens/appends/closes in one synchronous call, which
+  // Node runs to completion before any other continuation, so lines can never
+  // interleave or be lost. Readability under concurrency comes from attribution
+  // instead — entries emitted while tasks overlap carry `node: executor:<id>`,
+  // so one task's story can still be followed end to end.
   appendLog(runId, entry) {
     const line = JSON.stringify({ ts: new Date().toISOString(), ...entry });
     fs.appendFileSync(path.join(this.runDir(runId), 'log.jsonl'), line + '\n', 'utf8');

@@ -112,6 +112,7 @@ export function installDevMock() {
     getSnapshot: async id => snapshots[id] ?? null,
     approvePlan: async () => {},
     rejectPlan: async () => {},
+    resumeRun: async () => {},
     openRunFolder: async () => {},
     pickWorkspace: async () => null, // no native folder picker in the browser dev shell
     openWorkspace: async () => {},

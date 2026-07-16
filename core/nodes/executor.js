@@ -6,7 +6,7 @@ import { getTools } from '../tools/index.js';
 import { makeRetrospective } from '../retrospective.js';
 import { Workspace } from '../workspace.js';
 
-export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null } = {}) {
+export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null } = {}) {
   const tasksDoc = store.readTasks(runId);
   const task = tasksDoc.tasks.find(t => t.id === taskId);
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
@@ -57,6 +57,9 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     // Present only when the node opted into per-tool approval: the agent loop
     // calls it before each destructive tool call (V1 task 4).
     approveToolCall,
+    // Present when this task is part of a parallel batch: file tools use it to
+    // flag a write to a path another in-flight task also wrote (V1 task 6).
+    ledger,
     defaultWorker: {
       provider: config.workers?.executor?.provider ?? task.worker.provider,
       model: config.workers?.executor?.model ?? task.worker.model

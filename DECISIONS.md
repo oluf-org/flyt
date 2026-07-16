@@ -39,9 +39,9 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 **Status.** Decided (v1); future extension Open.
 
 ### D7 — Parallelism is a v1 requirement
-**Context.** Independent `aiStep` nodes already run in parallel (`maxParallel` 4); executor/agentTasks are still sequential.
+**Context.** Independent `aiStep` nodes already ran in parallel (`maxParallel` 4); executor/agentTasks were still sequential.
 **Decision.** Parallelism is **required**, both because of the capability it unlocks and because it underpins agents spawning other agents mid-run. Extending it to agentTasks is the key upgrade.
-**Status.** Decided (requirement); implementation for agentTasks is Open (Q-D1).
+**Status.** Decided — **done** (V1 task 6; Q-D1 resolved). agentTasks run bounded-parallel in the main walk and inside orchestrators, via atomic task claiming. See `DESIGN-SPEC.md` §2.1.
 
 ### D8 — Sub-agents = spawned nodes; two-tier orchestrator depth cap
 **Context.** "Agents spawning agents" mid-run. Orchestrator nodes already spawn children.
@@ -56,7 +56,7 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 ### D10 — Streaming is a v1 requirement
 **Context.** Adapters support `onText` streaming; the UI doesn't consume it, so real-model runs look idle.
 **Decision.** Ship **token streaming in v1** — a sidebar showing the latest update; later, a status sidebar that summarizes all active nodes.
-**Status.** Decided; IPC/snapshot rework is Open (Q-D7).
+**Status.** Decided; the IPC/snapshot rework it depended on is **done** (V1 task 5 — Q-D7 resolved). Surfacing streaming in the UI remains V1 task 8.
 
 ### D11 — Context via an explicit analysis step
 **Context.** `upstreamContext()` over-concatenates unless a `contextSpec` is set.
@@ -91,7 +91,7 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 ### D17 — Restart resilience: preserve completed steps now, full resilience later
 **Context.** Gates are an in-memory Map, but `meta.approvedGates` persists and resume logic exists.
 **Decision.** Near-term: ensure **completed steps survive an app restart.** Fuller crash/restart resilience for pending gates is a later goal.
-**Status.** Provisional.
+**Status.** Decided — near-term half **done** (V1 task 7). Interrupted runs are detected at startup and resumed by an explicit **Resume** action; completed nodes are kept and never re-executed. Resuming stayed a user action rather than automatic, so a crash can't make agent tool calls hit a real repo on launch — consistent with the approvals-first posture of D16. Pending *tool* gates still abandon honestly; that's the "later goal" half. See `DESIGN-SPEC.md` §10.
 
 ### D18 — Business model: BYO key now, capped-key subscription at ship
 **Context.** Users add their own OpenRouter/Anthropic key today.
@@ -120,13 +120,13 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 - **Q-P5.** What does the "AI helper as builder" authoring UX look like, and how does it relate to view mode?
 
 **Design (from `DESIGN-SPEC.md` §12):**
-- **Q-D1.** Parallel `agentTask`/executor execution: readable concurrent log, multi-active status, workspace write-isolation.
+- ~~**Q-D1.** Parallel `agentTask`/executor execution: readable concurrent log, multi-active status, workspace write-isolation.~~ **Resolved** (V1 task 6): atomic task claiming + bounded parallel drain; log safe by sync append + per-task attribution; status via persisted `running` + `nodeStatus`. The write hazard landed as **detection** (`core/writeLedger.js` flags concurrent same-path writes), not isolation — per-task worktrees remain post-V1.
 - **Q-D2.** Spawn guards beyond depth (budget/node-count); do spawned nodes get their own gates and retrospectives?
 - **Q-D3.** Context Analysis step: which model runs it, how the none/pointers/summarized/full choice is made and represented.
 - **Q-D4.** Routing matrix schema: exact axes and how ranking data updates it.
 - **Q-D5.** Workspace binding: run-time selection vs. workflow-bound; `.llmflow/` contents/schema.
 - **Q-D6.** Safety envelope: allowlist/denylist, diff preview before writes, network policy, limits of "skip safety."
-- **Q-D7.** Streaming vs. snapshot IPC: incremental update path so streaming doesn't re-send the whole snapshot.
+- ~~**Q-D7.** Streaming vs. snapshot IPC: incremental update path so streaming doesn't re-send the whole snapshot.~~ **Resolved** (V1 task 5): diffed pushes via `core/snapshotDiff.js`; see `DESIGN-SPEC.md` §10.
 - **Q-D8.** Retrospective loop scope: confirm narrow (ranking→routing) vs. broader adaptation.
 
 ---

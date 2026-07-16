@@ -1,7 +1,7 @@
 // create_file: create a NEW text file in the workspace. Fails if the file
 // already exists (use write_file to overwrite) so an agent can't silently
 // clobber existing repo files. Acts on the bound target project when set.
-import { fileHost, writeText, fileExists } from './fileHost.js';
+import { fileHost, writeText, fileExists, noteWorkspaceWrite } from './fileHost.js';
 
 export default {
   name: 'create_file',
@@ -20,7 +20,11 @@ export default {
     if (fileExists(host, args.path)) {
       throw new Error(`File "${args.path}" already exists; use write_file to overwrite it.`);
     }
+    const conflict = noteWorkspaceWrite(ctx, args.path);
     const created = writeText(host, args.path, args.content);
-    return { created, bytes: Buffer.byteLength(args.content, 'utf8'), target: host.target };
+    return {
+      created, bytes: Buffer.byteLength(args.content, 'utf8'), target: host.target,
+      ...(conflict ? { conflictWith: conflict } : {})
+    };
   }
 };

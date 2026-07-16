@@ -43,3 +43,21 @@ export function fileExists(host, relPath) {
   const p = host.resolve(relPath);
   return fs.existsSync(p) && fs.statSync(p).isFile();
 }
+
+// Record a write against the run's concurrent-write ledger, which is present
+// only while a parallel task batch is in flight (V1 task 6). When another
+// still-running task already wrote this path, the interference goes to
+// log.jsonl and is returned so the tool can surface it in its result (and from
+// there the retrospective + inspector). Null when there is no conflict.
+export function noteWorkspaceWrite(ctx, relPath) {
+  const conflict = ctx.ledger?.noteWrite(ctx.taskId, relPath) ?? null;
+  if (conflict) {
+    ctx.store?.appendLog(ctx.runId, {
+      event: 'workspace_write_conflict',
+      node: ctx.taskId ? `executor:${ctx.taskId}` : undefined,
+      path: relPath,
+      alsoWrittenBy: `executor:${conflict}`
+    });
+  }
+  return conflict;
+}

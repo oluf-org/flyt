@@ -10,6 +10,7 @@ import { Workspace } from '../core/workspace.js';
 import { lintFlow, lintText } from '../core/flowlang/lint.js';
 import { parseFlow } from '../core/flowlang/parse.js';
 import { serializeFlow } from '../core/flowlang/serialize.js';
+import { diffSnapshot } from '../core/snapshotDiff.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, '..');
@@ -89,20 +90,48 @@ const CHROME = {
 
 let win = null;
 // Coalesce bursts of state changes (parallel waves, streaming chunks) into at
-// most one snapshot push per run per tick window: the snapshot is built from
-// file state when the timer fires, so the last write always wins.
+// most one push per run per tick window: the snapshot is built from file state
+// when the timer fires, so the last write always wins.
 const pendingPush = new Map(); // runId -> timer
 const PUSH_COALESCE_MS = 80;
+
+// Incremental IPC (V1 task 5): instead of re-sending the whole run on every
+// mutation, we keep the last snapshot we sent per run plus a monotonic rev, and
+// push only the diff. The renderer applies patches on top of the full snapshot
+// it fetched via run:snapshot; the rev/base pair lets it detect a missed update
+// and resync. Session-scoped and bounded by the runs touched this session.
+const runChannels = new Map(); // runId -> { snapshot, rev }
+const revOf = runId => runChannels.get(runId)?.rev ?? 0;
+
 const pushUpdate = runId => {
   if (pendingPush.has(runId)) return;
   pendingPush.set(runId, setTimeout(() => {
     pendingPush.delete(runId);
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('run:update', { runId, snapshot: store.snapshot(runId) });
+    if (!win || win.isDestroyed()) return;
+    const next = store.snapshot(runId);
+    const chan = runChannels.get(runId);
+    // No baseline yet: send the full snapshot so the renderer has something to
+    // patch against.
+    if (!chan) {
+      const rev = 1;
+      runChannels.set(runId, { snapshot: next, rev });
+      win.webContents.send('run:update', { runId, rev, base: null, full: next });
+      return;
     }
+    const patch = diffSnapshot(chan.snapshot, next);
+    if (!patch) return; // nothing actually changed — skip the wake-up
+    const rev = chan.rev + 1;
+    runChannels.set(runId, { snapshot: next, rev });
+    win.webContents.send('run:update', { runId, rev, base: chan.rev, patch });
   }, PUSH_COALESCE_MS));
 };
 const flowRunner = new FlowRunner(store, runtimeConfig, pushUpdate, nodeLibrary);
+
+// Nothing is live this early, so any run still sitting in a non-terminal stage
+// was cut off by the app dying. Flag those once at startup so the run view can
+// offer Resume (V1 task 7); completed steps are preserved either way.
+const interrupted = flowRunner.reconcileInterrupted();
+if (interrupted.length) console.log(`[llm-flow] ${interrupted.length} interrupted run(s) marked resumable`);
 
 function createWindow() {
   win = new BrowserWindow({
@@ -139,8 +168,14 @@ ipcMain.handle('flow:run', (_e, flowId, userInput = '', workspaceDir = null) => 
 });
 ipcMain.handle('run:approve', (_e, runId) => flowRunner.approvePlan(runId));
 ipcMain.handle('run:reject', (_e, runId, reason) => flowRunner.rejectPlan(runId, reason));
+// Continue a run the app died in the middle of. Completed nodes are kept and
+// not re-executed (V1 task 7).
+ipcMain.handle('run:resume', (_e, runId) => flowRunner.resume(runId));
 ipcMain.handle('run:list', () => store.listRuns());
-ipcMain.handle('run:snapshot', (_e, runId) => store.snapshot(runId));
+// Full snapshot stamped with the run's current rev, so a renderer that fetches
+// it (on first view or after a missed patch) has a baseline the incremental
+// pushes can build on.
+ipcMain.handle('run:snapshot', (_e, runId) => ({ ...store.snapshot(runId), rev: revOf(runId) }));
 ipcMain.handle('run:openFolder', (_e, runId) => shell.openPath(store.runDir(runId)));
 
 // --- Workspace binding (target project folder for a run) ---

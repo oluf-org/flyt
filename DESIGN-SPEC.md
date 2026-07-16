@@ -46,10 +46,15 @@ Node kinds today:
 - `agentTask` — runs through the agent loop (`core/agent.js` → `core/nodes/executor.js`) with tools.
 - `orchestrator` — a container that plans and spawns child nodes (see §5).
 
-### 2.1 Parallelism — [PARTIAL]
-Independent `aiStep` nodes **run concurrently**, bounded by `config.maxParallel` (default 4). The scheduler batches ready, side-effect-safe nodes into waves. **However:** gates, `plan-eval`, and **executor (`agentTask`) tasks still run sequentially.** So parallelism is real for pure aiStep fan-out but not yet for the tool-using agent tasks that matter most to the coding-agent vision.
+### 2.1 Parallelism — [DONE]
+Independent `aiStep` **and `agentTask`** nodes run concurrently, bounded by `config.maxParallel` (default 4), in both the main walk and the orchestrator's inline sub-walk (V1 task 6, D7 — resolves Q-D1). The scheduler batches ready, side-effect-safe nodes into waves. Still serialized on purpose: `plan-eval` (it rewrites the flow), nodes behind an approval gate, and any task whose node opted into `approveToolCalls` (the gate promise is per-run, so two tasks pausing at once would collide over it).
 
-**[PLANNED]** Extend bounded parallelism to `agentTask`/executor tasks. This is the load-bearing upgrade for the product (the owner named parallelism as core magic). It requires care around: the append-only log staying readable with concurrent writers, per-node "active" status when several are live at once, and workspace file-write isolation between concurrent tasks.
+An `agentTask`'s `runNode` only *queues* a task; the queue then drains through the executor with the same bound. Tasks are **claimed** — `FlowRunner.claimNextTask` flips `pending` → `running` in a synchronous read-modify-write of `tasks.json`, which Node runs to completion before any other continuation, so two concurrent schedulers can never claim the same task. Claiming respects `dependsOn`.
+
+The three hazards this had to clear (`Q-D1`), and how:
+- **Readable log under concurrent writers.** `appendLog` uses `appendFileSync` — one synchronous open/append/close, so lines can never interleave or be lost (no locking needed; this is a benefit of the sync-I/O choice in §10). Readability comes from *attribution*: entries carry `node: executor:<taskId>`, so one task's story stays followable while others overlap. `task_claimed`/`task_wave` events record what ran together.
+- **Multi-active status.** A claimed task persists `status: 'running'` in `tasks.json`, and per-node status lives in `meta.nodeStatus` — both are maps, so any number of nodes/tasks show active at once. (`meta.currentTaskId` is a legacy single-task signal, kept only for runs recorded before this.) Consistent with the relaxed animation rule (D9).
+- **Workspace write interference.** Each write is already atomic (synchronous whole-file writes), so a same-path collision is a clean last-writer-wins, not corruption. What was missing was *visibility*: `core/writeLedger.js` tracks which in-flight task last wrote each path and flags a second concurrent writer to `log.jsonl` (`workspace_write_conflict`) and into the tool record → retrospective → inspector. This is **detection, not isolation** — true isolation (per-task worktrees + merge) is a much larger design decision, and `bash` can write files invisibly to the ledger.
 
 ### 2.2 The "feel" policy — [CLARIFIED]
 `GOALS.md` previously said "only one element on screen should ever animate at once." **That was a misstatement of intent.** The real goal: animation should be *deliberate and not messy* — avoid a screen full of competing motion — **without an absolute one-animation rule.** When parallel nodes run, showing several as active is correct; the constraint is tasteful, legible motion, not a single spinner. `GOALS.md` has been updated to match.
@@ -114,7 +119,7 @@ In this app, **a node is an agent.** Spawning a node and spawning an agent are t
 - A **sidebar showing the latest streaming update** (the currently-working node's live output).
 - **Future:** a *status sidebar* that runs a summarizer over *all* currently-active nodes, giving a running digest of everything in flight during parallel execution.
 
-Wiring: consume `onText` in the executor/runner → write incremental `nodes/<id>.md` → push to the renderer. Note the existing full-snapshot-over-IPC path (see §10) will need attention so streaming doesn't re-send everything on every chunk.
+Wiring: consume `onText` in the executor/runner → write incremental `nodes/<id>.md` → push to the renderer. The IPC side of this is done: pushes are incremental (§10), so a streaming chunk ships only the changed node's output rather than the whole run.
 
 ---
 
@@ -162,9 +167,10 @@ A coding agent with `write_file` + `bash` against a real workspace has real blas
 
 Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 
-- **Full-snapshot IPC.** Every mutation pushes the whole run snapshot to the renderer. This will fight streaming (§6) and large outputs; move toward incremental/diffed updates before outputs grow.
+- **Full-snapshot IPC — [RESOLVED]** (V1 task 5, resolves Q-D7). Mutations no longer push the whole run snapshot. `electron/main.js` keeps the last snapshot it sent per run plus a monotonic `rev`, and pushes only a diff (`core/snapshotDiff.js`): whole-value fields (`meta`/`prompt`/`plan`/`tasks`/`flow`) replace when changed, while the growing maps (`nodeOutputs`/`taskOutputs`/`retrospectives`) diff per entry — so a streaming flush ships one node's markdown. The renderer applies patches onto the snapshot it fetched via `run:snapshot`; a `rev`/`base` mismatch (e.g. a push missed during a run switch) triggers a resync. Because each patch is "current minus baseline", applying it to any state at/after that baseline converges.
 - **Synchronous filesystem.** `RunStore`/`FlowStore` use sync I/O. Fine for small runs; a liability under many concurrent tool calls (§2.1) and large files. Changing it is a philosophical shift, so decide deliberately.
-- **Restart resilience — [PARTIAL].** Approval gates are an in-memory `Map`, *but* approved gates persist in `meta.approvedGates` and the runner has checkpoint/escalation resume logic ("resumed after restart"). So resilience is better than the old review claims, though a gate pending *at the moment of restart* is still fragile. Owner's near-term ask: ensure **completed steps survive app restart**; fuller resilience is a later goal.
+- **Restart resilience — [DONE for completed steps]** (V1 task 7, D17 near-term). Completed steps survive the app dying and are never redone. At startup nothing is live yet, so any run left in a non-terminal stage was cut off: `FlowRunner.reconcileInterrupted` flags it `meta.interrupted` and **rewinds** what was mid-flight — node statuses that aren't `done` go back to `pending`, and tasks stuck at `running` return to the queue (including agent-spawned ones with no node). The rewind happens at *reconcile*, not resume, so a reopened run reads honestly: nothing spins, because nothing is running. Resuming is an **explicit user action** (a Resume button in the run view, `run:resume`) — the app never re-runs bash/file tools against a real repo on launch without the user deciding to. `execute(resume)` rebuilds `completed` from `meta.nodeStatus`, so the walk continues from exactly where it stopped. Liveness is tracked in `FlowRunner.live` (process state, not file state — which is precisely what a crash destroys), so a running run can never be resumed from underneath itself.
+  Still fragile by design (post-V1): a gate pending *at the moment of restart*. A pre-node/escalation gate recovers (approve/reject → `resumeFromGate`), but a **tool** gate is abandoned honestly — its call stack died with the app, so the task is failed rather than pretending the call can be approved.
 - **Canvas at scale.** Manual layout, new node/edge arrays per update, no memoization. Fine for small graphs (the stated scope); revisit before large graphs or heavy inspector content.
 
 ---
@@ -178,14 +184,14 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | Canvas (React Flow), Inspector, run panel, Settings | BUILT | Canvas is authoring + run view |
 | Flow DSL (`.flow.yaml`), lint/parse/serialize/migrate/CLI | BUILT | See `FLOW_LANG.md` |
 | One engine, dynamic topological walk | BUILT | `core/flowRunner.js` |
-| Parallel `aiStep` execution (`maxParallel` 4) | PARTIAL | Executor/agentTask still sequential |
+| Parallel `aiStep` + `agentTask` execution (`maxParallel` 4) | BUILT | Atomic task claiming; gated tasks stay solo (§2.1) |
 | Mid-run node materialization | BUILT | `plan-eval` + orchestrator spawn nodes |
 | Orchestrator node (spawns children, inline sub-walk) | PARTIAL | Seed of sub-agents; no depth/budget guard yet |
 | Agent loop + tool registry (native + text) | BUILT | `write_file`, `create_task`, `write_task_md` |
 | Adapters (mock/anthropic/openrouter), retry/backoff | BUILT | Default = mock |
 | Streaming (`onText` contract) | PARTIAL | Adapter-ready; not surfaced in UI |
 | Retrospectives + `historyDigest` | BUILT | One-way into planning today |
-| Approval gates + partial restart resume | PARTIAL | `meta.approvedGates` persists |
+| Approval gates + restart resume | BUILT | Completed steps survive a crash; explicit Resume (§10). Pending *tool* gates still abandon |
 | Two-tier orchestrator depth guard | PLANNED | Design rule; not enforced in code |
 | Model routing matrix + LLM tiebreaker | PLANNED | Today: static `categoryWorkers` |
 | Context Analysis step (cheap-model strategy) | PLANNED | `contextSpec` honored when present |
@@ -205,11 +211,11 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 
 Consolidated in `DECISIONS.md`; summarized here:
 
-1. **Parallel agentTasks:** how to run tool-using tasks concurrently with a readable log, correct multi-active status, and workspace write-isolation.
+1. ~~**Parallel agentTasks:** how to run tool-using tasks concurrently with a readable log, correct multi-active status, and workspace write-isolation.~~ **Resolved** (V1 task 6) — see §2.1. Note the write hazard landed as *detection*, not isolation.
 2. **Spawn guards beyond depth:** budget/node-count ceilings; whether spawned nodes get their own gates and retrospectives.
 3. **Context strategy selection:** who runs the analysis step, what model, and how "none/pointers/summarized/full" is chosen and represented.
 4. **Routing matrix schema:** exact axes (task type, language, complexity, cost) and how ranking data updates it.
 5. **Workspace binding:** run-time selection vs. workflow-bound; `.llmflow/` contents and schema.
 6. **Safety envelope:** allowlist/denylist, diff preview, network policy, and the limits of "skip safety."
-7. **Streaming vs. snapshot IPC:** incremental update path so streaming doesn't re-send the whole snapshot.
+7. ~~**Streaming vs. snapshot IPC:** incremental update path so streaming doesn't re-send the whole snapshot.~~ **Resolved** (V1 task 5) — see §10.
 8. **Retrospective loop scope:** keep narrow (which model wins which task type → routing) vs. broader adaptation.

@@ -325,7 +325,11 @@ function buildGraph(snapshot, selectedNode) {
     const execY = 3 * STEP_Y;
     const startY = execY - ((tasks.tasks.length - 1) * STEP_Y) / 2;
     tasks.tasks.forEach((t, i) => {
-      const running = meta.currentTaskId === t.id && meta.stage === 'execution';
+      // 'running' is persisted per task when the scheduler claims it, so any
+      // number of tasks can show active at once (V1 task 6). currentTaskId is
+      // the legacy single-task signal, kept for runs recorded before that.
+      const running = t.status === 'running'
+        || (meta.currentTaskId === t.id && meta.stage === 'execution');
       nodes.push({
         id: t.id,
         type: 'task',
