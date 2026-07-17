@@ -22,6 +22,7 @@ import path from 'node:path';
 import { parseFlow } from './flowlang/parse.js';
 import { serializeFlow } from './flowlang/serialize.js';
 import { layoutPositions } from '../src/flowLayout.js';
+import { UNTITLED_FLOW } from '../src/flowTypes.js';
 
 export const DEFAULT_PIPELINE_ID = 'default-pipeline';
 
@@ -132,7 +133,7 @@ export class FlowStore {
     const chain = nodes.map(n => n.id);
     const flow = {
       id,
-      name: 'Untitled flow',
+      name: UNTITLED_FLOW,
       nodes,
       edges: chain.slice(1).map((to, i) => ({ id: `e-${chain[i]}-${to}`, source: chain[i], target: to }))
     };

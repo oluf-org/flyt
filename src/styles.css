@@ -588,6 +588,7 @@ kbd.shortcut {
   font-size: 10.5px; color: var(--faint);
 }
 .save-dot.saved { color: var(--ok); }
+.save-dot.failed { color: var(--err); }
 
 /* flow lint badge (on-save validation of the *.flow.yaml source of truth) */
 .lint-badge {

@@ -11,6 +11,17 @@ export const TYPE_META = {
   output:       { icon: '◎', kind: 'user', label: 'Output',       sub: 'result · collects upstream' }
 };
 
+// The name a flow carries until the user gives it one. Also what the editor
+// falls back to when the name field is left blank: the DSL requires a name, so
+// an empty field is a transient editing state (you must clear the old name to
+// type a new one) and never something that reaches the store.
+export const UNTITLED_FLOW = 'Untitled flow';
+
+// Guarantee the name the store demands. Renaming necessarily passes through a
+// blank field on the way to the new name, and the editor autosaves as you type;
+// without this, that keystroke fails the save and the rename is stranded.
+export const namedFlow = flow => (flow.name?.trim() ? flow : { ...flow, name: UNTITLED_FLOW });
+
 // Tools an agentTask node may be granted (core/tools/index.js registry).
 export const AGENT_TOOLS = ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md'];
 

@@ -8,7 +8,7 @@ import LiveStream from './LiveStream.jsx';
 import RunBar from './RunBar.jsx';
 import RunResult from './RunResult.jsx';
 import { isTerminal } from './runProgress.js';
-import { resolveFlow } from './flowTypes.js';
+import { resolveFlow, namedFlow, UNTITLED_FLOW } from './flowTypes.js';
 import { layoutPositions } from './flowLayout.js';
 import { mergeSnapshot } from '../core/snapshotDiff.js';
 
@@ -91,7 +91,7 @@ export default function App() {
   const [flowsList, setFlowsList] = useState([]);
   const [activeFlowId, setActiveFlowId] = useState(null);
   const [flow, setFlow] = useState(null);
-  const [flowSaved, setFlowSaved] = useState(true);
+  const [saveState, setSaveState] = useState('saved'); // 'saved' | 'saving' | 'failed'
   const [flowLint, setFlowLint] = useState(null); // { ok, errors, warnings } for the open flow
   const [models, setModels] = useState([]);
   const [flowViewMode, setFlowViewMode] = useState('canvas'); // 'canvas' | 'yaml'
@@ -210,31 +210,38 @@ export default function App() {
     catch { setFlowLint(null); }
   }, []);
 
+  // The one write path. Every navigation awaits flushSave, so a rejection here
+  // would wedge the app rather than just this document: keep failures inside,
+  // and say so in the badge instead of claiming a save that never landed.
+  const persist = useCallback(async flow => {
+    try {
+      await window.llmflow.saveFlow(namedFlow(flow));
+      setSaveState('saved');
+      refreshFlows(); // name may have changed
+      refreshLint(flow.id);
+    } catch (e) {
+      console.error('Saving the flow failed:', e);
+      setSaveState('failed');
+    }
+  }, [refreshFlows, refreshLint]);
+
   const flushSave = useCallback(async () => {
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
       saveTimer.current = null;
-      if (flowRef.current) {
-        await window.llmflow.saveFlow(flowRef.current);
-        setFlowSaved(true);
-        refreshFlows();
-        refreshLint(flowRef.current.id);
-      }
+      if (flowRef.current) await persist(flowRef.current);
     }
-  }, [refreshFlows, refreshLint]);
+  }, [persist]);
 
   const schedulePersist = useCallback(next => {
     flowRef.current = next;
-    setFlowSaved(false);
+    setSaveState('saving');
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
+    saveTimer.current = setTimeout(() => {
       saveTimer.current = null;
-      await window.llmflow.saveFlow(flowRef.current);
-      setFlowSaved(true);
-      refreshFlows(); // name may have changed
-      refreshLint(flowRef.current?.id);
+      persist(flowRef.current);
     }, 500);
-  }, [refreshFlows, refreshLint]);
+  }, [persist]);
 
   const changeFlow = useCallback(updater => {
     setFlow(prev => {
@@ -267,7 +274,7 @@ export default function App() {
     const f = await window.llmflow.loadFlow(activeFlowId);
     flowRef.current = f;
     setFlow(f);
-    setFlowSaved(true);
+    setSaveState('saved');
     refreshLint(activeFlowId);
     // keep selected if the node still exists
     setSelectedNode(sel => sel && f.nodes.some(n => n.id === sel) ? sel : null);
@@ -302,7 +309,7 @@ export default function App() {
     const f = await window.llmflow.loadFlow(id);
     flowRef.current = f;
     setFlow(f);
-    setFlowSaved(true);
+    setSaveState('saved');
     setActiveFlowId(id);
     setSelectedNode(null);
     setRunFlowId(id); // browsing a flow points the run panel at it
@@ -675,6 +682,7 @@ export default function App() {
                 className="flow-name mono"
                 value={flow.name}
                 onChange={e => changeFlow(f => ({ ...f, name: e.target.value }))}
+                onBlur={() => changeFlow(f => (f.name.trim() ? f : { ...f, name: UNTITLED_FLOW }))}
                 aria-label="Flow name"
               />
               <div className="view-switch" role="tablist" aria-label="Editor view">
@@ -753,7 +761,9 @@ export default function App() {
               ) : (
                 <span className="lint-badge ok" title="Flow passes all lint rules">✓ Valid</span>
               ))}
-              <span className={'save-dot' + (flowSaved ? ' saved' : '')}>{flowSaved ? 'Saved' : 'Saving…'}</span>
+              <span className={'save-dot ' + saveState}>
+                {saveState === 'saved' ? 'Saved' : saveState === 'failed' ? 'Save failed' : 'Saving…'}
+              </span>
               <button className="reject" onClick={deleteFlow}>Delete flow</button>
             </div>
           )}

@@ -12,7 +12,7 @@ import path from 'node:path';
 import { NodeStore } from '../core/nodestore.js';
 import { FlowStore, DEFAULT_PIPELINE_ID } from '../core/flowstore.js';
 import { FlowRunner, topoSort } from '../core/flowRunner.js';
-import { SEED_NODE_TEMPLATES, resolveFlow, resolveInstance } from '../src/flowTypes.js';
+import { SEED_NODE_TEMPLATES, resolveFlow, resolveInstance, namedFlow, UNTITLED_FLOW } from '../src/flowTypes.js';
 import { makeStore, setScript, roleOf, testConfig, waitForStage } from './helpers.js';
 
 const tmpDir = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -193,4 +193,16 @@ test('template + override instructions reach the model prompt; agentTask templat
   const task = store.readTasks(runId).tasks.find(t => t.title === 'Test creation');
   assert.deepEqual(task.tools, ['write_file']);
   assert.equal(store.readMeta(runId).nodeStatus.tests, 'done');
+});
+
+// Renaming a flow clears the field before the new name is typed, and the editor
+// autosaves as you type — so the blank keystroke must still produce a saveable
+// flow (FlowStore.save rejects a nameless one) instead of stranding the rename.
+test('namedFlow: a blank name falls back, a real name is untouched', () => {
+  const flow = { id: 'f1', nodes: [], edges: [] };
+  assert.equal(namedFlow({ ...flow, name: '' }).name, UNTITLED_FLOW);
+  assert.equal(namedFlow({ ...flow, name: '   ' }).name, UNTITLED_FLOW);
+  assert.equal(namedFlow({ ...flow }).name, UNTITLED_FLOW); // name absent entirely
+  const named = { ...flow, name: 'Docs pipeline' };
+  assert.equal(namedFlow(named), named); // no needless copy
 });
