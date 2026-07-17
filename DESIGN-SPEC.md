@@ -244,7 +244,7 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | Area | State | Notes |
 |---|---|---|
 | File-based state, RunStore/NodeStore/FlowStore | BUILT | Single source of truth |
-| Node Library + Nodes page (9 templates) | BUILT | Template/instance/override model |
+| Node Library + Nodes page (9 templates) | BUILT | Work templates are agentTasks with real tools (V1 task 12) |
 | Template `skills` injected into execution | BUILT | V1 task 10 — project supplies `.llmflow/skills/<name>.md` (§6.2) |
 | Canvas (React Flow), Inspector, run panel, Settings | BUILT | Canvas is authoring + run view |
 | Run view mode (header, live panel, spawned tasks, outcome) | BUILT | V1 task 9 — see §6.1 |
@@ -255,7 +255,8 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | Orchestrator node (spawns children, inline sub-walk) | PARTIAL | Seed of sub-agents; no depth/budget guard yet |
 | Agent loop + tool registry (native + text) | BUILT | `write_file`, `create_task`, `write_task_md` |
 | Adapters (mock/anthropic/openrouter), retry/backoff | BUILT | Default = mock; contract pinned + validated live (§4.1) |
-| BYO-key real-model path | BUILT | V1 task 11 — both acceptance flows pass on a real model (§4.1) |
+| BYO-key real-model path | BUILT | OpenRouter validated live; Anthropic is env-var only (§4.1) |
+| **V1 acceptance: coding loop on a real repo** | **PASSED** | Feature landed + suite green; limits and gaps in §11.1 |
 | Streaming (`onText` contract) | BUILT | Runner + executor consume it; live panel in the right column (§6) |
 | Retrospectives + `historyDigest` | BUILT | One-way into planning today |
 | Approval gates + restart resume | BUILT | Completed steps survive a crash; explicit Resume (§10). Pending *tool* gates still abandon |
@@ -271,6 +272,30 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | AI-helper workflow builder | PLANNED | Canvas is manual today; the view-mode half of D5 is done (§6.1) |
 | Subscription / capped-key backend | PLANNED | BYO key today |
 | Packaging / distribution | NOT STARTED | Explicitly not on radar |
+
+---
+
+## 11.1 V1 acceptance — [PASSED, with gaps recorded] (V1 task 12)
+
+Run against a real git repo (`taskline`, a small ES-module library with a passing suite), on `openai/gpt-5.6-luna-pro` via a user's OpenRouter key, using the **shipped Default pipeline** — not a bespoke flow. Brief: *"Add tag filtering: a new exported `filterByTag(store, tag)`. Match the existing house style, and add tests that pass."*
+
+Result: plan → human gate → plan-eval decomposed it into design/implement/test → the agents read the repo, wrote `src/store.js` and `test/store.test.js`, and ran the suite → verify → **the feature landed matching the house style (named export, JSDoc, pure) and the suite went 2 → 4 green.** 5 gates approved (1 pre-node, 4 tool gates incl. `bash`), 14 live frames, `protocol: native` throughout, $0.25.
+
+The four bars:
+- **Loop** — passes, as above.
+- **Controllable** — gates asked before every `bash` and `write_file`; approving proceeded, and V1 task 4's tests cover rejection.
+- **Resumable** — the app was killed mid-run and relaunched; approving resumed from persisted file state with **zero completed nodes re-executed**. (Killed at a *gate*, exercising `resumeFromGate`; the interrupted-mid-execution path is covered by task 7's tests, not live.)
+- **Transparent** — the live panel shows each tool call as it assembles: `read_file` with its paths, `write_file` with the file content as it is written (§6, §4.1).
+
+**Honest limits of the evidence:**
+- **The acceptance is not deterministic.** An earlier run reported `done` having implemented nothing and left the suite red — two causes, both fixed and regression-tested: a work template that couldn't write (`code-design-step` shipped read-only while the planner handed it implementation work), and the plan contract never checking that `category` and `template` agree though they are documented 1:1. The passing run happened to route correctly, so the *contract check* is proven by unit tests rather than live.
+- **The run was sequential**, correctly: plan-eval produced a real `implement → test → verify` chain. Parallelism is proven separately (four concurrent agentTasks, §2.1).
+- **An agent can still report success over a failing suite.** `bash` returns a non-zero exit as *data*, so `ok:true` means the tool ran, not that the command succeeded. Non-zero exits are now recorded as retrospective problems and drop the confidence, and `test-creation-step` is instructed never to finish on a red suite — but nothing *enforces* it. `final-eval` is an `aiStep`, so it holds no tools and verifies by reading its colleagues' prose rather than by running anything. **This is the weakest joint in the loop.**
+
+**Known gaps carried past V1:**
+- **No request timeout anywhere in the adapters** — no `AbortSignal`. A stalled provider connection hangs a node indefinitely: it never errors, so the retry budget never engages. Seen live (a node sat 347s and was killed; the same node took 79–104s on other runs). The empty-stream guard only fires when a stream *ends*.
+- **Anthropic BYO-key is env-var only.** The adapter honors a caller-supplied key (V1 task 11), but `providerKeys` only ever carries `openrouter` and Settings offers no Anthropic field, so nothing can pass one. Its contract is pinned offline; it is unvalidated live.
+- **Native tool-calling is OpenRouter-only** (`toolProtocol()`); Anthropic always takes the text path.
 
 ---
 

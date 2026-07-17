@@ -1,7 +1,7 @@
 # LLM Flow — Goals & Architecture
 
 **Project:** llm-flow
-**Status (as of 2026-07-14):** Product refocus implemented — Node Library + one engine ship; `core/pipeline.js` retired (see "Migration" below)
+**Status (as of 2026-07-17):** **V1 tasks 1–12 complete.** The coding-agent loop runs end to end on a real repo with a real model: plan → human gate → decomposed work with real file/bash tools → verify → the change landed and the suite green. Validated live (`DESIGN-SPEC.md` §4.1, §12) with known gaps recorded there. Earlier: product refocus implemented — Node Library + one engine ship; `core/pipeline.js` retired (see "Migration" below).
 **Primary audience:** Future AI agents and human contributors. **Read this file first.**
 
 > **One-sentence vision:**
