@@ -307,11 +307,17 @@ export const SEED_NODE_TEMPLATES = [
   {
     id: 'code-design-step', name: 'Code (design)', category: 'Code design', icon: '✦',
     baseType: 'agentTask', role: 'execute',
-    // Read-only by design: a design step explores the codebase and produces a
-    // design, it does not edit. Holding no destructive tool also keeps it
-    // ungated, so design nodes still fan out in parallel.
-    tools: ['read_file', 'write_task_md'],
-    description: 'Architecture, interfaces, data models: reads the project, produces a design. Prefer a stronger model.'
+    // Writes, like every other work template. This shipped read-only ("a design
+    // step designs, it does not edit") and a live acceptance run showed why that
+    // is wrong: the planner handed it "Implement and export tag filtering", the
+    // node held no write tool, so it produced a spec, reported success, and the
+    // feature was never written — a silent no-op that nothing downstream caught.
+    // A work template that cannot do the work it is handed is a trap, and what
+    // actually distinguishes design here is the MODEL (FLOW_NODES: "prefers a
+    // stronger model"), not the toolset. Writes stay confined by
+    // Workspace.resolve(), so this remains ungated and parallel-safe.
+    tools: ['read_file', 'create_file', 'write_file', 'write_task_md'],
+    description: 'Architecture, interfaces, data models: reads the project and writes the code. Prefer a stronger model.'
   },
   {
     id: 'documentation-step', name: 'Documentation', category: 'documentation', icon: '✦',
@@ -325,7 +331,19 @@ export const SEED_NODE_TEMPLATES = [
     tools: ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md'],
     // The one template that can run commands, so the one that ships gated.
     approveToolCalls: true,
-    description: 'Create or extend tests, and run them. Can execute shell commands, so it asks before each destructive call — untick to run unattended.'
+    // This is the node that holds the test suite, so it is the node that must
+    // not lie about it. A live acceptance run had it write tests, run them, read
+    // `npm test` exit 1, and report success — leaving the repo redder than it
+    // found it while the run said "done". Nothing downstream caught it, so the
+    // instruction is the lever: a non-zero exit is a result, not noise.
+    instructions: [
+      'Run the test suite after writing or changing tests, and read the exit code.',
+      'A non-zero exit means the suite FAILED — fix the cause and run it again.',
+      'Never report the task complete while the suite is failing. If you cannot make',
+      'it pass, say so plainly at the top of your deliverable, state which tests fail',
+      'and why, and do not describe the work as done.'
+    ].join(' '),
+    description: 'Create or extend tests, and run them until they pass. Can execute shell commands, so it asks before each destructive call — untick to run unattended.'
   },
   {
     id: 'step-eval', name: 'Step evaluation', category: null, icon: '⚖',

@@ -136,13 +136,29 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     store.writeTaskOutput(runId, taskId, result.text.trim());
     status = 'done';
     const failedCalls = result.toolCalls.filter(c => !c.ok);
+    // A command that exits non-zero is a RESULT, not a tool failure: bash hands
+    // the exit code back as data so the agent can read it and react (see
+    // core/tools/bash.js), which makes ok:true mean "the tool ran", not "the
+    // command succeeded". So a red test suite counted as a clean success and
+    // vanished from the retrospective — a live run ended with `npm test` exit 1
+    // and reported no problems at all. Whether the agent should have recovered
+    // is its business; whether the run remembers is ours.
+    const redCommands = result.toolCalls.filter(c => c.ok && c.tool === 'bash' && c.result?.exitCode !== 0);
+    const problems = [
+      ...failedCalls.map(c => `Tool call ${c.tool} failed: ${c.error}`),
+      ...redCommands.map(c => `Command exited ${c.result.exitCode}: ${String(c.result.command ?? '').slice(0, 120)}`)
+    ];
     retro = makeRetrospective({
       node: `executor:${taskId}`,
       status: 'success',
-      problems: failedCalls.map(c => `Tool call ${c.tool} failed: ${c.error}`),
-      resolution: failedCalls.length ? 'Errors were fed back to the model for self-correction.' : '',
-      confidence: 0.75,
-      recommendation: `Task "${task.title}" completed by ${task.worker.provider}/${task.worker.model}${result.toolCalls.length ? ` using ${result.toolCalls.length} tool call(s)` : ''}.`,
+      problems,
+      resolution: [
+        failedCalls.length ? 'Tool errors were fed back to the model for self-correction.' : '',
+        redCommands.length ? 'A command the agent ran exited non-zero; the agent reported the task complete regardless — check the tool calls before trusting the deliverable.' : ''
+      ].filter(Boolean).join(' '),
+      confidence: redCommands.length ? 0.4 : 0.75,
+      recommendation: `Task "${task.title}" completed by ${task.worker.provider}/${task.worker.model}${result.toolCalls.length ? ` using ${result.toolCalls.length} tool call(s)` : ''}`
+        + `${redCommands.length ? `, but ${redCommands.length} command(s) exited non-zero` : ''}.`,
       model: task.worker,
       usage: result.usage,
       durationMs: result.durationMs,

@@ -80,6 +80,18 @@ export function parsePlanEval(text, extraTemplateIds = []) {
     if (n.category != null && !NODE_CATEGORIES.includes(n.category)) {
       errors.push(`${at}.category: "${n.category}" is not one of: ${NODE_CATEGORIES.join(', ')}`);
     }
+    // Category and template are documented 1:1 (FLOW_NODES.md): the category
+    // picks the model, the template picks the tools and the base type. Pairing
+    // them wrongly hands a node work its template isn't shaped for, and the
+    // planner does it — a live run emitted { category: 'Code general', template:
+    // 'code-design-step' } for "Implement and export tag filtering". Nothing
+    // checked, so the mismatch sailed through. Only built-in templates carry a
+    // known category; a user's own template is left to them.
+    const tplCategory = NODE_TEMPLATES[isStr(n.template) ? n.template.trim() : '']?.category;
+    if (n.category != null && tplCategory != null && n.category !== tplCategory) {
+      errors.push(`${at}: category "${n.category}" does not match template "${n.template.trim()}"`
+        + ` (whose category is "${tplCategory}") — they are 1:1; pick the template for the category`);
+    }
     if (n.taskRef != null && !isStr(n.taskRef)) errors.push(`${at}.taskRef: must be a non-empty string when present`);
     if (n.title != null && typeof n.title !== 'string') errors.push(`${at}.title: must be a string`);
     if (n.goal != null && typeof n.goal !== 'string') errors.push(`${at}.goal: must be a string`);

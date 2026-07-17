@@ -23,6 +23,25 @@ test('every work template is an agentTask that can reach the project', () => {
   }
 });
 
+// The trap this closes: code-design-step shipped read-only, the planner handed
+// it "Implement and export tag filtering", and the node — holding no write tool
+// — produced a spec, reported success, and the feature was never written. A work
+// template that cannot do the work it is handed fails silently and totally, so
+// no work template may be unable to write.
+test('every work template can write: a node that cannot do its job fails silently', () => {
+  for (const id of ['code-general-step', 'code-design-step', 'documentation-step', 'test-creation-step']) {
+    const t = seed(id);
+    assert.ok(t.tools.includes('write_file'), `${id} is handed work; it must be able to write it`);
+  }
+});
+
+// The node that owns the test suite must not report success over a red one.
+test('test-creation-step is instructed not to finish on a failing suite', () => {
+  const t = seed('test-creation-step');
+  assert.match(t.instructions, /non-zero exit/i);
+  assert.match(t.instructions, /[Nn]ever report the task complete while the suite is failing/);
+});
+
 test('the library can write code and run a command somewhere', () => {
   const granted = new Set(SEED_NODE_TEMPLATES.flatMap(t => t.tools ?? []));
   assert.ok(granted.has('write_file'), 'nothing could write to the project');
@@ -42,11 +61,14 @@ test('every template granting bash ships gated', () => {
   }
 });
 
-test('a read-only template holds no destructive tool, so it stays ungated and parallel-safe', () => {
-  const design = seed('code-design-step');
-  assert.equal(design.approveToolCalls, false);
-  for (const tool of design.tools) {
-    assert.ok(!DESTRUCTIVE_TOOLS.has(tool), `code-design-step must stay read-only, got ${tool}`);
+// Writes go through Workspace.resolve() and cannot escape the project, so a
+// write-only template needs no gate and keeps fanning out in parallel — only
+// bash, which is not confined, serializes behind approvals.
+test('templates that write but cannot run commands stay ungated and parallel-safe', () => {
+  for (const id of ['code-general-step', 'code-design-step', 'documentation-step']) {
+    const t = seed(id);
+    assert.ok(!t.tools.includes('bash'), `${id} should not need a shell`);
+    assert.equal(t.approveToolCalls, false, `${id} writes are confined; gating it would serialize work for nothing`);
   }
 });
 

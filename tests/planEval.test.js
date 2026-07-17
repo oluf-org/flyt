@@ -108,3 +108,41 @@ test('parseStitchDirectives: valid tasks kept, invalid dropped with error', () =
   assert.equal(r.errors.length, 1);
   assert.match(r.errors[0], /fixTasks\[1\]/);
 });
+
+// Category and template are documented 1:1 (FLOW_NODES.md): the category picks
+// the model, the template picks the tools and base type. A live run emitted
+// { category: 'Code general', template: 'code-design-step' } for "Implement and
+// export tag filtering" — nothing checked, and the node ran with the wrong
+// shape for the work it was handed.
+test('parsePlanEval rejects a category that contradicts its template', () => {
+  const doc = '```json\n' + JSON.stringify({
+    nodes: [{ id: 'n1', template: 'code-design-step', category: 'Code general', goal: 'Implement it' }]
+  }) + '\n```';
+  const r = parsePlanEval(doc);
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /does not match template/);
+  assert.match(r.errors.join('\n'), /1:1/);
+});
+
+test('parsePlanEval accepts a category that matches its template', () => {
+  const doc = '```json\n' + JSON.stringify({
+    nodes: [{ id: 'n1', template: 'code-general-step', category: 'Code general', goal: 'Implement it' }]
+  }) + '\n```';
+  assert.equal(parsePlanEval(doc).ok, true);
+});
+
+// The category is optional; omitting it is not a contradiction.
+test('parsePlanEval still accepts a node with no category', () => {
+  const doc = '```json\n' + JSON.stringify({
+    nodes: [{ id: 'n1', template: 'code-general-step', goal: 'Implement it' }]
+  }) + '\n```';
+  assert.equal(parsePlanEval(doc).ok, true);
+});
+
+// A user's own template carries no known category, so we can't judge the pairing.
+test('parsePlanEval does not police the category of a user-defined template', () => {
+  const doc = '```json\n' + JSON.stringify({
+    nodes: [{ id: 'n1', template: 'my-own-step', category: 'Code general', goal: 'g' }]
+  }) + '\n```';
+  assert.equal(parsePlanEval(doc, ['my-own-step']).ok, true);
+});

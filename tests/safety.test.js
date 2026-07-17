@@ -151,3 +151,48 @@ test('confinement: a symlink pointing outside the workspace is rejected', () => 
   // Lexically the path looks inside the workspace, but it realpaths outside.
   assert.throws(() => ws.resolve('link/secret.txt'), /symlink escape|escapes the workspace/);
 });
+
+// --- a failing command must not vanish into a clean success (V1 task 12) ---
+
+// bash hands a non-zero exit back as DATA so the agent can read it and react,
+// which makes ok:true mean "the tool ran", not "the command succeeded". So a red
+// test suite counted as a clean success: a live acceptance run ended with
+// `npm test` exit 1 and its retrospective listed no problems at all, while the
+// run reported "done" over a repo it had broken. Whether the agent recovers is
+// its business; whether the run remembers is ours.
+test('a command that exits non-zero is recorded as a problem, not a clean success', async () => {
+  const { store, ws, runner } = boundRunner();
+  setScript(({ prompt }) => (prompt.includes('TOOL RESULT')
+    ? 'All done! Everything is green.'  // the agent claims success over a red command
+    : '```tool\n{"tool":"bash","args":{"command":"node -e \\"process.exit(3)\\""}}\n```'));
+
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'agentTask', { title: 'W', goal: 'run the suite', tools: ['bash'] }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'out')]);
+  const runId = runner.start(flow, { workspace: ws.root });
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+
+  const retro = store.readRetrospectives(runId)['executor-task-1'];
+  assert.match(retro.problems.join('\n'), /exited 3/, 'the failing command belongs in the retrospective');
+  assert.match(retro.recommendation, /exited non-zero/);
+  assert.ok(retro.confidence < 0.75, 'a task that ends on a red command is not a confident success');
+});
+
+test('a clean command leaves the retrospective clean', async () => {
+  const { store, ws, runner } = boundRunner();
+  setScript(({ prompt }) => (prompt.includes('TOOL RESULT')
+    ? 'Done.'
+    : '```tool\n{"tool":"bash","args":{"command":"node -e \\"process.exit(0)\\""}}\n```'));
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'b' }),
+     node('work', 'agentTask', { title: 'W', goal: 'g', tools: ['bash'] }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'out')]);
+  const runId = runner.start(flow, { workspace: ws.root });
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  const retro = store.readRetrospectives(runId)['executor-task-1'];
+  assert.deepEqual(retro.problems, []);
+  assert.equal(retro.confidence, 0.75);
+});
