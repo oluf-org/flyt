@@ -1,0 +1,355 @@
+<!doctype html>
+<!-- LLM Flow — design polish demos. Companion to DESIGN-POLISH-IDEAS.md.
+     Self-contained. Targets Chromium 130 (Electron 33). Every demo is real,
+     no libraries, no build step. Uses the app's actual Slate & Sage tokens. -->
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>LLM Flow — design polish demos</title>
+<style>
+/* ---------- tokens: copied verbatim from src/styles.css ---------- */
+:root, [data-theme="light"] {
+  --app:#1f2724; --app-tx:#e6ebe8; --app-dim:#7f8a85;
+  --side:#f3f5f4; --canvas:#f8faf9; --dot:#e1e8e5;
+  --card:#ffffff; --border:#e0e6e3; --divider:#d4dbd7;
+  --tx:#1e2623; --dim:#6f7a75; --faint:#a0aaa5;
+  --accent:#5b8c6e; --accent-tx:#ffffff; --accent-soft:#e6efe9;
+  --ok:#4f7d63; --ok-soft:#e6efe9; --err:#9c4a44; --err-soft:#f4e7e5;
+  --chip:#eef2f0; --chip-tx:#6a746f;
+  --shadow-rest:0 1px 2px rgba(0,0,0,.05);
+  --shadow-float:0 2px 8px -3px rgba(0,0,0,.15);
+  color-scheme: light;
+}
+[data-theme="dark"] {
+  --app:#0f1512; --app-tx:#dfe7e2; --app-dim:#6f7d76;
+  --side:#141a17; --canvas:#0e1310; --dot:#212a25;
+  --card:#1a211d; --border:#29322d; --divider:#323c36;
+  --tx:#e3ebe6; --dim:#8e9c94; --faint:#5f6b64;
+  --accent:#7cba95; --accent-tx:#0b140f; --accent-soft:#1e2a23;
+  --ok:#7cba95; --ok-soft:#16241c; --err:#c98a83; --err-soft:#2a1d1b;
+  --chip:#212a25; --chip-tx:#a6b1ab;
+  --shadow-rest:0 1px 2px rgba(0,0,0,.25);
+  --shadow-float:0 2px 8px -3px rgba(0,0,0,.45);
+  color-scheme: dark;
+}
+
+/* idea #9 — animate to height:auto, everywhere */
+:root { interpolate-size: allow-keywords; }
+
+/* idea #7 — one spring, reused. Precomputed with a linear() generator. */
+:root { --spring: linear(0,.009,.035 2.1%,.141 4.4%,.723 12.9%,.938 16.7%,
+  1.017,1.077,1.121,1.149 24.3%,1.159,1.163,1.161,1.154 29.9%,1.129 32.8%,
+  1.051 39.6%,1.017 43.1%,.991,.977 51%,.974 53.8%,.975 57.1%,.997 69.8%,
+  1.003 76.9%,1); }
+
+* { box-sizing: border-box; }
+body {
+  margin:0; background:var(--canvas); color:var(--tx);
+  font:13px/1.5 'Figtree','Segoe UI',system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  /* idea #10 — static micro-noise over the canvas plane */
+  background-image:
+    radial-gradient(var(--dot) 1px, transparent 1px),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.028'/%3E%3C/svg%3E");
+  background-size: 22px 22px, 140px 140px;
+}
+.mono { font-family:'IBM Plex Mono',ui-monospace,monospace; }
+main { max-width: 880px; margin: 0 auto; padding: 34px 20px 80px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--dim); margin-bottom: 28px; }
+section {
+  background: var(--side); border:1px solid var(--border); border-radius:12px;
+  padding: 18px 20px; margin-bottom: 18px; box-shadow: var(--shadow-rest);
+}
+section h2 { font-size:14px; margin:0 0 2px; }
+section > p { color:var(--dim); margin:0 0 14px; max-width:64ch; text-wrap:pretty; }
+.label {
+  font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:10px;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--faint);
+}
+code.inline { background:var(--chip); color:var(--chip-tx); padding:1px 5px; border-radius:4px;
+  font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:11px; }
+.row { display:flex; gap:18px; flex-wrap:wrap; align-items:center; }
+
+/* ================================================================
+   1. Conic border-beam — the "running" signal
+   ================================================================ */
+@property --beam { syntax:'<angle>'; inherits:false; initial-value:0deg; }
+.flow-node {
+  position:relative; width:210px; background:var(--card);
+  border:1px solid var(--border); border-radius:10px; padding:10px 12px;
+  display:flex; gap:10px; align-items:center; box-shadow:var(--shadow-rest);
+  contain: paint;
+}
+.flow-node .icon {
+  width:28px; height:28px; border-radius:8px; background:var(--chip);
+  color:var(--chip-tx); display:grid; place-items:center; font-size:14px; flex:none;
+}
+.flow-node .t { font-weight:600; }
+.flow-node .s { color:var(--dim); font-size:11.5px; }
+.flow-node.running .icon { background:var(--accent-soft); color:var(--accent); }
+.flow-node.running::before {
+  content:''; position:absolute; inset:-1px; border-radius:11px; padding:1.5px;
+  background: conic-gradient(from var(--beam),
+    transparent 0 62%, var(--accent) 82%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: beam 2.6s linear infinite;
+  pointer-events:none;
+}
+@keyframes beam { to { --beam: 360deg; } }
+
+/* ================================================================
+   2. Signal dot traveling an edge (offset-path)
+   ================================================================ */
+.edge-demo { position:relative; width:100%; max-width:420px; height:110px; }
+.edge-demo svg { position:absolute; inset:0; width:100%; height:100%; }
+.edge-demo path { fill:none; stroke:var(--divider); stroke-width:2; }
+.edge-demo .dot {
+  position:absolute; width:7px; height:7px; margin:-3.5px; border-radius:50%;
+  background:var(--accent); box-shadow:0 0 6px var(--accent);
+  offset-path: path('M 20 30 C 140 30, 160 80, 300 80');
+  animation: travel 2.2s cubic-bezier(.45,.05,.55,.95) infinite;
+}
+@keyframes travel {
+  from { offset-distance:0%; opacity:0; }
+  12%  { opacity:1; }
+  88%  { opacity:1; }
+  to   { offset-distance:100%; opacity:0; }
+}
+
+/* ================================================================
+   3. View Transitions — theme swap (see JS)
+   ================================================================ */
+::view-transition-old(root), ::view-transition-new(root) { animation-duration:.24s; }
+.btn {
+  font:inherit; border:1px solid var(--border); background:var(--card); color:var(--tx);
+  border-radius:8px; padding:6px 14px; cursor:pointer;
+}
+.btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-tx); }
+
+/* ================================================================
+   5. Derived palette — color-mix + relative color
+   ================================================================ */
+.derived { --seed: var(--accent);
+  --d-soft:  color-mix(in oklab, var(--seed) 12%, var(--card));
+  --d-hover: color-mix(in oklab, var(--seed) 88%, black);
+  --d-ring:  color-mix(in oklab, var(--seed) 45%, transparent);
+  --d-err:   oklch(from var(--seed) l c calc(h + 155));
+  --d-warn:  oklch(from var(--seed) l c calc(h - 65));
+}
+.sw { width:74px; height:46px; border-radius:8px; border:1px solid var(--border);
+  display:grid; place-items:end start; padding:4px 6px; font-size:9.5px; color:#fff;
+  text-shadow:0 1px 2px rgba(0,0,0,.4); }
+.sw.light-tx { color:var(--tx); text-shadow:none; }
+
+/* ================================================================
+   6. Anchor positioning + Popover
+   ================================================================ */
+.anchor-btn { anchor-name: --menu-a; }
+#menu {
+  position: absolute; position-anchor: --menu-a;
+  position-area: bottom span-right; margin:6px 0 0;
+  position-try-fallbacks: flip-block;
+  background:var(--card); border:1px solid var(--border); border-radius:10px;
+  box-shadow:var(--shadow-float); padding:6px; min-width:180px;
+  opacity:0; transform:scale(.96) translateY(-4px);
+  transition: opacity .18s, transform .3s var(--spring), overlay .18s allow-discrete, display .18s allow-discrete;
+}
+#menu:popover-open { opacity:1; transform:none; }
+@starting-style { #menu:popover-open { opacity:0; transform:scale(.96) translateY(-4px); } }
+#menu button { display:block; width:100%; text-align:left; font:inherit; border:0;
+  background:none; color:var(--tx); padding:7px 10px; border-radius:6px; cursor:pointer; }
+#menu button:hover { background:var(--accent-soft); color:var(--accent); }
+
+.tip-target { anchor-name:--tip-a; text-decoration:underline dotted var(--faint); cursor:help; }
+#tip { position:absolute; position-anchor:--tip-a; position-area: top; margin-bottom:6px;
+  background:var(--app); color:var(--app-tx); font-size:11.5px; padding:5px 9px;
+  border-radius:6px; border:0; box-shadow:var(--shadow-float); }
+
+/* ================================================================
+   7. Spring press (linear() easing)
+   ================================================================ */
+.spring-btn { transition: transform .5s var(--spring); }
+.spring-btn:active { transform: scale(.93); transition-duration:.08s; }
+
+/* ================================================================
+   8. Scroll-driven: progress bar + row settle (zero JS)
+   ================================================================ */
+.log {
+  height:180px; overflow:auto; background:var(--card); border:1px solid var(--border);
+  border-radius:10px; scroll-timeline: --log-scroll;
+}
+.log .bar {
+  position:sticky; top:0; height:2px; background:var(--accent);
+  transform-origin:left; transform:scaleX(0); z-index:1;
+  animation: grow linear; animation-timeline: --log-scroll;
+}
+@keyframes grow { to { transform:scaleX(1); } }
+.log .line { padding:5px 12px; border-bottom:1px solid var(--border);
+  font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:11px; color:var(--dim);
+  animation: settle both; animation-timeline: view(); animation-range: entry 0% entry 60%;
+}
+@keyframes settle { from { opacity:.15; transform:translateY(4px); } to { opacity:1; transform:none; } }
+
+/* ================================================================
+   9. field-sizing + interpolate-size accordion
+   ================================================================ */
+textarea.auto {
+  field-sizing: content; min-height:2.4lh; max-height:8lh; width:100%; resize:none;
+  font:inherit; color:var(--tx); background:var(--card);
+  border:1px solid var(--border); border-radius:8px; padding:8px 10px;
+}
+.acc { border:1px solid var(--border); border-radius:10px; background:var(--card); overflow:hidden; }
+.acc-head { padding:9px 12px; cursor:pointer; font-weight:600; display:flex; justify-content:space-between; }
+.acc-head::after { content:'▾'; color:var(--faint); transition: rotate .3s var(--spring); }
+.acc-body { height:0; overflow:hidden; transition: height .35s var(--spring); }
+.acc.open .acc-body { height:auto; }           /* ← animates, thanks to interpolate-size */
+.acc.open .acc-head::after { rotate:180deg; }
+.acc-body p { margin:0; padding:0 12px 12px; color:var(--dim); }
+
+/* ================================================================
+   10. content-visibility list + tabular numbers
+   ================================================================ */
+.biglist { height:170px; overflow:auto; background:var(--card);
+  border:1px solid var(--border); border-radius:10px; }
+.biglist .r { content-visibility:auto; contain-intrinsic-size:auto 34px;
+  padding:7px 12px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; }
+.num { font-variant-numeric: tabular-nums; color:var(--dim); }
+</style>
+</head>
+<body>
+<main>
+  <h1>LLM Flow — design polish demos</h1>
+  <p class="sub">Every demo below is plain CSS/HTML running in Chromium 130 (what Electron 33 ships). No libraries. Companion doc: <code class="inline">DESIGN-POLISH-IDEAS.md</code></p>
+
+  <section>
+    <div class="label">idea 3 · view transitions</div>
+    <h2>Theme swap as one composited crossfade</h2>
+    <p>One line of JS wraps the toggle. If the API were missing it would fall back to an instant swap — but on the pinned engine it isn't.</p>
+    <button class="btn primary" id="themeBtn">Toggle theme</button>
+  </section>
+
+  <section>
+    <div class="label">idea 1 · @property + conic-gradient</div>
+    <h2>Border-beam as the “running” signal</h2>
+    <p>Paint-only, <code class="inline">contain:paint</code>, one shared keyframe. Several nodes glowing reads calmer than several spinners — matches the D9 parallel rule.</p>
+    <div class="row">
+      <div class="flow-node running"><span class="icon">⚙</span><div><div class="t">Implement parser</div><div class="s">agentTask · claude-sonnet</div></div></div>
+      <div class="flow-node running" style="--beam:180deg"><span class="icon">✎</span><div><div class="t">Write tests</div><div class="s">agentTask · parallel wave</div></div></div>
+      <div class="flow-node"><span class="icon">◇</span><div><div class="t">Plan</div><div class="s">done — no motion</div></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="label">idea 2 · offset-path</div>
+    <h2>Signal dot on an active edge</h2>
+    <p>The dot follows the real edge path via <code class="inline">offset-path: path(…)</code>; only <code class="inline">offset-distance</code> animates. React Flow already has the path string.</p>
+    <div class="edge-demo">
+      <svg viewBox="0 0 420 110" preserveAspectRatio="none"><path d="M 20 30 C 140 30, 160 80, 300 80"/></svg>
+      <div class="dot"></div>
+    </div>
+  </section>
+
+  <section class="derived">
+    <div class="label">idea 5 · color-mix + relative color</div>
+    <h2>Whole palette derived from one accent</h2>
+    <p>Every swatch below is computed from <code class="inline">--accent</code> at style time — change the seed and soft tints, hover shades, focus rings, even the error hue rotate with it, in both themes.</p>
+    <div class="row">
+      <div class="sw" style="background:var(--seed)">seed</div>
+      <div class="sw light-tx" style="background:var(--d-soft)">12% soft</div>
+      <div class="sw" style="background:var(--d-hover)">hover</div>
+      <div class="sw light-tx" style="background:var(--d-ring)">ring 45%</div>
+      <div class="sw" style="background:var(--d-err)">h+155 err</div>
+      <div class="sw" style="background:var(--d-warn)">h−65 warn</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="label">idea 6 · anchor positioning + popover</div>
+    <h2>Tooltips &amp; menus with zero positioning JS</h2>
+    <p>Top-layer (never clipped by the canvas), auto-flips at window edges via <code class="inline">position-try-fallbacks</code>, springs in with <code class="inline">@starting-style</code>. Hover the <span class="tip-target" id="tipT">port label</span>, or open the menu.</p>
+    <button class="btn anchor-btn" popovertarget="menu">Node actions ▾</button>
+    <div id="menu" popover>
+      <button>Run from here</button><button>Duplicate node</button><button>Open in inspector</button>
+    </div>
+    <div id="tip" popover="manual">creates · one file per task</div>
+  </section>
+
+  <section>
+    <div class="label">idea 7 · linear() spring</div>
+    <h2>Spring physics as a timing function</h2>
+    <p>Same cost as <code class="inline">ease-out</code> — the curve is precomputed. Press and release:</p>
+    <button class="btn primary spring-btn">Approve gate</button>
+  </section>
+
+  <section>
+    <div class="label">idea 8 · scroll-driven animations</div>
+    <h2>Reading progress + settle-in, off the main thread</h2>
+    <p>The accent bar and the row fade both run on <code class="inline">animation-timeline</code> — no scroll listeners exist on this page.</p>
+    <div class="log" id="log"><div class="bar"></div></div>
+  </section>
+
+  <section>
+    <div class="label">idea 9 · field-sizing + interpolate-size</div>
+    <h2>Auto-growing prompt box · animate to height:auto</h2>
+    <p>The textarea grows with content (<code class="inline">field-sizing:content</code>, one line, delete the JS). The accordion animates to <code class="inline">height:auto</code> — two lines of CSS.</p>
+    <textarea class="auto" placeholder="Type a few lines — the box grows, then scrolls past 8 lines…"></textarea>
+    <div style="height:10px"></div>
+    <div class="acc" id="acc">
+      <div class="acc-head">Context strategy</div>
+      <div class="acc-body"><p>pointers-only — 4 candidate files with rationale; the working node reads on demand. This panel animated open to its natural height with <code class="inline">interpolate-size: allow-keywords</code>.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="label">idea 4 · content-visibility &nbsp;+&nbsp; idea 11 · tabular-nums</div>
+    <h2>2,000 rows, no virtualization library · steady numbers</h2>
+    <p>Off-screen rows skip layout &amp; paint. The timer uses <code class="inline">tabular-nums</code> so digits don’t jitter: <strong class="num mono" id="clock">00:00.0</strong></p>
+    <div class="biglist" id="biglist"></div>
+  </section>
+</main>
+
+<script>
+// idea 3 — the entire View Transitions integration:
+const root = document.documentElement;
+document.getElementById('themeBtn').onclick = () => {
+  const swap = () => root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.startViewTransition ? document.startViewTransition(swap) : swap();
+};
+
+// idea 6 — tooltip show/hide (popover API does layering; anchor CSS does position)
+const tip = document.getElementById('tip'), tipT = document.getElementById('tipT');
+tipT.addEventListener('mouseenter', () => tip.showPopover());
+tipT.addEventListener('mouseleave', () => tip.hidePopover());
+
+// idea 9 — accordion toggle
+const acc = document.getElementById('acc');
+acc.querySelector('.acc-head').onclick = () => acc.classList.toggle('open');
+
+// demo data: log lines + big list
+const log = document.getElementById('log');
+for (let i = 1; i <= 40; i++) {
+  const d = document.createElement('div'); d.className = 'line';
+  d.textContent = `[12:0${i%10}:${String(10+i).slice(-2)}] executor:t${i}  tool call  write_file  workspace/src/mod${i}.js`;
+  log.appendChild(d);
+}
+const big = document.getElementById('biglist');
+const frag = document.createDocumentFragment();
+for (let i = 1; i <= 2000; i++) {
+  const r = document.createElement('div'); r.className = 'r';
+  r.innerHTML = `<span>run-${String(i).padStart(4,'0')} · code review flow</span><span class="num mono">${(i%59)+1}s · ${(i*137)%9000} tok</span>`;
+  frag.appendChild(r);
+}
+big.appendChild(frag);
+
+// tabular-nums clock
+const clock = document.getElementById('clock'); const t0 = performance.now();
+setInterval(() => {
+  const s = (performance.now() - t0) / 1000;
+  clock.textContent = `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}.${Math.floor((s%1)*10)}`;
+}, 100);
+</script>
+</body>
+</html>

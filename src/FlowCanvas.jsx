@@ -1,9 +1,17 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ReactFlow, Background, Controls, Handle, Position } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { TYPE_META, nodeLabel, nodeSub, nodePorts, createsNodes } from './flowTypes.js';
 import { wouldCreateCycle } from './flowLayout.js';
 import { spawnedTasks, taskNodeStatus } from './runGraph.js';
+import FlowEdge from './FlowEdge.jsx';
+import Tip from './Tip.jsx';
+
+// One custom edge for every canvas: weight (context bytes) + streaming signal
+// dot. Registered under a named key (overriding the reserved 'default' key
+// stops React Flow rendering edges); every edge we build sets type:'signal'.
+const EDGE_TYPE = 'signal';
+const edgeTypes = { [EDGE_TYPE]: FlowEdge };
 
 // The run-time-spawned task column: gap from the right edge of the authored
 // graph, and the vertical pitch between stacked tasks.
@@ -47,7 +55,10 @@ function StatusGlyph({ status }) {
   // queued: the node has contributed its task and is waiting for the executor
   // to claim it. Distinct from pending (not reached yet) — it used to be
   // flattened into it, which made a node that had done its part look untouched.
-  if (status === 'queued') return <span className="node-status" title="Queued — waiting for a worker">⋯</span>;
+  if (status === 'queued') return <Tip as="span" className="node-status" text="Queued — waiting for a worker">⋯</Tip>;
+  // skipped: retired by a follow-up turn (a failed/rejected run's old path
+  // that the continuation routed around) — deliberately never re-run.
+  if (status === 'skipped') return <Tip as="span" className="node-status" text="Retired by a follow-up turn — not re-run">↷</Tip>;
   return <span className="node-status" />;
 }
 
@@ -62,9 +73,9 @@ function PortRow({ ports }) {
       <div className="node-ports">
         <span className="node-ports-label">creates</span>
         {ports.map(p => (
-          <span key={p.id} className="node-port" title={p.description ?? p.label ?? p.id}>
+          <Tip key={p.id} as="span" className="node-port" text={p.description ?? p.label ?? p.id}>
             {p.label ?? p.id}
-          </span>
+          </Tip>
         ))}
       </div>
       {ports.map((p, i) => (
@@ -93,6 +104,7 @@ function NodeCard({ data, vertical, noTarget, noSource }) {
             <div className="node-title">{data.label}</div>
             {data.kind && <span className={`node-kind kind-${data.kind}`}>{data.kind}</span>}
             {data.spawns && <span className="node-kind kind-spawn" title="May create other nodes at run time">＋nodes</span>}
+            {data.turn != null && <span className="node-kind kind-turn" title={`Added by follow-up turn ${data.turn}`}>↩{data.turn}</span>}
           </div>
           <div className="node-sub">{data.sub}</div>
         </div>
@@ -144,7 +156,7 @@ function OrchestratorCard({ data }) {
 // fields so unchanged cards skip re-rendering (positions are applied by the
 // React Flow wrapper, not by NodeCard, so they don't belong in the compare).
 const cardEqual = (prev, next) =>
-  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty']
+  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'turn']
     .every(k => prev.data[k] === next.data[k]);
 
 const StageNode = React.memo(props => <NodeCard {...props} vertical />, cardEqual);
@@ -192,7 +204,7 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
     }
   })), [displayNodes, selectedNode]);
 
-  const edges = useMemo(() => flow.edges.map(e => ({ ...e })), [flow.edges]);
+  const edges = useMemo(() => flow.edges.map(e => ({ ...e, type: EDGE_TYPE })), [flow.edges]);
 
   const onNodesChange = useCallback(changes => {
     if (readOnly) return;
@@ -255,6 +267,7 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
       nodes={nodes}
       edges={edges}
       nodeTypes={editorNodeTypes}
+      edgeTypes={edgeTypes}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
@@ -275,12 +288,19 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
 }
 
 export default function FlowCanvas({ snapshot, selectedNode, onSelect }) {
-  const { nodes, edges } = useMemo(() => buildGraph(snapshot, selectedNode), [snapshot, selectedNode]);
+  const { nodes: baseNodes, edges: baseEdges } = useMemo(
+    () => buildGraph(snapshot, selectedNode), [snapshot, selectedNode]);
+  const { nodes, edges, dimming, onNodeMouseEnter, onNodeMouseLeave } =
+    useLineageFocus(baseNodes, baseEdges);
   return (
     <ReactFlow
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
+      className={dimming ? 'dimming' : undefined}
+      onNodeMouseEnter={onNodeMouseEnter}
+      onNodeMouseLeave={onNodeMouseLeave}
       onNodeClick={(_e, node) => onSelect(node.id)}
       onPaneClick={() => onSelect(null)}
       fitView
@@ -293,6 +313,57 @@ export default function FlowCanvas({ snapshot, selectedNode, onSelect }) {
       <Controls showInteractive={false} />
     </ReactFlow>
   );
+}
+
+// Focus dimming with lineage (flare 5): hovering a node lifts its full upstream
+// chain and recedes everything else. CSS can't walk a graph, so JS computes the
+// lit set (the hovered node + all ancestors via an upward walk) and tags nodes/
+// edges `lit` or `dim`; the CSS only fades. The hover is delayed ~150ms so a
+// mouse sweeping across the canvas doesn't strobe the whole graph.
+function useLineageFocus(baseNodes, baseEdges) {
+  // Upward adjacency (target -> [sources]); rebuilt only when the edges change.
+  const parents = useMemo(() => {
+    const m = new Map();
+    for (const e of baseEdges) {
+      if (!m.has(e.target)) m.set(e.target, []);
+      m.get(e.target).push(e.source);
+    }
+    return m;
+  }, [baseEdges]);
+
+  const [lit, setLit] = useState(null); // Set<id> in focus, or null = no focus
+  const timer = useRef(null);
+
+  const onNodeMouseLeave = useCallback(() => {
+    clearTimeout(timer.current);
+    setLit(null);
+  }, []);
+
+  const onNodeMouseEnter = useCallback((_e, node) => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      const set = new Set([node.id]);
+      const stack = [node.id];
+      while (stack.length) {
+        for (const p of (parents.get(stack.pop()) ?? [])) {
+          if (!set.has(p)) { set.add(p); stack.push(p); }
+        }
+      }
+      setLit(set);
+    }, 150);
+  }, [parents]);
+
+  const withClass = (obj, cls) => ({
+    ...obj, className: obj.className ? `${obj.className} ${cls}` : cls
+  });
+  const nodes = useMemo(() => !lit ? baseNodes
+    : baseNodes.map(n => withClass(n, lit.has(n.id) ? 'lit' : 'dim')), [baseNodes, lit]);
+  const edges = useMemo(() => !lit ? baseEdges
+    // an edge is part of the lineage only when BOTH ends are lit
+    : baseEdges.map(e => withClass(e, lit.has(e.source) && lit.has(e.target) ? 'lit' : 'dim')),
+    [baseEdges, lit]);
+
+  return { nodes, edges, dimming: !!lit, onNodeMouseEnter, onNodeMouseLeave };
 }
 
 function buildGraph(snapshot, selectedNode) {
@@ -327,7 +398,9 @@ function buildGraph(snapshot, selectedNode) {
     id: `e-${stageDefs[i].id}-${def.id}`,
     source: stageDefs[i].id,
     target: def.id,
-    animated: nodes[i + 1].data.status === 'active'
+    type: EDGE_TYPE,
+    animated: nodes[i + 1].data.status === 'active',
+    data: { sourceStatus: nodes[i].data.status }
   }));
 
   // Task nodes: a column beside the Execution stage.
@@ -352,11 +425,14 @@ function buildGraph(snapshot, selectedNode) {
           selected: selectedNode === t.id
         }
       });
+      const srcId = i === 0 ? 'execution' : tasks.tasks[i - 1].id;
       edges.push({
         id: `e-exec-${t.id}`,
-        source: i === 0 ? 'execution' : tasks.tasks[i - 1].id,
+        source: srcId,
         target: t.id,
-        animated: running
+        type: EDGE_TYPE,
+        animated: running,
+        data: { sourceStatus: nodes.find(n => n.id === srcId)?.data.status }
       });
     });
   }
@@ -384,6 +460,8 @@ function buildFlowRunGraph(snapshot, selectedNode) {
       icon: n.data?.icon ?? TYPE_META[n.type]?.icon ?? '▢',
       kind: n.kind,
       status: statusOf(n.id),
+      // Follow-up provenance (FU5): badge the node with its turn number.
+      ...(n.data?.origin === 'followup' ? { turn: n.data.turn } : {}),
       ports: nodePorts(n),
       spawns: n.type !== 'orchestrator' && createsNodes(n),
       ...(n.type === 'orchestrator' ? { empty: !childrenOf(n.id), box: n.data?.box } : {}),
@@ -399,8 +477,13 @@ function buildFlowRunGraph(snapshot, selectedNode) {
       id: e.id,
       source: e.source,
       target: e.target,
+      type: EDGE_TYPE,
       ...(e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}),
-      animated: statusOf(e.target) === 'active'
+      animated: statusOf(e.target) === 'active',
+      // FlowEdge: line weight from context that flowed here, streaming dot while
+      // the source produces. edgeContext is written by the runner as it assembles
+      // each node's context; absent (older runs / authoring) => the 2px default.
+      data: { contextBytes: meta.edgeContext?.[e.id], sourceStatus: statusOf(e.source) }
     }));
 
   // Tasks an agent spawned at run time (V1 task 9). They have no node in the
@@ -442,8 +525,10 @@ function buildFlowRunGraph(snapshot, selectedNode) {
           id: `e-spawn-${ownerNodeId}-${task.id}`,
           source: ownerNodeId,
           target: task.id,
+          type: EDGE_TYPE,
           className: 'edge-spawned', // dashed: created at run time, not authored
-          animated: status === 'active'
+          animated: status === 'active',
+          data: { sourceStatus: statusOf(ownerNodeId) }
         });
       }
     });

@@ -33,7 +33,7 @@ import { Workspace } from './workspace.js';
 import { loadSkills, withSkillsSection } from './skills.js';
 import { createWriteLedger } from './writeLedger.js';
 import { executeTool } from './tools/index.js';
-import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, extractJson } from './planEval.js';
+import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, extractJson } from './planEval.js';
 import { createNodeFromTemplate, getTemplate, resolveFlow, resolveInstance, primaryPort } from '../src/flowTypes.js';
 import { layoutPositions, containerLayout } from '../src/flowLayout.js';
 import { lintFlow, RUNTIME_RULES } from './flowlang/lint.js';
@@ -144,6 +144,24 @@ const DEFAULT_SYSTEM = {
     'contextSpec minimal. Independent nodes run in parallel; use dependsOn (or',
     'parallelGroups as sequential waves) only where order truly matters.'
   ].join('\n'),
+  'feedback-review': [
+    'ROLE: feedback-review',
+    'You close a follow-up turn: the user replied to a finished run, new nodes ran to',
+    'address that feedback, and you now judge whether the feedback is actually solved.',
+    'Compare the FEEDBACK (from the follow-up input node) against the turn\'s outputs',
+    'and any workspace changes. Write a short review, then end with ONE ```json block:',
+    '{',
+    '  "verdict": "solved" | "more-work",',
+    '  "reason": "<one line>",',
+    '  "nodes": [{ "id", "template", "title", "goal", "dependsOn": [], "contextSpec": {...} }]',
+    '}',
+    'Use "solved" when the feedback is addressed; the turn then completes.',
+    'Use "more-work" ONLY when concrete further work would fix it, and declare that work',
+    'as node specs (same contract as plan-eval; templates: code-general-step,',
+    'code-design-step, documentation-step, test-creation-step). They run before you',
+    'review again. Extensions are bounded; when in doubt, prefer "solved" with an',
+    'honest reason over an endless loop.'
+  ].join('\n'),
   'final-eval': [
     'ROLE: final-eval',
     'You are the final evaluation node.',
@@ -154,6 +172,38 @@ const DEFAULT_SYSTEM = {
     'Be honest and specific.'
   ].join('\n')
 };
+
+// The follow-up triage prompt (FOLLOWUP-PLAN FU3): not a node role — a direct
+// call made by followUp() before any node exists. It sees a digest of the run
+// (FU9) and classifies the user's reply into question / fix / feature.
+const TRIAGE_SYSTEM = [
+  'ROLE: followup-triage',
+  'A run of an AI workflow has finished, and the user replied to its result.',
+  'Classify that reply and respond with ONE ```json block — nothing else is used:',
+  '{',
+  '  "class": "question" | "fix" | "feature",',
+  '  "reason": "<one line>",',
+  '  "contextNodes": ["<id of a finished node whose output the new work needs>"],',
+  '  "answer": "<question-class only: answer the question directly, as Markdown>",',
+  '  "nodes": [{ "id": "<short unique id>", "template": "<code-general-step | code-design-step | documentation-step | test-creation-step>",',
+  '              "title": "<short>", "goal": "<fully self-describing>", "dependsOn": ["<id>"],',
+  '              "contextSpec": { "files": [{ "path": "<file>", "description": "<exactly which part is needed>" }] } }],',
+  '  "goal": "<feature-class only: one paragraph stating what to plan and build>"',
+  '}',
+  'Classes:',
+  '- "question": the user asks about the result; nothing should run. Provide "answer".',
+  '- "fix": a small correction to what was produced. Provide 1-2 "nodes" that do the fix.',
+  '- "feature": new work that deserves planning. Provide "goal"; a plan segment is created.',
+  'contextNodes: pick ONLY the finished nodes whose outputs the new work genuinely needs',
+  '(their outputs are wired in as context via edges). Keep it minimal.',
+  'If the run FAILED, the digest names the failed node and error: route the continuation',
+  'around or past it — the user\'s reply (e.g. "skip that step", "use approach B")',
+  'guides how. A rejected run\'s reply usually explains what was wrong with the plan.'
+].join('\n');
+
+// One turn may extend itself at most this many times before the run escalates
+// to the human gate (FU6).
+const MAX_TURN_EXTENSIONS = 2;
 
 // How often a token stream may reach the disk and the renderer. Every flush is
 // a file write plus an IPC push, and adapters call onText per chunk — at real
@@ -331,8 +381,11 @@ export class FlowRunner {
       }
     }
     const meta = this.store.readMeta(runId);
+    // 'skipped' survives the rewind: those nodes belong to a superseded pass of
+    // a failed/rejected run that a follow-up turn routed around (FU7) — they
+    // were retired deliberately and must not come back as runnable.
     const nodeStatus = Object.fromEntries(Object.entries(meta.nodeStatus ?? {})
-      .map(([id, s]) => [id, s === 'done' ? 'done' : 'pending']));
+      .map(([id, s]) => [id, s === 'done' || s === 'skipped' ? s : 'pending']));
     this.store.writeMeta(runId, { ...meta, nodeStatus, currentTaskId: null, currentNodeId: null });
     this.notify(runId);
     return Object.values(nodeStatus).filter(s => s === 'done').length;
@@ -365,6 +418,378 @@ export class FlowRunner {
     this.notify(runId);
     this.launch(runId, flow, true);
     return runId;
+  }
+
+  // --- Follow-up turns (FOLLOWUP-PLAN): reply to a finished run and the flow
+  // GROWS — a triage step classifies the feedback, a continuation subgraph is
+  // appended after the finished output, and the normal walk executes it.
+  // Completed nodes are never re-run (FU1); prior outputs reach the new nodes
+  // via edges, which is the only context mechanism there is.
+
+  // Why this run can't take a follow-up right now, or null when it can (FU2,
+  // FU10): legal only from a terminal stage, never while the run is live.
+  followUpBlocker(runId) {
+    let meta;
+    try { meta = this.store.readMeta(runId); } catch { return 'Run not found.'; }
+    if (!meta?.flowId) return 'Only flow runs can take follow-ups.';
+    if (this.live.has(runId)) return 'This run is still working — wait for the current turn to finish.';
+    if (meta.stage === 'awaiting_approval') return 'This run is paused at an approval gate — approve or reject it instead.';
+    if (!TERMINAL_STAGES.has(meta.stage)) return `Follow-ups are only possible once a run has finished (stage: ${meta.stage}).`;
+    if (!this.store.readFlow(runId)) return 'This run has no flow.json; it cannot be extended.';
+    return null;
+  }
+
+  // Accept one follow-up turn. Synchronous guards + snapshot, then the async
+  // triage/extend/walk runs under the same liveness tracking as launch().
+  followUp(runId, text) {
+    const feedback = String(text ?? '').trim();
+    if (!feedback) throw new Error('Follow-up text is empty.');
+    const blocker = this.followUpBlocker(runId);
+    if (blocker) throw new Error(blocker);
+    const flow = this.store.readFlow(runId);
+    const turn = this.store.nextTurn(runId);
+    this.store.snapshotBeforeTurn(runId, turn); // FU8: every turn boundary reconstructable
+    this.store.writeFollowupPrompt(runId, turn, feedback);
+    // The digest reads statuses, so build it BEFORE retiring the old walk.
+    const digest = this.followupDigest(runId, flow);
+    const meta = this.store.readMeta(runId);
+    const priorStage = meta.stage;
+    // Retire whatever the old walk never finished (a failed/rejected run's
+    // failure path): the turn routes around it, and it must never re-run —
+    // not even via crash-resume, which preserves 'skipped' (FU7).
+    const nodeStatus = Object.fromEntries(Object.entries(meta.nodeStatus ?? {})
+      .map(([id, s]) => [id, s === 'done' ? 'done' : 'skipped']));
+    this.store.writeMeta(runId, { ...meta, turn, nodeStatus });
+    this.store.appendLog(runId, {
+      event: 'followup_received', turn,
+      prompt: feedback.length > 200 ? feedback.slice(0, 200) + '…' : feedback
+    });
+    this.live.add(runId);
+    this.runFollowUp(runId, flow, turn, feedback, digest, priorStage)
+      .catch(err => this.fail(runId, err))
+      .finally(() => this.live.delete(runId));
+    return { runId, turn };
+  }
+
+  async runFollowUp(runId, flow, turn, feedback, digest, priorStage) {
+    // The run reads as working while the turn is triaged/executed. meta.error
+    // is deliberately kept until the graph actually extends, so a question
+    // turn on a failed run leaves the failure report intact.
+    this.store.setStage(runId, 'execution');
+    this.notify(runId);
+    const triage = await this.triageFollowUp(runId, turn, feedback, digest);
+
+    if (!triage) {
+      // Triage never produced a valid classification. The run's work is fine —
+      // restore its stage and surface the miss in the thread, not as a failure.
+      this.store.writeFollowupAnswer(runId, turn,
+        'This follow-up could not be triaged (the model produced no valid classification), so nothing was run. Try rephrasing.');
+      this.store.setStage(runId, priorStage);
+      this.notify(runId);
+      return;
+    }
+
+    if (triage.class === 'question') {
+      // No graph change: the answer lands in the thread, the run stays as it was.
+      this.store.writeFollowupAnswer(runId, turn, triage.answer);
+      this.store.appendLog(runId, { event: 'turn_done', turn, class: 'question' });
+      this.store.setStage(runId, priorStage);
+      this.notify(runId);
+      return;
+    }
+
+    this.materializeTurn(runId, flow, turn, feedback, triage);
+    this.store.writeMeta(runId, { ...this.store.readMeta(runId), error: null, interrupted: false });
+    this.store.appendLog(runId, { event: 'turn_started', turn, class: triage.class });
+    this.notify(runId);
+    // resume=true: completed is rebuilt from meta.nodeStatus, so exactly the
+    // new nodes are ready (FU2).
+    await this.execute(runId, flow, true);
+  }
+
+  // The triage digest (FU9): flow topology, per-done-node output heads, files
+  // the run wrote (from the tool records), and failure info — never the full
+  // outputs, which won't fit a long run into one prompt.
+  followupDigest(runId, flow) {
+    const meta = this.store.readMeta(runId);
+    const head = (s, n = 40) => {
+      const all = String(s).split('\n');
+      return all.length > n ? all.slice(0, n).join('\n') + '\n…' : all.join('\n');
+    };
+    const lines = ['FLOW TOPOLOGY (id · title · kind · status):'];
+    for (const n of flow.nodes) {
+      const kind = n.type === 'aiStep' ? `aiStep/${n.data?.role ?? 'custom'}` : n.type;
+      lines.push(`- ${n.id} · ${n.data?.title ?? ''} · ${kind} · ${meta.nodeStatus?.[n.id] ?? 'pending'}`);
+    }
+    lines.push('', 'EDGES:', ...flow.edges.map(e => `- ${e.source} -> ${e.target}`));
+    lines.push('', 'FINISHED NODE OUTPUTS (first 40 lines each):');
+    for (const n of flow.nodes) {
+      if (meta.nodeStatus?.[n.id] !== 'done' || n.type === 'input') continue;
+      const out = n.type === 'agentTask'
+        ? this.store.readTaskOutput(runId, n.data?.taskId ?? '')
+        : this.store.readNodeOutput(runId, n.id);
+      if (out) lines.push('', `--- ${n.id} (${n.data?.title ?? n.type}) ---`, head(out));
+    }
+    const files = new Set();
+    for (const r of Object.values(this.store.readRetrospectives(runId))) {
+      for (const c of r?.toolCalls ?? []) {
+        if ((c.tool === 'write_file' || c.tool === 'create_file') && c.ok && c.args?.path) {
+          files.add(String(c.args.path));
+        }
+      }
+    }
+    if (files.size) lines.push('', 'FILES WRITTEN DURING THE RUN:', ...[...files].map(f => `- ${f}`));
+    lines.push('', `RUN OUTCOME: ${meta.stage}${meta.error ? ` — ${meta.error}` : ''}`);
+    const failed = Object.entries(meta.nodeStatus ?? {}).filter(([, s]) => s === 'failed').map(([id]) => id);
+    if (failed.length) lines.push(`FAILED NODES: ${failed.join(', ')}`);
+    return lines.join('\n');
+  }
+
+  // One triage call (strict contract in core/planEval.js, one bounded re-ask).
+  // Returns the validated triage, or null — never throws for contract misses.
+  async triageFollowUp(runId, turn, feedback, digest) {
+    const worker = resolveWorker({}, this.config);
+    const apiKey = this.config.providerKeys?.[worker.provider];
+    const label = `fu${turn}-triage`;
+    const templateIds = this.nodeStore ? this.nodeStore.listFull().map(t => t.id) : [];
+    this.store.appendLog(runId, { event: 'followup_triage_start', turn, worker });
+    const userMsg = [
+      `RUN DIGEST:\n${digest}`,
+      `ORIGINAL PROMPT (turn 0):\n${this.store.readPrompt(runId)}`,
+      `USER FEEDBACK (follow-up turn ${turn}):\n${feedback}`
+    ].join('\n\n');
+    let outText;
+    try {
+      const result = await callModel({
+        provider: worker.provider, model: worker.model, apiKey,
+        system: TRIAGE_SYSTEM, prompt: userMsg,
+        onRetry: this.retryLogger(runId, label), retry: this.config.retry
+      });
+      outText = String(result.text ?? '').trim();
+    } catch (err) {
+      this.store.appendLog(runId, { event: 'followup_triage_failed', turn, error: String(err?.message ?? err) });
+      return null;
+    }
+    let parsed = parseTriage(outText, templateIds);
+    if (!parsed.ok) {
+      const fixed = await this.reAsk(runId, { id: label }, worker, apiKey, TRIAGE_SYSTEM, userMsg, outText, parsed.errors);
+      if (fixed != null) {
+        const reparsed = parseTriage(fixed, templateIds);
+        if (reparsed.ok) { parsed = reparsed; outText = fixed; }
+      }
+    }
+    this.store.writeFollowupTriage(runId, turn, parsed.ok
+      ? { ...parsed.triage, raw: outText }
+      : { class: null, errors: parsed.errors, raw: outText });
+    this.store.appendLog(runId, parsed.ok
+      ? { event: 'followup_triaged', turn, class: parsed.triage.class, contextNodes: parsed.triage.contextNodes, reason: parsed.triage.reason }
+      : { event: 'followup_triage_invalid', turn, errors: parsed.errors });
+    return parsed.ok ? parsed.triage : null;
+  }
+
+  // Namespace generated-node specs into a turn (FU5): ids get the fu<n>-
+  // prefix (collision-proof against plan-eval ids), and dependsOn references
+  // between the specs are rewritten to match.
+  prefixSpecs(specs, prefix) {
+    const ids = new Set(specs.map(s => s.id));
+    const ref = id => (ids.has(id) ? prefix + id : id);
+    return specs.map(s => ({
+      ...s,
+      id: prefix + s.id,
+      ...(s.dependsOn ? { dependsOn: s.dependsOn.map(ref) } : {})
+    }));
+  }
+
+  // Append the turn's continuation subgraph to the run's flow (FU3/FU4/FU5):
+  //   fix     -> fu<n>-input -> [triage's executor nodes] -> fu<n>-review
+  //   feature -> fu<n>-input -> plan -> plan-eval (approval gate) -> stitch
+  //              -> fu<n>-review, with plan-eval materializing executors
+  //              between itself and stitch mid-run, exactly as in a fresh run.
+  // The feedback itself is a visible input node on the canvas, and the done
+  // nodes triage selected are wired in as edge context.
+  materializeTurn(runId, flow, turn, feedback, triage) {
+    const provenance = { origin: 'followup', turn };
+    const inputId = `fu${turn}-input`;
+    const reviewId = `fu${turn}-review`;
+    const input = {
+      id: inputId, type: 'input', kind: 'user', position: { x: 0, y: 0 },
+      data: { title: `Follow-up ${turn}`, text: feedback, ...provenance }
+    };
+    const review = {
+      id: reviewId, type: 'aiStep', kind: 'ai', position: { x: 0, y: 0 },
+      data: { title: `Feedback review ${turn}`, role: 'feedback-review', icon: '⚖', ...provenance }
+    };
+    flow.nodes.push(input);
+    const added = [input, review];
+    const edges = [];
+    // Which new nodes the selected context (and the review's leaf edges) attach to.
+    let contextTargets = [];
+
+    if (triage.class === 'fix') {
+      const specs = this.prefixSpecs(triage.nodes, `fu${turn}-`);
+      // Materialize BEFORE the input->review edge exists, so the input node has
+      // no downstream targets and the leaves stay unwired until we point them
+      // at the review below. Roots hang off the input node (the feedback).
+      const mat = this.materializeParsedNodes(runId, flow, input, { nodes: specs });
+      for (const n of mat.created) n.data = { ...n.data, ...provenance };
+      const createdIds = new Set(mat.created.map(n => n.id));
+      contextTargets = mat.created.filter(n =>
+        flow.edges.some(e => e.source === inputId && e.target === n.id));
+      const leaves = mat.created.filter(n =>
+        !flow.edges.some(e => e.source === n.id && createdIds.has(e.target)));
+      for (const l of leaves) {
+        edges.push({ id: `fu${turn}-e-${l.id}-${reviewId}`, source: l.id, target: reviewId, generatedBy: inputId });
+      }
+    } else {
+      // feature: the standard reflective segment. The plan-eval node carries
+      // the human approval gate, and its materialized executors wire between
+      // it and the stitch node via the normal plan-eval path.
+      const plan = this.templateNode('plan-start', `fu${turn}-plan`,
+        { title: `Plan (follow-up ${turn})`, goal: triage.goal ?? feedback });
+      const planEval = this.templateNode('plan-eval', `fu${turn}-plan-eval`,
+        { title: `Plan evaluation (follow-up ${turn})`, requiresApproval: true });
+      const stitch = this.templateNode('stitch', `fu${turn}-stitch`,
+        { title: `Stitch (follow-up ${turn})` });
+      for (const n of [plan, planEval, stitch]) {
+        n.data = { ...n.data, ...provenance, generatedBy: inputId };
+        flow.nodes.push(n);
+        added.push(n);
+      }
+      edges.push(
+        { id: `fu${turn}-e-${inputId}-${plan.id}`, source: inputId, target: plan.id, generatedBy: inputId },
+        { id: `fu${turn}-e-${plan.id}-${planEval.id}`, source: plan.id, target: planEval.id, generatedBy: inputId },
+        { id: `fu${turn}-e-${planEval.id}-${stitch.id}`, source: planEval.id, target: stitch.id, generatedBy: inputId },
+        { id: `fu${turn}-e-${stitch.id}-${reviewId}`, source: stitch.id, target: reviewId, generatedBy: inputId }
+      );
+      contextTargets = [plan];
+    }
+
+    // The review always sees the feedback it judges against.
+    edges.push({ id: `fu${turn}-e-${inputId}-${reviewId}`, source: inputId, target: reviewId, generatedBy: inputId });
+
+    // Context selection is edge selection (FU1): each done node triage picked
+    // feeds the turn's entry nodes.
+    const meta = this.store.readMeta(runId);
+    const nodeIds = new Set(flow.nodes.map(n => n.id));
+    const ctx = (triage.contextNodes ?? []).filter(id =>
+      nodeIds.has(id) && meta.nodeStatus?.[id] === 'done');
+    for (const src of ctx) {
+      for (const t of contextTargets) {
+        edges.push({ id: `fu${turn}-e-${src}-${t.id}`, source: src, target: t.id, generatedBy: inputId });
+      }
+    }
+
+    flow.nodes.push(review);
+    flow.edges.push(...edges);
+    const pos = layoutPositions(flow);
+    for (const n of flow.nodes) if (!n.parentId) n.position = pos.get(n.id) ?? n.position;
+    this.store.writeFlow(runId, flow);
+    this.store.writeMeta(runId, {
+      ...this.store.readMeta(runId),
+      nodeStatus: {
+        ...this.store.readMeta(runId).nodeStatus,
+        ...Object.fromEntries(added.map(n => [n.id, 'pending']))
+      }
+    });
+    this.store.appendLog(runId, {
+      event: 'turn_materialized', turn, class: triage.class,
+      nodes: added.map(n => n.id), contextNodes: ctx
+    });
+    this.notify(runId);
+  }
+
+  // Act on a feedback-review verdict (FU6): 'solved' completes the turn;
+  // 'more-work' materializes the declared nodes upstream of the review and
+  // re-runs it, bounded to MAX_TURN_EXTENSIONS per turn. The bound (or a
+  // more-work verdict with nothing materializable) escalates to the existing
+  // human gate. This is also the fix-class misclassification safety net.
+  async handleFeedbackReview(runId, flow, node, review) {
+    const turn = Number(node.data?.turn ?? 0);
+    if (review.verdict === 'solved') {
+      this.store.appendLog(runId, { event: 'turn_done', turn, node: node.id, reason: review.reason });
+      return { ok: true };
+    }
+
+    const used = Number(node.data?.extensionsUsed ?? 0);
+    if (review.nodes?.length && used < MAX_TURN_EXTENSIONS) {
+      const specs = this.prefixSpecs(review.nodes, `fu${turn}x${used + 1}-`);
+      const existing = new Set(flow.nodes.map(n => n.id));
+      const usable = specs.filter(s => !existing.has(s.id));
+      const specIds = new Set(usable.map(s => s.id));
+      // Reject dependency cycles among the declared nodes before touching the
+      // flow — a cycle would leave them permanently unready.
+      const deps = new Map(usable.map(s => [s.id, (s.dependsOn ?? []).filter(d => specIds.has(d) && d !== s.id)]));
+      const state = new Map();
+      const cyclic = function visit(id) {
+        if (state.get(id) === 1) return true;
+        if (state.get(id) === 2) return false;
+        state.set(id, 1);
+        for (const d of deps.get(id)) if (visit(d)) return true;
+        state.set(id, 2);
+        return false;
+      };
+      if (usable.length && !usable.some(s => cyclic(s.id))) {
+        const inputId = `fu${turn}-input`;
+        const feedbackSrc = flow.nodes.some(n => n.id === inputId) ? inputId : null;
+        const created = usable.map(s => {
+          const nd = this.specNode(s);
+          nd.data = { ...nd.data, generatedBy: node.id, origin: 'followup', turn };
+          return nd;
+        });
+        const dependedOn = new Set([].concat(...deps.values()));
+        const edges = [];
+        for (const nd of created) {
+          for (const d of deps.get(nd.id)) {
+            edges.push({ id: `gen-e-${d}-${nd.id}`, source: d, target: nd.id, generatedBy: node.id });
+          }
+          if (!deps.get(nd.id).length && feedbackSrc) {
+            edges.push({ id: `gen-e-${feedbackSrc}-${nd.id}`, source: feedbackSrc, target: nd.id, generatedBy: node.id });
+          }
+          // Leaves feed the review itself: it re-runs after them.
+          if (!dependedOn.has(nd.id)) {
+            edges.push({ id: `gen-e-${nd.id}-${node.id}`, source: nd.id, target: node.id, generatedBy: node.id });
+          }
+        }
+        flow.nodes.push(...created);
+        flow.edges.push(...edges);
+        node.data = { ...node.data, extensionsUsed: used + 1 };
+        const pos = layoutPositions(flow);
+        for (const n of flow.nodes) if (!n.parentId) n.position = pos.get(n.id) ?? n.position;
+        this.store.writeFlow(runId, flow);
+        const meta = this.store.readMeta(runId);
+        this.store.writeMeta(runId, {
+          ...meta,
+          nodeStatus: { ...meta.nodeStatus, ...Object.fromEntries(created.map(n => [n.id, 'pending'])) }
+        });
+        this.store.appendLog(runId, {
+          event: 'feedback_review_extension', turn, node: node.id,
+          extension: used + 1, nodes: created.map(n => n.id), reason: review.reason
+        });
+        this.notify(runId);
+        // Un-complete the review: the walk runs the new nodes, then it again.
+        return { ok: true, requeue: [node.id] };
+      }
+    }
+
+    // Bound exhausted, or more-work with nothing materializable: a human decides.
+    this.store.appendLog(runId, {
+      event: 'feedback_review_escalate', turn, node: node.id,
+      reason: review.reason, extensionsUsed: used
+    });
+    this.setNodeStatus(runId, node.id, 'waiting');
+    this.store.setStage(runId, 'awaiting_approval', { pendingNodeId: node.id, pendingGateKind: 'escalation' });
+    this.notify(runId);
+    const approved = await new Promise(resolve => this.gates.set(runId, resolve));
+    if (!approved) {
+      this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
+      this.setNodeStatus(runId, node.id, 'failed');
+      this.notify(runId);
+      return { ok: false };
+    }
+    this.store.appendLog(runId, { event: 'human_decision', decision: 'approved', node: node.id, context: 'feedback-review escalation' });
+    this.store.setStage(runId, 'execution', { pendingNodeId: null, pendingGateKind: null });
+    this.setNodeStatus(runId, node.id, 'done');
+    return { ok: true };
   }
 
   // Start a run of a flow definition. Template instances are resolved
@@ -501,7 +926,10 @@ export class FlowRunner {
     if (resume) {
       const meta = this.store.readMeta(runId);
       for (const n of flow.nodes) {
-        if (meta.nodeStatus?.[n.id] === 'done') completed.add(n.id);
+        // 'skipped' counts as walked-past: a follow-up turn on a failed run
+        // retires the old failure path rather than re-running it (FU7).
+        const s = meta.nodeStatus?.[n.id];
+        if (s === 'done' || s === 'skipped') completed.add(n.id);
         if (n.type === 'agentTask' && n.data?.taskId) opts.taskIdByNode.set(n.id, n.data.taskId);
       }
       this.store.appendLog(runId, { event: 'flow_run_resumed', completed: completed.size, total: flow.nodes.length });
@@ -527,7 +955,9 @@ export class FlowRunner {
       // queues a task into tasks.json — a synchronous, therefore atomic,
       // append — and the queued tasks then execute in parallel below.
       const parallelSafe = n => !n.data?.requiresApproval && (
-        (n.type === 'aiStep' && (n.data?.role ?? 'custom') !== 'plan-eval')
+        (n.type === 'aiStep'
+          // plan-eval and feedback-review rewrite the flow; both run alone.
+          && !['plan-eval', 'feedback-review'].includes(n.data?.role ?? 'custom'))
         || n.type === 'agentTask');
       const safe = ready.filter(parallelSafe);
       const batch = safe.length > 1 ? safe.slice(0, maxParallel) : [ready[0]];
@@ -773,6 +1203,7 @@ export class FlowRunner {
       if (!await this.runPendingTasks(runId, opts.taskIdByNode, flow)) return { ok: false };
     }
     if (outcome?.stepEval) return this.handleStepEval(runId, flow, node, outcome.stepEval, opts);
+    if (outcome?.feedbackReview) return this.handleFeedbackReview(runId, flow, node, outcome.feedbackReview);
     return { ok: true };
   }
 
@@ -791,7 +1222,7 @@ export class FlowRunner {
 
     // The evaluated node: the last upstream work node (aiStep doing real work
     // or an agentTask) feeding this step-eval.
-    const evalRoles = new Set(['plan-start', 'plan-eval', 'step-eval', 'stitch', 'final-eval', 'plan', 'verify']);
+    const evalRoles = new Set(['plan-start', 'plan-eval', 'step-eval', 'stitch', 'final-eval', 'feedback-review', 'plan', 'verify']);
     const upstream = flow.edges.filter(e => e.target === node.id)
       .map(e => flow.nodes.find(n => n.id === e.source))
       .filter(Boolean);
@@ -876,17 +1307,24 @@ export class FlowRunner {
   // the explicitly listed files + the per-file descriptions the planner provided.
   // This directly implements "do not use any more context than necessary".
   upstreamContext(runId, flow, node, taskIdByNode) {
+    const incoming = flow.edges.filter(e => e.target === node.id);
     const spec = node.data?.contextSpec;
     if (spec && Array.isArray(spec.files) && spec.files.length) {
+      // A minimal-context node pulls only its declared files and ignores its
+      // upstream outputs — so record its incoming edges as carrying nothing.
+      // That is exactly what makes them draw thin on the canvas (flare 3).
+      this.recordEdgeContext(runId, Object.fromEntries(incoming.map(e => [e.id, 0])));
       return this.buildMinimalContext(runId, node);
     }
 
     const parts = [];
-    for (const e of flow.edges.filter(e => e.target === node.id)) {
+    const sizes = {};
+    for (const e of incoming) {
       const src = flow.nodes.find(n => n.id === e.source);
       if (!src) continue;
       const label = src.data?.title?.trim() || src.type;
-      let content;
+      let content, aux = null;
+      const port = e.sourceHandle;
       if (src.type === 'agentTask') {
         content = this.store.readTaskOutput(runId, taskIdByNode.get(src.id) ?? '');
       } else if (src.type === 'input') {
@@ -896,19 +1334,34 @@ export class FlowRunner {
         // ports live in nodes/<id>.<port>.md; the primary port (or an absent
         // sourceHandle) is the node's main output. A missing port artifact
         // falls back to the main output rather than dropping the edge.
-        const port = e.sourceHandle;
-        const aux = port && port !== primaryPort(src)
+        aux = port && port !== primaryPort(src)
           ? this.store.readNodeOutput(runId, `${src.id}.${port}`)
           : null;
         content = aux ?? this.store.readNodeOutput(runId, src.id);
-        if (port && aux) {
-          parts.push(`--- ${label} (${src.id} · output: ${port}) ---\n${content}`);
-          continue;
-        }
+      }
+      sizes[e.id] = content ? content.length : 0;
+      if (port && aux) {
+        parts.push(`--- ${label} (${src.id} · output: ${port}) ---\n${content}`);
+        continue;
       }
       if (content) parts.push(`--- ${label} (${src.id}) ---\n${content}`);
     }
+    this.recordEdgeContext(runId, sizes);
     return parts;
+  }
+
+  // Persist, per edge id, how many characters of context flowed along it, for
+  // the canvas to weight the line (flare 3). Merge (never clobber) — a run
+  // assembles context for many nodes, each contributing its own incoming edges.
+  // Synchronous read-modify-write is atomic under the single-threaded loop, the
+  // same assumption every other meta write here already relies on.
+  recordEdgeContext(runId, sizes) {
+    if (!sizes || !Object.keys(sizes).length) return;
+    const meta = this.store.readMeta(runId);
+    this.store.writeMeta(runId, {
+      ...meta,
+      edgeContext: { ...(meta.edgeContext ?? {}), ...sizes }
+    });
   }
 
   // Resolve one contextSpec path against the run's artifacts, in order:
@@ -1185,6 +1638,29 @@ export class FlowRunner {
       if (role === 'final-eval') {
         this.store.writeNodeOutput(runId, 'final-eval', outText);
       }
+      if (role === 'feedback-review') {
+        const templateIds = this.nodeStore ? this.nodeStore.listFull().map(t => t.id) : [];
+        let review = parseFeedbackReview(outText, templateIds);
+        if (!review) {
+          const fixed = await this.reAsk(runId, node, worker, apiKey, system, userMsg, outText,
+            ['no ```json block with { "verdict": "solved" | "more-work", "reason", "nodes"? } found']);
+          if (fixed != null) {
+            review = parseFeedbackReview(fixed, templateIds);
+            if (review) this.store.writeNodeOutput(runId, node.id, fixed);
+          }
+        }
+        if (review) {
+          outcome.feedbackReview = review;
+          problems.push(...(review.errors ?? []));
+          // Auxiliary "verdict" output port: just the structured decision.
+          this.store.writeNodeOutput(runId, `${node.id}.verdict`,
+            JSON.stringify({ verdict: review.verdict, reason: review.reason }, null, 2));
+          this.store.appendLog(runId, { event: 'feedback_review_verdict', node: node.id, verdict: review.verdict, reason: review.reason });
+        } else {
+          problems.push('feedback-review emitted no structured verdict JSON block; treated as solved');
+          this.store.appendLog(runId, { event: 'feedback_review_no_verdict', node: node.id });
+        }
+      }
 
       const retro = makeRetrospective({
         node: node.id,
@@ -1422,6 +1898,44 @@ export class FlowRunner {
     this.notify(runId);
   }
 
+  // Instantiate one Node Library template (user-editable worker/instructions/
+  // tools apply) as a runtime node, falling back to the built-in catalog. The
+  // caller re-layouts, so the position is a placeholder.
+  templateNode(templateId, id, overrides = {}) {
+    const lib = this.nodeStore?.get(templateId);
+    if (lib) return resolveInstance({ id, templateId, position: { x: 0, y: 0 }, overrides }, lib);
+    const { title, goal, category, contextSpec, requiresApproval } = overrides;
+    return createNodeFromTemplate(templateId, {
+      id,
+      position: { x: 0, y: 0 },
+      data: {
+        ...(title ? { title } : {}),
+        ...(goal ? { goal } : {}),
+        ...(category ? { category } : {}),
+        ...(contextSpec ? { contextSpec } : {}),
+        ...(requiresApproval != null ? { requiresApproval } : {})
+      }
+    });
+  }
+
+  // Turn one validated generated-node spec (plan-eval / triage / feedback-
+  // review contract shape) into a runtime node. A spec without an explicit
+  // contextSpec at least gets the task list, keeping "minimal declared
+  // context" the default.
+  specNode(s) {
+    const contextSpec = s.contextSpec ?? (s.taskRef
+      ? { files: [{ path: 'tasks-md', description: `The full task list from plan-start; only ${s.taskRef} is this node's assignment.` }] }
+      : undefined);
+    const goal = s.goal || (s.taskRef ? `Complete ${s.taskRef} exactly as defined in tasks.md.` : '');
+    const label = this.nodeStore?.get(s.template)?.name ?? getTemplate(s.template)?.label ?? s.template;
+    return this.templateNode(s.template, s.id, {
+      title: s.title || (s.taskRef ? `${label} (${s.taskRef})` : label),
+      goal,
+      ...(s.category ? { category: s.category } : {}),
+      ...(contextSpec ? { contextSpec } : {})
+    });
+  }
+
   // Materialize the nodes a plan-eval step declared (strict contract in
   // core/planEval.js): create real node objects from NODE_TEMPLATES, wire
   // them between the plan-eval node and its downstream targets, and persist
@@ -1511,42 +2025,7 @@ export class FlowRunner {
 
     const created = [];
     for (const s of specs) {
-      // A generated node without an explicit contextSpec at least gets the
-      // task list, keeping "minimal declared context" the default.
-      const contextSpec = s.contextSpec ?? (s.taskRef
-        ? { files: [{ path: 'tasks-md', description: `The full task list from plan-start; only ${s.taskRef} is this node's assignment.` }] }
-        : undefined);
-      const goal = s.goal || (s.taskRef ? `Complete ${s.taskRef} exactly as defined in tasks.md.` : '');
-
-      // Prefer the Node Library template (user-editable worker/instructions/
-      // tools apply); fall back to the built-in catalog contract otherwise.
-      const lib = this.nodeStore?.get(s.template);
-      let node;
-      if (lib) {
-        node = resolveInstance({
-          id: s.id,
-          templateId: s.template,
-          position: { x: 0, y: 0 }, // real position assigned by the layout pass below
-          overrides: {
-            title: s.title || (s.taskRef ? `${lib.name} (${s.taskRef})` : lib.name),
-            goal,
-            ...(s.category ? { category: s.category } : {}),
-            ...(contextSpec ? { contextSpec } : {})
-          }
-        }, lib);
-      } else {
-        const tmpl = getTemplate(s.template);
-        node = createNodeFromTemplate(s.template, {
-          id: s.id,
-          position: { x: 0, y: 0 },
-          data: {
-            title: s.title || (s.taskRef ? `${tmpl.label} (${s.taskRef})` : tmpl.label),
-            goal,
-            ...(s.category ? { category: s.category } : {}),
-            ...(contextSpec ? { contextSpec } : {})
-          }
-        });
-      }
+      const node = this.specNode(s);
       node.data = {
         ...node.data,
         ...(s.taskRef ? { taskRef: s.taskRef } : {}),

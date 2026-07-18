@@ -189,7 +189,22 @@ ipcMain.handle('run:reject', (_e, runId, reason) => flowRunner.rejectPlan(runId,
 // Continue a run the app died in the middle of. Completed nodes are kept and
 // not re-executed (V1 task 7).
 ipcMain.handle('run:resume', (_e, runId) => flowRunner.resume(runId));
-ipcMain.handle('run:list', () => store.listRuns());
+// Reply to a finished run (FOLLOWUP-PLAN): the flow grows with a continuation
+// subgraph and the walk executes it; completed nodes are never re-run.
+ipcMain.handle('run:followUp', (_e, runId, text) => flowRunner.followUp(runId, String(text ?? '')));
+// Summaries, not bare ids: the list names, groups and sorts runs, and reading
+// meta + prompt per run is a handful of small synchronous reads.
+ipcMain.handle('run:list', () => store.runSummaries());
+ipcMain.handle('run:rename', (_e, runId, name) => store.setRunName(runId, name));
+// Deleting a run this process is still walking would pull the files out from
+// under the runner mid-step (it writes meta/log/outputs as it goes), so refuse
+// while it's live and let the caller say why.
+ipcMain.handle('run:delete', (_e, runId) => {
+  if (flowRunner.live.has(runId)) throw new Error('This run is still executing. Wait for it to finish before deleting it.');
+  store.deleteRun(runId);
+  runChannels.delete(runId); // drop the patch baseline; the id is gone for good
+  return true;
+});
 // Full snapshot + the rev naming it, for a renderer that fetches one (on first
 // view or after a missed patch). The two are minted from the SAME instant and
 // recorded as this run's baseline, because the whole patch scheme rests on a rev
@@ -208,6 +223,7 @@ ipcMain.handle('run:snapshot', (_e, runId) => {
   return { ...snapshot, rev };
 });
 ipcMain.handle('run:openFolder', (_e, runId) => shell.openPath(store.runDir(runId)));
+ipcMain.handle('run:log', (_e, runId) => store.readLog(runId));
 
 // --- Workspace binding (target project folder for a run) ---
 ipcMain.handle('workspace:pick', async () => {

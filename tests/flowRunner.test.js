@@ -513,3 +513,28 @@ test('streamInto still throttles the noisy middle of a stream', () => {
   for (let i = 0; i < 50; i++) sink('chunk ' + i);
   assert.equal(written.length, 1, '50 rapid chunks must not become 50 writes + 50 IPC pushes');
 });
+
+// --- per-edge context sizing (flare 3: edge weight) ---
+
+test('the runner records per-edge context bytes into meta (thick full-context, thin contextSpec)', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(() => 'a step output long enough to carry weight downstream');
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'the brief for the run' }),
+     node('a', 'aiStep', { role: 'execute', title: 'A' }),
+     // b ignores its upstream output and pulls only its declared file:
+     node('b', 'aiStep', { role: 'execute', title: 'B',
+       contextSpec: { files: [{ path: 'prompt', description: 'the brief' }] } }),
+     node('out', 'output')],
+    [edge('in', 'a'), edge('a', 'b'), edge('b', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+
+  const ec = store.readMeta(runId).edgeContext;
+  assert.ok(ec, 'edgeContext should be persisted to meta');
+  // A full-context node's incoming edge carried the upstream text (> 0).
+  assert.ok(ec['e-in-a'] > 0, `e-in-a should carry context, got ${ec['e-in-a']}`);
+  // The contextSpec node ignored its upstream output — that edge carried nothing.
+  assert.equal(ec['e-a-b'], 0, 'the edge into a contextSpec node should be measured empty');
+});

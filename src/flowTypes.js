@@ -50,6 +50,10 @@ export const ROLE_PORTS = {
   'final-eval': [
     { id: 'report', label: 'final-eval.md', description: 'Completeness verdict + documented differences from the plan.' }
   ],
+  'feedback-review': [
+    { id: 'report', label: 'review', description: 'Whether the follow-up feedback is solved, and why.' },
+    { id: 'verdict', label: 'verdict', description: 'Structured solved / more-work verdict (JSON).' }
+  ],
   plan: [
     { id: 'plan', label: 'plan.md', description: 'The produced plan.' }
   ],
@@ -111,7 +115,7 @@ export function normalizeOutputs(outputs) {
   return clean.length ? clean : null;
 }
 
-export const AI_ROLES = ['plan', 'execute', 'verify', 'custom', 'plan-start', 'plan-eval', 'step-eval', 'stitch', 'final-eval'];
+export const AI_ROLES = ['plan', 'execute', 'verify', 'custom', 'plan-start', 'plan-eval', 'step-eval', 'stitch', 'final-eval', 'feedback-review'];
 
 // The four (minimum) categories used by plan-eval nodes to drive model selection
 // and template choice. Extend only after updating FLOW_NODES.md and config examples.

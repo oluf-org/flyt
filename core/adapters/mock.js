@@ -138,6 +138,29 @@ No larger gaps — no corrective task nodes created.
 { "fixTasks": [] }
 \`\`\``,
 
+    // Follow-up turns (FOLLOWUP-PLAN): classify the reply as a small fix so
+    // the whole extend-and-walk loop is exercisable with no API key.
+    'followup-triage': JSON.stringify({
+      class: 'fix',
+      reason: 'The reply asks for a small correction to the produced output (mock triage).',
+      contextNodes: [],
+      nodes: [
+        {
+          id: 'apply-feedback', template: 'code-general-step', category: 'Code general',
+          title: 'Apply the requested fix',
+          goal: `Apply the correction the user asked for in their follow-up: ${goal}`
+        }
+      ]
+    }, null, 2),
+
+    'feedback-review': `## Feedback review
+
+The follow-up work addresses the user's feedback (mock review).
+
+\`\`\`json
+{ "verdict": "solved", "reason": "The turn's output addresses the feedback (mock review)." }
+\`\`\``,
+
     'final-eval': `## Final Evaluation
 
 **Completeness:** Good.

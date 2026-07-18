@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import FlowCanvas, { FlowEditor } from './FlowCanvas.jsx';
 import Inspector, { FlowInspector } from './Inspector.jsx';
 import Settings from './Settings.jsx';
@@ -7,16 +8,31 @@ import FlowYamlEditor from './FlowYamlEditor.jsx';
 import LiveStream from './LiveStream.jsx';
 import RunBar from './RunBar.jsx';
 import RunResult from './RunResult.jsx';
+import RunsList from './RunsList.jsx';
 import { isTerminal } from './runProgress.js';
 import { resolveFlow, namedFlow, UNTITLED_FLOW } from './flowTypes.js';
 import { layoutPositions } from './flowLayout.js';
 import { mergeSnapshot } from '../core/snapshotDiff.js';
+import { runDocument } from './runDocument.js';
+import { foldReplay, replaySnapshot } from './runReplay.js';
+import ReplayStrip from './ReplayStrip.jsx';
 
 function setTheme(mode) { // 'light' | 'dark'
   document.documentElement.dataset.theme = mode;
   try { localStorage.setItem('llmflow-theme', mode); } catch {}
   // Keep the native window controls in step with the custom title bar.
   window.llmflow?.setTitleBarTheme?.(mode);
+}
+
+// Crossfade a whole-tree swap (theme flip, section change) via the View
+// Transitions API instead of transitioning every element's colours on every
+// mutation. flushSync forces the React re-render to land inside the transition
+// so the API captures the correct "after" frame. Falls back to an instant swap
+// where the API is missing or motion is reduced.
+function withViewTransition(update) {
+  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  if (reduce || !document.startViewTransition) { update(); return; }
+  document.startViewTransition(() => flushSync(update));
 }
 
 let nodeSeq = 0;
@@ -65,13 +81,38 @@ const NAV = [
   { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+3)' }
 ];
 
+// The run's plaintext mirror (flare 7): the same run as a typeset dossier you
+// can copy straight into an issue or PR. A pure projection of the snapshot —
+// runDocument does the typesetting; this just frames it and offers Copy.
+function RunMirror({ snapshot }) {
+  const doc = useMemo(() => runDocument(snapshot), [snapshot]);
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(doc);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch { /* clipboard blocked — the <pre> is still selectable */ }
+  };
+  return (
+    <div className="mirror-wrap">
+      <div className="mirror-toolbar">
+        <span className="section-label">Document</span>
+        <span className="mirror-hint">A pasteable dossier of this run — copy it into an issue or PR.</span>
+        <button className="ghost mini" onClick={copy}>{copied ? 'Copied ✓' : 'Copy'}</button>
+      </div>
+      <pre className="mirror">{doc}</pre>
+    </div>
+  );
+}
+
 // One mental model (GOALS.md): a Node Library of reusable AI templates, and
 // workflows composed from them on the canvas. Renderer is a pure view over
 // file state pushed from the main process: run snapshots (read-only), flow
 // definitions (editable, autosaved), node templates (edited on the Nodes
 // page). One engine, one run entry: the run panel on the right.
 export default function App() {
-  const [runIds, setRunIds] = useState([]);
+  const [runs, setRuns] = useState([]); // summaries (id, name, createdAt, stage…), newest first
   const [activeRunId, setActiveRunId] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
   // Mirror of `snapshot` for the incremental-update handler to read without a
@@ -95,6 +136,12 @@ export default function App() {
   const [flowLint, setFlowLint] = useState(null); // { ok, errors, warnings } for the open flow
   const [models, setModels] = useState([]);
   const [flowViewMode, setFlowViewMode] = useState('canvas'); // 'canvas' | 'yaml'
+  const [runView2, setRunView2] = useState('canvas'); // run view: 'canvas' | 'document'
+  // Replay scrubber (finished runs): folded frames + where the scrubber sits
+  // (null = live/final), and whether it's playing.
+  const [replayFrames, setReplayFrames] = useState(null);
+  const [replayIndex, setReplayIndex] = useState(null);
+  const [replayPlaying, setReplayPlaying] = useState(false);
   const flowRef = useRef(null);
   const saveTimer = useRef(null);
 
@@ -123,16 +170,69 @@ export default function App() {
 
   const toggleTheme = () => {
     const next = theme === 'light' ? 'dark' : 'light';
-    setTheme(next);
-    setThemeState(next);
+    withViewTransition(() => { setTheme(next); setThemeState(next); });
   };
 
   // Sync the native title-bar overlay to the boot theme once on mount.
   useEffect(() => { window.llmflow?.setTitleBarTheme?.(theme); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Opening a different run always lands on the canvas, not the last run's doc,
+  // and clears any replay state from the previous run.
+  useEffect(() => {
+    setRunView2('canvas');
+    setReplayFrames(null); setReplayIndex(null); setReplayPlaying(false);
+  }, [activeRunId]);
+
+  // For a FINISHED flow run, fetch its log once and fold it into replay frames.
+  // Live runs get null (the scrubber is meaningless while it's still moving).
+  useEffect(() => {
+    const stage = snapshot?.meta?.stage;
+    const flow = snapshot?.flow;
+    if (activeActivity === 'runs' && activeRunId && flow && isTerminal(stage) && window.llmflow?.readRunLog) {
+      let cancelled = false;
+      window.llmflow.readRunLog(activeRunId)
+        .then(log => { if (!cancelled) setReplayFrames(foldReplay(log, flow)); })
+        .catch(() => {});
+      return () => { cancelled = true; };
+    }
+    setReplayFrames(null);
+  }, [activeActivity, activeRunId, snapshot?.meta?.stage]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Playback advances one frame at a time in event order; stops at the end.
+  useEffect(() => {
+    if (!replayPlaying || !replayFrames?.length) return;
+    const id = setInterval(() => {
+      setReplayIndex(i => {
+        const next = (i == null ? 0 : i) + 1;
+        if (next > replayFrames.length - 1) { setReplayPlaying(false); return replayFrames.length - 1; }
+        return next;
+      });
+    }, 380);
+    return () => clearInterval(id);
+  }, [replayPlaying, replayFrames]);
+
+  const toggleReplayPlay = () => {
+    if (replayPlaying) { setReplayPlaying(false); return; }
+    setReplayIndex(i => (i == null || i >= (replayFrames?.length ?? 1) - 1) ? 0 : i);
+    setReplayPlaying(true);
+  };
+
   const refreshRuns = useCallback(async () => {
-    setRunIds(await window.llmflow.listRuns());
+    setRuns(await window.llmflow.listRuns());
   }, []);
+  // Listing runs re-reads every run's meta + prompt from disk, and run updates
+  // arrive as often as the token stream flushes (250ms) — that would re-read the
+  // whole runs/ directory several times a second while a run is live. The list
+  // only shows stage-level facts, so coalesce the storm into one trailing read.
+  const runsRefreshTimer = useRef(null);
+  const refreshRunsSoon = useCallback(() => {
+    if (runsRefreshTimer.current) return;
+    runsRefreshTimer.current = setTimeout(() => {
+      runsRefreshTimer.current = null;
+      refreshRuns();
+    }, 400);
+  }, [refreshRuns]);
+  useEffect(() => () => clearTimeout(runsRefreshTimer.current), []);
   const refreshFlows = useCallback(async () => {
     const list = await window.llmflow.listFlows();
     setFlowsList(list);
@@ -166,7 +266,7 @@ export default function App() {
   useEffect(() => {
     return window.llmflow.onRunUpdate(payload => {
       const { runId } = payload;
-      refreshRuns();
+      refreshRunsSoon();
       setActiveRunId(prev => prev ?? runId);
       const cur = snapRef.current;
       // Only mirror the run being viewed (or the very first one to appear).
@@ -190,7 +290,7 @@ export default function App() {
       }
       setSnapshot({ ...mergeSnapshot(cur, payload.patch), rev: payload.rev });
     });
-  }, [refreshRuns]);
+  }, [refreshRunsSoon]);
 
   useEffect(() => {
     if (!activeRunId) { setSnapshot(null); return; }
@@ -349,26 +449,47 @@ export default function App() {
     setNewRunOpen(false); // a fresh run is for watching, not for starting another
   }, [flushSave]);
 
+  const renameRun = useCallback(async (id, name) => {
+    await window.llmflow.renameRun(id, name);
+    await refreshRuns();
+  }, [refreshRuns]);
+
+  const deleteRun = useCallback(async id => {
+    try {
+      await window.llmflow.deleteRun(id);
+    } catch (err) {
+      // The main process refuses while the run is still executing; that reason
+      // is the whole message, so show it rather than the IPC wrapper around it.
+      window.alert(String(err?.message ?? err)
+        .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, ''));
+      return;
+    }
+    // The run being watched can be the one deleted: drop the view with it.
+    setActiveRunId(prev => (prev === id ? null : prev));
+    setSnapshot(prev => (prev?.meta?.runId === id ? null : prev));
+    await refreshRuns();
+  }, [refreshRuns]);
+
   // Switch section via the rail / shortcuts. Selections persist per section;
   // we only drop the canvas node selection, which is section-specific.
   const goActivity = useCallback(async key => {
     await flushSave();
-    setSelectedNode(null);
-    setActiveActivity(key);
+    withViewTransition(() => { setSelectedNode(null); setActiveActivity(key); });
   }, [flushSave]);
 
   const openTemplate = useCallback(async id => {
     await flushSave();
-    setSelectedTemplateId(id);
-    setSelectedNode(null);
-    setActiveActivity('library');
+    withViewTransition(() => {
+      setSelectedTemplateId(id);
+      setSelectedNode(null);
+      setActiveActivity('library');
+    });
   }, [flushSave]);
 
   const newTemplate = useCallback(async () => {
     const tpl = await window.llmflow.newNodeTemplate();
     await refreshTemplates();
-    setSelectedTemplateId(tpl.id);
-    setActiveActivity('library');
+    withViewTransition(() => { setSelectedTemplateId(tpl.id); setActiveActivity('library'); });
   }, [refreshTemplates]);
 
   // Section shortcuts: Ctrl/Cmd + 1/2/3 jump between Flows / Library / Runs.
@@ -533,9 +654,12 @@ export default function App() {
   );
 
   const activeIndex = NAV.findIndex(n => n.key === activeActivity);
+  // A run is identified by its name everywhere it's named; the id stays the
+  // fallback for a run the list hasn't loaded yet.
+  const activeRunName = runs.find(r => r.id === activeRunId)?.name ?? activeRunId;
   const crumb =
     libraryView ? ['Library', selectedTemplate?.name].filter(Boolean) :
-    activeActivity === 'runs' ? (activeRunId ? ['Runs', activeRunId] : ['Runs']) :
+    activeActivity === 'runs' ? (activeRunId ? ['Runs', activeRunName] : ['Runs']) :
     flowView ? ['Flows', flow.name] : ['Flows'];
 
   return (
@@ -549,7 +673,7 @@ export default function App() {
           ? <span className="titlebar-doc mono">{flow.name}</span>
           : libraryView
             ? <span className="titlebar-doc mono">{selectedTemplate?.name ?? 'Node Library'}</span>
-            : runView && <span className="titlebar-doc mono">{activeRunId}</span>}
+            : runView && <span className="titlebar-doc mono" title={activeRunId}>{activeRunName}</span>}
       </div>
 
       <header className="toolbar">
@@ -656,21 +780,17 @@ export default function App() {
 
           {activeActivity === 'runs' && (
             <>
-              <div className="sidebar-section" style={{ paddingBottom: 8 }}>
+              <div className="sidebar-section runs-header" style={{ paddingBottom: 8 }}>
                 <span className="section-label">Runs</span>
+                {runs.length > 0 && <span className="run-count mono">{runs.length}</span>}
               </div>
-              <div className="explorer-list">
-                {[...runIds].reverse().map(id => (
-                  <div
-                    key={id}
-                    className={'run-item' + (id === activeRunId && runView ? ' active' : '')}
-                    onClick={() => openRun(id)}
-                  >
-                    {id}
-                  </div>
-                ))}
-                {runIds.length === 0 && <div className="muted">No runs yet.</div>}
-              </div>
+              <RunsList
+                runs={runs}
+                activeRunId={runView ? activeRunId : null}
+                onOpen={openRun}
+                onRename={renameRun}
+                onDelete={deleteRun}
+              />
             </>
           )}
         </aside>
@@ -772,6 +892,8 @@ export default function App() {
               snapshot={snapshot}
               onOpenFolder={() => window.llmflow.openRunFolder(activeRunId)}
               onOpenWorkspace={() => window.llmflow.openWorkspace(activeRunId)}
+              docView={runView2}
+              onDocView={v => withViewTransition(() => setRunView2(v))}
             />
           )}
           {runView && snapshot?.meta?.interrupted && (
@@ -847,7 +969,24 @@ export default function App() {
                         onChangeFlow={changeFlow}
                       />)
               : runView && snapshot
-                ? <FlowCanvas snapshot={snapshot} selectedNode={selectedNode} onSelect={setSelectedNode} />
+                ? (runView2 === 'document'
+                    ? <RunMirror snapshot={snapshot} />
+                    : <>
+                        <FlowCanvas
+                          snapshot={replayIndex != null && replayFrames
+                            ? replaySnapshot(snapshot, replayFrames[replayIndex])
+                            : snapshot}
+                          selectedNode={selectedNode}
+                          onSelect={setSelectedNode}
+                        />
+                        <ReplayStrip
+                          frames={replayFrames}
+                          index={replayIndex}
+                          playing={replayPlaying}
+                          onScrub={i => { setReplayPlaying(false); setReplayIndex(i); }}
+                          onPlayToggle={toggleReplayPlay}
+                        />
+                      </>)
                 : activeActivity === 'runs'
                   ? (
                     <div className="empty-state">
@@ -918,7 +1057,12 @@ export default function App() {
               (self-hiding when none are), and the run's outcome once it settles.
               Both render only in the run view. */}
           {runView && snapshot && <LiveStream snapshot={snapshot} />}
-          {runView && snapshot && <RunResult snapshot={snapshot} />}
+          {runView && snapshot && (
+            <RunResult
+              snapshot={snapshot}
+              onFollowUp={text => window.llmflow.followUpRun(activeRunId, text)}
+            />
+          )}
 
           {flowView
             ? <FlowInspector

@@ -44,25 +44,15 @@ function validateContextSpec(cs, at, errors) {
   return { files };
 }
 
-// The strict plan-eval contract. Any violation rejects the WHOLE document
-// (no partial materialization) so generated flows are always well-formed.
-// extraTemplateIds extends the valid template names with the Node Library's
-// (user-editable) catalog on top of the built-in one.
-export function parsePlanEval(text, extraTemplateIds = []) {
-  const obj = extractJson(text);
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
-    return { ok: false, errors: ['no JSON object found in plan-eval output (expected a ```json block or raw JSON)'] };
-  }
-  const errors = [];
+// Validate an array of generated-node specs (the shared core of the plan-eval,
+// triage, and feedback-review contracts). Pushes violations into `errors` and
+// returns the normalized spec list.
+function validateNodeSpecs(rawNodes, extraTemplateIds, errors) {
   const knownTemplates = [...new Set([...Object.keys(NODE_TEMPLATES), ...extraTemplateIds])];
   const isKnownTemplate = t => knownTemplates.includes(t);
-
-  if (!Array.isArray(obj.nodes) || obj.nodes.length === 0) {
-    errors.push('nodes: required non-empty array of { id, template, ... }');
-  }
   const seen = new Set();
   const nodes = [];
-  for (const [i, n] of (Array.isArray(obj.nodes) ? obj.nodes : []).entries()) {
+  for (const [i, n] of (Array.isArray(rawNodes) ? rawNodes : []).entries()) {
     const at = `nodes[${i}]`;
     if (!n || typeof n !== 'object' || Array.isArray(n)) { errors.push(`${at}: must be an object`); continue; }
     if (!isStr(n.id) || !ID_RE.test(n.id.trim())) {
@@ -115,6 +105,23 @@ export function parsePlanEval(text, extraTemplateIds = []) {
       ...(contextSpec ? { contextSpec } : {})
     });
   }
+  return nodes;
+}
+
+// The strict plan-eval contract. Any violation rejects the WHOLE document
+// (no partial materialization) so generated flows are always well-formed.
+// extraTemplateIds extends the valid template names with the Node Library's
+// (user-editable) catalog on top of the built-in one.
+export function parsePlanEval(text, extraTemplateIds = []) {
+  const obj = extractJson(text);
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    return { ok: false, errors: ['no JSON object found in plan-eval output (expected a ```json block or raw JSON)'] };
+  }
+  const errors = [];
+  if (!Array.isArray(obj.nodes) || obj.nodes.length === 0) {
+    errors.push('nodes: required non-empty array of { id, template, ... }');
+  }
+  const nodes = validateNodeSpecs(obj.nodes, extraTemplateIds, errors);
 
   let parallelGroups;
   if (obj.parallelGroups != null) {
@@ -201,4 +208,82 @@ export function parseStitchDirectives(text) {
     fixTasks.push(ft);
   });
   return { fixTasks, errors };
+}
+
+// Follow-up triage (FOLLOWUP-PLAN FU3): one strict-JSON classification of the
+// user's feedback on a finished run. Total: never throws, invalid content comes
+// back as { ok: false, errors } so the runner can degrade gracefully.
+//
+//   { "class": "question" | "fix" | "feature",
+//     "reason": "<one line>",
+//     "contextNodes": ["<done node id>", ...],       // optional
+//     "answer": "<markdown>",                        // question-class: required
+//     "nodes": [<plan-eval node specs>],             // fix-class: required
+//     "goal": "<goal for the plan segment>" }        // feature-class: optional
+const TRIAGE_CLASSES = ['question', 'fix', 'feature'];
+export function parseTriage(text, extraTemplateIds = []) {
+  const obj = extractJson(text);
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    return { ok: false, errors: ['no JSON object found in triage output (expected a ```json block or raw JSON)'] };
+  }
+  const errors = [];
+  const cls = isStr(obj.class) ? obj.class.trim().toLowerCase() : '';
+  if (!TRIAGE_CLASSES.includes(cls)) {
+    errors.push(`class: required, one of: ${TRIAGE_CLASSES.join(', ')}`);
+  }
+  let contextNodes = [];
+  if (obj.contextNodes != null) {
+    if (!Array.isArray(obj.contextNodes) || obj.contextNodes.some(c => !isStr(c))) {
+      errors.push('contextNodes: must be an array of non-empty strings');
+    } else {
+      contextNodes = obj.contextNodes.map(c => c.trim());
+    }
+  }
+  if (cls === 'question' && !isStr(obj.answer)) {
+    errors.push('answer: required non-empty string for class "question"');
+  }
+  let nodes = [];
+  if (cls === 'fix') {
+    if (!Array.isArray(obj.nodes) || obj.nodes.length === 0) {
+      errors.push('nodes: required non-empty array of { id, template, ... } for class "fix"');
+    }
+    nodes = validateNodeSpecs(obj.nodes, extraTemplateIds, errors);
+  }
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    errors: [],
+    triage: {
+      class: cls,
+      reason: isStr(obj.reason) ? obj.reason.trim() : '',
+      contextNodes,
+      ...(cls === 'question' ? { answer: obj.answer.trim() } : {}),
+      ...(cls === 'fix' ? { nodes } : {}),
+      ...(cls === 'feature' && isStr(obj.goal) ? { goal: obj.goal.trim() } : {})
+    }
+  };
+}
+
+// feedback-review verdict (FOLLOWUP-PLAN FU6): closes every follow-up turn.
+// null when the output carries no structured verdict. `more-work` may declare
+// additional node specs; invalid specs are dropped with their errors reported
+// (the runner escalates when more-work arrives with nothing materializable).
+const REVIEW_VERDICTS = ['solved', 'more-work'];
+export function parseFeedbackReview(text, extraTemplateIds = []) {
+  const obj = extractJson(text);
+  if (!obj || typeof obj !== 'object' || !isStr(obj.verdict)) return null;
+  const verdict = obj.verdict.trim().toLowerCase();
+  if (!REVIEW_VERDICTS.includes(verdict)) return null;
+  const errors = [];
+  let nodes = [];
+  if (verdict === 'more-work' && Array.isArray(obj.nodes) && obj.nodes.length) {
+    nodes = validateNodeSpecs(obj.nodes, extraTemplateIds, errors);
+    if (errors.length) nodes = [];
+  }
+  return {
+    verdict,
+    reason: isStr(obj.reason) ? obj.reason.trim() : '',
+    nodes,
+    errors
+  };
 }

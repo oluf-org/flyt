@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { runProgress, formatElapsed } from './runProgress.js';
+import { sigil } from './sigil.js';
 
 // The run view's header (V1 task 9). D4 makes the canvas the live transparency
 // view of execution; this is the frame around it that answers "how far along is
 // this, is it still moving, and how do I get to the files?" — none of which the
 // canvas can say without the user counting glyphs.
-export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace }) {
+export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace, docView, onDocView }) {
   const [now, setNow] = useState(() => Date.now());
   const p = runProgress(snapshot, now);
   const live = Boolean(p?.live);
@@ -27,6 +28,13 @@ export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace }) {
 
   return (
     <div className="run-bar">
+      {snapshot.meta?.runId && (
+        <span
+          className="run-bar-sigil"
+          aria-hidden="true"
+          dangerouslySetInnerHTML={{ __html: sigil(snapshot.meta.runId, 24) }}
+        />
+      )}
       <span className="run-bar-name" title={snapshot.meta?.flowName}>
         {snapshot.meta?.flowName ?? 'Run'}
       </span>
@@ -63,6 +71,21 @@ export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace }) {
       <span className="run-stat mono" title="Elapsed">{formatElapsed(p.elapsedMs)}</span>
 
       <div className="toolbar-spacer" />
+
+      {onDocView && (
+        <div className="view-switch" role="tablist" aria-label="Run view">
+          <button
+            type="button" role="tab" aria-selected={docView !== 'document'}
+            className={'view-btn' + (docView !== 'document' ? ' active' : '')}
+            onClick={() => onDocView('canvas')}
+          ><span className="view-btn-glyph">◇</span> Canvas</button>
+          <button
+            type="button" role="tab" aria-selected={docView === 'document'}
+            className={'view-btn' + (docView === 'document' ? ' active' : '')}
+            onClick={() => onDocView('document')}
+          ><span className="view-btn-glyph">▤</span> Document</button>
+        </div>
+      )}
 
       {workspace && (
         <span className="run-ws mono" title={workspace}>

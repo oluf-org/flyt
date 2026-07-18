@@ -337,6 +337,46 @@ schema/validation/logging) with `createdBy: <stitch-node-id>` and executed by
 the executor before the flow continues. Invalid entries are dropped and
 reported; omitting the block or `"fixTasks": []` means nothing to fix.
 
+### followup-triage → turn classification (FOLLOWUP-PLAN)
+
+Not a node role: a direct call `FlowRunner.followUp()` makes when the user
+replies to a finished run. One ```json block:
+
+```json
+{
+  "class": "question" | "fix" | "feature",
+  "reason": "one line",
+  "contextNodes": ["<done node id whose output the new work needs>"],
+  "answer": "question-class only: the answer, as Markdown",
+  "nodes": [{ "id": "...", "template": "code-general-step", "title": "...", "goal": "...", "dependsOn": [], "contextSpec": { "files": [] } }],
+  "goal": "feature-class only: what to plan and build"
+}
+```
+
+`question` answers in place (`followups/<n>/answer.md`, no graph change).
+`fix` materializes the declared nodes (fu`<n>`- prefixed) between a visible
+`fu<n>-input` feedback node and a closing `feedback-review` node. `feature`
+materializes the standard reflective segment: plan → plan-eval (human approval
+gate) → materialized executors → stitch → feedback-review. `contextNodes`
+become edges from the selected done nodes into the turn's entry nodes — edge
+context is the only context mechanism. One bounded re-ask on contract misses;
+an unparseable triage restores the run's stage and notes the miss in the thread.
+
+### feedback-review → turn verdict
+
+Closes every follow-up turn. The report must end with one ```json block:
+
+```json
+{ "verdict": "solved" | "more-work", "reason": "one line", "nodes": [{ "id": "...", "template": "...", "goal": "..." }] }
+```
+
+- `solved`: the walk drains and the run is done again.
+- `more-work`: the declared nodes are materialized upstream of the review
+  (prefixed `fu<n>x<k>-`), the review re-runs after them. Bounded to 2
+  extensions per turn; hitting the bound — or `more-work` with nothing
+  materializable — escalates through the standard human gate.
+- No valid block = solved (noted as a problem in the retrospective).
+
 ### contextSpec resolution order
 
 `buildMinimalContext` resolves each declared path against, in order:
