@@ -18,6 +18,7 @@ import { foldReplay, replaySnapshot } from './runReplay.js';
 import ReplayStrip from './ReplayStrip.jsx';
 import TabStrip, { NewTabPage } from './TabStrip.jsx';
 import TabDeck from './TabDeck.jsx';
+import Lander from './Lander.jsx';
 
 function setTheme(mode) { // 'light' | 'dark'
   document.documentElement.dataset.theme = mode;
@@ -46,6 +47,14 @@ function freshNodeId(prefix) {
 // Stroke-based, currentColor, so they tint to --accent when active and inherit
 // the theme everywhere else. No emoji — they'd break the Slate & Sage feel. ---
 const RailIcon = {
+  // Home — the lander. A single node radiating three short rays: the sigil
+  // burst distilled to a rail glyph, in the same 1.6-stroke geometry.
+  home: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="2.6" />
+      <path d="M12 5.4V8M12 16v2.6M5.4 12H8M16 12h2.6M7.6 7.6 9.4 9.4M14.6 14.6l1.8 1.8M16.4 7.6 14.6 9.4M9.4 14.6l-1.8 1.8" />
+    </svg>
+  ),
   // Flows — a small workflow graph (one node branching to two)
   flows: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -78,9 +87,10 @@ const RailIcon = {
 // The three primary sections, in rail order. Each is a self-contained mode
 // with its own explorer list + remembered selection (Ctrl+1/2/3).
 const NAV = [
-  { key: 'flows', label: 'Flows', hint: 'Flows  (Ctrl+1)' },
-  { key: 'library', label: 'Library', hint: 'Node Library  (Ctrl+2)' },
-  { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+3)' }
+  { key: 'home', label: 'Home', hint: 'Home  (Ctrl+1)' },
+  { key: 'flows', label: 'Flows', hint: 'Flows  (Ctrl+2)' },
+  { key: 'library', label: 'Library', hint: 'Node Library  (Ctrl+3)' },
+  { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+4)' }
 ];
 
 // The run's plaintext mirror (flare 7): the same run as a typeset dossier you
@@ -146,6 +156,7 @@ export default function App() {
   const [replayPlaying, setReplayPlaying] = useState(false);
   const flowRef = useRef(null);
   const saveTimer = useRef(null);
+  const landerInputRef = useRef(null); // lander composer, for Ctrl+1 focus
 
   // Unified run entry (the run panel): workflow dropdown + user input.
   const [runFlowId, setRunFlowId] = useState('');
@@ -160,7 +171,7 @@ export default function App() {
   // which document the main area renders; each section keeps its own selection
   // (activeFlowId / activeRunId / selectedTemplateId) so switching sections and
   // coming back is lossless.
-  const [activeActivity, setActiveActivity] = useState('flows'); // 'flows' | 'library' | 'runs'
+  const [activeActivity, setActiveActivity] = useState('home'); // 'home' | 'flows' | 'library' | 'runs'
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
 
   // Undo/redo over flow edits. Bursts of changes (a node drag emits one per
@@ -244,8 +255,10 @@ export default function App() {
 
   const refreshRuns = useCallback(async () => {
     // Runs are per-project (T2): list the active tab's, and drop the result if
-    // the user switched tabs while the read was in flight.
+    // the user switched tabs while the read was in flight. Projectless (L6):
+    // no tab, no runs — never call the run store with a null project id.
     const pid = activeTabRef.current;
+    if (pid == null) { setRuns([]); return; }
     const list = await window.llmflow.listRuns(pid);
     if (activeTabRef.current === pid) setRuns(list);
   }, []);
@@ -279,12 +292,17 @@ export default function App() {
   useEffect(() => { refreshFlows(); refreshTemplates(); },
     [refreshFlows, refreshTemplates]);
 
-  // Worker defaults + model options for the node editor's worker pickers.
-  useEffect(() => {
+  // Worker defaults + model options for the node editor's worker pickers, plus
+  // whether a key exists (drives the lander's no-key hint). Re-read when Settings
+  // closes so adding a key clears the hint without a restart.
+  const [hasKey, setHasKey] = useState(false);
+  const refreshSettings = useCallback(() => {
     window.llmflow.getSettings().then(s => {
+      setHasKey(Boolean(s.hasKey));
       if (s.hasKey) window.llmflow.listModels().then(setModels).catch(() => setModels([]));
     });
   }, []);
+  useEffect(() => { refreshSettings(); }, [refreshSettings]);
 
   // Keep snapRef in step with the rendered snapshot so the update handler reads
   // a fresh baseline (pushes are ≥80ms apart, so this is settled between them).
@@ -480,11 +498,17 @@ export default function App() {
 
   const openRun = useCallback(async id => {
     await flushSave();
-    restoringRef.current = false; // a user-driven open always resets the run view
-    setActiveRunId(id);
-    setSelectedNode(null);
-    setActiveActivity('runs');
-    setNewRunOpen(false); // a fresh run is for watching, not for starting another
+    // The unfold (§5): crossfade the lander/section into the live run in one
+    // whole-tree view transition (reduced-motion → instant, handled by the
+    // helper). Same helper section changes already use, so opening a run from
+    // the lander and from the Runs list read consistently.
+    withViewTransition(() => {
+      restoringRef.current = false; // a user-driven open always resets the run view
+      setActiveRunId(id);
+      setSelectedNode(null);
+      setActiveActivity('runs');
+      setNewRunOpen(false); // a fresh run is for watching, not for starting another
+    });
   }, [flushSave]);
 
   const renameRun = useCallback(async (id, name) => {
@@ -559,7 +583,7 @@ export default function App() {
 
   const applyBundle = b => {
     restoringRef.current = true;
-    setActiveActivity(b.activeActivity ?? 'flows');
+    setActiveActivity(b.activeActivity ?? 'home');
     setActiveFlowId(b.activeFlowId ?? null);
     flowRef.current = b.flow ?? null;
     setFlow(b.flow ?? null);
@@ -617,6 +641,13 @@ export default function App() {
 
   const enterTab = async (id, savedState) => {
     activeTabRef.current = id;
+    // Projectless (L6): no tab to enter — reset to a clean home so the lander
+    // takes over with no stale run/flow from the tab we just left.
+    if (id == null) {
+      withViewTransition(() => { setActiveTab(null); applyBundle({}); });
+      window.llmflow.projectRecents?.().then(r => setRecents(r ?? []));
+      return;
+    }
     mruRef.current = [id, ...mruRef.current.filter(x => x !== id)];
     const target = bundles.current.get(id);
     withViewTransition(() => {
@@ -674,6 +705,43 @@ export default function App() {
     if (payload) setTabs(payload.tabs);
   };
 
+  // Rename a project from the tab strip (LANDER-PLAN §6). Display-name only —
+  // the appdata directory keeps its creation slug, so run paths and the tab id
+  // never churn. Main persists the override so it survives restarts (T17).
+  const renameTab = async (id, name) => {
+    const payload = await window.llmflow.renameProject?.(id, name);
+    if (payload) setTabs(payload.tabs);
+  };
+
+  // "Move to folder…" (Phase 6): adopt an appdata project into a real repo. Main
+  // migrates the files and swaps the tab in place; here we re-key the per-tab
+  // bundle + MRU from the old id to the new one, and resync if it was active.
+  const adoptTab = async id => {
+    const dir = await window.llmflow.pickProjectFolder?.();
+    if (!dir) return;
+    let payload;
+    try {
+      payload = await window.llmflow.adoptProject?.(id, dir);
+    } catch (err) {
+      window.alert(String(err?.message ?? err)
+        .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, ''));
+      return;
+    }
+    if (!payload) return;
+    const { oldId, opened } = payload;
+    if (bundles.current.has(oldId)) {
+      bundles.current.set(opened, bundles.current.get(oldId));
+      bundles.current.delete(oldId);
+    }
+    mruRef.current = mruRef.current.map(x => (x === oldId ? opened : x));
+    setTabs(payload.tabs);
+    if (activeTabRef.current === oldId) {
+      activeTabRef.current = opened;
+      setActiveTab(opened);
+      refreshRuns(); // runs moved with the same ids — re-read from the new store
+    }
+  };
+
   const openNewTabPage = async () => {
     setRecents(await window.llmflow.projectRecents?.() ?? []);
     setNewTabOpen(true);
@@ -700,8 +768,16 @@ export default function App() {
         setTabNotice(`Couldn't reopen ${p.dropped.length === 1 ? 'a tab' : `${p.dropped.length} tabs`} — folder missing: ${p.dropped.join(', ')}. Recents still lists ${p.dropped.length === 1 ? 'it' : 'them'}.`);
       }
       activeTabRef.current = p.active;
-      mruRef.current = [p.active, ...p.tabs.map(t => t.id).filter(x => x !== p.active)];
       setActiveTab(p.active);
+      // Projectless first launch (L5/L6): no active tab. The initial state is
+      // already a clean home, so the lander shows; just load recents for its
+      // recent-projects strip.
+      if (p.active == null) {
+        mruRef.current = p.tabs.map(t => t.id);
+        setRecents(await window.llmflow.projectRecents?.() ?? []);
+        return;
+      }
+      mruRef.current = [p.active, ...p.tabs.map(t => t.id).filter(x => x !== p.active)];
       await restoreSlim(p.tabs.find(t => t.id === p.active)?.state ?? {});
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -798,14 +874,20 @@ export default function App() {
   useEffect(() => {
     const onKey = e => {
       if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
-      const idx = { '1': 0, '2': 1, '3': 2 }[e.key];
+      const idx = { '1': 0, '2': 1, '3': 2, '4': 3 }[e.key];
       if (idx === undefined) return;
       e.preventDefault();
+      // Ctrl+1 goes Home; when already Home, it focuses the composer instead —
+      // the fast path back to typing. (A fresh switch autofocuses on mount.)
+      if (NAV[idx].key === 'home' && activeActivity === 'home') {
+        landerInputRef.current?.focus();
+        return;
+      }
       goActivity(NAV[idx].key);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [goActivity]);
+  }, [goActivity, activeActivity]);
 
   const newFlow = async () => {
     const f = await window.llmflow.newFlow();
@@ -929,6 +1011,34 @@ export default function App() {
     }
   };
 
+  // The lander's front door (LANDER-PLAN.md §5): the composer text becomes the
+  // run's User Input on the currently-selected workflow, then the view hands
+  // off to the live run. Phase 1 is a plain navigation (openRun switches to the
+  // Runs section); the unfold choreography lands in Phase 4.
+  const runFromLander = async text => {
+    if (!runFlowId || busy || !text.trim()) return;
+    setBusy(true);
+    try {
+      let pid = activeTabRef.current;
+      // Projectless (L5): the first prompt auto-creates a project — no folder
+      // picker. The slug is derived main-side, atomic with the mkdir; we open
+      // the returned tab, then run in it exactly as a bound tab would.
+      if (pid == null) {
+        const payload = await window.llmflow.createProject(text.trim());
+        setTabs(payload.tabs);
+        pid = payload.opened;
+        await enterTab(pid, payload.tabs.find(t => t.id === pid)?.state);
+      }
+      await flushSave();
+      const runId = await window.llmflow.runFlow(pid, runFlowId, text.trim(), workspaceDir || null);
+      setRunInput('');
+      await openRun(runId);
+      await refreshRuns();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Continue a run the app died in the middle of. The main process keeps the
   // completed nodes and picks the walk up from there (V1 task 7).
   const resumeRun = async () => {
@@ -950,6 +1060,13 @@ export default function App() {
   // belongs to live output; it comes back on its own once the run settles.
   const watching = runView && Boolean(snapshot) && !isTerminal(stage);
   const showRunForm = !watching || newRunOpen;
+  const homeView = activeActivity === 'home';
+  // Projectless (L6): no tab open — the lander shows its no-project variant.
+  const projectless = activeTab == null;
+  // The greeting names the project for a real tab (bound folder or appdata),
+  // and stays generic when projectless.
+  const landerProjectName = projectless || !activeTabInfo || activeTabInfo.kind === 'default'
+    ? null : activeTabInfo.name;
   const libraryView = activeActivity === 'library';
   const selectedTemplate = templates.find(t => t.id === selectedTemplateId) ?? null;
 
@@ -964,6 +1081,7 @@ export default function App() {
   // fallback for a run the list hasn't loaded yet.
   const activeRunName = runs.find(r => r.id === activeRunId)?.name ?? activeRunId;
   const crumb =
+    homeView ? ['Home'] :
     libraryView ? ['Library', selectedTemplate?.name].filter(Boolean) :
     activeActivity === 'runs' ? (activeRunId ? ['Runs', activeRunName] : ['Runs']) :
     flowView ? ['Flows', flow.name] : ['Flows'];
@@ -984,6 +1102,8 @@ export default function App() {
           onClose={closeTab}
           onReorder={reorderTabs}
           onNewTab={openNewTabPage}
+          onRename={renameTab}
+          onAdopt={adoptTab}
         />
         {flowView
           ? <span className="titlebar-doc mono">{flow.name}</span>
@@ -1050,6 +1170,30 @@ export default function App() {
           </button>
         </nav>
 
+        {homeView ? (
+          <Lander
+            projectName={landerProjectName}
+            projectless={projectless}
+            recents={recents}
+            seed={projectless ? null : activeTab}
+            runs={runs}
+            onOpenRun={openRun}
+            flows={flowsList}
+            flowId={runFlowId}
+            onSelectFlow={setRunFlowId}
+            hasKey={hasKey}
+            onOpenSettings={() => setShowSettings(true)}
+            inputRef={landerInputRef}
+            busy={busy}
+            onSubmit={runFromLander}
+            onOpenProject={openProjectTab}
+            onOpenFolder={async () => {
+              const dir = await window.llmflow.pickProjectFolder?.();
+              if (dir) openProjectTab(dir);
+            }}
+          />
+        ) : (
+        <>
         <aside className="sidebar">
           {activeActivity === 'flows' && (
             <>
@@ -1353,10 +1497,12 @@ export default function App() {
               onChange={e => setRunInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) startRun(); }}
             />
-            {boundFolder ? (
+            {(boundFolder || activeTabInfo?.kind === 'appdata') ? (
+              // A bound folder or an appdata project (L5) both have a fixed
+              // workspace — runs always target it, so no per-run picker.
               <div className="workspace-row">
-                <span className="workspace-path bound" title={boundFolder}>
-                  Runs in <span className="mono">{activeTabInfo.name}</span>
+                <span className="workspace-path bound" title={boundFolder ?? activeTabInfo?.name}>
+                  Runs in <span className="mono">{activeTabInfo?.name}</span>
                 </span>
               </div>
             ) : (
@@ -1420,19 +1566,19 @@ export default function App() {
                 </aside>
               )}
         </div>
+        </>
+        )}
       </div>
 
-      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {showSettings && <Settings onClose={() => { setShowSettings(false); refreshSettings(); }} />}
       {newTabOpen && (
         <NewTabPage
           recents={recents}
-          scratchOpen={tabs.some(t => t.id === 'default')}
           onOpenFolder={async () => {
             const dir = await window.llmflow.pickProjectFolder?.();
             if (dir) openProjectTab(dir);
           }}
           onOpenRecent={openProjectTab}
-          onOpenScratch={() => openProjectTab(null)}
           onRemoveRecent={async folder => {
             setRecents(await window.llmflow.removeProjectRecent?.(folder) ?? []);
           }}

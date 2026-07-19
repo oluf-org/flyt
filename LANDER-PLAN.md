@@ -1,7 +1,7 @@
 # Lander — Design & Implementation Plan
 
 **Feature:** The chat-first home surface of every project tab. First thing a user sees; the app's first impression.
-**Status:** Planned (decided 2026-07-19 with owner). Not started.
+**Status:** Phases 1–6 built & verified (2026-07-19). The only remaining item is the dot-morph unfold upgrade (the Phase 4 stretch), deferred to real-Electron work — see §5 / §7.
 **Read alongside:** `PRODUCT-SPEC.md` §2/§5 (chat-as-primary-interface intent), `DESIGN-SPEC.md` (Slate & Sage rules), `DESIGN-POLISH-IDEAS.md` (techniques reused here), `TABS-DECISIONS.md`/D22 (tab = project).
 
 ---
@@ -123,13 +123,13 @@ The lander is a **new section** rendered per-tab, becoming the default `section`
 
 **Explicit non-changes:** no engine work, no new files under `core/`, no new persisted state beyond one per-tab `lastFlowId` key and the appdata `projects/` directory. `NewTabPage` survives as the "open a project" picker but loses its Scratch button.
 
-### Open questions (small, decide during build)
+### Open questions — resolved during build
 
-- **Q-L1:** Does the rail stay visible on the lander, or fade to near-transparent until hover? (Lean: visible — hiding chrome on the home page makes the other sections feel like a different app.)
-- **Q-L2:** Chip popover — reuse the Flows dropdown component if one exists, or purpose-built 150-line popover? Check during Phase 2.
-- **Q-L3:** Projectless greeting copy, and whether the composer hints that a project will be auto-created ("We'll start a project for you") or stays silent. → `design:ux-copy` pass in Phase 5.
-- **Q-L4:** Slug heuristic details — how many words, stop-word list, collision suffix format. Decide in Phase 2; must be deterministic and instant.
-- **Q-L5:** Where the agent's workspace points for an appdata project — `<project>/workspace/` inside the project dir is the obvious default; confirm against D15's per-run binding.
+- **Q-L1 (Phase 5):** RESOLVED — the rail stays **visible** on the lander. Hiding chrome on the home page would make the other sections feel like a different app.
+- **Q-L2 (Phase 2b):** RESOLVED — **purpose-built** picker. No existing dropdown component to reuse; the picker is a compact keyboard-navigable listbox in `Lander.jsx`.
+- **Q-L3 (Phase 5):** RESOLVED — greeting stays "What should we build?"; the composer stays **silent** about auto-create. Only the empty projectless recents state hints it ("we'll create a project for you"), so returning users aren't nagged.
+- **Q-L4 (Phase 2):** RESOLVED — `core/projectName.js`: lowercase the first line, drop stop words (keep the imperative verb), keep ≤4 words / 40 chars, dedupe with `-2/-3`. Deterministic + instant; covered by `tests/projectName.test.js`.
+- **Q-L5 (Phase 2):** RESOLVED — an appdata project's runs bind to `<project>/workspace/` (`entry.workspaceRoot`), created on first run via the same `Workspace` path a bound folder uses.
 
 ---
 

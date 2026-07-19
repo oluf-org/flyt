@@ -88,14 +88,13 @@ test('projects: close keeps the entry alive (T13) and picks the right neighbour'
   assert.ok(registry.openIds.includes(id1));
 });
 
-test('projects: the last tab never leaves the strip empty', () => {
+test('projects: closing the last tab leaves the projectless state (L6)', () => {
   const { registry } = makeRegistry();
   const folder = tmp();
   registry.open(folder);
   registry.close(projectIdFor(folder));
-  assert.deepEqual(registry.openIds, [DEFAULT_PROJECT_ID]); // falls back to scratch
-  registry.close(DEFAULT_PROJECT_ID); // refusing: nothing to fall back to
-  assert.deepEqual(registry.openIds, [DEFAULT_PROJECT_ID]);
+  assert.deepEqual(registry.openIds, []); // no scratch fallback — the lander takes over
+  assert.equal(registry.activeId, null);
 });
 
 test('projects: reorder accepts only a permutation of the open tabs', () => {
@@ -115,7 +114,6 @@ test('projects: reorder accepts only a permutation of the open tabs', () => {
 test('projects: serialize/restore round-trips tabs, active, recents, tab state (T17)', () => {
   const { registry } = makeRegistry();
   const f1 = tmp(), f2 = tmp();
-  registry.open(null);
   registry.open(f1);
   registry.open(f2);
   registry.activate(projectIdFor(f1));
@@ -125,7 +123,7 @@ test('projects: serialize/restore round-trips tabs, active, recents, tab state (
   const { registry: fresh } = makeRegistry();
   const { dropped } = fresh.restore(saved);
   assert.deepEqual(dropped, []);
-  assert.deepEqual(fresh.openIds, [DEFAULT_PROJECT_ID, projectIdFor(f1), projectIdFor(f2)]);
+  assert.deepEqual(fresh.openIds, [projectIdFor(f1), projectIdFor(f2)]);
   assert.equal(fresh.activeId, projectIdFor(f1));
   assert.deepEqual(fresh.tabState[projectIdFor(f1)], { activeActivity: 'runs', activeRunId: 'r-1' });
   assert.deepEqual(fresh.recents, [f2, f1].map(f => path.resolve(f)));
@@ -147,12 +145,146 @@ test('projects: restore drops tabs whose folder is gone, keeps their recents (T1
   assert.ok(fresh.recents.includes(path.resolve(f2)), 'recents entry survives for a manual reopen');
 });
 
-test('projects: restore of an empty session opens the scratch tab', () => {
+test('projects: restore of an empty session lands projectless (L6)', () => {
   const { registry } = makeRegistry();
   const { dropped } = registry.restore({});
   assert.deepEqual(dropped, []);
-  assert.deepEqual(registry.openIds, [DEFAULT_PROJECT_ID]);
-  assert.equal(registry.activeId, DEFAULT_PROJECT_ID);
+  assert.deepEqual(registry.openIds, []);
+  assert.equal(registry.activeId, null);
+});
+
+test('projects: legacy scratch descriptors are ignored on restore (L6)', () => {
+  const { registry } = makeRegistry();
+  const f1 = tmp();
+  // A pre-L6 settings.json: scratch (null) plus a real folder.
+  const { dropped } = registry.restore({ open: [null, f1], active: null });
+  assert.deepEqual(dropped, []);
+  assert.deepEqual(registry.openIds, [projectIdFor(f1)]); // scratch dropped, folder kept
+  assert.equal(registry.activeId, projectIdFor(f1));
+});
+
+test('projects: createAppdata lays down runs/ + workspace/ and opens the tab (L5)', () => {
+  const { registry, root } = makeRegistry();
+  const { project, focused } = registry.createAppdata('Fix the auth flow');
+  assert.equal(focused, false);
+  assert.equal(project.kind, 'appdata');
+  assert.equal(project.id, 'appdata:fix-auth-flow');
+  assert.equal(project.name, 'fix-auth-flow');
+  assert.equal(registry.activeId, project.id);
+  const appDir = path.join(root, 'appdata', 'projects', 'fix-auth-flow');
+  assert.ok(fs.existsSync(path.join(appDir, 'runs')));
+  assert.ok(fs.existsSync(path.join(appDir, 'workspace')));
+  assert.equal(project.workspaceRoot, path.join(appDir, 'workspace'));
+});
+
+test('projects: appdata slugs dedupe against existing project dirs (Q-L4)', () => {
+  const { registry } = makeRegistry();
+  const a = registry.createAppdata('Add search');
+  const b = registry.createAppdata('Add search'); // same prompt, distinct project
+  assert.equal(a.project.id, 'appdata:add-search');
+  assert.equal(b.project.id, 'appdata:add-search-2');
+});
+
+test('projects: appdata projects round-trip through serialize/restore (L5)', () => {
+  const { registry, root } = makeRegistry();
+  registry.createAppdata('Build a snake game');
+  registry.rename('appdata:build-snake-game', 'Snake');
+  const saved = registry.serialize();
+  assert.deepEqual(saved.open, [{ appdata: 'build-snake-game' }]);
+
+  // A second registry over the same appDataDir restores the project + its name.
+  const fresh = new ProjectRegistry({
+    defaultRunsDir: path.join(root, 'runs'),
+    appDataDir: path.join(root, 'appdata'),
+    getStorage: () => 'workspace',
+    createRunner: () => ({ live: new Set() })
+  });
+  const { dropped } = fresh.restore(saved);
+  assert.deepEqual(dropped, []);
+  assert.deepEqual(fresh.openIds, ['appdata:build-snake-game']);
+  assert.equal(fresh.get('appdata:build-snake-game').name, 'Snake');
+});
+
+test('projects: restore drops an appdata tab whose dir is gone (L5)', () => {
+  const { registry, root } = makeRegistry();
+  registry.createAppdata('Add search');
+  const saved = registry.serialize();
+  fs.rmSync(path.join(root, 'appdata', 'projects', 'add-search'), { recursive: true, force: true });
+
+  const fresh = new ProjectRegistry({
+    defaultRunsDir: path.join(root, 'runs'),
+    appDataDir: path.join(root, 'appdata'),
+    getStorage: () => 'workspace',
+    createRunner: () => ({ live: new Set() })
+  });
+  const { dropped } = fresh.restore(saved);
+  assert.deepEqual(dropped, ['add-search']);
+  assert.deepEqual(fresh.openIds, []);
+  assert.equal(fresh.activeId, null);
+});
+
+test('projects: adopt migrates an appdata project into a folder (Phase 6)', () => {
+  const { registry, root } = makeRegistry();
+  const { project } = registry.createAppdata('Fix the auth flow');
+  registry.rename(project.id, 'Auth work');
+  registry.setTabState(project.id, { activeActivity: 'runs' });
+  const appDir = path.join(root, 'appdata', 'projects', 'fix-auth-flow');
+  // Seed a run and a workspace file to prove the files migrate.
+  fs.mkdirSync(path.join(appDir, 'runs', 'run-1'), { recursive: true });
+  fs.writeFileSync(path.join(appDir, 'runs', 'run-1', 'meta.json'), '{}');
+  fs.writeFileSync(path.join(appDir, 'workspace', 'index.js'), 'console.log(1)\n');
+
+  const target = tmp();
+  const { oldId, newId } = registry.adoptAppdata(project.id, target);
+
+  assert.equal(oldId, project.id);
+  assert.equal(newId, projectIdFor(target));
+  // The tab converted in place: same position, bound kind, custom name + state.
+  assert.deepEqual(registry.openIds, [newId]);
+  assert.equal(registry.activeId, newId);
+  assert.equal(registry.get(newId).kind, 'folder');
+  assert.equal(registry.get(newId).name, 'Auth work');
+  assert.deepEqual(registry.tabState[newId], { activeActivity: 'runs' });
+  assert.ok(!registry.has(oldId), 'the appdata entry is gone');
+  // Files landed in the repo; the appdata home is removed.
+  assert.equal(fs.readFileSync(path.join(target, 'index.js'), 'utf8'), 'console.log(1)\n');
+  assert.ok(fs.existsSync(path.join(target, '.llmflow', 'runs', 'run-1', 'meta.json')));
+  assert.ok(!fs.existsSync(appDir), 'the appdata directory is migrated away');
+  assert.ok(registry.recents.includes(path.resolve(target)));
+});
+
+test('projects: adopt never clobbers an existing file in the target folder', () => {
+  const { registry, root } = makeRegistry();
+  const { project } = registry.createAppdata('Add search');
+  const appDir = path.join(root, 'appdata', 'projects', 'add-search');
+  fs.writeFileSync(path.join(appDir, 'workspace', 'README.md'), 'from appdata\n');
+  const target = tmp();
+  fs.writeFileSync(path.join(target, 'README.md'), 'already here\n'); // must survive
+
+  registry.adoptAppdata(project.id, target);
+  assert.equal(fs.readFileSync(path.join(target, 'README.md'), 'utf8'), 'already here\n');
+});
+
+test('projects: adopt refuses a live run, a non-folder, and a non-appdata id', () => {
+  const { registry } = makeRegistry({ createRunner: () => ({ live: new Set(['run-x']) }) });
+  const { project } = registry.createAppdata('Busy work');
+  assert.throws(() => registry.adoptAppdata(project.id, tmp()), /in progress/);
+
+  const { registry: r2 } = makeRegistry();
+  const { project: p2 } = r2.createAppdata('Idle work');
+  assert.throws(() => r2.adoptAppdata(p2.id, path.join(tmp(), 'does-not-exist')), /not an existing directory/);
+  const folder = tmp();
+  r2.open(folder);
+  assert.throws(() => r2.adoptAppdata(projectIdFor(folder), tmp()), /app-managed/);
+});
+
+test('projects: rename overrides the display name for a bound folder too', () => {
+  const { registry } = makeRegistry();
+  const folder = tmp();
+  registry.open(folder);
+  registry.rename(projectIdFor(folder), 'My Repo');
+  assert.equal(registry.get(projectIdFor(folder)).name, 'My Repo');
+  assert.equal(registry.listOpen()[0].name, 'My Repo');
 });
 
 test('projects: workspace storage creates .llmflow on open; runners are per project', () => {

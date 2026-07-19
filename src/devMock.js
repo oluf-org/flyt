@@ -2,6 +2,7 @@
 // (and the design iterated on) outside Electron. Never active in the app:
 // installed only when the preload bridge is missing.
 import { SEED_NODE_TEMPLATES, normalizeTemplate } from './flowTypes.js';
+import { slugFromPrompt, dedupeSlug } from '../core/projectName.js';
 
 const snapshots = {
   // A finished flow run with one follow-up turn: previews the thread view +
@@ -155,6 +156,20 @@ const mockFlows = {
       { id: 'e-route-verify', source: 'route', target: 'verify' },
       { id: 'e-verify-result', source: 'verify', target: 'result' }
     ]
+  },
+  // A second flow so the workflow picker has more than one option to preview.
+  'quick-fix': {
+    id: 'quick-fix',
+    name: 'Quick fix',
+    nodes: [
+      { id: 'user-input', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
+      { id: 'fix', templateId: 'code-general-step', position: { x: 0, y: 130 }, overrides: { title: 'Fix' } },
+      { id: 'result', type: 'output', kind: 'user', position: { x: 0, y: 260 }, data: {} }
+    ],
+    edges: [
+      { id: 'e-user-input-fix', source: 'user-input', target: 'fix' },
+      { id: 'e-fix-result', source: 'fix', target: 'result' }
+    ]
   }
 };
 
@@ -176,12 +191,14 @@ const daysAgo = n => {
 // one shared run set.
 const mockProjects = {
   tabs: [
-    { id: 'default', folder: null, name: 'Scratch', live: 0, state: {} },
-    { id: 'D:\\demo\\habit-tracker', folder: 'D:\\demo\\habit-tracker', name: 'habit-tracker', live: 1, state: {} }
+    { id: 'appdata:fix-auth-flow', folder: null, kind: 'appdata', name: 'fix-auth-flow', live: 0, state: {} },
+    { id: 'D:\\demo\\habit-tracker', folder: 'D:\\demo\\habit-tracker', kind: 'folder', name: 'habit-tracker', live: 1, state: {} }
   ],
-  active: 'default',
+  active: 'appdata:fix-auth-flow',
   storage: 'workspace'
 };
+const mockAppdataSlugs = () => new Set(
+  mockProjects.tabs.filter(t => t.kind === 'appdata').map(t => t.id.replace(/^appdata:/, '')));
 
 export function installDevMock() {
   window.llmflow = {
@@ -247,11 +264,35 @@ export function installDevMock() {
       mockProjects.active = id;
       return { ...structuredClone(mockProjects), opened: id };
     },
+    // Auto-create an appdata project from the first prompt (L5). Slug derived +
+    // deduped exactly as the registry does main-side.
+    createProject: async (promptOrName = '') => {
+      const slug = dedupeSlug(slugFromPrompt(promptOrName), mockAppdataSlugs());
+      const id = 'appdata:' + slug;
+      mockProjects.tabs.push({ id, folder: null, kind: 'appdata', name: slug, live: 0, state: {} });
+      mockProjects.active = id;
+      return { ...structuredClone(mockProjects), opened: id };
+    },
+    renameProject: async (pid, name) => {
+      const t = mockProjects.tabs.find(t => t.id === pid);
+      if (t && String(name ?? '').trim()) t.name = String(name).trim();
+      return structuredClone(mockProjects);
+    },
+    // Adopt an appdata project into a folder (Phase 6): swap the tab in place to
+    // a bound folder, keeping its position + name.
+    adoptProject: async (pid, folder) => {
+      const t = mockProjects.tabs.find(t => t.id === pid);
+      if (t) { t.id = folder; t.folder = folder; t.kind = 'folder'; } // keep name/position
+      if (mockProjects.active === pid) mockProjects.active = folder;
+      return { ...structuredClone(mockProjects), oldId: pid, opened: folder };
+    },
     closeProject: async pid => {
       const idx = mockProjects.tabs.findIndex(t => t.id === pid);
-      if (idx !== -1 && mockProjects.tabs.length > 1) {
+      if (idx !== -1) {
         mockProjects.tabs.splice(idx, 1);
-        if (mockProjects.active === pid) mockProjects.active = mockProjects.tabs[Math.min(idx, mockProjects.tabs.length - 1)].id;
+        // Closing the last tab lands projectless (L6): active = null.
+        if (mockProjects.tabs.length === 0) mockProjects.active = null;
+        else if (mockProjects.active === pid) mockProjects.active = mockProjects.tabs[Math.min(idx, mockProjects.tabs.length - 1)].id;
       }
       return structuredClone(mockProjects);
     },

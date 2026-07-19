@@ -219,11 +219,44 @@ const registry = new ProjectRegistry({
 // project:list.
 const { dropped: droppedTabs } = registry.restore(settings.projects ?? {});
 
+// Scratch retirement (L6): the unbound scratch tab is gone. Its existing runs
+// (app-root runs/) migrate once into an appdata project named 'scratch' so no
+// history is orphaned. Non-destructive — the originals stay in place until the
+// user clears them — and guarded by a flag so it never runs twice. The
+// previously-active tab keeps focus; the migrated project just joins the strip.
+function migrateScratchIfNeeded() {
+  if (settings.scratchMigrated) return;
+  settings.scratchMigrated = true;
+  let runIds = [];
+  try {
+    runIds = fs.readdirSync(registry.defaultRunsDir)
+      .filter(d => fs.existsSync(path.join(registry.defaultRunsDir, d, 'meta.json')));
+  } catch { /* no app-root runs/ — nothing to migrate */ }
+  if (!runIds.length) { persistSettings(); return; }
+  const prevActive = registry.activeId;
+  const { project } = registry.createAppdata('scratch');
+  for (const id of runIds) {
+    try {
+      fs.cpSync(path.join(registry.defaultRunsDir, id), path.join(project.appDir, 'runs', id), { recursive: true });
+    } catch (e) {
+      console.warn(`[llm-flow] scratch migrate: skipped ${id} — ${e.message}`);
+    }
+  }
+  // Don't steal focus from a restored tab; the migrated project is just added.
+  if (prevActive != null) registry.activeId = prevActive;
+  persistSettings();
+  console.log(`[llm-flow] migrated ${runIds.length} scratch run(s) into ${project.id}`);
+}
+migrateScratchIfNeeded();
+
 function updateWindowTitle() {
   if (!win || win.isDestroyed()) return;
+  // Projectless (L6): no tab open — the app's own name, no project.
+  if (registry.activeId == null) { win.setTitle('LLM Flow'); return; }
   const entry = registry.get(registry.activeId);
-  // T16: <project> — LLM Flow; the scratch tab is just the app.
-  win.setTitle(entry.folder ? `${entry.name} — LLM Flow` : 'LLM Flow');
+  // T16: <project> — LLM Flow. Both bound folders and appdata projects name the
+  // window; the legacy default (were it ever active) is just the app.
+  win.setTitle(entry.kind === 'default' ? 'LLM Flow' : `${entry.name} — LLM Flow`);
 }
 
 function createWindow() {
@@ -278,6 +311,9 @@ ipcMain.handle('flow:run', (_e, projectId, flowId, userInput = '', workspaceDir 
   // workspace per run (or none — mock/no-file flows run without one).
   let workspace = null;
   if (entry.folder) workspace = new Workspace(entry.folder).ensure().root;
+  // An appdata project (L5) has its own managed workspace/ dir inside its
+  // appData home (Q-L5); runs there always bind to it, like a bound tab.
+  else if (entry.kind === 'appdata') workspace = new Workspace(entry.workspaceRoot).ensure().root;
   else if (workspaceDir) workspace = new Workspace(workspaceDir).ensure().root;
   return entry.runner.start(flows.load(flowId), { userInput: String(userInput ?? ''), workspace });
 });
@@ -364,6 +400,28 @@ ipcMain.handle('project:open', (_e, folder = null) => {
   const { project, focused } = registry.open(folder);
   updateWindowTitle();
   return { ...projectListPayload(), opened: project.id, focused };
+});
+// Auto-create an appdata project from the projectless lander's first prompt
+// (L5): the slug is derived + deduped main-side so the mkdir is atomic with the
+// name. Returns the same shape as project:open so the renderer opens the tab.
+ipcMain.handle('project:create', (_e, promptOrName = '') => {
+  const { project } = registry.createAppdata(String(promptOrName ?? ''));
+  updateWindowTitle();
+  return { ...projectListPayload(), opened: project.id, focused: false };
+});
+ipcMain.handle('project:rename', (_e, projectId, name) => {
+  registry.rename(projectId, String(name ?? ''));
+  updateWindowTitle();
+  return projectListPayload();
+});
+// Adopt an appdata project into a real folder (Phase 6, "Move to folder…"): the
+// registry migrates the files and swaps the tab in place, returning the id remap
+// so the renderer can re-key its per-tab bundles.
+ipcMain.handle('project:adopt', (_e, projectId, folder) => {
+  const { oldId, newId } = registry.adoptAppdata(projectId, folder);
+  pushState.delete(oldId); // the old id is gone for good — drop its push channels
+  updateWindowTitle();
+  return { ...projectListPayload(), oldId, opened: newId };
 });
 ipcMain.handle('project:close', (_e, projectId) => {
   // T13: closing a tab never kills work — the entry (store + runner) stays

@@ -39,6 +39,9 @@ contextBridge.exposeInMainWorld('llmflow', {
   // --- Project tabs (D22) ---
   listProjects: () => ipcRenderer.invoke('project:list'),
   openProject: (folder) => ipcRenderer.invoke('project:open', folder),
+  createProject: (promptOrName) => ipcRenderer.invoke('project:create', promptOrName),
+  renameProject: (pid, name) => ipcRenderer.invoke('project:rename', pid, name),
+  adoptProject: (pid, folder) => ipcRenderer.invoke('project:adopt', pid, folder),
   closeProject: (pid) => ipcRenderer.invoke('project:close', pid),
   activateProject: (pid) => ipcRenderer.invoke('project:activate', pid),
   reorderProjects: (ids) => ipcRenderer.invoke('project:reorder', ids),

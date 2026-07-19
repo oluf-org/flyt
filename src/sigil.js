@@ -9,15 +9,17 @@
 // inherits whatever colour its context sets, so it needs no theme awareness of
 // its own; the identity is entirely in the geometry, not the hue.
 
-// FNV-1a: a stable string hash (same bytes → same number, every run).
-function hash(s) {
+// FNV-1a: a stable string hash (same bytes → same number, every run). Exported
+// so the constellation (Lander) can seed its own layout from a project id with
+// the same determinism the sigils use — one identity principle, app-wide.
+export function hash(s) {
   let h = 2166136261;
   for (const c of String(s)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
 
 // A tiny deterministic PRNG seeded from the hash; identical sequence per seed.
-function rng(seed) {
+export function rng(seed) {
   return () => {
     seed = Math.imul(seed ^ (seed >>> 15), seed | 1);
     seed ^= seed + Math.imul(seed ^ (seed >>> 7), seed | 61);

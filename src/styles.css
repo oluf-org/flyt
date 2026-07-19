@@ -492,6 +492,200 @@ kbd.shortcut {
 
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
+/* ---------- lander (the chat-first home; LANDER-PLAN.md) ---------- */
+/* A chat window you already know how to use: greeting + autofocused composer,
+   sitting slightly above centre where every chat app has trained the eye. The
+   composer is the brightest thing on screen; everything else recedes. */
+.lander {
+  flex: 1; min-width: 0; position: relative;
+  display: flex; flex-direction: column; align-items: center;
+  background: var(--canvas);
+  overflow: auto;
+  padding: 24px;
+  animation: fade-in .3s ease both;
+}
+.lander-stage {
+  position: relative; z-index: 1; /* above the constellation */
+  width: 100%; max-width: 680px;
+  margin: clamp(48px, 30vh, 300px) auto auto;
+  display: flex; flex-direction: column; gap: 22px;
+}
+
+/* The living constellation (§4) — faint, behind everything, inert. Static in
+   Phase 3; drift + the focus wink arrive in Phase 4. Fully contained so it can
+   never trigger layout on the rest of the page, and un-clickable. */
+.constellation {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  z-index: 0; pointer-events: none; contain: strict;
+  opacity: 0.35;
+}
+[data-theme="dark"] .constellation { opacity: 0.5; }
+.constellation-lines line { stroke: var(--divider); stroke-width: 1; }
+.constellation-dots circle {
+  fill: var(--faint);
+  /* Drift: one shared elliptical loop, desynced per dot via inline duration +
+     negative delay. Compositor-only (transform), so an idle lander costs ~0%
+     CPU; the anchored lines never move (§4). */
+  animation-name: constellation-drift;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+/* Colour + opacity ease when the composer has focus — the canvas noticing you
+   (§4 wink). Two rules: the field brightens, and the nearest dot tints accent. */
+.lander:focus-within .constellation { opacity: 0.4; transition: opacity .5s ease; }
+[data-theme="dark"] .lander:focus-within .constellation { opacity: 0.58; }
+.constellation-dots circle.near { transition: fill .5s ease; }
+.lander:focus-within .constellation-dots circle.near { fill: var(--accent); }
+
+@keyframes constellation-drift {
+  0%   { transform: translate(0, 0); }
+  25%  { transform: translate(7px, 4px); }
+  50%  { transform: translate(2px, 9px); }
+  75%  { transform: translate(-6px, 4px); }
+  100% { transform: translate(0, 0); }
+}
+/* Reduced motion: the constellation still does its identity job, dead still. */
+@media (prefers-reduced-motion: reduce) {
+  .constellation-dots circle { animation: none; }
+}
+
+.lander-greeting { text-align: center; display: flex; flex-direction: column; gap: 10px; }
+.lander-greeting .section-label { color: var(--faint); }
+.lander-title {
+  margin: 0; font-size: 26px; font-weight: 600; line-height: 1.25;
+  color: var(--tx); letter-spacing: -0.01em; text-wrap: balance;
+}
+.lander-title .mono { font-size: 0.88em; color: var(--accent); }
+
+/* The composer: --card on --canvas, hairline border, soft float, accent ring on
+   focus — the one place the eye is meant to land. */
+.lander-composer {
+  display: flex; flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-float);
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+.lander-composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-float);
+}
+.lander-input {
+  resize: none; border: none; background: transparent;
+  padding: 16px 18px 6px; margin: 0;
+  font: inherit; font-size: 15px; line-height: 1.5; color: var(--tx);
+  min-height: 72px;
+}
+.lander-input:focus { outline: none; }
+.lander-input::placeholder { color: var(--faint); }
+
+.lander-composer-footer {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px 10px;
+}
+
+/* Workflow chip (L3) — a quiet model-picker-style pill, bottom-left. Inert in
+   Phase 1 (label only); the popover picker arrives in Phase 2b. */
+.lander-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 8px;
+  background: var(--chip); border: 1px solid transparent;
+  color: var(--chip-tx); font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: color .14s ease, background .14s ease;
+}
+.lander-chip:not(:disabled):hover,
+.lander-chip.open { color: var(--tx); background: var(--accent-soft); }
+.lander-chip:disabled { cursor: default; opacity: .7; }
+.lander-chip-glyph { color: var(--accent); font-size: 11px; }
+.lander-chip-name { color: var(--tx); }
+.lander-chip-caret { font-size: 9px; opacity: .7; }
+
+/* Workflow picker (L3) — a compact popover above the chip, model-picker style. */
+.lander-chip-wrap { position: relative; display: inline-flex; }
+.lander-picker {
+  position: absolute; bottom: calc(100% + 8px); left: 0;
+  min-width: 220px; max-width: 320px; max-height: 300px; overflow-y: auto;
+  display: flex; flex-direction: column; padding: 5px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow-selected);
+  z-index: 20;
+  animation: picker-rise .14s var(--spring) both;
+}
+@keyframes picker-rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .lander-picker { animation: none; } }
+.lander-picker-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px; border-radius: 7px;
+  background: transparent; border: none; text-align: left; width: 100%;
+  color: var(--tx); font-size: 13px; cursor: pointer;
+  transition: background .12s ease;
+}
+.lander-picker-item:hover { background: var(--accent-soft); }
+.lander-picker-item:focus-visible { outline: none; background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent-soft); }
+.lander-picker-item.selected { color: var(--accent); font-weight: 600; }
+.lander-picker-check { width: 12px; flex: none; color: var(--accent); font-size: 11px; }
+.lander-picker-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* First-launch no-key hint — one quiet line, centred under the composer. */
+.lander-hint {
+  text-align: center; font-size: 12.5px; color: var(--dim);
+  margin-top: -8px;
+}
+
+.lander-run {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 16px; border-radius: 9px;
+}
+.lander-run .shortcut { opacity: .8; }
+
+/* Recent-runs strip (§3) — up to five, sigil + name + time + status. */
+.lander-recent-runs { display: flex; flex-direction: column; gap: 6px; padding: 0 2px; }
+.lander-runs-list { display: flex; flex-direction: column; gap: 1px; }
+.lander-run-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px; border-radius: 8px;
+  background: transparent; border: none; text-align: left; width: 100%;
+  color: var(--tx); cursor: pointer;
+  transition: background .14s ease;
+}
+.lander-run-row:hover { background: var(--accent-soft); }
+.lander-run-row:focus-visible { outline: none; background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent-soft); }
+.lander-run-row .run-sigil { flex: none; width: 20px; height: 20px; }
+.lander-run-name {
+  flex: 1; min-width: 0; font-size: 13px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lander-run-meta {
+  flex: none; display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--faint);
+}
+.lander-run-meta .run-sep { color: var(--faint); }
+
+/* Projectless recent-projects strip (L5) — quiet, below the composer. */
+.lander-recents { display: flex; flex-direction: column; gap: 8px; padding: 0 2px; }
+.lander-recents-head { display: flex; align-items: baseline; justify-content: space-between; }
+.lander-recents-empty { font-size: 12.5px; }
+.lander-recents-list { display: flex; flex-direction: column; gap: 2px; }
+.lander-recent {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 7px 10px; border-radius: 8px;
+  background: transparent; border: none; text-align: left; width: 100%;
+  color: var(--tx); cursor: pointer;
+  transition: background .14s ease;
+}
+.lander-recent:hover { background: var(--accent-soft); }
+.lander-recent:focus-visible { outline: none; background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent-soft); }
+.lander-recent-name { font-size: 13px; font-weight: 500; flex: none; }
+.lander-recent-path {
+  font-size: 11px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.lander-recent.missing { cursor: default; opacity: .5; }
+.lander-recent.missing:hover { background: transparent; }
+.lander-recent-missing { font-size: 10px; color: var(--err); margin-left: auto; flex: none; }
+
 /* ---------- approval bar ---------- */
 
 .approval-bar {
@@ -1706,6 +1900,35 @@ button.link:hover { color: var(--accent); }
   flex: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* Inline rename field — sits in the label's place, no layout jump. */
+.tab-rename {
+  flex: 1; min-width: 0; width: 100%;
+  font: inherit; font-size: inherit; color: var(--tx);
+  background: var(--card);
+  border: 1px solid var(--accent); border-radius: 5px;
+  padding: 1px 5px; margin: -2px 0;
+}
+.tab-rename:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }
+.tab.editing { cursor: text; }
+
+/* Right-click tab menu (Rename / Move to folder… / Close). Fixed to the cursor;
+   no-drag so it survives the titlebar's drag region. */
+.tab-menu {
+  position: fixed; z-index: 100;
+  min-width: 168px; padding: 5px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow-selected);
+  display: flex; flex-direction: column;
+  -webkit-app-region: no-drag;
+  animation: picker-rise .12s var(--spring) both;
+}
+.tab-menu-item {
+  width: 100%; text-align: left;
+  padding: 7px 10px; border-radius: 6px;
+  background: transparent; border: none; color: var(--tx); font-size: 13px; cursor: pointer;
+}
+.tab-menu-item:hover, .tab-menu-item:focus-visible { outline: none; background: var(--accent-soft); }
+.tab-menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
 
 /* Live-run micro-indicator: the node beam's technique at 6px — a conic arc
    circling a dot. One of the few sanctioned continuous animations (it means
