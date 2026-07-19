@@ -1,8 +1,23 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import FlowCanvas, { FlowEditor } from './FlowCanvas.jsx';
 import Inspector, { FlowInspector } from './Inspector.jsx';
 import Settings from './Settings.jsx';
-import { TYPE_META, NODE_TEMPLATES, createNodeFromTemplate } from './flowTypes.js';
+import NodesPage from './NodesPage.jsx';
+import FlowYamlEditor from './FlowYamlEditor.jsx';
+import LiveStream from './LiveStream.jsx';
+import RunBar from './RunBar.jsx';
+import RunResult from './RunResult.jsx';
+import RunsList from './RunsList.jsx';
+import { isTerminal } from './runProgress.js';
+import { resolveFlow, namedFlow, UNTITLED_FLOW } from './flowTypes.js';
+import { layoutPositions } from './flowLayout.js';
+import { mergeSnapshot } from '../core/snapshotDiff.js';
+import { runDocument } from './runDocument.js';
+import { foldReplay, replaySnapshot } from './runReplay.js';
+import ReplayStrip from './ReplayStrip.jsx';
+import TabStrip, { NewTabPage } from './TabStrip.jsx';
+import TabDeck from './TabDeck.jsx';
 
 function setTheme(mode) { // 'light' | 'dark'
   document.documentElement.dataset.theme = mode;
@@ -11,125 +26,786 @@ function setTheme(mode) { // 'light' | 'dark'
   window.llmflow?.setTitleBarTheme?.(mode);
 }
 
-let nodeSeq = 0;
-function freshNodeId(type) {
-  return `${type}-${Date.now().toString(36)}${(nodeSeq++).toString(36)}`;
+// Crossfade a whole-tree swap (theme flip, section change) via the View
+// Transitions API instead of transitioning every element's colours on every
+// mutation. flushSync forces the React re-render to land inside the transition
+// so the API captures the correct "after" frame. Falls back to an instant swap
+// where the API is missing or motion is reduced.
+function withViewTransition(update) {
+  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  if (reduce || !document.startViewTransition) { update(); return; }
+  document.startViewTransition(() => flushSync(update));
 }
 
-// Renderer is a pure view over file state pushed from the main process:
-// run snapshots (read-only) and flow definitions (editable, autosaved).
+let nodeSeq = 0;
+function freshNodeId(prefix) {
+  return `${prefix}-${Date.now().toString(36)}${(nodeSeq++).toString(36)}`;
+}
+
+// --- Activity rail: refined line icons in the app's geometric language.
+// Stroke-based, currentColor, so they tint to --accent when active and inherit
+// the theme everywhere else. No emoji — they'd break the Slate & Sage feel. ---
+const RailIcon = {
+  // Flows — a small workflow graph (one node branching to two)
+  flows: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="5" r="2.3" /><circle cx="6" cy="18.5" r="2.3" /><circle cx="18" cy="18.5" r="2.3" />
+      <path d="M12 7.3v3.2M12 10.5 6.9 16.4M12 10.5l5.1 5.9" />
+    </svg>
+  ),
+  // Library — a grid of template tiles
+  library: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true">
+      <rect x="4" y="4" width="7" height="7" rx="1.6" /><rect x="13" y="4" width="7" height="7" rx="1.6" />
+      <rect x="4" y="13" width="7" height="7" rx="1.6" /><rect x="13" y="13" width="7" height="7" rx="1.6" />
+    </svg>
+  ),
+  // Runs — run history (clock with a back-arrow)
+  runs: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3.5 8.3A9 9 0 1 1 3 12" /><path d="M3.2 4v4.3h4.3" /><path d="M12 7.6V12l3 1.8" />
+    </svg>
+  ),
+  // Settings — a gear (utility, foot of the rail)
+  settings: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  )
+};
+
+// The three primary sections, in rail order. Each is a self-contained mode
+// with its own explorer list + remembered selection (Ctrl+1/2/3).
+const NAV = [
+  { key: 'flows', label: 'Flows', hint: 'Flows  (Ctrl+1)' },
+  { key: 'library', label: 'Library', hint: 'Node Library  (Ctrl+2)' },
+  { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+3)' }
+];
+
+// The run's plaintext mirror (flare 7): the same run as a typeset dossier you
+// can copy straight into an issue or PR. A pure projection of the snapshot —
+// runDocument does the typesetting; this just frames it and offers Copy.
+function RunMirror({ snapshot }) {
+  const doc = useMemo(() => runDocument(snapshot), [snapshot]);
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(doc);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch { /* clipboard blocked — the <pre> is still selectable */ }
+  };
+  return (
+    <div className="mirror-wrap">
+      <div className="mirror-toolbar">
+        <span className="section-label">Document</span>
+        <span className="mirror-hint">A pasteable dossier of this run — copy it into an issue or PR.</span>
+        <button className="ghost mini" onClick={copy}>{copied ? 'Copied ✓' : 'Copy'}</button>
+      </div>
+      <pre className="mirror">{doc}</pre>
+    </div>
+  );
+}
+
+// One mental model (GOALS.md): a Node Library of reusable AI templates, and
+// workflows composed from them on the canvas. Renderer is a pure view over
+// file state pushed from the main process: run snapshots (read-only), flow
+// definitions (editable, autosaved), node templates (edited on the Nodes
+// page). One engine, one run entry: the run panel on the right.
 export default function App() {
-  const [runIds, setRunIds] = useState([]);
+  const [runs, setRuns] = useState([]); // summaries (id, name, createdAt, stage…), newest first
   const [activeRunId, setActiveRunId] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
+  // Mirror of `snapshot` for the incremental-update handler to read without a
+  // stale closure: it needs the currently-viewed run + rev to decide whether an
+  // incoming patch applies and lines up (see onRunUpdate below).
+  const snapRef = useRef(null);
   const [selectedNode, setSelectedNode] = useState(null);
-  const [prompt, setPrompt] = useState('');
-  const [busy, setBusy] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [theme, setThemeState] = useState(
     () => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
   );
 
+  // Node Library (templates) — full definitions for resolution + palette.
+  const [templates, setTemplates] = useState([]);
+
   // Flow-builder state.
   const [flowsList, setFlowsList] = useState([]);
   const [activeFlowId, setActiveFlowId] = useState(null);
   const [flow, setFlow] = useState(null);
-  const [flowSaved, setFlowSaved] = useState(true);
+  const [saveState, setSaveState] = useState('saved'); // 'saved' | 'saving' | 'failed'
+  const [flowLint, setFlowLint] = useState(null); // { ok, errors, warnings } for the open flow
   const [models, setModels] = useState([]);
-  const [defaultWorker, setDefaultWorker] = useState({ provider: 'mock', model: 'mock-large' });
+  const [flowViewMode, setFlowViewMode] = useState('canvas'); // 'canvas' | 'yaml'
+  const [runView2, setRunView2] = useState('canvas'); // run view: 'canvas' | 'document'
+  // Replay scrubber (finished runs): folded frames + where the scrubber sits
+  // (null = live/final), and whether it's playing.
+  const [replayFrames, setReplayFrames] = useState(null);
+  const [replayIndex, setReplayIndex] = useState(null);
+  const [replayPlaying, setReplayPlaying] = useState(false);
   const flowRef = useRef(null);
   const saveTimer = useRef(null);
 
+  // Unified run entry (the run panel): workflow dropdown + user input.
+  const [runFlowId, setRunFlowId] = useState('');
+  const [runInput, setRunInput] = useState('');
+  const [workspaceDir, setWorkspaceDir] = useState(''); // bound target project folder (optional)
+  const [busy, setBusy] = useState(false);
+  const [resuming, setResuming] = useState(false); // continuing an interrupted run
+  // Explicitly reopened the run form while watching a live run (see `watching`).
+  const [newRunOpen, setNewRunOpen] = useState(false);
+
+  // Primary navigation. The active section drives which explorer list shows and
+  // which document the main area renders; each section keeps its own selection
+  // (activeFlowId / activeRunId / selectedTemplateId) so switching sections and
+  // coming back is lossless.
+  const [activeActivity, setActiveActivity] = useState('flows'); // 'flows' | 'library' | 'runs'
+  const [selectedTemplateId, setSelectedTemplateId] = useState(null);
+
+  // Undo/redo over flow edits. Bursts of changes (a node drag emits one per
+  // frame) coalesce into a single history entry via the time gate.
+  const undoStack = useRef([]);
+  const redoStack = useRef([]);
+  const lastHistoryPush = useRef(0);
+  const [historySize, setHistorySize] = useState({ undo: 0, redo: 0 });
+
+  // --- Project tabs (D22): one tab per open project; single renderer (T6).
+  // A tab switch swaps the per-tab state bundle (T8) — everything above that
+  // belongs to ONE project's view. Theme, Settings, models, templates and the
+  // flows list stay global (T2).
+  const [tabs, setTabs] = useState([]); // [{ id, folder, name, live, state }]
+  const [activeTab, setActiveTab] = useState(null); // project id ('default' = scratch)
+  // Ref mirror for handlers that must know the current tab without re-binding
+  // (push filtering, the Ctrl+Tab stream).
+  const activeTabRef = useRef(null);
+  useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
+  const [tabLive, setTabLive] = useState({}); // id -> count of live runs (strip dots)
+  const [newTabOpen, setNewTabOpen] = useState(false); // the ＋ page (T15)
+  const [recents, setRecents] = useState([]);
+  const [tabNotice, setTabNotice] = useState(null); // restore-time dropped-folder notice (T17)
+  const bundles = useRef(new Map()); // id -> captured bundle for tabs left this session
+  const mruRef = useRef([]); // tab ids, most recently used first (deck order)
+  const [deck, setDeck] = useState(null); // { order: [id…], index } while Ctrl+Tab is held
+  const deckRef = useRef(null);
+  useEffect(() => { deckRef.current = deck; }, [deck]);
+
   const toggleTheme = () => {
     const next = theme === 'light' ? 'dark' : 'light';
-    setTheme(next);
-    setThemeState(next);
+    withViewTransition(() => { setTheme(next); setThemeState(next); });
   };
 
   // Sync the native title-bar overlay to the boot theme once on mount.
   useEffect(() => { window.llmflow?.setTitleBarTheme?.(theme); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Opening a different run always lands on the canvas, not the last run's doc,
+  // and clears any replay state from the previous run. Bundle restores are the
+  // exception: a tab comes back exactly as it was left (T8), so the flag set by
+  // applyBundle skips this reset once.
+  useEffect(() => {
+    if (restoringRef.current) { restoringRef.current = false; return; }
+    setRunView2('canvas');
+    setReplayFrames(null); setReplayIndex(null); setReplayPlaying(false);
+  }, [activeRunId]);
+
+  // For a FINISHED flow run, fetch its log once and fold it into replay frames.
+  // Live runs get null (the scrubber is meaningless while it's still moving).
+  useEffect(() => {
+    const stage = snapshot?.meta?.stage;
+    const flow = snapshot?.flow;
+    if (activeActivity === 'runs' && activeRunId && flow && isTerminal(stage) && window.llmflow?.readRunLog) {
+      let cancelled = false;
+      window.llmflow.readRunLog(activeTabRef.current, activeRunId)
+        .then(log => { if (!cancelled) setReplayFrames(foldReplay(log, flow)); })
+        .catch(() => {});
+      return () => { cancelled = true; };
+    }
+    setReplayFrames(null);
+  }, [activeActivity, activeRunId, snapshot?.meta?.stage]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Playback advances one frame at a time in event order; stops at the end.
+  useEffect(() => {
+    if (!replayPlaying || !replayFrames?.length) return;
+    const id = setInterval(() => {
+      setReplayIndex(i => {
+        const next = (i == null ? 0 : i) + 1;
+        if (next > replayFrames.length - 1) { setReplayPlaying(false); return replayFrames.length - 1; }
+        return next;
+      });
+    }, 380);
+    return () => clearInterval(id);
+  }, [replayPlaying, replayFrames]);
+
+  const toggleReplayPlay = () => {
+    if (replayPlaying) { setReplayPlaying(false); return; }
+    setReplayIndex(i => (i == null || i >= (replayFrames?.length ?? 1) - 1) ? 0 : i);
+    setReplayPlaying(true);
+  };
+
   const refreshRuns = useCallback(async () => {
-    setRunIds(await window.llmflow.listRuns());
+    // Runs are per-project (T2): list the active tab's, and drop the result if
+    // the user switched tabs while the read was in flight.
+    const pid = activeTabRef.current;
+    const list = await window.llmflow.listRuns(pid);
+    if (activeTabRef.current === pid) setRuns(list);
   }, []);
+  // Listing runs re-reads every run's meta + prompt from disk, and run updates
+  // arrive as often as the token stream flushes (250ms) — that would re-read the
+  // whole runs/ directory several times a second while a run is live. The list
+  // only shows stage-level facts, so coalesce the storm into one trailing read.
+  const runsRefreshTimer = useRef(null);
+  const refreshRunsSoon = useCallback(() => {
+    if (runsRefreshTimer.current) return;
+    runsRefreshTimer.current = setTimeout(() => {
+      runsRefreshTimer.current = null;
+      refreshRuns();
+    }, 400);
+  }, [refreshRuns]);
+  useEffect(() => () => clearTimeout(runsRefreshTimer.current), []);
   const refreshFlows = useCallback(async () => {
-    setFlowsList(await window.llmflow.listFlows());
+    const list = await window.llmflow.listFlows();
+    setFlowsList(list);
+    // Keep the run panel pointed at a real workflow (default pipeline first).
+    setRunFlowId(prev => list.some(f => f.id === prev) ? prev : (list[0]?.id ?? ''));
+    return list;
+  }, []);
+  const refreshTemplates = useCallback(async () => {
+    setTemplates(await window.llmflow.listNodeTemplates());
   }, []);
 
-  useEffect(() => { refreshRuns(); refreshFlows(); }, [refreshRuns, refreshFlows]);
+  // Global catalogs (flows, templates) load once; per-project data (runs, the
+  // restored selection) loads in the project boot effect further down, after
+  // the tab machinery is defined.
+  useEffect(() => { refreshFlows(); refreshTemplates(); },
+    [refreshFlows, refreshTemplates]);
 
   // Worker defaults + model options for the node editor's worker pickers.
   useEffect(() => {
     window.llmflow.getSettings().then(s => {
-      setDefaultWorker(s.workers.executor);
       if (s.hasKey) window.llmflow.listModels().then(setModels).catch(() => setModels([]));
     });
   }, []);
 
+  // Keep snapRef in step with the rendered snapshot so the update handler reads
+  // a fresh baseline (pushes are ≥80ms apart, so this is settled between them).
+  useEffect(() => { snapRef.current = snapshot; }, [snapshot]);
+
+  // Incremental run updates (V1 task 5): the main process pushes either a full
+  // snapshot (rev/base) or a patch (only the changed slice) with the rev it
+  // targets and the base rev it was diffed against. We apply patches on top of
+  // the currently-viewed run's snapshot; a base that doesn't line up means we
+  // missed one (e.g. a push during a run switch), so we resync from files.
   useEffect(() => {
-    return window.llmflow.onRunUpdate(({ runId, snapshot }) => {
-      refreshRuns();
+    return window.llmflow.onRunUpdate(payload => {
+      const { runId } = payload;
+      // Scoped pushes (T7): a background project's run must never patch the
+      // foreground tab's snapshot. Same guard shape as the rev matching below.
+      if (payload.projectId && payload.projectId !== activeTabRef.current) return;
+      refreshRunsSoon();
       setActiveRunId(prev => prev ?? runId);
-      // Only mirror updates for the run being viewed.
-      setSnapshot(prev => (runId === (prevActive(prev) ?? runId)) ? snapshot : prev);
-      function prevActive(s) { return s?.meta?.runId; }
+      const cur = snapRef.current;
+      // Only mirror the run being viewed (or the very first one to appear).
+      if (cur?.meta?.runId && cur.meta.runId !== runId) return;
+      if (payload.full) {
+        setSnapshot({ ...payload.full, rev: payload.rev });
+        return;
+      }
+      // A patch with no baseline for this run yet: the activeRunId effect will
+      // fetch the full snapshot.
+      if (!cur || cur.meta?.runId !== runId) return;
+      if (payload.base !== cur.rev) {
+        window.llmflow.getSnapshot(activeTabRef.current, runId).then(s => {
+          // Ignore a resync that lost a race: another fetch (or the patch
+          // stream) may have already carried this run past the rev we asked
+          // for, and applying it would rewind the view.
+          const now = snapRef.current;
+          if (now?.meta?.runId === runId && (now.rev ?? 0) <= s.rev) setSnapshot(s);
+        });
+        return;
+      }
+      setSnapshot({ ...mergeSnapshot(cur, payload.patch), rev: payload.rev });
     });
-  }, [refreshRuns]);
+  }, [refreshRunsSoon]);
 
   useEffect(() => {
     if (!activeRunId) { setSnapshot(null); return; }
-    window.llmflow.getSnapshot(activeRunId).then(setSnapshot);
-  }, [activeRunId]);
+    // Switching runs faster than a fetch resolves must not land the old run's
+    // snapshot on the new view. activeTab is a dependency on purpose: a tab
+    // switch resyncs the (background-stale) snapshot from files even when the
+    // restored bundle carried one (T9: background projects don't stream).
+    let cancelled = false;
+    window.llmflow.getSnapshot(activeTab, activeRunId).then(s => { if (!cancelled) setSnapshot(s); });
+    return () => { cancelled = true; };
+  }, [activeRunId, activeTab]);
 
   // --- Flow persistence: debounced autosave, flushed on view switches ---
+  // Every save re-lints the stored flow (schema + semantic rules over the
+  // *.flow.yaml source of truth) to drive the validity badge in the toolbar.
+  const refreshLint = useCallback(async id => {
+    if (!id) { setFlowLint(null); return; }
+    try { setFlowLint(await window.llmflow.lintFlow(id)); }
+    catch { setFlowLint(null); }
+  }, []);
+
+  // The one write path. Every navigation awaits flushSave, so a rejection here
+  // would wedge the app rather than just this document: keep failures inside,
+  // and say so in the badge instead of claiming a save that never landed.
+  const persist = useCallback(async flow => {
+    try {
+      await window.llmflow.saveFlow(namedFlow(flow));
+      setSaveState('saved');
+      refreshFlows(); // name may have changed
+      refreshLint(flow.id);
+    } catch (e) {
+      console.error('Saving the flow failed:', e);
+      setSaveState('failed');
+    }
+  }, [refreshFlows, refreshLint]);
+
   const flushSave = useCallback(async () => {
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
       saveTimer.current = null;
-      if (flowRef.current && !flowRef.current.builtin) {
-        await window.llmflow.saveFlow(flowRef.current);
-        setFlowSaved(true);
-        refreshFlows();
-      }
+      if (flowRef.current) await persist(flowRef.current);
     }
-  }, [refreshFlows]);
+  }, [persist]);
+
+  const schedulePersist = useCallback(next => {
+    flowRef.current = next;
+    setSaveState('saving');
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
+      persist(flowRef.current);
+    }, 500);
+  }, [persist]);
 
   const changeFlow = useCallback(updater => {
     setFlow(prev => {
       if (!prev) return prev;
       const next = typeof updater === 'function' ? updater(prev) : updater;
-      if (next === prev || next.builtin) return next;
-      flowRef.current = next;
-      setFlowSaved(false);
-      clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(async () => {
-        saveTimer.current = null;
-        await window.llmflow.saveFlow(flowRef.current);
-        setFlowSaved(true);
-        refreshFlows(); // name may have changed
-      }, 500);
+      if (next === prev) return next;
+      const now = Date.now();
+      if (now - lastHistoryPush.current > 400) {
+        undoStack.current.push(prev);
+        if (undoStack.current.length > 100) undoStack.current.shift();
+      }
+      lastHistoryPush.current = now;
+      redoStack.current = [];
+      setHistorySize({ undo: undoStack.current.length, redo: 0 });
+      schedulePersist(next);
       return next;
     });
-  }, [refreshFlows]);
+  }, [schedulePersist]);
+
+  const resetHistory = useCallback(() => {
+    undoStack.current = [];
+    redoStack.current = [];
+    lastHistoryPush.current = 0;
+    setHistorySize({ undo: 0, redo: 0 });
+  }, []);
+
+  // Used by the YAML editor after a manual save-from-yaml succeeds.
+  const reloadCurrentFlow = useCallback(async () => {
+    if (!activeFlowId) return;
+    const f = await window.llmflow.loadFlow(activeFlowId);
+    flowRef.current = f;
+    setFlow(f);
+    setSaveState('saved');
+    refreshLint(activeFlowId);
+    // keep selected if the node still exists
+    setSelectedNode(sel => sel && f.nodes.some(n => n.id === sel) ? sel : null);
+  }, [activeFlowId, refreshLint]);
+
+  const undo = useCallback(() => {
+    const cur = flowRef.current;
+    if (!cur || !undoStack.current.length) return;
+    const target = undoStack.current.pop();
+    redoStack.current.push(cur);
+    lastHistoryPush.current = 0; // next edit starts a fresh history entry
+    setHistorySize({ undo: undoStack.current.length, redo: redoStack.current.length });
+    schedulePersist(target);
+    setFlow(target);
+    setSelectedNode(sel => sel && target.nodes.some(n => n.id === sel) ? sel : null);
+  }, [schedulePersist]);
+
+  const redo = useCallback(() => {
+    const cur = flowRef.current;
+    if (!cur || !redoStack.current.length) return;
+    const target = redoStack.current.pop();
+    undoStack.current.push(cur);
+    lastHistoryPush.current = 0;
+    setHistorySize({ undo: undoStack.current.length, redo: redoStack.current.length });
+    schedulePersist(target);
+    setFlow(target);
+    setSelectedNode(sel => sel && target.nodes.some(n => n.id === sel) ? sel : null);
+  }, [schedulePersist]);
 
   const openFlow = useCallback(async id => {
     await flushSave();
     const f = await window.llmflow.loadFlow(id);
     flowRef.current = f;
     setFlow(f);
-    setFlowSaved(true);
+    setSaveState('saved');
     setActiveFlowId(id);
-    setActiveRunId(null);
     setSelectedNode(null);
-  }, [flushSave]);
+    setRunFlowId(id); // browsing a flow points the run panel at it
+    setFlowViewMode('canvas');
+    setActiveActivity('flows');
+    resetHistory();
+    refreshLint(id);
+  }, [flushSave, resetHistory, refreshLint]);
+
+  // Undo/redo shortcuts while editing a flow (skip when typing in a field so
+  // native text undo keeps working).
+  useEffect(() => {
+    const onKey = e => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if (key === 'y' || (key === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
+
+  // Keep the Library selection pointed at a real template: default to the first
+  // one, and recover if the selected template is deleted elsewhere.
+  useEffect(() => {
+    if (selectedTemplateId && templates.some(t => t.id === selectedTemplateId)) return;
+    setSelectedTemplateId(templates[0]?.id ?? null);
+  }, [templates, selectedTemplateId]);
 
   const openRun = useCallback(async id => {
     await flushSave();
-    setActiveFlowId(null);
-    setFlow(null);
+    restoringRef.current = false; // a user-driven open always resets the run view
     setActiveRunId(id);
     setSelectedNode(null);
+    setActiveActivity('runs');
+    setNewRunOpen(false); // a fresh run is for watching, not for starting another
   }, [flushSave]);
+
+  const renameRun = useCallback(async (id, name) => {
+    await window.llmflow.renameRun(activeTabRef.current, id, name);
+    await refreshRuns();
+  }, [refreshRuns]);
+
+  const deleteRun = useCallback(async id => {
+    try {
+      await window.llmflow.deleteRun(activeTabRef.current, id);
+    } catch (err) {
+      // The main process refuses while the run is still executing; that reason
+      // is the whole message, so show it rather than the IPC wrapper around it.
+      window.alert(String(err?.message ?? err)
+        .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, ''));
+      return;
+    }
+    // The run being watched can be the one deleted: drop the view with it.
+    setActiveRunId(prev => (prev === id ? null : prev));
+    setSnapshot(prev => (prev?.meta?.runId === id ? null : prev));
+    await refreshRuns();
+  }, [refreshRuns]);
+
+  // Switch section via the rail / shortcuts. Selections persist per section;
+  // we only drop the canvas node selection, which is section-specific.
+  const goActivity = useCallback(async key => {
+    await flushSave();
+    withViewTransition(() => { setSelectedNode(null); setActiveActivity(key); });
+  }, [flushSave]);
+
+  const openTemplate = useCallback(async id => {
+    await flushSave();
+    withViewTransition(() => {
+      setSelectedTemplateId(id);
+      setSelectedNode(null);
+      setActiveActivity('library');
+    });
+  }, [flushSave]);
+
+  const newTemplate = useCallback(async () => {
+    const tpl = await window.llmflow.newNodeTemplate();
+    await refreshTemplates();
+    withViewTransition(() => { setSelectedTemplateId(tpl.id); setActiveActivity('library'); });
+  }, [refreshTemplates]);
+
+  // ===================== Project tabs (D22) =====================
+  // The per-tab bundle (T8): everything one project's view holds. Captured on
+  // leave, applied on return; a slim projection (ids + view modes, no
+  // snapshots/undo) goes to the main process so restore survives restarts
+  // (T17). These are plain functions, not useCallbacks — they run on tab
+  // events, not hot paths, and must always see current state.
+  const restoringRef = useRef(false); // lets the run-open reset effect skip bundle restores
+
+  const captureBundle = () => ({
+    activeActivity, activeFlowId, flow: flowRef.current, flowLint,
+    activeRunId, snapshot, selectedNode,
+    undo: [...undoStack.current], redo: [...redoStack.current],
+    runFlowId, runInput, workspaceDir, newRunOpen,
+    flowViewMode, runView2, runs
+  });
+
+  const slimOf = b => ({
+    activeActivity: b.activeActivity,
+    activeFlowId: b.activeFlowId,
+    activeRunId: b.activeRunId,
+    runFlowId: b.runFlowId,
+    runInput: b.runInput,
+    workspaceDir: b.workspaceDir,
+    flowViewMode: b.flowViewMode,
+    runView2: b.runView2
+  });
+
+  const applyBundle = b => {
+    restoringRef.current = true;
+    setActiveActivity(b.activeActivity ?? 'flows');
+    setActiveFlowId(b.activeFlowId ?? null);
+    flowRef.current = b.flow ?? null;
+    setFlow(b.flow ?? null);
+    setSaveState('saved'); // leave always flushes, so the incoming tab is saved by construction
+    setFlowLint(b.flowLint ?? null);
+    setActiveRunId(b.activeRunId ?? null);
+    setSnapshot(b.snapshot ?? null);
+    setSelectedNode(b.selectedNode ?? null);
+    undoStack.current = b.undo ?? [];
+    redoStack.current = b.redo ?? [];
+    lastHistoryPush.current = 0;
+    setHistorySize({ undo: undoStack.current.length, redo: redoStack.current.length });
+    setRunFlowId(prev => b.runFlowId || prev); // fresh tabs keep the catalog default
+    setRunInput(b.runInput ?? '');
+    setWorkspaceDir(b.workspaceDir ?? '');
+    setNewRunOpen(b.newRunOpen ?? false);
+    setFlowViewMode(b.flowViewMode ?? 'canvas');
+    setRunView2(b.runView2 ?? 'canvas');
+    setReplayFrames(null); setReplayIndex(null); setReplayPlaying(false);
+    setRuns(b.runs ?? []);
+    setBusy(false); setResuming(false);
+  };
+
+  // First visit to a tab this session: rebuild the bundle from the slim state
+  // the main process kept for it (T17 restore depth, best-effort).
+  const restoreSlim = async (slim = {}) => {
+    const b = {
+      activeActivity: slim.activeActivity, activeRunId: slim.activeRunId ?? null,
+      runFlowId: slim.runFlowId, runInput: slim.runInput,
+      workspaceDir: slim.workspaceDir,
+      flowViewMode: slim.flowViewMode, runView2: slim.runView2,
+      runs: []
+    };
+    if (slim.activeFlowId) {
+      try {
+        b.flow = await window.llmflow.loadFlow(slim.activeFlowId);
+        b.activeFlowId = slim.activeFlowId;
+      } catch { /* flow deleted since — open the section empty */ }
+    }
+    applyBundle(b);
+    refreshRuns();
+    if (b.activeFlowId) refreshLint(b.activeFlowId);
+  };
+
+  // Leaving a tab: flush the debounced autosave (exactly as section switches
+  // do), then capture. The slim copy goes to settings.json via the registry.
+  const leaveCurrentTab = async () => {
+    const cur = activeTabRef.current;
+    if (cur == null) return;
+    await flushSave();
+    const bundle = captureBundle();
+    bundles.current.set(cur, bundle);
+    window.llmflow.saveProjectState?.(cur, slimOf(bundle));
+  };
+
+  const enterTab = async (id, savedState) => {
+    activeTabRef.current = id;
+    mruRef.current = [id, ...mruRef.current.filter(x => x !== id)];
+    const target = bundles.current.get(id);
+    withViewTransition(() => {
+      setActiveTab(id);
+      if (target) applyBundle(target);
+    });
+    if (target) refreshRuns(); // resync what background execution changed (T9)
+    else await restoreSlim(savedState ?? {});
+  };
+
+  const switchTab = async id => {
+    if (!id || id === activeTabRef.current || !tabs.some(t => t.id === id)) return;
+    await leaveCurrentTab();
+    await enterTab(id, tabs.find(t => t.id === id)?.state);
+    const payload = await window.llmflow.activateProject?.(id);
+    if (payload) setTabs(payload.tabs);
+  };
+
+  // Open a folder as a tab (null = the scratch tab). Same folder twice focuses
+  // the existing tab (T5) — the main process decides, we follow.
+  const openProjectTab = async folder => {
+    await leaveCurrentTab();
+    let payload;
+    try {
+      payload = await window.llmflow.openProject(folder);
+    } catch (err) {
+      window.alert(String(err?.message ?? err)
+        .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, ''));
+      return;
+    }
+    setTabs(payload.tabs);
+    setNewTabOpen(false);
+    if (payload.opened !== activeTabRef.current) {
+      await enterTab(payload.opened, payload.tabs.find(t => t.id === payload.opened)?.state);
+    }
+  };
+
+  // Closing a tab keeps its runs executing (T13) — main owns the engine; we
+  // just drop the view. No confirm: nothing is lost.
+  const closeTab = async id => {
+    if (id === activeTabRef.current) await leaveCurrentTab();
+    const payload = await window.llmflow.closeProject(id);
+    bundles.current.delete(id);
+    mruRef.current = mruRef.current.filter(x => x !== id);
+    setTabs(payload.tabs);
+    setTabLive(prev => { const next = { ...prev }; delete next[id]; return next; });
+    if (payload.active !== activeTabRef.current) {
+      await enterTab(payload.active, payload.tabs.find(t => t.id === payload.active)?.state);
+    }
+  };
+
+  const reorderTabs = async ids => {
+    setTabs(prev => [...prev].sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)));
+    const payload = await window.llmflow.reorderProjects?.(ids);
+    if (payload) setTabs(payload.tabs);
+  };
+
+  const openNewTabPage = async () => {
+    setRecents(await window.llmflow.projectRecents?.() ?? []);
+    setNewTabOpen(true);
+  };
+
+  // Boot: adopt the restored session (T17) and enter the active tab.
+  const bootedRef = useRef(false);
+  useEffect(() => {
+    if (bootedRef.current) return;
+    bootedRef.current = true;
+    (async () => {
+      const p = await window.llmflow.listProjects?.();
+      if (!p) { // bridge without projects (stale mock): single scratch tab
+        activeTabRef.current = 'default';
+        setTabs([{ id: 'default', folder: null, name: 'Scratch', live: 0, state: {} }]);
+        setActiveTab('default');
+        mruRef.current = ['default'];
+        refreshRuns();
+        return;
+      }
+      setTabs(p.tabs);
+      setTabLive(Object.fromEntries(p.tabs.map(t => [t.id, t.live])));
+      if (p.dropped?.length) {
+        setTabNotice(`Couldn't reopen ${p.dropped.length === 1 ? 'a tab' : `${p.dropped.length} tabs`} — folder missing: ${p.dropped.join(', ')}. Recents still lists ${p.dropped.length === 1 ? 'it' : 'them'}.`);
+      }
+      activeTabRef.current = p.active;
+      mruRef.current = [p.active, ...p.tabs.map(t => t.id).filter(x => x !== p.active)];
+      setActiveTab(p.active);
+      await restoreSlim(p.tabs.find(t => t.id === p.active)?.state ?? {});
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live-run indicators for every tab, active or not (T9's featherweight push).
+  useEffect(() => window.llmflow.onProjectActivity?.(({ projectId, live }) => {
+    setTabLive(prev => ({ ...prev, [projectId]: live.length }));
+  }), []);
+
+  // --- Ctrl+Tab (T14 + 4.2): quick tap = instant MRU flip; holding ≥150ms
+  // deals the deck; further presses advance; releasing Ctrl commits; Esc
+  // cancels. Events arrive from the main process (before-input-event), so a
+  // focused canvas or text field can never eat them. Refs, not state, so the
+  // one subscription sees current values.
+  const tabsRef = useRef(tabs);
+  useEffect(() => { tabsRef.current = tabs; }, [tabs]);
+  const switchTabRef = useRef(switchTab);
+  switchTabRef.current = switchTab;
+  const holdTimer = useRef(null);
+  const pendingSteps = useRef(0);
+
+  useEffect(() => {
+    const openDeck = steps => {
+      const openIds = tabsRef.current.map(t => t.id);
+      const order = [
+        ...mruRef.current.filter(id => openIds.includes(id)),
+        ...openIds.filter(id => !mruRef.current.includes(id))
+      ];
+      if (order.length < 2) return;
+      const index = ((steps % order.length) + order.length) % order.length;
+      setDeck({ order, index });
+    };
+    const handle = ({ kind, shift }) => {
+      if (tabsRef.current.length < 2) return;
+      if (kind === 'cycle') {
+        const d = deckRef.current;
+        if (d) {
+          const len = d.order.length;
+          setDeck({ ...d, index: (d.index + (shift ? -1 : 1) + len) % len });
+        } else if (holdTimer.current) {
+          // A second press while the hold timer runs: the user is cycling, not
+          // tapping — deal the deck now, advanced by the accumulated steps.
+          clearTimeout(holdTimer.current);
+          holdTimer.current = null;
+          pendingSteps.current += shift ? -1 : 1;
+          openDeck(pendingSteps.current);
+        } else {
+          pendingSteps.current = shift ? -1 : 1;
+          holdTimer.current = setTimeout(() => {
+            holdTimer.current = null;
+            openDeck(pendingSteps.current);
+          }, 150);
+        }
+      } else if (kind === 'release') {
+        if (holdTimer.current) {
+          // Quick tap: flip to the most recently used other tab.
+          clearTimeout(holdTimer.current);
+          holdTimer.current = null;
+          const openIds = tabsRef.current.map(t => t.id);
+          const mru = mruRef.current.filter(id => openIds.includes(id));
+          if (mru[1]) switchTabRef.current(mru[1]);
+        } else if (deckRef.current) {
+          const d = deckRef.current;
+          setDeck(null);
+          switchTabRef.current(d.order[d.index]);
+        }
+      }
+    };
+    // Two sources, one state machine. The main process intercepts Ctrl+Tab in
+    // before-input-event (T14) and preventDefaults it, so when that path fires
+    // the DOM never sees the key; the window capture listeners are the
+    // fallback for input that bypasses the native pipeline (and make the
+    // feature testable). A duplicated 'release' is a no-op by construction.
+    const unsub = window.llmflow.onTabsKey?.(handle);
+    const onKeyDown = e => {
+      if (e.key === 'Tab' && e.ctrlKey) {
+        e.preventDefault();
+        handle({ kind: 'cycle', shift: e.shiftKey });
+      }
+    };
+    const onKeyUp = e => {
+      if (e.key === 'Control') handle({ kind: 'release' });
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
+    return () => {
+      unsub?.();
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
+    };
+  }, []);
+
+  // Section shortcuts: Ctrl/Cmd + 1/2/3 jump between Flows / Library / Runs.
+  useEffect(() => {
+    const onKey = e => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      const idx = { '1': 0, '2': 1, '3': 2 }[e.key];
+      if (idx === undefined) return;
+      e.preventDefault();
+      goActivity(NAV[idx].key);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [goActivity]);
 
   const newFlow = async () => {
     const f = await window.llmflow.newFlow();
@@ -137,8 +813,18 @@ export default function App() {
     await openFlow(f.id);
   };
 
+  const duplicateFlow = async () => {
+    if (!flow) return;
+    await flushSave();
+    const fresh = await window.llmflow.newFlow();
+    const copy = { ...structuredClone(flow), id: fresh.id, name: `${flow.name} (copy)` };
+    await window.llmflow.saveFlow(copy);
+    await refreshFlows();
+    await openFlow(fresh.id);
+  };
+
   const deleteFlow = async () => {
-    if (!flow || flow.builtin) return;
+    if (!flow) return;
     if (!window.confirm(`Delete flow "${flow.name}"?`)) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = null;
@@ -147,16 +833,19 @@ export default function App() {
     setFlow(null);
     setActiveFlowId(null);
     setSelectedNode(null);
+    resetHistory();
     refreshFlows();
   };
 
-  const addNode = type => {
-    const meta = TYPE_META[type];
-    const data =
-      type === 'input' ? { text: '' } :
-      type === 'agentTask' ? { title: 'New task', goal: '', constraints: [], worker: { ...defaultWorker } } :
-      type === 'aiStep' ? { title: '', role: 'custom', system: '', worker: { ...defaultWorker } } :
-      {};
+  const autoLayout = () => changeFlow(f => {
+    const pos = layoutPositions(f);
+    return { ...f, nodes: f.nodes.map(n => ({ ...n, position: pos.get(n.id) ?? n.position })) };
+  });
+
+  // Structural nodes: every runnable workflow starts from a User Input node
+  // and ends in an Output node. The Orchestrator is the third built-in — an
+  // AI container that creates and runs its own task nodes at run time.
+  const addStructuralNode = type => {
     changeFlow(f => {
       const n = f.nodes.length;
       const id = freshNodeId(type);
@@ -164,41 +853,55 @@ export default function App() {
       return {
         ...f,
         nodes: [...f.nodes, {
-          id, type, kind: meta.kind,
+          id, type,
+          kind: type === 'orchestrator' ? 'ai' : 'user',
           position: { x: 280, y: 40 + (n % 6) * 90 },
-          data
+          data: type === 'orchestrator' ? { title: 'Orchestrator' } : {}
         }]
       };
     });
   };
 
-  // Add a node using one of the documented standard templates (see FLOW_NODES.md + flowTypes.NODE_TEMPLATES)
-  const addNodeFromTemplate = (tplName) => {
-    const created = createNodeFromTemplate(tplName, {
-      data: { worker: { ...defaultWorker } }
-    });
-    const meta = TYPE_META[created.type] || { kind: created.kind || 'ai' };
+  // Drop a Node Library template onto the canvas as a fresh instance.
+  // Overrides start empty: the node inherits the template until edited.
+  const addTemplateNode = templateId => {
     changeFlow(f => {
       const n = f.nodes.length;
-      const id = freshNodeId(created.type);
+      const id = freshNodeId(templateId);
       setSelectedNode(id);
       return {
         ...f,
         nodes: [...f.nodes, {
-          id,
-          type: created.type,
-          kind: meta.kind || created.kind || 'ai',
+          id, templateId,
           position: { x: 280, y: 40 + (n % 6) * 90 },
-          data: created.data
+          overrides: {}
         }]
       };
     });
   };
 
+  // Legacy raw nodes (aiStep/agentTask) still edit through data.
   const changeNodeData = (nodeId, patch) => {
     changeFlow(f => ({
       ...f,
       nodes: f.nodes.map(n => n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n)
+    }));
+  };
+
+  // Template instances edit through overrides; undefined values remove the
+  // override (revert to the template default). Saved in this workflow only.
+  const changeNodeOverrides = (nodeId, patch) => {
+    changeFlow(f => ({
+      ...f,
+      nodes: f.nodes.map(n => {
+        if (n.id !== nodeId) return n;
+        const overrides = { ...n.overrides };
+        for (const [k, v] of Object.entries(patch)) {
+          if (v === undefined) delete overrides[k];
+          else overrides[k] = v;
+        }
+        return { ...n, overrides };
+      })
     }));
   };
 
@@ -211,12 +914,14 @@ export default function App() {
     setSelectedNode(null);
   };
 
-  const runFlow = async () => {
-    if (!flow || flow.builtin || busy) return;
+  // The one run entry: selected workflow + user input -> User Input node.
+  const startRun = async () => {
+    if (!runFlowId || busy) return;
     setBusy(true);
     try {
       await flushSave();
-      const runId = await window.llmflow.runFlow(flow.id);
+      const runId = await window.llmflow.runFlow(activeTabRef.current, runFlowId, runInput.trim(), workspaceDir || null);
+      setRunInput('');
       await openRun(runId);
       await refreshRuns();
     } finally {
@@ -224,21 +929,44 @@ export default function App() {
     }
   };
 
-  const startRun = async () => {
-    if (!prompt.trim() || busy) return;
-    setBusy(true);
-    try {
-      const runId = await window.llmflow.startRun(prompt.trim());
-      await openRun(runId);
-      setPrompt('');
-      await refreshRuns();
-    } finally {
-      setBusy(false);
-    }
+  // Continue a run the app died in the middle of. The main process keeps the
+  // completed nodes and picks the walk up from there (V1 task 7).
+  const resumeRun = async () => {
+    if (!activeRunId || resuming) return;
+    setResuming(true);
+    try { await window.llmflow.resumeRun(activeTabRef.current, activeRunId); }
+    finally { setResuming(false); }
   };
 
   const stage = snapshot?.meta?.stage;
-  const flowView = Boolean(activeFlowId && flow);
+  // A bound tab IS the workspace (T19): its runs always target the tab's
+  // folder, so the per-run picker only survives in the unbound scratch tab.
+  const activeTabInfo = tabs.find(t => t.id === activeTab) ?? null;
+  const boundFolder = activeTabInfo?.folder ?? null;
+  const flowView = activeActivity === 'flows' && Boolean(activeFlowId && flow);
+  const runView = activeActivity === 'runs' && Boolean(activeRunId);
+  // Watching a run in flight is a different job from starting one. While the
+  // run is live the "Run a workflow" form collapses to a button so the column
+  // belongs to live output; it comes back on its own once the run settles.
+  const watching = runView && Boolean(snapshot) && !isTerminal(stage);
+  const showRunForm = !watching || newRunOpen;
+  const libraryView = activeActivity === 'library';
+  const selectedTemplate = templates.find(t => t.id === selectedTemplateId) ?? null;
+
+  // Display copy of the edited flow with template defaults merged in.
+  const resolvedFlow = useMemo(
+    () => flow ? resolveFlow(flow, templates) : null,
+    [flow, templates]
+  );
+
+  const activeIndex = NAV.findIndex(n => n.key === activeActivity);
+  // A run is identified by its name everywhere it's named; the id stays the
+  // fallback for a run the list hasn't loaded yet.
+  const activeRunName = runs.find(r => r.id === activeRunId)?.name ?? activeRunId;
+  const crumb =
+    libraryView ? ['Library', selectedTemplate?.name].filter(Boolean) :
+    activeActivity === 'runs' ? (activeRunId ? ['Runs', activeRunName] : ['Runs']) :
+    flowView ? ['Flows', flow.name] : ['Flows'];
 
   return (
     <div className="app">
@@ -247,25 +975,39 @@ export default function App() {
           <div className="brand-mark">◆</div>
           <span className="brand-name">LLM Flow</span>
         </div>
+        <TabStrip
+          tabs={tabs}
+          activeId={activeTab}
+          live={tabLive}
+          saveState={saveState}
+          onSelect={switchTab}
+          onClose={closeTab}
+          onReorder={reorderTabs}
+          onNewTab={openNewTabPage}
+        />
         {flowView
           ? <span className="titlebar-doc mono">{flow.name}</span>
-          : activeRunId && <span className="titlebar-doc mono">{activeRunId}</span>}
+          : libraryView
+            ? <span className="titlebar-doc mono">{selectedTemplate?.name ?? 'Node Library'}</span>
+            : runView && <span className="titlebar-doc mono" title={activeRunId}>{activeRunName}</span>}
       </div>
+      {tabNotice && (
+        <div className="tab-notice" role="status">
+          <span>{tabNotice}</span>
+          <button className="link" onClick={() => setTabNotice(null)} aria-label="Dismiss notice">✕</button>
+        </div>
+      )}
 
       <header className="toolbar">
         <nav className="breadcrumb">
-          <span className="crumb-dim">{flowView ? 'Flows' : 'Runs'}</span>
-          {(flowView || activeRunId) && <>
+          <span className="crumb-dim">{crumb[0]}</span>
+          {crumb[1] && <>
             <span className="crumb-sep">/</span>
-            <span className="crumb-current">{flowView ? flow.name : activeRunId}</span>
+            <span className="crumb-current">{crumb[1]}</span>
           </>}
         </nav>
-        {!flowView && stage && <span className="stage-chip">{stage.replace(/_/g, ' ')}</span>}
+        {runView && stage && <span className="stage-chip">{stage.replace(/_/g, ' ')}</span>}
         <div className="toolbar-spacer" />
-        <button type="button" className="theme-toggle" onClick={() => setShowSettings(true)} title="Providers & models">
-          <span>⚙</span>
-          Settings
-        </button>
         <button type="button" className="theme-toggle" onClick={toggleTheme} title="Toggle appearance">
           <span>{theme === 'light' ? '☾' : '☀'}</span>
           {theme === 'light' ? 'Dark' : 'Light'}
@@ -273,146 +1015,442 @@ export default function App() {
       </header>
 
       <div className="app-body">
-        <aside className="sidebar">
-          <div className="sidebar-section">
-            <div className="section-row">
-              <span className="section-label">Flows</span>
-              <button className="ghost mini" onClick={newFlow}>＋ New flow</button>
-            </div>
-          </div>
-          <div className="flow-list">
-            {flowsList.map(f => (
-              <div
-                key={f.id}
-                className={'run-item flow-item' + (f.id === activeFlowId ? ' active' : '')}
-                onClick={() => openFlow(f.id)}
-              >
-                <span className="flow-item-name">{f.name}</span>
-                {f.builtin && <span className="node-kind kind-user">built-in</span>}
-              </div>
-            ))}
-          </div>
-
-          <div className="sidebar-section">
-            <span className="section-label">New run</span>
-            <textarea
-              placeholder="Describe what you want done…"
-              value={prompt}
-              onChange={e => setPrompt(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) startRun(); }}
+        {/* Primary navigation rail — the one persistent way between sections */}
+        <nav className="activity-bar" aria-label="Primary">
+          <div className="activity-group">
+            <div
+              className="activity-indicator"
+              data-hidden={activeIndex < 0 ? 'true' : 'false'}
+              style={{ '--active-index': Math.max(activeIndex, 0) }}
+              aria-hidden="true"
             />
-            <button className="primary" onClick={startRun} disabled={busy || !prompt.trim()}>
-              {busy ? 'Starting…' : 'Run pipeline'}<kbd className="shortcut">⌘↵</kbd>
-            </button>
-          </div>
-          <div className="sidebar-section" style={{ paddingBottom: 8 }}>
-            <span className="section-label">Runs</span>
-          </div>
-          <div className="run-list">
-            {[...runIds].reverse().map(id => (
-              <div
-                key={id}
-                className={'run-item' + (id === activeRunId && !flowView ? ' active' : '')}
-                onClick={() => openRun(id)}
+            {NAV.map(item => (
+              <button
+                key={item.key}
+                type="button"
+                className={'activity-btn' + (activeActivity === item.key ? ' active' : '')}
+                aria-current={activeActivity === item.key ? 'page' : undefined}
+                onClick={() => goActivity(item.key)}
+                title={item.hint}
               >
-                {id}
-              </div>
-            ))}
-            {runIds.length === 0 && <div className="muted">No runs yet.</div>}
-          </div>
-          {activeRunId && !flowView && (
-            <div className="sidebar-footer">
-              <button className="ghost" onClick={() => window.llmflow.openRunFolder(activeRunId)}>
-                Open run folder
+                {RailIcon[item.key]}
+                <span className="activity-label">{item.label}</span>
               </button>
-            </div>
+            ))}
+          </div>
+          <div className="activity-spacer" />
+          <button
+            type="button"
+            className="activity-btn utility"
+            onClick={() => setShowSettings(true)}
+            title="Settings — providers & models"
+          >
+            {RailIcon.settings}
+            <span className="activity-label">Settings</span>
+          </button>
+        </nav>
+
+        <aside className="sidebar">
+          {activeActivity === 'flows' && (
+            <>
+              <div className="sidebar-section">
+                <div className="section-row">
+                  <span className="section-label">Flows</span>
+                  <button className="ghost mini" onClick={newFlow}>＋ New</button>
+                </div>
+              </div>
+              <div className="explorer-list">
+                {flowsList.map(f => (
+                  <div
+                    key={f.id}
+                    className={'run-item flow-item' + (f.id === activeFlowId ? ' active' : '')}
+                    onClick={() => openFlow(f.id)}
+                  >
+                    <span className="flow-item-name">{f.name}</span>
+                    {f.id === 'default-pipeline' && <span className="node-kind kind-user">default</span>}
+                  </div>
+                ))}
+                {flowsList.length === 0 && <div className="muted">No flows yet.</div>}
+              </div>
+            </>
+          )}
+
+          {activeActivity === 'library' && (
+            <>
+              <div className="sidebar-section">
+                <div className="section-row">
+                  <span className="section-label">Node Library</span>
+                  <button className="ghost mini" onClick={newTemplate}>＋ New</button>
+                </div>
+              </div>
+              <div className="explorer-list">
+                {templates.map(t => (
+                  <div
+                    key={t.id}
+                    className={'run-item flow-item' + (t.id === selectedTemplateId ? ' active' : '')}
+                    onClick={() => openTemplate(t.id)}
+                  >
+                    <span className="palette-icon">{t.icon || '✦'}</span>
+                    <span className="flow-item-name">{t.name}</span>
+                    {t.category && <span className="node-kind kind-ai">{t.category}</span>}
+                  </div>
+                ))}
+                {templates.length === 0 && <div className="muted">No node templates yet.</div>}
+              </div>
+            </>
+          )}
+
+          {activeActivity === 'runs' && (
+            <>
+              <div className="sidebar-section runs-header" style={{ paddingBottom: 8 }}>
+                <span className="section-label">Runs</span>
+                {runs.length > 0 && <span className="run-count mono">{runs.length}</span>}
+              </div>
+              <RunsList
+                runs={runs}
+                activeRunId={runView ? activeRunId : null}
+                onOpen={openRun}
+                onRename={renameRun}
+                onDelete={deleteRun}
+              />
+            </>
           )}
         </aside>
 
         <main className="canvas-area">
           {flowView && (
             <div className="editor-bar">
-              {flow.builtin ? <>
-                <span className="section-label">Built-in flow</span>
-                <span className="editor-hint">Read-only — the classic pipeline. Run it from the New run box.</span>
-              </> : <>
-                <input
-                  className="flow-name mono"
-                  value={flow.name}
-                  onChange={e => changeFlow(f => ({ ...f, name: e.target.value }))}
-                  aria-label="Flow name"
-                />
+              <input
+                className="flow-name mono"
+                value={flow.name}
+                onChange={e => changeFlow(f => ({ ...f, name: e.target.value }))}
+                onBlur={() => changeFlow(f => (f.name.trim() ? f : { ...f, name: UNTITLED_FLOW }))}
+                aria-label="Flow name"
+              />
+              <div className="view-switch" role="tablist" aria-label="Editor view">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={flowViewMode === 'canvas'}
+                  className={'view-btn' + (flowViewMode === 'canvas' ? ' active' : '')}
+                  onClick={() => setFlowViewMode('canvas')}
+                  title="Visual flow editor"
+                >
+                  <span className="view-btn-glyph" aria-hidden>▦</span>Canvas
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={flowViewMode === 'split'}
+                  className={'view-btn' + (flowViewMode === 'split' ? ' active' : '')}
+                  onClick={() => setFlowViewMode('split')}
+                  title="Canvas and YAML side by side"
+                >
+                  <span className="view-btn-glyph" aria-hidden>◫</span>Split
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={flowViewMode === 'yaml'}
+                  className={'view-btn' + (flowViewMode === 'yaml' ? ' active' : '')}
+                  onClick={() => setFlowViewMode('yaml')}
+                  title="View and edit the raw .flow.yaml definition"
+                >
+                  <span className="view-btn-glyph" aria-hidden>{'{ }'}</span>YAML
+                </button>
+              </div>
+              {flowViewMode !== 'yaml' && (
                 <div className="palette">
-                  {Object.entries(TYPE_META).map(([type, m]) => (
-                    <button key={type} className="palette-btn" onClick={() => addNode(type)} title={`Add ${m.label}`}>
-                      <span className="palette-icon">{m.icon}</span>{m.label}
+                  <button className="palette-btn" onClick={() => addStructuralNode('input')} title="Add a User Input node — the run panel input lands here">
+                    <span className="palette-icon">✎</span>User Input
+                  </button>
+                  <button className="palette-btn" onClick={() => addStructuralNode('output')} title="Add an Output node — collects upstream results">
+                    <span className="palette-icon">◎</span>Output
+                  </button>
+                  <button className="palette-btn" onClick={() => addStructuralNode('orchestrator')} title="Add an Orchestrator — plans autonomously and creates & runs task nodes inside its box, no human intervention">
+                    <span className="palette-icon">▦</span>Orchestrator
+                  </button>
+                  {templates.map(t => (
+                    <button
+                      key={t.id}
+                      className="palette-btn"
+                      onClick={() => addTemplateNode(t.id)}
+                      title={`${t.name}: ${t.description || 'Node Library template'}`}
+                    >
+                      <span className="palette-icon">{t.icon || '✦'}</span>{t.name}
                     </button>
                   ))}
                 </div>
-                <div className="palette" style={{ marginTop: 4, opacity: 0.95 }}>
-                  <span className="section-label" style={{ fontSize: '11px', marginRight: 6 }}>Examples (see FLOW_NODES.md):</span>
-                  {Object.keys(NODE_TEMPLATES).map(tpl => {
-                    const t = NODE_TEMPLATES[tpl];
-                    return (
-                      <button
-                        key={tpl}
-                        className="palette-btn"
-                        onClick={() => addNodeFromTemplate(tpl)}
-                        title={`${t.label}: ${t.description}`}
-                      >
-                        <span className="palette-icon">{t.icon || '✦'}</span>{t.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="toolbar-spacer" />
-                <span className={'save-dot' + (flowSaved ? ' saved' : '')}>{flowSaved ? 'Saved' : 'Saving…'}</span>
-                <button className="primary" onClick={runFlow} disabled={busy || flow.nodes.length === 0}>
-                  {busy ? 'Starting…' : 'Run flow'}
-                </button>
-                <button className="reject" onClick={deleteFlow}>Delete flow</button>
-              </>}
-            </div>
-          )}
-          {!flowView && stage === 'awaiting_approval' && (
-            <div className="approval-bar">
-              <span className="section-label">Approval gate</span>
-              <span>Review the work so far, then approve to continue or reject to stop.</span>
-              <button className="primary" onClick={() => window.llmflow.approvePlan(activeRunId)}>Approve</button>
-              <button className="reject" onClick={() => window.llmflow.rejectPlan(activeRunId, 'Rejected by user')}>Reject</button>
-            </div>
-          )}
-          {flowView
-            ? <FlowEditor
-                flow={flow}
-                selectedNode={selectedNode}
-                onSelect={setSelectedNode}
-                onChangeFlow={changeFlow}
-                readOnly={Boolean(flow.builtin)}
-              />
-            : snapshot
-              ? <FlowCanvas snapshot={snapshot} selectedNode={selectedNode} onSelect={setSelectedNode} />
-              : (
-                <div className="empty-state">
-                  <span className="section-label">Nothing selected</span>
-                  Enter a prompt and run the pipeline,<br />or pick a flow to edit its graph.
-                </div>
               )}
+              <div className="toolbar-spacer" />
+              {flowViewMode !== 'yaml' && (
+                <>
+                  <button className="ghost mini" onClick={undo} disabled={historySize.undo === 0} title="Undo (Ctrl+Z)">↩ Undo</button>
+                  <button className="ghost mini" onClick={redo} disabled={historySize.redo === 0} title="Redo (Ctrl+Y)">↪ Redo</button>
+                  <button className="ghost mini" onClick={autoLayout} title="Arrange nodes into dependency layers">Auto-layout</button>
+                  <button className="ghost mini" onClick={duplicateFlow} title="Duplicate this workflow">Duplicate</button>
+                </>
+              )}
+              {flowLint && (flowLint.errors.length + flowLint.warnings.length > 0 ? (
+                <span
+                  className={'lint-badge' + (flowLint.ok ? ' warn' : ' error')}
+                  title={[...flowLint.errors, ...flowLint.warnings].map(f => `[${f.rule}] ${f.message}`).join('\n')}
+                >
+                  {flowLint.ok
+                    ? `⚠ ${flowLint.warnings.length} warning${flowLint.warnings.length === 1 ? '' : 's'}`
+                    : `✕ ${flowLint.errors.length} error${flowLint.errors.length === 1 ? '' : 's'}`}
+                </span>
+              ) : (
+                <span className="lint-badge ok" title="Flow passes all lint rules">✓ Valid</span>
+              ))}
+              <span className={'save-dot ' + saveState}>
+                {saveState === 'saved' ? 'Saved' : saveState === 'failed' ? 'Save failed' : 'Saving…'}
+              </span>
+              <button className="reject" onClick={deleteFlow}>Delete flow</button>
+            </div>
+          )}
+          {runView && snapshot && (
+            <RunBar
+              snapshot={snapshot}
+              onOpenFolder={() => window.llmflow.openRunFolder(activeTab, activeRunId)}
+              onOpenWorkspace={() => window.llmflow.openWorkspace(activeTab, activeRunId)}
+              docView={runView2}
+              onDocView={v => withViewTransition(() => setRunView2(v))}
+            />
+          )}
+          {runView && snapshot?.meta?.interrupted && (
+            <div className="approval-bar">
+              <span className="section-label">Interrupted</span>
+              <span>
+                The app closed while this run was working. Its finished steps are kept —
+                resuming continues from where it stopped.
+              </span>
+              <button className="primary" onClick={resumeRun} disabled={resuming}>
+                {resuming ? 'Resuming…' : 'Resume'}
+              </button>
+            </div>
+          )}
+          {runView && stage === 'awaiting_approval' && (
+            <div className="approval-bar">
+              <span className="section-label">
+                {snapshot?.meta?.pendingGateKind === 'tool' ? 'Tool approval' : 'Approval gate'}
+              </span>
+              {snapshot?.meta?.pendingGateKind === 'tool' && snapshot?.meta?.pendingToolCall
+                ? (
+                  <span>
+                    This node wants to run <span className="mono">{snapshot.meta.pendingToolCall.tool}</span>
+                    {snapshot.meta.pendingToolCall.summary
+                      ? <> on <span className="mono">{snapshot.meta.pendingToolCall.summary}</span></>
+                      : null}. Approve to run it, or reject to abort the task.
+                  </span>
+                )
+                : <span>Review the work so far, then approve to continue or reject to stop.</span>}
+              <button className="primary" onClick={() => window.llmflow.approvePlan(activeTab, activeRunId)}>Approve</button>
+              <button className="reject" onClick={() => window.llmflow.rejectPlan(activeTab, activeRunId, 'Rejected by user')}>Reject</button>
+            </div>
+          )}
+          {libraryView
+            ? <NodesPage
+                templates={templates}
+                selectedId={selectedTemplateId}
+                models={models}
+                onChanged={refreshTemplates}
+                onSelect={setSelectedTemplateId}
+              />
+            : flowView
+              ? (flowViewMode === 'yaml'
+                  ? <FlowYamlEditor
+                      flow={flow}
+                      onApplied={reloadCurrentFlow}
+                    />
+                  : flowViewMode === 'split'
+                    ? <div className="split-view">
+                        <div className="split-pane split-canvas">
+                          <FlowEditor
+                            key={activeTab}
+                            flow={flow}
+                            resolved={resolvedFlow}
+                            selectedNode={selectedNode}
+                            onSelect={setSelectedNode}
+                            onChangeFlow={changeFlow}
+                          />
+                        </div>
+                        <div className="split-gutter" aria-hidden />
+                        <div className="split-pane split-yaml">
+                          <FlowYamlEditor
+                            flow={flow}
+                            onApplied={reloadCurrentFlow}
+                            embedded
+                          />
+                        </div>
+                      </div>
+                    : <FlowEditor
+                        key={activeTab}
+                        flow={flow}
+                        resolved={resolvedFlow}
+                        selectedNode={selectedNode}
+                        onSelect={setSelectedNode}
+                        onChangeFlow={changeFlow}
+                      />)
+              : runView && snapshot
+                ? (runView2 === 'document'
+                    ? <RunMirror snapshot={snapshot} />
+                    : <>
+                        <FlowCanvas
+                          key={activeTab}
+                          snapshot={replayIndex != null && replayFrames
+                            ? replaySnapshot(snapshot, replayFrames[replayIndex])
+                            : snapshot}
+                          selectedNode={selectedNode}
+                          onSelect={setSelectedNode}
+                        />
+                        <ReplayStrip
+                          frames={replayFrames}
+                          index={replayIndex}
+                          playing={replayPlaying}
+                          onScrub={i => { setReplayPlaying(false); setReplayIndex(i); }}
+                          onPlayToggle={toggleReplayPlay}
+                        />
+                      </>)
+                : activeActivity === 'runs'
+                  ? (
+                    <div className="empty-state">
+                      <span className="section-label">Runs</span>
+                      {activeRunId
+                        ? <>Loading run <span className="mono">{activeRunId}</span>…</>
+                        : <>Select a run to inspect its graph —<br />or start one from the panel on the right.</>}
+                    </div>
+                  )
+                  : (
+                    <div className="empty-state">
+                      <span className="section-label">Flows</span>
+                      Select a flow to edit its graph —<br />or press ＋ New to start one.
+                    </div>
+                  )}
         </main>
 
-        {flowView
-          ? <FlowInspector
-              flow={flow}
-              selectedNode={selectedNode}
-              models={models}
-              onChangeData={changeNodeData}
-              onDeleteNode={deleteNode}
-              readOnly={Boolean(flow.builtin)}
+        <div className="right-col">
+          {!showRunForm && (
+            <button className="new-run-btn" onClick={() => setNewRunOpen(true)}>
+              <span aria-hidden>＋</span> New run
+            </button>
+          )}
+          {/* Conditionally rendered, not [hidden]: .run-panel sets display:flex,
+              which beats the UA stylesheet's [hidden] { display: none }. Every
+              field's state lives in App, so unmounting loses nothing. */}
+          {showRunForm && <div className="run-panel">
+            <span className="section-label">Run a workflow</span>
+            <select
+              value={runFlowId}
+              onChange={e => setRunFlowId(e.target.value)}
+              aria-label="Workflow to run"
+            >
+              {flowsList.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+            <textarea
+              placeholder="Type what you want done — this becomes the User Input node…"
+              value={runInput}
+              onChange={e => setRunInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) startRun(); }}
             />
-          : snapshot && <Inspector snapshot={snapshot} selectedNode={selectedNode} />}
+            {boundFolder ? (
+              <div className="workspace-row">
+                <span className="workspace-path bound" title={boundFolder}>
+                  Runs in <span className="mono">{activeTabInfo.name}</span>
+                </span>
+              </div>
+            ) : (
+              <div className="workspace-row">
+                <button
+                  className="ghost"
+                  onClick={async () => {
+                    const dir = await window.llmflow.pickWorkspace();
+                    if (dir) setWorkspaceDir(dir);
+                  }}
+                  title="Bind this run to a real project folder"
+                >
+                  {workspaceDir ? 'Change workspace…' : 'Choose workspace…'}
+                </button>
+                {workspaceDir
+                  ? (
+                    <span className="workspace-path" title={workspaceDir}>
+                      <span className="mono">{workspaceDir.split(/[\\/]/).pop()}</span>
+                      <button className="link" onClick={() => setWorkspaceDir('')} title="Clear workspace">✕</button>
+                    </span>
+                  )
+                  : <span className="muted">No workspace (files stay in the run folder)</span>}
+              </div>
+            )}
+            <button className="primary" onClick={startRun} disabled={busy || !runFlowId}>
+              {busy ? 'Starting…' : 'Run'}<kbd className="shortcut">⌘↵</kbd>
+            </button>
+          </div>}
+
+          {/* One slot, two states: live token output while nodes are producing
+              (self-hiding when none are), and the run's outcome once it settles.
+              Both render only in the run view. */}
+          {runView && snapshot && <LiveStream snapshot={snapshot} />}
+          {runView && snapshot && (
+            <RunResult
+              snapshot={snapshot}
+              onFollowUp={text => window.llmflow.followUpRun(activeTab, activeRunId, text)}
+            />
+          )}
+
+          {flowView
+            ? <FlowInspector
+                flow={flow}
+                selectedNode={selectedNode}
+                models={models}
+                templates={templates}
+                onChangeData={changeNodeData}
+                onChangeOverrides={changeNodeOverrides}
+                onDeleteNode={deleteNode}
+              />
+            : snapshot && runView
+              ? <Inspector snapshot={snapshot} selectedNode={selectedNode} />
+              : (
+                <aside className="inspector">
+                  <div className="inspector-body">
+                    <section>
+                      <h3>LLM Flow</h3>
+                      <pre>{'Pick a workflow, type your request, run it.\n\nWorkflows are built from Node Library templates on the canvas; every run is a folder of plain files you can open.'}</pre>
+                    </section>
+                  </div>
+                </aside>
+              )}
+        </div>
       </div>
 
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {newTabOpen && (
+        <NewTabPage
+          recents={recents}
+          scratchOpen={tabs.some(t => t.id === 'default')}
+          onOpenFolder={async () => {
+            const dir = await window.llmflow.pickProjectFolder?.();
+            if (dir) openProjectTab(dir);
+          }}
+          onOpenRecent={openProjectTab}
+          onOpenScratch={() => openProjectTab(null)}
+          onRemoveRecent={async folder => {
+            setRecents(await window.llmflow.removeProjectRecent?.(folder) ?? []);
+          }}
+          onClose={() => setNewTabOpen(false)}
+        />
+      )}
+      {deck && (
+        <TabDeck
+          order={deck.order}
+          index={deck.index}
+          tabs={tabs}
+          onPick={id => { setDeck(null); switchTab(id); }}
+          onCancel={() => setDeck(null)}
+          onNav={d => setDeck(prev => prev && ({
+            ...prev, index: (prev.index + d + prev.order.length) % prev.order.length
+          }))}
+        />
+      )}
     </div>
   );
 }

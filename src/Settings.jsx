@@ -1,14 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
-// Settings panel: OpenRouter API key + per-node worker assignment.
+// Settings panel: OpenRouter API key + default worker assignment.
 // The renderer never sees the stored key — only a hasKey flag comes back
 // over IPC, and saving sends the key one way into the main process.
-const WORKER_NODES = ['planner', 'router', 'executor', 'verifier'];
+const WORKER_NODES = ['executor'];
 const WORKER_HINTS = {
-  planner: 'Writes the plan',
-  router: 'Splits plan into tasks',
-  executor: 'Runs each task',
-  verifier: 'Checks the outputs'
+  executor: 'Default worker — used when a node template sets no worker'
 };
 const MOCK_MODELS = ['mock-large', 'mock-small'];
 
@@ -22,11 +19,13 @@ export default function Settings({ onClose }) {
   const [fetching, setFetching] = useState(false);
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
+  const [storage, setStorage] = useState('workspace'); // T2a — per-project file location
 
   useEffect(() => {
     window.llmflow.getSettings().then(s => {
       setHasKey(s.hasKey);
       setWorkers(s.workers);
+      setStorage(s.projectStorage ?? 'workspace');
     });
   }, []);
 
@@ -155,9 +154,9 @@ export default function Settings({ onClose }) {
 
           <section>
             <div className="settings-section-head">
-              <span className="section-label">Workers</span>
+              <span className="section-label">Default worker</span>
             </div>
-            <p className="settings-hint">Assign a provider and model to each pipeline node.</p>
+            <p className="settings-hint">Used whenever a node template (or workflow override) doesn&rsquo;t pick its own model.</p>
             {workers && WORKER_NODES.map(node => (
               <div className="worker-row" key={node}>
                 <div className="worker-name">
@@ -195,6 +194,32 @@ export default function Settings({ onClose }) {
               <button className="primary" onClick={saveWorkers} disabled={!workersValid}>
                 {workersSaved ? 'Saved ✓' : 'Save workers'}
               </button>
+            </div>
+          </section>
+
+          <section>
+            <div className="settings-section-head">
+              <span className="section-label">Project storage</span>
+            </div>
+            <p className="settings-hint">
+              Where a project tab&rsquo;s files (runs, artifacts) are written. Read when a project is
+              opened — already-open tabs keep their current location.
+            </p>
+            <div className="settings-row">
+              <select
+                value={storage}
+                onChange={async e => {
+                  const v = e.target.value;
+                  setStorage(v);
+                  setError('');
+                  try { await window.llmflow.setSettings({ projectStorage: v }); }
+                  catch (err) { setError(String(err.message ?? err)); }
+                }}
+                aria-label="Project storage location"
+              >
+                <option value="workspace">Inside the project — .llmflow/ in the folder, gitignored</option>
+                <option value="appdata">App data — keyed by project path, repo untouched</option>
+              </select>
             </div>
           </section>
 

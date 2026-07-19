@@ -8,20 +8,49 @@
 // Both paths share the same registry, the same validation, the same
 // executeTool wrapper, and the same iteration cap.
 import { callModel } from './adapters/index.js';
-import { executeTool } from './tools/index.js';
+import { executeTool, DESTRUCTIVE_TOOLS } from './tools/index.js';
 
 const MAX_ITERATIONS = 8;
 
-export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx }) {
+// Per-tool-call approval gate (V1 task 4). When the run supplies ctx.approveToolCall
+// (an agentTask node flagged approveToolCalls), pause before every DESTRUCTIVE
+// tool call and wait for a human decision. Rejection throws a marked error that
+// aborts the task — the caller reports it as an abort, not a model failure.
+async function gateToolCall(ctx, name, args) {
+  if (!ctx?.approveToolCall || !DESTRUCTIVE_TOOLS.has(name)) return;
+  const approved = await ctx.approveToolCall({ tool: name, args });
+  if (!approved) {
+    throw Object.assign(
+      new Error(`Tool call "${name}" was rejected at the approval gate — task aborted.`),
+      { toolRejected: true }
+    );
+  }
+}
+
+// onText is the adapter streaming contract (adapters/index.js) forwarded to
+// every turn of the loop, so a tool-using task is watchable instead of silent
+// for minutes (D10). It streams the text of the turn IN PROGRESS: each turn is
+// a fresh call, so the accumulated text restarts from empty rather than growing
+// across the whole loop. A consumer mirroring it into a file therefore shows
+// the current turn — including the ```tool block the agent is about to run —
+// and must treat its own write after runAgent returns as the authoritative one.
+// Which of the two protocols a worker will use for tools. Exported so callers
+// can record it: the audit log said THAT an agent called tools but never HOW,
+// so the two paths were indistinguishable after the fact and "did the native
+// path actually run?" could only be inferred from the model catalogue.
+export const toolProtocol = worker =>
+  (worker?.provider === 'openrouter' && worker?.supportsTools) ? 'native' : 'text';
+
+export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, retry }) {
   const started = Date.now();
   if (!tools.length) {
-    const r = await callModel({ ...worker, apiKey, system, prompt });
+    const r = await callModel({ ...worker, apiKey, system, prompt, onText, onRetry, retry });
     return { text: r.text, toolCalls: [], usage: r.usage, durationMs: r.durationMs };
   }
-  const native = worker.provider === 'openrouter' && worker.supportsTools;
+  const native = toolProtocol(worker) === 'native';
   const out = native
-    ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx })
-    : await textLoop({ worker, apiKey, system, prompt, tools, ctx });
+    ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry })
+    : await textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry });
   return { ...out, durationMs: Date.now() - started };
 }
 
@@ -36,7 +65,7 @@ function addUsage(total, usage) {
 }
 
 // --- NATIVE path: OpenAI function-tool format over the messages API ---
-async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx }) {
+async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry }) {
   const messages = [
     { role: 'system', content: system },
     { role: 'user', content: prompt }
@@ -50,7 +79,12 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx }) {
   let lastText = '';
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const res = await callModel({ ...worker, apiKey, messages, tools: oaTools });
+    // onText rides along, but today's adapters decline to stream a tool-enabled
+    // call (the loop needs the raw tool_calls message back, which only the
+    // non-streaming response carries) — so this path stays silent until an
+    // adapter can reassemble tool_calls from deltas. Honoring the contract here
+    // means that becomes an adapter change alone.
+    const res = await callModel({ ...worker, apiKey, messages, tools: oaTools, onText, onRetry, retry });
     usage = addUsage(usage, res.usage);
     lastText = res.text || lastText;
     const calls = res.message?.tool_calls;
@@ -61,10 +95,14 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx }) {
     // model can self-correct).
     messages.push({ role: 'assistant', content: res.message.content ?? null, tool_calls: calls });
     for (const call of calls) {
+      const name = call.function?.name;
       let args, record;
       try { args = JSON.parse(call.function?.arguments || '{}'); }
-      catch (err) { record = { tool: call.function?.name, ok: false, error: `Arguments were not valid JSON: ${err.message}`, ms: 0 }; }
-      record = record ?? await executeTool(call.function?.name, args, ctx);
+      catch (err) { record = { tool: name, ok: false, error: `Arguments were not valid JSON: ${err.message}`, ms: 0 }; }
+      if (!record) {
+        await gateToolCall(ctx, name, args); // may throw toolRejected to abort the task
+        record = await executeTool(name, args, ctx);
+      }
       toolCalls.push(record);
       messages.push({
         role: 'tool',
@@ -93,7 +131,7 @@ export function textProtocolInstructions(tools) {
   ].join('\n');
 }
 
-async function textLoop({ worker, apiKey, system, prompt, tools, ctx }) {
+async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry }) {
   const fullSystem = system + '\n\n' + textProtocolInstructions(tools);
   const toolCalls = [];
   let usage = null;
@@ -101,7 +139,7 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx }) {
   let lastText = '';
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const res = await callModel({ ...worker, apiKey, system: fullSystem, prompt: transcript });
+    const res = await callModel({ ...worker, apiKey, system: fullSystem, prompt: transcript, onText, onRetry, retry });
     usage = addUsage(usage, res.usage);
     lastText = res.text;
     const match = res.text.match(TOOL_BLOCK);
@@ -110,8 +148,10 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx }) {
     let record;
     try {
       const parsed = JSON.parse(match[1]);
+      await gateToolCall(ctx, parsed.tool, parsed.args ?? {}); // may throw toolRejected to abort the task
       record = await executeTool(parsed.tool, parsed.args ?? {}, ctx);
     } catch (err) {
+      if (err.toolRejected) throw err; // the abort must propagate, not be logged as a bad tool block
       record = { tool: '(unparsed)', ok: false, error: `Tool block was not valid JSON: ${err.message}`, ms: 0 };
       ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: ctx.taskId ? `executor:${ctx.taskId}` : undefined, ...record });
     }

@@ -1,7 +1,22 @@
-import React, { useCallback, useEffect, useMemo } from 'react';
-import { ReactFlow, Background, Controls, Handle, Position, useStoreApi } from '@xyflow/react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { ReactFlow, Background, Controls, Handle, Position } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { TYPE_META, nodeLabel, nodeSub } from './flowTypes.js';
+import { TYPE_META, nodeLabel, nodeSub, nodePorts, createsNodes } from './flowTypes.js';
+import { wouldCreateCycle } from './flowLayout.js';
+import { spawnedTasks, taskNodeStatus } from './runGraph.js';
+import FlowEdge from './FlowEdge.jsx';
+import Tip from './Tip.jsx';
+
+// One custom edge for every canvas: weight (context bytes) + streaming signal
+// dot. Registered under a named key (overriding the reserved 'default' key
+// stops React Flow rendering edges); every edge we build sets type:'signal'.
+const EDGE_TYPE = 'signal';
+const edgeTypes = { [EDGE_TYPE]: FlowEdge };
+
+// The run-time-spawned task column: gap from the right edge of the authored
+// graph, and the vertical pitch between stacked tasks.
+const SPAWN_DX = 260;
+const SPAWN_DY = 88;
 
 // Derives the node graph from the run snapshot (pure function of file state).
 // Layout follows the design system: vertical, top→down —
@@ -37,92 +52,159 @@ function StatusGlyph({ status }) {
   if (status === 'active') return <span className="node-status"><span className="spinner" /></span>;
   if (status === 'waiting') return <span className="node-status">⏸</span>;
   if (status === 'failed') return <span className="node-status">✕</span>;
+  // queued: the node has contributed its task and is waiting for the executor
+  // to claim it. Distinct from pending (not reached yet) — it used to be
+  // flattened into it, which made a node that had done its part look untouched.
+  if (status === 'queued') return <Tip as="span" className="node-status" text="Queued — waiting for a worker">⋯</Tip>;
+  // skipped: retired by a follow-up turn (a failed/rejected run's old path
+  // that the continuation routed around) — deliberately never re-run.
+  if (status === 'skipped') return <Tip as="span" className="node-status" text="Retired by a follow-up turn — not re-run">↷</Tip>;
   return <span className="node-status" />;
 }
 
+// The declared outputs of a node, made tangible: one chip per output in a
+// "creates" footer, and one bottom source handle per output so the user picks
+// WHICH output an edge carries. The first (primary) port is the anonymous
+// default handle — edges dragged from it stay portless (legacy behavior).
+function PortRow({ ports }) {
+  if (!ports?.length) return null;
+  return (
+    <>
+      <div className="node-ports">
+        <span className="node-ports-label">creates</span>
+        {ports.map(p => (
+          <Tip key={p.id} as="span" className="node-port" text={p.description ?? p.label ?? p.id}>
+            {p.label ?? p.id}
+          </Tip>
+        ))}
+      </div>
+      {ports.map((p, i) => (
+        <Handle
+          key={p.id}
+          type="source"
+          id={i === 0 ? undefined : p.id}
+          position={Position.Bottom}
+          className="port-handle"
+          style={ports.length > 1 ? { left: `${((i + 1) / (ports.length + 1)) * 100}%` } : undefined}
+        />
+      ))}
+    </>
+  );
+}
+
 function NodeCard({ data, vertical, noTarget, noSource }) {
+  const ports = noSource ? [] : (data.ports ?? []);
   return (
     <div className={`flow-node status-${data.status}` + (data.kind ? ` kind-${data.kind}` : '') + (data.selected ? ' selected' : '')}>
       {!noTarget && <Handle type="target" position={vertical ? Position.Top : Position.Left} />}
-      <span className="node-icon">{data.icon}</span>
-      <div className="node-text">
-        <div className="node-title-row">
-          <div className="node-title">{data.label}</div>
-          {data.kind && <span className={`node-kind kind-${data.kind}`}>{data.kind}</span>}
+      <div className="node-main">
+        <span className="node-icon">{data.icon}</span>
+        <div className="node-text">
+          <div className="node-title-row">
+            <div className="node-title">{data.label}</div>
+            {data.kind && <span className={`node-kind kind-${data.kind}`}>{data.kind}</span>}
+            {data.spawns && <span className="node-kind kind-spawn" title="May create other nodes at run time">＋nodes</span>}
+            {data.turn != null && <span className="node-kind kind-turn" title={`Added by follow-up turn ${data.turn}`}>↩{data.turn}</span>}
+          </div>
+          <div className="node-sub">{data.sub}</div>
         </div>
-        <div className="node-sub">{data.sub}</div>
+        <StatusGlyph status={data.status} />
       </div>
-      <StatusGlyph status={data.status} />
-      {!noSource && <Handle type="source" position={vertical ? Position.Bottom : Position.Right} />}
+      <PortRow ports={ports} />
+      {!noSource && ports.length === 0 && <Handle type="source" position={vertical ? Position.Bottom : Position.Right} />}
     </div>
   );
 }
 
-// React Flow measures nodes with a ResizeObserver, which never delivers while
-// the document is hidden (background tab, headless/automated browser) — nodes
-// then stay unmeasured and edges are silently skipped. After each commit, force
-// a measurement pass through the store for any node still missing dimensions;
-// a no-op whenever the ResizeObserver path already did its job.
-function ForceNodeMeasurement() {
-  const store = useStoreApi();
-  useEffect(() => {
-    const t = setTimeout(() => {
-      const { nodeLookup, domNode, updateNodeInternals } = store.getState();
-      if (!domNode) return;
-      const updates = new Map();
-      for (const el of domNode.querySelectorAll('.react-flow__node')) {
-        const id = el.getAttribute('data-id');
-        const node = nodeLookup.get(id);
-        if (node && !node.hidden && (node.measured.width === undefined || !node.internals.handleBounds)) {
-          updates.set(id, { id, nodeElement: el, force: true });
-        }
-      }
-      if (updates.size) updateNodeInternals(updates);
-    }, 0);
-    return () => clearTimeout(t);
-  });
-  return null;
+// The Orchestrator container: a large box that fills with AI-created task
+// nodes at run time. Children are separate React Flow nodes with
+// parentId = this node, rendered inside; the animated purple gradient border
+// marks the box while it plans and runs its children.
+function OrchestratorCard({ data }) {
+  const box = data.box ?? { w: 360, h: 200 };
+  return (
+    <div
+      className={`orch-node status-${data.status}` + (data.selected ? ' selected' : '')}
+      style={{ width: box.w, height: box.h }}
+    >
+      <Handle type="target" position={Position.Top} />
+      <div className="orch-header">
+        <span className="node-icon">{data.icon}</span>
+        <div className="node-text">
+          <div className="node-title-row">
+            <div className="node-title">{data.label}</div>
+            <span className="node-kind kind-ai">ai</span>
+            <span className="node-kind kind-spawn" title="Creates other nodes at run time">＋nodes</span>
+          </div>
+          <div className="node-sub">{data.sub}</div>
+        </div>
+        <StatusGlyph status={data.status} />
+      </div>
+      {data.empty && (
+        <div className="orch-hint">
+          Plans autonomously at run time —<br />task nodes are created and run in here,<br />no human intervention.
+        </div>
+      )}
+      <div className="orch-ports">
+        <PortRow ports={data.ports ?? []} />
+      </div>
+    </div>
+  );
 }
 
-const nodeTypes = {
-  stage: props => <NodeCard {...props} vertical />,
-  task: props => <NodeCard {...props} vertical />
-};
+// Snapshot pushes rebuild every node's data object; memoize on the rendered
+// fields so unchanged cards skip re-rendering (positions are applied by the
+// React Flow wrapper, not by NodeCard, so they don't belong in the compare).
+const cardEqual = (prev, next) =>
+  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'turn']
+    .every(k => prev.data[k] === next.data[k]);
+
+const StageNode = React.memo(props => <NodeCard {...props} vertical />, cardEqual);
+const OrchNode = React.memo(props => <OrchestratorCard {...props} />, cardEqual);
+
+const nodeTypes = { stage: StageNode, task: StageNode, orchestrator: OrchNode };
 
 // Editor node: same neutral card, handles depend on the node type
 // (input has no target, output has no source).
 const editorNodeTypes = {
-  editable: props => (
+  editable: React.memo(props => (
     <NodeCard
       {...props}
       vertical
       noTarget={props.data.nodeType === 'input'}
       noSource={props.data.nodeType === 'output'}
     />
-  )
+  ), cardEqual),
+  orchestrator: OrchNode
 };
 
 // Editable canvas over a flow DEFINITION (not run state). Authoritative state
-// is the flow object owned by App; React Flow changes are folded back into it
-// and persisted upstream (debounced save in App).
-export function FlowEditor({ flow, selectedNode, onSelect, onChangeFlow, readOnly }) {
-  const nodes = useMemo(() => flow.nodes.map(n => ({
+// is the RAW flow object owned by App (template instances stay
+// templateId+overrides on disk); `resolved` is the display copy with template
+// defaults merged in — same ids/positions, richer labels. React Flow changes
+// are folded back into the raw flow and persisted upstream (debounced save).
+export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlow, readOnly }) {
+  const displayNodes = (resolved ?? flow).nodes;
+  const nodes = useMemo(() => displayNodes.map(n => ({
     id: n.id,
-    type: 'editable',
+    type: n.type === 'orchestrator' ? 'orchestrator' : 'editable',
     position: n.position,
     selected: n.id === selectedNode,
     data: {
       label: nodeLabel(n),
       sub: nodeSub(n),
-      icon: TYPE_META[n.type]?.icon ?? '▢',
+      icon: n.data?.icon ?? TYPE_META[n.type]?.icon ?? '▢',
       kind: n.kind,
       nodeType: n.type,
       status: 'idle',
+      ports: nodePorts(n),
+      spawns: n.type !== 'orchestrator' && createsNodes(n),
+      ...(n.type === 'orchestrator' ? { empty: true, box: n.data?.box } : {}),
       selected: n.id === selectedNode
     }
-  })), [flow.nodes, selectedNode]);
+  })), [displayNodes, selectedNode]);
 
-  const edges = useMemo(() => flow.edges.map(e => ({ ...e })), [flow.edges]);
+  const edges = useMemo(() => flow.edges.map(e => ({ ...e, type: EDGE_TYPE })), [flow.edges]);
 
   const onNodesChange = useCallback(changes => {
     if (readOnly) return;
@@ -149,22 +231,47 @@ export function FlowEditor({ flow, selectedNode, onSelect, onChangeFlow, readOnl
     onChangeFlow(f => ({ ...f, edges: f.edges.filter(e => !removed.has(e.id)) }));
   }, [onChangeFlow, readOnly]);
 
-  const onConnect = useCallback(({ source, target }) => {
+  // sourceHandle records WHICH declared output of the source feeds the edge
+  // (null = the primary output). The same node pair may be connected once per
+  // output port.
+  const sameEdge = (e, source, target, sourceHandle) =>
+    e.source === source && e.target === target &&
+    (e.sourceHandle ?? null) === (sourceHandle ?? null);
+
+  const onConnect = useCallback(({ source, target, sourceHandle }) => {
     if (readOnly || !source || !target || source === target) return;
     onChangeFlow(f => {
-      if (f.edges.some(e => e.source === source && e.target === target)) return f;
-      return { ...f, edges: [...f.edges, { id: `e-${source}-${target}`, source, target }] };
+      if (f.edges.some(e => sameEdge(e, source, target, sourceHandle))) return f;
+      if (wouldCreateCycle(f.edges, source, target)) return f;
+      return {
+        ...f,
+        edges: [...f.edges, {
+          id: `e-${source}-${target}` + (sourceHandle ? `-${sourceHandle}` : ''),
+          source, target,
+          ...(sourceHandle ? { sourceHandle } : {})
+        }]
+      };
     });
   }, [onChangeFlow, readOnly]);
+
+  // Live drag feedback: refuse duplicate edges and anything that would close
+  // a cycle (topoSort rejects cyclic flows at run time — block them here).
+  const isValidConnection = useCallback(({ source, target, sourceHandle }) =>
+    Boolean(source && target) && source !== target &&
+    !flow.edges.some(e => sameEdge(e, source, target, sourceHandle)) &&
+    !wouldCreateCycle(flow.edges, source, target),
+  [flow.edges]);
 
   return (
     <ReactFlow
       nodes={nodes}
       edges={edges}
       nodeTypes={editorNodeTypes}
+      edgeTypes={edgeTypes}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
+      isValidConnection={isValidConnection}
       onNodeClick={(_e, node) => onSelect(node.id)}
       onPaneClick={() => onSelect(null)}
       nodesDraggable={!readOnly}
@@ -174,7 +281,6 @@ export function FlowEditor({ flow, selectedNode, onSelect, onChangeFlow, readOnl
       fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
       proOptions={{ hideAttribution: true }}
     >
-      <ForceNodeMeasurement />
       <Background gap={20} size={1.1} />
       <Controls showInteractive={false} />
     </ReactFlow>
@@ -182,12 +288,19 @@ export function FlowEditor({ flow, selectedNode, onSelect, onChangeFlow, readOnl
 }
 
 export default function FlowCanvas({ snapshot, selectedNode, onSelect }) {
-  const { nodes, edges } = useMemo(() => buildGraph(snapshot, selectedNode), [snapshot, selectedNode]);
+  const { nodes: baseNodes, edges: baseEdges } = useMemo(
+    () => buildGraph(snapshot, selectedNode), [snapshot, selectedNode]);
+  const { nodes, edges, dimming, onNodeMouseEnter, onNodeMouseLeave } =
+    useLineageFocus(baseNodes, baseEdges);
   return (
     <ReactFlow
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
+      className={dimming ? 'dimming' : undefined}
+      onNodeMouseEnter={onNodeMouseEnter}
+      onNodeMouseLeave={onNodeMouseLeave}
       onNodeClick={(_e, node) => onSelect(node.id)}
       onPaneClick={() => onSelect(null)}
       fitView
@@ -196,11 +309,61 @@ export default function FlowCanvas({ snapshot, selectedNode, onSelect }) {
       nodesDraggable={false}
       nodesConnectable={false}
     >
-      <ForceNodeMeasurement />
       <Background gap={20} size={1.1} />
       <Controls showInteractive={false} />
     </ReactFlow>
   );
+}
+
+// Focus dimming with lineage (flare 5): hovering a node lifts its full upstream
+// chain and recedes everything else. CSS can't walk a graph, so JS computes the
+// lit set (the hovered node + all ancestors via an upward walk) and tags nodes/
+// edges `lit` or `dim`; the CSS only fades. The hover is delayed ~150ms so a
+// mouse sweeping across the canvas doesn't strobe the whole graph.
+function useLineageFocus(baseNodes, baseEdges) {
+  // Upward adjacency (target -> [sources]); rebuilt only when the edges change.
+  const parents = useMemo(() => {
+    const m = new Map();
+    for (const e of baseEdges) {
+      if (!m.has(e.target)) m.set(e.target, []);
+      m.get(e.target).push(e.source);
+    }
+    return m;
+  }, [baseEdges]);
+
+  const [lit, setLit] = useState(null); // Set<id> in focus, or null = no focus
+  const timer = useRef(null);
+
+  const onNodeMouseLeave = useCallback(() => {
+    clearTimeout(timer.current);
+    setLit(null);
+  }, []);
+
+  const onNodeMouseEnter = useCallback((_e, node) => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      const set = new Set([node.id]);
+      const stack = [node.id];
+      while (stack.length) {
+        for (const p of (parents.get(stack.pop()) ?? [])) {
+          if (!set.has(p)) { set.add(p); stack.push(p); }
+        }
+      }
+      setLit(set);
+    }, 150);
+  }, [parents]);
+
+  const withClass = (obj, cls) => ({
+    ...obj, className: obj.className ? `${obj.className} ${cls}` : cls
+  });
+  const nodes = useMemo(() => !lit ? baseNodes
+    : baseNodes.map(n => withClass(n, lit.has(n.id) ? 'lit' : 'dim')), [baseNodes, lit]);
+  const edges = useMemo(() => !lit ? baseEdges
+    // an edge is part of the lineage only when BOTH ends are lit
+    : baseEdges.map(e => withClass(e, lit.has(e.source) && lit.has(e.target) ? 'lit' : 'dim')),
+    [baseEdges, lit]);
+
+  return { nodes, edges, dimming: !!lit, onNodeMouseEnter, onNodeMouseLeave };
 }
 
 function buildGraph(snapshot, selectedNode) {
@@ -235,7 +398,9 @@ function buildGraph(snapshot, selectedNode) {
     id: `e-${stageDefs[i].id}-${def.id}`,
     source: stageDefs[i].id,
     target: def.id,
-    animated: nodes[i + 1].data.status === 'active'
+    type: EDGE_TYPE,
+    animated: nodes[i + 1].data.status === 'active',
+    data: { sourceStatus: nodes[i].data.status }
   }));
 
   // Task nodes: a column beside the Execution stage.
@@ -243,7 +408,11 @@ function buildGraph(snapshot, selectedNode) {
     const execY = 3 * STEP_Y;
     const startY = execY - ((tasks.tasks.length - 1) * STEP_Y) / 2;
     tasks.tasks.forEach((t, i) => {
-      const running = meta.currentTaskId === t.id && meta.stage === 'execution';
+      // 'running' is persisted per task when the scheduler claims it, so any
+      // number of tasks can show active at once (V1 task 6). currentTaskId is
+      // the legacy single-task signal, kept for runs recorded before that.
+      const running = t.status === 'running'
+        || (meta.currentTaskId === t.id && meta.stage === 'execution');
       nodes.push({
         id: t.id,
         type: 'task',
@@ -256,11 +425,14 @@ function buildGraph(snapshot, selectedNode) {
           selected: selectedNode === t.id
         }
       });
+      const srcId = i === 0 ? 'execution' : tasks.tasks[i - 1].id;
       edges.push({
         id: `e-exec-${t.id}`,
-        source: i === 0 ? 'execution' : tasks.tasks[i - 1].id,
+        source: srcId,
         target: t.id,
-        animated: running
+        type: EDGE_TYPE,
+        animated: running,
+        data: { sourceStatus: nodes.find(n => n.id === srcId)?.data.status }
       });
     });
   }
@@ -274,28 +446,92 @@ function workerSub(kind, retro) {
 
 function buildFlowRunGraph(snapshot, selectedNode) {
   const { flow, meta } = snapshot;
-  const statusOf = id => {
-    const s = meta.nodeStatus?.[id] ?? 'pending';
-    return s === 'queued' ? 'pending' : s;
-  };
+  const statusOf = id => meta.nodeStatus?.[id] ?? 'pending';
+  const childrenOf = id => flow.nodes.some(n => n.parentId === id);
   const nodes = flow.nodes.map(n => ({
     id: n.id,
-    type: 'stage',
+    type: n.type === 'orchestrator' ? 'orchestrator' : 'stage',
     position: n.position,
+    // Orchestrator children live inside their container's box.
+    ...(n.parentId ? { parentId: n.parentId, extent: 'parent', draggable: false } : {}),
     data: {
       label: nodeLabel(n),
       sub: nodeSub(n),
-      icon: TYPE_META[n.type]?.icon ?? '▢',
+      icon: n.data?.icon ?? TYPE_META[n.type]?.icon ?? '▢',
       kind: n.kind,
       status: statusOf(n.id),
+      // Follow-up provenance (FU5): badge the node with its turn number.
+      ...(n.data?.origin === 'followup' ? { turn: n.data.turn } : {}),
+      ports: nodePorts(n),
+      spawns: n.type !== 'orchestrator' && createsNodes(n),
+      ...(n.type === 'orchestrator' ? { empty: !childrenOf(n.id), box: n.data?.box } : {}),
       selected: selectedNode === n.id
     }
   }));
-  const edges = flow.edges.map(e => ({
-    id: e.id,
-    source: e.source,
-    target: e.target,
-    animated: statusOf(e.target) === 'active'
-  }));
+  const parentOf = new Map(flow.nodes.map(n => [n.id, n.parentId ?? null]));
+  const edges = flow.edges
+    // Hide the container's attach edges (orchestrator -> its own children);
+    // the box already communicates ownership.
+    .filter(e => parentOf.get(e.target) !== e.source)
+    .map(e => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      type: EDGE_TYPE,
+      ...(e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}),
+      animated: statusOf(e.target) === 'active',
+      // FlowEdge: line weight from context that flowed here, streaming dot while
+      // the source produces. edgeContext is written by the runner as it assembles
+      // each node's context; absent (older runs / authoring) => the 2px default.
+      data: { contextBytes: meta.edgeContext?.[e.id], sourceStatus: statusOf(e.source) }
+    }));
+
+  // Tasks an agent spawned at run time (V1 task 9). They have no node in the
+  // definition — they didn't exist when the flow was authored — so they are
+  // derived here. Without this an agent delegating its work showed nothing.
+  //
+  // They get their OWN column clear of the authored graph rather than an offset
+  // from the node that caused them: the flow's own layout already owns that
+  // space, and hanging them off their owner dropped them on top of whatever sat
+  // to its right. The dashed edge carries the ownership; position doesn't have
+  // to. Everything is measured from top-level nodes only — an orchestrator
+  // child's position is relative to its parent box, not the canvas.
+  const spawned = spawnedTasks(snapshot);
+  if (spawned.length) {
+    const byId = new Map(flow.nodes.map(n => [n.id, n]));
+    const top = flow.nodes.filter(n => !n.parentId);
+    const colX = Math.max(0, ...top.map(n => (n.position?.x ?? 0) + (n.data?.box?.w ?? 0))) + SPAWN_DX;
+    const colY = Math.min(0, ...top.map(n => n.position?.y ?? 0));
+    spawned.forEach(({ task, ownerNodeId }, i) => {
+      const status = taskNodeStatus(task.status);
+      nodes.push({
+        id: task.id,
+        type: 'task',
+        position: { x: colX, y: colY + i * SPAWN_DY },
+        draggable: false,
+        data: {
+          label: task.title || task.id,
+          sub: `spawned task · ${task.worker?.provider}/${task.worker?.model}`,
+          icon: TYPE_META.agentTask.icon,
+          kind: 'ai',
+          status,
+          ports: [],
+          selected: selectedNode === task.id
+        }
+      });
+      // An untraceable task is still shown, just without a line home.
+      if (ownerNodeId && byId.has(ownerNodeId)) {
+        edges.push({
+          id: `e-spawn-${ownerNodeId}-${task.id}`,
+          source: ownerNodeId,
+          target: task.id,
+          type: EDGE_TYPE,
+          className: 'edge-spawned', // dashed: created at run time, not authored
+          animated: status === 'active',
+          data: { sourceStatus: statusOf(ownerNodeId) }
+        });
+      }
+    });
+  }
   return { nodes, edges };
 }

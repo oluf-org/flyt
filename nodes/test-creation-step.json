@@ -1,0 +1,22 @@
+{
+  "id": "test-creation-step",
+  "name": "Test creation",
+  "description": "Create or extend tests, and run them until they pass. Can execute shell commands, so it asks before each destructive call — untick to run unattended.",
+  "category": "Test-creation",
+  "icon": "☑",
+  "baseType": "agentTask",
+  "role": "execute",
+  "worker": null,
+  "instructions": "Run the test suite after writing or changing tests, and read the exit code. A non-zero exit means the suite FAILED — fix the cause and run it again. Never report the task complete while the suite is failing. If you cannot make it pass, say so plainly at the top of your deliverable, state which tests fail and why, and do not describe the work as done.",
+  "tools": [
+    "read_file",
+    "create_file",
+    "write_file",
+    "bash",
+    "create_task",
+    "write_task_md"
+  ],
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": true
+}

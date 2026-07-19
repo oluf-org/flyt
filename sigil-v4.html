@@ -1,0 +1,231 @@
+<!doctype html>
+<!-- LLM Flow — run sigils v4. Four more directions beyond v3's D–G, exploring
+     different symmetry systems: angular grid (rune), radial ticks (burst),
+     concentric arcs (circuit), bilateral mirror (moth). Same rules:
+     deterministic per id, seeded oklch hue, no filters, cacheable strings. -->
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>Run sigils v4</title>
+<style>
+:root, [data-theme="light"] {
+  --canvas:#f8faf9; --side:#f3f5f4; --card:#ffffff; --border:#e0e6e3; --dot:#e1e8e5;
+  --tx:#1e2623; --dim:#6f7a75; --faint:#a0aaa5;
+  --accent:#5b8c6e; --accent-soft:#e6efe9;
+  --sl:50%; --sc:0.12; color-scheme:light;
+}
+[data-theme="dark"] {
+  --canvas:#0e1310; --side:#141a17; --card:#1a211d; --border:#29322d; --dot:#212a25;
+  --tx:#e3ebe6; --dim:#8e9c94; --faint:#5f6b64;
+  --accent:#7cba95; --accent-soft:#1e2a23;
+  --sl:76%; --sc:0.13; color-scheme:dark;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--canvas); color:var(--tx);
+  font:13px/1.5 'Figtree','Segoe UI',system-ui,sans-serif; -webkit-font-smoothing:antialiased;
+  background-image:radial-gradient(var(--dot) 1px, transparent 1px); background-size:22px 22px; }
+main { max-width:860px; margin:0 auto; padding:34px 20px 70px; }
+h1 { font-size:19px; margin:0 0 4px; }
+.sub { color:var(--dim); margin-bottom:22px; }
+section { background:var(--side); border:1px solid var(--border); border-radius:12px;
+  padding:18px 20px; margin-bottom:16px; }
+section h2 { font-size:14px; margin:0 0 2px; }
+section p { color:var(--dim); margin:0 0 12px; max-width:64ch; }
+.label { font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:10px;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--faint); }
+.row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+.chip { display:flex; gap:9px; align-items:center; background:var(--card);
+  border:1px solid var(--border); border-radius:9px; padding:7px 11px; }
+.chip .id { font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:10.5px; color:var(--dim); }
+.hero { display:grid; place-items:center; width:92px; height:92px; background:var(--card);
+  border:1px solid var(--border); border-radius:14px; }
+input[type=text], .btn { font:inherit; padding:6px 10px; border:1px solid var(--border);
+  border-radius:8px; background:var(--card); color:var(--tx); }
+.btn { cursor:pointer; }
+label.ck { color:var(--dim); user-select:none; cursor:pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Run sigils — v4</h1>
+  <p class="sub">Four more anatomies, one per symmetry system. Same seeding + hue rules as v3.
+    <input type="text" id="in" value="run-2026-07-18-a41">
+    <button class="btn" id="themeBtn">Toggle theme</button>
+    <label class="ck"><input type="checkbox" id="hueBox" checked> seeded hues</label>
+  </p>
+
+  <section>
+    <div class="label">variant H · rune</div>
+    <h2>Angular stroke-walk on a 3×3 grid</h2>
+    <p>A seeded 4–6 segment walk across a tiny grid, drawn as one gradient stroke with round joins, plus a start dot. Angular where D–G were all curves — pairs nicely with monospace run ids. Grid quantization means small ids still render crisp.</p>
+    <div class="row" id="rowH"></div>
+  </section>
+
+  <section>
+    <div class="label">variant I · burst</div>
+    <h2>Radial ticks with seeded lengths</h2>
+    <p>8–14 evenly spaced rays whose inner/outer radii are seeded, some tipped with a dot. Reads like a compass rose / stamp. Nearly as cheap as v3's orbit, and the length pattern acts as a visual "barcode" of the id.</p>
+    <div class="row" id="rowI"></div>
+  </section>
+
+  <section>
+    <div class="label">variant J · circuit</div>
+    <h2>Arc segments on concentric tracks</h2>
+    <p>Three tracks, each carrying 1–2 arc segments with seeded start/sweep, rounded caps, node dots at arc ends. The most "flow run" of any variant so far — it looks like a radial progress/pipeline diagram without literally being one.</p>
+    <div class="row" id="rowJ"></div>
+  </section>
+
+  <section>
+    <div class="label">variant K · moth</div>
+    <h2>Mirrored constellation</h2>
+    <p>4–5 seeded points in one half, mirrored across the vertical axis, joined by a smooth path and marked with dots. Bilateral symmetry reads as an emblem (moth/mask/crest) — organic like v2's comet but composed instead of scattered.</p>
+    <div class="row" id="rowK"></div>
+  </section>
+
+  <section>
+    <div class="label">side by side</div>
+    <h2>Same run id, four variants</h2>
+    <div class="row"><div class="hero" id="heroH"></div><div class="hero" id="heroI"></div><div class="hero" id="heroJ"></div><div class="hero" id="heroK"></div></div>
+  </section>
+</main>
+
+<script>
+// ---------- seeded randomness (identical to v1–v3 so ids keep their identity) ----------
+function hash(s){ let h=2166136261; for (const c of s){ h^=c.charCodeAt(0); h=Math.imul(h,16777619); } return h>>>0; }
+function rng(seed){ return () => { seed=Math.imul(seed^seed>>>15,seed|1); seed^=seed+Math.imul(seed^seed>>>7,seed|61); return ((seed^seed>>>14)>>>0)/4294967296; }; }
+const uid = (id,v) => 's'+v+hash(id).toString(36);
+
+// ---------- color (same as v3) ----------
+let useHue = true;
+const col  = h => useHue ? `oklch(var(--sl) var(--sc) ${h.toFixed(0)})` : 'var(--accent)';
+const hueOf = id => hash('hue:'+id) % 360;
+function grad(g, h, ang){
+  const c2 = useHue ? col(h+45) : 'var(--accent)';
+  return `<linearGradient id="${g}" gradientTransform="rotate(${ang.toFixed(0)} .5 .5)">
+    <stop offset="0" stop-color="${col(h)}"/>
+    <stop offset="1" stop-color="${c2}" stop-opacity="${useHue?1:.35}"/></linearGradient>`;
+}
+const svgOpen = s => `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">`;
+
+// ---------- variant H: rune ----------
+function sigilH(id, s=26){
+  const r = rng(hash(id)), g = uid(id,'h'), h = hueOf(id);
+  const pad = s*.2, step = (s-2*pad)/2;                  // 3×3 grid
+  const P = (gx,gy) => [pad+gx*step, pad+gy*step];
+  const seg = 4 + Math.floor(r()*3);                     // 4–6 segments
+  let gx = Math.floor(r()*3), gy = Math.floor(r()*3);
+  const visited = new Set([gx+','+gy]);
+  let [x,y] = P(gx,gy), d = `M ${x.toFixed(1)} ${y.toFixed(1)}`, start = [x,y], end = [x,y];
+  const moves = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]];
+  for (let i=0;i<seg;i++){
+    // try seeded moves until one stays on the grid and hits a fresh cell (fallback: any on-grid)
+    let nx=gx, ny=gy;
+    for (let t=0;t<10;t++){
+      const [mx,my] = moves[Math.floor(r()*8)];
+      const cx=gx+mx, cy=gy+my;
+      if (cx<0||cx>2||cy<0||cy>2) continue;
+      nx=cx; ny=cy;
+      if (!visited.has(cx+','+cy)) break;
+    }
+    if (nx===gx && ny===gy) break;
+    gx=nx; gy=ny; visited.add(gx+','+gy);
+    end = P(gx,gy);
+    d += ` L ${end[0].toFixed(1)} ${end[1].toFixed(1)}`;
+  }
+  const k = s/26;
+  return `${svgOpen(s)}<defs>${grad(g, h, r()*360)}</defs>
+    <path d="${d}" fill="none" stroke="url(#${g})" stroke-width="${(1.5*k).toFixed(1)}" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="${start[0].toFixed(1)}" cy="${start[1].toFixed(1)}" r="${(2*k).toFixed(1)}" fill="${col(h)}"/>
+    <circle cx="${end[0].toFixed(1)}" cy="${end[1].toFixed(1)}" r="${(1.2*k).toFixed(1)}" fill="${col(h+45)}"/></svg>`;
+}
+
+// ---------- variant I: burst ----------
+function sigilI(id, s=26){
+  const r = rng(hash(id)), g = uid(id,'i'), h = hueOf(id), c = s/2, k = s/26;
+  const n = 8 + Math.floor(r()*7), off = r()*Math.PI*2;
+  let rays = '', dots = '';
+  for (let i=0;i<n;i++){
+    const a = off + i/n*Math.PI*2;
+    const r0 = s*(.10+r()*.10), r1 = s*(.24+r()*.20);
+    const x0=c+Math.cos(a)*r0, y0=c+Math.sin(a)*r0, x1=c+Math.cos(a)*r1, y1=c+Math.sin(a)*r1;
+    rays += `<line x1="${x0.toFixed(1)}" y1="${y0.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}"/>`;
+    if (r()<.3) dots += `<circle cx="${x1.toFixed(1)}" cy="${y1.toFixed(1)}" r="${(1.1*k).toFixed(1)}" fill="${col(h+45)}"/>`;
+  }
+  return `${svgOpen(s)}<defs>${grad(g, h, r()*360)}</defs>
+    <g stroke="url(#${g})" stroke-width="${(1.2*k).toFixed(1)}" stroke-linecap="round">${rays}</g>
+    ${dots}<circle cx="${c}" cy="${c}" r="${(1.7*k).toFixed(1)}" fill="${col(h)}"/></svg>`;
+}
+
+// ---------- variant J: circuit ----------
+function sigilJ(id, s=26){
+  const r = rng(hash(id)), g = uid(id,'j'), h = hueOf(id), c = s/2, k = s/26;
+  const arc = (rad, a0, a1) => {
+    const x0=c+Math.cos(a0)*rad, y0=c+Math.sin(a0)*rad, x1=c+Math.cos(a1)*rad, y1=c+Math.sin(a1)*rad;
+    const large = (a1-a0)%(Math.PI*2) > Math.PI ? 1 : 0;
+    return { d:`M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${rad.toFixed(1)} ${rad.toFixed(1)} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`,
+             ends:[[x0,y0],[x1,y1]] };
+  };
+  let paths = '', nodes = '';
+  const radii = [s*.18, s*.30, s*.42];
+  for (const rad of radii){
+    const nArcs = 1 + (r()<.5?1:0);
+    for (let i=0;i<nArcs;i++){
+      const a0 = r()*Math.PI*2, sweep = (.5+r()*1.2)/nArcs*Math.PI;
+      const A = arc(rad, a0, a0+sweep);
+      paths += `<path d="${A.d}"/>`;
+      if (r()<.6) nodes += `<circle cx="${A.ends[1][0].toFixed(1)}" cy="${A.ends[1][1].toFixed(1)}" r="${(1.3*k).toFixed(1)}" fill="${col(h+45)}"/>`;
+    }
+  }
+  return `${svgOpen(s)}<defs>${grad(g, h, r()*360)}</defs>
+    <g fill="none" stroke="url(#${g})" stroke-width="${(1.3*k).toFixed(1)}" stroke-linecap="round">${paths}</g>
+    ${nodes}<circle cx="${c}" cy="${c}" r="${(1.7*k).toFixed(1)}" fill="${col(h)}"/></svg>`;
+}
+
+// ---------- variant K: moth ----------
+function sigilK(id, s=26){
+  const r = rng(hash(id)), g = uid(id,'k'), h = hueOf(id), c = s/2, k = s/26;
+  const pad = s*.14, n = 4 + Math.floor(r()*2);
+  // seeded points in the right half, sorted top→bottom for a clean sweep
+  const pts = [];
+  for (let i=0;i<n;i++) pts.push([c + r()*(s-pad-c), pad + r()*(s-2*pad)]);
+  pts.sort((a,b)=>a[1]-b[1]);
+  // smooth open path through them (quadratic midpoint technique)
+  const path = ps => {
+    let d = `M ${ps[0][0].toFixed(1)} ${ps[0][1].toFixed(1)}`;
+    for (let i=1;i<ps.length-1;i++){
+      const mx=(ps[i][0]+ps[i+1][0])/2, my=(ps[i][1]+ps[i+1][1])/2;
+      d += ` Q ${ps[i][0].toFixed(1)} ${ps[i][1].toFixed(1)}, ${mx.toFixed(1)} ${my.toFixed(1)}`;
+    }
+    const L = ps[ps.length-1];
+    return d + ` L ${L[0].toFixed(1)} ${L[1].toFixed(1)}`;
+  };
+  const dots = ps => ps.map((p,i)=>
+    `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${((i===0?1.8:1+r()*.8)*k).toFixed(1)}"/>`).join('');
+  const half = `<path d="${path(pts)}" fill="none" stroke="url(#${g})" stroke-width="${(1.2*k).toFixed(1)}" stroke-linecap="round"/>
+    <g fill="${col(h)}">${dots(pts)}</g>`;
+  return `${svgOpen(s)}<defs>${grad(g, h, r()*360)}<g id="${g}w">${half}</g></defs>
+    <use href="#${g}w"/><use href="#${g}w" transform="translate(${s} 0) scale(-1 1)"/>
+    <line x1="${c}" y1="${(s*.2).toFixed(1)}" x2="${c}" y2="${(s*.8).toFixed(1)}" stroke="${col(h+45)}" stroke-width="${(.8*k).toFixed(1)}" opacity=".5" stroke-linecap="round"/></svg>`;
+}
+
+// ---------- render ----------
+const gens = { H:sigilH, I:sigilI, J:sigilJ, K:sigilK };
+const ids = ['run-0847','run-0848','run-0849','run-0850','run-0851'];
+function renderAll(){
+  const cur = document.getElementById('in').value || 'x';
+  for (const v of Object.keys(gens)){
+    document.getElementById('row'+v).innerHTML =
+      `<span class="chip">${gens[v](cur, 34)}<span class="id">${cur}</span></span>` +
+      ids.map(i=>`<span class="chip">${gens[v](i)}<span class="id">${i}</span></span>`).join('');
+    document.getElementById('hero'+v).innerHTML = gens[v](cur, 64);
+  }
+}
+document.getElementById('in').addEventListener('input', renderAll);
+document.getElementById('hueBox').addEventListener('change', e => { useHue = e.target.checked; renderAll(); });
+themeBtn.onclick = () => { const s=()=>document.documentElement.dataset.theme =
+  document.documentElement.dataset.theme==='dark'?'light':'dark';
+  document.startViewTransition ? document.startViewTransition(s) : s(); };
+renderAll();
+</script>
+</body>
+</html>

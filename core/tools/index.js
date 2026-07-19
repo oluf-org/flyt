@@ -5,10 +5,18 @@
 // to the run's files. Adding a tool = one file in core/tools/ + one
 // registerTool call below.
 import writeFile from './write_file.js';
+import createFile from './create_file.js';
+import readFile from './read_file.js';
+import bash from './bash.js';
 import createTask from './create_task.js';
 import writeTaskMd from './write_task_md.js';
 
 const registry = new Map();
+
+// Tools that MUTATE the workspace (write files or run shell commands). These
+// are the calls a per-node approval gate pauses on (V1 task 4 safety envelope);
+// read-only tools like read_file are never gated.
+export const DESTRUCTIVE_TOOLS = new Set(['write_file', 'create_file', 'bash']);
 
 export function registerTool(tool) {
   if (!tool?.name || typeof tool.run !== 'function' || !tool.parameters) {
@@ -77,5 +85,8 @@ export async function executeTool(name, args, ctx) {
 }
 
 registerTool(writeFile);
+registerTool(createFile);
+registerTool(readFile);
+registerTool(bash);
 registerTool(createTask);
 registerTool(writeTaskMd);

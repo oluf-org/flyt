@@ -11,7 +11,7 @@
 
 The **flowchart** system consists of:
 
-- The visual editor (`src/FlowCanvas.jsx` + `FlowEditor`, `src/App.jsx`) for authoring static DAG definitions stored in `flows/<id>.json`.
+- The visual editor (`src/FlowCanvas.jsx` + `FlowEditor`, `src/App.jsx`) for authoring static DAG definitions stored as the Flow DSL `flows/<id>.flow.yaml` (+ a `flows/<id>.layout.json` position sidecar; spec: `FLOW_LANG.md`). Legacy `flows/<id>.json` still loads and migrates on save.
 - The execution engine (`core/flowRunner.js`) that performs a topological walk, with special phases for `agentTask` nodes (which feed the existing powerful executor + tools).
 - All coordination through plain files under `runs/<runId>/` (the single source of truth).
 
@@ -66,6 +66,8 @@ This pattern makes it safe and effective for an AI to *emit* flow fragments, bec
 These are **example / standard nodes**. They are the reference set that AI should pick from or categorize work into. They are implemented primarily as `aiStep` (or `agentTask`) nodes carrying a `role` and/or `template` + rich `data`.
 
 They appear in the editor palette (via `TYPE_META`) and have first-class support in the inspector.
+
+> **Library templates vs. engine types.** Nodes 1–6 below are **Node Library templates** (`nodes/<id>.json` — the nine seeded templates). `orchestrator` (§7), along with `input` and `output`, are **engine/DSL node *types*, not Node Library templates**: they are built-in structural nodes added from the palette directly, not instantiated from the library. See `PRODUCT-SPEC.md` §5.
 
 ### 1. Start / Plan-Start Node
 
@@ -150,7 +152,7 @@ These are **not** a single type — they are concrete instances created from the
 
 | Template name         | Base     | Category        | Purpose                              | Prefers          |
 |-----------------------|----------|-----------------|--------------------------------------|------------------|
-| `code-general-step`   | aiStep or agentTask | Code general   | Straightforward implementation work | balanced model   |
+| `code-general-step`   | aiStep   | Code general   | Straightforward implementation work | balanced model   |
 | `code-design-step`    | aiStep   | Code design     | Interfaces, architecture, data models | stronger model   |
 | `documentation-step`  | aiStep   | documentation   | Docs, READMEs, comments              | lighter/faster   |
 | `test-creation-step`  | agentTask| Test-creation   | Unit/integration tests + fixtures    | code-capable     |
@@ -225,6 +227,57 @@ Usually placed before the final `output` collector.
 
 ---
 
+### 7. Orchestrator Node (autonomous container)
+
+**type:** `orchestrator` (built-in structural node, kind `ai` — added from the
+palette like User Input / Output, not from the Node Library)
+
+**Input:** the brief + upstream context (typically `tasks.md` from Plan-Start).
+
+**Output ports:**
+- `results` (primary) — the aggregated outputs of every node it created
+- `summary` — the orchestration plan summary + node inventory
+
+**Behavior:** one planning call (role `orchestrate`, same strict JSON contract
+as plan-eval, one bounded re-ask) decides the set of work nodes. They are
+materialized **inside the orchestrator's box** (`parentId` + `managedBy`) and
+executed by an inline sub-walk — parallel waves for independent aiSteps,
+sequential agent tasks — with **no human intervention**: children never pause
+at approval gates. When every child is done, their outputs are aggregated into
+`nodes/<id>.md`; downstream nodes only ever see the orchestrator itself.
+Unlike plan-eval (which degrades gracefully), an invalid plan **fails the
+node** — creating nodes is its entire job.
+
+On the canvas the box shows its children live and gets an animated purple
+gradient border while active. Artifacts: `nodes/<id>.plan.md` (the streamed
+planning output), `nodes/<id>.summary.md`, `nodes/<id>.md` (aggregate).
+
+---
+
+## Output Ports — what every node CREATES
+
+Every node declares named outputs (`src/flowTypes.js` `ROLE_PORTS` /
+`TYPE_PORTS`; Node Library templates may override with an `outputs` array).
+The first port is the **primary** output (`nodes/<id>.md`); auxiliary ports
+are written as `nodes/<id>.<port>.md`:
+
+| node | ports |
+|---|---|
+| plan-start | `tasks` |
+| plan-eval | `plan` (primary), `summary` |
+| step-eval | `report` (primary), `verdict` (the structured JSON decision) |
+| stitch / final-eval / verify | `report` |
+| work steps / agent tasks | `result` |
+| orchestrator | `results` (primary), `summary` |
+
+On the canvas each node shows a "creates" footer with one chip per port and
+one bottom **source handle per port** — drag an edge from a specific handle to
+send that output downstream. The edge stores `sourceHandle`; edges without one
+carry the primary output (legacy behavior, nothing to migrate). A missing port
+artifact falls back to the primary output rather than dropping the edge.
+
+---
+
 ## Strict JSON Contracts (implemented in `core/planEval.js`)
 
 These are enforced at runtime. Invalid output is rejected as a whole, the
@@ -283,6 +336,46 @@ Each valid entry is routed through the existing `create_task` tool (same
 schema/validation/logging) with `createdBy: <stitch-node-id>` and executed by
 the executor before the flow continues. Invalid entries are dropped and
 reported; omitting the block or `"fixTasks": []` means nothing to fix.
+
+### followup-triage → turn classification (FOLLOWUP-PLAN)
+
+Not a node role: a direct call `FlowRunner.followUp()` makes when the user
+replies to a finished run. One ```json block:
+
+```json
+{
+  "class": "question" | "fix" | "feature",
+  "reason": "one line",
+  "contextNodes": ["<done node id whose output the new work needs>"],
+  "answer": "question-class only: the answer, as Markdown",
+  "nodes": [{ "id": "...", "template": "code-general-step", "title": "...", "goal": "...", "dependsOn": [], "contextSpec": { "files": [] } }],
+  "goal": "feature-class only: what to plan and build"
+}
+```
+
+`question` answers in place (`followups/<n>/answer.md`, no graph change).
+`fix` materializes the declared nodes (fu`<n>`- prefixed) between a visible
+`fu<n>-input` feedback node and a closing `feedback-review` node. `feature`
+materializes the standard reflective segment: plan → plan-eval (human approval
+gate) → materialized executors → stitch → feedback-review. `contextNodes`
+become edges from the selected done nodes into the turn's entry nodes — edge
+context is the only context mechanism. One bounded re-ask on contract misses;
+an unparseable triage restores the run's stage and notes the miss in the thread.
+
+### feedback-review → turn verdict
+
+Closes every follow-up turn. The report must end with one ```json block:
+
+```json
+{ "verdict": "solved" | "more-work", "reason": "one line", "nodes": [{ "id": "...", "template": "...", "goal": "..." }] }
+```
+
+- `solved`: the walk drains and the run is done again.
+- `more-work`: the declared nodes are materialized upstream of the review
+  (prefixed `fu<n>x<k>-`), the review re-runs after them. Bounded to 2
+  extensions per turn; hitting the bound — or `more-work` with nothing
+  materializable — escalates through the standard human gate.
+- No valid block = solved (noted as a problem in the retrospective).
 
 ### contextSpec resolution order
 
@@ -359,16 +452,21 @@ All the above node kinds support `data.requiresApproval`. Evaluation nodes that 
 
 ---
 
-## Current Implementation Status (as of this doc)
+## Current Implementation Status (updated 2026-07-14)
 
-- Catalog and visual types: defined in `src/flowTypes.js`
+- **This catalog now lives in the Node Library** (`nodes/<id>.json`, managed on
+  the Nodes page, seeded from `src/flowTypes.js` `SEED_NODE_TEMPLATES`).
+  Workflow nodes are template instances (`templateId` + per-workflow
+  `overrides`); `resolveFlow()` merges them at edit/run time. Plan-eval may
+  reference any library template id in addition to the built-in names above.
 - Strict contracts + parsers: `core/planEval.js` (plan-eval, step-eval verdict, stitch fixTasks)
-- Runner: dynamic topological walk with real materialization, minimal-context
-  resolution, honest aiStep failure handling, bounded step-eval retry /
-  escalation, and stitch fix tasks via `create_task`: `core/flowRunner.js`
-- Editor support: `src/FlowInspector.jsx` + palette in `App.jsx`
+- Runner: dynamic topological walk with real materialization (library
+  templates preferred), minimal-context resolution, honest aiStep failure
+  handling, bounded step-eval retry / escalation, and stitch fix tasks via
+  `create_task`: `core/flowRunner.js`
+- Editor support: instance/override inspector in `src/Inspector.jsx` + library palette in `App.jsx`
 - Mock outputs that exercise the pattern (incl. structured verdicts): `core/adapters/mock.js`
-- Example flow(s): in `flows/`
+- Shipped flow: `flows/default-pipeline.flow.yaml` (the classic pipeline as library nodes)
 
 See the code and run a flow using these roles/templates to observe the produced artifacts.
 

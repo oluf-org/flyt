@@ -1,7 +1,7 @@
 // Mock adapter: lets the whole pipeline run end-to-end with no API key.
 // It keys off the "ROLE:" marker each node puts in its system prompt and
 // returns plausible, correctly-shaped output for that node type.
-export async function mockAdapter({ system, prompt }) {
+export async function mockAdapter({ system, prompt, onText }) {
   await sleep(600 + Math.random() * 900); // simulate latency so the canvas animates
   let role = (system.match(/ROLE:\s*([\w-]+)/) ?? [])[1] ?? 'generic';
   // Also recognize explicit role in the prompt/context for flow aiSteps that put role in user message
@@ -14,9 +14,10 @@ export async function mockAdapter({ system, prompt }) {
   // When the agent loop's text protocol is active (core/agent.js injects a
   // TOOL PROTOCOL section), an executor emits one example tool call first so
   // the whole registry + text path can be exercised with no API key.
+  let reply = null;
   if (role === 'executor' && system.includes('TOOL PROTOCOL')) {
-    if (!prompt.includes('TOOL RESULT')) {
-      return {
+    reply = !prompt.includes('TOOL RESULT')
+      ? {
         text: [
           'I will save my working notes to the workspace first.',
           '```tool',
@@ -24,12 +25,11 @@ export async function mockAdapter({ system, prompt }) {
           '```'
         ].join('\n'),
         usage: { input_tokens: 100, output_tokens: 60 }
+      }
+      : {
+        text: `## Result\n\n(mock output) Completed the assigned task for: ${goal}\n\n- Wrote working notes to workspace/notes.md via the write_file tool\n- Respected the listed constraints`,
+        usage: { input_tokens: 160, output_tokens: 200 }
       };
-    }
-    return {
-      text: `## Result\n\n(mock output) Completed the assigned task for: ${goal}\n\n- Wrote working notes to workspace/notes.md via the write_file tool\n- Respected the listed constraints`,
-      usage: { input_tokens: 160, output_tokens: 200 }
-    };
   }
 
   const text = {
@@ -138,6 +138,29 @@ No larger gaps — no corrective task nodes created.
 { "fixTasks": [] }
 \`\`\``,
 
+    // Follow-up turns (FOLLOWUP-PLAN): classify the reply as a small fix so
+    // the whole extend-and-walk loop is exercisable with no API key.
+    'followup-triage': JSON.stringify({
+      class: 'fix',
+      reason: 'The reply asks for a small correction to the produced output (mock triage).',
+      contextNodes: [],
+      nodes: [
+        {
+          id: 'apply-feedback', template: 'code-general-step', category: 'Code general',
+          title: 'Apply the requested fix',
+          goal: `Apply the correction the user asked for in their follow-up: ${goal}`
+        }
+      ]
+    }, null, 2),
+
+    'feedback-review': `## Feedback review
+
+The follow-up work addresses the user's feedback (mock review).
+
+\`\`\`json
+{ "verdict": "solved", "reason": "The turn's output addresses the feedback (mock review)." }
+\`\`\``,
+
     'final-eval': `## Final Evaluation
 
 **Completeness:** Good.
@@ -149,7 +172,24 @@ No larger gaps — no corrective task nodes created.
 The explicit per-file context descriptions worked: only the listed files were required.`
   }[role] ?? `(mock output for role "${role}")`;
 
-  return { text, usage: { input_tokens: 100, output_tokens: 200 } };
+  reply ??= { text, usage: { input_tokens: 100, output_tokens: 200 } };
+
+  // Simulate streaming: surface the text in growing prefixes so the
+  // incremental-output path (onText contract in adapters/index.js) can be
+  // exercised with no API key. Every role streams, the executor's tool-calling
+  // turns included — those are what an agentTask's live output actually shows
+  // (V1 task 8), so a mock that skipped them would hide the feature on exactly
+  // the path it matters most.
+  if (onText) {
+    const step = Math.max(20, Math.ceil(reply.text.length / 8));
+    for (let end = step; end < reply.text.length; end += step) {
+      onText(reply.text.slice(0, end));
+      await sleep(80);
+    }
+    onText(reply.text, { final: true });
+  }
+
+  return reply;
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));

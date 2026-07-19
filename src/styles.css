@@ -1,77 +1,97 @@
-/* ============================================================
-   LLM Flow — Slate & Sage design system (light default + dark)
+/* =========================================================================
+   LLM Flow — Slate & Sage design system
    One accent, spent deliberately. Neutrals do the work.
-   Never hard-code these hex values in components.
-   ============================================================ */
+   Never hard-code these hex values in components — reference the tokens.
 
-:root, [data-theme="light"] {
-  --app:         #1f2724;  /* top chrome background            */
-  --app-tx:      #e6ebe8;  /* top chrome text                  */
-  --app-dim:     #7f8a85;  /* top chrome secondary             */
+   The palette is DERIVED, not hand-listed twice. Three hue seeds (sage accent,
+   rose error, purple orchestrator) plus per-theme lightness/chroma. Every tint
+   (`*-soft`) is its seed at high lightness / low chroma via relative colour, so
+   retuning a seed's hue (`--accent-h`, `--err-h`) recolours that whole family in
+   BOTH themes at once. Neutrals and chrome stay literal `light-dark()` pairs —
+   the hand-tuned near-greys don't derive cleanly, and shouldn't move.
 
-  --side:        #f3f5f4;  /* panels: sidebar, inspector, toolbar */
-  --canvas:      #f8faf9;  /* flow canvas plane                */
-  --dot:         #e1e8e5;  /* canvas dot-grid                  */
+   Theme is selected by `color-scheme` (mapped from the data-theme attribute just
+   below); that is what `light-dark()` reads. The app still toggles data-theme —
+   this only teaches the browser which half of each pair is live (and, as a bonus,
+   themes native scrollbars/controls to match).
 
-  --card:        #ffffff;  /* node & card surface              */
-  --border:      #e0e6e3;  /* hairline borders                 */
-  --divider:     #d4dbd7;  /* flow connectors                  */
+   Compiled palette — what the tokens resolve to today (Δ≤2/255 vs. the previous
+   hand-picked hexes; verified round-trip):
+                     light      dark              light      dark
+     --accent        #5b8c6e    #7cba95   --app     #1f2724  #0f1512
+     --accent-soft   #e6efe9    #1e2a23   --side    #f3f5f4  #141a17
+     --ok            #4f7d63    #7cba95   --rail    #eceeec  #101613
+     --ok-soft       #e6efe9    #16241c   --canvas  #f8faf9  #0e1310
+     --err           #9c4a44    #c98a83   --card    #ffffff  #1a211d
+     --err-soft      #f4e7e5    #2a1d1b   --border  #e0e6e3  #29322d
+     --orch          #7443c9    #a98ae6   --divider #d4dbd7  #323c36
+     --orch-soft     #efe9f9    #251d33   --tx      #1e2623  #e3ebe6
+     --chip          #eef2f0    #212a25   --dim     #6f7a75  #8e9c94
+     --chip-tx       #6a746f    #a6b1ab   --faint   #a0aaa5  #5f6b64
+   ========================================================================= */
 
-  --tx:          #1e2623;  /* primary text                     */
-  --dim:         #6f7a75;  /* secondary text                   */
-  --faint:       #a0aaa5;  /* tertiary / mono labels           */
+/* light-dark() reads color-scheme; map it from the explicit theme attribute. */
+:root { color-scheme: light; }
+[data-theme="dark"] { color-scheme: dark; }
 
-  --accent:      #5b8c6e;  /* THE accent (sage)                */
-  --accent-tx:   #ffffff;  /* text/icon on accent fills        */
-  --accent-soft: #e6efe9;  /* accent tint: selected ring, chips */
+/* Allow transitions/animations to and from intrinsic sizes (height: auto), so
+   anything that expands can animate its real height without a JS measure. */
+:root { interpolate-size: allow-keywords; }
 
-  --ok:          #4f7d63;  /* success text                     */
-  --ok-soft:     #e6efe9;  /* success pill background          */
+:root {
+  /* ---- hue seeds (retune one number to reskin a whole family) ---- */
+  --accent-h: 157;   /* sage */
+  --err-h:     26;   /* rose */
 
-  --err:         #9c4a44;  /* failure — muted rose, used as sparingly as --ok */
-  --err-soft:    #f4e7e5;
+  /* ---- accent: THE accent + its tint (selected ring, chips) ---- */
+  --accent:      light-dark(oklch(0.596 0.070 var(--accent-h)),
+                            oklch(0.736 0.084 var(--accent-h)));
+  --accent-tx:   light-dark(#ffffff, #0b140f);   /* text/icon on accent fills */
+  --accent-soft: light-dark(oklch(from var(--accent) 0.9437 0.0124 h),
+                            oklch(from var(--accent) 0.2713 0.0210 h));
 
-  --chip:        #eef2f0;  /* neutral icon-chip background     */
-  --chip-tx:     #6a746f;  /* neutral icon-chip glyph          */
+  /* ---- semantics: success borrows the accent hue, failure is rose ---- */
+  --ok:       light-dark(oklch(from var(--accent) 0.5486 0.0652 h), var(--accent));
+  --ok-soft:  light-dark(oklch(from var(--accent) 0.9437 0.0124 h),
+                         oklch(from var(--accent) 0.2445 0.0247 h));
+  --err:      light-dark(oklch(0.5113 0.1107 var(--err-h)),
+                         oklch(0.6945 0.0785 var(--err-h)));
+  --err-soft: light-dark(oklch(from var(--err) 0.9377 0.0145 h),
+                         oklch(from var(--err) 0.2461 0.0210 h));
 
-  --shadow-rest:     0 1px 2px rgba(0, 0, 0, .05);
-  --shadow-selected: 0 10px 24px -12px rgba(0, 0, 0, .4);
-  --shadow-float:    0 2px 8px -3px rgba(0, 0, 0, .15);
-}
+  /* ---- neutrals & chrome (hand-tuned near-greys; literal light/dark pairs) -- */
+  --app:      light-dark(#1f2724, #0f1512);   /* top chrome background   */
+  --app-tx:   light-dark(#e6ebe8, #dfe7e2);   /* top chrome text         */
+  --app-dim:  light-dark(#7f8a85, #6f7d76);   /* top chrome secondary    */
 
-[data-theme="dark"] {
-  --app:         #0f1512;
-  --app-tx:      #dfe7e2;
-  --app-dim:     #6f7d76;
+  --side:     light-dark(#f3f5f4, #141a17);   /* panels: sidebar/inspector/toolbar */
+  --rail:     light-dark(#eceeec, #101613);   /* activity rail — a hair below --side */
+  --canvas:   light-dark(#f8faf9, #0e1310);   /* flow canvas plane       */
+  --dot:      light-dark(#e1e8e5, #212a25);   /* canvas dot-grid         */
 
-  --side:        #141a17;
-  --canvas:      #0e1310;
-  --dot:         #212a25;
+  --card:     light-dark(#ffffff, #1a211d);   /* node & card surface     */
+  --border:   light-dark(#e0e6e3, #29322d);   /* hairline borders        */
+  --divider:  light-dark(#d4dbd7, #323c36);   /* flow connectors         */
 
-  --card:        #1a211d;
-  --border:      #29322d;
-  --divider:     #323c36;
+  --tx:       light-dark(#1e2623, #e3ebe6);   /* primary text            */
+  --dim:      light-dark(#6f7a75, #8e9c94);   /* secondary text          */
+  --faint:    light-dark(#a0aaa5, #5f6b64);   /* tertiary / mono labels  */
 
-  --tx:          #e3ebe6;
-  --dim:         #8e9c94;
-  --faint:       #5f6b64;
+  --chip:     light-dark(#eef2f0, #212a25);   /* neutral icon-chip bg     */
+  --chip-tx:  light-dark(#6a746f, #a6b1ab);   /* neutral icon-chip glyph  */
 
-  --accent:      #7cba95;  /* brightened sage for dark contrast */
-  --accent-tx:   #0b140f;
-  --accent-soft: #1e2a23;
+  /* ---- elevation (only the shadow alpha differs by theme) ---- */
+  --shadow-rest:     0 1px 2px       light-dark(rgba(0,0,0,.05), rgba(0,0,0,.25));
+  --shadow-selected: 0 10px 24px -12px light-dark(rgba(0,0,0,.4),  rgba(0,0,0,.7));
+  --shadow-float:    0 2px 8px -3px    light-dark(rgba(0,0,0,.15), rgba(0,0,0,.45));
 
-  --ok:          #7cba95;
-  --ok-soft:     #16241c;
-
-  --err:         #c98a83;
-  --err-soft:    #2a1d1b;
-
-  --chip:        #212a25;
-  --chip-tx:     #a6b1ab;
-
-  --shadow-rest:     0 1px 2px rgba(0, 0, 0, .25);
-  --shadow-selected: 0 10px 24px -12px rgba(0, 0, 0, .7);
-  --shadow-float:    0 2px 8px -3px rgba(0, 0, 0, .45);
+  /* ---- motion: a restrained spring (≈1.7% overshoot) for the few things that
+     should feel like they SETTLE rather than glide — node select, panel rise,
+     button press. Not a bounce; just enough life to read as physical. ---- */
+  --spring: linear(
+    0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849,
+    0.937 34.6%, 0.968, 0.991, 1.006 47.6%, 1.015, 1.017 52%, 1.017, 1.013 57.5%,
+    1.002 63.5%, 0.995 69.9%, 0.994, 0.998 88.7%, 1.001, 1);
 }
 
 /* ---------- base ---------- */
@@ -86,16 +106,47 @@ body {
 }
 
 /* Motion policy:
-   - theme swap + status changes crossfade at .24s (applied broadly below)
-   - micro-interactions (hover, press, selection) override at .14s
-   - continuous animation is reserved for the ONE running element on screen */
-.app, .app * {
-  transition: background-color .24s ease, border-color .24s ease,
-              color .24s ease, box-shadow .24s ease, opacity .24s ease;
+   - theme swap + section changes crossfade the WHOLE tree once, via the View
+     Transitions API (App.jsx withViewTransition) — no per-element colour
+     transition tax on every theme-affecting mutation across the tree.
+   - status crossfades and micro-interactions (hover, press, selection) are
+     explicit, per-component, at .14–.24s — see each block below.
+   - continuous animation is reserved for the ONE running element on screen. */
+
+/* View-transition crossfade: keep it in the crossfade family (.24s), and skip
+   it entirely under reduced-motion so the swap is instant, not merely fast. */
+::view-transition-old(root),
+::view-transition-new(root) { animation-duration: .24s; }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) { animation: none !important; }
 }
 
 .mono {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+/* ---------- type primitives ---------- */
+/* Numeric readouts that update live — timers, token/run counts — use tabular
+   figures so digits don't jitter their width as they tick. */
+.run-time, .run-count, .run-stat, .run-turns,
+.live-count, .live-sub, .result-sub {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Short display strings read better balanced across lines; running prose gets
+   `pretty` to avoid orphans without the cost of balancing every line. */
+.empty-state, .orch-hint, .settings-header h2 { text-wrap: balance; }
+.settings-hint, .editor-hint, .result-empty { text-wrap: pretty; }
+
+/* Optical trim for chips/buttons — drops the font's extra leading so glyphs sit
+   truly centred. Chromium 133+ only; gated so it's a no-op (and trivially
+   removable) on the current runtime. */
+@supports (text-box-trim: trim-both) {
+  .stage-chip, .node-kind, .node-port, .result-badge, .live-tab, .view-btn {
+    text-box-trim: trim-both; text-box-edge: cap alphabetic;
+  }
 }
 .section-label {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
@@ -172,7 +223,7 @@ button {
   padding: 8px 13px; cursor: pointer;
   font: inherit; font-size: 12.5px; font-weight: 500;
   transition: background-color .14s ease, border-color .14s ease,
-              color .14s ease, box-shadow .14s ease, transform .14s ease;
+              color .14s ease, box-shadow .14s ease, transform .24s var(--spring);
 }
 button:hover:not(:disabled) { border-color: var(--divider); box-shadow: var(--shadow-rest); }
 button:active:not(:disabled) { transform: translateY(1px); }
@@ -215,7 +266,7 @@ kbd.shortcut {
 }
 .sidebar-section { padding: 16px 16px 0; display: flex; flex-direction: column; gap: 10px; }
 .sidebar textarea {
-  height: 104px; resize: vertical;
+  field-sizing: content; min-height: 104px; max-height: 280px; resize: none;
   background: var(--card); color: var(--tx);
   border: 1px solid var(--border); border-radius: 10px;
   padding: 10px 12px; font: inherit; font-size: 12.5px; line-height: 1.5;
@@ -227,7 +278,10 @@ kbd.shortcut {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.run-list { flex: 1; overflow-y: auto; padding: 6px 16px 12px; display: flex; flex-direction: column; gap: 2px; }
+.run-list, .explorer-list {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 6px 16px 12px; display: flex; flex-direction: column; gap: 2px;
+}
 .run-item {
   padding: 7px 10px; border-radius: 8px; cursor: pointer;
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
@@ -239,8 +293,191 @@ kbd.shortcut {
 .run-item:hover { background: var(--chip); color: var(--tx); }
 .run-item.active { background: var(--card); color: var(--tx); border-color: var(--border); box-shadow: var(--shadow-rest); }
 .muted { color: var(--faint); font-size: 12px; padding: 2px 10px; }
-.sidebar-footer { padding: 12px 16px; border-top: 1px solid var(--border); }
-.sidebar-footer button { width: 100%; }
+
+/* ---------- runs explorer ---------- */
+/* A run's name is the content, so it gets the text colour and the width; when
+   it happened, which workflow ran, and how it ended are one faint line under it.
+   Colour is spent only on runs that need attention — a history of finished runs
+   is a quiet list, not a wall of green. */
+
+.runs-header { flex-direction: row; align-items: baseline; justify-content: space-between; }
+.run-count { font-size: 10px; color: var(--faint); }
+
+.run-explorer { gap: 0; padding-top: 0; }
+.run-group { display: flex; flex-direction: column; gap: 2px; }
+.run-group + .run-group { margin-top: 12px; }
+/* The date sections stay legible while their runs scroll under them. */
+.run-group-label {
+  position: sticky; top: 0; z-index: 1;
+  padding: 8px 10px 6px;
+  background: var(--side);
+}
+
+.run-row {
+  position: relative; /* the row actions float over the row's tail */
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 8px 8px 8px 10px; border-radius: 8px;
+  cursor: pointer; border: 1px solid transparent;
+  transition: background-color .14s ease, border-color .14s ease, box-shadow .14s ease;
+  /* A long history (hundreds of runs) shouldn't lay out or paint the rows that
+     aren't on screen. `auto <h>` seeds the pre-render height so the scrollbar
+     is stable and there's no jump as rows resolve; the browser remembers the
+     real height once each row has rendered. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+  /* Rows settle in as they scroll into the list — a short scrubbed fade over
+     the first slice of their entry, then they hold. Pure CSS (a view() timeline),
+     no scroll listeners; reduced-motion opts out below. */
+  animation: run-row-in linear both;
+  animation-timeline: view();
+  animation-range: entry 0% entry 22%;
+}
+@keyframes run-row-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-row { animation: none; }
+}
+.run-row:hover, .run-row:focus-within { background: var(--chip); }
+.run-row:focus-visible {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* After :hover so a hovered active row keeps its own surface (the actions' fade
+   is painted to match). */
+.run-row.active { background: var(--card); border-color: var(--border); box-shadow: var(--shadow-rest); }
+.run-row.editing { background: var(--card); border-color: var(--border); cursor: default; }
+
+.run-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.run-row-name {
+  font-size: 12.5px; line-height: 1.35; color: var(--tx);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.run-row-sub {
+  display: flex; align-items: center; gap: 5px; min-width: 0;
+  font-size: 10.5px; color: var(--faint);
+}
+.run-time { flex: none; font-size: 10px; }
+.run-sep { flex: none; opacity: .55; }
+.run-flow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-status { flex: none; }
+.run-status.failed, .run-status.interrupted { color: var(--err); }
+.run-status.running, .run-status.waiting { color: var(--accent); }
+
+/* Rename in place: the field sits where the name sits, so the row doesn't jump. */
+.run-row-input {
+  width: 100%; font: inherit; font-size: 12.5px; line-height: 1.35;
+  color: var(--tx); background: var(--card);
+  border: 1px solid var(--accent); border-radius: 6px;
+  padding: 0 5px; margin: -1px 0 0; outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Run sigil — the leading identity mark (a deterministic burst of the run id),
+   which also carries status through its colour. 'done' is the resting state of
+   almost every past run, so it stays a neutral grey; failure, attention and
+   motion are what earn a hue, spent as sparingly as the old status dot was. The
+   shape gives each run a recognizable face even when the colour is quiet. */
+.run-sigil {
+  flex: none; width: 22px; height: 22px; margin-top: 1px;
+  display: grid; place-items: center;
+  color: var(--dim);                         /* done / resting */
+}
+.run-sigil svg { display: block; width: 22px; height: 22px; }
+.run-sigil.rejected { color: var(--faint); }
+.run-sigil.failed, .run-sigil.interrupted { color: var(--err); }
+.run-sigil.waiting { color: var(--accent); }
+/* The one continuous animation the list allows itself: the run still going. */
+.run-sigil.running { color: var(--accent); animation: sigil-pulse 1.7s ease-in-out infinite; }
+@keyframes sigil-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .run-sigil.running { animation: none; } }
+
+/* Row actions stay out of the way until the row is hovered or keyboard-focused.
+   Taken out of flow rather than merely faded: as a flex child they reserved
+   their width from every row forever, and the run name — the one thing worth
+   reading — paid for it in truncation. They fade in over the row's tail instead,
+   on a wash of the row's own surface so the text ends rather than collides. */
+.run-row-actions {
+  position: absolute; right: 6px; top: 50%;
+  display: flex; align-items: center; gap: 2px;
+  padding-left: 14px;
+  background: linear-gradient(to right, transparent, var(--chip) 14px);
+  opacity: 0; pointer-events: none;
+  transform: translateY(-50%) translateX(2px);
+  transition: opacity .14s ease, transform .14s ease;
+}
+.run-row.active .run-row-actions { background: linear-gradient(to right, transparent, var(--card) 14px); }
+.run-row.editing .run-row-actions { display: none; } /* the name field owns the row while renaming */
+.run-row:hover .run-row-actions,
+.run-row:focus-within .run-row-actions {
+  opacity: 1; pointer-events: auto;
+  transform: translateY(-50%);
+}
+.row-action {
+  width: 22px; height: 22px; padding: 4px; flex: none;
+  display: grid; place-items: center;
+  border: none; border-radius: 6px; cursor: pointer;
+  background: transparent; color: var(--faint);
+  transition: background-color .14s ease, color .14s ease;
+}
+.row-action svg { width: 14px; height: 14px; }
+.row-action:hover { background: var(--chip); color: var(--tx); }
+.row-action.danger:hover { background: var(--err-soft); color: var(--err); }
+.row-action:focus-visible { outline: none; color: var(--tx); box-shadow: 0 0 0 2px var(--accent-soft); }
+
+/* ---------- activity bar (primary navigation rail) ---------- */
+/* The one persistent way to move between the app's three sections — Flows,
+   Library, Runs — plus Settings pinned at the foot. A single accent-soft pill
+   slides between the active item (the deliberate motion); the icon + label
+   tint to the accent. Everything else stays neutral. */
+
+.activity-bar {
+  width: 68px; flex: none;
+  background: var(--rail);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; align-items: center;
+  padding: 10px 0 12px;
+  -webkit-user-select: none; user-select: none;
+}
+
+.activity-group { position: relative; display: flex; flex-direction: column; align-items: center; width: 100%; }
+
+/* the sliding pill — sits behind the active button, moves one 58px slot at a
+   time; the accent strip on its left edge is the IDE "you are here" cue */
+.activity-indicator {
+  position: absolute; left: 8px; right: 8px; top: 6px; height: 46px;
+  border-radius: 12px; background: var(--accent-soft);
+  transform: translateY(calc(var(--active-index, 0) * 58px));
+  transition: transform .22s cubic-bezier(.4, 0, .2, 1), opacity .18s ease;
+  pointer-events: none;
+}
+.activity-indicator::before {
+  content: ''; position: absolute; left: -8px; top: 9px; bottom: 9px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--accent);
+}
+.activity-indicator[data-hidden="true"] { opacity: 0; }
+
+.activity-btn {
+  position: relative; z-index: 1;
+  width: 100%; height: 58px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  background: transparent; border: none; padding: 0;
+  color: var(--dim); cursor: pointer;
+  transition: color .14s ease, transform .14s ease;
+}
+.activity-btn svg { width: 21px; height: 21px; display: block; }
+.activity-label { font-size: 9.5px; font-weight: 600; letter-spacing: .01em; line-height: 1; }
+.activity-btn:hover { color: var(--tx); }
+.activity-btn:active { transform: translateY(1px); }
+.activity-btn.active { color: var(--accent); }
+.activity-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 12px; }
+
+.activity-spacer { flex: 1; min-height: 8px; }
+
+/* Settings, pinned at the foot — a utility, so it sits outside the sliding
+   group and never carries the active pill. */
+.activity-btn.utility { height: 52px; }
 
 /* ---------- canvas area ---------- */
 
@@ -275,10 +512,40 @@ kbd.shortcut {
 
 /* ---------- react-flow chrome ---------- */
 
-.react-flow { background: var(--canvas); }
+/* A barely-there film grain (grayscale fractal noise at ~5% alpha) so the plane
+   reads as a surface rather than flat fill. Static — it doesn't pan with the
+   graph — and tempered the same in both themes because it's a neutral overlay. */
+.react-flow {
+  background-color: var(--canvas);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
 .react-flow__background circle { fill: var(--dot); }
 .react-flow__edge-path { stroke: var(--divider); stroke-width: 2; }
 .react-flow__edge.animated .react-flow__edge-path { stroke: var(--accent); }
+/* Edges to work an agent spawned at run time: dashed, because this connection
+   was never authored — the run created it (V1 task 9). */
+.react-flow__edge.edge-spawned .react-flow__edge-path {
+  stroke-dasharray: 3 4; stroke-width: 1.5;
+}
+/* Streaming signal: an accent dot rides source→target while the source is
+   producing. offset-path is set per-edge inline (FlowEdge); the travel is pure
+   CSS, so there's no per-frame JS. The dot's whole point is motion, so under
+   reduced-motion it simply doesn't appear. */
+.edge-signal {
+  fill: var(--accent);
+  offset-rotate: 0deg;
+  pointer-events: none;
+  animation: edge-flow 1.5s linear infinite;
+}
+@keyframes edge-flow { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+@media (prefers-reduced-motion: reduce) { .edge-signal { display: none; } }
+/* Focus dimming with lineage (flare 5): while a node is hovered its upstream
+   chain stays lit and everything else recedes. The lit/dim tags come from JS
+   (a graph walk); CSS only fades, and only the receded set pays for it. */
+.react-flow__node, .react-flow__edge { transition: opacity .2s ease; }
+.react-flow.dimming .react-flow__node.dim { opacity: .3; }
+.react-flow.dimming .react-flow__edge.dim { opacity: .2; }
+
 .react-flow__handle {
   background: var(--divider); border: none;
   width: 6px; height: 6px; min-width: 6px; min-height: 6px;
@@ -290,6 +557,7 @@ kbd.shortcut {
 .react-flow__controls-button {
   background: var(--card); border-bottom: 1px solid var(--border);
   fill: var(--dim); color: var(--dim);
+  transition: background-color .14s ease;
 }
 .react-flow__controls-button:hover { background: var(--chip); }
 .react-flow__attribution { display: none; }
@@ -299,20 +567,25 @@ kbd.shortcut {
    label; state is applied via tokens — never a new hue per type. */
 
 .flow-node {
-  display: flex; align-items: center; gap: 11px; text-align: left;
+  position: relative; /* anchors the running beam ring (::before) */
+  display: flex; flex-direction: column; text-align: left;
   background: var(--card);
   border: 1px solid var(--border); border-radius: 12px;
   padding: 10px 13px;
   min-width: 168px;
   box-shadow: var(--shadow-rest);
   transition: background-color .24s ease, border-color .24s ease,
-              color .24s ease, box-shadow .14s ease, opacity .24s ease;
+              color .24s ease, box-shadow .14s ease, opacity .24s ease,
+              transform .32s var(--spring);
 }
+.node-main { display: flex; align-items: center; gap: 11px; }
 .node-icon {
   width: 32px; height: 32px; flex: none; border-radius: 9px;
   display: grid; place-items: center;
   background: var(--chip); color: var(--chip-tx);
   font-size: 15px;
+  /* its chip fill/glyph tint change on select/active/failed — keep that a fade */
+  transition: background-color .24s ease, color .24s ease;
 }
 .node-text { min-width: 0; }
 .node-title { font-weight: 600; font-size: 13px; color: var(--tx); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -323,18 +596,44 @@ kbd.shortcut {
 }
 .node-status { margin-left: auto; flex: none; font-size: 13px; width: 16px; text-align: center; }
 
-/* state: selected — the accent's one job on the canvas */
+/* state: selected — the accent's one job on the canvas; a small spring pop
+   confirms the pick (transform only, so it's cheap and settles, not glides) */
 .flow-node.selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-selected);
+  transform: scale(1.02);
 }
+@media (prefers-reduced-motion: reduce) { .flow-node.selected { transform: none; } }
 .flow-node.selected .node-icon { background: var(--accent-soft); color: var(--accent); }
 
 /* state: done — a single quiet check */
 .status-done .node-status { color: var(--ok); }
 
-/* state: active — accent-tinted chip + the one continuous animation */
+/* state: active — accent-tinted chip + a beam of the accent travelling the
+   border: one short arc circling a masked conic ring (the orchestrator's
+   technique, in the single accent). This is the node's ambient "running now". */
 .status-active .node-icon { background: var(--accent-soft); color: var(--accent); }
+
+@property --beam { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
+.flow-node.status-active::before {
+  content: '';
+  position: absolute; inset: -1px;
+  border-radius: 13px; /* node radius + the 1px bleed */
+  padding: 1.6px;      /* ring thickness */
+  background: conic-gradient(from var(--beam),
+    transparent 0deg, transparent 250deg,
+    var(--accent) 332deg, transparent 360deg);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  pointer-events: none;
+  animation: beam-spin 2s linear infinite;
+}
+@keyframes beam-spin { to { --beam: 360deg; } }
+/* Reduced motion: a still accent ring says "active" without the travel. */
+@media (prefers-reduced-motion: reduce) {
+  .flow-node.status-active::before { background: var(--accent); animation: none; }
+}
+
 .spinner {
   width: 12px; height: 12px; display: inline-block;
   border: 2px solid var(--accent-soft);
@@ -358,6 +657,13 @@ kbd.shortcut {
 .status-failed .node-icon { background: var(--err-soft); color: var(--err); }
 .status-failed .node-status { color: var(--err); }
 
+/* state: queued — the node has handed its task to the executor and is waiting
+   for a worker. Between pending and active, and reads that way: it comes back
+   to full opacity (it HAS done its part) but stays quiet — no spinner, because
+   nothing is running yet. */
+.status-queued .node-status { color: var(--faint); letter-spacing: .1em; }
+.status-queued .node-icon { background: var(--chip); color: var(--chip-tx); }
+
 /* state: pending — recedes, doesn't disappear */
 .status-pending { opacity: .62; box-shadow: none; }
 
@@ -376,15 +682,128 @@ kbd.shortcut {
 }
 .node-kind.kind-ai { color: var(--accent); background: var(--accent-soft); }
 .flow-node.kind-ai .node-icon { border-radius: 50%; }
+/* nodes whose contract lets them CREATE other nodes at run time */
+.node-kind.kind-spawn { color: var(--orch); background: var(--orch-soft); }
+
+/* ---------- output ports: what a node CREATES ---------- */
+/* One chip per declared output; each chip pairs with a bottom source handle
+   so the user picks WHICH output an edge carries. space-evenly matches the
+   (i+1)/(n+1) handle positions. */
+
+.node-ports {
+  position: relative;
+  display: flex; align-items: center; justify-content: space-evenly;
+  gap: 6px; margin-top: 10px; padding-top: 7px;
+  border-top: 1px dashed var(--border);
+}
+/* sits on the dashed rule like a fieldset legend */
+.node-ports-label {
+  position: absolute; top: -7px; left: 0;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 8px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--faint); background: var(--card); padding-right: 5px;
+  line-height: 1.4;
+}
+.node-port {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 8.5px; letter-spacing: .04em;
+  padding: 1px 6px; border-radius: 4px;
+  color: var(--chip-tx); background: var(--chip);
+  white-space: nowrap;
+}
+.react-flow__handle.port-handle {
+  width: 8px; height: 8px;
+  background: var(--card); border: 1.5px solid var(--faint);
+  transition: border-color .14s ease, background-color .14s ease;
+}
+.react-flow__handle.port-handle:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+/* ---------- orchestrator: the autonomous container ---------- */
+/* A large box that fills with AI-created task nodes at run time. While it
+   plans and runs its children, the border is a slowly rotating purple
+   conic gradient — the deliberate exception to the one-accent rule. */
+
+/* purple keeps its own hue seed; -soft is the seed at high lightness, as above */
+:root {
+  --orch:      light-dark(oklch(0.5143 0.1968 295.4), oklch(0.6985 0.1347 298.4));
+  --orch-soft: light-dark(oklch(from var(--orch) 0.9434 0.0223 h),
+                          oklch(from var(--orch) 0.2510 0.0420 h));
+}
+
+@property --orch-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.orch-node {
+  position: relative;
+  display: flex; flex-direction: column;
+  min-width: 300px; min-height: 160px;
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  border: 1px dashed var(--divider); border-radius: 16px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow-rest);
+  /* its border/glow settle between states (idle → active → done/failed) */
+  transition: border-color .24s ease, box-shadow .24s ease;
+}
+.orch-node .orch-header { display: flex; align-items: center; gap: 11px; }
+.orch-node .node-icon { background: var(--orch-soft); color: var(--orch); }
+.orch-hint {
+  margin: auto; text-align: center;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; line-height: 1.8; color: var(--faint);
+}
+.orch-ports { position: absolute; bottom: 0; left: 0; right: 0; padding-bottom: 9px; }
+.orch-ports .node-ports { border-top: none; margin-top: 0; padding-top: 0; }
+.orch-ports .node-ports-label { display: none; }
+
+/* the animated gradient border, painted on a masked overlay ring —
+   the gradient exists ONLY in the active state, so an idle box can
+   never show a stray ring */
+.orch-node::before {
+  content: '';
+  position: absolute; inset: -2px;
+  border-radius: 18px;
+  padding: 2px;
+  background: none;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .3s ease;
+}
+.orch-node.status-active { border-color: transparent; }
+.orch-node.status-active::before {
+  opacity: 1;
+  background: conic-gradient(from var(--orch-angle),
+    #8b5cf6, #c084fc, #6d28d9, #a855f7, #7c3aed, #8b5cf6);
+  animation: orch-spin 3.4s linear infinite;
+}
+@keyframes orch-spin { to { --orch-angle: 360deg; } }
+/* a faint standing glow under the ring while active */
+.orch-node.status-active {
+  box-shadow: 0 0 0 4px var(--orch-soft), var(--shadow-float);
+}
+
+.orch-node.selected { border-color: var(--orch); border-style: solid; }
+.orch-node.status-done { border-style: solid; border-color: color-mix(in srgb, var(--orch) 45%, var(--border)); }
+.orch-node.status-done .node-status { color: var(--orch); }
+.orch-node.status-failed { border-style: solid; border-color: var(--err); }
+.orch-node.status-failed .node-icon { background: var(--err-soft); color: var(--err); }
+.orch-node .spinner { border-color: var(--orch-soft); border-top-color: var(--orch); }
 
 /* editor bar: sits where the approval bar does, same rhythm */
 .editor-bar {
   display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap; row-gap: 8px;
   padding: 10px 16px;
   background: var(--side);
   border-bottom: 1px solid var(--border);
   color: var(--tx); font-size: 13px;
 }
+.palette { flex-wrap: wrap; row-gap: 6px; }
 .editor-hint { color: var(--dim); font-size: 12.5px; }
 .flow-name {
   width: 200px;
@@ -407,11 +826,20 @@ kbd.shortcut {
   font-size: 10.5px; color: var(--faint);
 }
 .save-dot.saved { color: var(--ok); }
+.save-dot.failed { color: var(--err); }
+
+/* flow lint badge (on-save validation of the *.flow.yaml source of truth) */
+.lint-badge {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10.5px; cursor: help; white-space: nowrap;
+}
+.lint-badge.ok { color: var(--ok); }
+.lint-badge.warn { color: var(--warn, #c9a227); }
+.lint-badge.error { color: var(--bad, #c0504d); }
 
 /* sidebar flow list */
 .section-row { display: flex; align-items: center; justify-content: space-between; }
 button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
-.flow-list { padding: 6px 16px 4px; display: flex; flex-direction: column; gap: 2px; max-height: 168px; overflow-y: auto; flex: none; }
 .flow-item { display: flex; align-items: center; gap: 8px; font-family: inherit; font-size: 12.5px; }
 .flow-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -423,7 +851,8 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   padding: 8px 11px; font: inherit; font-size: 12.5px; line-height: 1.5;
   transition: border-color .14s ease, box-shadow .14s ease;
 }
-.node-editor textarea { resize: vertical; }
+/* Inspector fields grow with content to a cap; `rows` still sets the floor. */
+.node-editor textarea { field-sizing: content; max-height: 260px; resize: none; }
 .node-editor input::placeholder, .node-editor textarea::placeholder { color: var(--faint); }
 .node-editor input:focus, .node-editor textarea:focus, .node-editor select:focus {
   outline: none; border-color: var(--accent);
@@ -463,12 +892,28 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   flex: none; font-size: 11.5px; font-weight: 600;
   padding: 3px 9px; border-radius: 20px;
   color: var(--ok); background: var(--ok-soft);
+  transition: color .24s ease, background-color .24s ease;
 }
 .status-pill.pill-err { color: var(--err); background: var(--err-soft); }
 .status-pill.pill-neutral { color: var(--dim); background: var(--chip); }
 .status-pill.pill-accent { color: var(--accent); background: var(--accent-soft); }
 
-.inspector-body { flex: 1; overflow-y: auto; padding: 16px 18px; }
+.inspector-body { flex: 1; overflow-y: auto; padding: 16px 18px; position: relative; }
+
+/* Scroll-progress: a 2px accent line pinned to the pane's top edge that fills
+   left→right as you scroll it. Pure CSS — an anonymous scroll() timeline drives
+   the fill, so there are no scroll listeners. Sticky + negative margins pull it
+   flush to the top and bleed it past the pane's padding; the reserved-then-
+   cancelled height keeps it out of the content's flow. */
+.inspector-body::before {
+  content: ''; position: sticky; top: 0; z-index: 4;
+  display: block; height: 2px; margin: -16px -18px 14px;
+  background: var(--accent); border-radius: 0 2px 2px 0;
+  transform-origin: left center; transform: scaleX(0);
+  animation: scroll-progress linear both; animation-timeline: scroll(nearest);
+}
+@keyframes scroll-progress { to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) { .inspector-body::before { display: none; } }
 .inspector-body section { margin-bottom: 16px; }
 .inspector-body h3 {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
@@ -501,7 +946,7 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   background: var(--side);
   border: 1px solid var(--border); border-radius: 14px;
   box-shadow: var(--shadow-selected);
-  animation: panel-rise .2s ease both;
+  animation: panel-rise .34s var(--spring) both;
   overflow: hidden;
 }
 @keyframes panel-rise {
@@ -562,6 +1007,886 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   word-break: break-word;
 }
 
+/* ---------- right column: run panel + inspector ---------- */
+/* The one run entry (GOALS.md): workflow dropdown + user input + Run. */
+
+.right-col {
+  width: 372px; flex: none;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--side);
+  border-left: 1px solid var(--border);
+}
+.right-col .inspector { width: auto; flex: 1; border-left: none; min-height: 0; }
+
+.run-panel {
+  flex: none;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.run-panel select {
+  background: var(--card); color: var(--tx);
+  border: 1px solid var(--border); border-radius: 9px;
+  padding: 8px 11px; font: inherit; font-size: 12.5px;
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.run-panel textarea {
+  /* Grows with what you type up to a cap, then scrolls — no drag handle, no JS
+     measuring. min-height keeps the empty box at its old size. */
+  field-sizing: content; min-height: 88px; max-height: 260px; resize: none;
+  background: var(--card); color: var(--tx);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; font: inherit; font-size: 12.5px; line-height: 1.5;
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.run-panel textarea::placeholder { color: var(--faint); }
+.run-panel select:focus, .run-panel textarea:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Workspace binding: folder picker in the run panel + its readout. */
+.workspace-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 11.5px;
+}
+.workspace-row .ghost { flex: none; }
+.workspace-path {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-width: 0; color: var(--tx);
+}
+.workspace-path .mono {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 160px; direction: rtl; /* keep the tail (the folder name) visible */
+}
+button.link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--faint); font: inherit; font-size: 11px;
+  transition: color .14s ease;
+}
+button.link:hover { color: var(--accent); }
+/* ---------- run view: header bar ---------- */
+/* The frame around the canvas while watching a run (V1 task 9). Same height and
+   token language as .editor-bar, because it occupies the same slot — the run
+   view is the editor's peer, not a different app. */
+
+.run-bar {
+  flex: none;
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 16px; height: 46px;
+  background: var(--side);
+  border-bottom: 1px solid var(--border);
+}
+/* The run's sigil in the header — the same mark the list row leads with, so a
+   run keeps its face when you open it. Accent-toned here (this is the one run
+   in focus). */
+.run-bar-sigil { flex: none; display: grid; place-items: center; color: var(--accent); }
+.run-bar-sigil svg { display: block; width: 24px; height: 24px; }
+.run-bar-name {
+  font-size: 12.5px; font-weight: 600; color: var(--tx);
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.run-meter {
+  position: relative; width: 120px; height: 4px; flex: none;
+  border-radius: 3px; background: var(--chip); overflow: hidden;
+}
+.run-meter-fill, .run-meter-fail {
+  position: absolute; top: 0; bottom: 0; border-radius: 3px;
+  transition: width .3s ease;
+}
+.run-meter-fill { left: 0; background: var(--accent); }
+/* Failures anchor right so they eat into the bar rather than shifting done. */
+.run-meter-fail { right: 0; background: var(--err); }
+.run-stat { font-size: 11px; color: var(--dim); flex: none; }
+.run-stat-active { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-weight: 600; }
+.run-stat-wait { color: var(--accent); }
+.run-stat-fail { color: var(--err); font-weight: 600; }
+.run-ws {
+  font-size: 10.5px; color: var(--faint);
+  max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ---------- run view: plaintext mirror (flare 7) ---------- */
+/* The Document view: the run typeset as a pasteable dossier. Takes the canvas's
+   slot; the Canvas⇄Document swap crossfades via a View Transition. */
+.mirror-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--canvas); }
+.mirror-toolbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 18px; background: var(--side); border-bottom: 1px solid var(--border);
+}
+.mirror-hint { flex: 1; min-width: 0; font-size: 11.5px; color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mirror {
+  flex: 1; min-height: 0; overflow: auto; margin: 0;
+  padding: 18px 22px;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 12px; line-height: 1.55; color: var(--tx);
+  white-space: pre; tab-size: 2;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- run view: replay scrubber (flare 6) ---------- */
+/* A strip under the canvas for a finished run; drag to time-travel the graph,
+   play to watch the waves reform. Sits in the canvas plane, quiet until used. */
+.replay-strip {
+  flex: none;
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px;
+  background: var(--side); border-top: 1px solid var(--border);
+}
+.replay-play {
+  flex: none; width: 28px; height: 28px; padding: 0;
+  display: grid; place-items: center;
+  font-size: 10px; line-height: 1; color: var(--accent);
+  background: var(--card); border: 1px solid var(--border); border-radius: 7px;
+}
+.replay-play:hover { border-color: var(--accent); background: var(--accent-soft); }
+.replay-range {
+  flex: 1; min-width: 0; height: 4px; margin: 0;
+  -webkit-appearance: none; appearance: none;
+  background: var(--chip); border-radius: 3px; cursor: pointer;
+}
+.replay-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--card);
+  box-shadow: var(--shadow-rest);
+}
+.replay-range::-webkit-slider-thumb:hover { box-shadow: 0 0 0 4px var(--accent-soft); }
+.replay-time { flex: none; font-size: 11px; color: var(--tx); font-variant-numeric: tabular-nums; }
+.replay-line {
+  flex: none; min-width: 96px; max-width: 200px;
+  font-size: 10.5px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ---------- run view: outcome ---------- */
+/* Takes the live panel's slot once the run settles: while working you watch
+   tokens, when finished you read what it produced. */
+
+.result-panel {
+  flex: none;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  animation: slide-down .2s ease-out;
+}
+.result-head { display: flex; align-items: center; gap: 8px; }
+.result-badge {
+  font-size: 10px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600;
+  padding: 3px 8px; border-radius: 6px;
+  color: var(--ok); background: var(--ok-soft);
+}
+.result-badge.bad { color: var(--err); background: var(--err-soft); }
+.result-sub { font-size: 10px; color: var(--faint); display: block; margin-bottom: 4px; }
+.result-body {
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--card); color: var(--dim);
+  border: 1px solid var(--border); border-radius: 9px;
+  padding: 10px 12px; margin: 0;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11px; line-height: 1.6;
+  max-height: 220px; overflow-y: auto;
+}
+.result-empty { color: var(--faint); }
+
+/* ---------- follow-up thread (FOLLOWUP-PLAN) ---------- */
+/* A finished run is a conversation: each turn is feedback -> outcome, and the
+   composer at the bottom sends the next one. Same token language as the result
+   panel it lives in; no motion — replies appear, they don't perform. */
+
+.fu-thread {
+  display: flex; flex-direction: column; gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.fu-turn { display: flex; flex-direction: column; gap: 6px; }
+.fu-feedback { display: flex; align-items: flex-start; gap: 8px; }
+.fu-turn-num {
+  flex: none; width: 18px; height: 18px; margin-top: 2px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 600;
+  color: var(--accent); background: var(--accent-soft);
+  border-radius: 50%;
+}
+.fu-feedback-text {
+  flex: 1; margin: 0; padding: 8px 11px;
+  white-space: pre-wrap; word-break: break-word;
+  font: inherit; font-size: 12px; line-height: 1.5; color: var(--tx);
+  background: var(--accent-soft);
+  border: 1px solid transparent; border-radius: 10px 10px 10px 3px;
+}
+.fu-triage { display: flex; align-items: baseline; gap: 8px; padding-left: 26px; }
+.fu-class {
+  font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600;
+  padding: 2px 7px; border-radius: 5px;
+  color: var(--dim); background: var(--chip);
+}
+.fu-class-fix { color: var(--accent); background: var(--accent-soft); }
+.fu-class-feature { color: var(--orch); background: var(--orch-soft); }
+.fu-reason {
+  font-size: 11px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fu-turn .result-body { margin-left: 26px; max-height: 160px; }
+
+.fu-composer { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.fu-composer textarea {
+  field-sizing: content; min-height: 64px; max-height: 220px; resize: none;
+  background: var(--card); color: var(--tx);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 9px 11px; font: inherit; font-size: 12.5px; line-height: 1.5;
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.fu-composer textarea::placeholder { color: var(--faint); }
+.fu-composer textarea:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.fu-composer .primary { align-self: flex-end; }
+
+/* Follow-up provenance on the canvas: which turn added the node. */
+.node-kind.kind-turn { color: var(--accent); background: var(--accent-soft); }
+
+/* Turn count in the runs list. */
+.run-turns { color: var(--accent); flex: none; }
+
+/* The run form, collapsed while a live run owns the column. */
+.new-run-btn {
+  flex: none;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  margin: 12px 18px; padding: 9px 12px;
+  border: 1px dashed var(--border); border-radius: 10px;
+  background: none; color: var(--dim);
+  font: inherit; font-size: 12px; cursor: pointer;
+  transition: color .14s ease, border-color .14s ease, background-color .14s ease;
+}
+.new-run-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.new-run-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- live output (streaming) ---------- */
+/* Present only while something is actually producing tokens, then gone — the
+   panel's existence IS the "working" signal, so it earns the two animations
+   here (the pulse and the caret). Both say "live"; nothing else moves. */
+
+.live-panel {
+  flex: none;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  animation: slide-down .2s ease-out;
+}
+.live-head { display: flex; align-items: center; gap: 8px; }
+.live-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: none;
+  background: var(--accent);
+  animation: live-pulse 1.8s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1;  box-shadow: 0 0 0 0 var(--accent-soft); }
+  50%      { opacity: .5; box-shadow: 0 0 0 4px var(--accent-soft); }
+}
+.live-count { margin-left: auto; font-size: 10.5px; color: var(--faint); }
+
+/* One chip per working node — only when more than one is (parallel waves).
+   The strip scrolls horizontally with no scrollbar, so a soft fade at each end
+   signals there's more to scroll to rather than letting chips hard-clip. */
+.live-tabs {
+  display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px;
+  scrollbar-width: none;
+  mask-image: linear-gradient(90deg, transparent 0, #000 14px,
+    #000 calc(100% - 14px), transparent 100%);
+}
+.live-tabs::-webkit-scrollbar { display: none; }
+.live-tab {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  max-width: 150px; padding: 4px 9px;
+  border: 1px solid var(--border); border-radius: 20px;
+  background: var(--card); color: var(--dim);
+  font: inherit; font-size: 11px; cursor: pointer;
+  transition: color .14s ease, border-color .14s ease, background-color .14s ease;
+}
+.live-tab:hover { border-color: var(--accent); color: var(--tx); }
+.live-tab.active {
+  border-color: var(--accent); background: var(--accent-soft); color: var(--accent);
+  font-weight: 600;
+}
+.live-tab.pinned .live-tab-icon { color: var(--accent); }
+.live-tab-icon { flex: none; font-size: 10px; }
+.live-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.live-meta { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.live-title {
+  font-size: 12.5px; font-weight: 600; color: var(--tx);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.live-sub { flex: none; font-size: 10px; color: var(--faint); }
+
+.live-body {
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--card); color: var(--dim);
+  border: 1px solid var(--border); border-radius: 9px;
+  padding: 10px 12px; margin: 0;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11px; line-height: 1.6;
+  height: 168px; overflow-y: auto;
+}
+.live-idle { color: var(--faint); font-style: italic; }
+/* Block caret at the tail: the one cue that more text is still coming. */
+.live-caret {
+  display: inline-block; vertical-align: text-bottom;
+  width: 6px; height: 12px; margin-left: 2px;
+  background: var(--accent);
+  animation: live-blink 1.1s step-end infinite;
+}
+@keyframes live-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* ---------- Nodes page (Node Library CRUD) ---------- */
+
+.nodes-page { flex: 1; min-height: 0; display: flex; justify-content: center; }
+.nodes-editor {
+  flex: 1; min-width: 0;
+  max-width: 660px;
+  overflow-y: auto;
+  padding: 8px 24px 24px;
+}
+.nodes-editor .inspector-header { padding: 16px 0 14px; margin-bottom: 8px; }
+.nodes-editor section { margin-bottom: 16px; }
+.nodes-editor h3 {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--faint); font-weight: 500; margin: 0 0 8px;
+}
+.nodes-editor-row { display: flex; gap: 12px; }
+.nodes-editor-row section { flex: 1; min-width: 0; }
+.nodes-editor-actions { display: flex; gap: 10px; }
+
+/* override marking: template default vs "override (this workflow only)" */
+.override-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 6px; padding: 1px 7px; border-radius: 10px;
+  font-size: 9.5px; letter-spacing: .05em; text-transform: none;
+  color: var(--accent); background: var(--accent-soft);
+}
+.override-tag.default { color: var(--faint); background: var(--chip); }
+.override-tag .ghost.mini { padding: 0 3px; font-size: 10px; line-height: 1; }
+
+/* ---------- view switch (Canvas / Split / YAML) ---------- */
+
+.view-switch {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+  margin-left: 4px;
+  box-shadow: var(--shadow-rest);
+}
+.view-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  font-size: 11.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 1;
+  transition: color .14s ease, background .14s ease;
+}
+.view-btn-glyph {
+  font-size: 11px;
+  opacity: .8;
+  letter-spacing: -.5px;
+}
+.view-btn.active {
+  background: var(--accent);
+  color: var(--accent-tx);
+  box-shadow: 0 1px 3px -1px rgba(0,0,0,.25);
+}
+.view-btn.active .view-btn-glyph { opacity: 1; }
+.view-btn:hover:not(.active) { color: var(--tx); background: var(--accent-soft); }
+.view-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- split (50/50) layout ---------- */
+
+.split-view {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 6px 1fr;
+  background: var(--canvas);
+}
+.split-pane {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.split-canvas { background: var(--canvas); }
+.split-canvas > .react-flow { flex: 1; }
+.split-gutter {
+  background: linear-gradient(var(--border), var(--border)) center / 1px 100% no-repeat;
+  background-color: var(--side);
+}
+.split-yaml .yaml-editor { border-radius: 0; border: none; border-left: 1px solid var(--border); }
+
+/* ---------- YAML code editor ---------- */
+
+.yaml-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0 0 12px 12px;
+  overflow: hidden;
+}
+.yaml-editor.embedded { border-radius: 0; }
+
+.yaml-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--side);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.yaml-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.yaml-file .mono { color: var(--tx); font-size: 11.5px; }
+.yaml-file-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.clean-pill,
+.dirty-pill {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  line-height: 1.4;
+}
+.clean-pill { background: var(--chip); color: var(--chip-tx); }
+.dirty-pill {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* code surface: gutter + highlight layer + transparent textarea. The <pre>
+   and the <textarea> MUST share every box metric so the caret aligns. */
+.code-editor {
+  flex: 1;
+  min-height: 240px;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+  background: var(--card);
+}
+.embedded .code-editor { min-height: 0; }
+
+.code-gutter {
+  flex: none;
+  overflow: hidden;
+  background: var(--side);
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+.code-gutter-inner {
+  padding: 14px 10px 14px 12px;
+  text-align: right;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.code-lineno { min-width: 22px; }
+
+.code-body { flex: 1; position: relative; min-width: 0; }
+
+.code-highlight,
+.code-input {
+  margin: 0;
+  padding: 14px 16px;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+  word-wrap: normal;
+  letter-spacing: 0;
+  border: 0;
+}
+.code-highlight {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--tx);
+  background: transparent;
+}
+.code-highlight code { font: inherit; }
+.code-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--accent);
+  overflow: auto;
+  box-sizing: border-box;
+}
+.code-input::selection { background: var(--accent-soft); }
+.code-input:focus { outline: none; }
+.code-body:focus-within { box-shadow: inset 0 0 0 2px var(--accent-soft); }
+
+/* syntax tokens — the sage accent marks keys; a single quiet clay tone marks
+   literals (numbers / booleans / anchors). Everything else is neutral, in
+   keeping with "one accent, neutrals do the work". */
+:root { --tok-lit: light-dark(#9c6239, #c99a6a); }
+
+.tok-key     { color: var(--accent); }
+.tok-colon   { color: var(--faint); }
+.tok-punct   { color: var(--faint); }
+.tok-string  { color: var(--tx); }
+.tok-num     { color: var(--tok-lit); }
+.tok-bool    { color: var(--tok-lit); }
+.tok-anchor  { color: var(--tok-lit); }
+.tok-comment { color: var(--faint); font-style: italic; }
+
+.yaml-status {
+  padding: 9px 14px 11px;
+  border-top: 1px solid var(--border);
+  background: var(--side);
+  font-size: 12px;
+}
+.yaml-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.yaml-status .lint-badge { font-size: 11px; }
+.yaml-meta { margin-left: auto; font-size: 10.5px; }
+
+.lint-findings {
+  margin-top: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 132px;
+  overflow: auto;
+  font-size: 11.5px;
+}
+.finding {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  padding: 3px 8px;
+  border-radius: 6px;
+  transition: background-color .14s ease;
+}
+.finding:hover { background: var(--card); }
+.finding-dot {
+  flex: none;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  transform: translateY(-1px);
+}
+.finding.warn .finding-dot { background: var(--warn, #c9a227); }
+.finding.err .finding-dot  { background: var(--err); }
+.finding .finding-rule { color: var(--faint); font-size: 10.5px; }
+.finding .finding-node {
+  color: var(--accent);
+  font-size: 10.5px;
+  background: var(--accent-soft);
+  padding: 0 5px;
+  border-radius: 4px;
+}
+.finding-msg { color: var(--tx); }
+.finding-more { padding-left: 8px; }
+
+.yaml-footer {
+  padding: 7px 14px 9px;
+  font-size: 11px;
+  border-top: 1px solid var(--border);
+  background: var(--side);
+}
+.yaml-footer code {
+  background: var(--chip);
+  color: var(--chip-tx);
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 10.5px;
+}
+
+/* ---------- tooltips (Tip.jsx) ---------- */
+/* Replaces native title=. A popover (top layer → never clipped by the canvas or
+   a scrolling pane), positioned purely by CSS anchor positioning: it sits above
+   its trigger and flips below when there's no room. No positioning JS. */
+.tip {
+  inset: auto; border: none; margin-inline: 0; margin-block: 6px;
+  position-area: block-start;
+  position-try-fallbacks: flip-block;
+  width: max-content; max-width: 240px;
+  padding: 4px 8px;
+  font-family: inherit; font-size: 11px; line-height: 1.4; font-weight: 500;
+  color: var(--app-tx); background: var(--app);
+  border-radius: 6px; box-shadow: var(--shadow-float);
+  pointer-events: none;
+  /* spring-in from the trigger; @starting-style gives the entry its from-state */
+  opacity: 0; transform: translateY(3px) scale(.96); transform-origin: center bottom;
+  transition: opacity .12s ease, transform .16s var(--spring),
+              overlay .16s allow-discrete, display .16s allow-discrete;
+}
+.tip:popover-open { opacity: 1; transform: none; }
+@starting-style {
+  .tip:popover-open { opacity: 0; transform: translateY(3px) scale(.96); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tip { transition: opacity .01s; transform: none; }
+}
+
+/* =========================================================================
+   Project tabs (D22, Phase 4) — strip, new-tab page, deck switcher
+   ========================================================================= */
+
+/* ---------- tab strip (in the titlebar, demo A) ---------- */
+/* The strip lives on the drag region, so everything interactive opts out.
+   Overflow is Chrome-style: tabs shrink to a floor width, then the strip
+   itself scrolls (no scrollbar chrome — wheel and drag still work). */
+
+.tab-strip {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 4px;
+  align-self: stretch; padding: 5px 0;
+  overflow-x: auto; scrollbar-width: none;
+  -webkit-app-region: no-drag;
+}
+.tab-strip::-webkit-scrollbar { display: none; }
+
+.tab {
+  flex: 1 1 180px; min-width: 56px; max-width: 190px;
+  display: flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 8px 0 10px;
+  border-radius: 8px;
+  color: var(--app-dim); font-size: 12px;
+  cursor: default; user-select: none;
+  transition: background-color .14s ease, color .14s ease;
+}
+.tab:hover { background: light-dark(rgba(255,255,255,.07), rgba(255,255,255,.05)); color: var(--app-tx); }
+.tab.active {
+  background: light-dark(rgba(255,255,255,.12), rgba(255,255,255,.09));
+  color: var(--app-tx);
+}
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.tab-label {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Live-run micro-indicator: the node beam's technique at 6px — a conic arc
+   circling a dot. One of the few sanctioned continuous animations (it means
+   "executing right now", the same vocabulary as the canvas beams). */
+.tab-live {
+  flex: none; width: 6px; height: 6px; border-radius: 50%;
+  background: conic-gradient(from var(--beam),
+    var(--accent) 0deg 250deg, transparent 290deg 320deg, var(--accent) 350deg);
+  animation: beam-spin 2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-live { background: var(--accent); animation: none; }
+}
+
+/* Unsaved dot (saveState): quiet while saving, error red when a save failed. */
+.tab-dirty { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--app-dim); }
+.tab-dirty.failed { background: var(--err); }
+
+.tab-close {
+  flex: none; width: 16px; height: 16px; padding: 0;
+  display: grid; place-items: center;
+  background: none; border: none; border-radius: 4px;
+  color: inherit; font-size: 9px; line-height: 1;
+  opacity: 0; cursor: pointer;
+  transition: opacity .14s ease, background-color .14s ease;
+}
+.tab:hover .tab-close, .tab.active .tab-close { opacity: .7; }
+.tab-close:hover {
+  opacity: 1; box-shadow: none;
+  background: light-dark(rgba(255,255,255,.14), rgba(255,255,255,.12));
+}
+
+.tab-new {
+  flex: none; width: 26px; height: 26px; padding: 0;
+  display: grid; place-items: center;
+  background: none; border: none; border-radius: 7px;
+  color: var(--app-dim); font-size: 13px; cursor: pointer;
+  transition: background-color .14s ease, color .14s ease;
+}
+.tab-new:hover {
+  background: light-dark(rgba(255,255,255,.09), rgba(255,255,255,.07));
+  color: var(--app-tx); box-shadow: none;
+}
+
+/* Restore notice (T17): one dismissible line under the titlebar. */
+.tab-notice {
+  flex: none;
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 16px;
+  background: var(--err-soft); color: var(--err);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.tab-notice span { flex: 1; min-width: 0; }
+.tab-notice .link {
+  background: none; border: none; padding: 2px 4px;
+  color: inherit; font-size: 10px; cursor: pointer;
+}
+
+/* The bound-tab run panel just states where runs land (T19). */
+.workspace-path.bound { color: var(--dim); font-size: 12px; }
+
+/* ---------- new-tab page (T15) ---------- */
+
+.newtab-overlay {
+  position: fixed; inset: 0; z-index: 40;
+  display: grid; place-items: center;
+  background: rgba(15, 21, 18, .4);
+  animation: fade-in .18s ease both;
+}
+.newtab-page {
+  width: 520px; max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  display: flex; flex-direction: column; gap: 16px;
+  background: var(--side);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-selected);
+  animation: panel-rise .34s var(--spring) both;
+  padding: 18px;
+  overflow-y: auto;
+}
+.newtab-head { display: flex; align-items: flex-start; gap: 11px; }
+.newtab-head .inspector-title { flex: 1; }
+.newtab-head h2 { font-size: 14px; font-weight: 600; margin: 0; color: var(--tx); }
+.newtab-actions { display: flex; gap: 8px; }
+
+.newtab-recents { display: flex; flex-direction: column; gap: 6px; }
+.recent-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 9px;
+  cursor: pointer;
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.recent-row:hover { border-color: var(--divider); box-shadow: var(--shadow-rest); }
+.recent-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.recent-row.missing { opacity: .55; cursor: default; }
+.recent-row.missing:hover { border-color: var(--border); box-shadow: none; }
+.recent-name { flex: none; font-weight: 600; font-size: 12.5px; }
+.recent-path {
+  flex: 1; min-width: 0; font-size: 10.5px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left; /* a long path keeps its telling tail */
+}
+.recent-missing {
+  flex: none; font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; color: var(--err); background: var(--err-soft);
+  padding: 2px 7px; border-radius: 5px;
+}
+.recent-row .link {
+  background: none; border: none; padding: 2px 4px; cursor: pointer;
+  color: var(--faint); font-size: 10px;
+}
+.recent-row .link:hover { color: var(--err); box-shadow: none; }
+
+/* ---------- deck switcher (4.2, demo D) ---------- */
+/* A <dialog>, so the overlay sits in the top layer; the backdrop blur is the
+   app's one sanctioned blur (small area, per the anti-ideas rule). Cards deal
+   in with the spring — transform/opacity only, staggered by --deal. */
+
+.tab-deck {
+  border: none; padding: 0; background: none;
+  outline: none; overflow: visible;
+}
+.tab-deck::backdrop {
+  background: light-dark(rgba(15, 21, 18, .35), rgba(5, 8, 6, .5));
+  backdrop-filter: blur(7px);
+  animation: fade-in .18s ease both;
+}
+.deck-cards { display: flex; gap: 14px; align-items: stretch; }
+.deck-card {
+  width: 168px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 16px 14px 13px;
+  background: var(--side);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-float);
+  cursor: pointer;
+  /* backwards, not both: a forwards fill would pin the keyframe transform and
+     silently defeat the focused card's lift transition. */
+  animation: deck-deal .38s var(--spring) backwards;
+  animation-delay: calc(var(--deal) * 45ms);
+  transition: border-color .14s ease, box-shadow .14s ease, transform .24s var(--spring);
+}
+.deck-card.focused, .deck-card:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow-selected);
+  transform: translateY(-4px);
+}
+@keyframes deck-deal {
+  from { opacity: 0; transform: translateY(14px) scale(.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.deck-topo { color: var(--dim); height: 84px; }
+.deck-card.focused .deck-topo { color: var(--accent); }
+.deck-name {
+  font-weight: 600; font-size: 12.5px; color: var(--tx);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.deck-status { display: flex; align-items: center; gap: 6px; font-size: 10.5px; }
+.deck-live { color: var(--accent); font-weight: 600; }
+.deck-idle { color: var(--faint); }
+.deck-badge {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; padding: 2px 6px; border-radius: 5px;
+  background: var(--chip); color: var(--chip-tx);
+}
+.deck-badge.deck-stage-done { background: var(--ok-soft); color: var(--ok); }
+.deck-badge.deck-stage-failed, .deck-badge.deck-stage-rejected { background: var(--err-soft); color: var(--err); }
+.deck-run { display: flex; align-items: center; gap: 7px; max-width: 100%; color: var(--dim); }
+.deck-run-name {
+  font-size: 10.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.deck-hint {
+  margin-top: 14px; text-align: center;
+  font-size: 10px; letter-spacing: .06em;
+  color: light-dark(#e6ebe8, #dfe7e2); opacity: .6;
+}
+
 /* ---------- reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {
@@ -571,4 +1896,7 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
     animation-iteration-count: 1 !important;
   }
   .spinner { animation: none; border-top-color: var(--accent); }
+  .activity-indicator { transition: none; }
+  .deck-card { animation: none; }
+  .tab-deck::backdrop { backdrop-filter: none; }
 }

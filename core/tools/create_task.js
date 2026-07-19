@@ -32,6 +32,11 @@ export default {
     const id = `task-${maxN + 1}`;
     const known = new Set(doc.tasks.map(t => t.id));
     const dependsOn = (args.dependsOn ?? []).filter(d => known.has(d));
+    // A spawned task inherits its parent's tool-approval gate. Without this an
+    // agent under approveToolCalls could delegate its destructive work to a
+    // child task and have it run unapproved — the child has no flow node, which
+    // is where the gate used to be read from.
+    const parent = doc.tasks.find(t => t.id === ctx.taskId);
     const task = {
       id,
       title: args.title,
@@ -39,6 +44,7 @@ export default {
       inputs: ['prompt.md', ...dependsOn.map(d => `${d} output`)],
       constraints: args.constraints ?? [],
       dependsOn,
+      ...(parent?.approveToolCalls ? { approveToolCalls: true } : {}),
       // Never persist an apiKey into tasks.json — provider/model only.
       worker: args.worker?.provider && args.worker?.model
         ? { provider: args.worker.provider, model: args.worker.model }

@@ -1,0 +1,15 @@
+{
+  "id": "plan-eval",
+  "name": "Plan evaluation",
+  "description": "Consumes tasks.md; emits dependency order, task categories, and the work nodes to create.",
+  "category": null,
+  "icon": "▤⇄",
+  "baseType": "aiStep",
+  "role": "plan-eval",
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false
+}

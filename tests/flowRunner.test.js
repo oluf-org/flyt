@@ -48,6 +48,35 @@ test('resolveWorker: falls back to the executor default', () => {
     { provider: 'script', model: 'test-model' });
 });
 
+// The BYO-key trap (V1 task 11). categoryWorkers is read from config.json and
+// is NOT overridable from Settings, so anything it names is pinned for good.
+// It shipped mapping every category to the mock provider, which meant a user
+// who saved a real key and pointed the executor at a real model still had every
+// categorised work node — including test-creation-step, the only tool-using
+// agentTask template — silently answer with "(mock output)". Shipping it empty
+// is what makes one Settings change reach the whole app.
+test('resolveWorker: an unmapped category follows the executor, so a real key reaches work nodes', () => {
+  const shipped = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'config.json'), 'utf8'));
+  assert.deepEqual(shipped.categoryWorkers, {},
+    'config.json must not pin categories to a provider: Settings cannot override them');
+
+  const userConfig = { ...shipped, workers: { executor: { provider: 'openrouter', model: 'real/model' } } };
+  for (const category of ['Code design', 'Code general', 'documentation', 'Test-creation']) {
+    assert.deepEqual(resolveWorker(node('x', 'agentTask', { category }), userConfig),
+      { provider: 'openrouter', model: 'real/model' }, `category "${category}" must follow the executor`);
+  }
+});
+
+// The mechanism itself stays (V1 keeps static category routing) — an explicit
+// mapping still wins for anyone who hand-edits config.json.
+test('resolveWorker: an explicitly mapped category still overrides the executor', () => {
+  const config = testConfig({ categoryWorkers: { documentation: { provider: 'x', model: 'cheap' } } });
+  assert.deepEqual(resolveWorker(node('d', 'aiStep', { category: 'documentation' }), config),
+    { provider: 'x', model: 'cheap' });
+  assert.deepEqual(resolveWorker(node('c', 'aiStep', { category: 'Code general' }), config),
+    { provider: 'script', model: 'test-model' });
+});
+
 test('agentTask nodes get their category worker (unified resolution)', async () => {
   const store = makeStore();
   const config = testConfig({ categoryWorkers: { 'Test-creation': { provider: 'script', model: 'cat-model' } } });
@@ -158,6 +187,149 @@ test('plan-eval re-asks once with the validation errors on malformed output', as
   assert.match(store.readNodeOutput(runId, 'plan-eval-errors'), /resolved/);
 });
 
+// --- parallel waves ---
+
+test('independent aiSteps run concurrently as one wave', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  let inFlight = 0;
+  let maxInFlight = 0;
+  setScript(async () => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise(r => setTimeout(r, 120));
+    inFlight -= 1;
+    return 'step output';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('a', 'aiStep', { role: 'execute', title: 'A' }),
+     node('b', 'aiStep', { role: 'execute', title: 'B' }),
+     node('c', 'aiStep', { role: 'execute', title: 'C' }),
+     node('out', 'output')],
+    [edge('in', 'a'), edge('in', 'b'), edge('in', 'c'),
+     edge('a', 'out'), edge('b', 'out'), edge('c', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.equal(maxInFlight, 3, 'all three independent steps should be in flight together');
+  assert.ok(readLog(store, runId).some(e => e.event === 'wave_start' && e.nodes.length === 3));
+  for (const id of ['a', 'b', 'c']) assert.match(store.readNodeOutput(runId, id), /step output/);
+});
+
+test('maxParallel caps the wave size', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig({ maxParallel: 2 }));
+  let inFlight = 0;
+  let maxInFlight = 0;
+  setScript(async () => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise(r => setTimeout(r, 60));
+    inFlight -= 1;
+    return 'step output';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('a', 'aiStep', {}), node('b', 'aiStep', {}), node('c', 'aiStep', {}),
+     node('out', 'output')],
+    [edge('in', 'a'), edge('in', 'b'), edge('in', 'c'),
+     edge('a', 'out'), edge('b', 'out'), edge('c', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.ok(maxInFlight <= 2, `expected at most 2 in flight, saw ${maxInFlight}`);
+});
+
+test('a failure inside a wave fails the run', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(async ({ prompt }) => {
+    if (prompt.includes('GOAL:\nboom')) throw new Error('provider exploded');
+    return 'ok';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('a', 'aiStep', { title: 'A' }),
+     node('b', 'aiStep', { title: 'B', goal: 'boom' }),
+     node('out', 'output')],
+    [edge('in', 'a'), edge('in', 'b'), edge('a', 'out'), edge('b', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'failed');
+  assert.equal(store.readMeta(runId).nodeStatus.b, 'failed');
+});
+
+// --- incremental output (adapter onText streaming) ---
+
+test('aiStep streams partial output into the node file while the call runs', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(async ({ onText }) => {
+    onText('partial text so far');
+    await new Promise(r => setTimeout(r, 400));
+    return 'final full text';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('step', 'aiStep', { role: 'execute' }),
+     node('out', 'output')],
+    [edge('in', 'step'), edge('in', 'out'), edge('step', 'out')]);
+  const runId = runner.start(flow);
+  const partial = await waitFor(() => store.readNodeOutput(runId, 'step'), { label: 'partial node output' });
+  assert.match(partial, /partial text so far/);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.equal(store.readNodeOutput(runId, 'step'), 'final full text');
+});
+
+// The path that matters most for V1: an agentTask is the long, tool-using one,
+// and it was the silent one — runAgent never forwarded onText.
+test('agentTask streams the agent turn into the task output while the call runs', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(async ({ onText }) => {
+    onText('partial agent reply');
+    await new Promise(r => setTimeout(r, 400));
+    return 'final agent deliverable';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'agentTask', { title: 'Worker', goal: 'do the work' }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'out')]);
+  const runId = runner.start(flow);
+  const partial = await waitFor(() => store.readTaskOutput(runId, 'task-1'), { label: 'partial task output' });
+  assert.match(partial, /partial agent reply/);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.equal(store.readTaskOutput(runId, 'task-1'), 'final agent deliverable');
+});
+
+// The multi-turn contract: onText streams the turn IN PROGRESS, so a turn that
+// ends in a tool call is visible (that transparency is the point — you watch
+// the agent decide), and the executor's write after the loop is what lands.
+test('a tool-calling turn streams, then the final reply supersedes it', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  const turn1 = 'Recording the spec first.\n```tool\n{"tool":"write_task_md","args":{"content":"# Spec"}}\n```';
+  setScript(async ({ prompt, onText }) => {
+    if (prompt.includes('TOOL RESULT')) return 'final deliverable';
+    onText(turn1);
+    await new Promise(r => setTimeout(r, 400));
+    return turn1;
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'agentTask', { title: 'Worker', goal: 'do the work' }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'out')]);
+  const runId = runner.start(flow);
+  const mid = await waitFor(() => {
+    const t = store.readTaskOutput(runId, 'task-1');
+    return t?.includes('write_task_md') ? t : null;
+  }, { label: 'the streamed tool block' });
+  assert.match(mid, /Recording the spec first/);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  // No tool block left behind: the last turn's real deliverable replaced it.
+  assert.equal(store.readTaskOutput(runId, 'task-1'), 'final deliverable');
+});
+
 // --- step-eval retry loop ---
 
 test('step-eval retry re-runs the work node with persisted guidance, then passes', async () => {
@@ -262,4 +434,107 @@ test('step-eval escalation gate survives a restart: approve resumes to done', as
   assert.equal(statuses.seval, 'done');
   assert.equal(statuses.out, 'done');
   assert.ok(readLog(store, runId).some(e => e.event === 'flow_run_resumed'));
+});
+
+// A node whose model returns nothing must fail loudly. It used to be recorded
+// as success with a 0-byte output file, which then became the context every
+// downstream node read (V1 task 11 — seen on a real provider).
+test('an aiStep whose model returns an empty response fails instead of succeeding', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(() => '   \n  ');
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }), node('step', 'aiStep', { role: 'execute' }), node('out', 'output')],
+    [edge('in', 'step'), edge('step', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'failed');
+  assert.equal(store.readMeta(runId).nodeStatus.step, 'failed');
+  assert.match(store.readMeta(runId).error, /empty response/);
+  assert.equal(store.readRetrospectives(runId).step.status, 'failed');
+});
+
+test('an agentTask whose agent returns an empty response fails instead of succeeding', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(() => '');
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'agentTask', { title: 'W', goal: 'do it' }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'failed');
+  assert.equal(store.readTasks(runId).tasks[0].status, 'failed');
+});
+
+// node_start must record which tool protocol the executor used, so a real run
+// is auditable after the fact rather than inferred (V1 task 11).
+test('the executor logs which tool protocol it used', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(() => 'done');
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'b' }),
+     node('w', 'agentTask', { title: 'W', goal: 'g' }),
+     node('out', 'output')],
+    [edge('in', 'w'), edge('w', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  const start = readLog(store, runId).find(e => e.event === 'node_start' && e.node === 'executor:task-1');
+  // The 'script' test provider isn't openrouter, so it takes the text path.
+  assert.equal(start.protocol, 'text');
+});
+
+// streamInto throttles on the reasoning that the caller's write afterwards is
+// authoritative — true for one call, false inside an agent loop, where a turn is
+// superseded by the NEXT turn. So the last emit of a call must never be dropped:
+// a tool call's name arrives first and takes the flush window, and its arguments
+// stream in behind it (V1 task 12).
+test('streamInto never throttles away the final emit of a call', () => {
+  const store = makeStore();
+  const runId = store.createRun('b');
+  const runner = new FlowRunner(store, testConfig());
+  const written = [];
+  const sink = runner.streamInto(runId, t => written.push(t));
+
+  sink('→ write_file(');                       // first: flushes
+  sink('→ write_file({"path":"a.js"');         // within 250ms: dropped
+  sink('→ write_file({"path":"a.js"})', { final: true }); // must land regardless
+
+  assert.deepEqual(written, ['→ write_file(', '→ write_file({"path":"a.js"})']);
+});
+
+test('streamInto still throttles the noisy middle of a stream', () => {
+  const store = makeStore();
+  const runId = store.createRun('b');
+  const runner = new FlowRunner(store, testConfig());
+  const written = [];
+  const sink = runner.streamInto(runId, t => written.push(t));
+  for (let i = 0; i < 50; i++) sink('chunk ' + i);
+  assert.equal(written.length, 1, '50 rapid chunks must not become 50 writes + 50 IPC pushes');
+});
+
+// --- per-edge context sizing (flare 3: edge weight) ---
+
+test('the runner records per-edge context bytes into meta (thick full-context, thin contextSpec)', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(() => 'a step output long enough to carry weight downstream');
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'the brief for the run' }),
+     node('a', 'aiStep', { role: 'execute', title: 'A' }),
+     // b ignores its upstream output and pulls only its declared file:
+     node('b', 'aiStep', { role: 'execute', title: 'B',
+       contextSpec: { files: [{ path: 'prompt', description: 'the brief' }] } }),
+     node('out', 'output')],
+    [edge('in', 'a'), edge('a', 'b'), edge('b', 'out')]);
+  const runId = runner.start(flow);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+
+  const ec = store.readMeta(runId).edgeContext;
+  assert.ok(ec, 'edgeContext should be persisted to meta');
+  // A full-context node's incoming edge carried the upstream text (> 0).
+  assert.ok(ec['e-in-a'] > 0, `e-in-a should carry context, got ${ec['e-in-a']}`);
+  // The contextSpec node ignored its upstream output — that edge carried nothing.
+  assert.equal(ec['e-a-b'], 0, 'the edge into a contextSpec node should be measured empty');
 });
