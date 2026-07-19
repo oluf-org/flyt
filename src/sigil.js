@@ -61,3 +61,38 @@ export function sigil(id, size = 26) {
     + `<g stroke="url(#${gid})" stroke-width="${(1.2 * k).toFixed(1)}" stroke-linecap="round">${rays}</g>`
     + `${dots}<circle cx="${c}" cy="${c}" r="${(1.7 * k).toFixed(1)}" fill="currentColor"/></svg>`;
 }
+
+// Deck cards (4.2): a flow's topology as dots and lines — the sigil renderer's
+// degenerate case: no seeding, the geometry IS the data (canvas positions from
+// the layout sidecar). `topo` = { nodes: [{x,y}], edges: [[fromIdx,toIdx]] }.
+// currentColor only, like the sigil, so it themes for free.
+export function miniTopo(topo, size = 84) {
+  const s = size;
+  const head = `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}" class="sigil topo" aria-hidden="true">`;
+  if (!topo?.nodes?.length) {
+    // No flow open in that tab: a single faint mark, not an empty hole.
+    return `${head}<circle cx="${s / 2}" cy="${s / 2}" r="2.2" fill="currentColor" opacity="0.35"/></svg>`;
+  }
+  const xs = topo.nodes.map(n => n.x);
+  const ys = topo.nodes.map(n => n.y);
+  const minX = Math.min(...xs), minY = Math.min(...ys);
+  const spanX = Math.max(Math.max(...xs) - minX, 1);
+  const spanY = Math.max(Math.max(...ys) - minY, 1);
+  const pad = s * 0.15;
+  const scale = Math.min((s - 2 * pad) / spanX, (s - 2 * pad) / spanY);
+  const ox = (s - spanX * scale) / 2;
+  const oy = (s - spanY * scale) / 2;
+  const pts = topo.nodes.map(n => ({
+    x: ox + (n.x - minX) * scale,
+    y: oy + (n.y - minY) * scale
+  }));
+  let lines = '';
+  for (const [a, b] of topo.edges ?? []) {
+    const p = pts[a], q = pts[b];
+    if (!p || !q) continue;
+    lines += `<line x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${q.x.toFixed(1)}" y2="${q.y.toFixed(1)}"/>`;
+  }
+  const dots = pts.map(p =>
+    `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.4" fill="currentColor"/>`).join('');
+  return `${head}<g stroke="currentColor" stroke-width="1.2" opacity="0.45">${lines}</g>${dots}</svg>`;
+}

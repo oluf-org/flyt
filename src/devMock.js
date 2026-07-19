@@ -170,9 +170,22 @@ const daysAgo = n => {
   return d.toISOString();
 };
 
+// One mock scratch tab plus a bound-looking one, so the tab strip, new-tab
+// page and deck can be previewed in a browser. Run-scoped calls take a
+// projectId first (matching the preload bridge) and ignore it — the mock has
+// one shared run set.
+const mockProjects = {
+  tabs: [
+    { id: 'default', folder: null, name: 'Scratch', live: 0, state: {} },
+    { id: 'D:\\demo\\habit-tracker', folder: 'D:\\demo\\habit-tracker', name: 'habit-tracker', live: 1, state: {} }
+  ],
+  active: 'default',
+  storage: 'workspace'
+};
+
 export function installDevMock() {
   window.llmflow = {
-    listRuns: async () => Object.keys(snapshots)
+    listRuns: async (_pid) => Object.keys(snapshots)
       .map(id => ({
         id,
         name: runNameOverrides[id] ?? derivedName(id),
@@ -188,16 +201,16 @@ export function installDevMock() {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     // Same rule as the store: a blank name clears the override rather than
     // storing an empty one, so the prompt-derived name comes back.
-    renameRun: async (id, name) => {
+    renameRun: async (_pid, id, name) => {
       const clean = String(name ?? '').replace(/\s+/g, ' ').trim();
       if (clean) runNameOverrides[id] = clean; else delete runNameOverrides[id];
       return clean || derivedName(id);
     },
-    deleteRun: async id => { delete snapshots[id]; return true; },
-    getSnapshot: async id => snapshots[id] ?? null,
+    deleteRun: async (_pid, id) => { delete snapshots[id]; return true; },
+    getSnapshot: async (_pid, id) => snapshots[id] ?? null,
     // Synthesize a plausible in-order log from a finished mock run's flow, so the
     // replay scrubber can be previewed in the browser dev shell.
-    readRunLog: async id => {
+    readRunLog: async (_pid, id) => {
       const snap = snapshots[id];
       if (!snap?.flow) return [];
       const log = [];
@@ -223,6 +236,53 @@ export function installDevMock() {
     pickWorkspace: async () => null, // no native folder picker in the browser dev shell
     openWorkspace: async () => {},
     onRunUpdate: () => () => {},
+
+    // --- Project tabs (D22) ---
+    listProjects: async () => structuredClone(mockProjects),
+    openProject: async folder => {
+      const id = folder ?? 'default';
+      if (!mockProjects.tabs.some(t => t.id === id)) {
+        mockProjects.tabs.push({ id, folder, name: String(folder).split(/[\\/]/).pop(), live: 0, state: {} });
+      }
+      mockProjects.active = id;
+      return { ...structuredClone(mockProjects), opened: id };
+    },
+    closeProject: async pid => {
+      const idx = mockProjects.tabs.findIndex(t => t.id === pid);
+      if (idx !== -1 && mockProjects.tabs.length > 1) {
+        mockProjects.tabs.splice(idx, 1);
+        if (mockProjects.active === pid) mockProjects.active = mockProjects.tabs[Math.min(idx, mockProjects.tabs.length - 1)].id;
+      }
+      return structuredClone(mockProjects);
+    },
+    activateProject: async pid => { mockProjects.active = pid; return structuredClone(mockProjects); },
+    reorderProjects: async ids => {
+      mockProjects.tabs.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+      return structuredClone(mockProjects);
+    },
+    saveProjectState: async (pid, state) => {
+      const t = mockProjects.tabs.find(t => t.id === pid);
+      if (t) t.state = state;
+    },
+    projectRecents: async () => [
+      { folder: 'D:\\demo\\habit-tracker', name: 'habit-tracker', exists: true },
+      { folder: 'D:\\demo\\reporting', name: 'reporting', exists: true }
+    ],
+    removeProjectRecent: async () => [],
+    pickProjectFolder: async () => null, // no native folder picker in the browser dev shell
+    deckData: async () => mockProjects.tabs.map(t => ({
+      ...structuredClone(t),
+      latestRun: (() => {
+        const id = Object.keys(snapshots).sort().at(-1);
+        return id ? { id, name: derivedName(id), stage: snapshots[id].meta?.stage ?? 'done' } : null;
+      })(),
+      topo: {
+        nodes: [{ x: 0, y: 0 }, { x: 0, y: 130 }, { x: 0, y: 260 }, { x: 160, y: 130 }],
+        edges: [[0, 1], [1, 2], [0, 3], [3, 2]]
+      }
+    })),
+    onProjectActivity: () => () => {},
+    onTabsKey: () => () => {},
     getConfig: async () => ({ workers: structuredClone(mockSettings.workers) }),
     getSettings: async () => structuredClone(mockSettings),
     setSettings: async (patch = {}) => {
@@ -254,7 +314,7 @@ export function installDevMock() {
       return structuredClone(mockFlows[id]);
     },
     deleteFlow: async id => { delete mockFlows[id]; },
-    runFlow: async () => Object.keys(snapshots).sort().at(-1),
+    runFlow: async (_pid) => Object.keys(snapshots).sort().at(-1),
     listNodeTemplates: async () => [...mockTemplates.values()].map(t => normalizeTemplate(structuredClone(t)))
       .sort((a, b) => a.name.localeCompare(b.name)),
     saveNodeTemplate: async tpl => { mockTemplates.set(tpl.id, structuredClone(tpl)); return tpl; },

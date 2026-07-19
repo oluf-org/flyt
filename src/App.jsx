@@ -16,6 +16,8 @@ import { mergeSnapshot } from '../core/snapshotDiff.js';
 import { runDocument } from './runDocument.js';
 import { foldReplay, replaySnapshot } from './runReplay.js';
 import ReplayStrip from './ReplayStrip.jsx';
+import TabStrip, { NewTabPage } from './TabStrip.jsx';
+import TabDeck from './TabDeck.jsx';
 
 function setTheme(mode) { // 'light' | 'dark'
   document.documentElement.dataset.theme = mode;
@@ -168,6 +170,26 @@ export default function App() {
   const lastHistoryPush = useRef(0);
   const [historySize, setHistorySize] = useState({ undo: 0, redo: 0 });
 
+  // --- Project tabs (D22): one tab per open project; single renderer (T6).
+  // A tab switch swaps the per-tab state bundle (T8) — everything above that
+  // belongs to ONE project's view. Theme, Settings, models, templates and the
+  // flows list stay global (T2).
+  const [tabs, setTabs] = useState([]); // [{ id, folder, name, live, state }]
+  const [activeTab, setActiveTab] = useState(null); // project id ('default' = scratch)
+  // Ref mirror for handlers that must know the current tab without re-binding
+  // (push filtering, the Ctrl+Tab stream).
+  const activeTabRef = useRef(null);
+  useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
+  const [tabLive, setTabLive] = useState({}); // id -> count of live runs (strip dots)
+  const [newTabOpen, setNewTabOpen] = useState(false); // the ＋ page (T15)
+  const [recents, setRecents] = useState([]);
+  const [tabNotice, setTabNotice] = useState(null); // restore-time dropped-folder notice (T17)
+  const bundles = useRef(new Map()); // id -> captured bundle for tabs left this session
+  const mruRef = useRef([]); // tab ids, most recently used first (deck order)
+  const [deck, setDeck] = useState(null); // { order: [id…], index } while Ctrl+Tab is held
+  const deckRef = useRef(null);
+  useEffect(() => { deckRef.current = deck; }, [deck]);
+
   const toggleTheme = () => {
     const next = theme === 'light' ? 'dark' : 'light';
     withViewTransition(() => { setTheme(next); setThemeState(next); });
@@ -177,8 +199,11 @@ export default function App() {
   useEffect(() => { window.llmflow?.setTitleBarTheme?.(theme); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Opening a different run always lands on the canvas, not the last run's doc,
-  // and clears any replay state from the previous run.
+  // and clears any replay state from the previous run. Bundle restores are the
+  // exception: a tab comes back exactly as it was left (T8), so the flag set by
+  // applyBundle skips this reset once.
   useEffect(() => {
+    if (restoringRef.current) { restoringRef.current = false; return; }
     setRunView2('canvas');
     setReplayFrames(null); setReplayIndex(null); setReplayPlaying(false);
   }, [activeRunId]);
@@ -190,7 +215,7 @@ export default function App() {
     const flow = snapshot?.flow;
     if (activeActivity === 'runs' && activeRunId && flow && isTerminal(stage) && window.llmflow?.readRunLog) {
       let cancelled = false;
-      window.llmflow.readRunLog(activeRunId)
+      window.llmflow.readRunLog(activeTabRef.current, activeRunId)
         .then(log => { if (!cancelled) setReplayFrames(foldReplay(log, flow)); })
         .catch(() => {});
       return () => { cancelled = true; };
@@ -218,7 +243,11 @@ export default function App() {
   };
 
   const refreshRuns = useCallback(async () => {
-    setRuns(await window.llmflow.listRuns());
+    // Runs are per-project (T2): list the active tab's, and drop the result if
+    // the user switched tabs while the read was in flight.
+    const pid = activeTabRef.current;
+    const list = await window.llmflow.listRuns(pid);
+    if (activeTabRef.current === pid) setRuns(list);
   }, []);
   // Listing runs re-reads every run's meta + prompt from disk, and run updates
   // arrive as often as the token stream flushes (250ms) — that would re-read the
@@ -244,8 +273,11 @@ export default function App() {
     setTemplates(await window.llmflow.listNodeTemplates());
   }, []);
 
-  useEffect(() => { refreshRuns(); refreshFlows(); refreshTemplates(); },
-    [refreshRuns, refreshFlows, refreshTemplates]);
+  // Global catalogs (flows, templates) load once; per-project data (runs, the
+  // restored selection) loads in the project boot effect further down, after
+  // the tab machinery is defined.
+  useEffect(() => { refreshFlows(); refreshTemplates(); },
+    [refreshFlows, refreshTemplates]);
 
   // Worker defaults + model options for the node editor's worker pickers.
   useEffect(() => {
@@ -266,6 +298,9 @@ export default function App() {
   useEffect(() => {
     return window.llmflow.onRunUpdate(payload => {
       const { runId } = payload;
+      // Scoped pushes (T7): a background project's run must never patch the
+      // foreground tab's snapshot. Same guard shape as the rev matching below.
+      if (payload.projectId && payload.projectId !== activeTabRef.current) return;
       refreshRunsSoon();
       setActiveRunId(prev => prev ?? runId);
       const cur = snapRef.current;
@@ -279,7 +314,7 @@ export default function App() {
       // fetch the full snapshot.
       if (!cur || cur.meta?.runId !== runId) return;
       if (payload.base !== cur.rev) {
-        window.llmflow.getSnapshot(runId).then(s => {
+        window.llmflow.getSnapshot(activeTabRef.current, runId).then(s => {
           // Ignore a resync that lost a race: another fetch (or the patch
           // stream) may have already carried this run past the rev we asked
           // for, and applying it would rewind the view.
@@ -295,11 +330,13 @@ export default function App() {
   useEffect(() => {
     if (!activeRunId) { setSnapshot(null); return; }
     // Switching runs faster than a fetch resolves must not land the old run's
-    // snapshot on the new view.
+    // snapshot on the new view. activeTab is a dependency on purpose: a tab
+    // switch resyncs the (background-stale) snapshot from files even when the
+    // restored bundle carried one (T9: background projects don't stream).
     let cancelled = false;
-    window.llmflow.getSnapshot(activeRunId).then(s => { if (!cancelled) setSnapshot(s); });
+    window.llmflow.getSnapshot(activeTab, activeRunId).then(s => { if (!cancelled) setSnapshot(s); });
     return () => { cancelled = true; };
-  }, [activeRunId]);
+  }, [activeRunId, activeTab]);
 
   // --- Flow persistence: debounced autosave, flushed on view switches ---
   // Every save re-lints the stored flow (schema + semantic rules over the
@@ -443,6 +480,7 @@ export default function App() {
 
   const openRun = useCallback(async id => {
     await flushSave();
+    restoringRef.current = false; // a user-driven open always resets the run view
     setActiveRunId(id);
     setSelectedNode(null);
     setActiveActivity('runs');
@@ -450,13 +488,13 @@ export default function App() {
   }, [flushSave]);
 
   const renameRun = useCallback(async (id, name) => {
-    await window.llmflow.renameRun(id, name);
+    await window.llmflow.renameRun(activeTabRef.current, id, name);
     await refreshRuns();
   }, [refreshRuns]);
 
   const deleteRun = useCallback(async id => {
     try {
-      await window.llmflow.deleteRun(id);
+      await window.llmflow.deleteRun(activeTabRef.current, id);
     } catch (err) {
       // The main process refuses while the run is still executing; that reason
       // is the whole message, so show it rather than the IPC wrapper around it.
@@ -491,6 +529,270 @@ export default function App() {
     await refreshTemplates();
     withViewTransition(() => { setSelectedTemplateId(tpl.id); setActiveActivity('library'); });
   }, [refreshTemplates]);
+
+  // ===================== Project tabs (D22) =====================
+  // The per-tab bundle (T8): everything one project's view holds. Captured on
+  // leave, applied on return; a slim projection (ids + view modes, no
+  // snapshots/undo) goes to the main process so restore survives restarts
+  // (T17). These are plain functions, not useCallbacks — they run on tab
+  // events, not hot paths, and must always see current state.
+  const restoringRef = useRef(false); // lets the run-open reset effect skip bundle restores
+
+  const captureBundle = () => ({
+    activeActivity, activeFlowId, flow: flowRef.current, flowLint,
+    activeRunId, snapshot, selectedNode,
+    undo: [...undoStack.current], redo: [...redoStack.current],
+    runFlowId, runInput, workspaceDir, newRunOpen,
+    flowViewMode, runView2, runs
+  });
+
+  const slimOf = b => ({
+    activeActivity: b.activeActivity,
+    activeFlowId: b.activeFlowId,
+    activeRunId: b.activeRunId,
+    runFlowId: b.runFlowId,
+    runInput: b.runInput,
+    workspaceDir: b.workspaceDir,
+    flowViewMode: b.flowViewMode,
+    runView2: b.runView2
+  });
+
+  const applyBundle = b => {
+    restoringRef.current = true;
+    setActiveActivity(b.activeActivity ?? 'flows');
+    setActiveFlowId(b.activeFlowId ?? null);
+    flowRef.current = b.flow ?? null;
+    setFlow(b.flow ?? null);
+    setSaveState('saved'); // leave always flushes, so the incoming tab is saved by construction
+    setFlowLint(b.flowLint ?? null);
+    setActiveRunId(b.activeRunId ?? null);
+    setSnapshot(b.snapshot ?? null);
+    setSelectedNode(b.selectedNode ?? null);
+    undoStack.current = b.undo ?? [];
+    redoStack.current = b.redo ?? [];
+    lastHistoryPush.current = 0;
+    setHistorySize({ undo: undoStack.current.length, redo: redoStack.current.length });
+    setRunFlowId(prev => b.runFlowId || prev); // fresh tabs keep the catalog default
+    setRunInput(b.runInput ?? '');
+    setWorkspaceDir(b.workspaceDir ?? '');
+    setNewRunOpen(b.newRunOpen ?? false);
+    setFlowViewMode(b.flowViewMode ?? 'canvas');
+    setRunView2(b.runView2 ?? 'canvas');
+    setReplayFrames(null); setReplayIndex(null); setReplayPlaying(false);
+    setRuns(b.runs ?? []);
+    setBusy(false); setResuming(false);
+  };
+
+  // First visit to a tab this session: rebuild the bundle from the slim state
+  // the main process kept for it (T17 restore depth, best-effort).
+  const restoreSlim = async (slim = {}) => {
+    const b = {
+      activeActivity: slim.activeActivity, activeRunId: slim.activeRunId ?? null,
+      runFlowId: slim.runFlowId, runInput: slim.runInput,
+      workspaceDir: slim.workspaceDir,
+      flowViewMode: slim.flowViewMode, runView2: slim.runView2,
+      runs: []
+    };
+    if (slim.activeFlowId) {
+      try {
+        b.flow = await window.llmflow.loadFlow(slim.activeFlowId);
+        b.activeFlowId = slim.activeFlowId;
+      } catch { /* flow deleted since — open the section empty */ }
+    }
+    applyBundle(b);
+    refreshRuns();
+    if (b.activeFlowId) refreshLint(b.activeFlowId);
+  };
+
+  // Leaving a tab: flush the debounced autosave (exactly as section switches
+  // do), then capture. The slim copy goes to settings.json via the registry.
+  const leaveCurrentTab = async () => {
+    const cur = activeTabRef.current;
+    if (cur == null) return;
+    await flushSave();
+    const bundle = captureBundle();
+    bundles.current.set(cur, bundle);
+    window.llmflow.saveProjectState?.(cur, slimOf(bundle));
+  };
+
+  const enterTab = async (id, savedState) => {
+    activeTabRef.current = id;
+    mruRef.current = [id, ...mruRef.current.filter(x => x !== id)];
+    const target = bundles.current.get(id);
+    withViewTransition(() => {
+      setActiveTab(id);
+      if (target) applyBundle(target);
+    });
+    if (target) refreshRuns(); // resync what background execution changed (T9)
+    else await restoreSlim(savedState ?? {});
+  };
+
+  const switchTab = async id => {
+    if (!id || id === activeTabRef.current || !tabs.some(t => t.id === id)) return;
+    await leaveCurrentTab();
+    await enterTab(id, tabs.find(t => t.id === id)?.state);
+    const payload = await window.llmflow.activateProject?.(id);
+    if (payload) setTabs(payload.tabs);
+  };
+
+  // Open a folder as a tab (null = the scratch tab). Same folder twice focuses
+  // the existing tab (T5) — the main process decides, we follow.
+  const openProjectTab = async folder => {
+    await leaveCurrentTab();
+    let payload;
+    try {
+      payload = await window.llmflow.openProject(folder);
+    } catch (err) {
+      window.alert(String(err?.message ?? err)
+        .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, ''));
+      return;
+    }
+    setTabs(payload.tabs);
+    setNewTabOpen(false);
+    if (payload.opened !== activeTabRef.current) {
+      await enterTab(payload.opened, payload.tabs.find(t => t.id === payload.opened)?.state);
+    }
+  };
+
+  // Closing a tab keeps its runs executing (T13) — main owns the engine; we
+  // just drop the view. No confirm: nothing is lost.
+  const closeTab = async id => {
+    if (id === activeTabRef.current) await leaveCurrentTab();
+    const payload = await window.llmflow.closeProject(id);
+    bundles.current.delete(id);
+    mruRef.current = mruRef.current.filter(x => x !== id);
+    setTabs(payload.tabs);
+    setTabLive(prev => { const next = { ...prev }; delete next[id]; return next; });
+    if (payload.active !== activeTabRef.current) {
+      await enterTab(payload.active, payload.tabs.find(t => t.id === payload.active)?.state);
+    }
+  };
+
+  const reorderTabs = async ids => {
+    setTabs(prev => [...prev].sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)));
+    const payload = await window.llmflow.reorderProjects?.(ids);
+    if (payload) setTabs(payload.tabs);
+  };
+
+  const openNewTabPage = async () => {
+    setRecents(await window.llmflow.projectRecents?.() ?? []);
+    setNewTabOpen(true);
+  };
+
+  // Boot: adopt the restored session (T17) and enter the active tab.
+  const bootedRef = useRef(false);
+  useEffect(() => {
+    if (bootedRef.current) return;
+    bootedRef.current = true;
+    (async () => {
+      const p = await window.llmflow.listProjects?.();
+      if (!p) { // bridge without projects (stale mock): single scratch tab
+        activeTabRef.current = 'default';
+        setTabs([{ id: 'default', folder: null, name: 'Scratch', live: 0, state: {} }]);
+        setActiveTab('default');
+        mruRef.current = ['default'];
+        refreshRuns();
+        return;
+      }
+      setTabs(p.tabs);
+      setTabLive(Object.fromEntries(p.tabs.map(t => [t.id, t.live])));
+      if (p.dropped?.length) {
+        setTabNotice(`Couldn't reopen ${p.dropped.length === 1 ? 'a tab' : `${p.dropped.length} tabs`} — folder missing: ${p.dropped.join(', ')}. Recents still lists ${p.dropped.length === 1 ? 'it' : 'them'}.`);
+      }
+      activeTabRef.current = p.active;
+      mruRef.current = [p.active, ...p.tabs.map(t => t.id).filter(x => x !== p.active)];
+      setActiveTab(p.active);
+      await restoreSlim(p.tabs.find(t => t.id === p.active)?.state ?? {});
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live-run indicators for every tab, active or not (T9's featherweight push).
+  useEffect(() => window.llmflow.onProjectActivity?.(({ projectId, live }) => {
+    setTabLive(prev => ({ ...prev, [projectId]: live.length }));
+  }), []);
+
+  // --- Ctrl+Tab (T14 + 4.2): quick tap = instant MRU flip; holding ≥150ms
+  // deals the deck; further presses advance; releasing Ctrl commits; Esc
+  // cancels. Events arrive from the main process (before-input-event), so a
+  // focused canvas or text field can never eat them. Refs, not state, so the
+  // one subscription sees current values.
+  const tabsRef = useRef(tabs);
+  useEffect(() => { tabsRef.current = tabs; }, [tabs]);
+  const switchTabRef = useRef(switchTab);
+  switchTabRef.current = switchTab;
+  const holdTimer = useRef(null);
+  const pendingSteps = useRef(0);
+
+  useEffect(() => {
+    const openDeck = steps => {
+      const openIds = tabsRef.current.map(t => t.id);
+      const order = [
+        ...mruRef.current.filter(id => openIds.includes(id)),
+        ...openIds.filter(id => !mruRef.current.includes(id))
+      ];
+      if (order.length < 2) return;
+      const index = ((steps % order.length) + order.length) % order.length;
+      setDeck({ order, index });
+    };
+    const handle = ({ kind, shift }) => {
+      if (tabsRef.current.length < 2) return;
+      if (kind === 'cycle') {
+        const d = deckRef.current;
+        if (d) {
+          const len = d.order.length;
+          setDeck({ ...d, index: (d.index + (shift ? -1 : 1) + len) % len });
+        } else if (holdTimer.current) {
+          // A second press while the hold timer runs: the user is cycling, not
+          // tapping — deal the deck now, advanced by the accumulated steps.
+          clearTimeout(holdTimer.current);
+          holdTimer.current = null;
+          pendingSteps.current += shift ? -1 : 1;
+          openDeck(pendingSteps.current);
+        } else {
+          pendingSteps.current = shift ? -1 : 1;
+          holdTimer.current = setTimeout(() => {
+            holdTimer.current = null;
+            openDeck(pendingSteps.current);
+          }, 150);
+        }
+      } else if (kind === 'release') {
+        if (holdTimer.current) {
+          // Quick tap: flip to the most recently used other tab.
+          clearTimeout(holdTimer.current);
+          holdTimer.current = null;
+          const openIds = tabsRef.current.map(t => t.id);
+          const mru = mruRef.current.filter(id => openIds.includes(id));
+          if (mru[1]) switchTabRef.current(mru[1]);
+        } else if (deckRef.current) {
+          const d = deckRef.current;
+          setDeck(null);
+          switchTabRef.current(d.order[d.index]);
+        }
+      }
+    };
+    // Two sources, one state machine. The main process intercepts Ctrl+Tab in
+    // before-input-event (T14) and preventDefaults it, so when that path fires
+    // the DOM never sees the key; the window capture listeners are the
+    // fallback for input that bypasses the native pipeline (and make the
+    // feature testable). A duplicated 'release' is a no-op by construction.
+    const unsub = window.llmflow.onTabsKey?.(handle);
+    const onKeyDown = e => {
+      if (e.key === 'Tab' && e.ctrlKey) {
+        e.preventDefault();
+        handle({ kind: 'cycle', shift: e.shiftKey });
+      }
+    };
+    const onKeyUp = e => {
+      if (e.key === 'Control') handle({ kind: 'release' });
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
+    return () => {
+      unsub?.();
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
+    };
+  }, []);
 
   // Section shortcuts: Ctrl/Cmd + 1/2/3 jump between Flows / Library / Runs.
   useEffect(() => {
@@ -618,7 +920,7 @@ export default function App() {
     setBusy(true);
     try {
       await flushSave();
-      const runId = await window.llmflow.runFlow(runFlowId, runInput.trim(), workspaceDir || null);
+      const runId = await window.llmflow.runFlow(activeTabRef.current, runFlowId, runInput.trim(), workspaceDir || null);
       setRunInput('');
       await openRun(runId);
       await refreshRuns();
@@ -632,11 +934,15 @@ export default function App() {
   const resumeRun = async () => {
     if (!activeRunId || resuming) return;
     setResuming(true);
-    try { await window.llmflow.resumeRun(activeRunId); }
+    try { await window.llmflow.resumeRun(activeTabRef.current, activeRunId); }
     finally { setResuming(false); }
   };
 
   const stage = snapshot?.meta?.stage;
+  // A bound tab IS the workspace (T19): its runs always target the tab's
+  // folder, so the per-run picker only survives in the unbound scratch tab.
+  const activeTabInfo = tabs.find(t => t.id === activeTab) ?? null;
+  const boundFolder = activeTabInfo?.folder ?? null;
   const flowView = activeActivity === 'flows' && Boolean(activeFlowId && flow);
   const runView = activeActivity === 'runs' && Boolean(activeRunId);
   // Watching a run in flight is a different job from starting one. While the
@@ -669,12 +975,28 @@ export default function App() {
           <div className="brand-mark">◆</div>
           <span className="brand-name">LLM Flow</span>
         </div>
+        <TabStrip
+          tabs={tabs}
+          activeId={activeTab}
+          live={tabLive}
+          saveState={saveState}
+          onSelect={switchTab}
+          onClose={closeTab}
+          onReorder={reorderTabs}
+          onNewTab={openNewTabPage}
+        />
         {flowView
           ? <span className="titlebar-doc mono">{flow.name}</span>
           : libraryView
             ? <span className="titlebar-doc mono">{selectedTemplate?.name ?? 'Node Library'}</span>
             : runView && <span className="titlebar-doc mono" title={activeRunId}>{activeRunName}</span>}
       </div>
+      {tabNotice && (
+        <div className="tab-notice" role="status">
+          <span>{tabNotice}</span>
+          <button className="link" onClick={() => setTabNotice(null)} aria-label="Dismiss notice">✕</button>
+        </div>
+      )}
 
       <header className="toolbar">
         <nav className="breadcrumb">
@@ -890,8 +1212,8 @@ export default function App() {
           {runView && snapshot && (
             <RunBar
               snapshot={snapshot}
-              onOpenFolder={() => window.llmflow.openRunFolder(activeRunId)}
-              onOpenWorkspace={() => window.llmflow.openWorkspace(activeRunId)}
+              onOpenFolder={() => window.llmflow.openRunFolder(activeTab, activeRunId)}
+              onOpenWorkspace={() => window.llmflow.openWorkspace(activeTab, activeRunId)}
               docView={runView2}
               onDocView={v => withViewTransition(() => setRunView2(v))}
             />
@@ -923,8 +1245,8 @@ export default function App() {
                   </span>
                 )
                 : <span>Review the work so far, then approve to continue or reject to stop.</span>}
-              <button className="primary" onClick={() => window.llmflow.approvePlan(activeRunId)}>Approve</button>
-              <button className="reject" onClick={() => window.llmflow.rejectPlan(activeRunId, 'Rejected by user')}>Reject</button>
+              <button className="primary" onClick={() => window.llmflow.approvePlan(activeTab, activeRunId)}>Approve</button>
+              <button className="reject" onClick={() => window.llmflow.rejectPlan(activeTab, activeRunId, 'Rejected by user')}>Reject</button>
             </div>
           )}
           {libraryView
@@ -945,6 +1267,7 @@ export default function App() {
                     ? <div className="split-view">
                         <div className="split-pane split-canvas">
                           <FlowEditor
+                            key={activeTab}
                             flow={flow}
                             resolved={resolvedFlow}
                             selectedNode={selectedNode}
@@ -962,6 +1285,7 @@ export default function App() {
                         </div>
                       </div>
                     : <FlowEditor
+                        key={activeTab}
                         flow={flow}
                         resolved={resolvedFlow}
                         selectedNode={selectedNode}
@@ -973,6 +1297,7 @@ export default function App() {
                     ? <RunMirror snapshot={snapshot} />
                     : <>
                         <FlowCanvas
+                          key={activeTab}
                           snapshot={replayIndex != null && replayFrames
                             ? replaySnapshot(snapshot, replayFrames[replayIndex])
                             : snapshot}
@@ -1028,26 +1353,34 @@ export default function App() {
               onChange={e => setRunInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) startRun(); }}
             />
-            <div className="workspace-row">
-              <button
-                className="ghost"
-                onClick={async () => {
-                  const dir = await window.llmflow.pickWorkspace();
-                  if (dir) setWorkspaceDir(dir);
-                }}
-                title="Bind this run to a real project folder"
-              >
-                {workspaceDir ? 'Change workspace…' : 'Choose workspace…'}
-              </button>
-              {workspaceDir
-                ? (
-                  <span className="workspace-path" title={workspaceDir}>
-                    <span className="mono">{workspaceDir.split(/[\\/]/).pop()}</span>
-                    <button className="link" onClick={() => setWorkspaceDir('')} title="Clear workspace">✕</button>
-                  </span>
-                )
-                : <span className="muted">No workspace (files stay in the run folder)</span>}
-            </div>
+            {boundFolder ? (
+              <div className="workspace-row">
+                <span className="workspace-path bound" title={boundFolder}>
+                  Runs in <span className="mono">{activeTabInfo.name}</span>
+                </span>
+              </div>
+            ) : (
+              <div className="workspace-row">
+                <button
+                  className="ghost"
+                  onClick={async () => {
+                    const dir = await window.llmflow.pickWorkspace();
+                    if (dir) setWorkspaceDir(dir);
+                  }}
+                  title="Bind this run to a real project folder"
+                >
+                  {workspaceDir ? 'Change workspace…' : 'Choose workspace…'}
+                </button>
+                {workspaceDir
+                  ? (
+                    <span className="workspace-path" title={workspaceDir}>
+                      <span className="mono">{workspaceDir.split(/[\\/]/).pop()}</span>
+                      <button className="link" onClick={() => setWorkspaceDir('')} title="Clear workspace">✕</button>
+                    </span>
+                  )
+                  : <span className="muted">No workspace (files stay in the run folder)</span>}
+              </div>
+            )}
             <button className="primary" onClick={startRun} disabled={busy || !runFlowId}>
               {busy ? 'Starting…' : 'Run'}<kbd className="shortcut">⌘↵</kbd>
             </button>
@@ -1060,7 +1393,7 @@ export default function App() {
           {runView && snapshot && (
             <RunResult
               snapshot={snapshot}
-              onFollowUp={text => window.llmflow.followUpRun(activeRunId, text)}
+              onFollowUp={text => window.llmflow.followUpRun(activeTab, activeRunId, text)}
             />
           )}
 
@@ -1090,6 +1423,34 @@ export default function App() {
       </div>
 
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {newTabOpen && (
+        <NewTabPage
+          recents={recents}
+          scratchOpen={tabs.some(t => t.id === 'default')}
+          onOpenFolder={async () => {
+            const dir = await window.llmflow.pickProjectFolder?.();
+            if (dir) openProjectTab(dir);
+          }}
+          onOpenRecent={openProjectTab}
+          onOpenScratch={() => openProjectTab(null)}
+          onRemoveRecent={async folder => {
+            setRecents(await window.llmflow.removeProjectRecent?.(folder) ?? []);
+          }}
+          onClose={() => setNewTabOpen(false)}
+        />
+      )}
+      {deck && (
+        <TabDeck
+          order={deck.order}
+          index={deck.index}
+          tabs={tabs}
+          onPick={id => { setDeck(null); switchTab(id); }}
+          onCancel={() => setDeck(null)}
+          onNav={d => setDeck(prev => prev && ({
+            ...prev, index: (prev.index + d + prev.order.length) % prev.order.length
+          }))}
+        />
+      )}
     </div>
   );
 }

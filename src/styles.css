@@ -1668,6 +1668,225 @@ button.link:hover { color: var(--accent); }
   .tip { transition: opacity .01s; transform: none; }
 }
 
+/* =========================================================================
+   Project tabs (D22, Phase 4) — strip, new-tab page, deck switcher
+   ========================================================================= */
+
+/* ---------- tab strip (in the titlebar, demo A) ---------- */
+/* The strip lives on the drag region, so everything interactive opts out.
+   Overflow is Chrome-style: tabs shrink to a floor width, then the strip
+   itself scrolls (no scrollbar chrome — wheel and drag still work). */
+
+.tab-strip {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 4px;
+  align-self: stretch; padding: 5px 0;
+  overflow-x: auto; scrollbar-width: none;
+  -webkit-app-region: no-drag;
+}
+.tab-strip::-webkit-scrollbar { display: none; }
+
+.tab {
+  flex: 1 1 180px; min-width: 56px; max-width: 190px;
+  display: flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 8px 0 10px;
+  border-radius: 8px;
+  color: var(--app-dim); font-size: 12px;
+  cursor: default; user-select: none;
+  transition: background-color .14s ease, color .14s ease;
+}
+.tab:hover { background: light-dark(rgba(255,255,255,.07), rgba(255,255,255,.05)); color: var(--app-tx); }
+.tab.active {
+  background: light-dark(rgba(255,255,255,.12), rgba(255,255,255,.09));
+  color: var(--app-tx);
+}
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.tab-label {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Live-run micro-indicator: the node beam's technique at 6px — a conic arc
+   circling a dot. One of the few sanctioned continuous animations (it means
+   "executing right now", the same vocabulary as the canvas beams). */
+.tab-live {
+  flex: none; width: 6px; height: 6px; border-radius: 50%;
+  background: conic-gradient(from var(--beam),
+    var(--accent) 0deg 250deg, transparent 290deg 320deg, var(--accent) 350deg);
+  animation: beam-spin 2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-live { background: var(--accent); animation: none; }
+}
+
+/* Unsaved dot (saveState): quiet while saving, error red when a save failed. */
+.tab-dirty { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--app-dim); }
+.tab-dirty.failed { background: var(--err); }
+
+.tab-close {
+  flex: none; width: 16px; height: 16px; padding: 0;
+  display: grid; place-items: center;
+  background: none; border: none; border-radius: 4px;
+  color: inherit; font-size: 9px; line-height: 1;
+  opacity: 0; cursor: pointer;
+  transition: opacity .14s ease, background-color .14s ease;
+}
+.tab:hover .tab-close, .tab.active .tab-close { opacity: .7; }
+.tab-close:hover {
+  opacity: 1; box-shadow: none;
+  background: light-dark(rgba(255,255,255,.14), rgba(255,255,255,.12));
+}
+
+.tab-new {
+  flex: none; width: 26px; height: 26px; padding: 0;
+  display: grid; place-items: center;
+  background: none; border: none; border-radius: 7px;
+  color: var(--app-dim); font-size: 13px; cursor: pointer;
+  transition: background-color .14s ease, color .14s ease;
+}
+.tab-new:hover {
+  background: light-dark(rgba(255,255,255,.09), rgba(255,255,255,.07));
+  color: var(--app-tx); box-shadow: none;
+}
+
+/* Restore notice (T17): one dismissible line under the titlebar. */
+.tab-notice {
+  flex: none;
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 16px;
+  background: var(--err-soft); color: var(--err);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.tab-notice span { flex: 1; min-width: 0; }
+.tab-notice .link {
+  background: none; border: none; padding: 2px 4px;
+  color: inherit; font-size: 10px; cursor: pointer;
+}
+
+/* The bound-tab run panel just states where runs land (T19). */
+.workspace-path.bound { color: var(--dim); font-size: 12px; }
+
+/* ---------- new-tab page (T15) ---------- */
+
+.newtab-overlay {
+  position: fixed; inset: 0; z-index: 40;
+  display: grid; place-items: center;
+  background: rgba(15, 21, 18, .4);
+  animation: fade-in .18s ease both;
+}
+.newtab-page {
+  width: 520px; max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  display: flex; flex-direction: column; gap: 16px;
+  background: var(--side);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-selected);
+  animation: panel-rise .34s var(--spring) both;
+  padding: 18px;
+  overflow-y: auto;
+}
+.newtab-head { display: flex; align-items: flex-start; gap: 11px; }
+.newtab-head .inspector-title { flex: 1; }
+.newtab-head h2 { font-size: 14px; font-weight: 600; margin: 0; color: var(--tx); }
+.newtab-actions { display: flex; gap: 8px; }
+
+.newtab-recents { display: flex; flex-direction: column; gap: 6px; }
+.recent-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 9px;
+  cursor: pointer;
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.recent-row:hover { border-color: var(--divider); box-shadow: var(--shadow-rest); }
+.recent-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.recent-row.missing { opacity: .55; cursor: default; }
+.recent-row.missing:hover { border-color: var(--border); box-shadow: none; }
+.recent-name { flex: none; font-weight: 600; font-size: 12.5px; }
+.recent-path {
+  flex: 1; min-width: 0; font-size: 10.5px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left; /* a long path keeps its telling tail */
+}
+.recent-missing {
+  flex: none; font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; color: var(--err); background: var(--err-soft);
+  padding: 2px 7px; border-radius: 5px;
+}
+.recent-row .link {
+  background: none; border: none; padding: 2px 4px; cursor: pointer;
+  color: var(--faint); font-size: 10px;
+}
+.recent-row .link:hover { color: var(--err); box-shadow: none; }
+
+/* ---------- deck switcher (4.2, demo D) ---------- */
+/* A <dialog>, so the overlay sits in the top layer; the backdrop blur is the
+   app's one sanctioned blur (small area, per the anti-ideas rule). Cards deal
+   in with the spring — transform/opacity only, staggered by --deal. */
+
+.tab-deck {
+  border: none; padding: 0; background: none;
+  outline: none; overflow: visible;
+}
+.tab-deck::backdrop {
+  background: light-dark(rgba(15, 21, 18, .35), rgba(5, 8, 6, .5));
+  backdrop-filter: blur(7px);
+  animation: fade-in .18s ease both;
+}
+.deck-cards { display: flex; gap: 14px; align-items: stretch; }
+.deck-card {
+  width: 168px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 16px 14px 13px;
+  background: var(--side);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-float);
+  cursor: pointer;
+  /* backwards, not both: a forwards fill would pin the keyframe transform and
+     silently defeat the focused card's lift transition. */
+  animation: deck-deal .38s var(--spring) backwards;
+  animation-delay: calc(var(--deal) * 45ms);
+  transition: border-color .14s ease, box-shadow .14s ease, transform .24s var(--spring);
+}
+.deck-card.focused, .deck-card:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow-selected);
+  transform: translateY(-4px);
+}
+@keyframes deck-deal {
+  from { opacity: 0; transform: translateY(14px) scale(.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.deck-topo { color: var(--dim); height: 84px; }
+.deck-card.focused .deck-topo { color: var(--accent); }
+.deck-name {
+  font-weight: 600; font-size: 12.5px; color: var(--tx);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.deck-status { display: flex; align-items: center; gap: 6px; font-size: 10.5px; }
+.deck-live { color: var(--accent); font-weight: 600; }
+.deck-idle { color: var(--faint); }
+.deck-badge {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; padding: 2px 6px; border-radius: 5px;
+  background: var(--chip); color: var(--chip-tx);
+}
+.deck-badge.deck-stage-done { background: var(--ok-soft); color: var(--ok); }
+.deck-badge.deck-stage-failed, .deck-badge.deck-stage-rejected { background: var(--err-soft); color: var(--err); }
+.deck-run { display: flex; align-items: center; gap: 7px; max-width: 100%; color: var(--dim); }
+.deck-run-name {
+  font-size: 10.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.deck-hint {
+  margin-top: 14px; text-align: center;
+  font-size: 10px; letter-spacing: .06em;
+  color: light-dark(#e6ebe8, #dfe7e2); opacity: .6;
+}
+
 /* ---------- reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {
@@ -1678,4 +1897,6 @@ button.link:hover { color: var(--accent); }
   }
   .spinner { animation: none; border-top-color: var(--accent); }
   .activity-indicator { transition: none; }
+  .deck-card { animation: none; }
+  .tab-deck::backdrop { backdrop-filter: none; }
 }

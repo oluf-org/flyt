@@ -109,17 +109,17 @@ Ordering principle: token/motion foundation first (everything sits on it), then 
 
 ## Phase 4 — Tabs A + D (last; the only item with data-model prerequisites)
 
-**4.0 Decision gate — resolve the minimum set from `TABS-DECISIONS.md`:**
+**4.0 Decision gate — resolve the minimum set from `TABS-DECISIONS.md`:** ✅ **Resolved 2026-07-19 → `DECISIONS.md` D22** (incl. owner call T2a: storage location is a Settings option, default in-repo `.llmflow/`).
 T1 (tab = workspace folder — recommended), T2 (runs per-project; flows/templates stay global for v1), T3 (existing globals become the "default project"), T5 (focus-existing), T6 (single renderer, recommended (a)), T7 (`projectId` on IPC + scoped pushes), T8 (per-tab state list), T13 (close = keep running), T14 (**Ctrl+Tab cycles/deck, Ctrl+1..9 stay on sections** — pick and write it down), T17 (restore tabs). T4/T11-extras/T16/T18/T19 can ride defaults. **Do not start 4.1 until these are written into `DECISIONS.md`.**
 
-**4.1 Tabs A — baseline strip**
+**4.1 Tabs A — baseline strip** ✅ **Implemented 2026-07-19** (registry in `core/projects.js` + tests; acceptance driven in real Electron: per-project runs, restore, close-keeps-running)
 - Main process: project registry (open tabs, active id) in `settings.json`; `RunStore`/`FlowStore` instances keyed by project (runs dir per T2/T3 decision); IPC handlers take `projectId`; pushes carry it, renderer drops non-matching (guard mirrors the existing `snapRef` rev-matching).
 - Renderer: per-tab state bundle = the T8 list (activeFlowId, activeRunId, snapshot, selection, undo stacks, viewport, run-panel state); tab switch = flush debounced autosave → swap bundle. Theme/settings/models stay global.
 - Strip UI in the titlebar (per demo A): folder-name label, unsaved dot from `saveState`, live-run micro-indicator (reuse `--beam` token as a 6px dot), hover ×, middle-click close, drag reorder, `＋` → recents/folder-picker page (T15), overflow = Chrome-style shrink then scroll.
 - *Files:* `electron/main.js`, `electron/preload` surface, `src/App.jsx` (state bundling — the big one), new `src/TabStrip.jsx`, `src/styles.css`. *Depends on:* 4.0; benefits from 0.2 (tab switch = View Transition).
 - *Acceptance:* two projects open; runs land in the right project; background project's live run doesn't mutate foreground snapshot; restart restores tabs + active tab; closing a tab with a live run keeps the run executing (T13) and reopening the project shows it.
 
-**4.2 Tabs D — deck switcher**
+**4.2 Tabs D — deck switcher** ✅ **Implemented 2026-07-19** (`src/TabDeck.jsx`; topology mini-render shared in `src/sigil.js`)
 - Holding `Ctrl+Tab` ≥150ms opens the deck overlay (quick tap = instant MRU switch — both behaviors, like OS switchers); release or click selects; `Esc` cancels.
 - Card = project name + status line + preview: live topology mini-render (nodes→dots, edges→lines from `*.layout.json` — a degenerate case of the sigil renderer; share code in `src/sigil.js`) + run state badge + sigil of the latest run (3.1).
 - Overlay is a `<dialog>` with `::backdrop` blur (small area, per the anti-ideas rule this is the sanctioned blur use); cards spring-deal with `--spring` stagger, `transform/opacity` only.

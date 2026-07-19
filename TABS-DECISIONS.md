@@ -1,7 +1,7 @@
 # Project Tabs — Decisions Needed
 
 **Feature:** A browser-style tab strip at the top of the window, one tab per project.
-**Status:** All items `Open` unless marked otherwise. Format follows `DECISIONS.md` (Context → Options → Recommendation).
+**Status:** **Resolved 2026-07-19 → `DECISIONS.md` D22** (the Phase 4.0 gate set T1–T3/T5–T8/T13/T14/T17, plus riding defaults for the rest). This file stays as the reasoning record; D22 is the authority. One owner addition beyond the options below: **T2a** — per-project file storage (`.llmflow/` in-repo vs appdata) is a Settings choice, defaulting to in-repo.
 
 **Why this is bigger than UI:** today the app has *no project entity*. `flows/`, `runs/`, and `nodes/` are single global directories at the app root (`electron/main.js:37-39`), and a workspace folder is bound *per run* at start time (D15). Tabs "for projects" therefore forces data-model decisions before any UI work.
 
