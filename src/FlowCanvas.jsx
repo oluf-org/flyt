@@ -100,18 +100,6 @@ function NodeCard({ data, vertical, noTarget, noSource }) {
   return (
     <div className={`flow-node status-${data.status}` + (data.kind ? ` kind-${data.kind}` : '') + (data.selected ? ' selected' : '')}>
       {!noTarget && <Handle type="target" position={vertical ? Position.Top : Position.Left} />}
-      {/* The feedback point (node rework): every AI node can send a structured
-          pass/retry verdict back to the node whose output it received. */}
-      {data.feedbackPoint && (
-        <Handle
-          type="source"
-          id={FEEDBACK_HANDLE}
-          position={Position.Top}
-          className="feedback-handle"
-          style={{ left: '82%' }}
-          title="Feedback point — drag to the upstream node this one should judge"
-        />
-      )}
       <div className="node-main">
         <span className="node-icon">{data.icon}</span>
         <div className="node-text">
@@ -127,6 +115,22 @@ function NodeCard({ data, vertical, noTarget, noSource }) {
       </div>
       <PortRow ports={ports} />
       {!noSource && ports.length === 0 && <Handle type="source" position={vertical ? Position.Bottom : Position.Right} />}
+      {/* The feedback point (node rework): every AI node can send a structured
+          pass/retry verdict back to the node whose output it received.
+          Rendered LAST on purpose: React Flow resolves an edge with no
+          sourceHandle to the first source handle in DOM order, so anything
+          before the ports would steal every portless edge and draw it from
+          the top. */}
+      {data.feedbackPoint && (
+        <Handle
+          type="source"
+          id={FEEDBACK_HANDLE}
+          position={Position.Top}
+          className="feedback-handle"
+          style={{ left: '82%' }}
+          title="Feedback point — drag to the upstream node this one should judge"
+        />
+      )}
     </div>
   );
 }
@@ -143,16 +147,6 @@ function OrchestratorCard({ data }) {
       style={{ width: box.w, height: box.h }}
     >
       <Handle type="target" position={Position.Top} />
-      {data.feedbackPoint && (
-        <Handle
-          type="source"
-          id={FEEDBACK_HANDLE}
-          position={Position.Top}
-          className="feedback-handle"
-          style={{ left: '88%' }}
-          title="Feedback point — drag to the upstream node this one should judge"
-        />
-      )}
       <div className="orch-header">
         <span className="node-icon">{data.icon}</span>
         <div className="node-text">
@@ -191,6 +185,18 @@ function OrchestratorCard({ data }) {
       <div className="orch-ports">
         <PortRow ports={data.ports ?? []} />
       </div>
+      {/* Last, for the same reason as NodeCard: a portless edge binds to the
+          first source handle in DOM order. */}
+      {data.feedbackPoint && (
+        <Handle
+          type="source"
+          id={FEEDBACK_HANDLE}
+          position={Position.Top}
+          className="feedback-handle"
+          style={{ left: '88%' }}
+          title="Feedback point — drag to the upstream node this one should judge"
+        />
+      )}
     </div>
   );
 }
