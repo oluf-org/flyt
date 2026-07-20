@@ -10,7 +10,7 @@ import RunBar from './RunBar.jsx';
 import RunResult from './RunResult.jsx';
 import RunsList from './RunsList.jsx';
 import { isTerminal } from './runProgress.js';
-import { resolveFlow, namedFlow, UNTITLED_FLOW } from './flowTypes.js';
+import { resolveFlow, namedFlow, UNTITLED_FLOW, isStructuralNode } from './flowTypes.js';
 import { layoutPositions } from './flowLayout.js';
 import { mergeSnapshot } from '../core/snapshotDiff.js';
 import { runDocument } from './runDocument.js';
@@ -296,10 +296,14 @@ export default function App() {
   // whether a key exists (drives the lander's no-key hint). Re-read when Settings
   // closes so adding a key clears the hint without a restart.
   const [hasKey, setHasKey] = useState(false);
+  const [activeModels, setActiveModels] = useState([]);
   const refreshSettings = useCallback(() => {
     window.llmflow.getSettings().then(s => {
       setHasKey(Boolean(s.hasKey));
-      if (s.hasKey) window.llmflow.listModels().then(setModels).catch(() => setModels([]));
+      setActiveModels(s.activeModels ?? []);
+      // The openrouter live catalog only feeds the legacy free-text fallback
+      // in worker pickers; the curated active-models list is the primary offer.
+      if (s.providers?.openrouter?.hasKey) window.llmflow.listModels('openrouter').then(setModels).catch(() => setModels([]));
     });
   }, []);
   useEffect(() => { refreshSettings(); }, [refreshSettings]);
@@ -988,11 +992,15 @@ export default function App() {
   };
 
   const deleteNode = nodeId => {
-    changeFlow(f => ({
-      ...f,
-      nodes: f.nodes.filter(n => n.id !== nodeId),
-      edges: f.edges.filter(e => e.source !== nodeId && e.target !== nodeId)
-    }));
+    changeFlow(f => {
+      // The pinned structural nodes (input/output) never leave the canvas.
+      if (isStructuralNode(f.nodes.find(n => n.id === nodeId))) return f;
+      return {
+        ...f,
+        nodes: f.nodes.filter(n => n.id !== nodeId),
+        edges: f.edges.filter(e => e.source !== nodeId && e.target !== nodeId)
+      };
+    });
     setSelectedNode(null);
   };
 
@@ -1305,12 +1313,8 @@ export default function App() {
               </div>
               {flowViewMode !== 'yaml' && (
                 <div className="palette">
-                  <button className="palette-btn" onClick={() => addStructuralNode('input')} title="Add a User Input node — the run panel input lands here">
-                    <span className="palette-icon">✎</span>User Input
-                  </button>
-                  <button className="palette-btn" onClick={() => addStructuralNode('output')} title="Add an Output node — collects upstream results">
-                    <span className="palette-icon">◎</span>Output
-                  </button>
+                  {/* User Input / Output are pinned structural nodes: always on
+                      the canvas, never added or removed by hand. */}
                   <button className="palette-btn" onClick={() => addStructuralNode('orchestrator')} title="Add an Orchestrator — plans autonomously and creates & runs task nodes inside its box, no human intervention">
                     <span className="palette-icon">▦</span>Orchestrator
                   </button>
@@ -1398,6 +1402,7 @@ export default function App() {
                 templates={templates}
                 selectedId={selectedTemplateId}
                 models={models}
+                activeModels={activeModels}
                 onChanged={refreshTemplates}
                 onSelect={setSelectedTemplateId}
               />
@@ -1548,6 +1553,7 @@ export default function App() {
                 flow={flow}
                 selectedNode={selectedNode}
                 models={models}
+                activeModels={activeModels}
                 templates={templates}
                 onChangeData={changeNodeData}
                 onChangeOverrides={changeNodeOverrides}

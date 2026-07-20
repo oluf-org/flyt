@@ -192,4 +192,8 @@ The explicit per-file context descriptions worked: only the listed files were re
   return reply;
 }
 
+// The mock provider serves its own ids (mock-large / mock-small) — a real
+// model id must never resolve to it during a priority walk (PROVIDERS-PLAN §2).
+mockAdapter.canServe = modelId => String(modelId).startsWith('mock-');
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));

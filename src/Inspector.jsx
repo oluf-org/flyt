@@ -1,7 +1,8 @@
 import React from 'react';
 import {
   TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, AGENT_TOOLS,
-  nodeLabel, isInstance, resolveInstance, nodePorts
+  EFFORT_LEVELS, DEFAULT_EFFORT, EVAL_TYPES, WORK_CATEGORIES,
+  nodeLabel, isInstance, resolveInstance, nodePorts, isStructuralNode
 } from './flowTypes.js';
 import { outputKey } from './runGraph.js';
 
@@ -157,8 +158,40 @@ export default function Inspector({ snapshot, selectedNode }) {
 
 const MOCK_MODELS = ['mock-large', 'mock-small'];
 
-export function WorkerPicker({ worker, models, onChange, idPrefix }) {
+export function WorkerPicker({ worker, models, activeModels, onChange, idPrefix }) {
+  const actives = (activeModels ?? []).filter(m => m.enabled !== false);
   const w = worker?.provider ? worker : { provider: 'mock', model: 'mock-large' };
+
+  // Curated mode (PROVIDERS-PLAN §1): once the user has activated models, the
+  // picker offers ONLY those (plus mock) — thousands of catalog models exist,
+  // the picker shows the handful you chose. An active pick is stored as
+  // { provider: 'auto', model } and resolved per priority at call time.
+  if (actives.length) {
+    const value = w.provider === 'mock'
+      ? (MOCK_MODELS.includes(w.model) ? `mock:${w.model}` : `mock:${MOCK_MODELS[0]}`)
+      : actives.some(m => m.id === w.model) ? `active:${w.model}` : 'unset';
+    return (
+      <div className="worker-picker">
+        <select
+          value={value}
+          onChange={e => {
+            const v = e.target.value;
+            if (v.startsWith('mock:')) onChange({ provider: 'mock', model: v.slice(5) });
+            else if (v.startsWith('active:')) onChange({ provider: 'auto', model: v.slice(7) });
+          }}
+          aria-label="model"
+        >
+          {value === 'unset' && (
+            <option value="unset" disabled>{w.provider}/{w.model} — not in active models</option>
+          )}
+          {actives.map(m => <option key={m.id} value={`active:${m.id}`}>{m.id}</option>)}
+          {MOCK_MODELS.map(m => <option key={m} value={`mock:${m}`}>{m} (mock)</option>)}
+        </select>
+      </div>
+    );
+  }
+
+  // Legacy mode: nothing activated yet — mock + openrouter free text, as before.
   const setProvider = provider => {
     if (provider === 'mock') onChange({ provider, model: MOCK_MODELS.includes(w.model) ? w.model : MOCK_MODELS[0] });
     else onChange({ provider, model: MOCK_MODELS.includes(w.model) ? (models[0]?.id ?? '') : w.model });
@@ -191,7 +224,7 @@ export function WorkerPicker({ worker, models, onChange, idPrefix }) {
   );
 }
 
-export function FlowInspector({ flow, selectedNode, models, templates, onChangeData, onChangeOverrides, onDeleteNode }) {
+export function FlowInspector({ flow, selectedNode, models, activeModels, templates, onChangeData, onChangeOverrides, onDeleteNode }) {
   const node = flow.nodes.find(n => n.id === selectedNode);
 
   if (!node) {
@@ -222,6 +255,7 @@ export function FlowInspector({ flow, selectedNode, models, templates, onChangeD
         node={node}
         template={templates?.find(t => t.id === node.templateId) ?? null}
         models={models}
+        activeModels={activeModels}
         onChangeOverrides={onChangeOverrides}
         onDeleteNode={onDeleteNode}
       />
@@ -283,7 +317,7 @@ export function FlowInspector({ flow, selectedNode, models, templates, onChangeD
           </section>
           <section>
             <h3>Worker</h3>
-            <WorkerPicker worker={d.worker} models={models} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+            <WorkerPicker worker={d.worker} models={models} activeModels={activeModels} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
           </section>
 
           {/* Advanced example node fields (category, template, contextSpec) — see FLOW_NODES.md */}
@@ -386,13 +420,34 @@ export function FlowInspector({ flow, selectedNode, models, templates, onChangeD
               {AI_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           </section>
+          {d.role === 'evaluation' && (
+            <section>
+              <h3>Evaluation type</h3>
+              <select value={d.evalType ?? 'step'} disabled={readOnly} onChange={e => set({ evalType: e.target.value })}>
+                {Object.keys(EVAL_TYPES).map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </section>
+          )}
+          {d.role === 'translate' && (
+            <section>
+              <h3>Target language</h3>
+              <input value={d.language ?? ''} placeholder="English" disabled={readOnly}
+                onChange={e => set({ language: e.target.value || undefined })} />
+            </section>
+          )}
+          <section>
+            <h3>Effort level</h3>
+            <select value={d.effort ?? DEFAULT_EFFORT} disabled={readOnly} onChange={e => set({ effort: e.target.value })}>
+              {EFFORT_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </section>
           <section>
             <h3>System prompt — blank uses the role default</h3>
             <textarea rows={5} value={d.system ?? ''} disabled={readOnly} onChange={e => set({ system: e.target.value })} />
           </section>
           <section>
             <h3>Worker</h3>
-            <WorkerPicker worker={d.worker} models={models} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+            <WorkerPicker worker={d.worker} models={models} activeModels={activeModels} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
           </section>
         </>}
 
@@ -411,13 +466,47 @@ export function FlowInspector({ flow, selectedNode, models, templates, onChangeD
               value={d.goal ?? ''} onChange={e => set({ goal: e.target.value || undefined })} />
           </section>
           <section>
+            <h3>Spawned nodes — minimum / maximum</h3>
+            <div className="nodes-editor-row">
+              <select
+                aria-label="Minimum spawned nodes"
+                value={d.minNodes ?? 1}
+                onChange={e => {
+                  const min = Number(e.target.value);
+                  set({ minNodes: min, ...(min > (d.maxNodes ?? 5) ? { maxNodes: min } : {}) });
+                }}
+              >
+                {Array.from({ length: 20 }, (_, i) => i + 1).map(n => <option key={n} value={n}>min {n}</option>)}
+              </select>
+              <select
+                aria-label="Maximum spawned nodes"
+                value={d.maxNodes ?? 5}
+                onChange={e => {
+                  const max = Number(e.target.value);
+                  set({ maxNodes: max, ...(max < (d.minNodes ?? 1) ? { minNodes: max } : {}) });
+                }}
+              >
+                {Array.from({ length: 20 }, (_, i) => i + 1).map(n => <option key={n} value={n}>max {n}</option>)}
+              </select>
+            </div>
+            <div className="settings-hint">
+              Bounds how many work nodes the planning call may create (default 1–5).
+            </div>
+          </section>
+          <section>
+            <h3>Effort level</h3>
+            <select value={d.effort ?? DEFAULT_EFFORT} onChange={e => set({ effort: e.target.value })}>
+              {EFFORT_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </section>
+          <section>
             <h3>Extra instructions — appended to the planning prompt</h3>
             <textarea rows={4} placeholder="(optional) e.g. prefer few, larger nodes; always include a test node…"
               value={d.instructions ?? ''} onChange={e => set({ instructions: e.target.value || undefined })} />
           </section>
           <section>
             <h3>Planner worker</h3>
-            <WorkerPicker worker={d.worker} models={models} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+            <WorkerPicker worker={d.worker} models={models} activeModels={activeModels} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
           </section>
           <section>
             <h3>Creates</h3>
@@ -442,9 +531,16 @@ export function FlowInspector({ flow, selectedNode, models, templates, onChangeD
           </section>
         )}
 
-        {!readOnly && (
+        {!readOnly && !isStructuralNode(node) && (
           <section>
             <button className="reject" onClick={() => onDeleteNode(node.id)}>Delete node</button>
+          </section>
+        )}
+        {isStructuralNode(node) && (
+          <section>
+            <div className="settings-hint">
+              {node.type === 'input' ? 'User Input' : 'Output'} is a pinned structural node — every flow keeps one, so it cannot be deleted.
+            </div>
           </section>
         )}
       </div>
@@ -468,7 +564,7 @@ function OverrideTag({ active, onReset }) {
   );
 }
 
-function InstanceInspector({ node, template, models, onChangeOverrides, onDeleteNode }) {
+function InstanceInspector({ node, template, models, activeModels, onChangeOverrides, onDeleteNode }) {
   const ov = node.overrides ?? {};
   const eff = resolveInstance(node, template).data; // effective (merged) values
   const set = patch => onChangeOverrides(node.id, patch);
@@ -501,6 +597,50 @@ function InstanceInspector({ node, template, models, onChangeOverrides, onDelete
           />
         </section>
 
+        {template?.id === 'work' && (
+          <section>
+            <h3>Task type <OverrideTag active={ov.category != null} onReset={() => unset('category')} /></h3>
+            <select value={eff.category ?? WORK_CATEGORIES[0]} onChange={e => set({ category: e.target.value })}>
+              {WORK_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <div className="settings-hint">
+              Picks the tools and the default model. Test-creation can run commands, so it gates each call by default.
+            </div>
+          </section>
+        )}
+
+        {template?.role === 'evaluation' && (
+          <section>
+            <h3>Evaluation type <OverrideTag active={ov.evalType != null} onReset={() => unset('evalType')} /></h3>
+            <select value={eff.evalType ?? 'step'} onChange={e => set({ evalType: e.target.value })}>
+              <option value="plan">Plan evaluation — creates the work nodes</option>
+              <option value="step">Step evaluation — pass / retry / escalate</option>
+              <option value="final">Final evaluation — completeness report</option>
+            </select>
+          </section>
+        )}
+
+        <section>
+          <h3>Effort level <OverrideTag active={ov.effort != null} onReset={() => unset('effort')} /></h3>
+          <select value={eff.effort ?? DEFAULT_EFFORT} onChange={e => set({ effort: e.target.value })}>
+            {EFFORT_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+          <div className="settings-hint">
+            Drives the default model pick and the response budget. An explicit worker below overrides the model choice.
+          </div>
+        </section>
+
+        {eff.role === 'translate' && (
+          <section>
+            <h3>Target language <OverrideTag active={ov.language != null} onReset={() => unset('language')} /></h3>
+            <input
+              value={ov.language ?? ''}
+              placeholder={eff.language ?? 'English'}
+              onChange={e => set({ language: e.target.value || undefined })}
+            />
+          </section>
+        )}
+
         <section>
           <h3>Worker <OverrideTag active={ov.worker != null} onReset={() => unset('worker')} /></h3>
           {ov.worker == null && (
@@ -509,7 +649,7 @@ function InstanceInspector({ node, template, models, onChangeOverrides, onDelete
               : 'app default worker (template)'}</pre>
           )}
           {ov.worker != null
-            ? <WorkerPicker worker={ov.worker} models={models} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+            ? <WorkerPicker worker={ov.worker} models={models} activeModels={activeModels} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
             : <button type="button" className="ghost mini"
                 onClick={() => set({ worker: template?.worker ?? { provider: 'mock', model: 'mock-large' } })}>
                 Override worker for this workflow

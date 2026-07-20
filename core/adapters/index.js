@@ -25,16 +25,27 @@
 // in behind it and vanish.
 import { anthropicAdapter } from './anthropic.js';
 import { openrouterAdapter } from './openrouter.js';
+import { openaiAdapter } from './openai.js';
+import { kimiAdapter } from './kimi.js';
 import { mockAdapter } from './mock.js';
 
 const providers = {
   anthropic: anthropicAdapter,
   openrouter: openrouterAdapter,
+  openai: openaiAdapter,
+  kimi: kimiAdapter,
   mock: mockAdapter
 };
 
 export function registerProvider(name, adapter) {
   providers[name] = adapter;
+}
+
+// Can this provider serve this model id? Each adapter declares its own rule
+// (PROVIDERS-PLAN §2); resolveModelSource walks providerPriority with it.
+export function canServe(provider, modelId) {
+  const adapter = providers[provider];
+  return adapter?.canServe ? Boolean(adapter.canServe(modelId)) : false;
 }
 
 // Transient failures worth an automatic retry: rate limits (429), timeouts
@@ -69,7 +80,7 @@ export const DEFAULT_RETRY = { attempts: 5, baseMs: 1000, maxMs: 30000 };
 // count, but a call that exhausts its budget just throws, so the attempts that
 // led there left no trace and "did backoff actually run?" could only be guessed
 // from wall-clock timing. Callers log it (V1 task 11).
-export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools, retry, onText, onRetry }) {
+export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools, retry, onText, onRetry, ...rest }) {
   const adapter = providers[provider];
   if (!adapter) throw new Error(`Unknown provider "${provider}". Available: ${Object.keys(providers).join(', ')}`);
   const attempts = Math.max(1, retry?.attempts ?? DEFAULT_RETRY.attempts);
@@ -79,7 +90,9 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
   let lastErr;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const result = await adapter({ model, system, prompt, maxTokens, apiKey, messages, tools, onText });
+      // Extra fields (rest — e.g. kimi's keyKind, stamped by the main process)
+      // pass straight through to the adapter; callers never handle them.
+      const result = await adapter({ model, system, prompt, maxTokens, apiKey, messages, tools, onText, ...rest });
       return {
         ...result, provider, model,
         durationMs: Date.now() - started,

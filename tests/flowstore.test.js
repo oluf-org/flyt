@@ -78,11 +78,11 @@ test('flowstore: stale layout entries are ignored and pruned on save', () => {
 
 test('flowstore: create + remove use the DSL files', () => {
   const store = new FlowStore(tmp());
-  const flow = store.create('code-general-step');
+  const flow = store.create('work');
   assert.ok(fs.existsSync(store.flowPath(flow.id)));
   const loaded = store.load(flow.id);
   assert.deepEqual(loaded.nodes.map(n => n.id), ['input-1', 'step-1', 'output-1']);
-  assert.equal(loaded.nodes[1].templateId, 'code-general-step');
+  assert.equal(loaded.nodes[1].templateId, 'work');
   store.remove(flow.id);
   assert.ok(!fs.existsSync(store.flowPath(flow.id)));
   assert.ok(!fs.existsSync(store.layoutPath(flow.id)));

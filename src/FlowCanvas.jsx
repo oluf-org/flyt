@@ -1,7 +1,10 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ReactFlow, Background, Controls, Handle, Position } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { TYPE_META, nodeLabel, nodeSub, nodePorts, createsNodes } from './flowTypes.js';
+import {
+  TYPE_META, nodeLabel, nodeSub, nodePorts, createsNodes,
+  FEEDBACK_HANDLE, isFeedbackEdge, isStructuralNode, forwardEdges
+} from './flowTypes.js';
 import { wouldCreateCycle } from './flowLayout.js';
 import { spawnedTasks, taskNodeStatus } from './runGraph.js';
 import FlowEdge from './FlowEdge.jsx';
@@ -97,6 +100,18 @@ function NodeCard({ data, vertical, noTarget, noSource }) {
   return (
     <div className={`flow-node status-${data.status}` + (data.kind ? ` kind-${data.kind}` : '') + (data.selected ? ' selected' : '')}>
       {!noTarget && <Handle type="target" position={vertical ? Position.Top : Position.Left} />}
+      {/* The feedback point (node rework): every AI node can send a structured
+          pass/retry verdict back to the node whose output it received. */}
+      {data.feedbackPoint && (
+        <Handle
+          type="source"
+          id={FEEDBACK_HANDLE}
+          position={Position.Top}
+          className="feedback-handle"
+          style={{ left: '82%' }}
+          title="Feedback point — drag to the upstream node this one should judge"
+        />
+      )}
       <div className="node-main">
         <span className="node-icon">{data.icon}</span>
         <div className="node-text">
@@ -128,6 +143,16 @@ function OrchestratorCard({ data }) {
       style={{ width: box.w, height: box.h }}
     >
       <Handle type="target" position={Position.Top} />
+      {data.feedbackPoint && (
+        <Handle
+          type="source"
+          id={FEEDBACK_HANDLE}
+          position={Position.Top}
+          className="feedback-handle"
+          style={{ left: '88%' }}
+          title="Feedback point — drag to the upstream node this one should judge"
+        />
+      )}
       <div className="orch-header">
         <span className="node-icon">{data.icon}</span>
         <div className="node-text">
@@ -145,6 +170,24 @@ function OrchestratorCard({ data }) {
           Plans autonomously at run time —<br />task nodes are created and run in here,<br />no human intervention.
         </div>
       )}
+      {/* A large swarm collapses to a stack: the box stays compact and the
+          full node list opens in a modal instead (node rework). */}
+      {data.stack && (
+        <button
+          type="button"
+          className="orch-stack"
+          onClick={e => { e.stopPropagation(); data.onOpenStack?.(); }}
+          title="Show every spawned node"
+        >
+          <span className="orch-stack-cards" aria-hidden>
+            <span /><span /><span />
+          </span>
+          <span className="orch-stack-count">{data.stack.count} nodes</span>
+          <span className="orch-stack-done mono">
+            {data.stack.done}/{data.stack.count} done · click to list
+          </span>
+        </button>
+      )}
       <div className="orch-ports">
         <PortRow ports={data.ports ?? []} />
       </div>
@@ -156,7 +199,7 @@ function OrchestratorCard({ data }) {
 // fields so unchanged cards skip re-rendering (positions are applied by the
 // React Flow wrapper, not by NodeCard, so they don't belong in the compare).
 const cardEqual = (prev, next) =>
-  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'turn']
+  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'turn', 'feedbackPoint', 'stack']
     .every(k => prev.data[k] === next.data[k]);
 
 const StageNode = React.memo(props => <NodeCard {...props} vertical />, cardEqual);
@@ -190,6 +233,8 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
     type: n.type === 'orchestrator' ? 'orchestrator' : 'editable',
     position: n.position,
     selected: n.id === selectedNode,
+    // The pinned structural nodes cannot be deleted from the canvas.
+    deletable: !readOnly && n.type !== 'input' && n.type !== 'output',
     data: {
       label: nodeLabel(n),
       sub: nodeSub(n),
@@ -199,12 +244,17 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
       status: 'idle',
       ports: nodePorts(n),
       spawns: n.type !== 'orchestrator' && createsNodes(n),
+      feedbackPoint: n.type !== 'input' && n.type !== 'output',
       ...(n.type === 'orchestrator' ? { empty: true, box: n.data?.box } : {}),
       selected: n.id === selectedNode
     }
-  })), [displayNodes, selectedNode]);
+  })), [displayNodes, selectedNode, readOnly]);
 
-  const edges = useMemo(() => flow.edges.map(e => ({ ...e, type: EDGE_TYPE })), [flow.edges]);
+  const edges = useMemo(() => flow.edges.map(e => ({
+    ...e,
+    type: EDGE_TYPE,
+    ...(isFeedbackEdge(e) ? { className: 'edge-feedback' } : {})
+  })), [flow.edges]);
 
   const onNodesChange = useCallback(changes => {
     if (readOnly) return;
@@ -214,6 +264,8 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
         if (c.type === 'position' && c.position) {
           ns = ns.map(n => n.id === c.id ? { ...n, position: c.position } : n);
         } else if (c.type === 'remove') {
+          // Structural nodes are pinned: input/output never leave the canvas.
+          if (isStructuralNode(f.nodes.find(n => n.id === c.id))) continue;
           ns = ns.filter(n => n.id !== c.id);
           es = es.filter(e => e.source !== c.id && e.target !== c.id);
           deselect = true;
@@ -240,9 +292,17 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
 
   const onConnect = useCallback(({ source, target, sourceHandle }) => {
     if (readOnly || !source || !target || source === target) return;
+    const feedback = sourceHandle === FEEDBACK_HANDLE;
     onChangeFlow(f => {
       if (f.edges.some(e => sameEdge(e, source, target, sourceHandle))) return f;
-      if (wouldCreateCycle(f.edges, source, target)) return f;
+      // Feedback edges point backwards by design — they are a reverse channel
+      // outside the execution order, so the cycle guard does not apply. They
+      // may only target AI nodes.
+      if (feedback) {
+        if (isStructuralNode(f.nodes.find(n => n.id === target))) return f;
+      } else if (wouldCreateCycle(forwardEdges(f.edges), source, target)) {
+        return f;
+      }
       return {
         ...f,
         edges: [...f.edges, {
@@ -256,11 +316,15 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
 
   // Live drag feedback: refuse duplicate edges and anything that would close
   // a cycle (topoSort rejects cyclic flows at run time — block them here).
-  const isValidConnection = useCallback(({ source, target, sourceHandle }) =>
-    Boolean(source && target) && source !== target &&
-    !flow.edges.some(e => sameEdge(e, source, target, sourceHandle)) &&
-    !wouldCreateCycle(flow.edges, source, target),
-  [flow.edges]);
+  // Feedback edges are exempt from the cycle rule but must target an AI node.
+  const isValidConnection = useCallback(({ source, target, sourceHandle }) => {
+    if (!source || !target || source === target) return false;
+    if (flow.edges.some(e => sameEdge(e, source, target, sourceHandle))) return false;
+    if (sourceHandle === FEEDBACK_HANDLE) {
+      return !isStructuralNode(flow.nodes.find(n => n.id === target));
+    }
+    return !wouldCreateCycle(forwardEdges(flow.edges), source, target);
+  }, [flow.edges, flow.nodes]);
 
   return (
     <ReactFlow
@@ -288,30 +352,63 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
 }
 
 export default function FlowCanvas({ snapshot, selectedNode, onSelect }) {
+  // Which orchestrator's collapsed swarm list is open (null = none).
+  const [stackOpenFor, setStackOpenFor] = useState(null);
   const { nodes: baseNodes, edges: baseEdges } = useMemo(
-    () => buildGraph(snapshot, selectedNode), [snapshot, selectedNode]);
+    () => buildGraph(snapshot, selectedNode, setStackOpenFor), [snapshot, selectedNode]);
   const { nodes, edges, dimming, onNodeMouseEnter, onNodeMouseLeave } =
     useLineageFocus(baseNodes, baseEdges);
+  const stack = stackOpenFor
+    ? baseNodes.find(n => n.id === stackOpenFor)?.data?.stack ?? null
+    : null;
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      edgeTypes={edgeTypes}
-      className={dimming ? 'dimming' : undefined}
-      onNodeMouseEnter={onNodeMouseEnter}
-      onNodeMouseLeave={onNodeMouseLeave}
-      onNodeClick={(_e, node) => onSelect(node.id)}
-      onPaneClick={() => onSelect(null)}
-      fitView
-      fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
-      proOptions={{ hideAttribution: true }}
-      nodesDraggable={false}
-      nodesConnectable={false}
-    >
-      <Background gap={20} size={1.1} />
-      <Controls showInteractive={false} />
-    </ReactFlow>
+    <>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        className={dimming ? 'dimming' : undefined}
+        onNodeMouseEnter={onNodeMouseEnter}
+        onNodeMouseLeave={onNodeMouseLeave}
+        onNodeClick={(_e, node) => onSelect(node.id)}
+        onPaneClick={() => onSelect(null)}
+        fitView
+        fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
+        proOptions={{ hideAttribution: true }}
+        nodesDraggable={false}
+        nodesConnectable={false}
+      >
+        <Background gap={20} size={1.1} />
+        <Controls showInteractive={false} />
+      </ReactFlow>
+      {stack && (
+        <div className="orch-modal-backdrop" onClick={() => setStackOpenFor(null)}>
+          <div className="orch-modal" role="dialog" aria-label="Spawned nodes" onClick={e => e.stopPropagation()}>
+            <div className="orch-modal-head">
+              <span className="section-label">Spawned nodes</span>
+              <span className="mono">{stack.done}/{stack.count} done</span>
+              <button className="link" onClick={() => setStackOpenFor(null)} aria-label="Close">✕</button>
+            </div>
+            <div className="orch-modal-list">
+              {stack.items.map(it => (
+                <button
+                  key={it.id}
+                  type="button"
+                  className={'orch-modal-item' + (selectedNode === it.id ? ' active' : '')}
+                  onClick={() => { onSelect(it.id); setStackOpenFor(null); }}
+                >
+                  <span className={`orch-modal-status status-${it.status}`} aria-hidden />
+                  <span className="orch-modal-title">{it.title}</span>
+                  <span className="mono orch-modal-id">{it.id}</span>
+                  <span className="orch-modal-state">{it.status}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -366,10 +463,10 @@ function useLineageFocus(baseNodes, baseEdges) {
   return { nodes, edges, dimming: !!lit, onNodeMouseEnter, onNodeMouseLeave };
 }
 
-function buildGraph(snapshot, selectedNode) {
+function buildGraph(snapshot, selectedNode, onOpenStack) {
   // Flow runs carry their definition in the run dir; render that graph with
   // live per-node statuses instead of the classic linear stages.
-  if (snapshot.flow) return buildFlowRunGraph(snapshot, selectedNode);
+  if (snapshot.flow) return buildFlowRunGraph(snapshot, selectedNode, onOpenStack);
   const { meta, tasks, retrospectives } = snapshot;
   const STEP_Y = 104;
 
@@ -444,11 +541,31 @@ function workerSub(kind, retro) {
   return retro?.model ? `${kind} · ${retro.model.provider}/${retro.model.model}` : `${kind} · idle`;
 }
 
-function buildFlowRunGraph(snapshot, selectedNode) {
+// A swarm larger than this collapses into a stack on the orchestrator box —
+// the full list opens in a modal instead of drawing dozens of cards.
+const MAX_VISIBLE_CHILDREN = 8;
+
+function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
   const { flow, meta } = snapshot;
   const statusOf = id => meta.nodeStatus?.[id] ?? 'pending';
-  const childrenOf = id => flow.nodes.some(n => n.parentId === id);
-  const nodes = flow.nodes.map(n => ({
+  const childrenOf = id => flow.nodes.filter(n => n.parentId === id);
+  // Orchestrators whose swarm is too large to draw: their children are hidden
+  // and the box shows a stack + count (modal lists them).
+  const collapsed = new Set(flow.nodes
+    .filter(n => n.type === 'orchestrator' && childrenOf(n.id).length > MAX_VISIBLE_CHILDREN)
+    .map(n => n.id));
+  const hidden = new Set(flow.nodes
+    .filter(n => n.parentId && collapsed.has(n.parentId))
+    .map(n => n.id));
+  const stackFor = id => {
+    const kids = childrenOf(id);
+    return {
+      count: kids.length,
+      done: kids.filter(k => statusOf(k.id) === 'done').length,
+      items: kids.map(k => ({ id: k.id, title: nodeLabel(k), status: statusOf(k.id) }))
+    };
+  };
+  const nodes = flow.nodes.filter(n => !hidden.has(n.id)).map(n => ({
     id: n.id,
     type: n.type === 'orchestrator' ? 'orchestrator' : 'stage',
     position: n.position,
@@ -464,21 +581,30 @@ function buildFlowRunGraph(snapshot, selectedNode) {
       ...(n.data?.origin === 'followup' ? { turn: n.data.turn } : {}),
       ports: nodePorts(n),
       spawns: n.type !== 'orchestrator' && createsNodes(n),
-      ...(n.type === 'orchestrator' ? { empty: !childrenOf(n.id), box: n.data?.box } : {}),
+      feedbackPoint: n.type !== 'input' && n.type !== 'output',
+      ...(n.type === 'orchestrator'
+        ? collapsed.has(n.id)
+          // Collapsed: a compact box regardless of the swarm's laid-out size.
+          ? { empty: false, box: { w: 380, h: 230 }, stack: stackFor(n.id), onOpenStack: () => onOpenStack?.(n.id) }
+          : { empty: childrenOf(n.id).length === 0, box: n.data?.box }
+        : {}),
       selected: selectedNode === n.id
     }
   }));
   const parentOf = new Map(flow.nodes.map(n => [n.id, n.parentId ?? null]));
   const edges = flow.edges
     // Hide the container's attach edges (orchestrator -> its own children);
-    // the box already communicates ownership.
+    // the box already communicates ownership. Edges touching a hidden child
+    // (collapsed swarm) go with their nodes.
     .filter(e => parentOf.get(e.target) !== e.source)
+    .filter(e => !hidden.has(e.source) && !hidden.has(e.target))
     .map(e => ({
       id: e.id,
       source: e.source,
       target: e.target,
       type: EDGE_TYPE,
       ...(e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}),
+      ...(isFeedbackEdge(e) ? { className: 'edge-feedback' } : {}),
       animated: statusOf(e.target) === 'active',
       // FlowEdge: line weight from context that flowed here, streaming dot while
       // the source produces. edgeContext is written by the runner as it assembles

@@ -38,8 +38,12 @@ async function gateToolCall(ctx, name, args) {
 // can record it: the audit log said THAT an agent called tools but never HOW,
 // so the two paths were indistinguishable after the fact and "did the native
 // path actually run?" could only be inferred from the model catalogue.
+// Native is available on every OpenAI-compatible provider (openrouter, openai,
+// kimi — all backed by the shared factory in http.js); anthropic and mock stay
+// on the text protocol.
+const NATIVE_TOOL_PROVIDERS = new Set(['openrouter', 'openai', 'kimi']);
 export const toolProtocol = worker =>
-  (worker?.provider === 'openrouter' && worker?.supportsTools) ? 'native' : 'text';
+  (NATIVE_TOOL_PROVIDERS.has(worker?.provider) && worker?.supportsTools) ? 'native' : 'text';
 
 export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, retry }) {
   const started = Date.now();

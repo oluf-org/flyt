@@ -912,6 +912,28 @@ kbd.shortcut {
 }
 .react-flow__handle.port-handle:hover { border-color: var(--accent); background: var(--accent-soft); }
 
+/* ---------- feedback channel (node rework) ---------- */
+/* The feedback point at the top of every AI node: a small hollow diamond,
+   visually apart from the round target handle, tinted amber so a reverse
+   channel never reads as forward flow. */
+.react-flow__handle.feedback-handle {
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  background: var(--card);
+  border: 1.5px solid color-mix(in srgb, var(--warn, #c9a227) 65%, var(--faint));
+  transition: border-color .14s ease, background-color .14s ease;
+}
+.react-flow__handle.feedback-handle:hover {
+  border-color: var(--warn, #c9a227);
+  background: color-mix(in srgb, var(--warn, #c9a227) 18%, var(--card));
+}
+/* Feedback edges: dashed amber — a verdict channel, not context flow. */
+.react-flow__edge.edge-feedback path {
+  stroke: color-mix(in srgb, var(--warn, #c9a227) 70%, var(--divider));
+  stroke-dasharray: 6 5;
+}
+
 /* ---------- orchestrator: the autonomous container ---------- */
 /* A large box that fills with AI-created task nodes at run time. While it
    plans and runs its children, the border is a slowly rotating purple
@@ -948,6 +970,74 @@ kbd.shortcut {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 10px; line-height: 1.8; color: var(--faint);
 }
+/* Collapsed swarm (node rework): when the orchestrator spawns more nodes than
+   the box can sensibly draw, the children collapse into this stack chip; the
+   full list opens in a modal. */
+.orch-stack {
+  margin: auto;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 14px 22px;
+  background: none; border: none; cursor: pointer;
+  color: var(--tx);
+  border-radius: 12px;
+  transition: background-color .14s ease;
+}
+.orch-stack:hover { background: var(--orch-soft); }
+.orch-stack-cards { position: relative; width: 46px; height: 30px; display: block; }
+.orch-stack-cards span {
+  position: absolute; inset: 0;
+  background: var(--card);
+  border: 1.5px solid color-mix(in srgb, var(--orch) 45%, var(--border));
+  border-radius: 6px;
+}
+.orch-stack-cards span:nth-child(1) { transform: translate(-6px, -5px) rotate(-4deg); }
+.orch-stack-cards span:nth-child(2) { transform: translate(0, 0); }
+.orch-stack-cards span:nth-child(3) { transform: translate(6px, 5px) rotate(4deg); }
+.orch-stack-count { font-weight: 600; font-size: 14px; }
+.orch-stack-done { font-size: 10px; color: var(--faint); }
+
+/* The swarm list modal — same visual family as the settings sheet. */
+.orch-modal-backdrop {
+  position: absolute; inset: 0; z-index: 30;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(4px);
+}
+.orch-modal {
+  width: min(460px, 86%); max-height: 72%;
+  display: flex; flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-float);
+  overflow: hidden;
+}
+.orch-modal-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--divider);
+}
+.orch-modal-head .mono { margin-left: auto; font-size: 11px; color: var(--faint); }
+.orch-modal-list { overflow-y: auto; padding: 6px; }
+.orch-modal-item {
+  width: 100%;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  background: none; border: none; border-radius: 8px;
+  cursor: pointer; text-align: left; color: var(--tx);
+  transition: background-color .12s ease;
+}
+.orch-modal-item:hover, .orch-modal-item.active { background: var(--accent-soft); }
+.orch-modal-status {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--divider); flex: none;
+}
+.orch-modal-status.status-done { background: var(--ok, #3a7d5c); }
+.orch-modal-status.status-active { background: var(--orch); }
+.orch-modal-status.status-failed { background: var(--err); }
+.orch-modal-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.orch-modal-id { font-size: 10px; color: var(--faint); }
+.orch-modal-state { font-size: 10px; color: var(--faint); }
+
 .orch-ports { position: absolute; bottom: 0; left: 0; right: 0; padding-bottom: 9px; }
 .orch-ports .node-ports { border-top: none; margin-top: 0; padding-top: 0; }
 .orch-ports .node-ports-label { display: none; }
@@ -1192,6 +1282,82 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
 .worker-row input, .worker-row select { width: 100%; min-width: 0; }
 
 .settings-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+
+/* Settings tab rail — slim, like the TabStrip but inside the panel. */
+.settings-tabs {
+  display: flex; gap: 4px; padding: 8px 18px 0;
+  border-bottom: 1px solid var(--border);
+}
+.settings-tab {
+  border: none; background: none; color: var(--dim);
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  padding: 7px 12px 9px; margin-bottom: -1px;
+  border-bottom: 2px solid transparent; border-radius: 0;
+  cursor: pointer;
+}
+.settings-tab:hover { color: var(--tx); }
+.settings-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Provider cards: a collapsed card is one scannable line — name, status,
+   model count. One card open at a time. */
+.provider-cards { display: flex; flex-direction: column; gap: 6px; }
+.provider-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  overflow: hidden;
+}
+.provider-card.open { border-color: var(--accent); }
+.provider-card-head {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 12px; border: none; background: none;
+  font: inherit; font-size: 12.5px; color: var(--tx); cursor: pointer; text-align: left;
+}
+.provider-card-head:hover { background: var(--chip); }
+.provider-name { font-weight: 600; flex: none; min-width: 86px; }
+.provider-count { margin-left: auto; font-size: 11px; flex: none; }
+.provider-caret { color: var(--faint); flex: none; font-size: 10px; }
+.provider-card-body { padding: 4px 12px 12px; }
+.provider-note { color: var(--faint); font-style: italic; }
+.provider-test-row { align-items: center; margin-top: 8px; }
+.provider-test-err {
+  font-size: 10.5px; color: var(--err);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.keykind-row { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
+.keykind-option {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--tx); cursor: pointer;
+}
+.keykind-option input { accent-color: var(--accent); }
+
+/* Provider priority chips (Models tab top). */
+.priority-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.priority-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--chip); border: 1px solid var(--border); border-radius: 20px;
+  padding: 3px 6px 3px 10px; font-size: 12px; color: var(--tx);
+}
+.priority-chip.off { opacity: .45; }
+.priority-chip-label { font-weight: 600; }
+.priority-chip button {
+  border: none; background: none; color: var(--dim); cursor: pointer;
+  font-size: 9px; padding: 2px 3px; border-radius: 4px;
+}
+.priority-chip button:hover:not(:disabled) { color: var(--tx); background: var(--card); }
+.priority-chip button:disabled { opacity: .3; cursor: default; }
+
+/* Active-model rows (Models tab). */
+.model-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 2px; border-bottom: 1px solid var(--border);
+}
+.model-row:last-child { border-bottom: none; }
+.model-row.off .model-id { opacity: .45; }
+.model-row input[type="checkbox"] { accent-color: var(--accent); flex: none; }
+.model-row .model-id {
+  flex: 1; min-width: 0; font-size: 12px; color: var(--tx);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.model-row select { flex: none; max-width: 190px; }
 
 .settings-error {
   margin-top: 16px; padding: 10px 12px;

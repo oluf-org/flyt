@@ -14,7 +14,8 @@ nodes:
   plan:
     use: plan-start
   route:
-    use: plan-eval
+    use: evaluation
+    evalType: plan
     requiresApproval: true
 
 flow:
@@ -60,11 +61,11 @@ const CASES = [
   ['unknown-port', 'error',
     doc('nodes:\n  a:\n    use: plan-start\nflow:\n  - input -> a\n  - a.nope -> output\n')],
   ['cycle', 'error',
-    doc('nodes:\n  a:\n    use: plan-start\n  b:\n    use: final-eval\nflow:\n  - input -> a -> b -> output\n  - b -> a\n')],
+    doc('nodes:\n  a:\n    use: plan-start\n  b:\n    use: evaluation\nflow:\n  - input -> a -> b -> output\n  - b -> a\n')],
   ['unreachable', 'error',
-    doc('nodes:\n  a:\n    use: plan-start\n  loner:\n    use: final-eval\nflow:\n  - input -> a -> output\n  - loner -> output\n')],
+    doc('nodes:\n  a:\n    use: plan-start\n  loner:\n    use: evaluation\nflow:\n  - input -> a -> output\n  - loner -> output\n')],
   ['dead-end', 'warning',
-    doc('nodes:\n  a:\n    use: plan-start\n  sink:\n    use: final-eval\nflow:\n  - input -> a -> output\n  - a -> sink\n')],
+    doc('nodes:\n  a:\n    use: plan-start\n  sink:\n    use: evaluation\nflow:\n  - input -> a -> output\n  - a -> sink\n')],
   ['no-input', 'error',
     doc('nodes:\n  a:\n    use: plan-start\nflow:\n  - a -> output\n')],
   ['no-output', 'error',
@@ -74,7 +75,7 @@ const CASES = [
   ['invalid-override', 'error',
     doc('nodes:\n  a:\n    use: plan-start\n    tools: [write_file]\nflow:\n  - input -> a -> output\n')],
   ['unknown-tool', 'error',
-    doc('nodes:\n  a:\n    use: test-creation-step\n    tools: [rm_rf]\nflow:\n  - input -> a -> output\n')],
+    doc('nodes:\n  a:\n    use: work\n    tools: [rm_rf]\nflow:\n  - input -> a -> output\n')],
   ['orphan-approval', 'warning',
     doc('nodes:\n  in2:\n    type: input\n    requiresApproval: true\n  a:\n    use: plan-start\nflow:\n  - in2 -> a -> output\n  - input -> a\n')]
 ];
@@ -91,7 +92,7 @@ for (const [rule, severity, text] of CASES) {
 
 test('lint: tools override IS valid on agentTask templates', () => {
   const r = lintText(
-    doc('nodes:\n  t:\n    use: test-creation-step\n    tools: [write_file]\nflow:\n  - input -> t -> output\n'),
+    doc('nodes:\n  t:\n    use: work\n    tools: [write_file]\nflow:\n  - input -> t -> output\n'),
     { templates });
   assert.equal(r.ok, true, JSON.stringify(r.errors));
 });
@@ -101,12 +102,12 @@ test('lint: object contextSpec is valid on a template node; a string is rejected
   // (core/planEval.js, core/flowRunner.js) — the schema must accept that shape
   // on a `use:` instance, not force it to a string.
   const ok = lintText(
-    doc('nodes:\n  a:\n    use: code-general-step\n    contextSpec: { files: [{ path: src/x.ts, description: only the exports }] }\nflow:\n  - input -> a -> output\n'),
+    doc('nodes:\n  a:\n    use: work\n    contextSpec: { files: [{ path: src/x.ts, description: only the exports }] }\nflow:\n  - input -> a -> output\n'),
     { templates });
   assert.equal(ok.ok, true, JSON.stringify(ok.errors));
 
   const bad = lintText(
-    doc('nodes:\n  a:\n    use: code-general-step\n    contextSpec: just a string\nflow:\n  - input -> a -> output\n'),
+    doc('nodes:\n  a:\n    use: work\n    contextSpec: just a string\nflow:\n  - input -> a -> output\n'),
     { templates });
   assert.equal(bad.ok, false);
   assert.equal(bad.errors[0].rule, 'schema');

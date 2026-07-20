@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { WorkerPicker } from './Inspector.jsx';
-import { AI_ROLES, NODE_CATEGORIES, AGENT_TOOLS } from './flowTypes.js';
+import { AI_ROLES, NODE_CATEGORIES, AGENT_TOOLS, EFFORT_LEVELS, DEFAULT_EFFORT, EVAL_TYPES } from './flowTypes.js';
 
 // Node Library editor: edit/save/delete the reusable AI node template selected
 // in the explorer (the list lives in the sidebar so Library shares the one
@@ -15,7 +15,7 @@ const BASE_TYPES = [
   { value: 'agentTask', label: 'Agent task — full executor with tools' }
 ];
 
-export default function NodesPage({ templates, selectedId, models, onChanged, onSelect }) {
+export default function NodesPage({ templates, selectedId, models, activeModels, onChanged, onSelect }) {
   const [draft, setDraft] = useState(null);
   const [saved, setSaved] = useState(true);
   const [error, setError] = useState('');
@@ -105,6 +105,28 @@ export default function NodesPage({ templates, selectedId, models, onChanged, on
               </select>
             </section>
           </div>
+          <div className="nodes-editor-row">
+            <section>
+              <h3>Effort level (default for instances)</h3>
+              <select value={draft.effort ?? DEFAULT_EFFORT} onChange={e => set({ effort: e.target.value })}>
+                {EFFORT_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </section>
+            {draft.role === 'evaluation' && (
+              <section>
+                <h3>Evaluation type (default)</h3>
+                <select value={draft.evalType ?? 'step'} onChange={e => set({ evalType: e.target.value })}>
+                  {Object.keys(EVAL_TYPES).map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </section>
+            )}
+            {draft.role === 'translate' && (
+              <section>
+                <h3>Target language (default)</h3>
+                <input value={draft.language ?? ''} placeholder="English" onChange={e => set({ language: e.target.value })} />
+              </section>
+            )}
+          </div>
 
           <section>
             <h3>Worker (provider + model)</h3>
@@ -117,7 +139,7 @@ export default function NodesPage({ templates, selectedId, models, onChanged, on
               Use the app default worker
             </label>
             {draft.worker && (
-              <WorkerPicker worker={draft.worker} models={models} idPrefix={`tpl-${draft.id}`}
+              <WorkerPicker worker={draft.worker} models={models} activeModels={activeModels} idPrefix={`tpl-${draft.id}`}
                 onChange={worker => set({ worker })} />
             )}
           </section>

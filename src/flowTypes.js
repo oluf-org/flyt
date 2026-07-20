@@ -47,6 +47,18 @@ export const ROLE_PORTS = {
   stitch: [
     { id: 'report', label: 'stitch-report', description: 'Coherence review across the prior parallel work.' }
   ],
+  combine: [
+    { id: 'report', label: 'combined', description: 'The merged, coherent deliverable assembled from the parallel upstream outputs.' }
+  ],
+  split: [
+    { id: 'parts', label: 'parts', description: 'The work divided into clearly labeled independent parts for parallel downstream nodes.' }
+  ],
+  analyze: [
+    { id: 'report', label: 'analysis', description: 'The structured analysis report.' }
+  ],
+  translate: [
+    { id: 'result', label: 'translation', description: 'The translated text.' }
+  ],
   'final-eval': [
     { id: 'report', label: 'final-eval.md', description: 'Completeness verdict + documented differences from the plan.' }
   ],
@@ -86,7 +98,8 @@ export function nodePorts(node) {
   if (Array.isArray(explicit) && explicit.length) return explicit;
   if (node.type && node.type in TYPE_PORTS && node.type !== 'agentTask') return TYPE_PORTS[node.type];
   if (node.type === 'agentTask') return TYPE_PORTS.agentTask;
-  const role = node.data?.role ?? 'custom';
+  // The 'evaluation' meta-role declares the ports of the eval type it is set to.
+  const role = effectiveRole(node.data?.role ?? 'custom', node.data?.evalType);
   return ROLE_PORTS[role] ?? ROLE_PORTS.custom;
 }
 
@@ -99,7 +112,7 @@ export function primaryPort(node) {
 export function createsNodes(node) {
   if (node?.type === 'orchestrator') return true;
   const role = node?.data?.role;
-  return role === 'plan-eval' || role === 'stitch';
+  return role === 'plan-eval' || role === 'stitch' || role === 'combine';
 }
 
 // Validate/normalize a template's declared outputs ({ id, label?, description? }[]).
@@ -115,7 +128,13 @@ export function normalizeOutputs(outputs) {
   return clean.length ? clean : null;
 }
 
-export const AI_ROLES = ['plan', 'execute', 'verify', 'custom', 'plan-start', 'plan-eval', 'step-eval', 'stitch', 'final-eval', 'feedback-review'];
+export const AI_ROLES = [
+  'plan', 'execute', 'verify', 'custom', 'plan-start', 'plan-eval', 'step-eval',
+  'stitch', 'final-eval', 'feedback-review',
+  // Combined-node meta role ('evaluation' resolves to plan-eval / step-eval /
+  // final-eval via evalType) and the standalone roles added in the node rework.
+  'evaluation', 'combine', 'split', 'analyze', 'translate'
+];
 
 // The four (minimum) categories used by plan-eval nodes to drive model selection
 // and template choice. Extend only after updating FLOW_NODES.md and config examples.
@@ -126,10 +145,165 @@ export const NODE_CATEGORIES = [
   'Test-creation'
 ];
 
+// --- Combined-node options (node rework) ------------------------------------
+//
+// Effort level: every AI node carries one. It drives default model selection
+// (core/modelPriority.js) and the response token budget — it never overrides
+// an explicitly chosen worker.
+export const EFFORT_LEVELS = ['low', 'medium', 'high'];
+export const DEFAULT_EFFORT = 'medium';
+export const EFFORT_MAX_TOKENS = { low: 2048, medium: 4096, high: 8192 };
+
+// The Work node's task types are exactly the model-selection categories.
+export const WORK_CATEGORIES = NODE_CATEGORIES;
+
+// Per-task-type tool grants for the Work node (template id 'work'):
+// Test-creation is the one that runs commands, so it alone gets bash and
+// ships with the per-call approval gate on by default.
+export const WORK_TOOLS = {
+  'Test-creation': ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md'],
+  default: ['read_file', 'create_file', 'write_file', 'write_task_md']
+};
+
+// The Evaluation node's evalType option -> the concrete runtime role.
+export const EVAL_TYPES = {
+  plan: 'plan-eval',
+  step: 'step-eval',
+  final: 'final-eval'
+};
+export const DEFAULT_EVAL_TYPE = 'step';
+
+// The role a node actually runs as: the 'evaluation' meta-role resolves
+// through evalType; everything else is taken literally.
+export function effectiveRole(role, evalType) {
+  if (role === 'evaluation') return EVAL_TYPES[evalType] ?? EVAL_TYPES[DEFAULT_EVAL_TYPE];
+  return role;
+}
+
+// --- Feedback channel --------------------------------------------------------
+//
+// Every AI node exposes a feedback point at its top: a source handle with this
+// reserved id. A feedback edge points BACK to an upstream node (usually the one
+// that fed this node) and is excluded from topological ordering, cycle checks,
+// and forward context — it exists so a node can send a structured
+// pass/retry verdict to the node whose output it received.
+export const FEEDBACK_HANDLE = 'feedback';
+export const isFeedbackEdge = e => (e?.sourceHandle ?? null) === FEEDBACK_HANDLE;
+// The graph without its feedback channel — what ordering/cycle logic sees.
+export const forwardEdges = edges => (edges ?? []).filter(e => !isFeedbackEdge(e));
+
+// --- Structural nodes (pinned input/output) ---------------------------------
+//
+// Every flow always carries a User Input and an Output node: they are created
+// automatically, cannot be deleted on the canvas, and removing them from the
+// YAML fails the save. True for the pinned structural types.
+export const isStructuralType = t => t === 'input' || t === 'output';
+export const isStructuralNode = n => Boolean(n) && !n.templateId && isStructuralType(n.type);
+
+// Append any missing input/output node so a loaded flow always has both
+// (legacy files may predate the pinned-structural rule). Pure: returns the
+// same object when nothing is missing.
+export function ensureStructuralNodes(flow) {
+  const nodes = flow.nodes ?? [];
+  const hasInput = nodes.some(n => n.type === 'input');
+  const hasOutput = nodes.some(n => n.type === 'output');
+  if (hasInput && hasOutput) return flow;
+  const maxY = Math.max(0, ...nodes.map(n => n.position?.y ?? 0));
+  const added = [];
+  if (!hasInput) added.push({ id: 'input', type: 'input', kind: 'user', position: { x: 40, y: 40 }, data: {} });
+  if (!hasOutput) added.push({ id: 'output', type: 'output', kind: 'user', position: { x: 40, y: maxY + 130 }, data: {} });
+  return { ...flow, nodes: [...nodes, ...added] };
+}
+
+// Legacy template ids -> their combined replacement. Applied when loading a
+// stored flow (core/flowstore.js) and when migrating the seed library
+// (core/nodestore.js), so old flows keep working after the node rework.
+export const LEGACY_TEMPLATE_MAP = {
+  'code-general-step': { templateId: 'work', overrides: { category: 'Code general' } },
+  'code-design-step': { templateId: 'work', overrides: { category: 'Code design' } },
+  'documentation-step': { templateId: 'work', overrides: { category: 'documentation' } },
+  'test-creation-step': { templateId: 'work', overrides: { category: 'Test-creation' } },
+  'plan-eval': { templateId: 'evaluation', overrides: { evalType: 'plan' } },
+  'step-eval': { templateId: 'evaluation', overrides: { evalType: 'step' } },
+  'final-eval': { templateId: 'evaluation', overrides: { evalType: 'final' } },
+  'stitch': { templateId: 'combine', overrides: {} }
+};
+
+// Rewrite legacy template references in a stored flow to the combined nodes.
+// Pure: returns the same object when nothing referenced a retired template.
+export function migrateLegacyTemplates(flow) {
+  if (!(flow.nodes ?? []).some(n => n.templateId && LEGACY_TEMPLATE_MAP[n.templateId])) return flow;
+  return {
+    ...flow,
+    nodes: flow.nodes.map(n => {
+      const m = n.templateId ? LEGACY_TEMPLATE_MAP[n.templateId] : null;
+      if (!m) return n;
+      return { ...n, templateId: m.templateId, overrides: { ...m.overrides, ...(n.overrides ?? {}) } };
+    })
+  };
+}
+
 // NODE_TEMPLATES — the catalog that AI authors pick from when generating nodes.
 // Keys are the stable names referenced in plan-eval output and in flow data.template.
 // This is the machine-readable counterpart to the polished descriptions in FLOW_NODES.md.
+// The combined nodes (work / evaluation / combine / split) are the primary set;
+// the retired per-category ids stay as aliases so plans and flows written
+// before the rework still materialize.
 export const NODE_TEMPLATES = {
+  'work': {
+    label: 'Work',
+    baseType: 'agentTask',
+    role: 'execute',
+    category: null, // the spec's category picks the task type
+    icon: '✦',
+    description: 'The one work node: implementation, design, docs, or tests — pick the task type via category, and an effort level.',
+    defaultData: () => ({ title: 'Work', role: 'execute', category: 'Code general', effort: DEFAULT_EFFORT })
+  },
+  'evaluation': {
+    label: 'Evaluation',
+    baseType: 'aiStep',
+    role: 'evaluation',
+    category: null,
+    icon: '⚖',
+    description: 'The one evaluation node: plan / step / final — pick via evalType, plus an effort level.',
+    defaultData: () => ({ title: 'Evaluation', role: 'evaluation', evalType: DEFAULT_EVAL_TYPE, effort: DEFAULT_EFFORT, system: '' })
+  },
+  'combine': {
+    label: 'Combine',
+    baseType: 'aiStep',
+    role: 'combine',
+    category: null,
+    icon: '⧉',
+    description: 'Merge parallel upstream outputs into one coherent deliverable; small fixes inline, larger gaps become fix tasks.',
+    defaultData: () => ({ title: 'Combine', role: 'combine', effort: DEFAULT_EFFORT, system: '' })
+  },
+  'split': {
+    label: 'Split',
+    baseType: 'aiStep',
+    role: 'split',
+    category: null,
+    icon: '⑃',
+    description: 'Divide the upstream work into clearly labeled independent parts for parallel downstream nodes.',
+    defaultData: () => ({ title: 'Split', role: 'split', effort: DEFAULT_EFFORT, system: '' })
+  },
+  'general-analysis': {
+    label: 'General analysis',
+    baseType: 'aiStep',
+    role: 'analyze',
+    category: null,
+    icon: '◉',
+    description: 'General text analysis: structure, claims, evidence, gaps, recommendations. Effort level picks the depth.',
+    defaultData: () => ({ title: 'Analysis', role: 'analyze', effort: DEFAULT_EFFORT, system: '' })
+  },
+  'translation': {
+    label: 'Translation',
+    baseType: 'aiStep',
+    role: 'translate',
+    category: null,
+    icon: '文',
+    description: 'Faithful translation preserving meaning, tone, and formatting. Set the target language on the node.',
+    defaultData: () => ({ title: 'Translate', role: 'translate', effort: DEFAULT_EFFORT, language: 'English', system: '' })
+  },
   'plan-start': {
     label: 'Start / Plan-Start',
     baseType: 'aiStep',
@@ -249,11 +423,14 @@ export function nodeLabel(node) {
 export function nodeSub(node) {
   const d = node.data || {};
   const w = d.worker;
-  const workerText = w?.provider ? `${w.provider}/${w.model}` : 'default worker';
+  // 'auto' = an active-models pick, resolved per provider priority at call time.
+  const workerText = w?.provider === 'auto' ? w.model : w?.provider ? `${w.provider}/${w.model}` : 'default worker';
   const cat = d.category ? `${d.category} · ` : '';
+  // Non-default effort is worth a glance on the card; medium stays quiet.
+  const eff = d.effort && d.effort !== DEFAULT_EFFORT ? ` · ${d.effort} effort` : '';
 
   // Library template instances: show template name + effective worker.
-  if (d.templateId) return `${cat}${d.templateName ?? d.templateId} · ${workerText}`;
+  if (d.templateId) return `${cat}${d.templateName ?? d.templateId} · ${workerText}${eff}`;
 
   // Legacy catalog nodes (generated nodes carry data.template)
   const tmpl = d.template ? NODE_TEMPLATES[d.template] : null;
@@ -305,77 +482,61 @@ export function nodeSub(node) {
 export const SEED_NODE_TEMPLATES = [
   {
     id: 'plan-start', name: 'Plan', category: null, icon: '▶',
-    baseType: 'aiStep', role: 'plan-start',
+    baseType: 'aiStep', role: 'plan-start', effort: 'high',
     description: 'Produces tasks.md with well-defined tasks and explicit per-file context descriptions.'
   },
   {
-    id: 'plan-eval', name: 'Plan evaluation', category: null, icon: '▤⇄',
-    baseType: 'aiStep', role: 'plan-eval',
-    description: 'Consumes tasks.md; emits dependency order, task categories, and the work nodes to create.'
-  },
-  {
-    id: 'code-general-step', name: 'Code (general)', category: 'Code general', icon: '✦',
-    baseType: 'agentTask', role: 'execute',
-    tools: ['read_file', 'create_file', 'write_file', 'write_task_md'],
-    description: 'Straightforward implementation work: reads the project and writes the code. Balanced model is usually sufficient.'
-  },
-  {
-    id: 'code-design-step', name: 'Code (design)', category: 'Code design', icon: '✦',
-    baseType: 'agentTask', role: 'execute',
-    // Writes, like every other work template. This shipped read-only ("a design
-    // step designs, it does not edit") and a live acceptance run showed why that
-    // is wrong: the planner handed it "Implement and export tag filtering", the
-    // node held no write tool, so it produced a spec, reported success, and the
-    // feature was never written — a silent no-op that nothing downstream caught.
-    // A work template that cannot do the work it is handed is a trap, and what
-    // actually distinguishes design here is the MODEL (FLOW_NODES: "prefers a
-    // stronger model"), not the toolset. Writes stay confined by
-    // Workspace.resolve(), so this remains ungated and parallel-safe.
-    tools: ['read_file', 'create_file', 'write_file', 'write_task_md'],
-    description: 'Architecture, interfaces, data models: reads the project and writes the code. Prefer a stronger model.'
-  },
-  {
-    id: 'documentation-step', name: 'Documentation', category: 'documentation', icon: '✦',
-    baseType: 'agentTask', role: 'execute',
-    tools: ['read_file', 'create_file', 'write_file'],
-    description: 'Docs, README sections, usage examples: reads the code, writes the docs. Lighter/faster model often works.'
-  },
-  {
-    id: 'test-creation-step', name: 'Test creation', category: 'Test-creation', icon: '☑',
-    baseType: 'agentTask', role: 'execute',
-    tools: ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md'],
-    // The one template that can run commands, so the one that ships gated.
-    approveToolCalls: true,
-    // This is the node that holds the test suite, so it is the node that must
-    // not lie about it. A live acceptance run had it write tests, run them, read
-    // `npm test` exit 1, and report success — leaving the repo redder than it
-    // found it while the run said "done". Nothing downstream caught it, so the
-    // instruction is the lever: a non-zero exit is a result, not noise.
+    // The one work node (rework): the retired code-general / code-design /
+    // documentation / test-creation templates are its task types, picked via
+    // `category`. Tools follow the task type (WORK_TOOLS): only Test-creation
+    // gets bash, and it alone defaults the per-call approval gate on — a
+    // default that asks, not a default that acts (D16). Category still drives
+    // model selection exactly as before; effort refines it.
+    id: 'work', name: 'Work', category: 'Code general', icon: '✦',
+    baseType: 'agentTask', role: 'execute', effort: 'medium',
+    tools: null, // derived from the task type at resolve time (WORK_TOOLS)
+    // The test-suite honesty rule rides on the template so the Test-creation
+    // task type inherits it: a non-zero exit is a result, not noise.
     instructions: [
-      'Run the test suite after writing or changing tests, and read the exit code.',
-      'A non-zero exit means the suite FAILED — fix the cause and run it again.',
-      'Never report the task complete while the suite is failing. If you cannot make',
-      'it pass, say so plainly at the top of your deliverable, state which tests fail',
-      'and why, and do not describe the work as done.'
+      'If your task includes running tests or commands: read every exit code.',
+      'A non-zero exit means FAILURE — fix the cause and run it again. Never report',
+      'the task complete while a suite is failing; say so plainly instead.'
     ].join(' '),
-    description: 'Create or extend tests, and run them until they pass. Can execute shell commands, so it asks before each destructive call — untick to run unattended.'
+    description: 'The work node: implementation, design, docs, or tests — pick the task type and effort level on the node.'
   },
   {
-    id: 'step-eval', name: 'Step evaluation', category: null, icon: '⚖',
-    baseType: 'aiStep', role: 'step-eval',
-    description: 'Review the preceding node: pass, bounded auto-retry with guidance, or escalate to human.'
+    // The one evaluation node: plan / step / final evaluation picked via
+    // `evalType` (resolves to the plan-eval / step-eval / final-eval role).
+    id: 'evaluation', name: 'Evaluation', category: null, icon: '⚖',
+    baseType: 'aiStep', role: 'evaluation', evalType: 'step', effort: 'medium',
+    description: 'The evaluation node: plan evaluation (creates work nodes), step evaluation (pass/retry/escalate), or final evaluation — pick the type and effort level on the node.'
   },
   {
-    id: 'stitch', name: 'Stitch', category: null, icon: '🧵',
-    baseType: 'aiStep', role: 'stitch',
-    description: 'Review prior outputs, make small fixes, or create corrective fix tasks.'
+    id: 'combine', name: 'Combine', category: null, icon: '⧉',
+    baseType: 'aiStep', role: 'combine', effort: 'medium',
+    description: 'Merge parallel upstream outputs into one coherent deliverable; small fixes inline, larger gaps become fix tasks.'
   },
   {
-    id: 'final-eval', name: 'Final evaluation', category: null, icon: '✓◌',
-    baseType: 'aiStep', role: 'final-eval',
-    description: 'Evaluate completeness against the original plan; document differences and reasoning.'
+    id: 'split', name: 'Split', category: null, icon: '⑃',
+    baseType: 'aiStep', role: 'split', effort: 'medium',
+    description: 'Divide the upstream work into clearly labeled independent parts that downstream nodes can run in parallel.'
+  },
+  {
+    id: 'general-analysis', name: 'General analysis', category: null, icon: '◉',
+    baseType: 'aiStep', role: 'analyze', effort: 'medium',
+    description: 'General text analysis: summary, structure, claims and evidence, gaps, risks, recommendations. Effort level picks the depth.'
+  },
+  {
+    id: 'translation', name: 'Translation', category: null, icon: '文',
+    baseType: 'aiStep', role: 'translate', effort: 'medium', language: 'English',
+    description: 'Faithful translation preserving meaning, tone, register, and formatting. Set the target language on the node.'
   }
 ].map(t => ({ worker: null, instructions: '', tools: null, skills: [], requiresApproval: false, approveToolCalls: false, ...t }));
+
+// Seed ids retired by the node rework: their files are removed from the
+// library on startup (core/nodestore.js) and stored flows referencing them are
+// rewritten via LEGACY_TEMPLATE_MAP.
+export const RETIRED_SEED_IDS = Object.keys(LEGACY_TEMPLATE_MAP);
 
 // Fill in the optional template fields so every consumer sees one shape.
 export function normalizeTemplate(tpl) {
@@ -387,6 +548,11 @@ export function normalizeTemplate(tpl) {
     icon: tpl.icon ?? '✦',
     baseType: tpl.baseType === 'agentTask' ? 'agentTask' : 'aiStep',
     role: tpl.role ?? 'custom',
+    // Combined-node options (node rework). effort is universal; evalType only
+    // means anything on the 'evaluation' meta-role; language on 'translate'.
+    effort: EFFORT_LEVELS.includes(tpl.effort) ? tpl.effort : DEFAULT_EFFORT,
+    evalType: tpl.evalType in EVAL_TYPES ? tpl.evalType : DEFAULT_EVAL_TYPE,
+    ...(typeof tpl.language === 'string' && tpl.language.trim() ? { language: tpl.language.trim() } : {}),
     worker: tpl.worker?.provider && tpl.worker?.model
       ? { provider: tpl.worker.provider, model: tpl.worker.model } : null,
     instructions: tpl.instructions ?? '',
@@ -410,19 +576,33 @@ export function resolveInstance(node, tpl) {
   const type = (t?.baseType) === 'agentTask' ? 'agentTask' : 'aiStep';
   const instructions = [t?.instructions, ov.instructions]
     .filter(s => typeof s === 'string' && s.trim()).join('\n\n');
+  // Combined-node options: the 'evaluation' meta-role resolves to a concrete
+  // eval role via evalType; the Work node derives its tools (and its
+  // approve-every-tool-call default) from the chosen task type.
+  const evalType = (ov.evalType in EVAL_TYPES ? ov.evalType : null) ?? t?.evalType ?? DEFAULT_EVAL_TYPE;
+  const role = effectiveRole(t?.role ?? 'custom', evalType);
+  const effort = (EFFORT_LEVELS.includes(ov.effort) ? ov.effort : null) ?? t?.effort ?? DEFAULT_EFFORT;
+  const category = ov.category ?? t?.category ?? null;
+  const isWork = t?.id === 'work';
+  const workTools = isWork ? (WORK_TOOLS[category] ?? WORK_TOOLS.default) : null;
+  const tools = ov.tools ?? t?.tools ?? workTools;
+  const workGate = isWork && (tools ?? []).includes('bash');
   const data = {
     templateId: node.templateId,
     templateName: t?.name ?? node.templateId,
     icon: t?.icon ?? '✦',
     title: ov.title ?? t?.name ?? node.templateId,
-    role: t?.role ?? 'custom',
+    role,
+    effort,
+    ...(t?.role === 'evaluation' ? { evalType } : {}),
+    ...(role === 'translate' ? { language: ov.language ?? t?.language ?? 'English' } : {}),
     worker: ov.worker ?? t?.worker ?? null,
     ...(instructions ? { instructions } : {}),
-    ...(ov.category ?? t?.category ? { category: ov.category ?? t.category } : {}),
-    ...((ov.tools ?? t?.tools) ? { tools: ov.tools ?? t.tools } : {}),
+    ...(category ? { category } : {}),
+    ...(tools ? { tools } : {}),
     ...((ov.skills ?? t?.skills)?.length ? { skills: ov.skills ?? t.skills } : {}),
     requiresApproval: ov.requiresApproval ?? t?.requiresApproval ?? false,
-    approveToolCalls: ov.approveToolCalls ?? t?.approveToolCalls ?? false,
+    approveToolCalls: ov.approveToolCalls ?? (workGate ? true : t?.approveToolCalls ?? false),
     ...(t?.outputs?.length ? { outputs: t.outputs } : {}),
     ...(ov.goal ? { goal: ov.goal } : {}),
     ...(ov.contextSpec ? { contextSpec: ov.contextSpec } : {}),

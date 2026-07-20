@@ -5,8 +5,7 @@
 // forwarded it. Reading only process.env — as this did — meant a key entered in
 // the app was silently dropped and every Anthropic run failed as unconfigured.
 // ANTHROPIC_API_KEY remains a fallback for running from a shell.
-import { sseEvents } from './openrouter.js';
-import { apiError } from './http.js';
+import { sseEvents, apiError } from './http.js';
 
 export async function anthropicAdapter({ model, system, prompt, maxTokens, apiKey, onText }) {
   const key = apiKey || process.env.ANTHROPIC_API_KEY;
@@ -57,3 +56,6 @@ export async function anthropicAdapter({ model, system, prompt, maxTokens, apiKe
     usage: data.usage ?? null
   };
 }
+
+// PROVIDERS-PLAN §2: Anthropic serves claude-* ids only.
+anthropicAdapter.canServe = modelId => String(modelId).startsWith('claude-');

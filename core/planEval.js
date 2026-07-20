@@ -6,7 +6,7 @@
 // All parsers are total: they never throw. Invalid content comes back as
 // { ok: false, errors } (plan-eval) or null / { errors } so the runner can
 // fail gracefully, log the violations, and keep the run auditable.
-import { NODE_TEMPLATES, NODE_CATEGORIES } from '../src/flowTypes.js';
+import { NODE_TEMPLATES, NODE_CATEGORIES, EFFORT_LEVELS } from '../src/flowTypes.js';
 
 const ID_RE = /^[a-zA-Z0-9_-]+$/;
 const isStr = v => typeof v === 'string' && v.trim().length > 0;
@@ -82,6 +82,9 @@ function validateNodeSpecs(rawNodes, extraTemplateIds, errors) {
       errors.push(`${at}: category "${n.category}" does not match template "${n.template.trim()}"`
         + ` (whose category is "${tplCategory}") — they are 1:1; pick the template for the category`);
     }
+    if (n.effort != null && !EFFORT_LEVELS.includes(n.effort)) {
+      errors.push(`${at}.effort: "${n.effort}" is not one of: ${EFFORT_LEVELS.join(', ')}`);
+    }
     if (n.taskRef != null && !isStr(n.taskRef)) errors.push(`${at}.taskRef: must be a non-empty string when present`);
     if (n.title != null && typeof n.title !== 'string') errors.push(`${at}.title: must be a string`);
     if (n.goal != null && typeof n.goal !== 'string') errors.push(`${at}.goal: must be a string`);
@@ -99,6 +102,7 @@ function validateNodeSpecs(rawNodes, extraTemplateIds, errors) {
       template: isStr(n.template) ? n.template.trim() : '',
       ...(isStr(n.taskRef) ? { taskRef: n.taskRef.trim() } : {}),
       ...(n.category != null ? { category: n.category } : {}),
+      ...(EFFORT_LEVELS.includes(n.effort) ? { effort: n.effort } : {}),
       ...(isStr(n.title) ? { title: n.title.trim() } : {}),
       ...(isStr(n.goal) ? { goal: n.goal.trim() } : {}),
       ...(dependsOn ? { dependsOn } : {}),

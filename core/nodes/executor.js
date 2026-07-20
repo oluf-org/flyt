@@ -6,6 +6,7 @@ import { getTools } from '../tools/index.js';
 import { makeRetrospective } from '../retrospective.js';
 import { Workspace } from '../workspace.js';
 import { loadSkills, withSkillsSection } from '../skills.js';
+import { resolveCallTarget } from '../modelSource.js';
 
 // onText (optional): the caller's streaming sink for partial model output (V1
 // task 8). onRetry (optional): fires per transient-error backoff (V1 task 11).
@@ -17,14 +18,17 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
 
   // tasks.json never stores API keys; resolve the key for this task's
-  // provider from the runtime config at call time.
-  const apiKey = config.providerKeys?.[task.worker.provider];
+  // provider from the runtime config at call time. An 'auto' provider (a task
+  // created from an active-models pick) resolves through the main process's
+  // resolver — priority walk, pin override, key + keyKind stamping.
+  const target = resolveCallTarget(task.worker, config);
+  const apiKey = target.apiKey;
 
   // Native tool-calling is available per MODEL, learned from the provider's
   // catalogue (settings.modelCapabilities); anything unknown falls back to the
   // text protocol, which works everywhere.
-  const worker = { ...task.worker };
-  if (worker.provider === 'openrouter') {
+  const worker = { ...task.worker, provider: target.provider, model: target.model, ...(target.keyKind ? { keyKind: target.keyKind } : {}) };
+  if (worker.provider !== 'mock' && worker.provider !== 'anthropic') {
     worker.supportsTools = Boolean(config.modelCapabilities?.[worker.model]);
   }
 

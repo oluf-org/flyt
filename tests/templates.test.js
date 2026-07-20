@@ -28,9 +28,9 @@ test('NodeStore seeds the FLOW_NODES.md catalog into an empty directory', () => 
   // Files, not memory, are the source of truth.
   assert.ok(fs.existsSync(path.join(ns.rootDir, 'plan-start.json')));
   // A non-empty directory is never re-seeded.
-  ns.remove('stitch');
+  ns.remove('split');
   assert.equal(ns.seedIfEmpty(), false);
-  assert.equal(ns.get('stitch'), null);
+  assert.equal(ns.get('split'), null);
 });
 
 test('NodeStore CRUD round-trips and normalizes templates', () => {
@@ -50,13 +50,13 @@ test('NodeStore CRUD round-trips and normalizes templates', () => {
 // --- resolution: template defaults + per-workflow overrides ---
 
 test('resolveFlow merges overrides over template defaults; structural nodes pass through', () => {
-  const tpl = SEED_NODE_TEMPLATES.find(t => t.id === 'code-general-step');
+  const tpl = SEED_NODE_TEMPLATES.find(t => t.id === 'work');
   const flow = {
     id: 'f', name: 'F',
     nodes: [
       { id: 'in', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
-      { id: 'a', templateId: 'code-general-step', position: { x: 0, y: 100 }, overrides: {} },
-      { id: 'b', templateId: 'code-general-step', position: { x: 0, y: 200 }, overrides: {
+      { id: 'a', templateId: 'work', position: { x: 0, y: 100 }, overrides: {} },
+      { id: 'b', templateId: 'work', position: { x: 0, y: 200 }, overrides: {
         title: 'My step', worker: { provider: 'script', model: 'override-m' }, requiresApproval: true, instructions: 'workflow extra'
       } }
     ],
@@ -66,7 +66,7 @@ test('resolveFlow merges overrides over template defaults; structural nodes pass
   const [inn, a, b] = r.nodes;
   assert.equal(inn.type, 'input'); // untouched
   assert.equal(a.type, tpl.baseType); // whatever the template declares, not a hardcoded shape
-  assert.equal(a.data.title, 'Code (general)');
+  assert.equal(a.data.title, 'Work');
   assert.equal(a.data.category, 'Code general');
   assert.equal(a.data.requiresApproval, false);
   assert.equal(a.data.instructions, 'template guidance');
@@ -123,7 +123,7 @@ test('default pipeline parity: user input, post-planning gate, retrospectives, h
     seenPrompts[role] = prompt;
     if (role === 'plan-eval') {
       return '```json\n' + JSON.stringify({
-        nodes: [{ id: 'gen-docs', template: 'documentation-step', title: 'Docs', goal: 'Write the docs.' }]
+        nodes: [{ id: 'gen-docs', template: 'work', category: 'documentation', title: 'Docs', goal: 'Write the docs.' }]
       }) + '\n```';
     }
     return `${role} output`;
@@ -163,7 +163,7 @@ test('default pipeline parity: user input, post-planning gate, retrospectives, h
 test('template + override instructions reach the model prompt; agentTask templates carry tools', async () => {
   const store = makeStore();
   const ns = makeNodeStore();
-  ns.save({ ...ns.load('code-general-step'), instructions: 'TPL-GUIDANCE' });
+  ns.save({ ...ns.load('work'), instructions: 'TPL-GUIDANCE' });
   const runner = new FlowRunner(store, testConfig(), () => {}, ns);
 
   const prompts = [];
@@ -173,8 +173,8 @@ test('template + override instructions reach the model prompt; agentTask templat
     id: 'f1', name: 'F1',
     nodes: [
       { id: 'in', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
-      { id: 'work', templateId: 'code-general-step', position: { x: 0, y: 100 }, overrides: { instructions: 'OV-GUIDANCE' } },
-      { id: 'tests', templateId: 'test-creation-step', position: { x: 0, y: 200 }, overrides: { goal: 'Write the tests.', tools: ['write_file'] } },
+      { id: 'work', templateId: 'work', position: { x: 0, y: 100 }, overrides: { instructions: 'OV-GUIDANCE' } },
+      { id: 'tests', templateId: 'work', position: { x: 0, y: 200 }, overrides: { title: 'Test creation', category: 'Test-creation', goal: 'Write the tests.', tools: ['write_file'] } },
       { id: 'out', type: 'output', kind: 'user', position: { x: 0, y: 300 }, data: {} }
     ],
     edges: [
@@ -188,8 +188,6 @@ test('template + override instructions reach the model prompt; agentTask templat
   const workPrompt = prompts.find(p => p.includes('TPL-GUIDANCE')) ?? '';
   assert.match(workPrompt, /TPL-GUIDANCE[\s\S]*OV-GUIDANCE/);
   // The agentTask instance became a real executor task with the tool subset.
-  // Found by name, not index: code-general-step is an agentTask too now and
-  // queues its own task first (V1 task 12).
   const task = store.readTasks(runId).tasks.find(t => t.title === 'Test creation');
   assert.deepEqual(task.tools, ['write_file']);
   assert.equal(store.readMeta(runId).nodeStatus.tests, 'done');

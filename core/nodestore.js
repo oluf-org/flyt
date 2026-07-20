@@ -15,7 +15,7 @@
 // that the files are the single source of truth.
 import fs from 'node:fs';
 import path from 'node:path';
-import { SEED_NODE_TEMPLATES, normalizeTemplate } from '../src/flowTypes.js';
+import { SEED_NODE_TEMPLATES, RETIRED_SEED_IDS, normalizeTemplate } from '../src/flowTypes.js';
 
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
@@ -24,11 +24,35 @@ export class NodeStore {
     this.rootDir = rootDir; // e.g. <project>/nodes
     fs.mkdirSync(rootDir, { recursive: true });
     this.seedIfEmpty();
+    this.migrateSeeds();
   }
 
   seedIfEmpty() {
     if (fs.readdirSync(this.rootDir).some(f => f.endsWith('.json'))) return false;
     for (const tpl of SEED_NODE_TEMPLATES) this.save(tpl);
+    return true;
+  }
+
+  // Node rework migration: the per-category work templates and the separate
+  // evaluation templates were combined (work / evaluation / combine / split).
+  // Retired seed files are removed and any missing current seed is written —
+  // stored flows referencing the old ids are rewritten at load time
+  // (LEGACY_TEMPLATE_MAP in core/flowstore.js). User-created templates (ids
+  // outside the seed sets) are never touched. Idempotent.
+  migrateSeeds() {
+    let retired = false;
+    for (const id of RETIRED_SEED_IDS) {
+      if (fs.existsSync(this.templatePath(id))) {
+        fs.rmSync(this.templatePath(id), { force: true });
+        retired = true;
+      }
+    }
+    // Only a library that actually held the old set gets the new seeds — an
+    // already-migrated library keeps the user's deletions.
+    if (!retired) return false;
+    for (const tpl of SEED_NODE_TEMPLATES) {
+      if (!fs.existsSync(this.templatePath(tpl.id))) this.save(tpl);
+    }
     return true;
   }
 

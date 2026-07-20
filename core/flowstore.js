@@ -22,7 +22,7 @@ import path from 'node:path';
 import { parseFlow } from './flowlang/parse.js';
 import { serializeFlow } from './flowlang/serialize.js';
 import { layoutPositions } from '../src/flowLayout.js';
-import { UNTITLED_FLOW } from '../src/flowTypes.js';
+import { UNTITLED_FLOW, ensureStructuralNodes, migrateLegacyTemplates } from '../src/flowTypes.js';
 
 export const DEFAULT_PIPELINE_ID = 'default-pipeline';
 
@@ -64,11 +64,16 @@ export class FlowStore {
   }
 
   load(id) {
+    // Both formats pass through the same normalization: retired template ids
+    // are rewritten to their combined replacements, and the pinned structural
+    // nodes (input/output) are restored if a legacy file lacks them. The next
+    // save persists the migrated shape.
     if (fs.existsSync(this.flowPath(id))) {
       const flow = parseFlow(fs.readFileSync(this.flowPath(id), 'utf8'));
-      return this.#withPositions(flow);
+      return this.#withPositions(ensureStructuralNodes(migrateLegacyTemplates(flow)));
     }
-    return JSON.parse(fs.readFileSync(this.legacyPath(id), 'utf8'));
+    return ensureStructuralNodes(migrateLegacyTemplates(
+      JSON.parse(fs.readFileSync(this.legacyPath(id), 'utf8'))));
   }
 
   // Merge stored canvas positions into a parsed (position-free) flow; any
@@ -93,6 +98,15 @@ export class FlowStore {
 
   save(flow) {
     if (!flow?.id || !flow.name) throw new Error('Flow needs an id and a name');
+    // The structural nodes are pinned: every flow keeps its User Input and
+    // Output node. The canvas refuses to delete them; removing them from the
+    // YAML lands here and fails the save.
+    if (!(flow.nodes ?? []).some(n => n.type === 'input')) {
+      throw new Error('A flow must always contain its User Input node — reference "input" in the flow section (e.g. "input -> …") or declare a node of type input.');
+    }
+    if (!(flow.nodes ?? []).some(n => n.type === 'output')) {
+      throw new Error('A flow must always contain its Output node — reference "output" in the flow section (e.g. "… -> output") or declare a node of type output.');
+    }
     const clean = {
       id: flow.id,
       name: String(flow.name),
@@ -161,8 +175,8 @@ export class FlowStore {
         { id: 'user-input', type: 'input', kind: 'user', position: pos(0), data: {} },
         { id: 'plan', templateId: 'plan-start', position: pos(1), overrides: { title: 'Planning' } },
         // The post-planning human gate: pause for approval before routing.
-        { id: 'route', templateId: 'plan-eval', position: pos(2), overrides: { title: 'Routing', requiresApproval: true } },
-        { id: 'verify', templateId: 'final-eval', position: pos(3), overrides: { title: 'Verification' } },
+        { id: 'route', templateId: 'evaluation', position: pos(2), overrides: { title: 'Routing', evalType: 'plan', requiresApproval: true } },
+        { id: 'verify', templateId: 'evaluation', position: pos(3), overrides: { title: 'Verification', evalType: 'final' } },
         { id: 'result', type: 'output', kind: 'user', position: pos(4), data: {} }
       ],
       edges: [

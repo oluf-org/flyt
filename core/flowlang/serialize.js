@@ -12,7 +12,8 @@ import { DSL_VERSION } from './parse.js';
 // Field order inside a node entry: use/type first, then the human-salient
 // fields, then anything else alphabetically. Purely cosmetic but FIXED.
 const FIELD_ORDER = [
-  'title', 'role', 'category', 'system', 'instructions', 'goal', 'contextSpec',
+  'title', 'role', 'category', 'evalType', 'effort', 'language', 'minNodes', 'maxNodes',
+  'system', 'instructions', 'goal', 'contextSpec',
   'text', 'worker', 'tools', 'skills', 'constraints', 'outputs', 'requiresApproval', 'approveToolCalls'
 ];
 const fieldRank = k => {

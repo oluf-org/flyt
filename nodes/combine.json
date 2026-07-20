@@ -1,0 +1,18 @@
+{
+  "id": "combine",
+  "name": "Combine",
+  "description": "Merge parallel upstream outputs into one coherent deliverable; small fixes inline, larger gaps become fix tasks.",
+  "category": null,
+  "icon": "⧉",
+  "baseType": "aiStep",
+  "role": "combine",
+  "effort": "medium",
+  "evalType": "step",
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false,
+  "outputs": null
+}

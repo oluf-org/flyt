@@ -11,6 +11,11 @@ import { lintFlow, lintText } from '../core/flowlang/lint.js';
 import { parseFlow } from '../core/flowlang/parse.js';
 import { serializeFlow } from '../core/flowlang/serialize.js';
 import { diffSnapshot } from '../core/snapshotDiff.js';
+import { callModel, canServe } from '../core/adapters/index.js';
+import {
+  PROVIDER_IDS, KEYED_PROVIDERS, DEFAULT_PRIORITY, CURATED_MODELS, TEST_MODELS,
+  migrateSettings, createResolver
+} from '../core/modelSource.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, '..');
@@ -42,47 +47,101 @@ const nodeLibrary = new NodeStore(path.join(projectRoot, 'nodes')); // seeds its
 flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable workflow
 
 // --- Settings & secrets ---
-// settings.json lives in userData (never the repo). Shape:
-//   { openrouterApiKey: string,
-//     workers: { planner|router|executor|verifier: { provider, model } },
+// settings.json lives in userData (never the repo). Shape (PROVIDERS-PLAN §1):
+//   { providers: { anthropic|openai|kimi|openrouter: { apiKey, keyKind? } },
+//     providerPriority: [providerId, ...],              // auto-source walk order
+//     activeModels: [{ id, source: 'auto'|providerId, enabled }],
+//     workers: { executor: { provider, model } },
 //     projectStorage: 'workspace' | 'appdata',        // T2a — where per-project files live
 //     projects: { open, active, recents, tabState } } // D22 — tab session (T17)
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 
 function loadSettings() {
-  try { return JSON.parse(fs.readFileSync(settingsPath, 'utf8')); }
-  catch { return {}; }
+  try { return migrateSettings(JSON.parse(fs.readFileSync(settingsPath, 'utf8'))); }
+  catch { return migrateSettings({}); }
 }
 function persistSettings() {
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 }
 
 let settings = loadSettings();
+persistSettings(); // seal the migration (legacy openrouterApiKey is gone after this)
+
+// A provider counts as connected when settings holds a key for it — or, for
+// anthropic/openai, when the shell environment provides one (the adapters
+// accept that fallback for CLI use). The mock provider is always connected.
+function hasKey(provider) {
+  if (provider === 'mock') return true;
+  if (settings.providers?.[provider]?.apiKey) return true;
+  if (provider === 'anthropic') return Boolean(process.env.ANTHROPIC_API_KEY);
+  if (provider === 'openai') return Boolean(process.env.OPENAI_API_KEY);
+  return false;
+}
+
+// The resolution rule (PROVIDERS-PLAN §2). Pinned source wins when it has a
+// key; 'auto' walks providerPriority, skipping disconnected providers and
+// providers that can't serve the id. Returns the fully-stamped call target —
+// { provider, model, apiKey, keyKind? } — ready to hand to callModel.
+const resolveSource = createResolver({ hasKey, canServe, priority: () => settings.providerPriority });
+function resolveModelSource(modelId, pinned = null) {
+  const entry = (settings.activeModels ?? []).find(m => m.id === modelId);
+  const source = pinned ?? entry?.source ?? 'auto';
+  const r = resolveSource(modelId, source);
+  return {
+    ...r,
+    apiKey: settings.providers?.[r.provider]?.apiKey ?? null,
+    ...(r.provider === 'kimi' ? { keyKind: settings.providers?.kimi?.keyKind ?? 'platform' } : {})
+  };
+}
 
 // Runtime config = config.json defaults merged with settings.json overrides,
-// with the OpenRouter key injected into matching workers. Rebuilt in place on
-// every settings save so the running Pipeline picks up changes without a
-// restart (Pipeline holds a reference to this object).
+// with each worker's provider key injected. Rebuilt in place on every settings
+// save so the running Pipeline picks up changes without a restart (Pipeline
+// holds a reference to this object).
 const runtimeConfig = { ...baseConfig };
 
 function rebuildRuntimeConfig() {
   const workers = {};
   for (const [name, def] of Object.entries(baseConfig.workers)) {
     const override = settings.workers?.[name];
-    const w = override?.provider && override?.model
+    let w = override?.provider && override?.model
       ? { provider: override.provider, model: override.model }
       : { provider: def.provider, model: def.model };
-    if (w.provider === 'openrouter' && settings.openrouterApiKey) w.apiKey = settings.openrouterApiKey;
-    // Native tool-calling capability, learned from the last models:list fetch
-    // (persisted in settings.json). Unknown models fall back to the text
-    // tool protocol, which works everywhere.
-    if (w.provider === 'openrouter') w.supportsTools = Boolean(settings.modelCapabilities?.[w.model]);
+    // A model the user activated is resolved through the providers map: its
+    // pinned source (or the priority walk for 'auto') decides who serves it,
+    // and the key rides along (PROVIDERS-PLAN §4). A model the registry doesn't
+    // know keeps the legacy behavior — worker's own provider + key injection.
+    const entry = (settings.activeModels ?? []).find(m => m.id === w.model);
+    if ((entry && entry.enabled !== false) || w.provider === 'auto') {
+      try {
+        const r = resolveModelSource(w.model, entry ? undefined : 'auto');
+        w = { provider: r.provider, model: r.model, apiKey: r.apiKey, ...(r.keyKind ? { keyKind: r.keyKind } : {}) };
+      } catch { /* unresolved: the call fails with the adapter's missing-key error */ }
+    }
+    if (!w.apiKey && settings.providers?.[w.provider]?.apiKey) {
+      w.apiKey = settings.providers[w.provider].apiKey;
+    }
+    if (w.provider === 'kimi' && !w.keyKind) w.keyKind = settings.providers?.kimi?.keyKind ?? 'platform';
+    // Native tool-calling capability, learned from model catalogs (persisted
+    // in settings.json). Unknown models fall back to the text tool protocol,
+    // which works everywhere.
+    if (w.provider !== 'mock' && w.provider !== 'anthropic') {
+      w.supportsTools = Boolean(settings.modelCapabilities?.[w.model]);
+    }
     workers[name] = w;
   }
   runtimeConfig.workers = workers;
   // Per-provider key lookup for task workers persisted in runs/tasks.json,
   // which must never contain the key itself.
-  runtimeConfig.providerKeys = settings.openrouterApiKey ? { openrouter: settings.openrouterApiKey } : {};
+  runtimeConfig.providerKeys = Object.fromEntries(
+    KEYED_PROVIDERS.filter(p => settings.providers?.[p]?.apiKey).map(p => [p, settings.providers[p].apiKey])
+  );
+  // Call-time resolution for 'auto' workers (active-models picks ride on nodes
+  // and tasks as { provider: 'auto', model }).
+  runtimeConfig.resolveModelSource = resolveModelSource;
+  // Which Kimi endpoint the saved key belongs to — the model-priority defaults
+  // (core/modelPriority.js) pick kimi-for-coding for a Kimi-Code key.
+  runtimeConfig.kimiKeyKind = settings.providers?.kimi?.keyKind ?? 'platform';
   // Per-model tool support for task workers resolved at execution time.
   runtimeConfig.modelCapabilities = settings.modelCapabilities ?? {};
   // Category → worker mapping for advanced planning flows (FLOW_NODES.md)
@@ -90,14 +149,28 @@ function rebuildRuntimeConfig() {
 }
 rebuildRuntimeConfig();
 
-// What the renderer is allowed to see: worker assignments plus whether a key
-// exists. The raw key never crosses the IPC boundary.
+// What the renderer is allowed to see: per-provider hasKey flags (never the
+// keys), the priority order, the active-model registry, worker assignments,
+// and a small connected/model-count summary for the overview UI.
 function publicSettings() {
+  const providers = Object.fromEntries(PROVIDER_IDS.map(p => [p, {
+    hasKey: hasKey(p),
+    ...(p === 'kimi' ? { keyKind: settings.providers?.kimi?.keyKind ?? 'platform' } : {})
+  }]));
+  const activeModels = settings.activeModels ?? [];
   return {
-    hasKey: Boolean(settings.openrouterApiKey),
+    providers,
+    // Legacy flag for the lander's no-key hint: any provider at all.
+    hasKey: KEYED_PROVIDERS.some(hasKey),
+    providerPriority: settings.providerPriority ?? [...DEFAULT_PRIORITY],
+    activeModels,
     workers: Object.fromEntries(
       Object.entries(runtimeConfig.workers).map(([name, w]) => [name, { provider: w.provider, model: w.model }])
     ),
+    summary: {
+      connected: KEYED_PROVIDERS.filter(hasKey).length,
+      activeModelCount: activeModels.filter(m => m.enabled !== false).length
+    },
     // T2a: where per-project files are written ('workspace' = in-repo .llmflow/,
     // 'appdata' = under userData). Read at project-open time.
     projectStorage: settings.projectStorage === 'appdata' ? 'appdata' : 'workspace'
@@ -492,7 +565,7 @@ ipcMain.handle('flow:list', () => flows.list());
 ipcMain.handle('flow:load', (_e, id) => flows.load(id));
 ipcMain.handle('flow:save', (_e, flow) => flows.save(flow));
 ipcMain.handle('flow:new', () =>
-  flows.create(nodeLibrary.get('code-general-step') ? 'code-general-step' : null));
+  flows.create(nodeLibrary.get('work') ? 'work' : null));
 ipcMain.handle('flow:delete', (_e, id) => flows.remove(id));
 // On-save validation for the canvas badge: full rule set, structured findings.
 ipcMain.handle('flow:lint', (_e, id) =>
@@ -538,10 +611,33 @@ ipcMain.handle('node:delete', (_e, id) => nodeLibrary.remove(id));
 ipcMain.handle('settings:get', () => publicSettings());
 
 ipcMain.handle('settings:set', (_e, patch = {}) => {
-  // Only overwrite the stored key when a non-empty string is provided, so the
-  // renderer can save worker changes without ever knowing (or clearing) the key.
-  if (typeof patch.openrouterApiKey === 'string' && patch.openrouterApiKey.trim()) {
-    settings.openrouterApiKey = patch.openrouterApiKey.trim();
+  // Provider keys are one-way, like the legacy OpenRouter key: only overwrite
+  // when a non-empty string is provided, so the renderer can save other
+  // settings without ever knowing (or clearing) a key.
+  if (patch.providerKeys && typeof patch.providerKeys === 'object') {
+    settings.providers = { ...(settings.providers ?? {}) };
+    for (const [p, key] of Object.entries(patch.providerKeys)) {
+      if (KEYED_PROVIDERS.includes(p) && typeof key === 'string' && key.trim()) {
+        settings.providers[p] = { ...(settings.providers[p] ?? {}), apiKey: key.trim() };
+      }
+    }
+  }
+  if (patch.kimiKeyKind === 'platform' || patch.kimiKeyKind === 'code') {
+    settings.providers = { ...(settings.providers ?? {}) };
+    settings.providers.kimi = { ...(settings.providers.kimi ?? {}), keyKind: patch.kimiKeyKind };
+  }
+  if (Array.isArray(patch.providerPriority)) {
+    const seen = patch.providerPriority.filter(p => PROVIDER_IDS.includes(p));
+    settings.providerPriority = [...new Set([...seen, ...DEFAULT_PRIORITY])];
+  }
+  if (Array.isArray(patch.activeModels)) {
+    settings.activeModels = patch.activeModels
+      .filter(m => m && typeof m.id === 'string' && m.id.trim())
+      .map(m => ({
+        id: m.id.trim(),
+        source: PROVIDER_IDS.includes(m.source) ? m.source : 'auto',
+        enabled: m.enabled !== false
+      }));
   }
   if (patch.workers && typeof patch.workers === 'object') {
     settings.workers = { ...settings.workers };
@@ -561,10 +657,18 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
   return publicSettings();
 });
 
-ipcMain.handle('models:list', async () => {
-  if (!settings.openrouterApiKey) throw new Error('No OpenRouter API key saved. Add one in Settings first.');
+// Per-provider model catalogs (PROVIDERS-PLAN §4): openrouter keeps its live
+// fetch; anthropic/openai/kimi return short curated lists (their model
+// endpoints are inconsistent — a static list + the free-text field avoids
+// another failure mode).
+ipcMain.handle('models:list', async (_e, provider = 'openrouter') => {
+  if (provider !== 'openrouter') {
+    if (!CURATED_MODELS[provider]) throw new Error(`No model catalog for provider "${provider}".`);
+    return CURATED_MODELS[provider].map(m => ({ ...m, contextLength: null }));
+  }
+  if (!settings.providers?.openrouter?.apiKey) throw new Error('No OpenRouter API key saved. Add one in Settings first.');
   const res = await fetch('https://openrouter.ai/api/v1/models', {
-    headers: { 'Authorization': `Bearer ${settings.openrouterApiKey}` }
+    headers: { 'Authorization': `Bearer ${settings.providers.openrouter.apiKey}` }
   });
   if (!res.ok) {
     const body = await res.text();
@@ -585,6 +689,30 @@ ipcMain.handle('models:list', async () => {
   persistSettings();
   rebuildRuntimeConfig();
   return models;
+});
+
+// The Settings "Test" button (PROVIDERS-PLAN §4): one tiny call through the
+// adapter, so a bad key is caught here rather than three nodes into a run.
+ipcMain.handle('provider:test', async (_e, provider) => {
+  if (provider === 'mock') return { ok: true };
+  if (!PROVIDER_IDS.includes(provider)) return { ok: false, error: `Unknown provider "${provider}".` };
+  try {
+    if (!hasKey(provider)) throw new Error(`No API key saved for ${provider} yet.`);
+    const keyKind = settings.providers?.kimi?.keyKind ?? 'platform';
+    const model = provider === 'kimi'
+      ? (keyKind === 'code' ? TEST_MODELS.kimiCode : TEST_MODELS.kimiPlatform)
+      : TEST_MODELS[provider];
+    await callModel({
+      provider, model,
+      apiKey: settings.providers?.[provider]?.apiKey ?? null,
+      ...(provider === 'kimi' ? { keyKind } : {}),
+      system: '', prompt: 'Reply with the single word: ok',
+      maxTokens: 16, retry: { attempts: 1, baseMs: 1 }
+    });
+    return { ok: true, model };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err).slice(0, 300) };
+  }
 });
 // Re-tint the native window controls when the renderer flips theme.
 ipcMain.handle('titlebar:setTheme', (_e, mode) => {

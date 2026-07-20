@@ -1,5 +1,46 @@
 # LLM Flow — Standard Example Nodes & Flowchart Patterns
 
+> **Node rework (2026-07-20).** The catalog below describes the original
+> per-role templates; the shipped library has since been combined:
+>
+> - **Pinned structural nodes** — every flow always carries its User Input and
+>   Output node. They are created automatically, cannot be deleted on the
+>   canvas, and removing them from the YAML fails the save
+>   (`core/flowstore.js`).
+> - **`work`** — the one work node (agentTask). Its *task type* is the
+>   category (`Code general | Code design | documentation | Test-creation`);
+>   the tool grant follows the task type (`WORK_TOOLS`): only Test-creation
+>   gets `bash`, and it alone defaults the per-call approval gate on.
+>   Replaces `code-general-step`, `code-design-step`, `documentation-step`,
+>   `test-creation-step`.
+> - **`evaluation`** — the one evaluation node. Its `evalType`
+>   (`plan | step | final`) resolves to the `plan-eval` / `step-eval` /
+>   `final-eval` role, so the contracts below are unchanged. Replaces the
+>   three separate evaluation templates.
+> - **`combine`** / **`split`** — Combine merges parallel outputs into one
+>   coherent deliverable (the stitch contract, including `fixTasks`); Split
+>   divides work into labeled independent parts for parallel branches.
+>   Replace `stitch`.
+> - **`general-analysis`** / **`translation`** — general text analysis, and
+>   faithful translation with a per-node target `language`.
+> - **Effort level** — every AI node carries `effort: low | medium | high`.
+>   It drives the default model pick (`core/modelPriority.js`: per-provider
+>   rankings plus a general cross-provider priority per task kind × effort,
+>   restricted to providers with keys) and the response token budget. An
+>   explicit worker always wins; `config.categoryWorkers` still beats the
+>   priority table.
+> - **Feedback point** — every AI node (not input/output) has a `feedback`
+>   source handle at its top. A feedback edge (`node.feedback -> upstream`)
+>   points backwards, is excluded from ordering/cycle rules, and carries the
+>   step-eval verdict contract: a `retry` verdict re-runs the judged node
+>   with `retry-for-<id>.md` guidance (bounded), then re-evaluates.
+> - **Orchestrator node budget** — `minNodes`/`maxNodes` (default 1–5) bound
+>   how many nodes the planning call may declare; on the canvas a swarm
+>   larger than 8 collapses into a stack with a modal list.
+> - Stored flows referencing retired template ids are migrated on load
+>   (`LEGACY_TEMPLATE_MAP` in `src/flowTypes.js`); generated-node specs may
+>   also carry an optional per-node `effort`.
+
 **Status:** 2026-07-13 — Initial version produced as part of flowchart refinement.  
 **Purpose:** Define the nodes that AI (and humans) can reliably pick from, categorize work into, or instantiate when authoring custom flows. This is the authoritative reference for "how the flowchart part of the application should work" for sophisticated planning + execution + reflection workflows.
 

@@ -28,13 +28,18 @@
 //   stitch    -> fixTasks[] routed through the existing create_task tool
 import { callModel } from './adapters/index.js';
 import { makeRetrospective } from './retrospective.js';
+import { resolveCallTarget } from './modelSource.js';
 import { runExecutorTask } from './nodes/executor.js';
 import { Workspace } from './workspace.js';
 import { loadSkills, withSkillsSection } from './skills.js';
 import { createWriteLedger } from './writeLedger.js';
 import { executeTool } from './tools/index.js';
 import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, extractJson } from './planEval.js';
-import { createNodeFromTemplate, getTemplate, resolveFlow, resolveInstance, primaryPort } from '../src/flowTypes.js';
+import {
+  createNodeFromTemplate, getTemplate, resolveFlow, resolveInstance, primaryPort,
+  effectiveRole, isFeedbackEdge, forwardEdges, EFFORT_MAX_TOKENS, LEGACY_TEMPLATE_MAP
+} from '../src/flowTypes.js';
+import { pickDefaultWorker } from './modelPriority.js';
 import { layoutPositions, containerLayout } from '../src/flowLayout.js';
 import { lintFlow, RUNTIME_RULES } from './flowlang/lint.js';
 
@@ -75,7 +80,7 @@ const DEFAULT_SYSTEM = {
     'Each listed file must include a short description of *exactly* what part is needed.',
     'The goal is to give later steps the smallest possible context.',
     'Also assign a Category from: Code general, Code design, documentation, Test-creation.',
-    'Suggest a template name from the known catalog (plan-eval, code-design-step, etc.).',
+    'Suggest the "work" template for every work task (the category picks its task type).',
     'Format strictly as shown in the example in your instructions.'
   ].join('\n'),
   'plan-eval': [
@@ -86,9 +91,10 @@ const DEFAULT_SYSTEM = {
     '{',
     '  "nodes": [{',
     '    "id": "<unique; letters/digits/_/- only>",',
-    '    "template": "<code-general-step | code-design-step | documentation-step | test-creation-step>",',
+    '    "template": "work",',
     '    "taskRef": "task-N",',
     '    "category": "<Code general | Code design | documentation | Test-creation>",',
+    '    "effort": "<low | medium | high — optional; match the task\'s difficulty>",',
     '    "title": "<short>", "goal": "<fully self-describing>",',
     '    "dependsOn": ["<id or taskRef of a prerequisite generated node>"],',
     '    "contextSpec": { "files": [{ "path": "<file>", "description": "<exactly which part is needed>" }] }',
@@ -97,8 +103,10 @@ const DEFAULT_SYSTEM = {
     '  "categories": { "task-1": "Code design" },',
     '  "summary": "<one line>"',
     '}',
-    'Every node MUST have id + template. parallelGroups are sequential waves used for',
-    'ordering when dependsOn is omitted. Keep every contextSpec minimal — that is the point.'
+    'Every node MUST have id + template. The "work" template covers every task type;',
+    'its category selects implementation / design / docs / tests. parallelGroups are',
+    'sequential waves used for ordering when dependsOn is omitted. Keep every',
+    'contextSpec minimal — that is the point.'
   ].join('\n'),
   'step-eval': [
     'ROLE: step-eval',
@@ -120,6 +128,44 @@ const DEFAULT_SYSTEM = {
     'Each entry becomes a real executor task run before the flow continues.',
     'Omit the block (or emit "fixTasks": []) when nothing is needed.'
   ].join('\n'),
+  combine: [
+    'ROLE: combine',
+    'You are the Combine node. Merge the upstream outputs (often produced in',
+    'parallel) into ONE coherent deliverable.',
+    'Resolve overlaps, contradictions, and seams; keep every genuine contribution.',
+    'Make small fixes yourself and describe them.',
+    'If larger fixes are required, end with ONE ```json block:',
+    '{ "fixTasks": [{ "title": "<short>", "goal": "<fully self-describing>", "constraints": [], "dependsOn": [] }] }',
+    'Each entry becomes a real executor task run before the flow continues.',
+    'Omit the block (or emit "fixTasks": []) when nothing is needed.'
+  ].join('\n'),
+  split: [
+    'ROLE: split',
+    'You are the Split node. Divide the upstream work into independent parts',
+    'that can be handled in parallel by downstream nodes.',
+    'Produce Markdown with one "## part-N — <short name>" section per part.',
+    'Each part must be fully self-describing: state its goal, its inputs, and its',
+    'boundaries so no two parts overlap and nothing is left unassigned.',
+    'Prefer 2-5 parts. Do not do the work itself — only divide it.'
+  ].join('\n'),
+  analyze: [
+    'ROLE: analyze',
+    'You are a general text-analysis node. Analyze the brief and upstream context',
+    'and produce a structured Markdown report:',
+    '# Analysis\n\n## Summary\n<3-5 sentences>\n\n## Structure & key points\n\n## Claims & evidence',
+    '\n\n## Gaps, risks & inconsistencies\n\n## Recommendations',
+    'Ground every observation in the text (quote or reference the location).',
+    'Match the depth to your effort level; never pad. State uncertainty honestly.'
+  ].join('\n'),
+  translate: [
+    'ROLE: translate',
+    'You are a translation node. Translate the upstream content into the TARGET',
+    'LANGUAGE given in your instructions (default: English).',
+    'Preserve meaning, tone, register, names, numbers, code blocks, and Markdown',
+    'formatting exactly; translate prose, not identifiers or code.',
+    'Output ONLY the translation — no commentary. If a passage is ambiguous, pick',
+    'the most faithful reading and add a translator\'s note at the very end.'
+  ].join('\n'),
   orchestrate: [
     'ROLE: orchestrate',
     'You are an Orchestrator node. From the brief and the upstream task list,',
@@ -129,9 +175,10 @@ const DEFAULT_SYSTEM = {
     '{',
     '  "nodes": [{',
     '    "id": "<unique; letters/digits/_/- only>",',
-    '    "template": "<code-general-step | code-design-step | documentation-step | test-creation-step>",',
+    '    "template": "work",',
     '    "taskRef": "task-N",',
     '    "category": "<Code general | Code design | documentation | Test-creation>",',
+    '    "effort": "<low | medium | high — optional; match the task\'s difficulty>",',
     '    "title": "<short>", "goal": "<fully self-describing>",',
     '    "dependsOn": ["<id of a prerequisite node>"],',
     '    "contextSpec": { "files": [{ "path": "<file>", "description": "<exactly which part is needed>" }] }',
@@ -139,10 +186,12 @@ const DEFAULT_SYSTEM = {
     '  "parallelGroups": [["task-1","task-2"],["task-3"]],',
     '  "summary": "<one line>"',
     '}',
-    'The nodes you declare are created inside you and run AUTOMATICALLY, without',
-    'any human review — every goal must be fully self-describing, and every',
-    'contextSpec minimal. Independent nodes run in parallel; use dependsOn (or',
-    'parallelGroups as sequential waves) only where order truly matters.'
+    'The "work" template covers every task type; its category selects',
+    'implementation / design / docs / tests. The nodes you declare are created',
+    'inside you and run AUTOMATICALLY, without any human review — every goal must',
+    'be fully self-describing, and every contextSpec minimal. Independent nodes',
+    'run in parallel; use dependsOn (or parallelGroups as sequential waves) only',
+    'where order truly matters.'
   ].join('\n'),
   'feedback-review': [
     'ROLE: feedback-review',
@@ -157,8 +206,8 @@ const DEFAULT_SYSTEM = {
     '}',
     'Use "solved" when the feedback is addressed; the turn then completes.',
     'Use "more-work" ONLY when concrete further work would fix it, and declare that work',
-    'as node specs (same contract as plan-eval; templates: code-general-step,',
-    'code-design-step, documentation-step, test-creation-step). They run before you',
+    'as node specs (same contract as plan-eval; template "work" + a category of',
+    'Code general | Code design | documentation | Test-creation). They run before you',
     'review again. Extensions are bounded; when in doubt, prefer "solved" with an',
     'honest reason over an endless loop.'
   ].join('\n'),
@@ -185,7 +234,8 @@ const TRIAGE_SYSTEM = [
   '  "reason": "<one line>",',
   '  "contextNodes": ["<id of a finished node whose output the new work needs>"],',
   '  "answer": "<question-class only: answer the question directly, as Markdown>",',
-  '  "nodes": [{ "id": "<short unique id>", "template": "<code-general-step | code-design-step | documentation-step | test-creation-step>",',
+  '  "nodes": [{ "id": "<short unique id>", "template": "work",',
+  '              "category": "<Code general | Code design | documentation | Test-creation>",',
   '              "title": "<short>", "goal": "<fully self-describing>", "dependsOn": ["<id>"],',
   '              "contextSpec": { "files": [{ "path": "<file>", "description": "<exactly which part is needed>" }] } }],',
   '  "goal": "<feature-class only: one paragraph stating what to plan and build>"',
@@ -214,22 +264,29 @@ const STREAM_FLUSH_MS = 250;
 //   1. an explicit worker set on the node wins,
 //   2. otherwise the node's category picks from config.categoryWorkers
 //      (the plan-eval pattern: category drives model selection),
-//   3. otherwise the configured executor default.
+//   3. otherwise the model-priority defaults (core/modelPriority.js): the
+//      node's task kind + effort level walk the general provider preference,
+//      restricted to providers with a saved key,
+//   4. otherwise the configured executor default.
 export function resolveWorker(node, config) {
   const w = node?.data?.worker;
   if (w?.provider && w?.model) return { provider: w.provider, model: w.model };
   const cat = node?.data?.category;
   const pref = cat ? config.categoryWorkers?.[cat] : null;
   if (pref?.provider && pref?.model) return { provider: pref.provider, model: pref.model };
+  const pick = pickDefaultWorker(node, config);
+  if (pick) return pick;
   const d = config.workers.executor;
   return { provider: d.provider, model: d.model };
 }
 
-// Kahn topological sort over the flow; throws on cycles.
+// Kahn topological sort over the flow; throws on cycles. Feedback edges
+// (sourceHandle 'feedback') point backwards by design and are not part of the
+// execution order.
 export function topoSort(flow) {
   const indegree = new Map(flow.nodes.map(n => [n.id, 0]));
   const adj = new Map(flow.nodes.map(n => [n.id, []]));
-  for (const e of flow.edges) {
+  for (const e of forwardEdges(flow.edges)) {
     if (!indegree.has(e.source) || !indegree.has(e.target)) continue; // dangling edge
     indegree.set(e.target, indegree.get(e.target) + 1);
     adj.get(e.source).push(e.target);
@@ -548,11 +605,11 @@ export class FlowRunner {
   // One triage call (strict contract in core/planEval.js, one bounded re-ask).
   // Returns the validated triage, or null — never throws for contract misses.
   async triageFollowUp(runId, turn, feedback, digest) {
-    const worker = resolveWorker({}, this.config);
-    const apiKey = this.config.providerKeys?.[worker.provider];
+    const worker = resolveCallTarget(resolveWorker({}, this.config), this.config);
+    const apiKey = worker.apiKey;
     const label = `fu${turn}-triage`;
     const templateIds = this.nodeStore ? this.nodeStore.listFull().map(t => t.id) : [];
-    this.store.appendLog(runId, { event: 'followup_triage_start', turn, worker });
+    this.store.appendLog(runId, { event: 'followup_triage_start', turn, worker: { provider: worker.provider, model: worker.model } });
     const userMsg = [
       `RUN DIGEST:\n${digest}`,
       `ORIGINAL PROMPT (turn 0):\n${this.store.readPrompt(runId)}`,
@@ -561,7 +618,7 @@ export class FlowRunner {
     let outText;
     try {
       const result = await callModel({
-        provider: worker.provider, model: worker.model, apiKey,
+        ...worker, apiKey,
         system: TRIAGE_SYSTEM, prompt: userMsg,
         onRetry: this.retryLogger(runId, label), retry: this.config.retry
       });
@@ -646,10 +703,10 @@ export class FlowRunner {
       // it and the stitch node via the normal plan-eval path.
       const plan = this.templateNode('plan-start', `fu${turn}-plan`,
         { title: `Plan (follow-up ${turn})`, goal: triage.goal ?? feedback });
-      const planEval = this.templateNode('plan-eval', `fu${turn}-plan-eval`,
-        { title: `Plan evaluation (follow-up ${turn})`, requiresApproval: true });
-      const stitch = this.templateNode('stitch', `fu${turn}-stitch`,
-        { title: `Stitch (follow-up ${turn})` });
+      const planEval = this.templateNode('evaluation', `fu${turn}-plan-eval`,
+        { title: `Plan evaluation (follow-up ${turn})`, evalType: 'plan', requiresApproval: true });
+      const stitch = this.templateNode('combine', `fu${turn}-stitch`,
+        { title: `Combine (follow-up ${turn})` });
       for (const n of [plan, planEval, stitch]) {
         n.data = { ...n.data, ...provenance, generatedBy: inputId };
         flow.nodes.push(n);
@@ -945,7 +1002,7 @@ export class FlowRunner {
       // Orchestrator children (managedBy) are run by their container's inline
       // sub-walk — the outer scheduler never picks them up.
       const ready = order.filter(n => !completed.has(n.id) && !n.data?.managedBy &&
-        flow.edges.every(e =>
+        forwardEdges(flow.edges).every(e =>
           e.target !== n.id || completed.has(e.source) || !nodesById.has(e.source)));
       if (!ready.length) break;
 
@@ -957,7 +1014,8 @@ export class FlowRunner {
       const parallelSafe = n => !n.data?.requiresApproval && (
         (n.type === 'aiStep'
           // plan-eval and feedback-review rewrite the flow; both run alone.
-          && !['plan-eval', 'feedback-review'].includes(n.data?.role ?? 'custom'))
+          // effectiveRole: an Evaluation node set to evalType 'plan' IS plan-eval.
+          && !['plan-eval', 'feedback-review'].includes(effectiveRole(n.data?.role ?? 'custom', n.data?.evalType)))
         || n.type === 'agentTask');
       const safe = ready.filter(parallelSafe);
       const batch = safe.length > 1 ? safe.slice(0, maxParallel) : [ready[0]];
@@ -1203,6 +1261,9 @@ export class FlowRunner {
       if (!await this.runPendingTasks(runId, opts.taskIdByNode, flow)) return { ok: false };
     }
     if (outcome?.stepEval) return this.handleStepEval(runId, flow, node, outcome.stepEval, opts);
+    // A feedback-edge verdict is handled exactly like a step-eval verdict — the
+    // explicit feedback targets take precedence inside handleStepEval.
+    if (outcome?.feedback) return this.handleStepEval(runId, flow, node, outcome.feedback, opts);
     if (outcome?.feedbackReview) return this.handleFeedbackReview(runId, flow, node, outcome.feedbackReview);
     return { ok: true };
   }
@@ -1220,45 +1281,52 @@ export class FlowRunner {
     const { verdict, reason, guidance } = evalResult;
     if (verdict === 'pass') return { ok: true };
 
-    // The evaluated node: the last upstream work node (aiStep doing real work
-    // or an agentTask) feeding this step-eval.
-    const evalRoles = new Set(['plan-start', 'plan-eval', 'step-eval', 'stitch', 'final-eval', 'feedback-review', 'plan', 'verify']);
-    const upstream = flow.edges.filter(e => e.target === node.id)
+    // The evaluated node(s). Explicit feedback edges win (the node rework's
+    // feedback point names its target); otherwise fall back to the classic
+    // heuristic — the last upstream work node feeding this step-eval.
+    const fbTargets = flow.edges.filter(e => isFeedbackEdge(e) && e.source === node.id)
+      .map(e => flow.nodes.find(n => n.id === e.target))
+      .filter(n => n && n.type !== 'input' && n.type !== 'output');
+    const evalRoles = new Set(['plan-start', 'plan-eval', 'step-eval', 'stitch', 'combine', 'final-eval', 'feedback-review', 'plan', 'verify']);
+    const upstream = forwardEdges(flow.edges).filter(e => e.target === node.id)
       .map(e => flow.nodes.find(n => n.id === e.source))
       .filter(Boolean);
-    const target = upstream.filter(n =>
+    const heuristic = upstream.filter(n =>
         n.type === 'agentTask' || (n.type === 'aiStep' && !evalRoles.has(n.data?.role ?? 'custom'))).pop()
       ?? upstream.filter(n => n.type === 'aiStep' || n.type === 'agentTask').pop();
+    const targets = fbTargets.length ? fbTargets : (heuristic ? [heuristic] : []);
 
     const maxRetries = Math.max(0, Number(node.data?.maxRetries ?? 1));
     const used = opts.retryBudget.get(node.id) ?? 0;
 
-    if (verdict === 'retry' && target && used < maxRetries) {
+    if (verdict === 'retry' && targets.length && used < maxRetries) {
       opts.retryBudget.set(node.id, used + 1);
-      const guidanceText = [
-        `# Retry guidance from ${node.data?.title || node.id} (attempt ${used + 1} of ${maxRetries})`,
-        '',
-        `Reason the previous attempt was rejected: ${reason || '(none given)'}`,
-        '',
-        guidance || '(no specific guidance — address the stated reason)'
-      ].join('\n');
-      this.store.writeNodeOutput(runId, `retry-for-${target.id}`, guidanceText);
-      this.store.appendLog(runId, { event: 'step_eval_retry', node: node.id, target: target.id, attempt: used + 1, reason });
+      for (const target of targets) {
+        const guidanceText = [
+          `# Retry guidance from ${node.data?.title || node.id} (attempt ${used + 1} of ${maxRetries})`,
+          '',
+          `Reason the previous attempt was rejected: ${reason || '(none given)'}`,
+          '',
+          guidance || '(no specific guidance — address the stated reason)'
+        ].join('\n');
+        this.store.writeNodeOutput(runId, `retry-for-${target.id}`, guidanceText);
+        this.store.appendLog(runId, { event: 'step_eval_retry', node: node.id, target: target.id, attempt: used + 1, reason });
 
-      if (target.type === 'agentTask') {
-        // Reset the node's task to pending with the guidance as an extra
-        // input; the requeued walk runs it through the executor again.
-        const doc = this.store.readTasks(runId);
-        const t = doc?.tasks.find(t => t.id === opts.taskIdByNode.get(target.id));
-        if (t) {
-          t.status = 'pending';
-          if (!t.inputs.includes(`retry-for-${target.id}`)) t.inputs.push(`retry-for-${target.id}`);
-          this.store.writeTasks(runId, doc);
+        if (target.type === 'agentTask') {
+          // Reset the node's task to pending with the guidance as an extra
+          // input; the requeued walk runs it through the executor again.
+          const doc = this.store.readTasks(runId);
+          const t = doc?.tasks.find(t => t.id === opts.taskIdByNode.get(target.id));
+          if (t) {
+            t.status = 'pending';
+            if (!t.inputs.includes(`retry-for-${target.id}`)) t.inputs.push(`retry-for-${target.id}`);
+            this.store.writeTasks(runId, doc);
+          }
         }
       }
-      // Un-complete the work node and this eval node: the scheduler re-runs
+      // Un-complete the work node(s) and this eval node: the scheduler re-runs
       // the target (which picks up retry-for-<id>.md), then re-evaluates.
-      return { ok: true, requeue: [target.id, node.id] };
+      return { ok: true, requeue: [...targets.map(t => t.id), node.id] };
     }
 
     // escalate — explicitly requested, retry budget exhausted, or no target.
@@ -1307,7 +1375,9 @@ export class FlowRunner {
   // the explicitly listed files + the per-file descriptions the planner provided.
   // This directly implements "do not use any more context than necessary".
   upstreamContext(runId, flow, node, taskIdByNode) {
-    const incoming = flow.edges.filter(e => e.target === node.id);
+    // Feedback edges are a reverse channel (verdict + guidance, delivered as
+    // retry-for-<id>.md), never forward context.
+    const incoming = forwardEdges(flow.edges).filter(e => e.target === node.id);
     const spec = node.data?.contextSpec;
     if (spec && Array.isArray(spec.files) && spec.files.length) {
       // A minimal-context node pulls only its declared files and ignores its
@@ -1460,7 +1530,7 @@ export class FlowRunner {
       }
       const taskId = nextTaskId();
       taskIdByNode.set(node.id, taskId);
-      const upstream = flow.edges.filter(e => e.source && e.target === node.id).map(e => e.source);
+      const upstream = forwardEdges(flow.edges).filter(e => e.source && e.target === node.id).map(e => e.source);
       const specFiles = (node.data?.contextSpec?.files ?? []).map(f => f?.path).filter(Boolean);
       const inputs = ['prompt.md', ...upstream
         .map(srcId => {
@@ -1508,16 +1578,42 @@ export class FlowRunner {
     }
 
     if (node.type === 'aiStep') {
-      const role = node.data?.role ?? 'custom';
-      const worker = resolveWorker(node, this.config);
-      const apiKey = this.config.providerKeys?.[worker.provider];
+      // The 'evaluation' meta-role resolves through the node's evalType.
+      const role = effectiveRole(node.data?.role ?? 'custom', node.data?.evalType);
+      const worker = resolveCallTarget(resolveWorker(node, this.config), this.config);
+      const apiKey = worker.apiKey;
       this.store.appendLog(runId, {
         event: 'node_start', node: node.id, type: 'aiStep', role,
-        worker: { provider: worker.provider, model: worker.model }
+        worker: { provider: worker.provider, model: worker.model },
+        ...(node.data?.effort ? { effort: node.data.effort } : {})
       });
-      const system = this.applySkills(runId, node.id,
+      let system = this.applySkills(runId, node.id,
         node.data?.system?.trim() || DEFAULT_SYSTEM[role] || DEFAULT_SYSTEM.custom,
         node.data?.skills);
+      if (role === 'translate') {
+        system += `\n\nTARGET LANGUAGE: ${node.data?.language?.trim() || 'English'}`;
+      }
+      // Feedback channel (node rework): a node wired back to an upstream node
+      // via a feedback edge judges that node's work with a structured verdict.
+      // Roles with their own verdict/materialization contracts keep them.
+      const feedbackTargets = flow.edges
+        .filter(e => isFeedbackEdge(e) && e.source === node.id)
+        .map(e => flow.nodes.find(n => n.id === e.target))
+        .filter(Boolean);
+      const ownContract = ['step-eval', 'feedback-review', 'plan-eval'].includes(role);
+      if (feedbackTargets.length && !ownContract) {
+        system += [
+          '',
+          '',
+          'FEEDBACK LINK: you are wired back to '
+            + feedbackTargets.map(t => `"${t.data?.title || t.id}" (${t.id})`).join(', ')
+            + ' — the node(s) whose output you received.',
+          'After your deliverable, end with ONE ```json block:',
+          '{ "verdict": "pass" | "retry", "reason": "<one line>", "guidance": "<retry only: what to do differently>" }',
+          'Use "retry" when that upstream work needs revision — it re-runs with your',
+          'guidance, then you review again (bounded). Otherwise use "pass".'
+        ].join('\n');
+      }
       const parts = this.upstreamContext(runId, flow, node, taskIdByNode);
       const retryGuidance = this.store.readNodeOutput(runId, `retry-for-${node.id}`);
       // Planning roles learn from prior runs' retrospectives (historyDigest),
@@ -1538,7 +1634,12 @@ export class FlowRunner {
 
       let result;
       try {
-        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText, onRetry: this.retryLogger(runId, node.id), retry: this.config.retry });
+        result = await callModel({
+          ...worker, apiKey, system, prompt: userMsg, onText,
+          // Effort level sets the response budget; medium keeps the default.
+          ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
+          onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
+        });
         // A call that comes back with nothing is not a success. Recording one as
         // success wrote a 0-byte artifact, marked the node done, and handed
         // emptiness to every downstream node — the run read as healthy the whole
@@ -1627,8 +1728,8 @@ export class FlowRunner {
           this.store.appendLog(runId, { event: 'step_eval_no_verdict', node: node.id });
         }
       }
-      if (role === 'stitch') {
-        this.store.writeNodeOutput(runId, 'stitch-report', outText);
+      if (role === 'stitch' || role === 'combine') {
+        this.store.writeNodeOutput(runId, role === 'combine' ? 'combine-report' : 'stitch-report', outText);
         const st = parseStitchDirectives(outText);
         if (st) {
           problems.push(...(st.errors ?? []));
@@ -1659,6 +1760,20 @@ export class FlowRunner {
         } else {
           problems.push('feedback-review emitted no structured verdict JSON block; treated as solved');
           this.store.appendLog(runId, { event: 'feedback_review_no_verdict', node: node.id });
+        }
+      }
+
+      // Feedback channel: a node wired back to upstream work judges it with the
+      // step-eval verdict shape. Missing verdict counts as pass — feedback must
+      // never wedge a run.
+      if (feedbackTargets.length && !ownContract) {
+        const verdictObj = parseStepEvalVerdict(outText);
+        if (verdictObj) {
+          outcome.feedback = verdictObj;
+          this.store.writeNodeOutput(runId, `${node.id}.verdict`, JSON.stringify(verdictObj, null, 2));
+          this.store.appendLog(runId, { event: 'feedback_verdict', node: node.id, targets: feedbackTargets.map(t => t.id), ...verdictObj });
+        } else {
+          this.store.appendLog(runId, { event: 'feedback_no_verdict', node: node.id });
         }
       }
 
@@ -1707,8 +1822,8 @@ export class FlowRunner {
   // orchestrator's primary "results" output — downstream nodes only ever see
   // the orchestrator itself. No human intervention anywhere in the loop.
   async runOrchestrator(runId, flow, node, opts) {
-    const worker = resolveWorker(node, this.config);
-    const apiKey = this.config.providerKeys?.[worker.provider];
+    const worker = resolveCallTarget(resolveWorker(node, this.config), this.config);
+    const apiKey = worker.apiKey;
     this.store.appendLog(runId, {
       event: 'node_start', node: node.id, type: 'orchestrator',
       worker: { provider: worker.provider, model: worker.model }
@@ -1732,9 +1847,15 @@ export class FlowRunner {
     // reused — the planning call is skipped and unfinished children re-run.
     let children = flow.nodes.filter(n => n.data?.managedBy === node.id);
     if (!children.length) {
+      // Node budget (rework): the min/max dropdowns on the node bound how many
+      // work nodes the planning call may declare. Defaults 1-5.
+      const minNodes = Math.max(1, Math.floor(Number(node.data?.minNodes ?? 1) || 1));
+      const maxNodes = Math.max(minNodes, Math.floor(Number(node.data?.maxNodes ?? 5) || 5));
       const system = this.applySkills(runId, node.id,
         node.data?.system?.trim() || DEFAULT_SYSTEM.orchestrate,
-        node.data?.skills);
+        node.data?.skills)
+        + `\n\nNODE BUDGET: declare between ${minNodes} and ${maxNodes} nodes (inclusive). `
+        + 'Prefer the fewest nodes that genuinely cover the work.';
       const parts = this.upstreamContext(runId, flow, node, opts.taskIdByNode);
       const userMsg = [
         `USER PROMPT:\n${this.store.readPrompt(runId)}`,
@@ -1747,7 +1868,11 @@ export class FlowRunner {
       const onText = this.streamInto(runId, t => this.store.writeNodeOutput(runId, `${node.id}.plan`, t));
       let result;
       try {
-        result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt: userMsg, onText, onRetry: this.retryLogger(runId, node.id), retry: this.config.retry });
+        result = await callModel({
+          ...worker, apiKey, system, prompt: userMsg, onText,
+          ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
+          onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
+        });
       } catch (err) {
         const msg = String(err?.message ?? err);
         this.store.appendLog(runId, { event: 'node_error', node: node.id, role: 'orchestrate', error: msg });
@@ -1757,9 +1882,19 @@ export class FlowRunner {
       this.store.writeNodeOutput(runId, `${node.id}.plan`, outText);
 
       const templateIds = this.nodeStore ? this.nodeStore.listFull().map(t => t.id) : [];
+      // Contract violations AND budget violations both earn the one bounded
+      // re-ask; a plan that stays outside the budget after that is accepted
+      // with a logged warning rather than wasted (the work is still valid).
+      const boundsErrors = plan => {
+        const n = plan.nodes.length;
+        return n < minNodes || n > maxNodes
+          ? [`nodes: declared ${n} node(s); this orchestrator's node budget is ${minNodes}-${maxNodes} (inclusive)`]
+          : [];
+      };
       let parsed = parsePlanEval(outText, templateIds);
-      if (!parsed.ok) {
-        const fixed = await this.reAsk(runId, node, worker, apiKey, system, userMsg, outText, parsed.errors);
+      const firstErrors = parsed.ok ? boundsErrors(parsed.plan) : parsed.errors;
+      if (firstErrors.length) {
+        const fixed = await this.reAsk(runId, node, worker, apiKey, system, userMsg, outText, firstErrors);
         if (fixed != null) {
           const reparsed = parsePlanEval(fixed, templateIds);
           if (reparsed.ok) {
@@ -1772,6 +1907,10 @@ export class FlowRunner {
       // Unlike plan-eval (which degrades gracefully), creating nodes IS the
       // orchestrator's job — an invalid plan fails the node honestly.
       if (!parsed.ok) throw failNode('planning output violated the node contract', parsed.errors);
+      const stillOut = boundsErrors(parsed.plan);
+      if (stillOut.length) {
+        this.store.appendLog(runId, { event: 'orchestrator_bounds_violated', node: node.id, min: minNodes, max: maxNodes, declared: parsed.plan.nodes.length });
+      }
 
       const mat = this.materializeParsedNodes(runId, flow, node, parsed.plan, { parentId: node.id });
       if (!mat.ok || !mat.created.length) {
@@ -1803,7 +1942,7 @@ export class FlowRunner {
     const maxParallel = Math.max(1, Number(this.config.maxParallel ?? 4));
     for (;;) {
       const ready = children.filter(c => !done.has(c.id) &&
-        flow.edges.every(e => e.target !== c.id || !childIds.has(e.source) || done.has(e.source)));
+        forwardEdges(flow.edges).every(e => e.target !== c.id || !childIds.has(e.source) || done.has(e.source)));
       if (!ready.length) break;
       // Children are never gated (the container runs autonomously), so both
       // aiStep and agentTask children are wave-safe (V1 task 6).
@@ -1876,7 +2015,7 @@ export class FlowRunner {
       'Respond again in full, fixing every error above. Emit exactly ONE valid ```json block satisfying the contract.'
     ].join('\n\n');
     try {
-      const result = await callModel({ provider: worker.provider, model: worker.model, apiKey, system, prompt,
+      const result = await callModel({ ...worker, apiKey, system, prompt,
         onRetry: this.retryLogger(runId, node.id), retry: this.config.retry });
       return String(result.text ?? '').trim();
     } catch (err) {
@@ -1902,9 +2041,21 @@ export class FlowRunner {
   // tools apply) as a runtime node, falling back to the built-in catalog. The
   // caller re-layouts, so the position is a placeholder.
   templateNode(templateId, id, overrides = {}) {
-    const lib = this.nodeStore?.get(templateId);
-    if (lib) return resolveInstance({ id, templateId, position: { x: 0, y: 0 }, overrides }, lib);
-    const { title, goal, category, contextSpec, requiresApproval } = overrides;
+    let lib = this.nodeStore?.get(templateId);
+    let effOverrides = overrides;
+    // A retired template id (a model quoting the pre-rework catalog, or an old
+    // run being resumed) resolves through the combined replacement.
+    if (!lib && LEGACY_TEMPLATE_MAP[templateId]) {
+      const legacy = LEGACY_TEMPLATE_MAP[templateId];
+      const mapped = this.nodeStore?.get(legacy.templateId);
+      if (mapped) {
+        lib = mapped;
+        templateId = legacy.templateId;
+        effOverrides = { ...legacy.overrides, ...overrides };
+      }
+    }
+    if (lib) return resolveInstance({ id, templateId, position: { x: 0, y: 0 }, overrides: effOverrides }, lib);
+    const { title, goal, category, contextSpec, requiresApproval, effort, evalType, language } = overrides;
     return createNodeFromTemplate(templateId, {
       id,
       position: { x: 0, y: 0 },
@@ -1913,6 +2064,9 @@ export class FlowRunner {
         ...(goal ? { goal } : {}),
         ...(category ? { category } : {}),
         ...(contextSpec ? { contextSpec } : {}),
+        ...(effort ? { effort } : {}),
+        ...(evalType ? { evalType } : {}),
+        ...(language ? { language } : {}),
         ...(requiresApproval != null ? { requiresApproval } : {})
       }
     });
@@ -1932,6 +2086,7 @@ export class FlowRunner {
       title: s.title || (s.taskRef ? `${label} (${s.taskRef})` : label),
       goal,
       ...(s.category ? { category: s.category } : {}),
+      ...(s.effort ? { effort: s.effort } : {}),
       ...(contextSpec ? { contextSpec } : {})
     });
   }

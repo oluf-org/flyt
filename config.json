@@ -1,5 +1,5 @@
 {
-  "comment": "Committed defaults for worker assignment; settings.json in the app's userData folder overrides the executor worker (edit via the in-app Settings panel). Providers: 'mock' (no API key needed), 'anthropic' (key via Settings or ANTHROPIC_API_KEY), 'openrouter' (key saved via Settings). The executor worker is the app-wide default, used when a node template sets no worker of its own.",
+  "comment": "Committed defaults for worker assignment; settings.json in the app's userData folder overrides the executor worker (edit via the in-app Settings panel). Providers: 'mock' (no API key needed), 'anthropic', 'openai', 'kimi' (platform or Kimi-Code key), 'openrouter' — keys saved via Settings → Providers; anthropic/openai also accept ANTHROPIC_API_KEY / OPENAI_API_KEY from the shell. A worker may also be { provider: 'auto', model }, resolved at call time through Settings' provider priority. The executor worker is the app-wide default, used when a node template sets no worker of its own.",
   "workers": {
     "executor": { "provider": "mock", "model": "mock-large" }
   },

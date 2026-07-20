@@ -121,12 +121,44 @@ const snapshots = {
   }
 };
 
-// In-memory stand-ins for the settings/models IPC surface.
+// In-memory stand-ins for the settings/models IPC surface (PROVIDERS-PLAN shape).
 const mockSettings = {
   hasKey: false,
+  providers: {
+    anthropic: { hasKey: false },
+    openai: { hasKey: false },
+    kimi: { hasKey: false, keyKind: 'platform' },
+    openrouter: { hasKey: false },
+    mock: { hasKey: true }
+  },
+  providerPriority: ['anthropic', 'openai', 'kimi', 'openrouter', 'mock'],
+  activeModels: [],
   workers: {
     executor: { provider: 'mock', model: 'mock-large' }
-  }
+  },
+  summary: { connected: 0, activeModelCount: 0 },
+  projectStorage: 'workspace'
+};
+const refreshMockSummary = () => {
+  mockSettings.summary = {
+    connected: ['anthropic', 'openai', 'kimi', 'openrouter'].filter(p => mockSettings.providers[p].hasKey).length,
+    activeModelCount: mockSettings.activeModels.filter(m => m.enabled !== false).length
+  };
+  mockSettings.hasKey = mockSettings.summary.connected > 0;
+};
+const mockCurated = {
+  anthropic: [
+    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', supportsTools: true },
+    { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', supportsTools: true }
+  ],
+  openai: [
+    { id: 'gpt-5.2', name: 'GPT-5.2', supportsTools: true },
+    { id: 'gpt-5-mini', name: 'GPT-5 mini', supportsTools: true }
+  ],
+  kimi: [
+    { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', supportsTools: true },
+    { id: 'kimi-for-coding', name: 'Kimi for Coding', supportsTools: true }
+  ]
 };
 const mockModels = [
   { id: 'openai/gpt-4o-mini', name: 'OpenAI: GPT-4o-mini', contextLength: 128000, supportsTools: true },
@@ -146,8 +178,8 @@ const mockFlows = {
     nodes: [
       { id: 'user-input', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
       { id: 'plan', templateId: 'plan-start', position: { x: 0, y: 130 }, overrides: { title: 'Planning' } },
-      { id: 'route', templateId: 'plan-eval', position: { x: 0, y: 260 }, overrides: { title: 'Routing', requiresApproval: true } },
-      { id: 'verify', templateId: 'final-eval', position: { x: 0, y: 390 }, overrides: { title: 'Verification' } },
+      { id: 'route', templateId: 'evaluation', position: { x: 0, y: 260 }, overrides: { title: 'Routing', evalType: 'plan', requiresApproval: true } },
+      { id: 'verify', templateId: 'evaluation', position: { x: 0, y: 390 }, overrides: { title: 'Verification', evalType: 'final' } },
       { id: 'result', type: 'output', kind: 'user', position: { x: 0, y: 520 }, data: {} }
     ],
     edges: [
@@ -163,7 +195,7 @@ const mockFlows = {
     name: 'Quick fix',
     nodes: [
       { id: 'user-input', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
-      { id: 'fix', templateId: 'code-general-step', position: { x: 0, y: 130 }, overrides: { title: 'Fix' } },
+      { id: 'fix', templateId: 'work', position: { x: 0, y: 130 }, overrides: { title: 'Fix', category: 'Code general' } },
       { id: 'result', type: 'output', kind: 'user', position: { x: 0, y: 260 }, data: {} }
     ],
     edges: [
@@ -327,14 +359,31 @@ export function installDevMock() {
     getConfig: async () => ({ workers: structuredClone(mockSettings.workers) }),
     getSettings: async () => structuredClone(mockSettings),
     setSettings: async (patch = {}) => {
-      if (typeof patch.openrouterApiKey === 'string' && patch.openrouterApiKey.trim()) mockSettings.hasKey = true;
+      if (patch.providerKeys) {
+        for (const p of Object.keys(patch.providerKeys)) {
+          if (mockSettings.providers[p]) mockSettings.providers[p].hasKey = true;
+        }
+      }
+      if (patch.kimiKeyKind) mockSettings.providers.kimi.keyKind = patch.kimiKeyKind;
+      if (Array.isArray(patch.providerPriority)) mockSettings.providerPriority = [...patch.providerPriority];
+      if (Array.isArray(patch.activeModels)) mockSettings.activeModels = structuredClone(patch.activeModels);
       if (patch.workers) Object.assign(mockSettings.workers, structuredClone(patch.workers));
+      if (patch.projectStorage) mockSettings.projectStorage = patch.projectStorage;
+      refreshMockSummary();
       return structuredClone(mockSettings);
     },
-    listModels: async () => {
-      if (!mockSettings.hasKey) throw new Error('No OpenRouter API key saved. Add one in Settings first.');
-      return mockModels;
+    listModels: async (provider = 'openrouter') => {
+      if (provider === 'openrouter') {
+        if (!mockSettings.providers.openrouter.hasKey) throw new Error('No OpenRouter API key saved. Add one in Settings first.');
+        return mockModels;
+      }
+      return mockCurated[provider] ?? [];
     },
+    testProvider: async provider => (
+      provider === 'mock' || mockSettings.providers[provider]?.hasKey
+        ? { ok: true }
+        : { ok: false, error: `No API key saved for ${provider} yet.` }
+    ),
     listFlows: async () => Object.values(mockFlows).map(f => ({ id: f.id, name: f.name })),
     loadFlow: async id => structuredClone(mockFlows[id]),
     saveFlow: async flow => { mockFlows[flow.id] = structuredClone(flow); return flow; },
