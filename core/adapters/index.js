@@ -28,6 +28,11 @@ import { openrouterAdapter } from './openrouter.js';
 import { openaiAdapter } from './openai.js';
 import { kimiAdapter } from './kimi.js';
 import { mockAdapter } from './mock.js';
+import { abortError, isAbortError } from './http.js';
+
+// RUN-CONTROL: re-exported so callers (runner, tests) classify unwind errors
+// the same way the retry loop below does.
+export { abortError, isAbortError };
 
 const providers = {
   anthropic: anthropicAdapter,
@@ -61,6 +66,17 @@ export function isTransientError(err) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// A backoff sleep that a stop() can cut short: resolves normally, rejects
+// with an AbortError the moment the signal fires. No signal = plain sleep.
+const sleepAbortable = (ms, signal) => new Promise((resolve, reject) => {
+  if (!signal) return resolve(sleep(ms));
+  if (signal.aborted) return reject(abortError());
+  const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); };
+  const onAbort = () => { cleanup(); reject(abortError()); };
+  const timer = setTimeout(() => { cleanup(); resolve(); }, ms);
+  signal.addEventListener('abort', onAbort, { once: true });
+});
+
 // Retry policy, overridable per call and from config.json (`retry`).
 //
 // Five attempts over ~15s of backoff, not three over ~3.3s: rate limits are
@@ -80,7 +96,7 @@ export const DEFAULT_RETRY = { attempts: 5, baseMs: 1000, maxMs: 30000 };
 // count, but a call that exhausts its budget just throws, so the attempts that
 // led there left no trace and "did backoff actually run?" could only be guessed
 // from wall-clock timing. Callers log it (V1 task 11).
-export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools, retry, onText, onRetry, ...rest }) {
+export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools, retry, onText, onRetry, signal, ...rest }) {
   const adapter = providers[provider];
   if (!adapter) throw new Error(`Unknown provider "${provider}". Available: ${Object.keys(providers).join(', ')}`);
   const attempts = Math.max(1, retry?.attempts ?? DEFAULT_RETRY.attempts);
@@ -89,10 +105,13 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
   const started = Date.now();
   let lastErr;
   for (let attempt = 0; attempt < attempts; attempt++) {
+    // RUN-CONTROL: a stop that landed between attempts (or before the first)
+    // ends the call immediately — an abort is never retried below either.
+    if (signal?.aborted) throw abortError();
     try {
       // Extra fields (rest — e.g. kimi's keyKind, stamped by the main process)
       // pass straight through to the adapter; callers never handle them.
-      const result = await adapter({ model, system, prompt, maxTokens, apiKey, messages, tools, onText, ...rest });
+      const result = await adapter({ model, system, prompt, maxTokens, apiKey, messages, tools, onText, signal, ...rest });
       return {
         ...result, provider, model,
         durationMs: Date.now() - started,
@@ -100,6 +119,8 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
       };
     } catch (err) {
       lastErr = err;
+      // An abort is a deliberate stop, not a transient failure: no retry.
+      if (isAbortError(err) || signal?.aborted) throw isAbortError(err) ? err : abortError();
       if (attempt === attempts - 1 || !isTransientError(err)) throw err;
       // The provider's own Retry-After wins whenever it asks for longer than we
       // guessed — it knows when its window reopens and we don't. Capped, so a
@@ -112,7 +133,7 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
         retryAfterMs: err?.retryAfterMs ?? null,
         error: String(err?.message ?? err).slice(0, 300)
       });
-      await sleep(delayMs);
+      await sleepAbortable(delayMs, signal);
     }
   }
   throw lastErr; // unreachable, but keeps the control flow explicit

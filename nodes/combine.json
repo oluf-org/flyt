@@ -1,7 +1,7 @@
 {
   "id": "combine",
   "name": "Combine",
-  "description": "Merge parallel upstream outputs into one coherent deliverable; small fixes inline, larger gaps become fix tasks.",
+  "description": "Merge parallel upstream outputs — complementary parts or alternative attempts at the same task — into one coherent deliverable, keeping the best of each; small fixes inline, larger gaps become fix tasks.",
   "category": null,
   "icon": "⧉",
   "baseType": "aiStep",

@@ -1,8 +1,13 @@
 // Mock adapter: lets the whole pipeline run end-to-end with no API key.
 // It keys off the "ROLE:" marker each node puts in its system prompt and
 // returns plausible, correctly-shaped output for that node type.
-export async function mockAdapter({ system, prompt, onText }) {
-  await sleep(600 + Math.random() * 900); // simulate latency so the canvas animates
+import { abortError } from './http.js';
+
+export async function mockAdapter({ system, prompt, onText, signal }) {
+  // RUN-CONTROL: honor the stop signal like a real adapter would (fetch +
+  // stream checks), so stop() works against mock runs too.
+  if (signal?.aborted) throw abortError();
+  await sleepAbortable(600 + Math.random() * 900, signal); // simulate latency so the canvas animates
   let role = (system.match(/ROLE:\s*([\w-]+)/) ?? [])[1] ?? 'generic';
   // Also recognize explicit role in the prompt/context for flow aiSteps that put role in user message
   if (!role || role === 'generic') {
@@ -183,8 +188,9 @@ The explicit per-file context descriptions worked: only the listed files were re
   if (onText) {
     const step = Math.max(20, Math.ceil(reply.text.length / 8));
     for (let end = step; end < reply.text.length; end += step) {
+      if (signal?.aborted) throw abortError(); // stopped mid-stream
       onText(reply.text.slice(0, end));
-      await sleep(80);
+      await sleepAbortable(80, signal);
     }
     onText(reply.text, { final: true });
   }
@@ -197,3 +203,14 @@ The explicit per-file context descriptions worked: only the listed files were re
 mockAdapter.canServe = modelId => String(modelId).startsWith('mock-');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Same contract as the retry loop's abort-aware backoff (adapters/index.js):
+// plain sleep without a signal, an AbortError the moment one fires.
+const sleepAbortable = (ms, signal) => new Promise((resolve, reject) => {
+  if (!signal) return resolve(sleep(ms));
+  if (signal.aborted) return reject(abortError());
+  const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); };
+  const onAbort = () => { cleanup(); reject(abortError()); };
+  const timer = setTimeout(() => { cleanup(); resolve(); }, ms);
+  signal.addEventListener('abort', onAbort, { once: true });
+});

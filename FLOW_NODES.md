@@ -23,6 +23,13 @@
 >   Replace `stitch`.
 > - **`general-analysis`** / **`translation`** — general text analysis, and
 >   faithful translation with a per-node target `language`.
+> - **`compare`** (2026-07-20) — reviews multiple upstream *alternatives*
+>   (the same task fanned out to different models, competing drafts/plans)
+>   and reports agreements, differences, per-alternative strengths, and a
+>   keep-the-best recommendation. Combine's contract now covers alternatives
+>   too (best-of merge, not concatenation), so `compare → combine` implements
+>   the dual-model bake-off pattern below; `requiresApproval` on the Combine
+>   makes the human the judge.
 > - **Effort level** — every AI node carries `effort: low | medium | high`.
 >   It drives the default model pick (`core/modelPriority.js`: per-provider
 >   rankings plus a general cross-provider priority per task kind × effort,
@@ -106,9 +113,9 @@ This pattern makes it safe and effective for an AI to *emit* flow fragments, bec
 
 These are **example / standard nodes**. They are the reference set that AI should pick from or categorize work into. They are implemented primarily as `aiStep` (or `agentTask`) nodes carrying a `role` and/or `template` + rich `data`.
 
-They appear in the editor palette (via `TYPE_META`) and have first-class support in the inspector.
+They appear in the editor's ＋ Add node picker (via `TYPE_META`) and have first-class support in the inspector.
 
-> **Library templates vs. engine types.** Nodes 1–6 below are **Node Library templates** (`nodes/<id>.json` — the nine seeded templates). `orchestrator` (§7), along with `input` and `output`, are **engine/DSL node *types*, not Node Library templates**: they are built-in structural nodes added from the palette directly, not instantiated from the library. See `PRODUCT-SPEC.md` §5.
+> **Library templates vs. engine types.** Nodes 1–6 below are **Node Library templates** (`nodes/<id>.json` — the nine seeded templates). `orchestrator` (§7), along with `input` and `output`, are **engine/DSL node *types*, not Node Library templates**: they are built-in structural nodes added from the picker directly, not instantiated from the library. See `PRODUCT-SPEC.md` §5.
 
 ### 1. Start / Plan-Start Node
 
@@ -271,7 +278,7 @@ Usually placed before the final `output` collector.
 ### 7. Orchestrator Node (autonomous container)
 
 **type:** `orchestrator` (built-in structural node, kind `ai` — added from the
-palette like User Input / Output, not from the Node Library)
+＋ Add node picker like User Input / Output, not from the Node Library)
 
 **Input:** the brief + upstream context (typically `tasks.md` from Plan-Start).
 
@@ -289,9 +296,110 @@ at approval gates. When every child is done, their outputs are aggregated into
 Unlike plan-eval (which degrades gracefully), an invalid plan **fails the
 node** — creating nodes is its entire job.
 
+**Authored children (alternative to planning):** nodes you drag into the box
+yourself (`parent` in the DSL, no `managedBy`) ARE the plan — when any exist,
+the planning call is skipped and exactly those nodes run in the same inline
+sub-walk, with the same aggregation and summary sidecar.
+
 On the canvas the box shows its children live and gets an animated purple
 gradient border while active. Artifacts: `nodes/<id>.plan.md` (the streamed
 planning output), `nodes/<id>.summary.md`, `nodes/<id>.md` (aggregate).
+
+---
+
+### 8. Compare Node
+
+**role:** `compare` · **template:** `compare` · icon `⇄`
+
+**Input:** two or more upstream outputs that are *alternatives* — the same task
+completed independently (typically by different models via per-node `worker`
+overrides), or competing drafts, plans, or solutions.
+
+**Output port:** `report` — a structured comparison: alternatives inventory,
+agreements, substantive differences (with which side handles each better and
+why), per-alternative strengths/weaknesses, and a **Recommendation** section
+stating exactly what to keep from which alternative. Also mirrored to
+`nodes/compare-report.md` for inspectability (like `combine-report`).
+
+**Behavior:** judges, never redoes or merges the work. Grounds every judgment
+in the actual outputs; judges correctness and fitness for the brief, not style
+or length; says so when alternatives are equivalent instead of inventing a
+winner. Deliberately general: works for model bake-offs, draft A/B reviews,
+plan alternatives — anything with competing versions of the same deliverable.
+
+#### The dual-model bake-off pattern
+
+Run the same task on two models, compare, and keep the best of both:
+
+```
+        ┌── work A (worker: model 1) ──┐
+input ──┤                              ├── compare ── combine ── …
+        └── work B (worker: model 2) ──┘        (A + B + report feed combine)
+```
+
+- **Fan-out needs no new node:** wire the same upstream into two `work` (or
+  AI-step) instances and give each a different per-node `worker` override.
+- **Compare** reads both alternatives and writes the difference report.
+- **Combine** reads both alternatives *plus* the report and produces the
+  single best-of deliverable — its contract distinguishes complementary parts
+  from alternatives and follows the comparison's recommendations, crediting
+  where each element came from (larger gaps still become `fixTasks`).
+- **Model as judge:** run as-is. **Human as judge:** set `requiresApproval`
+  on the Combine node — the run pauses after Compare with the report (and both
+  alternatives) on screen, and the human approves, rejects, or adjusts before
+  the merge runs. For a fully human comparison, drop the Compare node and gate
+  the Combine directly.
+
+### 9. Prompt Refiner Node
+
+**Visual:** icon `✍`, label "Prompt refiner", sub "refine · brief + questions"
+**kind:** `ai`
+**Type/role:** `aiStep` with `role: "refine"` (Node Library template `prompt-refiner`)
+
+**Input:** the raw run request (usually straight from the `input` node).
+
+**Output (primary port `prompt`):** the request rewritten into a precise,
+self-contained brief — goal, constraints, deliverable, acceptance. This is what
+the rest of the flow executes, so the planner/work nodes never see the original
+loose prompt. **Auxiliary port `questions`:** clarifying questions, present only
+when an ambiguity would *materially* change the deliverable.
+
+**Behavior (MODES-COMPARE T5/T6):** the refiner resolves ordinary ambiguity
+itself by stating an assumption inline and proceeding. It asks a question only
+when it cannot responsibly pick for the user — and when it does, it ends its
+brief with ONE fenced JSON block:
+
+```json
+{ "questions": [{ "id": "scope", "text": "Web or CLI?", "why": "changes the whole build" }] }
+```
+
+(at most 3). That parks the run at the **`awaiting_input`** gate — a sibling of
+the approval gate. The user answers from the composer; the answers are written
+to `nodes/<id>.answers.md`, the node re-runs with them in context, and it
+proceeds without asking again (**one round, hard cap**). A malformed or absent
+block means "no questions — proceed". The refiner is the first node of every
+default pipeline (below).
+
+---
+
+## Default Pipelines (Low / Medium / High / Ultra)
+
+Beside the classic **Default pipeline**, the app seeds four **tiered pipelines**
+on first launch (`core/flowstore.js` `ensureSeedPipelines`; seeded only when
+absent, so user edits and deletions are respected):
+
+| Pipeline | Graph | For |
+|---|---|---|
+| **Low** | `input → refine → work (Code general) → output` | a quick, well-scoped task |
+| **Medium** | `input → refine → plan → orchestrator (1–5) → output` | planning with a small swarm |
+| **High** | Medium at high effort: enriched planner + orchestrator (2–10) | substantial, decomposable work |
+| **Ultra** | High + a final evaluation wired back to the orchestrator for one bounded retry | when completeness must be checked |
+
+Each ships with **two example modes** (`Fable` / `GPT`) — the same graph on a
+different model brain — so the launch mode picker and the comparison view have
+something to run day one. The **High** tier's planner runs the enriched brief as
+a `system` override on the plan node (data, not a code fork — T8), and exposes
+the orchestrator's `minNodes`/`maxNodes` as composer run inputs (`expose:`, T9).
 
 ---
 

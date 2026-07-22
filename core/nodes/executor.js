@@ -11,8 +11,11 @@ import { resolveCallTarget } from '../modelSource.js';
 // onText (optional): the caller's streaming sink for partial model output (V1
 // task 8). onRetry (optional): fires per transient-error backoff (V1 task 11).
 // Both are forwarded to the agent loop untouched — what to do with them is the
-// caller's business, not this module's.
-export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, retry = null } = {}) {
+// caller's business, not this module's. signal (optional, RUN-CONTROL): an
+// AbortSignal the runner fires on stop(); the agent loop's model calls reject
+// with an AbortError, which lands in the catch below as a STOPPED task —
+// requeued to 'pending', never marked failed.
+export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, retry = null, signal = null } = {}) {
   const tasksDoc = store.readTasks(runId);
   const task = tasksDoc.tasks.find(t => t.id === taskId);
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
@@ -128,7 +131,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   let retro;
   let status;
   try {
-    const result = await runAgent({ worker, apiKey, system, prompt: userMsg, tools, ctx, onText, onRetry, retry: retry ?? config.retry });
+    const result = await runAgent({ worker, apiKey, system, prompt: userMsg, tools, ctx, onText, onRetry, retry: retry ?? config.retry, signal });
     // An agent that produced no deliverable has not done the task, whatever the
     // transport says. Marking it done would leave the streamed partial (or a
     // 0-byte file) standing as the task's output and let dependents run on it.
@@ -169,24 +172,34 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
       toolCalls: result.toolCalls
     });
   } catch (err) {
-    status = 'failed';
-    const aborted = Boolean(err?.toolRejected);
+    // RUN-CONTROL stop: an aborted model call is not a task failure. The task
+    // goes back to 'pending' so a later resume/restart re-runs it, and the
+    // retrospective carries the same aborted flag a tool-gate rejection does,
+    // so the scheduler never turns a stop into a run failure.
+    const stopped = Boolean(err?.aborted || err?.name === 'AbortError' || signal?.aborted);
+    status = stopped ? 'pending' : 'failed';
+    const aborted = stopped || Boolean(err?.toolRejected);
     retro = makeRetrospective({
       node: `executor:${taskId}`,
       status: 'failed',
-      problems: [String(err.message ?? err)],
-      resolution: aborted
-        ? 'A tool call was rejected at the approval gate; task aborted by the human.'
-        : 'Task marked failed; pipeline escalates to human.',
+      problems: [stopped ? 'Stopped by the user (run cancelled).' : String(err.message ?? err)],
+      resolution: stopped
+        ? 'The run was stopped; the task returns to the queue unfinished.'
+        : aborted
+          ? 'A tool call was rejected at the approval gate; task aborted by the human.'
+          : 'Task marked failed; pipeline escalates to human.',
       confidence: 0,
-      recommendation: aborted
-        ? `Task "${task.title}" was aborted — a destructive tool call was rejected at the approval gate.`
-        : `Task "${task.title}" failed — inspect log.jsonl and retry with a different worker.`,
+      recommendation: stopped
+        ? `Task "${task.title}" was stopped mid-flight — resume or restart the run to re-run it.`
+        : aborted
+          ? `Task "${task.title}" was aborted — a destructive tool call was rejected at the approval gate.`
+          : `Task "${task.title}" failed — inspect log.jsonl and retry with a different worker.`,
       model: task.worker
     });
-    // Flag human rejections so the runner keeps the "rejected" stage the tool
-    // gate set, rather than overwriting it with a generic "failed".
+    // Flag human rejections and stops so the runner keeps the stage those
+    // paths set, rather than overwriting it with a generic "failed".
     if (aborted) retro.aborted = true;
+    if (stopped) retro.stopped = true;
   }
   // Persist the status change against a FRESH read of tasks.json: a
   // create_task tool call during this run may have appended tasks that the

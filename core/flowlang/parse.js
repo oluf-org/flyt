@@ -47,14 +47,24 @@ function parseNodeEntry(id, entry) {
   if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
     throw new FlowParseError(`node "${id}" must be a map of fields`);
   }
-  const { use, type, kind, ...rest } = entry;
+  // `parent: <orchestratorId>` declares containment: the node lives inside
+  // that orchestrator's box on the canvas and runs in its inline sub-walk.
+  // `expose: [worker, effort]` (MODES-COMPARE T9) declares which of the node's
+  // fields the flow author surfaces as ad-hoc run inputs in the composer — a
+  // first-class node field, not an override value.
+  const { use, type, kind, parent, expose, ...rest } = entry;
+  const parentId = parent == null ? null : String(parent);
+  if (expose != null && (!Array.isArray(expose) || expose.some(f => typeof f !== 'string'))) {
+    throw new FlowParseError(`node "${id}" expose must be a list of field names`);
+  }
+  const exposeField = Array.isArray(expose) ? { expose: expose.map(String) } : {};
   if (use && type) throw new FlowParseError(`node "${id}" has both "use" and "type" — pick one`);
   if (use) {
-    return { id, templateId: String(use), overrides: rest };
+    return { id, templateId: String(use), overrides: rest, ...(parentId ? { parentId } : {}), ...exposeField };
   }
   if (type) {
     if (!(type in KIND_OF)) throw new FlowParseError(`node "${id}" has unknown type "${type}"`);
-    return { id, type, kind: kind ?? KIND_OF[type], data: rest };
+    return { id, type, kind: kind ?? KIND_OF[type], data: rest, ...(parentId ? { parentId } : {}), ...exposeField };
   }
   throw new FlowParseError(`node "${id}" needs either "use: <templateId>" or "type: <baseType>"`);
 }
@@ -82,6 +92,9 @@ export function parseFlow(text) {
   }
   if (doc.flow != null && !Array.isArray(doc.flow)) {
     throw new FlowParseError('"flow" must be a list of "source[.port] -> target" entries');
+  }
+  if (doc.modes != null && (typeof doc.modes !== 'object' || Array.isArray(doc.modes))) {
+    throw new FlowParseError('"modes" must be a map of mode id -> definition');
   }
 
   const nodes = [];
@@ -118,11 +131,50 @@ export function parseFlow(text) {
     nodes.push({ id: 'output', type: 'output', kind: 'user', data: {} });
   }
 
+  // modes: named, saved launch-override bundles (MODES-COMPARE T2). One graph,
+  // N configurations picked at run start. Structure is checked here; whether a
+  // mode's overrides reference real nodes / legal fields is the linter's job.
+  const modes = parseModes(doc.modes);
+
   return {
     id: doc.id,
     name: doc.name,
     ...(typeof doc.description === 'string' && doc.description.trim() ? { description: doc.description } : {}),
     nodes,
-    edges
+    edges,
+    ...(modes && Object.keys(modes).length ? { modes } : {})
   };
+}
+
+// doc.modes -> { [modeId]: { name?, overrides: { [nodeId]: {...fields} } } }.
+// Only structural shape is enforced (map of maps); the linter validates the
+// override fields against the actual nodes.
+function parseModes(raw) {
+  if (raw == null) return null;
+  const modes = {};
+  for (const [id, entry] of Object.entries(raw)) {
+    if (!REF_RE.exec(id) || id.includes('.')) throw new FlowParseError(`invalid mode id "${id}"`);
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new FlowParseError(`mode "${id}" must be a map of fields`);
+    }
+    const { name, overrides, ...rest } = entry;
+    const extra = Object.keys(rest);
+    if (extra.length) throw new FlowParseError(`mode "${id}" has unknown field(s): ${extra.join(', ')}`);
+    if (name != null && typeof name !== 'string') throw new FlowParseError(`mode "${id}" name must be a string`);
+    if (overrides != null && (typeof overrides !== 'object' || Array.isArray(overrides))) {
+      throw new FlowParseError(`mode "${id}" overrides must be a map of nodeId -> fields`);
+    }
+    const ov = {};
+    for (const [nodeId, fields] of Object.entries(overrides ?? {})) {
+      if (fields === null || typeof fields !== 'object' || Array.isArray(fields)) {
+        throw new FlowParseError(`mode "${id}" override for "${nodeId}" must be a map of fields`);
+      }
+      ov[nodeId] = fields;
+    }
+    modes[id] = {
+      ...(typeof name === 'string' && name.trim() ? { name } : {}),
+      overrides: ov
+    };
+  }
+  return modes;
 }

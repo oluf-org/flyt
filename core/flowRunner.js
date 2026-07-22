@@ -26,7 +26,7 @@
 //   step-eval -> structured verdict: pass | retry (bounded, with enriched
 //                retry-for-<node>.md guidance) | escalate (human gate)
 //   stitch    -> fixTasks[] routed through the existing create_task tool
-import { callModel } from './adapters/index.js';
+import { callModel, abortError, isAbortError } from './adapters/index.js';
 import { makeRetrospective } from './retrospective.js';
 import { resolveCallTarget } from './modelSource.js';
 import { runExecutorTask } from './nodes/executor.js';
@@ -34,10 +34,13 @@ import { Workspace } from './workspace.js';
 import { loadSkills, withSkillsSection } from './skills.js';
 import { createWriteLedger } from './writeLedger.js';
 import { executeTool } from './tools/index.js';
-import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, extractJson } from './planEval.js';
+import { checkToolCall } from './safetyCheck.js';
+import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, parseRefineQuestions, stripRefineQuestions, extractJson } from './planEval.js';
+import { deriveRunName } from './state.js';
 import {
   createNodeFromTemplate, getTemplate, resolveFlow, resolveInstance, primaryPort,
-  effectiveRole, isFeedbackEdge, forwardEdges, EFFORT_MAX_TOKENS, LEGACY_TEMPLATE_MAP
+  effectiveRole, isFeedbackEdge, forwardEdges, EFFORT_MAX_TOKENS, LEGACY_TEMPLATE_MAP,
+  validateOverrideMap, mergeOverrideMaps
 } from '../src/flowTypes.js';
 import { pickDefaultWorker } from './modelPriority.js';
 import { layoutPositions, containerLayout } from '../src/flowLayout.js';
@@ -132,7 +135,14 @@ const DEFAULT_SYSTEM = {
     'ROLE: combine',
     'You are the Combine node. Merge the upstream outputs (often produced in',
     'parallel) into ONE coherent deliverable.',
-    'Resolve overlaps, contradictions, and seams; keep every genuine contribution.',
+    'The inputs are either COMPLEMENTARY PARTS of a larger whole, or ALTERNATIVE',
+    'ATTEMPTS at the same task (e.g. the same brief given to different models).',
+    'For complementary parts: resolve overlaps, contradictions, and seams; keep',
+    'every genuine contribution.',
+    'For alternatives: do NOT concatenate or average them. Take the strongest',
+    'version of each element so the result keeps the best of every attempt, and',
+    'follow the recommendations of any upstream comparison report. Briefly note',
+    'which alternative each major element came from.',
     'Make small fixes yourself and describe them.',
     'If larger fixes are required, end with ONE ```json block:',
     '{ "fixTasks": [{ "title": "<short>", "goal": "<fully self-describing>", "constraints": [], "dependsOn": [] }] }',
@@ -147,6 +157,23 @@ const DEFAULT_SYSTEM = {
     'Each part must be fully self-describing: state its goal, its inputs, and its',
     'boundaries so no two parts overlap and nothing is left unassigned.',
     'Prefer 2-5 parts. Do not do the work itself — only divide it.'
+  ].join('\n'),
+  compare: [
+    'ROLE: compare',
+    'You are the Compare node. The upstream outputs are ALTERNATIVES: the same',
+    'task completed independently (e.g. by different models), or competing',
+    'drafts/plans/solutions. Do NOT redo the work and do NOT merge — compare.',
+    'Produce a structured Markdown report:',
+    '# Comparison\n\n## Alternatives\n<one line each: which upstream node, in one sentence what it did>',
+    '\n\n## Agreements\n<where they align — likely safe to trust>',
+    '\n\n## Differences\n<each substantive difference: what diverges, and which alternative handles it better, with reasoning>',
+    '\n\n## Strengths & weaknesses\n<per alternative>',
+    '\n\n## Recommendation\n<exactly what to keep from which alternative to build the single best deliverable>',
+    'Ground every judgment in the actual outputs (quote or reference). Judge',
+    'correctness and fitness for the brief, not style or length. If the',
+    'alternatives are equivalent on a point, say so instead of inventing a winner.',
+    'A downstream node (or a human at an approval gate) merges based on your',
+    'recommendation — make it specific enough to act on without re-reading everything.'
   ].join('\n'),
   analyze: [
     'ROLE: analyze',
@@ -165,6 +192,22 @@ const DEFAULT_SYSTEM = {
     'formatting exactly; translate prose, not identifiers or code.',
     'Output ONLY the translation — no commentary. If a passage is ambiguous, pick',
     'the most faithful reading and add a translator\'s note at the very end.'
+  ].join('\n'),
+  refine: [
+    'ROLE: refine',
+    'You are the Prompt Refiner: the first step of a workflow. Rewrite the user\'s',
+    'request into a precise, self-contained brief the rest of the flow can execute',
+    'without seeing the original. Structure it as Markdown:',
+    '# Brief\n\n## Goal\n<one or two sentences>\n\n## Constraints\n<bullets>\n\n'
+      + '## Deliverable\n<what to produce>\n\n## Acceptance\n<how we know it is done>',
+    'Resolve ordinary ambiguity yourself by stating a reasonable assumption inline',
+    '(an "## Assumptions" section) and proceeding — do NOT ask about it.',
+    'ONLY when an ambiguity would MATERIALLY change the deliverable (a fork you',
+    'cannot responsibly pick for the user) may you ask. If so, end the brief with',
+    'exactly ONE ```json block and nothing after it:',
+    '{ "questions": [{ "id": "<short-slug>", "text": "<the question>", "why": "<what changes depending on the answer>" }] }',
+    'At most 3 questions; fewer is better; usually none. Every question you ask',
+    'stalls the run and costs the user a round-trip — ask only when you truly must.'
   ].join('\n'),
   orchestrate: [
     'ROLE: orchestrate',
@@ -255,6 +298,19 @@ const TRIAGE_SYSTEM = [
 // to the human gate (FU6).
 const MAX_TURN_EXTENSIONS = 2;
 
+// The investigateNode prompt (RUN-CONTROL): not a node role — a direct call
+// that explains one node's status/output/retro/log tail to the flow's owner
+// in plain language, the way triageFollowUp explains a whole run.
+const INVESTIGATE_SYSTEM = [
+  'ROLE: node-investigator',
+  'You are explaining one node of an AI workflow pipeline to the flow\'s owner.',
+  'From the node\'s status, its (possibly partial) output, its retrospective,',
+  'and the recent log lines, write a plain-language summary of 3-6 sentences:',
+  'what this node did or is doing, whether it is healthy, and anything notable.',
+  'Mention the model that ran it and the token usage when known. If there is',
+  'no output yet, say so plainly instead of guessing. No headers, no jargon.'
+].join('\n');
+
 // How often a token stream may reach the disk and the renderer. Every flush is
 // a file write plus an IPC push, and adapters call onText per chunk — at real
 // token rates that is hundreds of calls a second. 250ms still reads as live.
@@ -310,7 +366,60 @@ export function topoSort(flow) {
 }
 
 // Stages a run can't continue from: the walk is over, one way or another.
-export const TERMINAL_STAGES = new Set(['done', 'failed', 'rejected']);
+// 'cancelled' (RUN-CONTROL stop) is terminal like the others: not resumable,
+// never interrupted — but restartNode/branch can still relaunch from one.
+export const TERMINAL_STAGES = new Set(['done', 'failed', 'rejected', 'cancelled']);
+
+// The node plus everything transitively DOWNSTREAM of it over forward edges
+// (feedback edges point backwards by design and are excluded). restartNode's
+// reset set; exported for tests.
+export function downstreamSet(flow, nodeId) {
+  const adj = new Map();
+  for (const e of forwardEdges(flow.edges)) {
+    if (!adj.has(e.source)) adj.set(e.source, []);
+    adj.get(e.source).push(e.target);
+  }
+  const seen = new Set([nodeId]);
+  const queue = [nodeId];
+  while (queue.length) {
+    for (const next of adj.get(queue.shift()) ?? []) {
+      if (!seen.has(next)) { seen.add(next); queue.push(next); }
+    }
+  }
+  return seen;
+}
+
+// The node plus everything transitively UPSTREAM of it over forward edges —
+// the set a branch preserves.
+export function upstreamSet(flow, nodeId) {
+  const pred = new Map();
+  for (const e of forwardEdges(flow.edges)) {
+    if (!pred.has(e.target)) pred.set(e.target, []);
+    pred.get(e.target).push(e.source);
+  }
+  const seen = new Set([nodeId]);
+  const queue = [nodeId];
+  while (queue.length) {
+    for (const prev of pred.get(queue.shift()) ?? []) {
+      if (!seen.has(prev)) { seen.add(prev); queue.push(prev); }
+    }
+  }
+  return seen;
+}
+
+// How a run decides whether to pause before a destructive tool call.
+//   'ask'    — every time (the default; nothing runs unwatched)
+//   'smart'  — only when the safety screen flags the call
+//   'always' — never (always approve; the agent runs unattended)
+//   'node'   — legacy: obey each node's own approveToolCalls flag
+// Absent (null/undefined) means "nobody configured one" — runs recorded before
+// this setting existed, and every embedding of the runner that doesn't pass it
+// — so it keeps the historical behavior, 'node'. Anything else unrecognized is
+// a bug or a corrupted settings file and becomes 'ask': neither is a reason to
+// start running shell commands unattended.
+export const APPROVAL_MODES = ['ask', 'smart', 'always', 'node'];
+export const normalizeApprovalMode = m =>
+  (m == null ? 'node' : APPROVAL_MODES.includes(m) ? m : 'ask');
 
 export class FlowRunner {
   constructor(store, config, onUpdate = () => {}, nodeStore = null) {
@@ -319,6 +428,20 @@ export class FlowRunner {
     this.onUpdate = onUpdate;
     this.nodeStore = nodeStore; // Node Library (template defaults for instances)
     this.gates = new Map(); // runId -> resolve(bool) for a pending approval
+    // MODES-COMPARE T6: runId -> resolve(answersText) for a refine node parked
+    // at the awaiting_input gate. A separate map from `gates` because the
+    // answer is free text, not an approve/reject boolean.
+    this.inputGates = new Map();
+    // RUN-CONTROL state (process-local, like the approval gates):
+    //   pauseGates    — runId -> resolve() for a walk holding at a pause
+    //   pauseRequests — runs asked to hold at the next wave boundary
+    //   stopRequests  — runs being hard-stopped; set by stop(), cleared when
+    //                   the walk has fully unwound (launch's finally)
+    //   abortControllers — runId -> Set<AbortController> of in-flight model calls
+    this.pauseGates = new Map();
+    this.pauseRequests = new Set();
+    this.stopRequests = new Set();
+    this.abortControllers = new Map();
     // Runs this process is currently walking. Process state, not file state:
     // it's exactly what's lost in a crash, which is what makes an interrupted
     // run identifiable (see reconcileInterrupted).
@@ -362,6 +485,35 @@ export class FlowRunner {
     return info => this.store.appendLog(runId, { event: 'model_retry', node: nodeId, ...info });
   }
 
+  // --- RUN-CONTROL: abort tracking -----------------------------------------
+  // Every model call a run makes registers an AbortController here; stop()
+  // fires them all at once. Register at call start, unregister when it
+  // settles — the registry only ever holds genuinely in-flight calls.
+  trackAbort(runId) {
+    const ctl = new AbortController();
+    let set = this.abortControllers.get(runId);
+    if (!set) this.abortControllers.set(runId, set = new Set());
+    set.add(ctl);
+    return ctl;
+  }
+  untrackAbort(runId, ctl) {
+    const set = this.abortControllers.get(runId);
+    if (!set) return;
+    set.delete(ctl);
+    if (!set.size) this.abortControllers.delete(runId);
+  }
+  // One model call whose lifetime is registered against the run, so stop()
+  // can abort it. The signal itself stays optional all the way down — every
+  // other caller of callModel is untouched.
+  async trackedCallModel(runId, params) {
+    const ctl = this.trackAbort(runId);
+    try {
+      return await callModel({ ...params, signal: ctl.signal });
+    } finally {
+      this.untrackAbort(runId, ctl);
+    }
+  }
+
   // The run's bound project, or null when it has none / the folder is gone.
   // Never throws: a missing workspace degrades the run, it doesn't kill it.
   workspaceFor(runId) {
@@ -395,7 +547,15 @@ export class FlowRunner {
     this.live.add(runId);
     this.execute(runId, flow, resume)
       .catch(err => this.fail(runId, err))
-      .finally(() => this.live.delete(runId));
+      .finally(() => {
+        this.live.delete(runId);
+        // RUN-CONTROL: the walk has fully unwound — a stop request has done its
+        // work and must not leak into a later relaunch of the same run.
+        this.stopRequests.delete(runId);
+        this.pauseRequests.delete(runId);
+        this.abortControllers.delete(runId);
+        this.inputGates.delete(runId);
+      });
   }
 
   // At startup nothing is live yet, so any run left in a non-terminal stage was
@@ -409,7 +569,7 @@ export class FlowRunner {
       let meta;
       try { meta = this.store.readMeta(runId); } catch { continue; }
       if (!meta?.flowId || meta.interrupted) continue;
-      if (TERMINAL_STAGES.has(meta.stage) || meta.stage === 'awaiting_approval') continue;
+      if (TERMINAL_STAGES.has(meta.stage) || meta.stage === 'awaiting_approval' || meta.stage === 'awaiting_input') continue;
       if (this.live.has(runId)) continue;
       this.store.writeMeta(runId, { ...meta, interrupted: true });
       this.store.appendLog(runId, { event: 'run_interrupted', stage: meta.stage });
@@ -453,8 +613,11 @@ export class FlowRunner {
     let meta;
     try { meta = this.store.readMeta(runId); } catch { return 'Run not found.'; }
     if (!meta?.flowId) return 'Only flow runs can be resumed.';
-    if (this.live.has(runId)) return 'That run is already running.';
+    // A stop that is still unwinding counts as live — the old walk must be
+    // fully gone before anything relaunches this run.
+    if (this.live.has(runId) || this.stopRequests.has(runId)) return 'That run is already running.';
     if (meta.stage === 'awaiting_approval') return 'This run is paused at an approval gate — approve or reject it instead.';
+    if (meta.stage === 'awaiting_input') return 'This run is waiting for your input — answer its question instead.';
     if (TERMINAL_STAGES.has(meta.stage)) return `This run already finished (${meta.stage}).`;
     if (!this.store.readFlow(runId)) return 'This run has no flow.json; it cannot be resumed.';
     return null;
@@ -465,16 +628,285 @@ export class FlowRunner {
   // so the walk picks up exactly where it stopped. The rewind is normally
   // already done by reconcileInterrupted at startup; repeating it here is a
   // no-op that keeps resume correct on its own.
+  //
+  // RUN-CONTROL: on a soft-paused run this SAME entry point releases the pause
+  // gate — the walk is still live (parked on the gate promise), so there is
+  // nothing to relaunch; it clears meta.paused itself when it wakes.
   resume(runId) {
+    let pausedMeta = null;
+    try { pausedMeta = this.store.readMeta(runId); } catch { /* falls through to the blocker */ }
+    if (pausedMeta?.paused && this.pauseGates.has(runId)) {
+      this.store.appendLog(runId, { event: 'run_resume_requested', from: 'pause' });
+      this.pauseGates.get(runId)();
+      return runId;
+    }
     const blocker = this.resumeBlocker(runId);
     if (blocker) throw new Error(blocker);
     const flow = this.store.readFlow(runId);
     const kept = this.rewindInFlight(runId);
-    this.store.writeMeta(runId, { ...this.store.readMeta(runId), interrupted: false, error: null });
+    // `paused: false`: a run the app killed mid-pause carries a stale flag no
+    // live gate will ever clear.
+    this.store.writeMeta(runId, { ...this.store.readMeta(runId), interrupted: false, error: null, paused: false });
     this.store.appendLog(runId, { event: 'flow_run_resume_requested', keptCompleted: kept });
     this.notify(runId);
     this.launch(runId, flow, true);
     return runId;
+  }
+
+  // --- Run control (RUN-CONTROL): stop / pause / restart / branch / investigate.
+
+  // Soft pause: hold the walk at the NEXT wave boundary — the wave in flight
+  // (including any approval gate it is parked on) always settles first.
+  // meta.paused flips true only once the hold has actually landed (execute()),
+  // so the UI never claims a pause that hasn't happened. Idempotent: a second
+  // request while pausing or paused is a no-op. Not live -> not-live.
+  pause(runId) {
+    if (!this.live.has(runId)) return { ok: false, error: 'not-live' };
+    if (!this.pauseRequests.has(runId) && !this.pauseGates.has(runId)) {
+      this.pauseRequests.add(runId);
+      this.store.appendLog(runId, { event: 'run_pause_requested' });
+      this.notify(runId);
+    }
+    return { ok: true };
+  }
+
+  // Hard stop: abort every in-flight model call, wake whatever the walk is
+  // parked on (approval gate or pause hold), and record the honest end state —
+  // stage 'cancelled', every unfinished node back to 'pending' so the run
+  // stays inspectable and its done work preserved, tasks stuck 'running'
+  // requeued. The asynchronous unwind (aborted calls, gate rejection paths)
+  // reads stopRequests and skips its own 'failed'/'rejected' writes, so
+  // nothing clobbers the cancelled state written here. Removing the run from
+  // `live` is what unblocks run:delete. Not live -> not-live.
+  stop(runId) {
+    if (!this.live.has(runId)) return { ok: false, error: 'not-live' };
+    this.stopRequests.add(runId);
+    this.pauseRequests.delete(runId);
+    // Wake a pause hold: the walk re-checks stopRequests right after the gate
+    // and returns instead of continuing.
+    const pauseWake = this.pauseGates.get(runId);
+    if (pauseWake) { this.pauseGates.delete(runId); pauseWake(); }
+    // Abort every in-flight model call registered for this run.
+    for (const ctl of this.abortControllers.get(runId) ?? []) ctl.abort();
+    // Settle a pending approval gate so no awaiting promise hangs. The
+    // rejection path runs but is muted by stopRequests (see gate(), toolGate(),
+    // handleStepEval, handleFeedbackReview), so it never lands a 'rejected'.
+    const gateResolve = this.gates.get(runId);
+    if (gateResolve) { this.gates.delete(runId); gateResolve(false); }
+    // Settle a pending refiner input gate (T6) the same way — resolve null so
+    // the awaiting_input walk unwinds; handleRefineQuestions skips its bookkeeping
+    // under stopRequests, leaving the cancelled state intact.
+    const inputResolve = this.inputGates.get(runId);
+    if (inputResolve) { this.inputGates.delete(runId); inputResolve(null); }
+    // Requeue tasks that were claimed when the stop landed; the executor's own
+    // unwind settles in-flight ones the same way, so this covers the gaps
+    // (a stop between waves) and converges with it otherwise.
+    const doc = this.store.readTasks(runId);
+    if (doc) {
+      const requeued = doc.tasks.filter(t => t.status === 'running');
+      if (requeued.length) {
+        for (const t of requeued) t.status = 'pending';
+        this.store.writeTasks(runId, doc);
+      }
+    }
+    const meta = this.store.readMeta(runId);
+    // 'done'/'skipped' survive, everything else goes back to 'pending' — the
+    // same honesty rule as the crash rewind: nothing is running, so nothing
+    // may keep looking active.
+    const nodeStatus = Object.fromEntries(Object.entries(meta.nodeStatus ?? {})
+      .map(([id, s]) => [id, s === 'done' || s === 'skipped' ? s : 'pending']));
+    this.store.writeMeta(runId, {
+      ...meta, nodeStatus,
+      currentTaskId: null, currentNodeId: null, paused: false,
+      pendingNodeId: null, pendingGateKind: null, pendingToolCall: null
+    });
+    this.store.setStage(runId, 'cancelled', { cancelledAt: new Date().toISOString() });
+    this.store.appendLog(runId, { event: 'run_stopped' });
+    this.live.delete(runId);
+    this.notify(runId);
+    return { ok: true };
+  }
+
+  // Restart one node and everything downstream of it, on a non-live run.
+  // Completed ancestors keep their status and outputs; the reset set goes back
+  // to 'pending' with its stale outputs deleted, then the run relaunches with
+  // resume semantics so exactly those nodes re-run. Optional guidance lands in
+  // retry-for-<nodeId>.md, which runNode already injects into the prompt.
+  restartNode(runId, nodeId, guidance = '') {
+    if (this.live.has(runId) || this.stopRequests.has(runId)) {
+      throw new Error('run is live — stop or pause it first');
+    }
+    const meta = this.store.readMeta(runId);
+    if (!meta?.flowId) throw new Error('Only flow runs can restart a node.');
+    const flow = this.store.readFlow(runId);
+    if (!flow) throw new Error(`Run ${runId} has no flow.json; cannot restart a node.`);
+    if (!flow.nodes.some(n => n.id === nodeId)) throw new Error(`No node "${nodeId}" in this run's flow.`);
+
+    // Forward edges only: a feedback edge points backwards by design and is no
+    // reason to reset its target.
+    const reset = downstreamSet(flow, nodeId);
+    const nodeStatus = { ...(meta.nodeStatus ?? {}) };
+    for (const id of reset) nodeStatus[id] = 'pending';
+    // A gated node being re-run must ask again — its old approval described
+    // the attempt the user just sent back.
+    const approvedGates = (meta.approvedGates ?? []).filter(id => !reset.has(id));
+    this.store.writeMeta(runId, {
+      ...meta, nodeStatus, approvedGates,
+      stage: 'execution', error: null, interrupted: false, paused: false,
+      currentNodeId: null, currentTaskId: null
+    });
+    this.resetTasksForNodes(runId, flow, reset);
+    // Stale outputs of reset nodes must never reach a downstream prompt
+    // (upstreamContext tolerates missing files, so deleting is the safe side).
+    // Stale retry guidance goes too — the restart IS the fresh attempt.
+    for (const id of reset) {
+      this.store.deleteNodeOutputs(runId, id);
+      this.store.deleteNodeOutputs(runId, `retry-for-${id}`);
+    }
+    const text = String(guidance ?? '').trim();
+    if (text) {
+      this.store.writeNodeOutput(runId, `retry-for-${nodeId}`,
+        `# Retry guidance (manual restart)\n\n${text}`);
+    }
+    this.store.appendLog(runId, { event: 'node_restart', node: nodeId, reset: [...reset], guidance: Boolean(text) });
+    this.notify(runId);
+    this.launch(runId, flow, true);
+    return { ok: true };
+  }
+
+  // Fork a run at a node: copy the run directory wholesale, prune the copy's
+  // nodeStatus so the chosen node and its transitive ancestors keep their
+  // status (their outputs survive as context) and everything else goes back
+  // to 'pending', then launch the copy with resume semantics so the downstream
+  // re-runs against the preserved upstream. The new run lists with a
+  // ' (branch)' name suffix and a branchedFrom pointer.
+  branch(runId, nodeId) {
+    if (this.live.has(runId) || this.stopRequests.has(runId)) {
+      throw new Error('run is live — stop or pause it first');
+    }
+    const srcMeta = this.store.readMeta(runId);
+    if (!srcMeta?.flowId) throw new Error('Only flow runs can be branched.');
+    const flow = this.store.readFlow(runId);
+    if (!flow) throw new Error(`Run ${runId} has no flow.json; cannot branch it.`);
+    if (!flow.nodes.some(n => n.id === nodeId)) throw new Error(`No node "${nodeId}" in this run's flow.`);
+
+    // Mint the id + directories, then overwrite with the full copy.
+    const newRunId = this.store.createRun(this.store.readPrompt(runId));
+    this.store.copyRunDir(runId, newRunId);
+
+    const keep = upstreamSet(flow, nodeId);
+    const reset = new Set(flow.nodes.map(n => n.id).filter(id => !keep.has(id)));
+    const meta = this.store.readMeta(newRunId);
+    const nodeStatus = Object.fromEntries(flow.nodes.map(n =>
+      [n.id, keep.has(n.id) ? (meta.nodeStatus?.[n.id] ?? 'pending') : 'pending']));
+    const baseName = String(meta.name ?? '').trim() || deriveRunName(this.store.readPrompt(newRunId));
+    const cleaned = {
+      ...meta,
+      runId: newRunId,
+      nodeStatus,
+      name: `${baseName} (branch)`,
+      branchedFrom: { runId, nodeId, at: new Date().toISOString() },
+      stage: 'execution',
+      error: null, interrupted: false, paused: false,
+      currentNodeId: null, currentTaskId: null,
+      pendingNodeId: null, pendingGateKind: null, pendingToolCall: null,
+      approvedGates: [] // the fork makes its own gate decisions
+    };
+    delete cleaned.cancelledAt; // a branch of a stopped run is a fresh run
+    this.store.writeMeta(newRunId, cleaned);
+    // Re-running agentTasks requeue their tasks (same rule as restartNode);
+    // re-running nodes lose their stale outputs.
+    this.resetTasksForNodes(newRunId, flow, reset);
+    for (const id of reset) {
+      this.store.deleteNodeOutputs(newRunId, id);
+      this.store.deleteNodeOutputs(newRunId, `retry-for-${id}`);
+    }
+    this.store.appendLog(newRunId, { event: 'run_branched', from: runId, nodeId });
+    this.notify(newRunId);
+    this.launch(newRunId, flow, true);
+    return { ok: true, runId: newRunId };
+  }
+
+  // A plain-language read on one node: status, (possibly partial) output,
+  // retrospective, the last log lines mentioning it, and — when a model is
+  // configured — a 3-6 sentence summary of what the node did/is doing and
+  // whether it's healthy. The raw data always comes back; without a model the
+  // summary degrades to null + summaryError 'no-model'.
+  async investigateNode(runId, nodeId) {
+    let meta;
+    try { meta = this.store.readMeta(runId); } catch { throw new Error(`Run ${runId} not found.`); }
+    const flow = this.store.readFlow(runId);
+    const node = flow?.nodes.find(n => n.id === nodeId) ?? null;
+    const status = meta?.nodeStatus?.[nodeId] ?? 'pending';
+    // aiSteps write nodes/<id>.md; an agentTask's deliverable is its task output.
+    let output = this.store.readNodeOutput(runId, nodeId);
+    if (output == null && node?.type === 'agentTask') {
+      output = this.store.readTaskOutput(runId, node.data?.taskId ?? '');
+    }
+    // Retros and log lines are matched on the node id AND its task id, because
+    // an agentTask's records live under `executor-<taskId>`.
+    const needles = [nodeId, ...(node?.data?.taskId ? [node.data.taskId] : [])];
+    const retro = Object.entries(this.store.readRetrospectives(runId))
+      .find(([name]) => needles.some(n => name.includes(n)))?.[1] ?? null;
+    const logTail = this.store.readLog(runId)
+      .filter(e => needles.some(n => JSON.stringify(e).includes(n)))
+      .slice(-20);
+    const model = retro?.model ?? logTail.map(e => e?.worker).filter(Boolean).pop() ?? null;
+
+    let summary = null, summaryError = null;
+    try {
+      // Same model choice as follow-up triage: the configured default worker.
+      const worker = resolveCallTarget(resolveWorker({}, this.config), this.config);
+      const result = await callModel({
+        ...worker, apiKey: worker.apiKey,
+        system: INVESTIGATE_SYSTEM,
+        prompt: [
+          `RUN: ${meta?.flowName ?? meta?.flowId ?? runId} (${runId}) — stage: ${meta?.stage ?? 'unknown'}`,
+          `NODE: ${nodeId}${node?.data?.title ? ` — ${node.data.title}` : ''} (${node?.type ?? 'unknown'}) — status: ${status}`,
+          `MODEL THAT RAN IT: ${model ? `${model.provider}/${model.model}` : 'unknown'}`,
+          retro ? `RETROSPECTIVE:\n${JSON.stringify(retro, null, 2).slice(0, 2000)}` : 'RETROSPECTIVE: none recorded',
+          `OUTPUT (possibly partial):\n${output?.trim() ? output.slice(0, 4000) : '(no output recorded yet)'}`,
+          logTail.length
+            ? `RECENT LOG LINES:\n${logTail.map(e => JSON.stringify(e)).join('\n').slice(0, 2000)}`
+            : 'RECENT LOG LINES: none'
+        ].join('\n\n'),
+        retry: this.config.retry,
+        onRetry: this.retryLogger(runId, `investigate:${nodeId}`)
+      });
+      summary = String(result.text ?? '').trim() || null;
+      if (!summary) summaryError = 'no-model';
+    } catch (err) {
+      summaryError = 'no-model';
+      this.store.appendLog(runId, { event: 'investigate_summary_failed', node: nodeId, error: String(err?.message ?? err).slice(0, 300) });
+    }
+    return { ok: true, status, output, retro, logTail, summary, model, ...(summaryError ? { summaryError } : {}) };
+  }
+
+  // Tasks belonging to (or spawned under) a set of reset nodes go back to
+  // 'pending' so the relaunched walk re-claims them, and their stale outputs
+  // are deleted. createdBy names either a task id (executor-spawned) or a node
+  // id (stitch/fix-task created), so both are matched.
+  resetTasksForNodes(runId, flow, resetNodes) {
+    const doc = this.store.readTasks(runId);
+    if (!doc?.tasks?.length) return;
+    const taskIds = new Set(flow.nodes
+      .filter(n => resetNodes.has(n.id) && n.type === 'agentTask')
+      .map(n => n.data?.taskId).filter(Boolean));
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const t of doc.tasks) {
+        if (taskIds.has(t.id) || !t.createdBy) continue;
+        if (taskIds.has(t.createdBy) || resetNodes.has(t.createdBy)) {
+          taskIds.add(t.id); grew = true;
+        }
+      }
+    }
+    let changed = false;
+    for (const t of doc.tasks) {
+      if (taskIds.has(t.id) && t.status !== 'pending') { t.status = 'pending'; changed = true; }
+    }
+    if (changed) this.store.writeTasks(runId, doc);
+    for (const id of taskIds) this.store.deleteTaskOutput(runId, id);
   }
 
   // --- Follow-up turns (FOLLOWUP-PLAN): reply to a finished run and the flow
@@ -491,6 +923,7 @@ export class FlowRunner {
     if (!meta?.flowId) return 'Only flow runs can take follow-ups.';
     if (this.live.has(runId)) return 'This run is still working — wait for the current turn to finish.';
     if (meta.stage === 'awaiting_approval') return 'This run is paused at an approval gate — approve or reject it instead.';
+    if (meta.stage === 'awaiting_input') return 'This run is waiting for your input — answer its question instead.';
     if (!TERMINAL_STAGES.has(meta.stage)) return `Follow-ups are only possible once a run has finished (stage: ${meta.stage}).`;
     if (!this.store.readFlow(runId)) return 'This run has no flow.json; it cannot be extended.';
     return null;
@@ -539,6 +972,8 @@ export class FlowRunner {
     if (!triage) {
       // Triage never produced a valid classification. The run's work is fine —
       // restore its stage and surface the miss in the thread, not as a failure.
+      // (A stop mid-triage already wrote the cancelled state — keep it.)
+      if (this.stopRequests.has(runId)) return;
       this.store.writeFollowupAnswer(runId, turn,
         'This follow-up could not be triaged (the model produced no valid classification), so nothing was run. Try rephrasing.');
       this.store.setStage(runId, priorStage);
@@ -548,6 +983,7 @@ export class FlowRunner {
 
     if (triage.class === 'question') {
       // No graph change: the answer lands in the thread, the run stays as it was.
+      if (this.stopRequests.has(runId)) return;
       this.store.writeFollowupAnswer(runId, turn, triage.answer);
       this.store.appendLog(runId, { event: 'turn_done', turn, class: 'question' });
       this.store.setStage(runId, priorStage);
@@ -617,7 +1053,7 @@ export class FlowRunner {
     ].join('\n\n');
     let outText;
     try {
-      const result = await callModel({
+      const result = await this.trackedCallModel(runId, {
         ...worker, apiKey,
         system: TRIAGE_SYSTEM, prompt: userMsg,
         onRetry: this.retryLogger(runId, label), retry: this.config.retry
@@ -838,9 +1274,13 @@ export class FlowRunner {
     this.notify(runId);
     const approved = await new Promise(resolve => this.gates.set(runId, resolve));
     if (!approved) {
-      this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
-      this.setNodeStatus(runId, node.id, 'failed');
-      this.notify(runId);
+      // A stop() settling the gate is a cancel, not a rejection — its
+      // cancelled state stands.
+      if (!this.stopRequests.has(runId)) {
+        this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
+        this.setNodeStatus(runId, node.id, 'failed');
+        this.notify(runId);
+      }
       return { ok: false };
     }
     this.store.appendLog(runId, { event: 'human_decision', decision: 'approved', node: node.id, context: 'feedback-review escalation' });
@@ -856,7 +1296,14 @@ export class FlowRunner {
   // workspace (an absolute path to a bound project folder, already validated +
   // .llmflow/-provisioned by the caller) is recorded in meta.json so the run,
   // its tools, and the UI all know which real repo it operates on (D15).
-  start(flow, { userInput = '', workspace = null } = {}) {
+  // approvalMode (APPROVAL-MODES §1) is captured PER RUN, at start, and stored
+  // in meta.json. It is not read live from settings, because a run that began
+  // under "ask permission" must not silently become unattended halfway through
+  // when the user flips the global default for the next one.
+  //   'ask'    — pause before every destructive tool call.
+  //   'smart'  — screen each call (core/safetyCheck.js); pause only on risk.
+  //   'always' — never pause. The dangerous one.
+  start(flow, { userInput = '', workspace = null, approvalMode = null, modeId = null, overrides = null } = {}) {
     // Pre-run gate (REFACTOR-PLAN §4): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
@@ -865,7 +1312,27 @@ export class FlowRunner {
       throw new Error(`Flow "${flow.name ?? flow.id}" failed validation:\n`
         + gate.errors.map(e => `- [${e.rule}] ${e.message}`).join('\n'));
     }
-    const resolved = resolveFlow(flow, this.nodeStore?.listFull() ?? []);
+    const templates = this.nodeStore?.listFull() ?? [];
+    // Launch overrides (MODES-COMPARE T1): a chosen mode's saved override
+    // bundle, then ad-hoc run inputs on top (run input > mode). Validate the
+    // effective map against the resolved-without-overrides flow BEFORE applying
+    // it, so an unknown node or an illegal field rejects the start cleanly.
+    let mode = null;
+    if (modeId) {
+      mode = flow.modes?.[modeId];
+      if (!mode) throw new Error(`Flow "${flow.name ?? flow.id}" has no mode "${modeId}".`);
+    }
+    const launchOverrides = mergeOverrideMaps(mode?.overrides, overrides);
+    const hasLaunch = Object.keys(launchOverrides).length > 0;
+    if (hasLaunch) {
+      const base = resolveFlow(flow, templates);
+      const errs = validateOverrideMap(base, launchOverrides, { label: 'launch override' });
+      if (errs.length) {
+        throw new Error(`Flow "${flow.name ?? flow.id}" launch overrides are invalid:\n`
+          + errs.map(e => `- ${e}`).join('\n'));
+      }
+    }
+    const resolved = resolveFlow(flow, templates, hasLaunch ? launchOverrides : null);
     const flowCopy = JSON.parse(JSON.stringify({ ...resolved, builtin: undefined }));
     const input = flowCopy.nodes.find(n => n.type === 'input');
     if (input && userInput.trim()) input.data = { ...input.data, text: userInput.trim() };
@@ -877,12 +1344,53 @@ export class FlowRunner {
       flowId: flow.id,
       flowName: flow.name,
       ...(workspace ? { workspace } : {}),
+      approvalMode: normalizeApprovalMode(approvalMode ?? this.config.approvalMode),
+      // Provenance for reproducibility/replay: which mode ran, and the exact
+      // effective override map. The flow.json snapshot already bakes them in;
+      // this records the intent behind that snapshot.
+      ...(modeId ? { modeId, modeName: mode?.name ?? modeId } : {}),
+      ...(hasLaunch ? { launchOverrides } : {}),
       nodeStatus: Object.fromEntries(flow.nodes.map(n => [n.id, 'pending']))
     });
-    this.store.appendLog(runId, { event: 'flow_run_created', flowId: flow.id, workspace: workspace ?? null, nodes: flow.nodes.length, edges: flow.edges.length });
+    this.store.appendLog(runId, {
+      event: 'flow_run_created', flowId: flow.id, workspace: workspace ?? null,
+      approvalMode: normalizeApprovalMode(approvalMode ?? this.config.approvalMode),
+      ...(modeId ? { modeId } : {}),
+      ...(hasLaunch ? { overrideNodes: Object.keys(launchOverrides) } : {}),
+      nodes: flow.nodes.length, edges: flow.edges.length
+    });
     this.notify(runId);
     this.launch(runId, flowCopy);
     return runId;
+  }
+
+  // The run's captured approval mode. Falls back to the host default, then to
+  // 'ask' — the safe end. A run recorded before the setting existed has no
+  // approvalMode in meta and lands on the host default, preserving the old
+  // node-flag behavior only when that default is 'node'.
+  approvalMode(runId) {
+    const meta = this.store.readMeta(runId);
+    return normalizeApprovalMode(meta?.approvalMode ?? this.config.approvalMode);
+  }
+
+  // Ask the configured cheap model whether this call is risky. The host injects
+  // config.safety = { model, resolveModelSource } — the runner never sees keys
+  // or settings. Missing config means no screening is possible, which is
+  // 'caution': ask the human.
+  async screenToolCall(runId, nodeId, call) {
+    const safety = this.config.safety;
+    const verdict = await checkToolCall(call, {
+      resolve: safety?.resolveModelSource ?? null,
+      model: safety?.model ?? null,
+      retry: this.config.retry
+    });
+    this.store.appendLog(runId, {
+      event: 'tool_safety_check', node: nodeId, tool: call.tool,
+      risk: verdict.risk, reason: verdict.reason, source: verdict.source,
+      ...(verdict.model ? { model: verdict.model } : {}),
+      ...(verdict.durationMs != null ? { durationMs: verdict.durationMs } : {})
+    });
+    return verdict;
   }
 
   approvePlan(runId) { this.resolveGate(runId, true); }
@@ -997,11 +1505,31 @@ export class FlowRunner {
     // step-eval sends back for retry (postProcess requeue) re-enter it.
     const maxParallel = Math.max(1, Number(this.config.maxParallel ?? 4));
     for (;;) {
+      // RUN-CONTROL hard stop: stop() already recorded the cancelled end
+      // state; the walk just leaves without touching the stage again.
+      if (this.stopRequests.has(runId)) return;
+      // RUN-CONTROL soft pause: requested at any moment, taken here — between
+      // waves, so the wave in flight always settles first. meta.paused flips
+      // true only once the hold actually lands, then the walk parks on the
+      // pause gate until resume() (or stop()) resolves it.
+      if (this.pauseRequests.has(runId)) {
+        this.pauseRequests.delete(runId);
+        this.store.writeMeta(runId, { ...this.store.readMeta(runId), paused: true });
+        this.store.appendLog(runId, { event: 'run_paused' });
+        this.notify(runId);
+        await new Promise(resolve => this.pauseGates.set(runId, resolve));
+        this.pauseGates.delete(runId);
+        if (this.stopRequests.has(runId)) return; // stopped out of the hold
+        this.store.writeMeta(runId, { ...this.store.readMeta(runId), paused: false });
+        this.store.appendLog(runId, { event: 'run_resumed', from: 'pause' });
+        this.notify(runId);
+      }
       const nodesById = new Map(flow.nodes.map(n => [n.id, n]));
       const order = topoSort(flow); // also validates: throws on cycles
-      // Orchestrator children (managedBy) are run by their container's inline
-      // sub-walk — the outer scheduler never picks them up.
-      const ready = order.filter(n => !completed.has(n.id) && !n.data?.managedBy &&
+      // Orchestrator children live inside their container's box (parentId):
+      // materialized ones (managedBy) and authored ones alike are run by the
+      // container's inline sub-walk — the outer scheduler never picks them up.
+      const ready = order.filter(n => !completed.has(n.id) && !n.data?.managedBy && !n.parentId &&
         forwardEdges(flow.edges).every(e =>
           e.target !== n.id || completed.has(e.source) || !nodesById.has(e.source)));
       if (!ready.length) break;
@@ -1048,6 +1576,7 @@ export class FlowRunner {
       if (!await this.applyPost(runId, flow, node, outcome, opts, completed)) return;
     }
 
+    if (this.stopRequests.has(runId)) return; // stopped during the final wave
     this.store.setStage(runId, 'done', { currentTaskId: null });
     this.notify(runId);
   }
@@ -1084,6 +1613,8 @@ export class FlowRunner {
   async runClaimedTask(runId, task, taskIdByNode, flow, ledger, gate = null) {
     const nodeId = [...taskIdByNode.entries()].find(([, tid]) => tid === task.id)?.[0];
     if (nodeId) this.setNodeStatus(runId, nodeId, 'active', { currentTaskId: task.id });
+    // RUN-CONTROL: the task's model calls are abortable via stop().
+    const abortCtl = this.trackAbort(runId);
     const opts = {
       ledger,
       // Mirror the agent's reply into the task's output file as it streams, so
@@ -1095,17 +1626,22 @@ export class FlowRunner {
       onText: this.streamInto(runId, t => this.store.writeTaskOutput(runId, task.id, t)),
       onRetry: this.retryLogger(runId, `executor:${task.id}`),
       retry: this.config.retry,
+      signal: abortCtl.signal,
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };
     ledger.begin(task.id);
     try {
       const retro = await runExecutorTask(this.store, runId, task.id, this.config, opts);
-      if (nodeId) this.setNodeStatus(runId, nodeId, retro.status === 'failed' ? 'failed' : 'done');
-      return { taskId: task.id, ok: retro.status !== 'failed', retro };
+      // A stopped task requeues (retro.stopped): its node goes back to
+      // 'pending', not 'failed' — the run was cancelled, the task didn't lose.
+      if (nodeId) this.setNodeStatus(runId, nodeId,
+        retro.stopped ? 'pending' : retro.status === 'failed' ? 'failed' : 'done');
+      return { taskId: task.id, ok: !retro.stopped && retro.status !== 'failed', retro };
     } catch (err) {
       // runExecutorTask folds model/tool errors into a failed retrospective, so
       // reaching here means something unexpected threw. Mark the task failed so
-      // it is never re-claimed and its dependents stay blocked.
+      // it is never re-claimed and its dependents stay blocked. (A stop lands
+      // inside runExecutorTask's own catch, never here.)
       const doc = this.store.readTasks(runId);
       const t = doc?.tasks.find(t => t.id === task.id);
       if (t) { t.status = 'failed'; this.store.writeTasks(runId, doc); }
@@ -1114,6 +1650,7 @@ export class FlowRunner {
       return { taskId: task.id, ok: false, error: String(err?.message ?? err) };
     } finally {
       ledger.end(task.id);
+      this.untrackAbort(runId, abortCtl);
     }
   }
 
@@ -1142,7 +1679,21 @@ export class FlowRunner {
     // an agent delegate its destructive work to a child and have it run against
     // the real workspace unapproved. Tasks recorded before the flag existed fall
     // back to their node.
-    const isGated = task => Boolean(task.approveToolCalls ?? nodeFor(task)?.data?.approveToolCalls);
+    //
+    // The run's approvalMode (APPROVAL-MODES §1) overrides the node flag in both
+    // directions, because it is the more recent and more explicit statement of
+    // intent — the user chose it for THIS run, in the chatbox, seconds ago:
+    //   'always' — nothing is gated, whatever the node says.
+    //   'ask'    — everything is gated, whatever the node says.
+    //   'smart'  — everything is gated too; the gate then screens the call and
+    //              lets safe ones through without bothering the human. The task
+    //              still runs solo, since it may pause.
+    const mode = this.approvalMode(runId);
+    const isGated = task => {
+      if (mode === 'always') return false;
+      if (mode === 'ask' || mode === 'smart') return true;
+      return Boolean(task.approveToolCalls ?? nodeFor(task)?.data?.approveToolCalls);
+    };
 
     // The gate to run a claimed task under, or null when it is unattended. The
     // node is the pause's attribution target only: walk createdBy up to the
@@ -1167,7 +1718,9 @@ export class FlowRunner {
     let failure = null;
 
     for (;;) {
-      while (!failure && running.size < maxParallel) {
+      // RUN-CONTROL: after a stop, no new task is claimed — in-flight ones
+      // unwind via their abort signals and the loop drains.
+      while (!failure && !this.stopRequests.has(runId) && running.size < maxParallel) {
         // A gated task may only start when nothing else is in flight.
         const task = this.claimNextTask(runId, t => !isGated(t) || running.size === 0);
         if (!task) break;
@@ -1189,8 +1742,9 @@ export class FlowRunner {
 
     if (failure) {
       // A human tool-gate rejection already set stage 'rejected'; don't
-      // clobber it with a generic failure.
-      if (!failure.retro?.aborted) {
+      // clobber it with a generic failure. A stop already set 'cancelled'
+      // (a stopped task carries the aborted flag too) — same rule.
+      if (!failure.retro?.aborted && !this.stopRequests.has(runId)) {
         const why = failure.retro ? failure.retro.problems.join('; ') : failure.error;
         this.store.setStage(runId, 'failed', { error: `Task ${failure.taskId} failed: ${why}` });
       }
@@ -1211,18 +1765,42 @@ export class FlowRunner {
   async toolGate(runId, node, call) {
     const summary = call.tool === 'bash' ? call.args?.command : call.args?.path;
     const nodeId = node?.id ?? null;
+
+    // 'smart' mode: screen the call first and let a clean verdict through
+    // without waking the human. Only 'safe' passes — 'caution' and 'danger'
+    // both fall through to the pause below, carrying the verdict with them so
+    // the approval bar can say WHY it stopped. checkToolCall never throws and
+    // fails closed, so a broken or unreachable classifier degrades this mode
+    // into plain "ask permission" rather than into "approve everything".
+    let verdict = null;
+    if (this.approvalMode(runId) === 'smart') {
+      verdict = await this.screenToolCall(runId, nodeId, call);
+      if (verdict.risk === 'safe') return true;
+    }
+
     if (nodeId) this.setNodeStatus(runId, nodeId, 'waiting');
-    this.store.appendLog(runId, { event: 'tool_gate_pause', node: nodeId, tool: call.tool, summary: summary ?? null });
+    this.store.appendLog(runId, {
+      event: 'tool_gate_pause', node: nodeId, tool: call.tool, summary: summary ?? null,
+      ...(verdict ? { risk: verdict.risk, reason: verdict.reason } : {})
+    });
     this.store.setStage(runId, 'awaiting_approval', {
       pendingNodeId: nodeId, pendingGateKind: 'tool',
-      pendingToolCall: { tool: call.tool, summary: summary ?? null }
+      pendingToolCall: {
+        tool: call.tool,
+        summary: summary ?? null,
+        ...(verdict ? { risk: verdict.risk, reason: verdict.reason, checkedBy: verdict.model ?? verdict.source } : {})
+      }
     });
     this.notify(runId);
     const approved = await new Promise(resolve => this.gates.set(runId, resolve));
     if (!approved) {
       this.store.appendLog(runId, { event: 'tool_gate_decision', node: nodeId, tool: call.tool, decision: 'rejected' });
-      this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null, pendingToolCall: null });
-      if (nodeId) this.setNodeStatus(runId, nodeId, 'failed');
+      // stop() settles the gate with false too — but a stop is a cancel, not a
+      // rejection: the cancelled state stop() wrote must stand.
+      if (!this.stopRequests.has(runId)) {
+        this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null, pendingToolCall: null });
+        if (nodeId) this.setNodeStatus(runId, nodeId, 'failed');
+      }
       return false;
     }
     this.store.appendLog(runId, { event: 'tool_gate_decision', node: nodeId, tool: call.tool, decision: 'approved' });
@@ -1260,6 +1838,9 @@ export class FlowRunner {
       }
       if (!await this.runPendingTasks(runId, opts.taskIdByNode, flow)) return { ok: false };
     }
+    // A refine node that asked clarifying questions parks the whole run at the
+    // awaiting_input gate until the user answers (MODES-COMPARE T6).
+    if (outcome?.refineQuestions?.length) return this.handleRefineQuestions(runId, flow, node, outcome.refineQuestions);
     if (outcome?.stepEval) return this.handleStepEval(runId, flow, node, outcome.stepEval, opts);
     // A feedback-edge verdict is handled exactly like a step-eval verdict — the
     // explicit feedback targets take precedence inside handleStepEval.
@@ -1287,7 +1868,7 @@ export class FlowRunner {
     const fbTargets = flow.edges.filter(e => isFeedbackEdge(e) && e.source === node.id)
       .map(e => flow.nodes.find(n => n.id === e.target))
       .filter(n => n && n.type !== 'input' && n.type !== 'output');
-    const evalRoles = new Set(['plan-start', 'plan-eval', 'step-eval', 'stitch', 'combine', 'final-eval', 'feedback-review', 'plan', 'verify']);
+    const evalRoles = new Set(['plan-start', 'plan-eval', 'step-eval', 'stitch', 'combine', 'compare', 'final-eval', 'feedback-review', 'plan', 'verify']);
     const upstream = forwardEdges(flow.edges).filter(e => e.target === node.id)
       .map(e => flow.nodes.find(n => n.id === e.source))
       .filter(Boolean);
@@ -1339,14 +1920,87 @@ export class FlowRunner {
     this.notify(runId);
     const approved = await new Promise(resolve => this.gates.set(runId, resolve));
     if (!approved) {
-      this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
-      this.setNodeStatus(runId, node.id, 'failed');
-      this.notify(runId);
+      // A stop() settling the gate is a cancel, not a rejection.
+      if (!this.stopRequests.has(runId)) {
+        this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
+        this.setNodeStatus(runId, node.id, 'failed');
+        this.notify(runId);
+      }
       return { ok: false };
     }
     this.store.appendLog(runId, { event: 'human_decision', decision: 'approved', node: node.id, context: 'step-eval escalation' });
     this.store.setStage(runId, 'execution', { pendingNodeId: null, pendingGateKind: null });
     this.setNodeStatus(runId, node.id, 'done');
+    return { ok: true };
+  }
+
+  // A refine node emitted clarifying questions: park the run at the
+  // awaiting_input gate (sibling of awaiting_approval) until the user answers
+  // from the composer, then re-run the node with the answers as context. One
+  // round only — the re-run carries answeredInputs so it can't park again.
+  // Returns { ok, requeue? }.
+  async handleRefineQuestions(runId, flow, node, questions) {
+    this.store.writeNodeQuestions(runId, node.id, questions);
+    this.setNodeStatus(runId, node.id, 'waiting');
+    this.store.setStage(runId, 'awaiting_input', {
+      pendingNodeId: node.id, pendingGateKind: 'input', pendingQuestions: questions
+    });
+    this.store.appendLog(runId, { event: 'input_gate', node: node.id, questions: questions.length });
+    this.notify(runId);
+    const answers = await new Promise(resolve => this.inputGates.set(runId, resolve));
+    // stop() settles the gate with null — a cancel, not an answer. The
+    // cancelled end state is already written; just unwind.
+    if (answers == null && this.stopRequests.has(runId)) return { ok: false };
+    const text = String(answers ?? '').trim() || '(the user provided no answer — proceed on your stated assumptions)';
+    this.store.writeNodeOutput(runId, `${node.id}.answers`, text);
+    const meta = this.store.readMeta(runId);
+    this.store.writeMeta(runId, {
+      ...meta,
+      answeredInputs: [...(meta.answeredInputs ?? []), node.id],
+      pendingNodeId: null, pendingGateKind: null, pendingQuestions: null
+    });
+    this.store.setStage(runId, 'execution');
+    this.store.appendLog(runId, { event: 'input_answered', node: node.id, chars: text.length });
+    this.notify(runId);
+    // Requeue the refine node: the walk re-runs it, now with the answers in
+    // context, and it produces the settled brief without asking again.
+    return { ok: true, requeue: [node.id] };
+  }
+
+  // Answer a run parked at the awaiting_input gate (MODES-COMPARE T6). Distinct
+  // from run:followUp — this closes an in-flight question, it does not open a
+  // new turn. Works whether the walk is still parked on the live promise or the
+  // app restarted (persisted-state path, mirroring resumeFromGate).
+  answerInput(runId, answersText) {
+    let meta;
+    try { meta = this.store.readMeta(runId); } catch { throw new Error(`Run ${runId} not found.`); }
+    if (!meta?.flowId || meta.stage !== 'awaiting_input') {
+      throw new Error('This run is not waiting for input.');
+    }
+    const nodeId = meta.pendingNodeId;
+    const text = String(answersText ?? '').trim();
+    const live = this.inputGates.get(runId);
+    if (live) {
+      // The walk is parked on the promise: it handles the bookkeeping + re-run.
+      this.inputGates.delete(runId);
+      live(text);
+      return { ok: true };
+    }
+    // App restarted while gated: no live promise. Record the answers, mark the
+    // node answered (one-round cap), requeue it, and relaunch with resume.
+    const flow = this.store.readFlow(runId);
+    if (!flow) throw new Error(`Run ${runId} has no flow.json; cannot resume.`);
+    if (nodeId) this.store.writeNodeOutput(runId, `${nodeId}.answers`, text || '(the user provided no answer — proceed on your stated assumptions)');
+    this.store.writeMeta(runId, {
+      ...meta,
+      answeredInputs: [...(meta.answeredInputs ?? []), nodeId].filter(Boolean),
+      nodeStatus: { ...meta.nodeStatus, ...(nodeId ? { [nodeId]: 'pending' } : {}) },
+      stage: 'execution', pendingNodeId: null, pendingGateKind: null, pendingQuestions: null,
+      interrupted: false
+    });
+    this.store.appendLog(runId, { event: 'input_answered', node: nodeId, resumed: true });
+    this.notify(runId);
+    this.launch(runId, flow, true);
     return { ok: true };
   }
 
@@ -1360,8 +2014,11 @@ export class FlowRunner {
     this.notify(runId);
     const approved = await new Promise(resolve => this.gates.set(runId, resolve));
     if (!approved) {
-      this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
-      this.setNodeStatus(runId, node.id, 'pending');
+      // A stop() settling the gate is a cancel, not a rejection.
+      if (!this.stopRequests.has(runId)) {
+        this.store.setStage(runId, 'rejected', { pendingNodeId: null, pendingGateKind: null });
+        this.setNodeStatus(runId, node.id, 'pending');
+      }
       return false;
     }
     this.store.appendLog(runId, { event: 'human_decision', decision: 'approved', node: node.id });
@@ -1495,6 +2152,11 @@ export class FlowRunner {
 
   async runNode(runId, flow, node, opts) {
     const { taskIdByNode, nextTaskId } = opts;
+    // RUN-CONTROL: a stop can land while the walk is suspended at an await
+    // before this node starts (the gate, a wave boundary). Never begin new
+    // node work for a stopped run — stop() aborts what is IN flight; this
+    // guard covers what has not started yet.
+    if (this.stopRequests.has(runId)) throw abortError(`Node ${node.id} not started: run stopped`);
     this.setNodeStatus(runId, node.id, 'active', { currentNodeId: node.id });
 
     if (node.type === 'input') {
@@ -1616,6 +2278,9 @@ export class FlowRunner {
       }
       const parts = this.upstreamContext(runId, flow, node, taskIdByNode);
       const retryGuidance = this.store.readNodeOutput(runId, `retry-for-${node.id}`);
+      // A refine node re-running after the awaiting_input gate gets the user's
+      // answers to the questions it asked (MODES-COMPARE T6).
+      const refineAnswers = role === 'refine' ? this.store.readNodeOutput(runId, `${node.id}.answers`) : null;
       // Planning roles learn from prior runs' retrospectives (historyDigest),
       // matching the classic pipeline's planner behavior.
       const history = (role === 'plan' || role === 'plan-start') ? this.store.historyDigest() : '';
@@ -1624,6 +2289,7 @@ export class FlowRunner {
         node.data?.goal?.trim() ? `GOAL:\n${node.data.goal.trim()}` : '',
         node.data?.instructions?.trim() ? `EXTRA INSTRUCTIONS (from the node template / workflow):\n${node.data.instructions.trim()}` : '',
         parts.length ? `CONTEXT:\n${parts.join('\n\n')}` : '',
+        refineAnswers ? `USER ANSWERS TO YOUR CLARIFYING QUESTIONS (incorporate these and do NOT ask again):\n${refineAnswers}` : '',
         history ? `LESSONS FROM PREVIOUS RUNS (retrospective recommendations):\n${history}` : '',
         retryGuidance ? `RETRY GUIDANCE (a previous attempt was rejected — fix this):\n${retryGuidance}` : ''
       ].filter(Boolean).join('\n\n');
@@ -1634,7 +2300,7 @@ export class FlowRunner {
 
       let result;
       try {
-        result = await callModel({
+        result = await this.trackedCallModel(runId, {
           ...worker, apiKey, system, prompt: userMsg, onText,
           // Effort level sets the response budget; medium keeps the default.
           ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
@@ -1649,6 +2315,16 @@ export class FlowRunner {
           throw new Error(`${worker.provider}/${worker.model} returned an empty response`);
         }
       } catch (err) {
+        // RUN-CONTROL stop: an aborted call is not a node failure — no failed
+        // retrospective, no 'failed' status. The node goes back to 'pending'
+        // so a later restart re-runs it; the partial streamed text on disk is
+        // an honest partial. The abort error unwinds the walk (fail() mutes
+        // itself under stopRequests).
+        if (isAbortError(err) || this.stopRequests.has(runId)) {
+          this.store.appendLog(runId, { event: 'node_aborted', node: node.id, role });
+          this.setNodeStatus(runId, node.id, 'pending');
+          throw isAbortError(err) ? err : abortError(`Node ${node.id} stopped`);
+        }
         const msg = String(err?.message ?? err);
         this.store.appendLog(runId, { event: 'node_error', node: node.id, role, error: msg });
         this.store.writeRetrospective(runId, node.id, makeRetrospective({
@@ -1728,6 +2404,10 @@ export class FlowRunner {
           this.store.appendLog(runId, { event: 'step_eval_no_verdict', node: node.id });
         }
       }
+      if (role === 'compare') {
+        // Inspectability sidecar, matching combine-report / stitch-report.
+        this.store.writeNodeOutput(runId, 'compare-report', outText);
+      }
       if (role === 'stitch' || role === 'combine') {
         this.store.writeNodeOutput(runId, role === 'combine' ? 'combine-report' : 'stitch-report', outText);
         const st = parseStitchDirectives(outText);
@@ -1738,6 +2418,27 @@ export class FlowRunner {
       }
       if (role === 'final-eval') {
         this.store.writeNodeOutput(runId, 'final-eval', outText);
+      }
+      if (role === 'refine') {
+        // The primary "prompt" port is the clean brief — downstream nodes
+        // consume it as the run request, so strip the trailing questions fence.
+        const brief = stripRefineQuestions(outText);
+        if (brief && brief !== outText) this.store.writeNodeOutput(runId, node.id, brief);
+        // On an answer re-run the node already asked once (T6's one-round cap):
+        // parse questions, but a re-run must never park again.
+        const answered = (this.store.readMeta(runId).answeredInputs ?? []).includes(node.id);
+        const parsed = answered ? null : parseRefineQuestions(outText);
+        if (parsed?.questions?.length) {
+          this.store.writeNodeOutput(runId, `${node.id}.questions`,
+            parsed.questions.map((q, i) => `${i + 1}. ${q.text}${q.why ? `\n   (why: ${q.why})` : ''}`).join('\n\n'));
+          outcome.refineQuestions = parsed.questions;
+          this.store.appendLog(runId, { event: 'refine_questions', node: node.id, count: parsed.questions.length });
+        } else {
+          if (answered && parseRefineQuestions(outText)) {
+            this.store.appendLog(runId, { event: 'refine_questions_capped', node: node.id, reason: 'one-round cap: second-round questions ignored' });
+          }
+          this.store.appendLog(runId, { event: 'refine_done', node: node.id });
+        }
       }
       if (role === 'feedback-review') {
         const templateIds = this.nodeStore ? this.nodeStore.listFull().map(t => t.id) : [];
@@ -1821,6 +2522,10 @@ export class FlowRunner {
   // sequential agent tasks), and every child's output is aggregated into the
   // orchestrator's primary "results" output — downstream nodes only ever see
   // the orchestrator itself. No human intervention anywhere in the loop.
+  //
+  // Exception: nodes the user placed inside the box on the canvas (parentId,
+  // no managedBy) ARE the plan — with authored children present the planning
+  // call is skipped and exactly they run in the same sub-walk.
   async runOrchestrator(runId, flow, node, opts) {
     const worker = resolveCallTarget(resolveWorker(node, this.config), this.config);
     const apiKey = worker.apiKey;
@@ -1846,6 +2551,31 @@ export class FlowRunner {
     // Resume support: children already materialized on a previous pass are
     // reused — the planning call is skipped and unfinished children re-run.
     let children = flow.nodes.filter(n => n.data?.managedBy === node.id);
+    // Authored children (canvas rework): nodes the user placed inside this
+    // orchestrator's box by hand. They ARE the plan — the planning call is
+    // skipped and exactly they run in the inline sub-walk, their outputs
+    // aggregated like materialized children's.
+    const authored = !children.length
+      ? flow.nodes.filter(n => n.parentId === node.id && !n.data?.managedBy)
+      : [];
+    if (authored.length) {
+      children = authored;
+      const meta = this.store.readMeta(runId);
+      const missing = Object.fromEntries(authored
+        .filter(c => !meta.nodeStatus?.[c.id])
+        .map(c => [c.id, 'pending']));
+      if (Object.keys(missing).length) {
+        this.store.writeMeta(runId, { ...meta, nodeStatus: { ...(meta.nodeStatus ?? {}), ...missing } });
+      }
+      // The auxiliary "summary" port: the node inventory (no plan exists —
+      // the canvas placement was the plan).
+      this.store.writeNodeOutput(runId, `${node.id}.summary`, [
+        `${children.length} authored node(s) orchestrated.`,
+        '',
+        ...children.map(c => `- ${c.data?.title ?? c.id} (${c.id})`)
+      ].join('\n'));
+      this.store.appendLog(runId, { event: 'orchestrator_authored_children', node: node.id, children: children.map(c => c.id) });
+    }
     if (!children.length) {
       // Node budget (rework): the min/max dropdowns on the node bound how many
       // work nodes the planning call may declare. Defaults 1-5.
@@ -1868,12 +2598,18 @@ export class FlowRunner {
       const onText = this.streamInto(runId, t => this.store.writeNodeOutput(runId, `${node.id}.plan`, t));
       let result;
       try {
-        result = await callModel({
+        result = await this.trackedCallModel(runId, {
           ...worker, apiKey, system, prompt: userMsg, onText,
           ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
           onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
         });
       } catch (err) {
+        // RUN-CONTROL stop: not a failure — back to pending, no failed retro.
+        if (isAbortError(err) || this.stopRequests.has(runId)) {
+          this.store.appendLog(runId, { event: 'node_aborted', node: node.id, role: 'orchestrate' });
+          this.setNodeStatus(runId, node.id, 'pending');
+          throw isAbortError(err) ? err : abortError(`Orchestrator ${node.id} stopped`);
+        }
         const msg = String(err?.message ?? err);
         this.store.appendLog(runId, { event: 'node_error', node: node.id, role: 'orchestrate', error: msg });
         throw failNode(msg);
@@ -1925,7 +2661,7 @@ export class FlowRunner {
         ...children.map(c => `- ${c.data?.title ?? c.id} (${c.id})`)
       ].join('\n'));
       this.store.appendLog(runId, { event: 'orchestrator_spawned', node: node.id, children: children.map(c => c.id) });
-    } else {
+    } else if (!authored.length) {
       this.store.appendLog(runId, { event: 'node_resume', node: node.id, type: 'orchestrator', children: children.length });
     }
 
@@ -1941,6 +2677,9 @@ export class FlowRunner {
       .map(c => c.id));
     const maxParallel = Math.max(1, Number(this.config.maxParallel ?? 4));
     for (;;) {
+      // RUN-CONTROL: a stop unwinds the box the same way it unwinds the outer
+      // walk — children already went back to 'pending' via their own catches.
+      if (this.stopRequests.has(runId)) throw abortError(`Orchestrator ${node.id} stopped`);
       const ready = children.filter(c => !done.has(c.id) &&
         forwardEdges(flow.edges).every(e => e.target !== c.id || !childIds.has(e.source) || done.has(e.source)));
       if (!ready.length) break;
@@ -1955,12 +2694,13 @@ export class FlowRunner {
         batch.forEach((c, i) => { if (results[i].status === 'fulfilled') done.add(c.id); });
         const rejected = results.find(r => r.status === 'rejected');
         if (rejected) {
-          this.setNodeStatus(runId, node.id, 'failed');
+          // Under a stop the container isn't failing — it's being cancelled.
+          if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
           throw rejected.reason;
         }
         if (batch.some(c => c.type === 'agentTask')
           && !await this.runPendingTasks(runId, opts.taskIdByNode, flow)) {
-          this.setNodeStatus(runId, node.id, 'failed');
+          if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
           throw new Error(`Orchestrator ${node.id}: a child task failed`);
         }
         continue;
@@ -1973,7 +2713,7 @@ export class FlowRunner {
           throw new Error(`Orchestrator ${node.id}: child task ${child.id} failed`);
         }
       } catch (err) {
-        this.setNodeStatus(runId, node.id, 'failed');
+        if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
         throw err;
       }
       done.add(child.id);
@@ -2015,26 +2755,42 @@ export class FlowRunner {
       'Respond again in full, fixing every error above. Emit exactly ONE valid ```json block satisfying the contract.'
     ].join('\n\n');
     try {
-      const result = await callModel({ ...worker, apiKey, system, prompt,
+      const result = await this.trackedCallModel(runId, { ...worker, apiKey, system, prompt,
         onRetry: this.retryLogger(runId, node.id), retry: this.config.retry });
       return String(result.text ?? '').trim();
     } catch (err) {
+      // A stop must unwind the walk, not degrade into a graceful contract miss.
+      if (isAbortError(err) || this.stopRequests.has(runId)) {
+        throw isAbortError(err) ? err : abortError(`Node ${node.id} stopped`);
+      }
       this.store.appendLog(runId, { event: 'structured_output_reask_failed', node: node.id, error: String(err?.message ?? err) });
       return null;
     }
   }
 
   fail(runId, err) {
-    this.store.appendLog(runId, { event: 'flow_error', error: String(err?.stack ?? err) });
-    const meta = this.store.readMeta(runId);
-    const current = meta.currentNodeId;
-    this.store.setStage(runId, 'failed', { error: String(err?.message ?? err) });
-    // In a parallel wave currentNodeId is just the last node that went
-    // active — it may have finished fine. Only flag it if it's still active.
-    if (current && this.store.readMeta(runId).nodeStatus?.[current] === 'active') {
-      this.setNodeStatus(runId, current, 'failed');
-    }
-    this.notify(runId);
+    // Never throws: a run stopped and then deleted mid-unwind pulls the files
+    // out from under these writes, and an unhandled rejection here would take
+    // down the main process for a race the user caused legitimately.
+    try {
+      // A stop() unwinds through here as an abort-marked error: the cancelled
+      // end state stop() already recorded must stand — no 'failed' clobbering.
+      if (this.stopRequests.has(runId) || isAbortError(err)) {
+        this.store.appendLog(runId, { event: 'flow_unwound_after_stop', error: String(err?.message ?? err).slice(0, 300) });
+        this.notify(runId);
+        return;
+      }
+      this.store.appendLog(runId, { event: 'flow_error', error: String(err?.stack ?? err) });
+      const meta = this.store.readMeta(runId);
+      const current = meta.currentNodeId;
+      this.store.setStage(runId, 'failed', { error: String(err?.message ?? err) });
+      // In a parallel wave currentNodeId is just the last node that went
+      // active — it may have finished fine. Only flag it if it's still active.
+      if (current && this.store.readMeta(runId).nodeStatus?.[current] === 'active') {
+        this.setNodeStatus(runId, current, 'failed');
+      }
+      this.notify(runId);
+    } catch { /* the run is gone — there is nothing left to report to */ }
   }
 
   // Instantiate one Node Library template (user-editable worker/instructions/

@@ -39,6 +39,19 @@ export function apiError(provider, res, bodyText) {
   return err;
 }
 
+// Cooperative cancellation (RUN-CONTROL): the runner threads an AbortSignal
+// down through callModel; adapters pass it to fetch and check it between
+// stream events. The error is marked both ways callers test for it — the
+// DOM-style name 'AbortError' (what fetch itself throws on abort) and an
+// `aborted` flag — so retry logic and run-control recognize it without
+// string matching.
+export function abortError(message = 'The model call was aborted') {
+  return Object.assign(new Error(message), { name: 'AbortError', aborted: true });
+}
+export function isAbortError(err) {
+  return Boolean(err?.aborted || err?.name === 'AbortError');
+}
+
 // Parse an SSE byte stream into the `data:` payload strings.
 export async function* sseEvents(readable) {
   const decoder = new TextDecoder();
@@ -57,7 +70,7 @@ export async function* sseEvents(readable) {
 // One adapter implementation for every OpenAI-compatible chat-completions API.
 //
 //   openaiCompatible({ provider, baseUrl, headers?, keyHelp?, envKey? }) ->
-//     adapter({ model, system, prompt, messages?, tools?, maxTokens, apiKey, onText? })
+//     adapter({ model, system, prompt, messages?, tools?, maxTokens, apiKey, onText?, signal? })
 //
 // - provider: display name used in error messages ('OpenRouter', 'OpenAI', 'Kimi').
 // - headers: extra request headers (OpenRouter's referer/title; Kimi Code's
@@ -73,7 +86,7 @@ export async function* sseEvents(readable) {
 //                               assistant message comes back so the loop can
 //                               echo tool_calls and read finish_reason.
 export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'Add it in Settings.', envKey = null }) {
-  return async function openaiCompatibleAdapter({ model, system, prompt, messages, tools, maxTokens, apiKey, onText }) {
+  return async function openaiCompatibleAdapter({ model, system, prompt, messages, tools, maxTokens, apiKey, onText, signal }) {
     const key = apiKey || (envKey ? process.env[envKey] : null);
     if (!key) throw new Error(`${provider} API key is not set. ${keyHelp}`);
 
@@ -104,7 +117,10 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
         'content-type': 'application/json',
         ...headers
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      // RUN-CONTROL: optional cooperative cancellation (stop()). fetch rejects
+      // with an AbortError when it fires; the stream loop below checks it too.
+      ...(signal ? { signal } : {})
     });
 
     if (!res.ok) {
@@ -118,6 +134,9 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       const frags = new Map(); // tool_call index -> the call being assembled
 
       for await (const event of sseEvents(res.body)) {
+        // A mid-stream stop: fetch's own abort also rejects this loop, but the
+        // explicit check makes the exit deterministic on every runtime.
+        if (signal?.aborted) throw abortError();
         if (event === '[DONE]') break;
         let chunk;
         try { chunk = JSON.parse(event); } catch { continue; }

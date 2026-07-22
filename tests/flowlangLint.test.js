@@ -168,3 +168,32 @@ test('lint: machine-readable finding shape', () => {
   assert.deepEqual(Object.keys(f).sort(), ['message', 'nodeId', 'rule', 'severity'].sort());
   assert.equal(f.nodeId, 'a');
 });
+
+test('lint: parent must be an existing orchestrator; structural/box nodes cannot be contained', () => {
+  const base = {
+    id: 'p', name: 'P',
+    nodes: [
+      { id: 'input', type: 'input', kind: 'user', data: {} },
+      { id: 'orch', type: 'orchestrator', kind: 'ai', data: {} },
+      { id: 'step', type: 'aiStep', kind: 'ai', data: {}, parentId: 'orch' },
+      { id: 'lost', type: 'aiStep', kind: 'ai', data: {}, parentId: 'ghost' },
+      { id: 'bad', type: 'aiStep', kind: 'ai', data: {}, parentId: 'step' },
+      { id: 'nested', type: 'orchestrator', kind: 'ai', data: {}, parentId: 'orch' },
+      { id: 'output', type: 'output', kind: 'user', data: {} }
+    ],
+    edges: [
+      { id: 'e-input-orch', source: 'input', target: 'orch' },
+      { id: 'e-orch-step', source: 'orch', target: 'step' },
+      { id: 'e-orch-lost', source: 'orch', target: 'lost' },
+      { id: 'e-orch-bad', source: 'orch', target: 'bad' },
+      { id: 'e-orch-output', source: 'orch', target: 'output' }
+    ]
+  };
+  const { errors } = lintFlow(base, { templates: null });
+  const parentErrors = errors.filter(e => e.rule === 'parent');
+  assert.ok(parentErrors.some(e => e.message.includes('parent "ghost" does not exist')));
+  assert.ok(parentErrors.some(e => e.message.includes('parent "step" is not an orchestrator')));
+  assert.ok(parentErrors.some(e => e.message.includes('"nested": orchestrator nodes cannot live inside an orchestrator')));
+  assert.ok(!parentErrors.some(e => e.nodeId === 'step'), 'a valid child passes');
+  assert.ok(RUNTIME_RULES.includes('parent'), 'a broken parent blocks the pre-run gate');
+});

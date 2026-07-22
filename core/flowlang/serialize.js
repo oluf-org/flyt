@@ -55,16 +55,18 @@ function emitValue(lines, key, v, indent) {
 
 function emitNode(lines, node) {
   const fields = node.templateId
-    ? { use: node.templateId, ...(node.overrides ?? {}) }
+    ? { use: node.templateId, ...(node.parentId ? { parent: node.parentId } : {}), ...(node.expose ? { expose: node.expose } : {}), ...(node.overrides ?? {}) }
     : {
         type: node.type,
         // kind is derivable from type; only persist a deviation
         ...(node.kind && node.kind !== KIND_OF[node.type] ? { kind: node.kind } : {}),
+        ...(node.parentId ? { parent: node.parentId } : {}),
+        ...(node.expose ? { expose: node.expose } : {}),
         ...(node.data ?? {})
       };
   lines.push(`  ${formatScalar(node.id)}:`);
   const keys = Object.keys(fields).filter(k => fields[k] !== undefined);
-  const head = keys.filter(k => k === 'use' || k === 'type' || k === 'kind');
+  const head = keys.filter(k => k === 'use' || k === 'type' || k === 'kind' || k === 'parent' || k === 'expose');
   const rest = keys.filter(k => !head.includes(k))
     .sort((a, b) => fieldRank(a) - fieldRank(b) || a.localeCompare(b));
   for (const k of [...head, ...rest]) emitValue(lines, k, fields[k], 4);
@@ -77,6 +79,27 @@ function isImplicit(node) {
   return empty
     && ((node.id === 'input' && node.type === 'input') || (node.id === 'output' && node.type === 'output'))
     && (node.kind ?? KIND_OF[node.type]) === KIND_OF[node.type];
+}
+
+// The `modes:` block (MODES-COMPARE T2): each mode is name + a per-node
+// override map. Emitted in the flow object's own key order (insertion order,
+// which parse preserves) so serialize/parse round-trips byte-for-byte. Each
+// node's override fields render inline — they're small and read best on one
+// line (`refine: { worker: { provider: anthropic, model: claude-fable-5 } }`).
+function emitModes(lines, modes) {
+  lines.push('modes:');
+  for (const [id, mode] of Object.entries(modes)) {
+    lines.push(`  ${formatScalar(id)}:`);
+    if (typeof mode?.name === 'string' && mode.name.trim()) {
+      lines.push(`    name: ${formatScalar(mode.name)}`);
+    }
+    const entries = Object.entries(mode?.overrides ?? {}).filter(([, f]) => f !== undefined);
+    if (!entries.length) { lines.push('    overrides: {}'); continue; }
+    lines.push('    overrides:');
+    for (const [nodeId, fields] of entries) {
+      lines.push(`      ${formatScalar(nodeId)}: ${formatInline(fields)}`);
+    }
+  }
 }
 
 export function serializeFlow(flow) {
@@ -99,6 +122,10 @@ export function serializeFlow(flow) {
   for (const e of flow.edges ?? []) {
     const port = e.sourceHandle ? `.${e.sourceHandle}` : '';
     lines.push(`  - ${e.source}${port} -> ${e.target}`);
+  }
+  if (flow.modes && Object.keys(flow.modes).length) {
+    lines.push('');
+    emitModes(lines, flow.modes);
   }
   return lines.join('\n') + '\n';
 }

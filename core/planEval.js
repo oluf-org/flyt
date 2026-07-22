@@ -268,6 +268,37 @@ export function parseTriage(text, extraTemplateIds = []) {
   };
 }
 
+// prompt-refiner questions (MODES-COMPARE T5). The refiner MAY end its brief
+// with ONE ```json { "questions": [{ id, text, why }] } block — but only when
+// an ambiguity would materially change the deliverable. Total: no block, an
+// empty list, or malformed JSON all come back as null ("no questions —
+// proceed"). Capped at 3; invalid entries are dropped, `text` accepts the
+// synonym `question`.
+export function parseRefineQuestions(text) {
+  const obj = extractJson(text);
+  if (!obj || typeof obj !== 'object' || !Array.isArray(obj.questions)) return null;
+  const questions = [];
+  for (const [i, q] of obj.questions.entries()) {
+    if (questions.length >= 3) break;
+    if (!q || typeof q !== 'object') continue;
+    const qText = isStr(q.text) ? q.text.trim() : (isStr(q.question) ? q.question.trim() : '');
+    if (!qText) continue;
+    questions.push({
+      id: isStr(q.id) && ID_RE.test(q.id.trim()) ? q.id.trim() : `q${i + 1}`,
+      text: qText,
+      ...(isStr(q.why) ? { why: q.why.trim() } : {})
+    });
+  }
+  return questions.length ? { questions } : null;
+}
+
+// The refined brief WITHOUT its trailing questions fence — what downstream
+// nodes should consume as the run request. Only strips a final ```json ...```
+// block (the refiner's questions), leaving the prose brief intact.
+export function stripRefineQuestions(text) {
+  return String(text ?? '').replace(/\n*```(?:json)?\s*\{[\s\S]*?"questions"[\s\S]*?```\s*$/i, '').trimEnd();
+}
+
 // feedback-review verdict (FOLLOWUP-PLAN FU6): closes every follow-up turn.
 // null when the output carries no structured verdict. `more-work` may declare
 // additional node specs; invalid specs are dropped with their errors reported
