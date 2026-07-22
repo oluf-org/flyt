@@ -1,13 +1,21 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { ReactFlow, Background, Controls, Handle, Position } from '@xyflow/react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ReactFlow, Background, Controls, MiniMap, Handle, Position,
+  ReactFlowProvider, useReactFlow, applyNodeChanges, applyEdgeChanges
+} from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
   TYPE_META, nodeLabel, nodeSub, nodePorts, createsNodes,
   FEEDBACK_HANDLE, isFeedbackEdge, isStructuralNode, forwardEdges
 } from './flowTypes.js';
-import { wouldCreateCycle } from './flowLayout.js';
+import {
+  wouldCreateCycle, arrangeForCanvas, absolutePosition,
+  fitOrchBox, shrinkOrchBox, ORCH_BOX_DEFAULT, ORCH_PAD
+} from './flowLayout.js';
 import { spawnedTasks, taskNodeStatus } from './runGraph.js';
+import { formatElapsed } from './runProgress.js';
 import FlowEdge from './FlowEdge.jsx';
+import NodeMenu from './NodeMenu.jsx';
 import Tip from './Tip.jsx';
 
 // One custom edge for every canvas: weight (context bytes) + streaming signal
@@ -20,6 +28,33 @@ const edgeTypes = { [EDGE_TYPE]: FlowEdge };
 // graph, and the vertical pitch between stacked tasks.
 const SPAWN_DX = 260;
 const SPAWN_DY = 88;
+
+// Node ids for canvas-created nodes (editor drops + App's picker click-add).
+let nodeSeq = 0;
+export function freshNodeId(prefix) {
+  return `${prefix}-${Date.now().toString(36)}${(nodeSeq++).toString(36)}`;
+}
+
+// The drag-and-drop payload the node picker puts on the dataTransfer.
+export const DND_MIME = 'application/x-llmflow-node';
+export const dndOrchestrator = () => ({ kind: 'orchestrator' });
+export const dndTemplate = templateId => ({ kind: 'template', templateId });
+
+// A fresh flow node from a picker spec at a canvas position: either the
+// built-in Orchestrator structural node or a Node Library template instance
+// (overrides start empty — the node inherits the template until edited).
+function nodeFromSpec(spec, position) {
+  if (spec?.kind === 'orchestrator') {
+    return {
+      id: freshNodeId('orchestrator'), type: 'orchestrator', kind: 'ai',
+      position, data: { title: 'Orchestrator' }
+    };
+  }
+  if (spec?.kind === 'template' && typeof spec.templateId === 'string') {
+    return { id: freshNodeId(spec.templateId), templateId: spec.templateId, position, overrides: {} };
+  }
+  return null;
+}
 
 // Derives the node graph from the run snapshot (pure function of file state).
 // Layout follows the design system: vertical, top→down —
@@ -95,6 +130,19 @@ function PortRow({ ports }) {
   );
 }
 
+// The elapsed ticker on an active node (run canvas only — only the run graph
+// stamps data.activeSince). The interval lives inside the card so the stamp
+// itself never churns: memoized parents see one data change when the node
+// goes active, and the second hand ticks from local state.
+function ElapsedTicker({ since }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <span className="node-elapsed mono">{formatElapsed(Math.max(0, now - since))}</span>;
+}
+
 function NodeCard({ data, vertical, noTarget, noSource }) {
   const ports = noSource ? [] : (data.ports ?? []);
   return (
@@ -108,6 +156,7 @@ function NodeCard({ data, vertical, noTarget, noSource }) {
             {data.kind && <span className={`node-kind kind-${data.kind}`}>{data.kind}</span>}
             {data.spawns && <span className="node-kind kind-spawn" title="May create other nodes at run time">＋nodes</span>}
             {data.turn != null && <span className="node-kind kind-turn" title={`Added by follow-up turn ${data.turn}`}>↩{data.turn}</span>}
+            {data.activeSince != null && data.status === 'active' && <ElapsedTicker since={data.activeSince} />}
           </div>
           <div className="node-sub">{data.sub}</div>
         </div>
@@ -135,15 +184,15 @@ function NodeCard({ data, vertical, noTarget, noSource }) {
   );
 }
 
-// The Orchestrator container: a large box that fills with AI-created task
-// nodes at run time. Children are separate React Flow nodes with
-// parentId = this node, rendered inside; the animated purple gradient border
-// marks the box while it plans and runs its children.
+// The Orchestrator container: a large box that fills with task nodes — dropped
+// in by hand while authoring, or AI-created at run time. Children are separate
+// React Flow nodes with parentId = this node, rendered inside; the animated
+// purple gradient border marks the box while it plans and runs its children.
 function OrchestratorCard({ data }) {
-  const box = data.box ?? { w: 360, h: 200 };
+  const box = data.box ?? ORCH_BOX_DEFAULT;
   return (
     <div
-      className={`orch-node status-${data.status}` + (data.selected ? ' selected' : '')}
+      className={`orch-node status-${data.status}` + (data.selected ? ' selected' : '') + (data.dropTarget ? ' drop-target' : '')}
       style={{ width: box.w, height: box.h }}
     >
       <Handle type="target" position={Position.Top} />
@@ -154,6 +203,11 @@ function OrchestratorCard({ data }) {
             <div className="node-title">{data.label}</div>
             <span className="node-kind kind-ai">ai</span>
             <span className="node-kind kind-spawn" title="Creates other nodes at run time">＋nodes</span>
+            {data.childCount > 0 && (
+              <span className="node-kind kind-inside" title={`${data.childCount} node(s) placed inside this box`}>
+                ▣ {data.childCount}
+              </span>
+            )}
           </div>
           <div className="node-sub">{data.sub}</div>
         </div>
@@ -161,7 +215,9 @@ function OrchestratorCard({ data }) {
       </div>
       {data.empty && (
         <div className="orch-hint">
-          Plans autonomously at run time —<br />task nodes are created and run in here,<br />no human intervention.
+          {data.emptyHint ?? (
+            <>Plans autonomously at run time —<br />task nodes are created and run in here,<br />no human intervention.</>
+          )}
         </div>
       )}
       {/* A large swarm collapses to a stack: the box stays compact and the
@@ -205,7 +261,7 @@ function OrchestratorCard({ data }) {
 // fields so unchanged cards skip re-rendering (positions are applied by the
 // React Flow wrapper, not by NodeCard, so they don't belong in the compare).
 const cardEqual = (prev, next) =>
-  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'turn', 'feedbackPoint', 'stack']
+  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'emptyHint', 'turn', 'feedbackPoint', 'stack', 'dropTarget', 'childCount', 'activeSince']
     .every(k => prev.data[k] === next.data[k]);
 
 const StageNode = React.memo(props => <NodeCard {...props} vertical />, cardEqual);
@@ -227,67 +283,225 @@ const editorNodeTypes = {
   orchestrator: OrchNode
 };
 
-// Editable canvas over a flow DEFINITION (not run state). Authoritative state
-// is the RAW flow object owned by App (template instances stay
+// Editable canvas over a flow DEFINITION (not run state). The raw flow object
+// owned by App stays authoritative (template instances stay
 // templateId+overrides on disk); `resolved` is the display copy with template
-// defaults merged in — same ids/positions, richer labels. React Flow changes
-// are folded back into the raw flow and persisted upstream (debounced save).
-export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlow, readOnly }) {
-  const displayNodes = (resolved ?? flow).nodes;
-  const nodes = useMemo(() => displayNodes.map(n => ({
-    id: n.id,
-    type: n.type === 'orchestrator' ? 'orchestrator' : 'editable',
-    position: n.position,
-    selected: n.id === selectedNode,
-    // The pinned structural nodes cannot be deleted from the canvas.
-    deletable: !readOnly && n.type !== 'input' && n.type !== 'output',
-    data: {
-      label: nodeLabel(n),
-      sub: nodeSub(n),
-      icon: n.data?.icon ?? TYPE_META[n.type]?.icon ?? '▢',
-      kind: n.kind,
-      nodeType: n.type,
-      status: 'idle',
-      ports: nodePorts(n),
-      spawns: n.type !== 'orchestrator' && createsNodes(n),
-      feedbackPoint: n.type !== 'input' && n.type !== 'output',
-      ...(n.type === 'orchestrator' ? { empty: true, box: n.data?.box } : {}),
-      selected: n.id === selectedNode
-    }
-  })), [displayNodes, selectedNode, readOnly]);
+// defaults merged in — same ids/positions, richer labels.
+//
+// State strategy (canvas rework): local React Flow state mirrors the flow,
+// because a controlled round-trip through App on every drag frame defeated
+// React Flow's node-identity checks (re-measure loops, lost drag state) and
+// dropped the change types the flow doesn't model (dimensions, selection).
+// All change types apply locally via applyNodeChanges; only semantic changes
+// (final positions, removals, adds, containment) are folded into the flow.
+// Every fold marks the exact object it wrote, so the sync effect treats the
+// resulting re-render as an echo instead of rebuilding mid-drag.
+export function FlowEditor(props) {
+  return (
+    <ReactFlowProvider>
+      <FlowEditorCanvas {...props} />
+    </ReactFlowProvider>
+  );
+}
 
-  const edges = useMemo(() => flow.edges.map(e => ({
+function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow, readOnly }) {
+  const rf = useReactFlow();
+  // Latest-value mirrors for callbacks that must see current props without
+  // re-binding (drag handlers fire outside React's render cycle).
+  const flowRef = useRef(flow);
+  const resolvedRef = useRef(resolved);
+  const selectedNodeRef = useRef(selectedNode);
+  flowRef.current = flow;
+  resolvedRef.current = resolved;
+  selectedNodeRef.current = selectedNode;
+
+  // Build React Flow nodes from a flow object. Structure (ids, parentage,
+  // positions) comes from the raw flow; labels/ports prefer the resolved
+  // display copy. Orchestrators order first, each followed by its children —
+  // React Flow requires parents before children, and boxes belong at the
+  // back so they can never cover a free node.
+  const buildNodes = useCallback((f, sel, dropTargetId) => {
+    const dispById = new Map((resolvedRef.current ?? f).nodes.map(n => [n.id, n]));
+    const orchIds = new Set(f.nodes.filter(n => n.type === 'orchestrator').map(n => n.id));
+    const childCount = new Map();
+    for (const n of f.nodes) {
+      if (n.parentId) childCount.set(n.parentId, (childCount.get(n.parentId) ?? 0) + 1);
+    }
+    return arrangeForCanvas(f.nodes).map(raw => {
+      const n = dispById.get(raw.id) ?? raw;
+      const isOrch = raw.type === 'orchestrator';
+      const kids = childCount.get(raw.id) ?? 0;
+      return {
+        id: raw.id,
+        type: isOrch ? 'orchestrator' : 'editable',
+        position: raw.position,
+        // Containment: only honored when the parent box actually exists —
+        // an orphaned parentId (hand-edited YAML) degrades to top level
+        // rather than vanishing. The linter flags it. Deliberately NO
+        // extent:'parent' — that would clamp the child inside the box and
+        // make drag-out-to-detach impossible.
+        ...(raw.parentId && orchIds.has(raw.parentId)
+          ? { parentId: raw.parentId }
+          : {}),
+        selected: raw.id === sel,
+        // The pinned structural nodes cannot be deleted from the canvas.
+        deletable: !readOnly && raw.type !== 'input' && raw.type !== 'output',
+        data: {
+          label: nodeLabel(n),
+          sub: nodeSub(n),
+          icon: n.data?.icon ?? TYPE_META[raw.type]?.icon ?? '▢',
+          kind: n.kind,
+          nodeType: raw.type,
+          status: 'idle',
+          ports: nodePorts(n),
+          spawns: !isOrch && createsNodes(n),
+          feedbackPoint: raw.type !== 'input' && raw.type !== 'output',
+          ...(isOrch ? {
+            empty: kids === 0,
+            childCount: kids,
+            box: raw.data?.box,
+            dropTarget: dropTargetId === raw.id,
+            emptyHint: 'Drag nodes in to run them inside this box — or let it plan for itself at run time.'
+          } : {}),
+          selected: raw.id === sel
+        }
+      };
+    });
+  }, [readOnly]);
+
+  const buildEdges = useCallback(f => f.edges.map(e => ({
     ...e,
     type: EDGE_TYPE,
     ...(isFeedbackEdge(e) ? { className: 'edge-feedback' } : {})
-  })), [flow.edges]);
+  })), []);
+
+  const [dropTarget, setDropTarget] = useState(null);
+  const dropTargetRef = useRef(null);
+  const [nodes, setNodes] = useState(() => buildNodes(flow, selectedNode, null));
+  const [edges, setEdges] = useState(() => buildEdges(flow));
+  // The exact flow object our own fold produced — the sync effect skips it,
+  // so local drag/measure state is never rebuilt from under the gesture.
+  const lastWritten = useRef(null);
+
+  // External changes (undo/redo, YAML edits, picker click-add, inspector
+  // edits) rebuild the local mirror; our own writes are already reflected in it.
+  useEffect(() => {
+    if (lastWritten.current === flow) return;
+    setNodes(buildNodes(flow, selectedNode, dropTargetRef.current));
+    setEdges(buildEdges(flow));
+  }, [flow, selectedNode, buildNodes, buildEdges]);
+
+  // The drop-target highlight maps onto orchestrator data only — a cheap
+  // targeted update rather than a full rebuild on every drag frame.
+  useEffect(() => {
+    dropTargetRef.current = dropTarget;
+    setNodes(ns => ns.map(n => n.type === 'orchestrator' && Boolean(n.data.dropTarget) !== (n.id === dropTarget)
+      ? { ...n, data: { ...n.data, dropTarget: n.id === dropTarget } }
+      : n));
+  }, [dropTarget]);
+
+  // Fold a mutation into the flow, keeping the local mirror for position /
+  // removal changes that React Flow already applied locally.
+  const writeFlow = useCallback(updater => {
+    onChangeFlow(f => {
+      const next = updater(f);
+      if (next !== f) lastWritten.current = next;
+      return next;
+    });
+  }, [onChangeFlow]);
+
+  // Structural mutations (attach / detach / add) change parentage or order —
+  // things the local change-application can't express. Computed from the
+  // latest flow outside any updater (updaters must stay pure), then the
+  // local mirror is rebuilt from the result immediately.
+  const writeStructure = useCallback(buildNext => {
+    const f = flowRef.current;
+    const next = buildNext(f);
+    if (next === f) return;
+    lastWritten.current = next;
+    onChangeFlow(next);
+    setNodes(buildNodes(next, selectedNodeRef.current, dropTargetRef.current));
+    setEdges(buildEdges(next));
+  }, [onChangeFlow, buildNodes, buildEdges]);
+
+  // Orchestrator boxes as absolute canvas rects (editor boxes are always
+  // top-level — nesting is refused by the editor and flagged by the linter).
+  const orchRects = useCallback(f => f.nodes
+    .filter(n => n.type === 'orchestrator' && !n.parentId)
+    .map(n => {
+      const box = n.data?.box ?? ORCH_BOX_DEFAULT;
+      return { id: n.id, x: n.position?.x ?? 0, y: n.position?.y ?? 0, w: box.w, h: box.h };
+    }), []);
+
+  const centerOf = useCallback(id => {
+    const internal = rf.getInternalNode(id);
+    if (!internal) return null;
+    const p = internal.internals?.positionAbsolute ?? internal.position;
+    const w = internal.measured?.width ?? 180;
+    const h = internal.measured?.height ?? 72;
+    return { x: p.x + w / 2, y: p.y + h / 2 };
+  }, [rf]);
+
+  // Which dragged nodes may change containment (structural nodes and boxes
+  // themselves never can).
+  const containmentCandidates = useCallback(dragged => (dragged ?? []).filter(d => {
+    const raw = flowRef.current.nodes.find(n => n.id === d.id);
+    return raw && raw.type !== 'input' && raw.type !== 'output' && raw.type !== 'orchestrator';
+  }), []);
+
+  const inRect = (c, r) => c.x >= r.x && c.x <= r.x + r.w && c.y >= r.y && c.y <= r.y + r.h;
 
   const onNodesChange = useCallback(changes => {
     if (readOnly) return;
-    onChangeFlow(f => {
-      let ns = f.nodes, es = f.edges, deselect = false;
-      for (const c of changes) {
-        if (c.type === 'position' && c.position) {
-          ns = ns.map(n => n.id === c.id ? { ...n, position: c.position } : n);
-        } else if (c.type === 'remove') {
-          // Structural nodes are pinned: input/output never leave the canvas.
-          if (isStructuralNode(f.nodes.find(n => n.id === c.id))) continue;
-          ns = ns.filter(n => n.id !== c.id);
-          es = es.filter(e => e.source !== c.id && e.target !== c.id);
-          deselect = true;
-        }
+    setNodes(ns => applyNodeChanges(changes, ns));
+    const positionChanges = [];
+    const removed = [];
+    for (const c of changes) {
+      if (c.type === 'position' && c.position) positionChanges.push(c);
+      else if (c.type === 'remove') removed.push(c.id);
+    }
+    if (positionChanges.length) {
+      writeFlow(f => ({
+        ...f,
+        nodes: f.nodes.map(n => {
+          const c = positionChanges.find(x => x.id === n.id);
+          return c ? { ...n, position: c.position } : n;
+        })
+      }));
+    }
+    if (removed.length) {
+      const structural = new Set(flowRef.current.nodes.filter(isStructuralNode).map(n => n.id));
+      const drop = new Set(removed.filter(id => !structural.has(id)));
+      // Removing an orchestrator removes everything inside its box.
+      for (const n of flowRef.current.nodes) {
+        if (n.parentId && drop.has(n.parentId)) drop.add(n.id);
       }
-      if (deselect) onSelect(null);
-      return ns === f.nodes && es === f.edges ? f : { ...f, nodes: ns, edges: es };
-    });
-  }, [onChangeFlow, onSelect, readOnly]);
+      if (drop.size) {
+        const orphanedParents = new Set(
+          flowRef.current.nodes.filter(n => drop.has(n.id) && n.parentId).map(n => n.parentId));
+        writeStructure(f => {
+          const kept = f.nodes.filter(n => !drop.has(n.id));
+          return {
+            ...f,
+            // Boxes that lost children shrink back around what remains.
+            nodes: kept.map(n => orphanedParents.has(n.id)
+              ? { ...n, data: { ...n.data, box: shrinkOrchBox(kept.filter(c => c.parentId === n.id)) } }
+              : n),
+            edges: f.edges.filter(e => !drop.has(e.source) && !drop.has(e.target))
+          };
+        });
+        if (drop.has(selectedNodeRef.current)) onSelect(null);
+      }
+    }
+  }, [readOnly, writeFlow, writeStructure, onSelect]);
 
   const onEdgesChange = useCallback(changes => {
     if (readOnly) return;
+    setEdges(es => applyEdgeChanges(changes, es));
     const removed = new Set(changes.filter(c => c.type === 'remove').map(c => c.id));
     if (!removed.size) return;
-    onChangeFlow(f => ({ ...f, edges: f.edges.filter(e => !removed.has(e.id)) }));
-  }, [onChangeFlow, readOnly]);
+    writeFlow(f => ({ ...f, edges: f.edges.filter(e => !removed.has(e.id)) }));
+  }, [readOnly, writeFlow]);
 
   // sourceHandle records WHICH declared output of the source feeds the edge
   // (null = the primary output). The same node pair may be connected once per
@@ -299,7 +513,7 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
   const onConnect = useCallback(({ source, target, sourceHandle }) => {
     if (readOnly || !source || !target || source === target) return;
     const feedback = sourceHandle === FEEDBACK_HANDLE;
-    onChangeFlow(f => {
+    writeStructure(f => {
       if (f.edges.some(e => sameEdge(e, source, target, sourceHandle))) return f;
       // Feedback edges point backwards by design — they are a reverse channel
       // outside the execution order, so the cycle guard does not apply. They
@@ -318,19 +532,176 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
         }]
       };
     });
-  }, [onChangeFlow, readOnly]);
+  }, [readOnly, writeStructure]);
 
   // Live drag feedback: refuse duplicate edges and anything that would close
   // a cycle (topoSort rejects cyclic flows at run time — block them here).
   // Feedback edges are exempt from the cycle rule but must target an AI node.
   const isValidConnection = useCallback(({ source, target, sourceHandle }) => {
     if (!source || !target || source === target) return false;
-    if (flow.edges.some(e => sameEdge(e, source, target, sourceHandle))) return false;
+    const f = flowRef.current;
+    if (f.edges.some(e => sameEdge(e, source, target, sourceHandle))) return false;
     if (sourceHandle === FEEDBACK_HANDLE) {
-      return !isStructuralNode(flow.nodes.find(n => n.id === target));
+      return !isStructuralNode(f.nodes.find(n => n.id === target));
     }
-    return !wouldCreateCycle(forwardEdges(flow.edges), source, target);
-  }, [flow.edges, flow.nodes]);
+    return !wouldCreateCycle(forwardEdges(f.edges), source, target);
+  }, []);
+
+  // While dragging, light up the box the node would land in.
+  const onNodeDrag = useCallback((_e, _node, dragged) => {
+    const cands = containmentCandidates(dragged);
+    let target = null;
+    if (cands.length === 1) {
+      const raw = flowRef.current.nodes.find(n => n.id === cands[0].id);
+      const c = centerOf(cands[0].id);
+      if (c) {
+        target = orchRects(flowRef.current)
+          .find(r => r.id !== raw?.parentId && inRect(c, r))?.id ?? null;
+      }
+    }
+    if (dropTargetRef.current !== target) setDropTarget(target);
+  }, [containmentCandidates, centerOf, orchRects]);
+
+  // Drag end decides containment: a node released inside a box attaches to it
+  // (position becomes box-relative); a child dragged out of its box detaches
+  // (position becomes absolute). Boxes refit around their children.
+  const onNodeDragStop = useCallback((_e, _node, dragged) => {
+    setDropTarget(null);
+    if (readOnly) return;
+    const cands = containmentCandidates(dragged);
+    if (!cands.length) return;
+    const f = flowRef.current;
+    const rects = orchRects(f);
+    const attached = [];  // node copies that gained a parent
+    const detached = [];  // { node, from } pairs that lost one
+    const nodes = f.nodes.map(n => ({ ...n }));
+    const byId = new Map(nodes.map(n => [n.id, n]));
+
+    for (const d of cands) {
+      const n = byId.get(d.id);
+      if (!n) continue;
+      const c = centerOf(d.id);
+      if (!c) continue;
+      if (n.parentId) {
+        const parent = byId.get(n.parentId);
+        if (!parent) {
+          // Orphaned child (its box was deleted): flatten to top level.
+          n.position = absolutePosition(n, byId);
+          delete n.parentId;
+          detached.push({ node: n, from: null });
+          continue;
+        }
+        const pAbs = absolutePosition(parent, byId);
+        const pBox = parent.data?.box ?? ORCH_BOX_DEFAULT;
+        const out = !inRect(c, { x: pAbs.x, y: pAbs.y, w: pBox.w, h: pBox.h });
+        if (out) {
+          const abs = absolutePosition(n, byId);
+          const from = n.parentId;
+          // Dropped over a DIFFERENT box: re-parent in the same gesture
+          // rather than leaving the node floating inside it unattached.
+          const target = rects.find(r => r.id !== from && inRect(c, r));
+          if (target) {
+            n.parentId = target.id;
+            n.position = {
+              x: Math.max(ORCH_PAD.x, Math.round(abs.x - target.x)),
+              y: Math.max(ORCH_PAD.top, Math.round(abs.y - target.y))
+            };
+            detached.push({ node: n, from });
+            attached.push(n);
+          } else {
+            n.position = abs;
+            delete n.parentId;
+            detached.push({ node: n, from });
+          }
+        }
+      } else {
+        const abs = absolutePosition(n, byId);
+        const r = rects.find(r => r.id !== n.id && inRect(c, r));
+        if (r) {
+          n.parentId = r.id;
+          n.position = {
+            x: Math.max(ORCH_PAD.x, Math.round(abs.x - r.x)),
+            y: Math.max(ORCH_PAD.top, Math.round(abs.y - r.y))
+          };
+          attached.push(n);
+        }
+      }
+    }
+    if (!attached.length && !detached.length) return;
+
+    writeStructure(() => {
+      let edges = f.edges;
+      // A detached node loses the box's own wire to it (context edges from
+      // other nodes stay).
+      for (const { node, from } of detached) {
+        if (from) edges = edges.filter(e => !(e.source === from && e.target === node.id));
+      }
+      // A fresh child with no incoming edge gets the box's wire, exactly like
+      // a node the orchestrator materializes at run time — it keeps the child
+      // reachable for the linter and marks ownership.
+      for (const n of attached) {
+        if (!edges.some(e => e.target === n.id)) {
+          edges = [...edges, { id: `e-${n.parentId}-${n.id}`, source: n.parentId, target: n.id }];
+        }
+      }
+      const refit = new Set([...attached.map(n => n.parentId), ...detached.map(d => d.from).filter(Boolean)]);
+      const sized = nodes.map(n => refit.has(n.id)
+        ? { ...n, data: { ...n.data, box: fitOrchBox(nodes.filter(c => c.parentId === n.id), n.data?.box) } }
+        : n);
+      const shrunk = sized.map(n => detached.some(d => d.from === n.id)
+        ? { ...n, data: { ...n.data, box: shrinkOrchBox(sized.filter(c => c.parentId === n.id)) } }
+        : n);
+      return { ...f, nodes: arrangeForCanvas(shrunk), edges };
+    });
+  }, [readOnly, containmentCandidates, centerOf, orchRects, writeStructure]);
+
+  // --- Node picker drag-and-drop: a spec on the dataTransfer becomes a node
+  // where it lands — inside a box when dropped onto one.
+  const onDragOver = useCallback(e => {
+    if (readOnly || !e.dataTransfer.types.includes(DND_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }, [readOnly]);
+
+  const onDrop = useCallback(e => {
+    if (readOnly) return;
+    const raw = e.dataTransfer.getData(DND_MIME);
+    if (!raw) return;
+    e.preventDefault();
+    let spec;
+    try { spec = JSON.parse(raw); } catch { return; }
+    const point = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    // The card centers on the cursor, snapped to the background grid.
+    const position = {
+      x: Math.round((point.x - 115) / 20) * 20,
+      y: Math.round((point.y - 36) / 20) * 20
+    };
+    const node = nodeFromSpec(spec, position);
+    if (!node) return;
+    writeStructure(f => {
+      const rects = orchRects(f);
+      const r = spec.kind === 'orchestrator' ? null : rects.find(r => inRect(point, r));
+      if (r) {
+        node.parentId = r.id;
+        node.position = {
+          x: Math.max(ORCH_PAD.x, position.x - r.x),
+          y: Math.max(ORCH_PAD.top, position.y - r.y)
+        };
+      }
+      let nodes = [...f.nodes, node];
+      let edges = f.edges;
+      if (node.parentId) {
+        if (!edges.some(e => e.target === node.id)) {
+          edges = [...edges, { id: `e-${node.parentId}-${node.id}`, source: node.parentId, target: node.id }];
+        }
+        nodes = nodes.map(n => n.id === node.parentId
+          ? { ...n, data: { ...n.data, box: fitOrchBox(nodes.filter(c => c.parentId === n.id), n.data?.box) } }
+          : n);
+      }
+      return { ...f, nodes: arrangeForCanvas(nodes), edges };
+    });
+    onSelect(node.id);
+  }, [readOnly, rf, orchRects, writeStructure, onSelect]);
 
   return (
     <ReactFlow
@@ -344,31 +715,180 @@ export function FlowEditor({ flow, resolved, selectedNode, onSelect, onChangeFlo
       isValidConnection={isValidConnection}
       onNodeClick={(_e, node) => onSelect(node.id)}
       onPaneClick={() => onSelect(null)}
+      onNodeDrag={onNodeDrag}
+      onNodeDragStop={onNodeDragStop}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
       nodesDraggable={!readOnly}
       nodesConnectable={!readOnly}
       deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
+      snapToGrid
+      snapGrid={[20, 20]}
+      connectionRadius={32}
+      minZoom={0.2}
+      maxZoom={1.75}
       fitView
       fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
       proOptions={{ hideAttribution: true }}
     >
       <Background gap={20} size={1.1} />
       <Controls showInteractive={false} />
+      <MiniMap className="flow-minimap" pannable zoomable position="bottom-right" />
     </ReactFlow>
   );
 }
 
-export default function FlowCanvas({ snapshot, selectedNode, onSelect }) {
+// The run canvas (D4): a read-only, live view of the run's graph. It wraps
+// its own ReactFlowProvider (the editor has one too, FlowEditor above) so the
+// follow camera can drive the viewport through useReactFlow.
+export default function FlowCanvas(props) {
+  return (
+    <ReactFlowProvider>
+      <FlowCanvasInner {...props} />
+    </ReactFlowProvider>
+  );
+}
+
+function FlowCanvasInner({ snapshot, selectedNode, onSelect, live = false, paused = false, follow = true, onFollowChange, onInvestigate, control }) {
+  const rf = useReactFlow();
   // Which orchestrator's collapsed swarm list is open (null = none).
   const [stackOpenFor, setStackOpenFor] = useState(null);
-  const { nodes: baseNodes, edges: baseEdges } = useMemo(
-    () => buildGraph(snapshot, selectedNode, setStackOpenFor), [snapshot, selectedNode]);
+  // Right-click menu: { kind:'node', id, x, y } | { kind:'pane', x, y } | null.
+  const [menu, setMenu] = useState(null);
+  // The done bloom: { x, y } in canvas pixels, {} for "canvas center", null off.
+  const [bloom, setBloom] = useState(null);
+  // nodeId -> the instant the run first showed it active (drives the card
+  // ticker). Stamping here, not in the cards, keeps "first seen" honest across
+  // the memoized re-render path.
+  const activeSince = useRef(new Map());
+  const prevStage = useRef(snapshot?.meta?.stage);
+  const prevActive = useRef(new Set());
+
+  const { nodes: baseNodes, edges: baseEdges } = useMemo(() => {
+    const g = buildGraph(snapshot, selectedNode, setStackOpenFor);
+    // Stamp first-seen-active onto the node's data (run canvas only — the
+    // editor never sets it, which is exactly what gates the ticker off there).
+    const now = Date.now();
+    for (const n of g.nodes) {
+      if (n.data.status === 'active') {
+        if (!activeSince.current.has(n.id)) activeSince.current.set(n.id, now);
+        n.data.activeSince = activeSince.current.get(n.id);
+      } else {
+        activeSince.current.delete(n.id);
+      }
+    }
+    return g;
+  }, [snapshot, selectedNode]);
   const { nodes, edges, dimming, onNodeMouseEnter, onNodeMouseLeave } =
     useLineageFocus(baseNodes, baseEdges);
   const stack = stackOpenFor
     ? baseNodes.find(n => n.id === stackOpenFor)?.data?.stack ?? null
     : null;
+
+  // --- Follow execution: the chat-scrolls-to-the-nodes camera. ---
+  const nodeStatus = snapshot?.meta?.nodeStatus;
+
+  // Center on a set of node ids: one node glides to middle; a parallel wave
+  // frames the union of its cards at a readable zoom.
+  const centerOn = useCallback(ids => {
+    const rects = ids.map(id => {
+      const internal = rf.getInternalNode(id);
+      if (!internal) return null;
+      const p = internal.internals?.positionAbsolute ?? internal.position;
+      return {
+        x: p.x, y: p.y,
+        w: internal.measured?.width ?? 180,
+        h: internal.measured?.height ?? 72
+      };
+    }).filter(Boolean);
+    if (!rects.length) return;
+    if (rects.length === 1) {
+      const r = rects[0];
+      rf.setCenter(r.x + r.w / 2, r.y + r.h / 2, { duration: 600, zoom: rf.getZoom() });
+      return;
+    }
+    const x0 = Math.min(...rects.map(r => r.x));
+    const y0 = Math.min(...rects.map(r => r.y));
+    rf.fitBounds(
+      { x: x0, y: y0,
+        width: Math.max(...rects.map(r => r.x + r.w)) - x0,
+        height: Math.max(...rects.map(r => r.y + r.h)) - y0 },
+      { duration: 600, padding: 0.4, maxZoom: 1 }
+    );
+  }, [rf]);
+
+  // Glide only to NEWLY active nodes (diffed against the previous push) —
+  // re-centering on every snapshot would drag the canvas back under the user.
+  // The diff resets on run switches: ids repeat across runs, and opening a
+  // live run should frame whatever is working right now.
+  const prevFollowRun = useRef(snapshot?.meta?.runId);
+  useEffect(() => {
+    if (prevFollowRun.current !== snapshot?.meta?.runId) {
+      prevFollowRun.current = snapshot?.meta?.runId;
+      prevActive.current = new Set();
+    }
+    const active = new Set(
+      Object.entries(nodeStatus ?? {}).filter(([, s]) => s === 'active').map(([id]) => id)
+    );
+    const fresh = [...active].filter(id => !prevActive.current.has(id));
+    prevActive.current = active;
+    if (follow && live && fresh.length) centerOn(fresh);
+  }, [nodeStatus, snapshot?.meta?.runId, follow, live, centerOn]);
+
+  // Don't fight the user: a manual pan/zoom yields the camera until the chip
+  // re-arms follow. Programmatic moves (setCenter/fitBounds/fitView) pass a
+  // null event, so only real gestures turn follow off.
+  const onMoveStart = useCallback(event => {
+    if (event && follow) onFollowChange?.(false);
+  }, [follow, onFollowChange]);
+
+  const reFollow = useCallback(() => {
+    onFollowChange?.(true);
+    centerOn(Object.entries(nodeStatus ?? {}).filter(([, s]) => s === 'active').map(([id]) => id));
+  }, [onFollowChange, centerOn, nodeStatus]);
+
+  // --- Done bloom: one soft pulse when the walk completes, then it's gone.
+  // Under reduced motion nothing renders at all (a JS gate, not just CSS).
+  const prevRunId = useRef(snapshot?.meta?.runId);
+  useEffect(() => {
+    const stage = snapshot?.meta?.stage;
+    const runId = snapshot?.meta?.runId;
+    const prev = prevStage.current;
+    prevStage.current = stage;
+    // A run switch can carry the stage from live to done — that's navigation,
+    // not completion. Only a transition within the SAME run blooms.
+    const sameRun = prevRunId.current === runId;
+    prevRunId.current = runId;
+    if (!sameRun || stage !== 'done' || prev === 'done' || prev == null) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const out = (snapshot?.flow?.nodes ?? []).find(n => n.type === 'output');
+    const internal = out && rf.getInternalNode(out.id);
+    if (!internal) { setBloom({}); return; } // no output node: pulse from center
+    const p = internal.internals?.positionAbsolute ?? internal.position;
+    const pt = rf.flowToScreenPosition({
+      x: p.x + (internal.measured?.width ?? 180) / 2,
+      y: p.y + (internal.measured?.height ?? 72) / 2
+    });
+    setBloom({ x: pt.x, y: pt.y });
+  }, [snapshot?.meta?.stage, snapshot?.meta?.runId, snapshot?.flow, rf]);
+
+  // --- Context menus: run controls a right-click away, on node and canvas. ---
+  const onNodeContextMenu = useCallback((e, node) => {
+    e.preventDefault();
+    setMenu({ kind: 'node', id: node.id, x: e.clientX, y: e.clientY });
+  }, []);
+  const onPaneContextMenu = useCallback(e => {
+    e.preventDefault();
+    const pt = 'clientX' in (e ?? {}) ? e : (e?.nativeEvent ?? {});
+    setMenu({ kind: 'pane', x: pt.clientX ?? 0, y: pt.clientY ?? 0 });
+  }, []);
+
+  const menuNode = menu?.kind === 'node'
+    ? baseNodes.find(n => n.id === menu.id) ?? null
+    : null;
+
   return (
-    <>
+    <div className={'run-canvas' + (live ? ' canvas-live' : '')}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -379,15 +899,52 @@ export default function FlowCanvas({ snapshot, selectedNode, onSelect }) {
         onNodeMouseLeave={onNodeMouseLeave}
         onNodeClick={(_e, node) => onSelect(node.id)}
         onPaneClick={() => onSelect(null)}
+        onNodeContextMenu={onNodeContextMenu}
+        onPaneContextMenu={onPaneContextMenu}
+        onMoveStart={onMoveStart}
         fitView
         fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
         proOptions={{ hideAttribution: true }}
         nodesDraggable={false}
         nodesConnectable={false}
+        minZoom={0.2}
+        maxZoom={1.75}
       >
         <Background gap={20} size={1.1} />
         <Controls showInteractive={false} />
+        <MiniMap className="flow-minimap" pannable zoomable position="bottom-right" />
       </ReactFlow>
+      {live && <div className="canvas-vignette" aria-hidden="true" />}
+      {!follow && live && (
+        <button type="button" className="follow-chip" onClick={reFollow}>
+          ▶ Follow execution
+        </button>
+      )}
+      {bloom && (
+        <div
+          className="canvas-bloom"
+          style={bloom.x != null ? { '--bloom-x': `${bloom.x}px`, '--bloom-y': `${bloom.y}px` } : undefined}
+          onAnimationEnd={() => setBloom(null)}
+        />
+      )}
+      {menu && (
+        <NodeMenu
+          menu={menu}
+          node={menuNode}
+          flowBacked={Boolean(snapshot?.flow)}
+          live={live}
+          paused={paused}
+          follow={follow}
+          onClose={() => setMenu(null)}
+          onInvestigate={() => onInvestigate?.(menu.id)}
+          onRestart={guidance => control?.restart?.(menu.id, guidance)}
+          onBranch={() => control?.branch?.(menu.id)}
+          onPause={() => control?.pause?.()}
+          onResume={() => control?.resume?.()}
+          onStop={() => control?.stop?.()}
+          onToggleFollow={() => onFollowChange?.(!follow)}
+        />
+      )}
       {stack && (
         <div className="orch-modal-backdrop" onClick={() => setStackOpenFor(null)}>
           <div className="orch-modal" role="dialog" aria-label="Spawned nodes" onClick={e => e.stopPropagation()}>
@@ -414,7 +971,7 @@ export default function FlowCanvas({ snapshot, selectedNode, onSelect }) {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -571,12 +1128,17 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
       items: kids.map(k => ({ id: k.id, title: nodeLabel(k), status: statusOf(k.id) }))
     };
   };
-  const nodes = flow.nodes.filter(n => !hidden.has(n.id)).map(n => ({
+  const nodes = arrangeForCanvas(flow.nodes.filter(n => !hidden.has(n.id))).map(n => ({
     id: n.id,
     type: n.type === 'orchestrator' ? 'orchestrator' : 'stage',
     position: n.position,
-    // Orchestrator children live inside their container's box.
-    ...(n.parentId ? { parentId: n.parentId, extent: 'parent', draggable: false } : {}),
+    // Orchestrator children live inside their container's box. arrangeForCanvas
+    // guarantees parents precede children (React Flow drops the child
+    // otherwise); a child whose box is missing or collapsed degrades to top
+    // level instead of vanishing.
+    ...(n.parentId && !hidden.has(n.parentId) && flow.nodes.some(p => p.id === n.parentId && p.type === 'orchestrator')
+      ? { parentId: n.parentId, extent: 'parent', draggable: false }
+      : {}),
     data: {
       label: nodeLabel(n),
       sub: nodeSub(n),

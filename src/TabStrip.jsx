@@ -6,7 +6,7 @@ import React, { useEffect, useRef, useState } from 'react';
 // saveState, live-run micro-indicator, hover ×, middle-click close, drag
 // reorder, ＋ → the recents/folder-picker page (T15). Overflow is
 // Chrome-style: tabs shrink to a floor, then the strip scrolls (CSS).
-export default function TabStrip({ tabs, activeId, live, saveState, onSelect, onClose, onReorder, onNewTab, onRename, onAdopt }) {
+export default function TabStrip({ tabs, activeId, live, saveState, onSelect, onClose, onReorder, onNewTab, onRename, onAdopt, onReveal }) {
   const dragId = useRef(null);
   // Inline rename (LANDER-PLAN §6): double-click a tab's label to rename the
   // project. Commit on Enter/blur, cancel on Esc; a blank name is ignored.
@@ -16,6 +16,7 @@ export default function TabStrip({ tabs, activeId, live, saveState, onSelect, on
   const cancelled = useRef(false);
   // Right-click tab menu (Rename / Move to folder… / Close).
   const [menu, setMenu] = useState(null); // { id, x, y } | null
+  const menuRef = useRef(null);
 
   useEffect(() => {
     if (!editingId) return;
@@ -27,13 +28,17 @@ export default function TabStrip({ tabs, activeId, live, saveState, onSelect, on
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
+    // The listener runs in the capture phase, so a React onPointerDown on the
+    // menu can't stop it — check the target ourselves and ignore clicks that
+    // land inside the menu (otherwise it unmounts before the item's click fires).
+    const onDown = e => { if (!menuRef.current?.contains(e.target)) close(); };
     const onKey = e => { if (e.key === 'Escape') close(); };
     window.addEventListener('keydown', onKey);
-    window.addEventListener('pointerdown', close, true);
+    window.addEventListener('pointerdown', onDown, true);
     window.addEventListener('blur', close);
     return () => {
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('pointerdown', close, true);
+      window.removeEventListener('pointerdown', onDown, true);
       window.removeEventListener('blur', close);
     };
   }, [menu]);
@@ -139,10 +144,10 @@ export default function TabStrip({ tabs, activeId, live, saveState, onSelect, on
 
       {menu && menuTab && (
         <div
+          ref={menuRef}
           className="tab-menu"
           role="menu"
           style={{ left: menu.x, top: menu.y }}
-          onPointerDown={e => e.stopPropagation()}
         >
           <button role="menuitem" className="tab-menu-item" onClick={() => { setMenu(null); startRename(menuTab); }}>
             Rename
@@ -152,6 +157,9 @@ export default function TabStrip({ tabs, activeId, live, saveState, onSelect, on
               Move to folder…
             </button>
           )}
+          <button role="menuitem" className="tab-menu-item" onClick={() => { setMenu(null); onReveal?.(menuTab.id); }}>
+            Open in file explorer
+          </button>
           <div className="tab-menu-sep" role="separator" />
           <button role="menuitem" className="tab-menu-item" onClick={() => { setMenu(null); onClose(menuTab.id); }}>
             Close tab

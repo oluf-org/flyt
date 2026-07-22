@@ -59,6 +59,19 @@
   --err-soft: light-dark(oklch(from var(--err) 0.9377 0.0145 h),
                          oklch(from var(--err) 0.2461 0.0210 h));
 
+  /* ---- warning: amber, the third seed ---- */
+  /* Was referenced with a hard-coded #c9a227 fallback in a handful of places
+     (feedback edges, lint badges) but never actually defined, so it sat outside
+     the theme and outside the derivation. Defining it here brings it in: those
+     call sites keep their fallback and simply stop using it, and the amber now
+     has a dark-theme half. Amber, not rose, carries "this is risky" — rose is
+     already spent on failure, and a mode that is ON is not a mode that failed. */
+  --warn-h:   85;
+  --warn:     light-dark(oklch(0.5820 0.1015 var(--warn-h)),
+                         oklch(0.7600 0.1100 var(--warn-h)));
+  --warn-soft: light-dark(oklch(from var(--warn) 0.9420 0.0300 h),
+                          oklch(from var(--warn) 0.2620 0.0380 h));
+
   /* ---- neutrals & chrome (hand-tuned near-greys; literal light/dark pairs) -- */
   --app:      light-dark(#1f2724, #0f1512);   /* top chrome background   */
   --app-tx:   light-dark(#e6ebe8, #dfe7e2);   /* top chrome text         */
@@ -202,6 +215,13 @@ body {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 10.5px; padding: 3px 8px; border-radius: 6px;
   color: var(--accent); background: var(--accent-soft);
+}
+/* The mode a run was launched with (MODES-COMPARE T4), beside its name. Reads
+   as an identity tag, not a status, so it borrows the accent outline rather
+   than the filled stage-chip. */
+.mode-chip {
+  font-size: 10.5px; padding: 3px 8px; border-radius: 6px;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 .toolbar-spacer { flex: 1; }
 
@@ -520,16 +540,28 @@ kbd.shortcut {
   opacity: 0.35;
 }
 [data-theme="dark"] .constellation { opacity: 0.5; }
-.constellation-lines line { stroke: var(--divider); stroke-width: 1; }
-.constellation-dots circle {
-  fill: var(--faint);
-  /* Drift: one shared elliptical loop, desynced per dot via inline duration +
-     negative delay. Compositor-only (transform), so an idle lander costs ~0%
-     CPU; the anchored lines never move (§4). */
+/* Drift: one shared elliptical loop on each connected CLUSTER (a line plus both
+   of its endpoint dots move as one group, so dots never slide off their lines),
+   desynced per cluster via inline duration + negative delay. Compositor-only
+   (transform), so an idle lander costs ~0% CPU (§4). */
+.constellation-cluster {
   animation-name: constellation-drift;
   animation-timing-function: ease-in-out;
   animation-iteration-count: infinite;
   will-change: transform;
+}
+/* Load-in: dots surface one by one (fade + gentle scale-up), then each line
+   draws itself between two dots that already exist. Delays are inline, seeded
+   and staggered in Constellation.jsx. */
+.constellation-lines line {
+  stroke: var(--divider); stroke-width: 1;
+  stroke-dasharray: 1; /* with pathLength=1: one dash spanning the whole line */
+  animation: constellation-line-in .9s ease-out backwards;
+}
+.constellation-dots circle {
+  fill: var(--faint);
+  transform-box: fill-box; transform-origin: center;
+  animation: constellation-dot-in .5s ease-out backwards;
 }
 /* Colour + opacity ease when the composer has focus — the canvas noticing you
    (§4 wink). Two rules: the field brightens, and the nearest dot tints accent. */
@@ -545,9 +577,19 @@ kbd.shortcut {
   75%  { transform: translate(-6px, 4px); }
   100% { transform: translate(0, 0); }
 }
+@keyframes constellation-dot-in {
+  from { opacity: 0; transform: scale(.4); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes constellation-line-in {
+  from { stroke-dashoffset: 1; }
+  to   { stroke-dashoffset: 0; }
+}
 /* Reduced motion: the constellation still does its identity job, dead still. */
 @media (prefers-reduced-motion: reduce) {
-  .constellation-dots circle { animation: none; }
+  .constellation-cluster,
+  .constellation-dots circle,
+  .constellation-lines line { animation: none; }
 }
 
 .lander-greeting { text-align: center; display: flex; flex-direction: column; gap: 10px; }
@@ -625,7 +667,39 @@ kbd.shortcut {
 .lander-picker-item:focus-visible { outline: none; background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent-soft); }
 .lander-picker-item.selected { color: var(--accent); font-weight: 600; }
 .lander-picker-check { width: 12px; flex: none; color: var(--accent); font-size: 11px; }
-.lander-picker-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lander-picker-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+/* A mode option (MODES-COMPARE T4) reads as a child of its flow: indented past
+   the check column, a touch dimmer, with a leading tick so the tree is legible. */
+.lander-picker-mode { padding-left: 22px; font-size: 12.5px; }
+.lander-picker-mode .lander-picker-name::before { content: '↳ '; color: var(--faint); }
+.lander-picker-badge {
+  flex: none; font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; color: var(--dim); background: var(--accent-soft);
+  padding: 2px 6px; border-radius: 5px;
+}
+
+/* Composer launch controls (MODES-COMPARE T10): the exposed run inputs, laid
+   out under the composer as compact labelled controls. Shared by the lander and
+   the Runs-panel new-run form. */
+.launch-inputs {
+  margin-top: 10px;
+  display: flex; flex-direction: column; gap: 8px;
+  animation: fade-in .18s ease both;
+}
+.launch-inputs-grid { display: flex; flex-wrap: wrap; gap: 10px 14px; }
+.launch-input { display: flex; flex-direction: column; gap: 4px; min-width: 150px; }
+.launch-input-label { font-size: 11px; color: var(--dim); }
+.launch-input input[type="number"] { width: 84px; }
+.li-segmented {
+  display: inline-flex; gap: 2px; align-self: flex-start;
+  background: var(--accent-soft); border-radius: 7px; padding: 2px;
+}
+.li-seg {
+  border: none; background: transparent; color: var(--tx);
+  font-size: 11.5px; padding: 3px 11px; border-radius: 5px; cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.li-seg.active { background: var(--accent); color: var(--accent-tx); font-weight: 600; }
 
 /* First-launch no-key hint — one quiet line, centred under the composer. */
 .lander-hint {
@@ -699,6 +773,165 @@ kbd.shortcut {
 .approval-bar span { flex: 1; }
 .approval-bar .section-label { flex: none; }
 
+/* A gate the safety screen flagged as destructive reads differently from a
+   routine pause: rose hairline and tinted ground, so "the model thinks this
+   deletes something" is legible before the sentence is. */
+.approval-bar.danger {
+  background: var(--err-soft);
+  border-bottom-color: color-mix(in srgb, var(--err) 45%, var(--border));
+  box-shadow: inset 3px 0 0 var(--err);
+}
+
+/* The classifier's one-line reason, inline after the command. */
+.risk-note {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  margin-left: 8px; font-size: 12px; color: var(--dim);
+}
+.risk-note .risk-pill {
+  flex: none; font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+  padding: 2px 7px; border-radius: 20px;
+  color: var(--warn); background: var(--warn-soft);
+}
+.risk-note.risk-danger { color: var(--err); }
+.risk-note.risk-danger .risk-pill { color: var(--err); background: color-mix(in srgb, var(--err) 16%, transparent); }
+
+/* ---------- approval mode: the chip beside Run, and its popover ---------- */
+
+.approval-mode { position: relative; display: flex; flex-direction: column; gap: 5px; }
+
+.approval-chip {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; padding: 7px 10px;
+  font-size: 12px; font-weight: 500; text-align: left;
+  color: var(--dim);
+  background: var(--chip);
+  border: 1px solid transparent; border-radius: 7px;
+  cursor: pointer;
+  transition: color .14s ease, background-color .14s ease, border-color .14s ease;
+}
+.approval-chip:hover { color: var(--tx); border-color: var(--border); }
+.approval-chip.open { color: var(--tx); border-color: var(--accent); background: var(--accent-soft); }
+.approval-chip-glyph { flex: none; font-size: 13px; line-height: 1; }
+.approval-chip-label { flex: 1; }
+.approval-chip-caret { flex: none; font-size: 9px; opacity: .55; }
+
+/* The one mode that runs commands unattended announces itself: amber text, a
+   warning glyph, and a tinted ground it keeps for as long as it is selected.
+   The whole failure mode of this feature is a user who forgot it was on. */
+.approval-chip.danger {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 32%, transparent);
+}
+.approval-chip.danger:hover,
+.approval-chip.danger.open {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+.approval-chip.danger .approval-chip-glyph {
+  /* A slow, low-amplitude pulse: enough to catch a passing glance, not enough
+     to be something you learn to ignore or want to switch off. */
+  animation: warn-pulse 2.6s ease-in-out infinite;
+}
+@keyframes warn-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .approval-chip.danger .approval-chip-glyph { animation: none; }
+}
+
+.approval-warning {
+  margin: 0; font-size: 11px; line-height: 1.4;
+  color: var(--warn);
+}
+.approval-note {
+  margin: 0; font-size: 11px; line-height: 1.4;
+  color: var(--faint);
+}
+.approval-note .mono { font-size: 10.5px; }
+
+.approval-pop {
+  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0;
+  z-index: 40;
+  display: flex; flex-direction: column;
+  padding: 5px;
+  background: var(--card);
+  border: 1px solid var(--border); border-radius: 9px;
+  box-shadow: 0 10px 28px -8px light-dark(rgb(0 0 0 / .22), rgb(0 0 0 / .55));
+  animation: slide-up .14s ease both;
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.approval-opt {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 9px 10px; text-align: left;
+  background: transparent; border: none; border-radius: 6px;
+  color: var(--tx); cursor: pointer;
+  transition: background-color .12s ease;
+}
+.approval-opt:hover { background: var(--chip); }
+.approval-opt.active { background: var(--accent-soft); }
+.approval-opt.danger.active { background: var(--warn-soft); }
+.approval-opt-glyph { flex: none; font-size: 13px; line-height: 1.35; color: var(--dim); }
+.approval-opt.danger .approval-opt-glyph { color: var(--warn); }
+.approval-opt-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.approval-opt-label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600;
+}
+.approval-opt.danger .approval-opt-label { color: var(--warn); }
+.approval-opt-blurb { font-size: 11.5px; line-height: 1.4; color: var(--dim); }
+.approval-opt-detail { font-size: 11px; line-height: 1.45; color: var(--faint); }
+.approval-opt-tick { margin-left: auto; flex: none; font-size: 11px; color: var(--accent); }
+.approval-opt.danger .approval-opt-tick { color: var(--warn); }
+
+.approval-danger-tag {
+  flex: none;
+  font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 20px;
+  color: var(--warn); background: color-mix(in srgb, var(--warn) 18%, transparent);
+}
+
+.approval-pop-foot {
+  margin: 4px 6px 3px; padding-top: 7px;
+  border-top: 1px solid var(--border);
+  font-size: 10.5px; line-height: 1.45; color: var(--faint);
+}
+
+/* ---------- approval modes, Settings variant ---------- */
+/* Same three options, laid out as radio rows — Settings has the width for the
+   full explanation the popover has to keep short. */
+
+.approval-modes { display: flex; flex-direction: column; gap: 6px; }
+
+.approval-mode-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer;
+  transition: border-color .14s ease, background-color .14s ease;
+}
+.approval-mode-row:hover { border-color: var(--divider); background: var(--chip); }
+.approval-mode-row.active { border-color: var(--accent); background: var(--accent-soft); }
+.approval-mode-row.danger.active {
+  border-color: var(--warn); background: var(--warn-soft);
+}
+.approval-mode-row input { margin-top: 2px; flex: none; }
+.approval-mode-glyph { flex: none; font-size: 14px; line-height: 1.3; color: var(--dim); }
+.approval-mode-row.danger .approval-mode-glyph { color: var(--warn); }
+.approval-mode-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.approval-mode-label {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 13px; font-weight: 600; color: var(--tx);
+}
+.approval-mode-row.danger .approval-mode-label { color: var(--warn); }
+.approval-mode-detail { font-size: 11.5px; line-height: 1.5; color: var(--dim); }
+
 @keyframes slide-down {
   from { opacity: 0; transform: translateY(-6px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -744,6 +977,30 @@ kbd.shortcut {
   background: var(--divider); border: none;
   width: 6px; height: 6px; min-width: 6px; min-height: 6px;
 }
+/* While a connection is being dragged, eligible targets light up (the
+   editor's isValidConnection decides) — the affordance answers "where may
+   this go?" without a failed drop first. */
+.react-flow__handle.connectingto {
+  background: var(--chip-tx);
+  width: 8px; height: 8px;
+}
+.react-flow__handle.valid {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.react-flow__edge.valid .react-flow__edge-path { stroke: var(--accent); }
+
+/* The minimap: quiet chrome, same surface language as the controls. */
+.react-flow__minimap {
+  background: var(--side);
+  border: 1px solid var(--border); border-radius: 9px;
+  box-shadow: var(--shadow-float);
+  overflow: hidden;
+}
+.react-flow__minimap-mask { fill: color-mix(in srgb, var(--canvas) 55%, transparent); }
+.react-flow__minimap-node { fill: color-mix(in srgb, var(--dim) 45%, var(--canvas)); }
+.react-flow__minimap.pannable, .react-flow__minimap.zoomable { cursor: grab; }
+
 .react-flow__controls {
   box-shadow: var(--shadow-float);
   border: 1px solid var(--border); border-radius: 9px; overflow: hidden;
@@ -1072,6 +1329,16 @@ kbd.shortcut {
 }
 
 .orch-node.selected { border-color: var(--orch); border-style: solid; }
+/* Drop target: a node is hovering over the box — the solid border + tint
+   says "release to place it inside" before the drop commits. */
+.orch-node.drop-target {
+  border-style: solid; border-color: var(--orch);
+  background: color-mix(in srgb, var(--orch-soft) 45%, var(--card));
+  box-shadow: 0 0 0 4px var(--orch-soft), var(--shadow-float);
+}
+.orch-node.drop-target .orch-hint { color: var(--orch); }
+/* The "▣ N" chip: how many authored nodes the box holds. */
+.node-kind.kind-inside { background: var(--orch-soft); color: var(--orch); }
 .orch-node.status-done { border-style: solid; border-color: color-mix(in srgb, var(--orch) 45%, var(--border)); }
 .orch-node.status-done .node-status { color: var(--orch); }
 .orch-node.status-failed { border-style: solid; border-color: var(--err); }
@@ -1087,7 +1354,6 @@ kbd.shortcut {
   border-bottom: 1px solid var(--border);
   color: var(--tx); font-size: 13px;
 }
-.palette { flex-wrap: wrap; row-gap: 6px; }
 .editor-hint { color: var(--dim); font-size: 12.5px; }
 .flow-name {
   width: 200px;
@@ -1098,12 +1364,107 @@ kbd.shortcut {
 }
 .flow-name:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
-.palette { display: flex; gap: 6px; }
-.palette-btn {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 10px; font-size: 12px;
-}
 .palette-icon { color: var(--chip-tx); font-size: 13px; }
+
+/* The "＋ Add node" button in the editor bar opens the picker. */
+.add-node-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; font-size: 12px; font-weight: 600;
+  background: var(--card); color: var(--tx);
+  border: 1px solid var(--border); border-radius: 8px;
+  transition: border-color .14s ease, background-color .14s ease, box-shadow .14s ease;
+}
+.add-node-btn:hover, .add-node-btn.active {
+  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ---------- node picker ---------- */
+/* The familiar add-node panel of node editors: search-first, grouped, rows
+   that click to add or drag onto the canvas. Overlays the canvas top-left. */
+.picker-backdrop { position: absolute; inset: 0; z-index: 19; }
+.node-picker {
+  position: absolute; top: 12px; left: 12px; z-index: 20;
+  width: 302px; max-width: calc(100% - 24px);
+  max-height: min(520px, calc(100% - 24px));
+  display: flex; flex-direction: column;
+  background: var(--side);
+  border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow-float);
+  overflow: hidden;
+}
+.picker-search {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--divider);
+}
+.picker-search-icon { color: var(--faint); font-size: 14px; }
+.picker-search input {
+  flex: 1; min-width: 0;
+  background: none; border: none; outline: none;
+  color: var(--tx); font: inherit; font-size: 13px;
+}
+.picker-search input::placeholder { color: var(--faint); }
+.picker-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; }
+.picker-group-label {
+  padding: 8px 8px 4px;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint);
+}
+.picker-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 8px; border-radius: 8px; cursor: grab;
+  border: 1px solid transparent;
+  transition: background-color .12s ease, border-color .12s ease;
+}
+.picker-row:active { cursor: grabbing; }
+.picker-row:hover, .picker-row.active {
+  background: var(--card); border-color: var(--border);
+}
+.picker-row-icon {
+  width: 26px; height: 26px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--chip); border-radius: 7px;
+  font-size: 13px; color: var(--chip-tx);
+}
+.picker-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.picker-row-name { font-size: 12.5px; font-weight: 600; color: var(--tx); }
+.picker-row-desc {
+  font-size: 11px; color: var(--dim); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.picker-row-grip { color: var(--faint); font-size: 11px; opacity: 0; transition: opacity .12s ease; }
+.picker-row:hover .picker-row-grip, .picker-row.active .picker-row-grip { opacity: 1; }
+.picker-empty { padding: 18px 12px; color: var(--faint); font-size: 12px; text-align: center; }
+.picker-foot {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--divider);
+  font-size: 10.5px; color: var(--faint);
+}
+.picker-foot span { flex: 1; }
+.picker-foot kbd {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; padding: 1px 5px;
+  background: var(--chip); border-radius: 4px; color: var(--dim);
+}
+
+/* ---------- column resizers ---------- */
+/* A 5px hit area over the seam between columns; the line itself lights up on
+   hover/drag. Double-click resets to the default width. */
+.col-resizer {
+  width: 5px; flex: none; align-self: stretch;
+  cursor: col-resize; position: relative; z-index: 5;
+  margin: 0 -2px; /* overlap the seam, don't consume layout width */
+}
+.col-resizer::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px;
+  background: transparent;
+  transition: background-color .14s ease;
+}
+.col-resizer:hover::after, body.col-resizing .col-resizer::after { background: var(--accent); }
+body.col-resizing { cursor: col-resize; user-select: none; }
+body.col-resizing * { cursor: col-resize !important; }
 
 .save-dot {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
@@ -1120,6 +1481,18 @@ kbd.shortcut {
 .lint-badge.ok { color: var(--ok); }
 .lint-badge.warn { color: var(--warn, #c9a227); }
 .lint-badge.error { color: var(--bad, #c0504d); }
+
+/* Modes summary chip on the flow header (MODES-COMPARE T3): a quiet accent
+   pill that jumps to the YAML view where modes are authored. */
+.modes-chip {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10.5px; white-space: nowrap; cursor: pointer;
+  color: var(--accent);
+  background: var(--accent-soft); border: none;
+  padding: 3px 8px; border-radius: 6px;
+}
+.modes-chip:hover { filter: brightness(1.05); }
+.modes-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* sidebar flow list */
 .section-row { display: flex; align-items: center; justify-content: space-between; }
@@ -2033,7 +2406,10 @@ button.link:hover { color: var(--accent); }
    ========================================================================= */
 
 /* ---------- tab strip (in the titlebar, demo A) ---------- */
-/* The strip lives on the drag region, so everything interactive opts out.
+/* The strip lives on the drag region. Rather than opt the whole strip out of
+   dragging (which would kill the window drag across most of the titlebar), the
+   strip stays draggable and only the interactive children — tabs and ＋ — opt
+   out. Empty strip space, and the gaps between tabs, drag the window.
    Overflow is Chrome-style: tabs shrink to a floor width, then the strip
    itself scrolls (no scrollbar chrome — wheel and drag still work). */
 
@@ -2042,7 +2418,6 @@ button.link:hover { color: var(--accent); }
   display: flex; align-items: center; gap: 4px;
   align-self: stretch; padding: 5px 0;
   overflow-x: auto; scrollbar-width: none;
-  -webkit-app-region: no-drag;
 }
 .tab-strip::-webkit-scrollbar { display: none; }
 
@@ -2053,6 +2428,7 @@ button.link:hover { color: var(--accent); }
   border-radius: 8px;
   color: var(--app-dim); font-size: 12px;
   cursor: default; user-select: none;
+  -webkit-app-region: no-drag;
   transition: background-color .14s ease, color .14s ease;
 }
 .tab:hover { background: light-dark(rgba(255,255,255,.07), rgba(255,255,255,.05)); color: var(--app-tx); }
@@ -2133,6 +2509,7 @@ button.link:hover { color: var(--accent); }
   background: none; border: none; border-radius: 7px;
   color: var(--app-dim); font-size: 13px; cursor: pointer;
   transition: background-color .14s ease, color .14s ease;
+  -webkit-app-region: no-drag;
 }
 .tab-new:hover {
   background: light-dark(rgba(255,255,255,.09), rgba(255,255,255,.07));
@@ -2276,6 +2653,774 @@ button.link:hover { color: var(--accent); }
   color: light-dark(#e6ebe8, #dfe7e2); opacity: .6;
 }
 
+/* =========================================================================
+   Run mode (RUN-CONTROL) — context menu, follow camera, node focus, live chrome
+   ========================================================================= */
+
+/* ---------- run canvas shell ---------- */
+/* The run canvas carries its own stage wrapper so live chrome (vignette,
+   follow chip, bloom) can overlay it; the editor canvas stays untouched. */
+.run-canvas { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+.run-canvas > .react-flow { flex: 1; }
+
+/* Live reads as "stage": a slightly deeper plane and a faint vignette. Both
+   static — the ambience is a state, not an animation. */
+.run-canvas.canvas-live .react-flow {
+  background-color: color-mix(in srgb, var(--canvas) 93%, var(--app));
+}
+.canvas-vignette {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  background: radial-gradient(115% 85% at 50% 42%,
+    transparent 58%,
+    light-dark(rgba(31, 39, 36, .07), rgba(0, 0, 0, .34)) 100%);
+}
+
+/* ---------- node context menu ---------- */
+/* The tab menu's sibling (same geometry, own classes): fixed to the cursor,
+   spring entry, Esc/outside-click/blur to dismiss — plus a header naming the
+   node and arrow-key navigation. */
+.node-menu {
+  position: fixed; z-index: 100;
+  min-width: 208px; padding: 5px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow-selected);
+  display: flex; flex-direction: column;
+  animation: picker-rise .12s var(--spring) both;
+}
+.node-menu-label {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.node-menu-label-title {
+  flex: 1; min-width: 0;
+  font-size: 11px; font-weight: 600; color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.node-menu-label .status-pill { font-size: 9.5px; padding: 1px 7px; }
+.node-menu-item {
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: 6px;
+  background: transparent; border: none;
+  color: var(--tx); font-size: 13px; text-align: left; cursor: pointer;
+}
+.node-menu-item:hover:not(:disabled),
+.node-menu-item:focus-visible { outline: none; background: var(--accent-soft); box-shadow: none; }
+.node-menu-item:disabled { opacity: .45; cursor: default; }
+.node-menu-item.danger { color: var(--err); }
+.node-menu-item.danger:hover:not(:disabled),
+.node-menu-item.danger:focus-visible { background: var(--err-soft); }
+.node-menu-item.danger.confirm { background: var(--err-soft); font-weight: 600; }
+.node-menu-glyph { flex: none; width: 17px; text-align: center; font-size: 11px; color: var(--dim); }
+.node-menu-item.danger .node-menu-glyph { color: var(--err); }
+.node-menu-check { flex: none; width: 17px; text-align: center; font-size: 11px; color: var(--accent); }
+.node-menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+
+/* Restart-with-guidance: the one-line prompt swaps in for the item list,
+   same box, so the menu never jumps. */
+.node-menu-guidance { display: flex; flex-direction: column; gap: 8px; padding: 6px 8px 8px; }
+.node-menu-guidance-label { font-size: 11px; font-weight: 600; color: var(--dim); padding: 0 2px; }
+.node-menu-guidance input {
+  font: inherit; font-size: 12.5px; color: var(--tx);
+  background: var(--canvas);
+  border: 1px solid var(--accent); border-radius: 7px;
+  padding: 7px 9px; outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.node-menu-hint { font-size: 10.5px; color: var(--faint); padding: 0 2px; }
+
+/* ---------- follow camera chip ---------- */
+/* Shown when a manual pan/zoom has yielded the camera; one click re-arms it. */
+.follow-chip {
+  position: absolute; left: 50%; bottom: 18px; z-index: 6;
+  transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 14px;
+  font-size: 12px; font-weight: 600; color: var(--accent);
+  background: var(--card); border: 1px solid var(--accent); border-radius: 999px;
+  box-shadow: var(--shadow-float);
+  cursor: pointer;
+  animation: follow-chip-in .3s var(--spring) both;
+}
+@keyframes follow-chip-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(10px) scale(.94); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+.follow-chip:hover { background: var(--accent-soft); }
+
+/* ---------- run toast (IPC rejections) ---------- */
+/* Bottom-center above the canvas, clear of the follow chip; auto-dismisses. */
+.run-toast {
+  position: absolute; left: 50%; bottom: 58px; z-index: 30;
+  transform: translateX(-50%);
+  max-width: min(520px, calc(100% - 48px));
+  padding: 9px 14px;
+  font-size: 12.5px; line-height: 1.45; color: var(--tx);
+  background: var(--card); border: 1px solid var(--border); border-radius: 9px;
+  box-shadow: var(--shadow-selected);
+  animation: slide-up .16s ease both;
+}
+
+/* ---------- done bloom ---------- */
+/* One soft radial pulse from the output node (or canvas center) when the walk
+   completes. Rendered only for the transition, removed on animationend; never
+   rendered under reduced motion. */
+.canvas-bloom {
+  position: absolute; z-index: 4;
+  left: var(--bloom-x, 50%); top: var(--bloom-y, 50%);
+  width: 10px; height: 10px; margin: -5px 0 0 -5px;
+  border-radius: 50%; background: var(--accent);
+  pointer-events: none;
+  animation: bloom .9s ease-out both;
+}
+@keyframes bloom {
+  0%   { opacity: .5; transform: scale(.5); box-shadow: 0 0 0 0 var(--accent-soft); }
+  100% { opacity: 0;  transform: scale(1);  box-shadow: 0 0 0 96px var(--accent-soft); }
+}
+
+/* ---------- per-node elapsed ticker (run canvas only) ---------- */
+.node-elapsed {
+  flex: none; margin-left: auto;
+  font-size: 9.5px; color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- run bar: live controls + lineage/paused chips ---------- */
+.run-controls { display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; }
+.run-ctl {
+  width: 26px; height: 26px; padding: 0;
+  display: grid; place-items: center;
+  font-size: 10px; line-height: 1;
+  background: var(--card); border: 1px solid var(--border); border-radius: 7px;
+  color: var(--dim); cursor: pointer;
+}
+.run-ctl:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.run-ctl.danger:hover,
+.run-ctl.danger.confirm { border-color: var(--err); background: var(--err-soft); color: var(--err); }
+.run-ctl:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.run-chip-paused {
+  flex: none;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 6px;
+  color: var(--warn); background: var(--warn-soft);
+}
+.run-meter-fill.paused { background: var(--warn); }
+.run-chip-branch {
+  flex: none;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; padding: 2px 7px; border-radius: 6px;
+  color: var(--orch); background: var(--orch-soft);
+}
+
+/* A stopped run is not a failed run: the neutral badge variant. */
+.result-badge.neutral { color: var(--dim); background: var(--chip); }
+
+/* ---------- node focus panel (investigate) ---------- */
+/* Inspector typography, one node's whole story: summary → stream → facts. */
+.node-focus {
+  flex: none;
+  display: flex; flex-direction: column; min-height: 0; max-height: 48%;
+  background: var(--side);
+  border-bottom: 1px solid var(--border);
+  animation: panel-rise .34s var(--spring) both;
+}
+.node-focus .inspector-header { padding: 14px 18px 12px; }
+.node-focus .inspector-header .node-icon { width: 30px; height: 30px; font-size: 14px; }
+.focus-close {
+  flex: none; width: 22px; height: 22px; padding: 0;
+  display: grid; place-items: center;
+  background: none; border: none; border-radius: 6px;
+  color: var(--faint); font-size: 10px; line-height: 1; cursor: pointer;
+  transition: background-color .14s ease, color .14s ease;
+}
+.focus-close:hover { background: var(--chip); color: var(--tx); box-shadow: none; }
+.focus-elapsed { flex: none; font-size: 10px; color: var(--accent); font-variant-numeric: tabular-nums; }
+
+.node-focus-body {
+  overflow-y: auto; padding: 12px 18px 14px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.node-focus-body h3 {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--faint); font-weight: 500; margin: 0 0 8px;
+}
+.focus-summary { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--tx); }
+.focus-summary-note { color: var(--warn); font-size: 12px; }
+.focus-actions-inline { margin-top: 6px; display: flex; gap: 8px; }
+
+/* Loading shimmer for the summary — CSS-only, stilled under reduced motion. */
+.focus-shimmer {
+  height: 54px; border-radius: 9px;
+  background: linear-gradient(100deg, var(--chip) 30%, var(--card) 50%, var(--chip) 70%);
+  background-size: 200% 100%;
+  animation: focus-shimmer 1.2s linear infinite;
+}
+@keyframes focus-shimmer { from { background-position: 120% 0; } to { background-position: -80% 0; } }
+
+.focus-stream { height: 140px; }
+
+.focus-advanced { font-size: 12px; }
+.focus-advanced summary {
+  cursor: pointer; color: var(--dim); font-size: 12px;
+  transition: color .14s ease;
+}
+.focus-advanced summary:hover { color: var(--tx); }
+.focus-facts {
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 14px;
+  margin: 8px 0 0; padding: 10px 12px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 9px;
+}
+.focus-facts dt {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; letter-spacing: .04em; color: var(--faint);
+}
+.focus-facts dd { margin: 0; font-size: 11.5px; color: var(--tx); }
+
+.focus-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ---------- coach tip (one-time) ---------- */
+/* Bottom-left over the canvas; dismissed once, remembered forever. */
+.coach-tip {
+  position: absolute; left: 18px; bottom: 18px; z-index: 30;
+  display: flex; align-items: center; gap: 10px;
+  max-width: 380px;
+  padding: 10px 12px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 11px;
+  box-shadow: var(--shadow-selected);
+  font-size: 12.5px; color: var(--tx);
+  animation: slide-up .18s ease both;
+}
+.coach-tip .section-label { flex: none; color: var(--accent); }
+.coach-tip-text { flex: 1; min-width: 0; line-height: 1.45; }
+.coach-tip .link { flex: none; padding: 2px 4px; }
+.coach-tip .link:hover { color: var(--tx); }
+
+/* ---------- chat run surface (CHAT-RUN) ---------- */
+/* Home's second state: the conversation stays put and the live flow unfolds
+   below it in one scrollable column — down to watch the run, up to re-read
+   what you asked. Same slot as .lander, so it fills .app-body. */
+.chat-run {
+  flex: 1; min-width: 0; position: relative;
+  display: flex; flex-direction: column;
+  background: var(--app);
+}
+.chat-topbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--divider);
+  flex: none;
+}
+.chat-run-sigil { width: 18px; height: 18px; display: inline-flex; }
+.chat-run-name {
+  font-size: 12.5px; font-weight: 600; color: var(--dim);
+  max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* The one scroller: thread + flow live here, composer is pinned below it. */
+.chat-scroll {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; align-items: center;
+  scroll-behavior: smooth;
+  padding-bottom: 8px;
+}
+
+.chat-thread {
+  width: min(720px, calc(100% - 48px));
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 22px 0 6px;
+}
+.chat-msg {
+  max-width: 86%;
+  padding: 10px 14px;
+  border-radius: 13px;
+  font-size: 13.5px; line-height: 1.55;
+  animation: slide-up .18s ease both;
+}
+.chat-msg pre {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  font-family: inherit; font-size: inherit; line-height: inherit;
+}
+.chat-msg.user {
+  align-self: flex-end;
+  background: var(--accent-soft); color: var(--tx);
+  border: 1px solid var(--border);
+  border-bottom-right-radius: 4px;
+}
+.chat-msg.assistant {
+  align-self: flex-start;
+  background: var(--card); color: var(--tx);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+.chat-msg.system {
+  align-self: center;
+  padding: 3px 10px;
+  background: none; border: none;
+  font-size: 11.5px; color: var(--faint);
+}
+
+/* The run surface: same RunBar / approval bars / FlowCanvas as the Runs
+   section, framed as one card the thread points at. */
+.chat-flow {
+  width: min(1060px, calc(100% - 40px));
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 18px 0 16px;
+}
+.chat-canvas {
+  position: relative;
+  height: min(620px, 62vh);
+  border: 1px solid var(--border); border-radius: 13px;
+  overflow: hidden;
+  background: var(--canvas);
+  display: flex; flex-direction: column;
+}
+.chat-canvas > .react-flow { flex: 1; }
+.chat-canvas-loading {
+  align-items: center; justify-content: center;
+  color: var(--faint);
+}
+
+.chat-composer {
+  flex: none;
+  display: flex; align-items: flex-end; gap: 10px;
+  width: min(720px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 12px 0 14px;
+  border-top: 1px solid var(--divider);
+}
+.chat-input {
+  flex: 1; min-width: 0; resize: none;
+  padding: 11px 13px;
+  font: inherit; font-size: 13.5px; line-height: 1.5; color: var(--tx);
+  background: var(--card); border: 1px solid var(--border); border-radius: 11px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.chat-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.chat-input:disabled { opacity: .62; cursor: default; }
+.chat-input::placeholder { color: var(--faint); }
+
+/* Node Focus overlays the canvas edge instead of a right column (home has
+   none) — same panel, same panel-rise entry. */
+.chat-focus-overlay {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 20;
+  width: min(420px, 94%);
+  display: flex; flex-direction: column;
+  background: var(--side);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-float);
+  animation: panel-rise .22s var(--spring) both;
+}
+.chat-focus-overlay .node-focus { flex: 1; min-height: 0; }
+
+/* ---------- chat run: node feed + summary sidebar + approval dialog ---------- */
+/* The run-feed rework: the graph flattens into a chat-style column of node
+   cards (execution order, newest at the bottom), an opt-in summary sidebar
+   rides the right edge, and approval gates own the surface in a dialog.
+
+   Token note: this section tints with color-mix(), never the *-soft aliases
+   (--warn-soft/--err-soft/--accent-soft). Those are defined with relative
+   color syntax (oklch(from var(--x) …)), and relative colors whose origin
+   comes through a var() compute to transparent in the Electron 33 Chromium
+   the app ships on — color-mix(in srgb, var(--x) N%, …) resolves fine. */
+
+.chat-body {
+  flex: 1; min-height: 0;
+  display: flex;
+}
+.chat-column {
+  flex: 1; min-width: 0; position: relative;
+  display: flex; flex-direction: column;
+}
+
+/* The composer lives inside .chat-column now; keep it pinned and centered. */
+.chat-column .chat-composer { width: min(720px, calc(100% - 48px)); }
+
+/* --- the node feed --- */
+.node-feed {
+  align-self: center;
+  width: min(780px, 100%);
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 6px 0 18px;
+}
+.feed-item {
+  display: flex; align-items: stretch; gap: 12px;
+  cursor: pointer;
+  animation: slide-up .18s ease both;
+}
+.feed-item > .flow-node { flex: 1; min-width: 0; }
+.feed-item:focus-visible { outline: none; }
+.feed-item:focus-visible > .flow-node { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent); }
+
+/* The rail: a thin execution timeline down the feed's left edge, colored by
+   state, so "how far along" is readable while scrolling at chat speed. */
+.feed-rail {
+  flex: none; width: 3px; border-radius: 2px;
+  background: var(--divider);
+  transition: background-color .24s ease;
+}
+.feed-item.status-done .feed-rail { background: var(--ok, #3a7d5c); }
+.feed-item.status-active .feed-rail { background: var(--accent); }
+.feed-item.status-waiting .feed-rail { background: var(--warn); }
+.feed-item.status-failed .feed-rail { background: var(--err); }
+
+/* Work nested under a container (orchestrator children, spawned tasks,
+   classic execution tasks) indents — the box becomes hierarchy, not a frame. */
+.feed-item.feed-child { margin-left: 28px; }
+.feed-item.feed-child .feed-rail { width: 2px; opacity: .85; }
+.feed-item.feed-spawned > .flow-node { border-style: dashed; }
+
+/* The live stream tail on a working node: the feed's analogue of a
+   half-typed chat reply — last few lines, mono, quiet. */
+.feed-stream {
+  margin: 8px 0 0; padding: 8px 10px;
+  max-height: 7.5em; overflow: hidden;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11px; line-height: 1.5; color: var(--dim);
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--canvas);
+  border: 1px solid var(--divider); border-radius: 8px;
+  mask-image: linear-gradient(to bottom, transparent 0, black 1.6em);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 1.6em);
+}
+
+/* Landed work: output excerpt + retrospective, folded into the card. */
+.feed-body { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.feed-output {
+  margin: 0; padding: 8px 10px;
+  font-family: inherit; font-size: 12px; line-height: 1.55; color: var(--tx);
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--canvas);
+  border: 1px solid var(--divider); border-radius: 8px;
+}
+.feed-retro { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 11px; color: var(--faint); }
+.feed-retro-status { font-weight: 600; text-transform: capitalize; }
+.feed-retro-status.retro-success { color: var(--ok, #3a7d5c); }
+.feed-retro-status.retro-partial { color: var(--warn); }
+.feed-retro-status.retro-failed { color: var(--err); }
+.feed-retro-problems { color: var(--warn); }
+.feed-retro-note { flex-basis: 100%; color: var(--dim); }
+.feed-waiting { margin-top: 8px; font-size: 12px; color: var(--warn); }
+
+/* The jump chip: floats above the composer when fresh work lands while the
+   user is scrolled up reading — the chat-client "new messages" pill. */
+.jump-latest {
+  position: absolute; left: 50%; bottom: 86px; z-index: 25;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  font-size: 12px; font-weight: 500; color: var(--tx);
+  background: var(--card); border: 1px solid var(--border); border-radius: 20px;
+  box-shadow: var(--shadow-float); cursor: pointer;
+  animation: slide-up .16s ease both;
+  transition: background-color .14s ease;
+}
+.jump-latest:hover { background: color-mix(in srgb, var(--accent) 14%, var(--card)); }
+
+/* --- the summary sidebar --- */
+.chat-side {
+  flex: none; width: 320px;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 14px 14px 18px;
+  overflow-y: auto;
+  background: var(--side);
+  border-left: 1px solid var(--border);
+  animation: panel-rise .22s var(--spring) both;
+}
+.chat-side-head { display: flex; align-items: baseline; justify-content: space-between; }
+.chat-side-elapsed { font-size: 11px; color: var(--faint); }
+
+.side-progress { display: flex; flex-direction: column; gap: 6px; }
+.side-progress .run-meter { height: 6px; }
+.side-progress-stats { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--dim); }
+
+.side-answer { display: flex; flex-direction: column; gap: 6px; }
+.side-answer pre {
+  margin: 0; padding: 10px 12px;
+  font-family: inherit; font-size: 12px; line-height: 1.55; color: var(--tx);
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+}
+
+.side-nodes { display: flex; flex-direction: column; gap: 8px; }
+.side-empty { font-size: 12px; color: var(--faint); }
+.side-node {
+  padding: 8px 10px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.side-node-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.side-node-head .node-icon { width: 22px; height: 22px; font-size: 11px; border-radius: 6px; }
+.side-node-title { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; color: var(--tx); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-node-status { flex: none; font-size: 10px; color: var(--faint); text-transform: capitalize; }
+.side-node-status.status-done { color: var(--ok, #3a7d5c); }
+.side-node-status.status-active { color: var(--accent); }
+.side-node-status.status-failed { color: var(--err); }
+.side-node-retro { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--dim); }
+.side-node-problems { color: var(--warn); }
+.side-node-note { color: var(--faint); }
+.side-node-output {
+  margin: 0; font-family: inherit; font-size: 11px; line-height: 1.5; color: var(--dim);
+  white-space: pre-wrap; word-break: break-word;
+}
+.side-node-output.streaming { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+
+/* The sidebar toggle reads active when the panel is open. */
+.chat-side-toggle.active { background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--accent); border-color: transparent; }
+
+/* --- the approval dialog --- */
+/* The gate owns the whole chat surface: backdrop + a large centered card.
+   Anchored to .chat-run (position: relative) like the other run overlays. */
+.approval-modal-backdrop {
+  position: absolute; inset: 0; z-index: 40;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  backdrop-filter: blur(5px);
+  animation: approval-fade .18s ease both;
+}
+@keyframes approval-fade { from { opacity: 0; } to { opacity: 1; } }
+.approval-modal {
+  width: min(600px, 92%);
+  display: flex; flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: var(--shadow-float);
+  animation: approval-rise .24s var(--spring) both;
+}
+@keyframes approval-rise {
+  from { opacity: 0; transform: translateY(14px) scale(.985); }
+  to   { opacity: 1; transform: none; }
+}
+.approval-modal.danger {
+  border-color: color-mix(in srgb, var(--err) 45%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 22%, transparent), var(--shadow-float);
+}
+.approval-modal-head {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 20px 22px 0;
+}
+.approval-modal-glyph {
+  width: 44px; height: 44px; flex: none; border-radius: 12px;
+  display: grid; place-items: center; font-size: 20px;
+  background: color-mix(in srgb, var(--warn) 14%, var(--card)); color: var(--warn);
+}
+.approval-modal.danger .approval-modal-glyph {
+  background: color-mix(in srgb, var(--err) 14%, var(--card)); color: var(--err);
+}
+.approval-modal-titles { min-width: 0; }
+.approval-modal-titles h2 { margin: 2px 0 4px; font-size: 17px; font-weight: 650; color: var(--tx); }
+.approval-modal-sub { margin: 0; font-size: 12.5px; color: var(--dim); }
+.approval-modal-run { font-weight: 600; color: var(--tx); }
+
+.approval-modal-body { padding: 14px 22px 4px; display: flex; flex-direction: column; gap: 10px; }
+.approval-modal-ask { margin: 0; font-size: 14px; line-height: 1.55; color: var(--tx); }
+.approval-modal-cmd {
+  margin: 0; padding: 10px 12px;
+  font-size: 12px; line-height: 1.5; color: var(--tx);
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--canvas); border: 1px solid var(--divider); border-radius: 9px;
+}
+.approval-modal-risk {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 12.5px; color: var(--dim);
+}
+.approval-modal-risk .risk-pill {
+  flex: none; font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+  padding: 2px 7px; border-radius: 20px;
+  color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--card));
+}
+.approval-modal-risk.risk-danger { color: var(--err); }
+.approval-modal-risk.risk-danger .risk-pill { color: var(--err); background: color-mix(in srgb, var(--err) 16%, transparent); }
+.approval-modal-hint { margin: 0 0 6px; font-size: 12px; line-height: 1.5; color: var(--faint); }
+
+.approval-modal-actions {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 22px 18px;
+  border-top: 1px solid var(--divider);
+  margin-top: 8px;
+}
+button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
+
+/* The minimized gate dock: pinned above the composer, outside the scroll
+   area, so a parked run's decision point is always on screen while the user
+   scrolls the feed to review. Amber by default, rose for danger — same
+   reading as the dialog it expands back into. */
+.gate-dock {
+  flex: none;
+  display: flex; align-items: center; gap: 10px;
+  width: min(720px, calc(100% - 48px));
+  margin: 0 auto; padding: 9px 12px 9px 14px;
+  background: color-mix(in srgb, var(--warn) 13%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: 12px;
+  box-shadow: var(--shadow-selected);
+  animation: slide-up .18s ease both;
+}
+.gate-dock.danger {
+  background: color-mix(in srgb, var(--err) 13%, var(--card));
+  border-color: color-mix(in srgb, var(--err) 45%, var(--border));
+}
+.gate-dock-glyph { flex: none; font-size: 15px; color: var(--warn); }
+.gate-dock.danger .gate-dock-glyph { color: var(--err); }
+.gate-dock-text {
+  flex: 1; min-width: 0;
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 12.5px; color: var(--tx);
+  overflow: hidden; white-space: nowrap;
+}
+.gate-dock-text strong { flex: none; font-weight: 600; }
+.gate-dock-cmd {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  font-size: 11px; color: var(--dim);
+}
+.gate-dock-sub { flex: none; color: var(--faint); font-size: 11.5px; }
+.gate-dock button { flex: none; }
+
+/* The refiner's input gate (MODES-COMPARE T6): a friendly ask, not a
+   destructive pause — accent hairline and tinted ground, answered in the
+   composer right below it (so no buttons of its own). */
+.input-gate {
+  flex: none;
+  width: min(720px, calc(100% - 48px));
+  margin: 0 auto 8px; padding: 12px 14px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 12px;
+  box-shadow: var(--shadow-selected);
+  animation: slide-up .18s ease both;
+}
+.input-gate-head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--tx); margin-bottom: 8px;
+}
+.input-gate-head strong { font-weight: 600; }
+.input-gate-glyph {
+  display: inline-grid; place-items: center;
+  width: 22px; height: 22px; border-radius: 7px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 13px;
+}
+.input-gate-questions {
+  margin: 0 0 8px; padding-left: 22px;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.input-gate-questions li { color: var(--tx); font-size: 13px; }
+.input-gate-q { display: block; }
+.input-gate-why {
+  display: block; margin-top: 2px;
+  color: var(--dim); font-size: 11.5px; font-style: italic;
+}
+.input-gate-hint { color: var(--faint); font-size: 11.5px; }
+
+/* ---------- Comparison (MODES-COMPARE T11/T12) ---------- */
+
+/* Launch UX (T11): the composer's Compare toggle + the A/B slot chips. */
+.lander-compare-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 11px; border-radius: 9px;
+  font-size: 12px; color: var(--dim);
+  background: var(--card); border: 1px solid var(--border);
+  cursor: pointer; transition: color .15s ease, background .15s ease, border-color .15s ease;
+}
+.lander-compare-toggle:not(:disabled):hover { color: var(--tx); background: var(--accent-soft); }
+.lander-compare-toggle.active {
+  color: var(--accent); border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.lander-compare-toggle:disabled { cursor: default; opacity: .6; }
+.lander-compare-slots {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-width: 0; flex-wrap: wrap;
+}
+.compare-slot-label {
+  display: inline-grid; place-items: center;
+  width: 18px; height: 18px; border-radius: 6px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 11px; font-weight: 600; flex: none;
+}
+.compare-vs { color: var(--faint); font-size: 11.5px; }
+
+/* Split view (T12): a header, two independent panes, one shared composer. */
+.compare-run {
+  flex: 1; min-width: 0; position: relative;
+  display: flex; flex-direction: column;
+  background: var(--app);
+}
+.compare-topbar-title {
+  font-size: 12.5px; font-weight: 600; color: var(--dim);
+}
+.compare-target {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.compare-target-label { color: var(--faint); font-size: 11.5px; }
+.compare-target .seg {
+  padding: 4px 10px; border-radius: 8px;
+  font-size: 12px; color: var(--dim);
+  background: var(--card); border: 1px solid var(--border);
+  cursor: pointer; transition: color .12s ease, background .12s ease, border-color .12s ease;
+}
+.compare-target .seg:not(:disabled):hover { color: var(--tx); background: var(--accent-soft); }
+.compare-target .seg.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.compare-target .seg:disabled { cursor: default; opacity: .5; }
+
+.compare-thread {
+  flex: none;
+  width: min(1060px, calc(100% - 40px));
+  margin: 0 auto; padding: 16px 0 4px;
+  display: flex; flex-direction: column;
+}
+.compare-thread .chat-msg { align-self: center; max-width: 100%; }
+
+.compare-panes {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  width: min(1060px, calc(100% - 40px));
+  margin: 0 auto; padding: 8px 0 12px;
+}
+.compare-pane {
+  min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border); border-radius: 13px;
+  background: var(--card);
+  overflow-y: auto;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.compare-pane.targeted {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.compare-pane-head {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 2px 8px;
+  border-bottom: 1px solid var(--divider);
+  background: var(--card);
+}
+.compare-pane-badge {
+  display: inline-grid; place-items: center;
+  width: 20px; height: 20px; border-radius: 6px;
+  background: var(--accent); color: var(--on-accent, #fff);
+  font-size: 11.5px; font-weight: 700; flex: none;
+}
+.compare-pane-sigil { width: 16px; height: 16px; display: inline-flex; flex: none; }
+.compare-pane-name {
+  font-size: 12.5px; font-weight: 600; color: var(--tx);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+/* Gates and inline cards fill the narrow pane rather than the centered column. */
+.compare-pane .gate-dock,
+.compare-pane .input-gate { width: auto; margin-left: 0; margin-right: 0; }
+
+.compare-composer {
+  width: min(1060px, calc(100% - 40px));
+}
+
+@media (max-width: 900px) {
+  .compare-panes { grid-template-columns: 1fr; }
+}
+
 /* ---------- reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {
@@ -2288,4 +3433,10 @@ button.link:hover { color: var(--accent); }
   .activity-indicator { transition: none; }
   .deck-card { animation: none; }
   .tab-deck::backdrop { backdrop-filter: none; }
+  /* The bloom is never rendered in the first place (a JS gate in FlowCanvas);
+     this is the belt-and-braces half. */
+  .canvas-bloom { display: none; }
+  .focus-shimmer { animation: none; }
+  /* Smooth scrolling is a nicety, not a necessity. */
+  .chat-scroll { scroll-behavior: auto; }
 }

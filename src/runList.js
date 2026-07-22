@@ -86,8 +86,11 @@ const STAGE_LABEL = {
 // Stage → the one word the list shows plus the dot's class. Terminal stages win
 // over `interrupted`: a run that was interrupted and then resumed to completion
 // is Done, and the flag only still describes runs that never got there.
+// A user-stopped run (RUN-CONTROL 'cancelled') reads like an interruption, not
+// a failure — its finished work is kept, and it can be restarted or branched.
 export function runStatus(run) {
   const stage = run?.stage;
+  if (stage === 'cancelled') return { kind: 'interrupted', label: 'Stopped' };
   if (isTerminal(stage)) return { kind: stage, label: TERMINAL_LABEL[stage] ?? 'Done' };
   if (run?.interrupted) return { kind: 'interrupted', label: 'Interrupted' };
   if (stage === 'awaiting_approval') return { kind: 'waiting', label: STAGE_LABEL[stage] };

@@ -18,7 +18,7 @@ const NODE_META = {
   verifier: { icon: '⚖', typeLabel: 'eval · quality gate' }
 };
 
-function statusPill(status) {
+export function statusPill(status) {
   if (!status) return null;
   const label = status.replace(/_/g, ' ');
   const cls =
@@ -224,7 +224,7 @@ export function WorkerPicker({ worker, models, activeModels, onChange, idPrefix 
   );
 }
 
-export function FlowInspector({ flow, selectedNode, models, activeModels, templates, onChangeData, onChangeOverrides, onDeleteNode }) {
+export function FlowInspector({ flow, selectedNode, models, activeModels, templates, onChangeData, onChangeOverrides, onDeleteNode, onDetachNode }) {
   const node = flow.nodes.find(n => n.id === selectedNode);
 
   if (!node) {
@@ -240,7 +240,7 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
         <div className="inspector-body">
           <section>
             <h3>Flow</h3>
-            <pre>Select a node to edit it, drag between handles to connect, or add nodes from the palette above the canvas.</pre>
+            <pre>Select a node to edit it, drag between handles to connect, or press ＋ Add node to search the library — drag nodes straight onto the canvas, and onto a box to fill it.</pre>
           </section>
         </div>
       </aside>
@@ -253,11 +253,13 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
     return (
       <InstanceInspector
         node={node}
+        parent={node.parentId ? flow.nodes.find(n => n.id === node.parentId) : null}
         template={templates?.find(t => t.id === node.templateId) ?? null}
         models={models}
         activeModels={activeModels}
         onChangeOverrides={onChangeOverrides}
         onDeleteNode={onDeleteNode}
+        onDetachNode={onDetachNode}
       />
     );
   }
@@ -531,6 +533,12 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
           </section>
         )}
 
+        {node.parentId && (
+          <ContainmentSection
+            parent={flow.nodes.find(n => n.id === node.parentId)}
+            onDetach={onDetachNode ? () => onDetachNode(node.id) : null}
+          />
+        )}
         {!readOnly && !isStructuralNode(node) && (
           <section>
             <button className="reject" onClick={() => onDeleteNode(node.id)}>Delete node</button>
@@ -564,7 +572,21 @@ function OverrideTag({ active, onReset }) {
   );
 }
 
-function InstanceInspector({ node, template, models, activeModels, onChangeOverrides, onDeleteNode }) {
+// Containment: the node lives inside an orchestrator's box and runs in its
+// inline sub-walk (no planning call — the canvas placement was the plan).
+// One way out, stated plainly.
+function ContainmentSection({ parent, onDetach }) {
+  if (!parent) return null;
+  return (
+    <section>
+      <h3>Inside {nodeLabel(parent)}</h3>
+      <pre>This node runs inside the orchestrator&rsquo;s box when the flow runs — the box skips its own planning and runs exactly the nodes placed inside.</pre>
+      {onDetach && <button className="ghost mini" onClick={onDetach}>Remove from box</button>}
+    </section>
+  );
+}
+
+function InstanceInspector({ node, parent, template, models, activeModels, onChangeOverrides, onDeleteNode, onDetachNode }) {
   const ov = node.overrides ?? {};
   const eff = resolveInstance(node, template).data; // effective (merged) values
   const set = patch => onChangeOverrides(node.id, patch);
@@ -762,6 +784,12 @@ function InstanceInspector({ node, template, models, activeModels, onChangeOverr
           }}>+ Add file</button>
         </section>
 
+        {parent && (
+          <ContainmentSection
+            parent={parent}
+            onDetach={onDetachNode ? () => onDetachNode(node.id) : null}
+          />
+        )}
         <section>
           <button className="reject" onClick={() => onDeleteNode(node.id)}>Delete node</button>
         </section>

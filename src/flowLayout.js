@@ -76,8 +76,7 @@ export function layoutPositions(flow, { xGap = 260, yGap = 130, x0 = 40, y0 = 40
 // Returns { positions: Map<id,{x,y}>, box: {w,h} } — the box is sized to fit.
 export function containerLayout(children, edges, {
   xGap = 250, yGap = 96, padX = 22, padTop = 58, padBottom = 46, cardW = 230
-} = {}) {
-  const ids = new Set(children.map(n => n.id));
+} = {}) {  const ids = new Set(children.map(n => n.id));
   const parents = new Map(children.map(n => [n.id, []]));
   for (const e of edges) {
     if (ids.has(e.source) && ids.has(e.target)) parents.get(e.target).push(e.source);
@@ -117,4 +116,78 @@ export function containerLayout(children, edges, {
       h: padTop + (rows.size - 1) * yGap + 72 + padBottom
     }
   };
+}
+
+// --- Orchestrator containment (editor + run view) ---------------------------
+
+// The empty orchestrator box, and the padding its children live inside:
+// padTop clears the header, padBottom clears the "creates" ports row.
+export const ORCH_BOX_DEFAULT = { w: 360, h: 200 };
+export const ORCH_PAD = { x: 22, top: 58, bottom: 62, cardW: 230, cardH: 76 };
+
+// True when a node may live inside an orchestrator's box: the pinned
+// structural nodes stay top-level, and boxes never nest (one level deep,
+// mirroring the engine's spawn guard).
+export function isContainable(node) {
+  return Boolean(node) && !node.parentId
+    && node.type !== 'input' && node.type !== 'output' && node.type !== 'orchestrator';
+}
+
+// The box that fits all children (their positions are box-relative), never
+// smaller than the empty box. Pure: positions only, no measuring.
+export function fitOrchBox(children, cur = null) {
+  if (!children.length) return { ...ORCH_BOX_DEFAULT };
+  const maxX = Math.max(...children.map(n => n.position?.x ?? 0));
+  const maxY = Math.max(...children.map(n => n.position?.y ?? 0));
+  return {
+    w: Math.max(ORCH_BOX_DEFAULT.w, cur?.w ?? 0, maxX + ORCH_PAD.cardW + ORCH_PAD.x),
+    h: Math.max(ORCH_BOX_DEFAULT.h, cur?.h ?? 0, maxY + ORCH_PAD.cardH + ORCH_PAD.bottom)
+  };
+}
+
+// The box that fits children exactly (used after a detach, so the box
+// shrinks back around what is left).
+export function shrinkOrchBox(children) {
+  if (!children.length) return { ...ORCH_BOX_DEFAULT };
+  const maxX = Math.max(...children.map(n => n.position?.x ?? 0));
+  const maxY = Math.max(...children.map(n => n.position?.y ?? 0));
+  return {
+    w: Math.max(ORCH_BOX_DEFAULT.w, maxX + ORCH_PAD.cardW + ORCH_PAD.x),
+    h: Math.max(ORCH_BOX_DEFAULT.h, maxY + ORCH_PAD.cardH + ORCH_PAD.bottom)
+  };
+}
+
+// Canvas ordering invariant. React Flow requires a parent to precede its
+// children in the nodes array ("Parent node not found" otherwise); beyond
+// that, container boxes belong at the BACK so dragging a box across the
+// canvas never visually swallows a free node. Stable: relative order within
+// each group is preserved.
+export function arrangeForCanvas(nodes) {
+  const orchs = nodes.filter(n => n.type === 'orchestrator' && !n.parentId);
+  const orchIds = new Set(orchs.map(o => o.id));
+  const childrenOf = new Map(orchs.map(o => [o.id, []]));
+  const rest = [];
+  for (const n of nodes) {
+    if (n.parentId && orchIds.has(n.parentId)) childrenOf.get(n.parentId).push(n);
+    else if (!orchIds.has(n.id)) rest.push(n);
+  }
+  const out = [];
+  for (const o of orchs) out.push(o, ...childrenOf.get(o.id));
+  return [...out, ...rest];
+}
+
+// Absolute canvas position of a node: top-level nodes carry it directly; a
+// child's position is relative to its parent box.
+export function absolutePosition(node, byId) {
+  let x = node.position?.x ?? 0;
+  let y = node.position?.y ?? 0;
+  let pid = node.parentId;
+  while (pid) {
+    const parent = byId.get(pid);
+    if (!parent) break;
+    x += parent.position?.x ?? 0;
+    y += parent.position?.y ?? 0;
+    pid = parent.parentId;
+  }
+  return { x, y };
 }

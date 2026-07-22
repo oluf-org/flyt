@@ -95,6 +95,22 @@ export default function RunResult({ snapshot, onFollowUp }) {
   );
   const composer = <Composer stage={meta.stage} onFollowUp={onFollowUp} />;
 
+  // A user-stopped run is not a failure: neutral badge, honest account of what
+  // remains possible (restart any node, or branch — both from the canvas menu).
+  if (meta.stage === 'cancelled') {
+    return (
+      <section className="result-panel" aria-label="Run outcome">
+        <div className="result-head">
+          <span className="result-badge neutral">Stopped</span>
+        </div>
+        <pre className="result-body">
+          {'The run was stopped before it finished. Completed nodes kept their outputs —\nright-click a node on the canvas to restart it, or branch the run from there.'}
+        </pre>
+        {thread}
+        {composer}
+      </section>
+    );
+  }
   if (meta.stage === 'failed' || meta.stage === 'rejected') {
     const failed = meta.stage === 'failed';
     return (

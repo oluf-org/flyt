@@ -56,8 +56,15 @@ export const ROLE_PORTS = {
   analyze: [
     { id: 'report', label: 'analysis', description: 'The structured analysis report.' }
   ],
+  compare: [
+    { id: 'report', label: 'comparison', description: 'Differences, per-alternative strengths/weaknesses, and a keep-the-best recommendation.' }
+  ],
   translate: [
     { id: 'result', label: 'translation', description: 'The translated text.' }
+  ],
+  refine: [
+    { id: 'prompt', label: 'refined prompt', description: 'The user request rewritten into a precise, self-contained brief.' },
+    { id: 'questions', label: 'questions', description: 'Clarifying questions (JSON) — present only when an ambiguity would materially change the work.' }
   ],
   'final-eval': [
     { id: 'report', label: 'final-eval.md', description: 'Completeness verdict + documented differences from the plan.' }
@@ -133,7 +140,10 @@ export const AI_ROLES = [
   'stitch', 'final-eval', 'feedback-review',
   // Combined-node meta role ('evaluation' resolves to plan-eval / step-eval /
   // final-eval via evalType) and the standalone roles added in the node rework.
-  'evaluation', 'combine', 'split', 'analyze', 'translate'
+  'evaluation', 'combine', 'split', 'analyze', 'translate', 'compare',
+  // The prompt refiner (MODES-COMPARE T5): rewrites the run request into a
+  // precise brief, and may park the run with clarifying questions.
+  'refine'
 ];
 
 // The four (minimum) categories used by plan-eval nodes to drive model selection
@@ -274,8 +284,17 @@ export const NODE_TEMPLATES = {
     role: 'combine',
     category: null,
     icon: '⧉',
-    description: 'Merge parallel upstream outputs into one coherent deliverable; small fixes inline, larger gaps become fix tasks.',
+    description: 'Merge parallel upstream outputs — complementary parts or alternative attempts at the same task — into one coherent deliverable, keeping the best of each; small fixes inline, larger gaps become fix tasks.',
     defaultData: () => ({ title: 'Combine', role: 'combine', effort: DEFAULT_EFFORT, system: '' })
+  },
+  'compare': {
+    label: 'Compare',
+    baseType: 'aiStep',
+    role: 'compare',
+    category: null,
+    icon: '⇄',
+    description: 'Compare multiple upstream alternatives (same task done by different models, drafts, plans): agreements, differences, per-alternative strengths, and a keep-the-best recommendation.',
+    defaultData: () => ({ title: 'Compare', role: 'compare', effort: DEFAULT_EFFORT, system: '' })
   },
   'split': {
     label: 'Split',
@@ -481,6 +500,11 @@ export function nodeSub(node) {
 //     round: a default that asks, not a default that acts.
 export const SEED_NODE_TEMPLATES = [
   {
+    id: 'prompt-refiner', name: 'Prompt refiner', category: null, icon: '✍',
+    baseType: 'aiStep', role: 'refine', effort: 'medium',
+    description: 'Rewrites the run request into a precise, self-contained brief (goal, constraints, deliverable, acceptance). Asks clarifying questions only when an ambiguity would materially change the work.'
+  },
+  {
     id: 'plan-start', name: 'Plan', category: null, icon: '▶',
     baseType: 'aiStep', role: 'plan-start', effort: 'high',
     description: 'Produces tasks.md with well-defined tasks and explicit per-file context descriptions.'
@@ -514,7 +538,17 @@ export const SEED_NODE_TEMPLATES = [
   {
     id: 'combine', name: 'Combine', category: null, icon: '⧉',
     baseType: 'aiStep', role: 'combine', effort: 'medium',
-    description: 'Merge parallel upstream outputs into one coherent deliverable; small fixes inline, larger gaps become fix tasks.'
+    description: 'Merge parallel upstream outputs — complementary parts or alternative attempts at the same task — into one coherent deliverable, keeping the best of each; small fixes inline, larger gaps become fix tasks.'
+  },
+  {
+    // Compare: review multiple alternatives to the same deliverable (e.g. the
+    // same task fanned out to two different models) and summarize differences,
+    // strengths, and what to keep from each. Pairs with Combine downstream for
+    // the best-of merge; requiresApproval on that Combine makes the human the
+    // judge — the run pauses with this report on screen.
+    id: 'compare', name: 'Compare', category: null, icon: '⇄',
+    baseType: 'aiStep', role: 'compare', effort: 'medium',
+    description: 'Compare multiple upstream alternatives (same task done by different models, drafts, plans): agreements, differences, per-alternative strengths, and a keep-the-best recommendation.'
   },
   {
     id: 'split', name: 'Split', category: null, icon: '⑃',
@@ -598,6 +632,10 @@ export function resolveInstance(node, tpl) {
     ...(role === 'translate' ? { language: ov.language ?? t?.language ?? 'English' } : {}),
     worker: ov.worker ?? t?.worker ?? null,
     ...(instructions ? { instructions } : {}),
+    // A `system` override replaces the role's default system prompt wholesale
+    // (the runner reads node.data.system). Templates don't carry one, so this
+    // is purely an instance/launch-override concern (T8's planner tiering).
+    ...(typeof ov.system === 'string' && ov.system.trim() ? { system: ov.system } : {}),
     ...(category ? { category } : {}),
     ...(tools ? { tools } : {}),
     ...((ov.skills ?? t?.skills)?.length ? { skills: ov.skills ?? t.skills } : {}),
@@ -606,18 +644,136 @@ export function resolveInstance(node, tpl) {
     ...(t?.outputs?.length ? { outputs: t.outputs } : {}),
     ...(ov.goal ? { goal: ov.goal } : {}),
     ...(ov.contextSpec ? { contextSpec: ov.contextSpec } : {}),
+    // expose (MODES-COMPARE T9): surfaced on data so the resolved flow the
+    // composer consumes carries which fields become ad-hoc run inputs.
+    ...(node.expose?.length ? { expose: node.expose } : {}),
     ...(t ? {} : { missingTemplate: true })
   };
-  return { id: node.id, type, kind: 'ai', position: node.position, data };
+  return {
+    id: node.id, type, kind: 'ai', position: node.position, data,
+    // Containment survives resolution: a template instance can live inside
+    // an orchestrator's box like any raw node.
+    ...(node.parentId ? { parentId: node.parentId } : {})
+  };
 }
 
 // Resolve every template instance in a flow against the library. Structural
 // (input/output) and already-resolved/legacy nodes pass through unchanged.
-export function resolveFlow(flow, templates = []) {
+//
+// launchOverrides (MODES-COMPARE T1) is an optional per-node override map
+// { [nodeId]: { worker?, effort?, system?, ... } } applied at run start on top
+// of each node's stored overrides — launch WINS. It is the single primitive
+// behind modes, run inputs, and comparison: all three assemble a map here.
+// For a template instance the extra fields merge into `overrides` (so
+// resolveInstance layers them over the template); for a raw node they merge
+// straight into `data`. Structural input/output nodes are never overridden —
+// their data is run content, not configuration.
+export function resolveFlow(flow, templates = [], launchOverrides = null) {
   const byId = new Map(templates.map(t => [t.id, t]));
+  const lo = launchOverrides && typeof launchOverrides === 'object' ? launchOverrides : null;
   return {
     ...flow,
-    nodes: (flow.nodes ?? []).map(n =>
-      isInstance(n) ? resolveInstance(n, byId.get(n.templateId)) : n)
+    nodes: (flow.nodes ?? []).map(n => {
+      const extra = lo && lo[n.id] ? lo[n.id] : null;
+      if (isInstance(n)) {
+        const merged = extra ? { ...n, overrides: { ...(n.overrides ?? {}), ...extra } } : n;
+        return resolveInstance(merged, byId.get(n.templateId));
+      }
+      const hasExpose = Array.isArray(n.expose) && n.expose.length;
+      const applyExtra = extra && n.type !== 'input' && n.type !== 'output';
+      if (hasExpose || applyExtra) {
+        return { ...n, data: {
+          ...(n.data ?? {}),
+          ...(hasExpose ? { expose: n.expose } : {}),
+          ...(applyExtra ? extra : {})
+        } };
+      }
+      return n;
+    })
   };
+}
+
+// The subset of a node's exposed fields that are actually overridable on it
+// (MODES-COMPARE T9/T10). Takes a RESOLVED node (data.expose present). Drops
+// any exposed name a node can't accept — the linter flags those, but the
+// composer must never render a control that would be rejected at run start.
+export function exposedFields(node) {
+  const declared = node?.data?.expose ?? node?.expose;
+  if (!Array.isArray(declared) || !declared.length) return [];
+  const allowed = overridableFields(node);
+  const seen = new Set();
+  return declared.filter(f => typeof f === 'string' && allowed.has(f) && !seen.has(f) && seen.add(f));
+}
+
+// --- Launch overrides: modes, run inputs, comparison (MODES-COMPARE) --------
+//
+// The one whitelist of fields a launch override (and therefore a mode override
+// and an exposed run input) may set. Everything universal to AI nodes plus the
+// per-kind fields, which `overridableFields` gates by node type/role.
+export const LAUNCH_OVERRIDE_COMMON = ['worker', 'effort', 'instructions', 'system', 'requiresApproval', 'approveToolCalls'];
+
+// The set of fields that may be overridden on ONE node, keyed off its resolved
+// shape (type + data.role/category/evalType). Structural input/output nodes
+// accept nothing. Used by the runner's launch-override validation (T1) and the
+// `expose:` linter (T9), so both agree on what a given node exposes.
+export function overridableFields(node) {
+  const type = node?.type;
+  if (type === 'input' || type === 'output') return new Set();
+  const fields = new Set(LAUNCH_OVERRIDE_COMMON);
+  const d = node?.data ?? {};
+  if (type === 'orchestrator') { fields.add('minNodes'); fields.add('maxNodes'); }
+  // A work node carries a category; the Evaluation meta-role carries evalType;
+  // translate carries a language. Resolved nodes surface these on data.
+  if (d.category != null || d.role === 'execute') fields.add('category');
+  if (d.evalType != null || d.role === 'evaluation') fields.add('evalType');
+  if (d.role === 'translate' || d.language != null) fields.add('language');
+  // Only agentTask nodes can hold tools (the agent executor); mirror the lint
+  // rule so a tools override is legal exactly where it means something.
+  if (type === 'agentTask') fields.add('tools');
+  return fields;
+}
+
+// Validate a per-node override map against a RESOLVED flow. Returns an array of
+// human-readable error strings (empty = valid). Unknown node id and a field
+// not overridable on its node are both errors (T1: reject the start).
+export function validateOverrideMap(resolvedFlow, overrides, { label = 'override' } = {}) {
+  const errors = [];
+  if (overrides == null) return errors;
+  if (typeof overrides !== 'object' || Array.isArray(overrides)) {
+    return [`${label} map must be an object of nodeId -> fields`];
+  }
+  const byId = new Map((resolvedFlow.nodes ?? []).map(n => [n.id, n]));
+  for (const [nodeId, fields] of Object.entries(overrides)) {
+    const node = byId.get(nodeId);
+    if (!node) { errors.push(`${label}: unknown node "${nodeId}"`); continue; }
+    if (fields == null || typeof fields !== 'object' || Array.isArray(fields)) {
+      errors.push(`${label}: node "${nodeId}" must map to an object of fields`);
+      continue;
+    }
+    const allowed = overridableFields(node);
+    for (const key of Object.keys(fields)) {
+      if (!allowed.has(key)) {
+        errors.push(allowed.size
+          ? `${label}: "${key}" is not overridable on node "${nodeId}" (allowed: ${[...allowed].join(', ')})`
+          : `${label}: node "${nodeId}" (${node.type}) accepts no overrides`);
+      }
+    }
+  }
+  return errors;
+}
+
+// Layer several per-node override maps into one, later maps winning per field.
+// The merge is one level deep on purpose: `worker` is a whole object you pick,
+// not a thing to deep-merge. This is precedence made concrete —
+// mergeOverrideMaps(modeOverrides, runInputs): run input > mode.
+export function mergeOverrideMaps(...maps) {
+  const out = {};
+  for (const m of maps) {
+    if (!m || typeof m !== 'object') continue;
+    for (const [id, fields] of Object.entries(m)) {
+      if (!fields || typeof fields !== 'object') continue;
+      out[id] = { ...(out[id] ?? {}), ...fields };
+    }
+  }
+  return out;
 }
