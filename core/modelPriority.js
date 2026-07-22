@@ -144,6 +144,45 @@ export const PROVIDER_MODEL_PRIORITY = {
       high: ['kimi-k2.6']
     }
   },
+  // Codex CLI (ChatGPT subscription): the codex-tuned models are its best
+  // agentic pick; plain GPT-5.2 covers the general kinds.
+  codex: {
+    code: {
+      low: ['gpt-5.1-codex-mini', 'gpt-5.2-codex'],
+      medium: ['gpt-5.2-codex', 'gpt-5.2'],
+      high: ['gpt-5.2-codex']
+    },
+    docs: {
+      low: ['gpt-5.1-codex-mini'],
+      medium: ['gpt-5.2', 'gpt-5.1-codex-mini'],
+      high: ['gpt-5.2']
+    },
+    planning: {
+      low: ['gpt-5.2'],
+      medium: ['gpt-5.2', 'gpt-5.2-codex'],
+      high: ['gpt-5.2-codex', 'gpt-5.2']
+    },
+    evaluation: {
+      low: ['gpt-5.1-codex-mini', 'gpt-5.2'],
+      medium: ['gpt-5.2'],
+      high: ['gpt-5.2-codex', 'gpt-5.2']
+    },
+    analysis: {
+      low: ['gpt-5.1-codex-mini', 'gpt-5.2'],
+      medium: ['gpt-5.2'],
+      high: ['gpt-5.2', 'gpt-5.2-codex']
+    },
+    translation: {
+      low: ['gpt-5.1-codex-mini'],
+      medium: ['gpt-5.2'],
+      high: ['gpt-5.2']
+    },
+    general: {
+      low: ['gpt-5.1-codex-mini'],
+      medium: ['gpt-5.2'],
+      high: ['gpt-5.2', 'gpt-5.2-codex']
+    }
+  },
   // OpenRouter mirrors the frontier models under vendor-prefixed ids, so it
   // simply inherits the cross-provider ranking.
   openrouter: {
@@ -225,6 +264,21 @@ export const PROVIDER_ORDER = {
     high: ['anthropic', 'openai', 'kimi', 'openrouter']
   }
 };
+
+// The Claude subscription serves the same models with the same ranking as the
+// Anthropic API — only the transport differs.
+PROVIDER_MODEL_PRIORITY['claude-code'] = PROVIDER_MODEL_PRIORITY.anthropic;
+
+// Slot each subscription runtime right after its API sibling in every
+// cross-provider list: a user with both prefers the metered key by default
+// (predictable billing, no plan limits burned); a subscription-only user still
+// lands on the same per-kind best pick.
+for (const kind of Object.values(PROVIDER_ORDER)) {
+  for (const [effort, order] of Object.entries(kind)) {
+    kind[effort] = order.flatMap(p =>
+      p === 'anthropic' ? [p, 'claude-code'] : p === 'openai' ? [p, 'codex'] : [p]);
+  }
+}
 
 // Roles that map straight to a task kind; categories refine work nodes.
 const ROLE_KIND = {

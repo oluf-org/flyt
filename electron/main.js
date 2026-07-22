@@ -15,9 +15,13 @@ import { serializeFlow } from '../core/flowlang/serialize.js';
 import { diffSnapshot } from '../core/snapshotDiff.js';
 import { callModel, canServe } from '../core/adapters/index.js';
 import {
-  PROVIDER_IDS, KEYED_PROVIDERS, DEFAULT_PRIORITY, CURATED_MODELS, TEST_MODELS,
-  migrateSettings, createResolver
+  PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
+  CURATED_MODELS, TEST_MODELS, migrateSettings, createResolver
 } from '../core/modelSource.js';
+// Subscription (CLI-delegation) plumbing: sign-in detection + binary
+// resolution. Presence checks only — no token is ever read (SUBSCRIPTION-AUTH-GUIDE).
+import { claudeCredentialStatus, resolveClaudeCli } from '../core/adapters/claudeCode.js';
+import { codexCredentialStatus, resolveCodexCli } from '../core/adapters/codexCli.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, '..');
@@ -77,10 +81,28 @@ persistSettings(); // seal the migration (legacy openrouterApiKey is gone after 
 // accept that fallback for CLI use). The mock provider is always connected.
 function hasKey(provider) {
   if (provider === 'mock') return true;
+  // Subscription providers connect via the vendor CLI's own sign-in, but only
+  // once the user has explicitly opted in (the Settings card carries the
+  // usage warning — Claude plan limits and Anthropic's OAuth terms).
+  if (SUBSCRIPTION_PROVIDERS.includes(provider)) {
+    const sub = settings.subscriptions?.[provider];
+    if (!sub?.enabled) return false;
+    return subscriptionStatus(provider).signedIn;
+  }
   if (settings.providers?.[provider]?.apiKey) return true;
   if (provider === 'anthropic') return Boolean(process.env.ANTHROPIC_API_KEY);
   if (provider === 'openai') return Boolean(process.env.OPENAI_API_KEY);
   return false;
+}
+
+// Sign-in + CLI presence for one subscription provider (cheap fs checks).
+function subscriptionStatus(provider) {
+  const sub = settings.subscriptions?.[provider] ?? {};
+  const home = sub.home || null;
+  if (provider === 'claude-code') {
+    return { ...claudeCredentialStatus(home), cli: resolveClaudeCli(sub.cliPath || null) };
+  }
+  return { ...codexCredentialStatus(home), cli: resolveCodexCli(sub.cliPath || null) };
 }
 
 // The resolution rule (PROVIDERS-PLAN §2). Pinned source wins when it has a
@@ -92,11 +114,19 @@ function resolveModelSource(modelId, pinned = null) {
   const entry = (settings.activeModels ?? []).find(m => m.id === modelId);
   const source = pinned ?? entry?.source ?? 'auto';
   const r = resolveSource(modelId, source);
-  return {
+  const out = {
     ...r,
     apiKey: settings.providers?.[r.provider]?.apiKey ?? null,
     ...(r.provider === 'kimi' ? { keyKind: settings.providers?.kimi?.keyKind ?? 'platform' } : {})
   };
+  // Subscription targets carry their optional overrides to the adapter:
+  // cliHome selects the account (credential dir), cliPath the binary. No key.
+  if (SUBSCRIPTION_PROVIDERS.includes(r.provider)) {
+    const sub = settings.subscriptions?.[r.provider];
+    if (sub?.home) out.cliHome = sub.home;
+    if (sub?.cliPath) out.cliPath = sub.cliPath;
+  }
+  return out;
 }
 
 // Runtime config = config.json defaults merged with settings.json overrides,
@@ -141,6 +171,12 @@ function rebuildRuntimeConfig() {
   runtimeConfig.providerKeys = Object.fromEntries(
     KEYED_PROVIDERS.filter(p => settings.providers?.[p]?.apiKey).map(p => [p, settings.providers[p].apiKey])
   );
+  // Connected subscription providers join the map with a sentinel — the
+  // default-worker picker treats presence as "connected", and the adapters
+  // ignore apiKey by design (the CLI owns auth).
+  for (const p of SUBSCRIPTION_PROVIDERS) {
+    if (hasKey(p)) runtimeConfig.providerKeys[p] = 'subscription';
+  }
   // Call-time resolution for 'auto' workers (active-models picks ride on nodes
   // and tasks as { provider: 'auto', model }).
   runtimeConfig.resolveModelSource = resolveModelSource;
@@ -176,22 +212,44 @@ rebuildRuntimeConfig();
 // keys), the priority order, the active-model registry, worker assignments,
 // and a small connected/model-count summary for the overview UI.
 function publicSettings() {
-  const providers = Object.fromEntries(PROVIDER_IDS.map(p => [p, {
-    hasKey: hasKey(p),
-    ...(p === 'kimi' ? { keyKind: settings.providers?.kimi?.keyKind ?? 'platform' } : {})
-  }]));
+  const providers = Object.fromEntries(PROVIDER_IDS.map(p => {
+    const entry = {
+      hasKey: hasKey(p),
+      ...(p === 'kimi' ? { keyKind: settings.providers?.kimi?.keyKind ?? 'platform' } : {})
+    };
+    // Subscription card state: opted in? signed in? CLI found? Paths shown are
+    // locations, never contents — the renderer needs them to say "run
+    // `codex login`" vs "enable it" vs "install the CLI" precisely.
+    if (SUBSCRIPTION_PROVIDERS.includes(p)) {
+      const sub = settings.subscriptions?.[p] ?? {};
+      const st = subscriptionStatus(p);
+      entry.subscription = {
+        enabled: Boolean(sub.enabled),
+        signedIn: st.signedIn,
+        credentialPath: st.detail,
+        cliFound: Boolean(st.cli),
+        cliCommand: st.cli ? [st.cli.command, ...st.cli.args].join(' ') : null,
+        home: sub.home ?? '',
+        cliPath: sub.cliPath ?? ''
+      };
+    }
+    return [p, entry];
+  }));
   const activeModels = settings.activeModels ?? [];
+  const connectable = [...KEYED_PROVIDERS, ...SUBSCRIPTION_PROVIDERS];
   return {
     providers,
     // Legacy flag for the lander's no-key hint: any provider at all.
-    hasKey: KEYED_PROVIDERS.some(hasKey),
+    hasKey: connectable.some(hasKey),
+    // The lander's usage notice: runs may draw on the Claude subscription.
+    claudeSubscriptionActive: hasKey('claude-code'),
     providerPriority: settings.providerPriority ?? [...DEFAULT_PRIORITY],
     activeModels,
     workers: Object.fromEntries(
       Object.entries(runtimeConfig.workers).map(([name, w]) => [name, { provider: w.provider, model: w.model }])
     ),
     summary: {
-      connected: KEYED_PROVIDERS.filter(hasKey).length,
+      connected: connectable.filter(hasKey).length,
       activeModelCount: activeModels.filter(m => m.enabled !== false).length
     },
     // T2a: where per-project files are written ('workspace' = in-repo .llmflow/,
@@ -824,6 +882,24 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
       }
     }
   }
+  // Subscription opt-ins (SUBSCRIPTION-AUTH-GUIDE): per provider —
+  // { enabled?, home?, cliPath? }. enabled is the explicit consent gate;
+  // empty-string home/cliPath clears the override. No token ever passes here.
+  if (patch.subscriptions && typeof patch.subscriptions === 'object') {
+    settings.subscriptions = { ...(settings.subscriptions ?? {}) };
+    for (const p of SUBSCRIPTION_PROVIDERS) {
+      const inc = patch.subscriptions[p];
+      if (!inc || typeof inc !== 'object') continue;
+      const next = { ...(settings.subscriptions[p] ?? {}) };
+      if (typeof inc.enabled === 'boolean') next.enabled = inc.enabled;
+      for (const field of ['home', 'cliPath']) {
+        if (typeof inc[field] !== 'string') continue;
+        const v = inc[field].trim();
+        if (v) next[field] = v; else delete next[field];
+      }
+      settings.subscriptions[p] = next;
+    }
+  }
   if (patch.kimiKeyKind === 'platform' || patch.kimiKeyKind === 'code') {
     settings.providers = { ...(settings.providers ?? {}) };
     settings.providers.kimi = { ...(settings.providers.kimi ?? {}), keyKind: patch.kimiKeyKind };
@@ -916,15 +992,24 @@ ipcMain.handle('provider:test', async (_e, provider) => {
   if (provider === 'mock') return { ok: true };
   if (!PROVIDER_IDS.includes(provider)) return { ok: false, error: `Unknown provider "${provider}".` };
   try {
-    if (!hasKey(provider)) throw new Error(`No API key saved for ${provider} yet.`);
+    if (!hasKey(provider)) {
+      throw new Error(SUBSCRIPTION_PROVIDERS.includes(provider)
+        ? `${provider} is not connected — enable it and sign in via the vendor CLI first.`
+        : `No API key saved for ${provider} yet.`);
+    }
     const keyKind = settings.providers?.kimi?.keyKind ?? 'platform';
     const model = provider === 'kimi'
       ? (keyKind === 'code' ? TEST_MODELS.kimiCode : TEST_MODELS.kimiPlatform)
       : TEST_MODELS[provider];
+    // Subscription targets get their overrides stamped exactly like a real
+    // call would (resolveModelSource) — a CLI round trip takes a few seconds.
+    const sub = SUBSCRIPTION_PROVIDERS.includes(provider) ? settings.subscriptions?.[provider] : null;
     await callModel({
       provider, model,
       apiKey: settings.providers?.[provider]?.apiKey ?? null,
       ...(provider === 'kimi' ? { keyKind } : {}),
+      ...(sub?.home ? { cliHome: sub.home } : {}),
+      ...(sub?.cliPath ? { cliPath: sub.cliPath } : {}),
       system: '', prompt: 'Reply with the single word: ok',
       maxTokens: 16, retry: { attempts: 1, baseMs: 1 }
     });

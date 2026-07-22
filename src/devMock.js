@@ -168,12 +168,31 @@ const mockSettings = {
   hasKey: false,
   providers: {
     anthropic: { hasKey: false },
+    // Subscription (CLI-delegation) providers: signed in but not yet enabled,
+    // so the browser preview exercises the whole card (warning, toggle, test).
+    'claude-code': {
+      hasKey: false,
+      subscription: {
+        enabled: false, signedIn: true,
+        credentialPath: 'C:\\Users\\dev\\.claude\\.credentials.json',
+        cliFound: true, cliCommand: 'claude.exe', home: '', cliPath: ''
+      }
+    },
     openai: { hasKey: false },
+    codex: {
+      hasKey: false,
+      subscription: {
+        enabled: false, signedIn: false,
+        credentialPath: 'C:\\Users\\dev\\.codex\\auth.json',
+        cliFound: true, cliCommand: 'codex.exe', home: '', cliPath: ''
+      }
+    },
     kimi: { hasKey: false, keyKind: 'platform' },
     openrouter: { hasKey: false },
     mock: { hasKey: true }
   },
-  providerPriority: ['anthropic', 'openai', 'kimi', 'openrouter', 'mock'],
+  claudeSubscriptionActive: false,
+  providerPriority: ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'],
   activeModels: [],
   workers: {
     executor: { provider: 'mock', model: 'mock-large' }
@@ -194,10 +213,12 @@ const mockSettings = {
 };
 const refreshMockSummary = () => {
   mockSettings.summary = {
-    connected: ['anthropic', 'openai', 'kimi', 'openrouter'].filter(p => mockSettings.providers[p].hasKey).length,
+    connected: ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter']
+      .filter(p => mockSettings.providers[p].hasKey).length,
     activeModelCount: mockSettings.activeModels.filter(m => m.enabled !== false).length
   };
   mockSettings.hasKey = mockSettings.summary.connected > 0;
+  mockSettings.claudeSubscriptionActive = Boolean(mockSettings.providers['claude-code'].hasKey);
 };
 const mockCurated = {
   anthropic: [
@@ -211,6 +232,12 @@ const mockCurated = {
   kimi: [
     { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', supportsTools: true },
     { id: 'kimi-for-coding', name: 'Kimi for Coding', supportsTools: true }
+  ],
+  'claude-code': [
+    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 (subscription)', supportsTools: true }
+  ],
+  codex: [
+    { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex (subscription)', supportsTools: true }
   ]
 };
 const mockModels = [
@@ -439,6 +466,16 @@ export function installDevMock() {
         }
       }
       if (patch.kimiKeyKind) mockSettings.providers.kimi.keyKind = patch.kimiKeyKind;
+      if (patch.subscriptions) {
+        for (const [p, inc] of Object.entries(patch.subscriptions)) {
+          const entry = mockSettings.providers[p];
+          if (!entry?.subscription || !inc) continue;
+          if (typeof inc.enabled === 'boolean') entry.subscription.enabled = inc.enabled;
+          if (typeof inc.home === 'string') entry.subscription.home = inc.home.trim();
+          if (typeof inc.cliPath === 'string') entry.subscription.cliPath = inc.cliPath.trim();
+          entry.hasKey = entry.subscription.enabled && entry.subscription.signedIn;
+        }
+      }
       if (Array.isArray(patch.providerPriority)) mockSettings.providerPriority = [...patch.providerPriority];
       if (Array.isArray(patch.activeModels)) mockSettings.activeModels = structuredClone(patch.activeModels);
       if (patch.workers) Object.assign(mockSettings.workers, structuredClone(patch.workers));

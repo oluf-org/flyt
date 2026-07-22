@@ -9,17 +9,31 @@ import { APPROVAL_MODE_OPTIONS } from './ApprovalModePicker.jsx';
 // The renderer never sees a stored key — only per-provider hasKey flags come
 // back over IPC, and saving sends a key one way into the main process.
 
-const PROVIDER_ORDER = ['anthropic', 'openai', 'kimi', 'openrouter', 'mock'];
+const PROVIDER_ORDER = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'];
+// Providers whose "connection" is the vendor CLI's own sign-in, not a key.
+const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'];
 const PROVIDER_META = {
   anthropic: {
     name: 'Anthropic', blurb: 'Claude models — key from console.anthropic.com',
     placeholder: 'sk-ant-…',
-    note: "Subscription login isn't permitted by Anthropic for third-party tools — use an API key."
+    note: 'Pay-per-token API key. To use a Claude Pro/Max plan instead, see the Claude subscription card below.'
+  },
+  'claude-code': {
+    name: 'Claude subscription', subscription: true,
+    blurb: 'Your Claude Pro/Max plan, via the Claude Code CLI you are already signed in to. llm-flow never sees a token — it launches the official CLI, which authenticates itself.',
+    loginHint: <>Not signed in — run <code className="mono">claude</code> in a terminal and use <code className="mono">/login</code>, then re-open Settings.</>,
+    warning: 'Heads-up before enabling: every call here spends your Claude plan’s usage limits (5-hour and weekly windows) — a multi-node workflow can burn through them quickly. Anthropic permits subscription sign-in only through its own Claude Code app, which is exactly what llm-flow launches, but the usage still lands on your personal account and is governed by your plan’s terms. Prefer an API key for heavy or unattended runs.'
   },
   openai: {
     name: 'OpenAI', blurb: 'GPT models — key from platform.openai.com',
     placeholder: 'sk-…',
-    note: "Sign-in with ChatGPT can't pay for third-party model calls — use an API key."
+    note: 'Pay-per-token API key. To use a ChatGPT plan instead, see the ChatGPT subscription card below.'
+  },
+  codex: {
+    name: 'ChatGPT subscription', subscription: true,
+    blurb: 'Your ChatGPT Plus/Pro plan, via the Codex CLI you are already signed in to. llm-flow never sees a token — it launches the official CLI, which authenticates itself.',
+    loginHint: <>Not signed in — run <code className="mono">codex login</code> in a terminal, then re-open Settings.</>,
+    warning: 'Calls here spend your ChatGPT plan’s Codex usage limits and are governed by your ChatGPT workspace policies.'
   },
   kimi: {
     name: 'Kimi', blurb: 'Kimi K2 models — platform key or Kimi Code subscription key',
@@ -36,7 +50,9 @@ const PROVIDER_META = {
 // stays the authority for actual resolution).
 const SERVE = {
   anthropic: id => id.startsWith('claude-'),
+  'claude-code': id => id.startsWith('claude-'),
   openai: id => /^(gpt-|o\d)/.test(id),
+  codex: id => /^(gpt-|o\d|codex)/.test(id),
   kimi: id => /^(kimi-|moonshot-)/.test(id),
   openrouter: id => id.includes('/'),
   mock: id => id.startsWith('mock-')
@@ -44,7 +60,7 @@ const SERVE = {
 const canServe = (provider, id) => SERVE[provider]?.(id) ?? false;
 
 const MOCK_MODELS = ['mock-large', 'mock-small'];
-const CATALOG_PROVIDERS = ['anthropic', 'openai', 'kimi']; // curated lists; openrouter fetches live
+const CATALOG_PROVIDERS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi']; // curated lists; openrouter fetches live
 
 export default function Settings({ onClose }) {
   const [tab, setTab] = useState('providers');
@@ -139,6 +155,7 @@ function ProvidersTab({ s, save }) {
           {PROVIDER_ORDER.map(p => {
             const meta = PROVIDER_META[p];
             const connected = s.providers[p]?.hasKey;
+            const sub = s.providers[p]?.subscription;
             const open = expanded === p;
             const t = tests[p];
             return (
@@ -151,9 +168,17 @@ function ProvidersTab({ s, save }) {
                   <span className="provider-name">{meta.name}</span>
                   {p === 'mock'
                     ? <span className="status-pill pill-neutral">built in</span>
-                    : connected
-                      ? <span className="status-pill">connected</span>
-                      : <span className="status-pill pill-err">no key</span>}
+                    : meta.subscription
+                      ? (connected
+                        ? <span className="status-pill">connected</span>
+                        : sub?.enabled
+                          ? <span className="status-pill pill-err">not signed in</span>
+                          : sub?.signedIn
+                            ? <span className="status-pill pill-neutral">signed in · off</span>
+                            : <span className="status-pill pill-neutral">off</span>)
+                      : connected
+                        ? <span className="status-pill">connected</span>
+                        : <span className="status-pill pill-err">no key</span>}
                   <span className="provider-count muted">{activeCount(p)} model{activeCount(p) === 1 ? '' : 's'}</span>
                   <span className="provider-caret">{open ? '▾' : '▸'}</span>
                 </button>
@@ -161,6 +186,12 @@ function ProvidersTab({ s, save }) {
                   <div className="provider-card-body">
                     <p className="settings-hint">{meta.blurb}</p>
                     {meta.note && <p className="settings-hint provider-note">{meta.note}</p>}
+                    {meta.subscription && (
+                      <SubscriptionCard
+                        p={p} meta={meta} sub={sub} connected={connected} save={save}
+                        test={test} t={t}
+                      />
+                    )}
                     {p === 'kimi' && (
                       <div className="keykind-row" role="radiogroup" aria-label="Kimi key kind">
                         {[['platform', 'Platform key — pay per token'], ['code', 'Kimi Code key — uses your Kimi membership']].map(([kind, label]) => (
@@ -176,7 +207,7 @@ function ProvidersTab({ s, save }) {
                         ))}
                       </div>
                     )}
-                    {p !== 'mock' && (
+                    {p !== 'mock' && !meta.subscription && (
                       <>
                         <div className="settings-row">
                           <input
@@ -227,6 +258,89 @@ function ProvidersTab({ s, save }) {
           </select>
         </div>
       </section>
+    </>
+  );
+}
+
+// --- Subscription provider card (SUBSCRIPTION-AUTH-GUIDE) -------------------
+// The vendor CLI is the authentication authority: this card never takes a
+// key. It shows sign-in state, carries the usage warning, and gates the
+// provider behind an explicit enable toggle. Advanced: a credential-home
+// override (selects an account — a credential directory IS an account) and an
+// explicit CLI path for unusual installs.
+
+function SubscriptionCard({ p, meta, sub, connected, save, test, t }) {
+  const [home, setHome] = useState(sub?.home ?? '');
+  const [cliPath, setCliPath] = useState(sub?.cliPath ?? '');
+  const [advanced, setAdvanced] = useState(Boolean(sub?.home || sub?.cliPath));
+  const dirty = home !== (sub?.home ?? '') || cliPath !== (sub?.cliPath ?? '');
+
+  return (
+    <>
+      {meta.warning && <p className="settings-hint provider-warning">⚠ {meta.warning}</p>}
+
+      <label className="sub-enable-row">
+        <input
+          type="checkbox"
+          checked={Boolean(sub?.enabled)}
+          onChange={e => save({ subscriptions: { [p]: { enabled: e.target.checked } } })}
+          aria-label={`Use ${meta.name}`}
+        />
+        <span>Use my subscription for model calls</span>
+      </label>
+
+      {!sub?.cliFound && (
+        <p className="settings-hint provider-note">
+          CLI not found on PATH — install it, or point at the binary under Advanced below.
+        </p>
+      )}
+      {sub?.cliFound && !sub?.signedIn && (
+        <p className="settings-hint provider-note">{meta.loginHint}</p>
+      )}
+      {connected && (
+        <p className="settings-hint">
+          Signed in — credentials stay with the CLI (<span className="mono">{sub.credentialPath}</span>); llm-flow only launches it.
+        </p>
+      )}
+
+      <div className="settings-row provider-test-row">
+        <button onClick={() => test(p)} disabled={!connected || t?.state === 'running'}>
+          {t?.state === 'running' ? 'Testing…' : 'Test connection'}
+        </button>
+        {t?.state === 'ok' && <span className="status-pill">ok</span>}
+        {t?.state === 'err' && <span className="provider-test-err mono" title={t.error}>{t.error}</span>}
+        <button className="link" onClick={() => setAdvanced(a => !a)} aria-expanded={advanced}>
+          {advanced ? 'Hide advanced' : 'Advanced…'}
+        </button>
+      </div>
+
+      {advanced && (
+        <>
+          <div className="settings-row">
+            <input
+              type="text"
+              placeholder={p === 'codex' ? 'Credential home (CODEX_HOME) — blank for default' : 'Credential home (HOME with a .claude/) — blank for default'}
+              value={home}
+              onChange={e => setHome(e.target.value)}
+              aria-label={`${meta.name} credential home`}
+            />
+          </div>
+          <div className="settings-row">
+            <input
+              type="text"
+              placeholder="CLI path — blank to find it on PATH"
+              value={cliPath}
+              onChange={e => setCliPath(e.target.value)}
+              aria-label={`${meta.name} CLI path`}
+            />
+            <button
+              className="primary"
+              disabled={!dirty}
+              onClick={() => save({ subscriptions: { [p]: { home, cliPath } } })}
+            >Save</button>
+          </div>
+        </>
+      )}
     </>
   );
 }
@@ -369,7 +483,13 @@ function ModelsTab({ s, save }) {
       window.llmflow.listModels(p)
         .then(list => list.map(m => ({ ...m, provider: p })))
         .catch(() => [])
-    )).then(lists => { if (alive) setCatalog(lists.flat()); });
+    )).then(lists => {
+      if (!alive) return;
+      // The subscription catalogs repeat their API sibling's ids — keep the
+      // first occurrence so the datalist offers each id once.
+      const seen = new Set();
+      setCatalog(lists.flat().filter(m => !seen.has(m.id) && seen.add(m.id)));
+    });
     return () => { alive = false; };
   }, []);
 

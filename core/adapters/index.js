@@ -28,6 +28,11 @@ import { openrouterAdapter } from './openrouter.js';
 import { openaiAdapter } from './openai.js';
 import { kimiAdapter } from './kimi.js';
 import { mockAdapter } from './mock.js';
+// Subscription (CLI-delegation) providers: the vendor's own CLI is spawned as
+// the authenticated runtime — llm-flow never holds a token
+// (SUBSCRIPTION-AUTH-GUIDE). Same callModel contract as every other adapter.
+import { claudeCodeAdapter } from './claudeCode.js';
+import { codexAdapter } from './codexCli.js';
 import { abortError, isAbortError } from './http.js';
 
 // RUN-CONTROL: re-exported so callers (runner, tests) classify unwind errors
@@ -36,8 +41,10 @@ export { abortError, isAbortError };
 
 const providers = {
   anthropic: anthropicAdapter,
+  'claude-code': claudeCodeAdapter,
   openrouter: openrouterAdapter,
   openai: openaiAdapter,
+  codex: codexAdapter,
   kimi: kimiAdapter,
   mock: mockAdapter
 };

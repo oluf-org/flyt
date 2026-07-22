@@ -776,6 +776,9 @@ kbd.shortcut {
   text-align: center; font-size: 12.5px; color: var(--dim);
   margin-top: -8px;
 }
+/* Subscription-usage notice: quiet, but unmistakably a caution. */
+.lander-hint-warn { color: var(--warn); }
+.lander-hint-warn .link { color: inherit; text-decoration: underline; }
 
 .lander-run {
   margin-left: auto;
@@ -1847,6 +1850,23 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   font-size: 10.5px; color: var(--err);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* Subscription provider cards (SUBSCRIPTION-AUTH-GUIDE): the usage warning is
+   the one deliberately loud element — enabling this spends a personal plan. */
+.provider-warning {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-style: normal;
+}
+.sub-enable-row {
+  display: flex; align-items: center; gap: 8px;
+  margin: 2px 0 10px;
+  font-size: 12.5px; font-weight: 600; color: var(--tx); cursor: pointer;
+}
+.sub-enable-row input { accent-color: var(--warn); }
+
 .keykind-row { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
 .keykind-option {
   display: flex; align-items: center; gap: 8px;

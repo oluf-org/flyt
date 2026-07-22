@@ -182,8 +182,11 @@ export async function checkToolCall(call, { resolve, model, retry } = {}) {
 //   gpt-5.6-luna     $1.00 / $6.00
 // A verdict is ~10 output tokens, so the real cost of 'smart' mode is the
 // prompt — and the deterministic screen above means most calls never send one.
+// altProviders: other connected providers that can serve the same id — e.g.
+// Haiku rides a Claude subscription (claude-code) when no Anthropic key is
+// saved; the resolver's priority walk picks the actual transport.
 export const SAFETY_MODEL_CANDIDATES = [
-  { id: 'claude-haiku-4-5', provider: 'anthropic', label: 'Claude Haiku 4.5' },
+  { id: 'claude-haiku-4-5', provider: 'anthropic', altProviders: ['claude-code'], label: 'Claude Haiku 4.5' },
   { id: 'gpt-5.6-luna', provider: 'openai', label: 'GPT-5.6 Luna' },
   { id: 'kimi-k2.6', provider: 'kimi', label: 'Kimi K2.6' },
   { id: 'moonshotai/kimi-k2.6', provider: 'openrouter', label: 'Kimi K2.6 (OpenRouter)' },
@@ -194,5 +197,6 @@ export const SAFETY_MODEL_CANDIDATES = [
 // The id 'auto' resolves to the first candidate whose provider is connected.
 export function pickSafetyModel(configured, isConnected) {
   if (configured && configured !== 'auto') return configured;
-  return SAFETY_MODEL_CANDIDATES.find(c => isConnected(c.provider))?.id ?? null;
+  return SAFETY_MODEL_CANDIDATES.find(c =>
+    [c.provider, ...(c.altProviders ?? [])].some(isConnected))?.id ?? null;
 }

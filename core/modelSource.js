@@ -10,9 +10,15 @@
 //   activeModels:    [{ id, source: 'auto' | providerId, enabled: bool }]
 //   workers:         { executor: { provider, model } }   (unchanged)
 
-export const PROVIDER_IDS = ['anthropic', 'openai', 'kimi', 'openrouter', 'mock'];
-export const KEYED_PROVIDERS = PROVIDER_IDS.filter(p => p !== 'mock');
-export const DEFAULT_PRIORITY = ['anthropic', 'openai', 'kimi', 'openrouter', 'mock'];
+// Subscription providers (SUBSCRIPTION-AUTH-GUIDE): connected not by a saved
+// key but by the vendor CLI's own sign-in (Claude Code / Codex CLI), gated
+// behind an explicit opt-in in Settings. They sit right after their API-key
+// sibling in the default priority: a saved key wins, the subscription is the
+// fallback — reorderable like any provider.
+export const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'];
+export const PROVIDER_IDS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'];
+export const KEYED_PROVIDERS = PROVIDER_IDS.filter(p => p !== 'mock' && !SUBSCRIPTION_PROVIDERS.includes(p));
+export const DEFAULT_PRIORITY = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'];
 
 // Curated per-provider model lists (PROVIDERS-PLAN §4): anthropic/openai/kimi
 // model endpoints are inconsistent, so a short static list + the free-text
@@ -34,6 +40,19 @@ export const CURATED_MODELS = {
     { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', supportsTools: true, keyKind: 'platform' },
     { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsTools: true, keyKind: 'platform' },
     { id: 'kimi-for-coding', name: 'Kimi for Coding (Kimi Code subscription)', supportsTools: true, keyKind: 'code' }
+  ],
+  // The subscription runtimes serve the same frontier ids as their API
+  // siblings (the priority walk decides who takes a call), plus the
+  // codex-tuned models only the Codex CLI reaches.
+  'claude-code': [
+    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 (subscription)', supportsTools: true },
+    { id: 'claude-opus-4-5', name: 'Claude Opus 4.5 (subscription)', supportsTools: true },
+    { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5 (subscription)', supportsTools: true }
+  ],
+  codex: [
+    { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex (subscription)', supportsTools: true },
+    { id: 'gpt-5.2', name: 'GPT-5.2 (subscription)', supportsTools: true },
+    { id: 'gpt-5.1-codex-mini', name: 'GPT-5.1 Codex mini (subscription)', supportsTools: true }
   ]
 };
 
@@ -41,7 +60,9 @@ export const CURATED_MODELS = {
 // works in Settings rather than three nodes into a run (PROVIDERS-PLAN §4).
 export const TEST_MODELS = {
   anthropic: 'claude-haiku-4-5',
+  'claude-code': 'claude-haiku-4-5',
   openai: 'gpt-5-mini',
+  codex: 'gpt-5.1-codex-mini',
   kimiPlatform: 'kimi-k2.6',
   kimiCode: 'kimi-for-coding',
   openrouter: 'openai/gpt-4o-mini'
@@ -80,6 +101,20 @@ export function migrateSettings(raw) {
   if (s.providers.kimi && s.providers.kimi.keyKind !== 'code') {
     s.providers.kimi = { ...s.providers.kimi, keyKind: 'platform' };
   }
+
+  // Subscription providers: { enabled, home?, cliPath? } per provider. enabled
+  // is the explicit opt-in gate (the Claude card carries a usage warning);
+  // home/cliPath are the optional account-selection and binary overrides.
+  const subs = {};
+  for (const p of SUBSCRIPTION_PROVIDERS) {
+    const raw = s.subscriptions?.[p];
+    if (!raw || typeof raw !== 'object') continue;
+    const entry = { enabled: raw.enabled === true };
+    if (typeof raw.home === 'string' && raw.home.trim()) entry.home = raw.home.trim();
+    if (typeof raw.cliPath === 'string' && raw.cliPath.trim()) entry.cliPath = raw.cliPath.trim();
+    subs[p] = entry;
+  }
+  s.subscriptions = subs;
   return s;
 }
 
@@ -93,7 +128,7 @@ export function createResolver({ hasKey, canServe, priority }) {
     if (pinned && pinned !== 'auto') {
       if (hasKey(pinned)) return { provider: pinned, model: modelId };
       throw new Error(
-        `Model "${modelId}" is pinned to ${pinned}, but that provider has no API key saved. ` +
+        `Model "${modelId}" is pinned to ${pinned}, but that provider has no API key or sign-in. ` +
         `Add one in Settings → Providers, or switch the model's source to Auto.`
       );
     }

@@ -412,6 +412,9 @@ export default function App() {
   // whether a key exists (drives the lander's no-key hint). Re-read when Settings
   // closes so adding a key clears the hint without a restart.
   const [hasKey, setHasKey] = useState(false);
+  // Claude-subscription usage notice (SUBSCRIPTION-AUTH-GUIDE): when runs can
+  // draw on the user's Claude plan, the lander says so next to the composer.
+  const [claudeSubActive, setClaudeSubActive] = useState(false);
   const [activeModels, setActiveModels] = useState([]);
   // Tool-call approval (APPROVAL-MODES §3). The saved default seeds the chip;
   // changing it in the chatbox saves it back, so the picker beside Run and the
@@ -422,6 +425,7 @@ export default function App() {
   const refreshSettings = useCallback(() => {
     window.llmflow.getSettings().then(s => {
       setHasKey(Boolean(s.hasKey));
+      setClaudeSubActive(Boolean(s.claudeSubscriptionActive));
       setActiveModels(s.activeModels ?? []);
       setApprovalMode(s.approvalMode ?? 'ask');
       setSafetyModel(s.resolvedSafetyModel ?? null);
@@ -1897,6 +1901,7 @@ export default function App() {
             models={models}
             activeModels={activeModels}
             hasKey={hasKey}
+            claudeSubActive={claudeSubActive}
             onOpenSettings={() => setShowSettings(true)}
             inputRef={landerInputRef}
             busy={busy}

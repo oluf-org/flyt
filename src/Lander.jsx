@@ -169,7 +169,7 @@ export default function Lander({
   flows = [], flowId, modeId = null, onSelect, configs = {},
   compareOn = false, onToggleCompare, slotB = null, onSelectB,
   launchInputs = [], launchValues, onLaunchInput, models = [], activeModels = [],
-  hasKey = true, onOpenSettings,
+  hasKey = true, claudeSubActive = false, onOpenSettings,
   busy, inputRef, onSubmit, onOpenProject, onOpenFolder
 }) {
   const [text, setText] = useState('');
@@ -304,6 +304,15 @@ export default function Lander({
             Add an OpenRouter key in{' '}
             <button type="button" className="link" onClick={onOpenSettings}>Settings</button>
             {' '}to run.
+          </div>
+        )}
+
+        {/* Claude-subscription notice (SUBSCRIPTION-AUTH-GUIDE): the user
+            opted in, but each run should still say where its usage lands. */}
+        {claudeSubActive && (
+          <div className="lander-hint lander-hint-warn">
+            <span aria-hidden>⚠</span> Runs may use your Claude subscription (via Claude Code) — plan limits apply.{' '}
+            <button type="button" className="link" onClick={onOpenSettings}>Manage</button>
           </div>
         )}
 
