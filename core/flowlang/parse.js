@@ -146,9 +146,13 @@ export function parseFlow(text) {
   };
 }
 
-// doc.modes -> { [modeId]: { name?, overrides: { [nodeId]: {...fields} } } }.
-// Only structural shape is enforced (map of maps); the linter validates the
-// override fields against the actual nodes.
+// doc.modes -> { [modeId]: { name?, description?, derivedFrom?, overrides:
+// { [nodeId]: {...fields} } } }. Only structural shape is enforced (map of
+// maps); the linter validates the override fields against the actual nodes.
+// `description` and `derivedFrom` (CONFIGS-COMPARE P1) are pass-through
+// scalars: description is picker/card copy; derivedFrom is lineage metadata
+// only — it records which mode a duplicate/promote came from and carries NO
+// merge or inheritance semantics at run time.
 function parseModes(raw) {
   if (raw == null) return null;
   const modes = {};
@@ -157,10 +161,14 @@ function parseModes(raw) {
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
       throw new FlowParseError(`mode "${id}" must be a map of fields`);
     }
-    const { name, overrides, ...rest } = entry;
+    const { name, description, derivedFrom, overrides, ...rest } = entry;
     const extra = Object.keys(rest);
     if (extra.length) throw new FlowParseError(`mode "${id}" has unknown field(s): ${extra.join(', ')}`);
     if (name != null && typeof name !== 'string') throw new FlowParseError(`mode "${id}" name must be a string`);
+    if (description != null && typeof description !== 'string') throw new FlowParseError(`mode "${id}" description must be a string`);
+    if (derivedFrom != null && (typeof derivedFrom !== 'string' || !REF_RE.exec(derivedFrom) || derivedFrom.includes('.'))) {
+      throw new FlowParseError(`mode "${id}" derivedFrom must be a mode id`);
+    }
     if (overrides != null && (typeof overrides !== 'object' || Array.isArray(overrides))) {
       throw new FlowParseError(`mode "${id}" overrides must be a map of nodeId -> fields`);
     }
@@ -173,6 +181,8 @@ function parseModes(raw) {
     }
     modes[id] = {
       ...(typeof name === 'string' && name.trim() ? { name } : {}),
+      ...(typeof description === 'string' && description.trim() ? { description } : {}),
+      ...(typeof derivedFrom === 'string' && derivedFrom.trim() ? { derivedFrom } : {}),
       overrides: ov
     };
   }

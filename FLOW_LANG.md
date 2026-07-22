@@ -114,14 +114,24 @@ flow with no `modes` runs in its single implicit default configuration.
 modes:
   fable-high:
     name: High — Fable          # label shown in the launch picker
+    description: Fable worker on every AI node.   # optional — pickers & cards
     overrides:
       refine:      { worker: { provider: anthropic, model: claude-fable-5 } }
       orchestrate: { maxNodes: 10 }
   gpt-high:
     name: High — GPT
+    derivedFrom: fable-high     # optional — lineage metadata only (see below)
     overrides:
       refine:      { worker: { provider: openai, model: gpt-5 } }
 ```
+
+Two optional scalar fields sit beside `name` (CONFIGS-COMPARE P1):
+
+- `description` — one line shown in pickers and on the config's card.
+- `derivedFrom: <modeId>` — **lineage metadata only**. Duplicating a config
+  copies the full override map and records the parent here; there is NO merge
+  or inheritance at run time (each mode's `overrides` is always the complete
+  map). The linter warns when it references a mode that doesn't exist.
 
 Each override is keyed by node id and may set only fields that node accepts —
 the same whitelist the runner enforces at launch: `worker`, `effort`,
@@ -175,7 +185,7 @@ scalars, or multi-document files — the linter reports these as parse errors.
 | `duplicate-edge` | warning | same edge stated twice |
 | `orphan-approval` | warning | `requiresApproval` on an input/output node |
 | `parent` | error | `parent:` missing, not an orchestrator, or a structural/orchestrator node is contained |
-| `mode` | error/warning | mode override field the node can't accept (error), or override of a node not in the flow (warning) |
+| `mode` | error/warning | mode override field the node can't accept (error), override of a node not in the flow (warning), or a `derivedFrom` pointing at a non-existent mode (warning) |
 | `expose` | error | a node exposes a field it cannot accept as a run input |
 
 Templates are loaded at lint time, so the rules always reflect the current

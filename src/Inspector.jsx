@@ -2,7 +2,8 @@ import React from 'react';
 import {
   TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, AGENT_TOOLS,
   EFFORT_LEVELS, DEFAULT_EFFORT, EVAL_TYPES, WORK_CATEGORIES,
-  nodeLabel, isInstance, resolveInstance, nodePorts, isStructuralNode
+  nodeLabel, isInstance, resolveInstance, nodePorts, isStructuralNode,
+  overridableFields, resolveFlow, diffOverrides
 } from './flowTypes.js';
 import { outputKey } from './runGraph.js';
 
@@ -224,12 +225,90 @@ export function WorkerPicker({ worker, models, activeModels, onChange, idPrefix 
   );
 }
 
-export function FlowInspector({ flow, selectedNode, models, activeModels, templates, onChangeData, onChangeOverrides, onDeleteNode, onDetachNode }) {
+// Edit-target toggle (CONFIGS-COMPARE P1): at the top of the Inspector, switch
+// between Flow (stored node overrides — today's behavior) and Config: <name>
+// (that config's override map). Same fields, same override tags, same
+// overridableFields validation — only the write target changes.
+function EditTargetBar({ modes, editModeId, onEditMode }) {
+  const ids = Object.keys(modes ?? {});
+  if (!ids.length || !onEditMode) return null;
+  return (
+    <div className="edit-target">
+      <button
+        type="button"
+        className={'edit-target-btn' + (!editModeId ? ' active' : '')}
+        onClick={() => onEditMode(null)}
+        title="Edit the flow itself — stored node overrides"
+      >Flow</button>
+      <select
+        className={'edit-target-select' + (editModeId ? ' active' : '')}
+        value={editModeId ?? ''}
+        onChange={e => onEditMode(e.target.value || null)}
+        aria-label="Edit a config's override map instead"
+        title="Edit a config — changes land in that config's override map, not the flow"
+      >
+        <option value="">Config…</option>
+        {ids.map(id => <option key={id} value={id}>◑ {modes[id].name || id}</option>)}
+      </select>
+    </div>
+  );
+}
+
+export function FlowInspector({ flow, selectedNode, models, activeModels, templates, onChangeData, onChangeOverrides, onDeleteNode, onDetachNode, editModeId = null, onEditMode, onChangeConfigOverrides }) {
   const node = flow.nodes.find(n => n.id === selectedNode);
+  const modes = flow.modes ?? {};
+  const editMode = editModeId && modes[editModeId] ? { id: editModeId, ...modes[editModeId] } : null;
+  const targetBar = <EditTargetBar modes={modes} editModeId={editMode?.id ?? null} onEditMode={onEditMode} />;
+
+  // Config edit target, no node selected: the config's summary (description,
+  // lineage, diff-against-Default badges) and the invitation to pick a node.
+  if (editMode && !node) {
+    const resolved = resolveFlow(flow, templates ?? []);
+    const badges = diffOverrides(resolved, editMode.overrides);
+    return (
+      <aside className="inspector">
+        {targetBar}
+        <div className="inspector-header">
+          <span className="node-icon">◑</span>
+          <div className="inspector-title">
+            <h2>{editMode.name || editMode.id}</h2>
+            <div className="node-sub">config · {flow.name}</div>
+          </div>
+        </div>
+        <div className="inspector-body">
+          {editMode.description && (
+            <section>
+              <h3>Description</h3>
+              <pre>{editMode.description}</pre>
+            </section>
+          )}
+          {editMode.derivedFrom && (
+            <section>
+              <h3>Lineage</h3>
+              <pre>{`Derived from "${editMode.derivedFrom}" (metadata only — the full override map is stored on this config; nothing is merged at run time).`}</pre>
+            </section>
+          )}
+          <section>
+            <h3>What it changes vs Default</h3>
+            <div className="config-badges">
+              {badges.length
+                ? badges.map((b, i) => <span key={i} className={'config-badge' + (b.kind === 'change' ? '' : ' warn')} title={b.text}>{b.text}</span>)
+                : <span className="config-badge neutral">same as Default</span>}
+            </div>
+          </section>
+          <section>
+            <h3>Editing</h3>
+            <pre>Select a node on the canvas to view and edit this config&rsquo;s overrides for that node. Clearing a field removes it from the config (back to the flow default).</pre>
+          </section>
+        </div>
+      </aside>
+    );
+  }
 
   if (!node) {
     return (
       <aside className="inspector">
+        {targetBar}
         <div className="inspector-header">
           <span className="node-icon">✏</span>
           <div className="inspector-title">
@@ -247,6 +326,23 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
     );
   }
 
+  // Config edit target + a node: edit that config's overrides FOR THIS NODE.
+  // Same fields and override tags as the flow editor, gated by the same
+  // overridableFields whitelist the runner enforces at launch.
+  if (editMode) {
+    return (
+      <ConfigNodeEditor
+        node={node}
+        mode={editMode}
+        template={node.templateId ? templates?.find(t => t.id === node.templateId) ?? null : null}
+        models={models}
+        activeModels={activeModels}
+        onChangeConfigOverrides={onChangeConfigOverrides}
+        banner={targetBar}
+      />
+    );
+  }
+
   // Template instances get the override editor: template defaults come from
   // the Node Library; every change here is saved in this workflow only.
   if (isInstance(node)) {
@@ -260,6 +356,7 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
         onChangeOverrides={onChangeOverrides}
         onDeleteNode={onDeleteNode}
         onDetachNode={onDetachNode}
+        banner={targetBar}
       />
     );
   }
@@ -271,6 +368,7 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
 
   return (
     <aside className="inspector">
+      {targetBar}
       <div className="inspector-header">
         <span className="node-icon">{meta.icon}</span>
         <div className="inspector-title">
@@ -562,11 +660,11 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
 // clearly marked "override (this workflow only)". Clearing an override
 // reverts to the template default. Templates are edited on the Nodes page.
 
-function OverrideTag({ active, onReset }) {
-  if (!active) return <span className="override-tag default">template default</span>;
+function OverrideTag({ active, onReset, label = 'override (this workflow only)', defaultLabel = 'template default' }) {
+  if (!active) return <span className="override-tag default">{defaultLabel}</span>;
   return (
     <span className="override-tag">
-      override (this workflow only)
+      {label}
       {onReset && <button type="button" className="ghost mini" onClick={onReset} title="Revert to the template default">↺</button>}
     </span>
   );
@@ -586,7 +684,7 @@ function ContainmentSection({ parent, onDetach }) {
   );
 }
 
-function InstanceInspector({ node, parent, template, models, activeModels, onChangeOverrides, onDeleteNode, onDetachNode }) {
+function InstanceInspector({ node, parent, template, models, activeModels, onChangeOverrides, onDeleteNode, onDetachNode, banner = null }) {
   const ov = node.overrides ?? {};
   const eff = resolveInstance(node, template).data; // effective (merged) values
   const set = patch => onChangeOverrides(node.id, patch);
@@ -594,6 +692,7 @@ function InstanceInspector({ node, parent, template, models, activeModels, onCha
 
   return (
     <aside className="inspector">
+      {banner}
       <div className="inspector-header">
         <span className="node-icon">{template?.icon ?? '✦'}</span>
         <div className="inspector-title">
@@ -793,6 +892,209 @@ function InstanceInspector({ node, parent, template, models, activeModels, onCha
         <section>
           <button className="reject" onClick={() => onDeleteNode(node.id)}>Delete node</button>
         </section>
+      </div>
+    </aside>
+  );
+}
+
+// --- Config edit target (CONFIGS-COMPARE P1) ---------------------------------
+// The Inspector's Config mode: shows/edits ONE config's override map for the
+// selected node. Fields are exactly the launch-override whitelist for that
+// node (overridableFields — the same set the runner enforces and the linter
+// checks), shown with the same override tags as the flow editor. Values
+// display EFFECTIVE (flow default + this config's override layered on);
+// writes land only in the config; clearing a field removes it from the config.
+function ConfigNodeEditor({ node, mode, template, models, activeModels, onChangeConfigOverrides, banner = null }) {
+  const ov = mode.overrides?.[node.id] ?? {};
+  // Effective values: the flow default with this config's overrides on top —
+  // for an instance, through the template merge; for a raw node, onto data.
+  const effNode = node.templateId
+    ? resolveInstance({ ...node, overrides: { ...(node.overrides ?? {}), ...ov } }, template)
+    : { ...node, data: { ...(node.data ?? {}), ...ov } };
+  const eff = effNode.data ?? {};
+  const allowed = overridableFields(effNode);
+  const set = patch => onChangeConfigOverrides(mode.id, node.id, patch);
+  const unset = key => set({ [key]: undefined });
+  const tag = field => <OverrideTag active={ov[field] !== undefined} onReset={() => unset(field)} label="config override" defaultLabel="flow default" />;
+  const has = f => allowed.has(f);
+
+  return (
+    <aside className="inspector">
+      {banner}
+      <div className="inspector-header">
+        <span className="node-icon">{template?.icon ?? TYPE_META[node.type]?.icon ?? '▢'}</span>
+        <div className="inspector-title">
+          <h2>{eff.title ?? node.id}</h2>
+          <div className="node-sub">config ◑ {mode.name || mode.id} · overrides for this node</div>
+        </div>
+        <span className="status-pill pill-accent">config</span>
+      </div>
+      <div className="inspector-body node-editor">
+        {allowed.size === 0 ? (
+          <section>
+            <h3>No overridable fields</h3>
+            <pre>{node.type} nodes accept no launch overrides — configs cannot change this node.</pre>
+          </section>
+        ) : (
+          <>
+            {has('worker') && (
+              <section>
+                <h3>Worker {tag('worker')}</h3>
+                {ov.worker == null && (
+                  <pre>{eff.worker ? `${eff.worker.provider}/${eff.worker.model} (flow default)` : 'app default worker (flow default)'}</pre>
+                )}
+                {ov.worker != null
+                  ? <WorkerPicker worker={ov.worker} models={models} activeModels={activeModels} idPrefix={`c-${node.id}`} onChange={worker => set({ worker })} />
+                  : <button type="button" className="ghost mini"
+                      onClick={() => set({ worker: eff.worker ?? { provider: 'mock', model: 'mock-large' } })}>
+                      Set a worker for this config
+                    </button>}
+              </section>
+            )}
+
+            {has('effort') && (
+              <section>
+                <h3>Effort level {tag('effort')}</h3>
+                <select value={eff.effort ?? DEFAULT_EFFORT} onChange={e => set({ effort: e.target.value })}>
+                  {EFFORT_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </section>
+            )}
+
+            {has('category') && (
+              <section>
+                <h3>Task type {tag('category')}</h3>
+                <select value={eff.category ?? WORK_CATEGORIES[0]} onChange={e => set({ category: e.target.value })}>
+                  {WORK_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </section>
+            )}
+
+            {has('evalType') && (
+              <section>
+                <h3>Evaluation type {tag('evalType')}</h3>
+                <select value={eff.evalType ?? 'step'} onChange={e => set({ evalType: e.target.value })}>
+                  <option value="plan">Plan evaluation — creates the work nodes</option>
+                  <option value="step">Step evaluation — pass / retry / escalate</option>
+                  <option value="final">Final evaluation — completeness report</option>
+                </select>
+              </section>
+            )}
+
+            {has('language') && (
+              <section>
+                <h3>Target language {tag('language')}</h3>
+                <input
+                  value={ov.language ?? ''}
+                  placeholder={eff.language ?? 'English'}
+                  onChange={e => set({ language: e.target.value || undefined })}
+                />
+              </section>
+            )}
+
+            {(has('minNodes') || has('maxNodes')) && (
+              <section>
+                <h3>Spawned nodes — minimum / maximum {tag('minNodes')}{has('maxNodes') && tag('maxNodes')}</h3>
+                <div className="nodes-editor-row">
+                  <select
+                    aria-label="Minimum spawned nodes"
+                    value={eff.minNodes ?? 1}
+                    onChange={e => {
+                      const min = Number(e.target.value);
+                      set({ minNodes: min, ...(min > (eff.maxNodes ?? 5) ? { maxNodes: min } : {}) });
+                    }}
+                  >
+                    {Array.from({ length: 20 }, (_, i) => i + 1).map(n => <option key={n} value={n}>min {n}</option>)}
+                  </select>
+                  <select
+                    aria-label="Maximum spawned nodes"
+                    value={eff.maxNodes ?? 5}
+                    onChange={e => {
+                      const max = Number(e.target.value);
+                      set({ maxNodes: max, ...(max < (eff.minNodes ?? 1) ? { minNodes: max } : {}) });
+                    }}
+                  >
+                    {Array.from({ length: 20 }, (_, i) => i + 1).map(n => <option key={n} value={n}>max {n}</option>)}
+                  </select>
+                </div>
+              </section>
+            )}
+
+            {has('system') && (
+              <section>
+                <h3>System prompt {tag('system')}</h3>
+                <textarea
+                  rows={5}
+                  placeholder="(blank — the role default is used)"
+                  value={ov.system ?? ''}
+                  onChange={e => set({ system: e.target.value || undefined })}
+                />
+              </section>
+            )}
+
+            {has('instructions') && (
+              <section>
+                <h3>Extra instructions {tag('instructions')}</h3>
+                <textarea
+                  rows={4}
+                  placeholder="(blank — no extra instructions from this config)"
+                  value={ov.instructions ?? ''}
+                  onChange={e => set({ instructions: e.target.value || undefined })}
+                />
+              </section>
+            )}
+
+            {has('tools') && (
+              <section>
+                <h3>Tools {tag('tools')}</h3>
+                {AGENT_TOOLS.map(tool => {
+                  const effective = ov.tools ?? eff.tools ?? AGENT_TOOLS;
+                  return (
+                    <label className="check-row" key={tool}>
+                      <input
+                        type="checkbox"
+                        checked={effective.includes(tool)}
+                        onChange={() => {
+                          const next = effective.includes(tool)
+                            ? effective.filter(t => t !== tool)
+                            : [...effective, tool];
+                          set({ tools: next });
+                        }}
+                      />
+                      <span className="mono">{tool}</span>
+                    </label>
+                  );
+                })}
+              </section>
+            )}
+
+            {(has('requiresApproval') || has('approveToolCalls')) && (
+              <section>
+                <h3>Approval {tag('requiresApproval')}{tag('approveToolCalls')}</h3>
+                {has('requiresApproval') && (
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(eff.requiresApproval)}
+                      onChange={e => set({ requiresApproval: e.target.checked })}
+                    />
+                    Pause for human approval before this node runs
+                  </label>
+                )}
+                {has('approveToolCalls') && (
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(eff.approveToolCalls)}
+                      onChange={e => set({ approveToolCalls: e.target.checked })}
+                    />
+                    Pause before each file/shell tool call (approve every write &amp; command)
+                  </label>
+                )}
+              </section>
+            )}
+          </>
+        )}
       </div>
     </aside>
   );

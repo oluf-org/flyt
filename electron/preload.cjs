@@ -23,6 +23,13 @@ contextBridge.exposeInMainWorld('llmflow', {
   // notification + taskbar flash — a stopped workflow must find the user.
   signalApprovalGate: (info) => ipcRenderer.invoke('app:approvalGate', info),
   listRuns: (pid) => ipcRenderer.invoke('run:list', pid),
+  // Comparison records (CONFIGS-COMPARE P2): begin mints the shared group id
+  // before the two runs start; save persists { id, runIds, origin } and stamps
+  // both runs' metas; list feeds the ⚖ badge + pairing restore.
+  beginCompare: (pid) => ipcRenderer.invoke('compare:begin', pid),
+  saveCompare: (pid, rec) => ipcRenderer.invoke('compare:save', pid, rec),
+  listComparisons: (pid) => ipcRenderer.invoke('compare:list', pid),
+  judgeRuns: (pid, a, b, cmpId = null) => ipcRenderer.invoke('run:judge', pid, a, b, cmpId),
   renameRun: (pid, runId, name) => ipcRenderer.invoke('run:rename', pid, runId, name),
   deleteRun: (pid, runId) => ipcRenderer.invoke('run:delete', pid, runId),
   getSnapshot: (pid, runId) => ipcRenderer.invoke('run:snapshot', pid, runId),
@@ -43,6 +50,12 @@ contextBridge.exposeInMainWorld('llmflow', {
   newFlow: () => ipcRenderer.invoke('flow:new'),
   deleteFlow: (id) => ipcRenderer.invoke('flow:delete', id),
   lintFlow: (id) => ipcRenderer.invoke('flow:lint', id),
+  // Configs (CONFIGS-COMPARE P1): create/update, duplicate, and promote a
+  // finished run's launch config — all modes on a flow, stored in its YAML.
+  saveConfig: (flowId, modeId, config) => ipcRenderer.invoke('flow:saveConfig', flowId, modeId, config),
+  duplicateConfig: (flowId, sourceId, newId, name) => ipcRenderer.invoke('flow:duplicateConfig', flowId, sourceId, newId, name),
+  promoteRunConfig: (pid, runId, name) => ipcRenderer.invoke('flow:promoteRunConfig', pid, runId, name),
+  listConfigs: () => ipcRenderer.invoke('flow:listConfigs'),
   flowLaunchInputs: (id) => ipcRenderer.invoke('flow:launchInputs', id),
   getFlowYaml: (flow) => ipcRenderer.invoke('flow:toYaml', flow),
   saveFlowFromYaml: (id, yaml) => ipcRenderer.invoke('flow:saveFromYaml', id, yaml),

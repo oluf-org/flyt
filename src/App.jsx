@@ -26,6 +26,8 @@ import ChatRun from './ChatRun.jsx';
 import CompareRun from './CompareRun.jsx';
 import ApprovalModePicker from './ApprovalModePicker.jsx';
 import LaunchInputs from './LaunchInputs.jsx';
+import ConfigsPanel, { slugConfigId } from './ConfigsPanel.jsx';
+import RematchPicker from './RematchPicker.jsx';
 
 function setTheme(mode) { // 'light' | 'dark'
   document.documentElement.dataset.theme = mode;
@@ -220,6 +222,20 @@ export default function App() {
   const [models, setModels] = useState([]);
   const [flowViewMode, setFlowViewMode] = useState('canvas'); // 'canvas' | 'yaml'
   const [pickerOpen, setPickerOpen] = useState(false); // the add-node panel over the canvas
+  // CONFIGS-COMPARE P1: the Configs panel (anchored at the modes chip) and the
+  // Inspector's config edit target (null = editing the Flow, today's behavior).
+  const [configsOpen, setConfigsOpen] = useState(false);
+  const [configEditId, setConfigEditId] = useState(null);
+  // Per-flow config summaries with diff badges (flow:listConfigs), for the
+  // composer/compare pickers and the run panel's mode dropdown.
+  const [configsByFlow, setConfigsByFlow] = useState({});
+  // CONFIGS-COMPARE P2: this project's comparison records (newest first — the
+  // Runs list ⚖ badge and the reopen path read them) and the pending rematch
+  // (a finished run about to be re-fired against a picked config).
+  const [comparisons, setComparisons] = useState([]);
+  const [rematch, setRematch] = useState(null);
+  // P3: a judge call is in flight for the open comparison.
+  const [judging, setJudging] = useState(false);
   const [runView2, setRunView2] = useState('canvas'); // run view: 'canvas' | 'document'
   // Resizable outer columns (explorer left, run panel right).
   const [leftColW, startLeftResize, resetLeftCol] = useResizableColumn('llmflow.col.left', 288, { min: 208, max: 520 }, 1);
@@ -350,9 +366,14 @@ export default function App() {
     // the user switched tabs while the read was in flight. Projectless (L6):
     // no tab, no runs — never call the run store with a null project id.
     const pid = activeTabRef.current;
-    if (pid == null) { setRuns([]); return; }
+    if (pid == null) { setRuns([]); setComparisons([]); return; }
     const list = await window.llmflow.listRuns(pid);
     if (activeTabRef.current === pid) setRuns(list);
+    // Comparison records (P2) ride the same refresh — they change only when a
+    // comparison is created or a run is deleted, both of which refresh runs.
+    window.llmflow.listComparisons?.(pid)
+      .then(recs => { if (activeTabRef.current === pid) setComparisons(recs ?? []); })
+      .catch(() => {});
   }, []);
   // Listing runs re-reads every run's meta + prompt from disk, and run updates
   // arrive as often as the token stream flushes (250ms) — that would re-read the
@@ -372,6 +393,9 @@ export default function App() {
     setFlowsList(list);
     // Keep the run panel pointed at a real workflow (default pipeline first).
     setRunFlowId(prev => list.some(f => f.id === prev) ? prev : (list[0]?.id ?? ''));
+    // Config badges for the pickers (P1) ride the same refresh — a flow save
+    // is the only thing that changes them, and every save re-runs this.
+    window.llmflow.listConfigs?.().then(setConfigsByFlow).catch(() => {});
     return list;
   }, []);
   const refreshTemplates = useCallback(async () => {
@@ -1162,6 +1186,128 @@ export default function App() {
     });
   };
 
+  // --- Configs (CONFIGS-COMPARE P1) ------------------------------------------
+  // A config IS a mode in the open flow's modes: block. Panel edits ride the
+  // same changeFlow path as canvas edits — undoable, debounce-autosaved,
+  // re-linted — so the Configs panel and the YAML editor stay two views of the
+  // one source of truth.
+
+  // Inspector config editing: patch one node's entry in a config's override
+  // map; undefined values remove the field, an emptied node entry drops out.
+  const changeConfigOverrides = useCallback((modeId, nodeId, patch) => {
+    changeFlow(f => {
+      const mode = f.modes?.[modeId];
+      if (!mode) return f;
+      const entry = { ...(mode.overrides?.[nodeId] ?? {}) };
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === undefined) delete entry[k];
+        else entry[k] = v;
+      }
+      const overrides = { ...(mode.overrides ?? {}) };
+      if (Object.keys(entry).length) overrides[nodeId] = entry;
+      else delete overrides[nodeId];
+      return { ...f, modes: { ...f.modes, [modeId]: { ...mode, overrides } } };
+    });
+  }, [changeFlow]);
+
+  // ＋ New config: an empty bundle (same as Default until edited), named by
+  // prompt, opened in the Inspector straight away.
+  const newConfig = useCallback(() => {
+    const f = flowRef.current;
+    if (!f) return;
+    const name = window.prompt('Name the new config:', 'New config');
+    if (name == null) return;
+    const base = slugConfigId(name) ?? 'config';
+    let id = base;
+    for (let n = 2; f.modes?.[id]; n++) id = `${base}-${n}`;
+    changeFlow(prev => ({ ...prev, modes: { ...(prev.modes ?? {}), [id]: { name: name.trim() || id, overrides: {} } } }));
+    setConfigEditId(id);
+    setConfigsOpen(false);
+  }, [changeFlow]);
+
+  // Duplicate: copy the full override map under a new id, derivedFrom = the
+  // source (lineage metadata only — mirrors flowstore.duplicateConfig).
+  const duplicateConfig = useCallback(sourceId => {
+    const f = flowRef.current;
+    const src = f?.modes?.[sourceId];
+    if (!f || !src) return;
+    const name = window.prompt('Duplicate config as:', `${src.name ?? sourceId} (copy)`);
+    if (name == null) return;
+    const base = slugConfigId(name) ?? `${sourceId}-copy`;
+    let id = base;
+    for (let n = 2; f.modes?.[id]; n++) id = `${base}-${n}`;
+    changeFlow(prev => ({
+      ...prev,
+      modes: {
+        ...(prev.modes ?? {}),
+        [id]: {
+          name: name.trim() || id,
+          ...(src.description ? { description: src.description } : {}),
+          derivedFrom: sourceId,
+          overrides: structuredClone(src.overrides ?? {})
+        }
+      }
+    }));
+  }, [changeFlow]);
+
+  // Delete: confirmed while the config is the tab's selected launch target
+  // (the selection clears with it); also released as the Inspector's target.
+  const deleteConfig = useCallback(modeId => {
+    const f = flowRef.current;
+    const mode = f?.modes?.[modeId];
+    if (!f || !mode) return;
+    const isLaunchTarget = runFlowId === f.id && runModeId === modeId;
+    if (!window.confirm(
+      `Delete config "${mode.name || modeId}"?` +
+      (isLaunchTarget ? '\n\nIt is the run panel\'s selected launch target — that selection will be cleared.' : '')
+    )) return;
+    changeFlow(prev => {
+      const modes = { ...(prev.modes ?? {}) };
+      delete modes[modeId];
+      return { ...prev, modes };
+    });
+    if (isLaunchTarget) setRunModeId(null);
+    setConfigEditId(cur => (cur === modeId ? null : cur));
+  }, [changeFlow, runFlowId, runModeId]);
+
+  // Run a config: point the run panel at flow+mode and open the form.
+  const runConfig = useCallback(modeId => {
+    if (!flowRef.current) return;
+    setRunFlowId(flowRef.current.id);
+    setRunModeId(modeId);
+    setNewRunOpen(true);
+    setConfigsOpen(false);
+  }, []);
+
+  // Edit a config: make it the Inspector's edit target.
+  const editConfig = useCallback(modeId => {
+    setConfigEditId(modeId);
+    setConfigsOpen(false);
+  }, []);
+
+  // The Inspector's edit target must always name a config that still exists.
+  useEffect(() => {
+    if (configEditId && !flow?.modes?.[configEditId]) setConfigEditId(null);
+  }, [flow, configEditId]);
+
+  // "Save as config" on a finished run (P1): the run's launchOverrides become
+  // a new config on its flow, derivedFrom the run's mode if it had one.
+  const saveRunAsConfig = useCallback(async runId => {
+    const name = window.prompt('Save this run\'s launch configuration as a config:', 'Saved config');
+    if (name == null) return;
+    try {
+      const res = await window.llmflow.promoteRunConfig(activeTabRef.current, runId, name);
+      await refreshFlows();
+      // If the promoted flow is open in the editor, reload it so the new
+      // config shows in the panel/pickers (the debounced saver is idle: the
+      // user was watching a run, not editing).
+      if (flowRef.current?.id === res.flowId) await reloadCurrentFlow();
+      window.alert(`Saved config "${res.mode?.name ?? res.modeId}" on flow "${res.flowId}".`);
+    } catch (err) {
+      window.alert(ipcMessage(err));
+    }
+  }, [refreshFlows, reloadCurrentFlow]);
+
   // Picking a mode in the chatbox both governs the next run and becomes the new
   // saved default — the alternative (a per-run choice that forgets itself) means
   // a user who wants unattended runs re-arms the dangerous mode every time,
@@ -1306,8 +1452,15 @@ export default function App() {
       const prompt = text.trim();
       // Slot inputs aren't exposed in compare mode (the modes carry the config),
       // so each slot's launch is just its mode.
-      const runIdA = await window.llmflow.runFlow(pid, slotA.flowId, prompt, workspaceDir || null, approvalMode, launchForSelection(slotA.modeId));
-      const runIdB = await window.llmflow.runFlow(pid, slotB.flowId, prompt, workspaceDir || null, approvalMode, launchForSelection(slotB.modeId));
+      // P2: mint the comparison id BEFORE the runs start so both run metas
+      // carry the group from creation; the record is written once both run
+      // ids exist (original = A, compare slot = B).
+      const cmp = await window.llmflow.beginCompare(pid);
+      const launchA = { ...(launchForSelection(slotA.modeId) ?? {}), compareGroup: { id: cmp.id, label: 'A' } };
+      const launchB = { ...(launchForSelection(slotB.modeId) ?? {}), compareGroup: { id: cmp.id, label: 'B' } };
+      const runIdA = await window.llmflow.runFlow(pid, slotA.flowId, prompt, workspaceDir || null, approvalMode, launchA);
+      const runIdB = await window.llmflow.runFlow(pid, slotB.flowId, prompt, workspaceDir || null, approvalMode, launchB);
+      await window.llmflow.saveCompare(pid, { id: cmp.id, runIds: [runIdA, runIdB], origin: 'launch' });
       setRunInput('');
       withViewTransition(() => {
         setChatSeed(prompt);
@@ -1319,6 +1472,102 @@ export default function App() {
       await refreshRuns();
     } finally {
       setBusy(false);
+    }
+  };
+
+  // P2: every compare origin (launch / rematch / manual / reopen) lands on the
+  // same home-surface switch — the split view replaces the chat, exactly like
+  // a launch-compare does.
+  const openCompare = async ids => {
+    withViewTransition(() => {
+      setChatRunId(null);
+      setChatSeed('');
+      setCompareRunIds(ids);
+      setActiveRunId(ids[0]);
+      setSelectedNode(null);
+      setActiveActivity('home');
+    });
+    await refreshRuns();
+  };
+
+  // Rematch (P2): a finished run's "Compare against…" button. Snapshot the
+  // run's launch facts (prompt, workspace, flow, config) and open the picker;
+  // the actual re-fire happens in confirmRematch so no run is started before
+  // the user has picked a configuration.
+  const startRematch = async runId => {
+    const pid = activeTabRef.current;
+    const s = await window.llmflow.getSnapshot(pid, runId).catch(() => null);
+    const meta = s?.meta;
+    if (!meta?.flowId) return;
+    setRematch({
+      runId,
+      flowId: meta.flowId,
+      modeId: meta.modeId ?? null,
+      flowName: meta.flowName ?? meta.flowId,
+      prompt: s.prompt ?? '',
+      workspace: meta.workspace ?? null,
+    });
+  };
+
+  const confirmRematch = async modeId => {
+    const r = rematch;
+    setRematch(null);
+    if (!r) return;
+    const pid = activeTabRef.current;
+    try {
+      await flushSave();
+      // Same shape as a launch-compare: id first, then the run, then the
+      // record — original stays pane A, the fresh rematch is pane B.
+      const cmp = await window.llmflow.beginCompare(pid);
+      const runIdB = await window.llmflow.runFlow(
+        pid, r.flowId, r.prompt, r.workspace || workspaceDir || null, approvalMode,
+        { ...(modeId ? { modeId } : {}), compareGroup: { id: cmp.id, label: 'B' } });
+      await window.llmflow.saveCompare(pid, { id: cmp.id, runIds: [r.runId, runIdB], origin: 'rematch' });
+      await openCompare([r.runId, runIdB]);
+    } catch (err) {
+      window.alert(ipcMessage(err));
+    }
+  };
+
+  // Manual select-compare (P2): any two existing runs. Their metas get the
+  // group stamped retroactively main-side (first stamp wins), so a run can
+  // sit in several comparisons without losing its first pairing.
+  const compareExistingRuns = async ids => {
+    const pid = activeTabRef.current;
+    if (pid == null || !Array.isArray(ids) || ids.length !== 2) return;
+    try {
+      const cmp = await window.llmflow.beginCompare(pid);
+      await window.llmflow.saveCompare(pid, { id: cmp.id, runIds: ids, origin: 'manual' });
+      await openCompare(ids);
+    } catch (err) {
+      window.alert(ipcMessage(err));
+    }
+  };
+
+  // The Runs list ⚖ badge: reopen a recorded pairing.
+  const openComparison = rec => {
+    if (Array.isArray(rec?.runIds) && rec.runIds.length === 2) openCompare(rec.runIds);
+  };
+
+  // P3: the record for the currently open pair (newest match), and the Judge
+  // action itself. Judging refreshes the records so the verdict panel updates
+  // in place; an unrecorded pair gets a record main-side (run:judge creates
+  // one), which is why the record lookup tolerates null here.
+  const activeComparison = compareRunIds
+    ? comparisons.find(c => c.runIds?.[0] === compareRunIds[0] && c.runIds?.[1] === compareRunIds[1]) ?? null
+    : null;
+  const judgeComparison = async () => {
+    const ids = compareRunIds;
+    const pid = activeTabRef.current;
+    if (!ids || pid == null || judging) return;
+    setJudging(true);
+    try {
+      await window.llmflow.judgeRuns(pid, ids[0], ids[1], activeComparison?.id ?? null);
+      await refreshRuns();
+    } catch (err) {
+      window.alert(ipcMessage(err));
+    } finally {
+      setJudging(false);
     }
   };
 
@@ -1597,6 +1846,11 @@ export default function App() {
               onReject={runId => window.llmflow.rejectPlan(activeTab, runId, 'Rejected by user')}
               onOpenRun={openRun}
               onOpenFolder={runId => window.llmflow.openRunFolder(activeTab, runId)}
+              onSaveConfig={saveRunAsConfig}
+              onRematch={startRematch}
+              comparison={activeComparison}
+              onJudge={judgeComparison}
+              judging={judging}
             />
           ) : chatRunId ? (
             <ChatRun
@@ -1629,6 +1883,7 @@ export default function App() {
             runs={runs}
             onOpenRun={openRun}
             flows={flowsList}
+            configs={configsByFlow}
             flowId={runFlowId}
             modeId={runModeId}
             onSelect={selectRunFlow}
@@ -1717,6 +1972,9 @@ export default function App() {
                 onOpen={openRun}
                 onRename={renameRun}
                 onDelete={deleteRun}
+                comparisons={comparisons}
+                onCompareRuns={compareExistingRuns}
+                onOpenComparison={openComparison}
               />
             </>
           )}
@@ -1785,16 +2043,28 @@ export default function App() {
                   <button className="ghost mini" onClick={duplicateFlow} title="Duplicate this workflow">Duplicate</button>
                 </>
               )}
-              {/* Modes summary (MODES-COMPARE T3): a count chip that jumps to
-                  the YAML editor, where modes are authored. Tooltip lists them. */}
+              {/* Configs (CONFIGS-COMPARE P1): the modes chip toggles the
+                  Configs panel — one card per config with its diff-against-
+                  Default badges. YAML editing stays fully supported (the
+                  panel and the YAML are two views of the same modes: block). */}
               {flow?.modes && Object.keys(flow.modes).length > 0 && (
                 <button
                   type="button"
-                  className="modes-chip"
-                  onClick={() => setFlowViewMode('yaml')}
-                  title={'Modes (edit in the YAML view):\n' + Object.entries(flow.modes).map(([id, m]) => `• ${m.name || id}`).join('\n')}
+                  className={'modes-chip' + (configsOpen ? ' active' : '')}
+                  onClick={() => setConfigsOpen(o => !o)}
+                  title={'Configs (click to open the panel):\n' + Object.entries(flow.modes).map(([id, m]) => `• ${m.name || id}`).join('\n')}
                 >
-                  ◑ {Object.keys(flow.modes).length} mode{Object.keys(flow.modes).length === 1 ? '' : 's'}
+                  ◑ {Object.keys(flow.modes).length} config{Object.keys(flow.modes).length === 1 ? '' : 's'}
+                </button>
+              )}
+              {(!flow?.modes || Object.keys(flow.modes).length === 0) && flow && (
+                <button
+                  type="button"
+                  className={'modes-chip empty' + (configsOpen ? ' active' : '')}
+                  onClick={() => setConfigsOpen(o => !o)}
+                  title="No configs yet — click to create one"
+                >
+                  ◑ configs
                 </button>
               )}
               {flowLint && (flowLint.errors.length + flowLint.warnings.length > 0 ? (
@@ -1825,6 +2095,8 @@ export default function App() {
               onPause={runControl.pause}
               onResume={runControl.resume}
               onStop={runControl.stop}
+              onSaveConfig={saveRunAsConfig}
+              onRematch={startRematch}
             />
           )}
           {runView && snapshot?.meta?.interrupted && (
@@ -1961,6 +2233,25 @@ export default function App() {
             </>
           )}
 
+          {/* The Configs panel (P1), anchored at the modes chip above. */}
+          {flowView && configsOpen && flow && (
+            <>
+              <div className="picker-backdrop" onClick={() => setConfigsOpen(false)} />
+              <ConfigsPanel
+                flow={flow}
+                resolved={resolvedFlow}
+                launchTargetId={runFlowId === flow.id ? runModeId : null}
+                editModeId={configEditId}
+                onRun={runConfig}
+                onDuplicate={duplicateConfig}
+                onEdit={editConfig}
+                onDelete={deleteConfig}
+                onNew={newConfig}
+                onClose={() => setConfigsOpen(false)}
+              />
+            </>
+          )}
+
           {/* Run-mode overlays: action rejections (transient) and the one-time
               context-menu tip. Both live over the canvas, clear of the panels. */}
           {runToast && <div className="run-toast" role="status">{runToast}</div>}
@@ -1996,7 +2287,8 @@ export default function App() {
               {flowsList.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
             {/* Mode picker (MODES-COMPARE T4): only when the selected flow ships
-                modes. "Default" runs the flow's stored configuration. */}
+                modes. "Default" runs the flow's stored configuration. P1: each
+                option carries its diff-against-Default badges as a tooltip. */}
             {(flowsList.find(f => f.id === runFlowId)?.modes?.length > 0) && (
               <select
                 value={runModeId ?? ''}
@@ -2004,8 +2296,18 @@ export default function App() {
                 aria-label="Mode"
               >
                 <option value="">Default</option>
-                {flowsList.find(f => f.id === runFlowId).modes.map(m =>
-                  <option key={m.id} value={m.id}>{m.name}</option>)}
+                {flowsList.find(f => f.id === runFlowId).modes.map(m => {
+                  const cfg = configsByFlow[runFlowId]?.find(c => c.id === m.id);
+                  const summary = [
+                    cfg?.description,
+                    ...(cfg?.badges ?? [])
+                  ].filter(Boolean).join('\n');
+                  return (
+                    <option key={m.id} value={m.id} title={summary || undefined}>
+                      {m.name}{cfg?.badges?.length ? ` (${cfg.badges.length} change${cfg.badges.length === 1 ? '' : 's'})` : ''}
+                    </option>
+                  );
+                })}
               </select>
             )}
             {/* Exposed run inputs (MODES-COMPARE T10). */}
@@ -2087,6 +2389,9 @@ export default function App() {
                 onChangeOverrides={changeNodeOverrides}
                 onDeleteNode={deleteNode}
                 onDetachNode={detachNode}
+                editModeId={configEditId}
+                onEditMode={setConfigEditId}
+                onChangeConfigOverrides={changeConfigOverrides}
               />
             : snapshot && runView
               ? <>
@@ -2121,6 +2426,14 @@ export default function App() {
       </div>
 
       {showSettings && <Settings onClose={() => { setShowSettings(false); refreshSettings(); }} />}
+      {rematch && (
+        <RematchPicker
+          run={rematch}
+          configs={configsByFlow[rematch.flowId] ?? []}
+          onPick={confirmRematch}
+          onCancel={() => setRematch(null)}
+        />
+      )}
       {newTabOpen && (
         <NewTabPage
           recents={recents}

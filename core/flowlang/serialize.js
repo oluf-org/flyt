@@ -82,16 +82,24 @@ function isImplicit(node) {
 }
 
 // The `modes:` block (MODES-COMPARE T2): each mode is name + a per-node
-// override map. Emitted in the flow object's own key order (insertion order,
-// which parse preserves) so serialize/parse round-trips byte-for-byte. Each
-// node's override fields render inline — they're small and read best on one
-// line (`refine: { worker: { provider: anthropic, model: claude-fable-5 } }`).
+// override map, plus the optional P1 scalars `description` (picker/card copy)
+// and `derivedFrom` (lineage metadata only — no resolution inheritance).
+// Emitted in the flow object's own key order (insertion order, which parse
+// preserves) so serialize/parse round-trips byte-for-byte. Each node's
+// override fields render inline — they're small and read best on one line
+// (`refine: { worker: { provider: anthropic, model: claude-fable-5 } }`).
 function emitModes(lines, modes) {
   lines.push('modes:');
   for (const [id, mode] of Object.entries(modes)) {
     lines.push(`  ${formatScalar(id)}:`);
     if (typeof mode?.name === 'string' && mode.name.trim()) {
       lines.push(`    name: ${formatScalar(mode.name)}`);
+    }
+    if (typeof mode?.description === 'string' && mode.description.trim()) {
+      emitValue(lines, 'description', mode.description, 4);
+    }
+    if (typeof mode?.derivedFrom === 'string' && mode.derivedFrom.trim()) {
+      lines.push(`    derivedFrom: ${formatScalar(mode.derivedFrom)}`);
     }
     const entries = Object.entries(mode?.overrides ?? {}).filter(([, f]) => f !== undefined);
     if (!entries.length) { lines.push('    overrides: {}'); continue; }

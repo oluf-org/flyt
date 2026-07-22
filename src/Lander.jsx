@@ -24,14 +24,17 @@
 // slot and the single-run chip share exactly one keyboard-correct listbox.
 import { Fragment, useEffect, useRef, useState } from 'react';
 import Constellation from './Constellation.jsx';
-import LaunchInputs from './LaunchInputs.jsx';
+import ConfigModal from './ConfigModal.jsx';
 import { sigil } from './sigil.js';
 import { runStatus, runTimeLabel } from './runList.js';
 
 // One workflow chip + its listbox popover. Owns only its open/close and roving
 // focus; the selection and the pick handler come from the parent, so a slot and
 // the single-run chip are the same control with different wiring.
-function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef }) {
+// `configs` (CONFIGS-COMPARE P1) is flow:listConfigs output keyed by flow id —
+// each config's diff-against-Default badges render under its name, so
+// "Low · Fable vs Low · GPT-5" is scannable instead of a flat list of names.
+function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef, configs = {}, flowsOnly = false }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
   const chipRef = useRef(null);
@@ -124,8 +127,9 @@ function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef 
                   <span className="lander-picker-name">{f.name}</span>
                   {f.modes?.length > 0 && <span className="lander-picker-badge">{f.modes.length} modes</span>}
                 </button>
-                {(f.modes ?? []).map(m => {
+                {!flowsOnly && (f.modes ?? []).map(m => {
                   const modeSelected = f.id === flowId && modeId === m.id;
+                  const cfg = configs[f.id]?.find(c => c.id === m.id) ?? null;
                   return (
                     <button
                       key={m.id}
@@ -135,9 +139,18 @@ function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef 
                       aria-selected={modeSelected}
                       className={'lander-picker-item lander-picker-mode' + (modeSelected ? ' selected' : '')}
                       onClick={() => pick(f.id, m.id)}
+                      title={cfg?.description ?? undefined}
                     >
                       <span className="lander-picker-check" aria-hidden>{modeSelected ? '✓' : ''}</span>
-                      <span className="lander-picker-name">{m.name}</span>
+                      <span className="lander-picker-name">
+                        {m.name}
+                        {cfg?.badges?.length > 0 && (
+                          <span className="lander-picker-badges">
+                            {cfg.badges.slice(0, 3).map((b, i) => <span key={i} className="lander-picker-diff">{b}</span>)}
+                            {cfg.badges.length > 3 && <span className="lander-picker-diff">+{cfg.badges.length - 3} more</span>}
+                          </span>
+                        )}
+                      </span>
                     </button>
                   );
                 })}
@@ -153,16 +166,18 @@ function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef 
 export default function Lander({
   projectName, projectless, recents = [], seed,
   runs = [], onOpenRun,
-  flows = [], flowId, modeId = null, onSelect,
+  flows = [], flowId, modeId = null, onSelect, configs = {},
   compareOn = false, onToggleCompare, slotB = null, onSelectB,
   launchInputs = [], launchValues, onLaunchInput, models = [], activeModels = [],
   hasKey = true, onOpenSettings,
   busy, inputRef, onSubmit, onOpenProject, onOpenFolder
 }) {
   const [text, setText] = useState('');
+  const [configOpen, setConfigOpen] = useState(false);
   const localRef = useRef(null);
   const taRef = inputRef ?? localRef;
   const canRun = text.trim().length > 0 && !busy;
+  const selectedFlow = flows.find(f => f.id === flowId) ?? null;
 
   // Slot B falls back to slot A's flow (default mode) until the user repoints it.
   const bFlowId = slotB?.flowId ?? flowId;
@@ -186,6 +201,23 @@ export default function Lander({
   return (
     <main className="lander">
       <Constellation seed={seed} />
+      {/* The config modal (the cog's "later stage"): pick a config of the chosen
+          workflow and tune its per-node settings. Rendered at the lander root so
+          its backdrop covers the whole home area. */}
+      {!compareOn && configOpen && selectedFlow && (
+        <ConfigModal
+          flow={selectedFlow}
+          configs={configs[flowId] ?? []}
+          modeId={modeId}
+          onSelect={(fid, mid) => onSelect(fid, mid)}
+          launchInputs={launchInputs}
+          launchValues={launchValues}
+          onLaunchInput={onLaunchInput}
+          models={models}
+          activeModels={activeModels}
+          onClose={() => { setConfigOpen(false); taRef.current?.focus(); }}
+        />
+      )}
       <div className="lander-stage">
         <div className="lander-greeting">
           <span className="section-label">LLM Flow</span>
@@ -214,13 +246,30 @@ export default function Lander({
             {compareOn ? (
               <div className="lander-compare-slots">
                 <span className="compare-slot-label" aria-hidden>A</span>
-                <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow A" composerRef={taRef} />
+                <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow A" composerRef={taRef} configs={configs} />
                 <span className="compare-vs" aria-hidden>vs</span>
                 <span className="compare-slot-label" aria-hidden>B</span>
-                <WorkflowPicker flows={flows} flowId={bFlowId} modeId={bModeId} onPick={onSelectB} ariaLabel="Workflow B" composerRef={taRef} />
+                <WorkflowPicker flows={flows} flowId={bFlowId} modeId={bModeId} onPick={onSelectB} ariaLabel="Workflow B" composerRef={taRef} configs={configs} />
               </div>
             ) : (
-              <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow" composerRef={taRef} />
+              <div className="lander-workflow-group">
+                <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow" composerRef={taRef} configs={configs} flowsOnly />
+                {/* The cog is the "later stage" of choosing: which config of the
+                    picked workflow to run, and its per-node settings. Disabled
+                    until a workflow is chosen — there's nothing to configure. */}
+                <button
+                  type="button"
+                  className={'lander-config-cog' + (configOpen ? ' open' : '')}
+                  onClick={() => setConfigOpen(true)}
+                  disabled={!flowId}
+                  aria-haspopup="dialog"
+                  aria-expanded={configOpen}
+                  title="Configure this workflow — pick a config and tune per-node settings"
+                  aria-label="Configure workflow"
+                >
+                  <span aria-hidden>⚙</span>
+                </button>
+              </div>
             )}
 
             {/* Compare toggle (T11): splits the chip into A/B slots and fires two
@@ -245,18 +294,6 @@ export default function Lander({
               {busy ? 'Starting…' : compareOn ? 'Compare' : 'Run'}<kbd className="shortcut">↵</kbd>
             </button>
           </div>
-          {/* Exposed run inputs (MODES-COMPARE T10): controls the selected flow
-              surfaced, layered on the mode at launch. Hidden in compare mode —
-              the two modes carry their own config. */}
-          {!compareOn && (
-            <LaunchInputs
-              inputs={launchInputs}
-              values={launchValues}
-              onChange={onLaunchInput}
-              models={models}
-              activeModels={activeModels}
-            />
-          )}
         </div>
 
         {/* First-ever-launch (no key): a single quiet line under the composer,

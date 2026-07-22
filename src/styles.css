@@ -701,6 +701,76 @@ kbd.shortcut {
 }
 .li-seg.active { background: var(--accent); color: var(--accent-tx); font-weight: 600; }
 
+/* Workflow chip + config cog, grouped so they read as one control. The cog is
+   the "later stage": it opens the config modal for the chosen workflow. */
+.lander-workflow-group { display: inline-flex; align-items: center; gap: 4px; }
+.lander-config-cog {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 8px;
+  background: var(--chip); border: 1px solid transparent;
+  color: var(--chip-tx); font-size: 14px; cursor: pointer;
+  transition: color .14s ease, background .14s ease, transform .2s ease;
+}
+.lander-config-cog:not(:disabled):hover,
+.lander-config-cog.open { color: var(--tx); background: var(--accent-soft); }
+.lander-config-cog.open span { transform: rotate(45deg); }
+.lander-config-cog span { transition: transform .3s var(--spring); display: inline-block; }
+.lander-config-cog:disabled { cursor: default; opacity: .45; }
+
+/* Config modal — the cog's destination. Same backdrop language as the approval
+   modal so the two dialogs feel like one family. */
+.config-modal-backdrop {
+  position: absolute; inset: 0; z-index: 40;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  backdrop-filter: blur(5px);
+  animation: approval-fade .18s ease both;
+}
+.config-modal {
+  width: min(520px, 92%); max-height: 82%;
+  display: flex; flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: var(--shadow-float);
+  animation: approval-rise .24s var(--spring) both;
+  outline: none;
+}
+.config-modal-head {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 16px 18px 10px;
+}
+.config-modal-titles { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.config-modal-title { margin: 0; font-size: 17px; font-weight: 600; }
+.config-modal-head .link { font-size: 15px; }
+.config-modal-body {
+  display: flex; flex-direction: column; gap: 18px;
+  padding: 4px 18px 8px; overflow-y: auto;
+}
+.config-modal-section { display: flex; flex-direction: column; gap: 8px; }
+.config-modal-sub { font-size: 11.5px; color: var(--dim); line-height: 1.4; }
+.config-choices { display: flex; flex-direction: column; gap: 6px; }
+.config-choice {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 11px; border-radius: 10px; width: 100%; text-align: left;
+  background: var(--chip); border: 1px solid transparent; cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+.config-choice:hover { background: var(--accent-soft); }
+.config-choice:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }
+.config-choice.selected { border-color: var(--accent); background: var(--accent-soft); }
+.config-choice-check { color: var(--accent); font-size: 12px; line-height: 1.5; flex: none; }
+.config-choice-body { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1; }
+.config-choice-name { font-weight: 600; font-size: 13px; }
+.config-choice-desc { font-size: 11.5px; color: var(--dim); }
+.config-modal-foot {
+  display: flex; justify-content: flex-end;
+  padding: 10px 18px 16px;
+}
+/* Inside the modal the launch inputs already have a heading above them, so drop
+   their own "Run inputs" label and top margin. */
+.config-modal .launch-inputs { margin-top: 0; }
+.config-modal .launch-inputs > .section-label { display: none; }
+
 /* First-launch no-key hint — one quiet line, centred under the composer. */
 .lander-hint {
   text-align: center; font-size: 12.5px; color: var(--dim);
@@ -1493,6 +1563,88 @@ body.col-resizing * { cursor: col-resize !important; }
 }
 .modes-chip:hover { filter: brightness(1.05); }
 .modes-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.modes-chip.active { box-shadow: 0 0 0 2px var(--accent); }
+.modes-chip.empty { color: var(--faint); background: var(--chip); }
+
+/* --- Configs (CONFIGS-COMPARE P1) --- */
+
+/* The Configs panel: overlays the canvas top-right, anchored at the chip. */
+.configs-panel {
+  position: absolute; top: 12px; right: 12px; z-index: 20;
+  width: 360px; max-width: calc(100% - 24px);
+  max-height: min(560px, calc(100% - 24px));
+  display: flex; flex-direction: column;
+  background: var(--side);
+  border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow-float);
+  overflow: hidden;
+}
+.configs-panel-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--divider);
+}
+.configs-panel-sub { flex: 1 1 100%; font-size: 11px; color: var(--dim); }
+.configs-panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+
+.config-card {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--card); padding: 9px 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.config-card.editing { border-color: var(--accent); }
+.config-card-head { display: flex; align-items: baseline; gap: 8px; }
+.config-card-name { font-weight: 600; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.config-card-lineage {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; color: var(--faint); white-space: nowrap;
+}
+.config-card-desc { font-size: 11.5px; color: var(--dim); }
+
+/* Diff-against-Default badges — shared by the panel, the Inspector config
+   summary, and (smaller) the workflow pickers. */
+.config-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.config-badge {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px 6px; border-radius: 5px;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.config-badge.warn { color: var(--warn, #c9a227); }
+.config-badge.neutral { color: var(--faint); background: var(--chip); }
+
+.config-card-actions { display: flex; gap: 6px; align-items: center; }
+button.primary.mini { padding: 3px 10px; font-size: 11.5px; }
+button.ghost.mini.danger { color: var(--err, #c0504d); }
+
+/* The Inspector's edit-target toggle (Flow vs Config). */
+.edit-target {
+  display: flex; gap: 6px; align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--divider);
+}
+.edit-target-btn {
+  border: none; background: transparent; color: var(--dim);
+  font-size: 11.5px; padding: 3px 11px; border-radius: 5px; cursor: pointer;
+}
+.edit-target-btn.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.edit-target-select {
+  flex: 1; min-width: 0;
+  background: var(--card); color: var(--tx);
+  border: 1px solid var(--border); border-radius: 6px;
+  font-size: 11.5px; padding: 3px 6px;
+}
+.edit-target-select.active { border-color: var(--accent); color: var(--accent); }
+
+/* Config diff badges inside the workflow picker rows. */
+.lander-picker-badges { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+.lander-picker-diff {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9px; color: var(--dim); background: var(--chip);
+  padding: 1px 5px; border-radius: 4px;
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* sidebar flow list */
 .section-row { display: flex; align-items: center; justify-content: space-between; }
@@ -3419,6 +3571,143 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 
 @media (max-width: 900px) {
   .compare-panes { grid-template-columns: 1fr; }
+}
+
+/* ---------- CONFIGS-COMPARE P2 ---------- */
+
+/* The "what differed" header line in the compare thread: one mono line that
+   answers it, with the per-entry detail on hover. Amber when the pairing
+   couples runs launched from different prompts. */
+.compare-diff {
+  align-self: center;
+  display: inline-flex; align-items: center; gap: 7px;
+  margin: 2px 0 4px; padding: 5px 10px;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11px; line-height: 1.4;
+  color: var(--tx);
+  background: var(--side);
+  border: 1px solid var(--border); border-radius: 8px;
+  max-width: 100%;
+}
+.compare-diff-glyph { color: var(--accent); flex: none; }
+.compare-diff.identical { color: var(--faint); border-style: dashed; }
+.compare-diff.identical .compare-diff-glyph { color: var(--faint); }
+.compare-diff.warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 32%, transparent);
+}
+.compare-diff.warn .compare-diff-glyph { color: var(--warn); }
+
+/* The rematch picker: a fixed overlay (it can open from the run view, the
+   compare view, or the lander — none is the canvas' positioning context). */
+.rematch-backdrop {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(4px);
+}
+.rematch-modal {
+  width: min(440px, 88%); max-height: 72%;
+  display: flex; flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-float);
+  overflow: hidden;
+}
+.rematch-head {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 13px;
+}
+.rematch-sub { font-size: 11.5px; color: var(--dim); }
+.rematch-list { overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.rematch-item {
+  width: 100%;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px;
+  background: none; border: none; border-radius: 8px;
+  cursor: pointer; text-align: left; color: var(--tx);
+  transition: background-color .12s ease;
+}
+.rematch-item:hover { background: var(--accent-soft); }
+.rematch-item.suggested { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.rematch-item-name { font-size: 12.5px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rematch-tag {
+  flex: none;
+  font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  color: var(--faint); background: var(--chip);
+}
+.rematch-tag.suggest { color: var(--accent); background: var(--accent-soft); }
+.rematch-item-badges {
+  flex: 1 1 100%;
+  font-size: 10.5px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rematch-empty { padding: 12px 10px; font-size: 12px; color: var(--faint); }
+.rematch-foot {
+  display: flex; justify-content: flex-end;
+  padding: 10px 12px;
+  border-top: 1px solid var(--divider);
+}
+
+/* Manual select-compare in the Runs explorer: a slim bar on top of the list
+   and a check disc on each row while the mode is on. */
+.run-compare-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 8px 8px;
+  border-bottom: 1px solid var(--divider);
+  position: sticky; top: 0; z-index: 3;
+  background: var(--side);
+}
+.run-compare-hint { flex: 1; font-size: 11px; color: var(--faint); }
+.run-row.selectable { cursor: pointer; }
+.run-row.picked { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.run-check {
+  flex: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  display: inline-grid; place-items: center;
+  font-size: 10px; line-height: 1;
+  border: 1px solid var(--border); color: transparent;
+  background: var(--card);
+}
+.run-check.on { border-color: var(--accent); background: var(--accent); color: var(--on-accent, #fff); }
+/* The ⚖ badge reopens the run's latest comparison pairing. */
+.row-action.compare-badge { font-size: 12px; line-height: 1; }
+
+/* P3 verdict panel: the judge's report between the panes. Sits in the thread
+   under the diff header — a card, not a gate, so it never blocks the panes. */
+.compare-verdict {
+  align-self: stretch;
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 2px 0 6px; padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--border); border-radius: 12px;
+}
+.compare-verdict-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.compare-verdict-hint { font-size: 11.5px; color: var(--faint); }
+.compare-verdict-badge {
+  font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+}
+.compare-verdict-badge.tie { background: var(--chip); color: var(--dim); }
+.compare-verdict-axis {
+  font-size: 10.5px; padding: 2px 8px; border-radius: 999px;
+  background: var(--side); border: 1px solid var(--border); color: var(--dim);
+}
+.compare-verdict-axis strong { color: var(--tx); font-weight: 600; }
+.compare-verdict-notes { font-size: 12px; color: var(--tx); line-height: 1.5; }
+.compare-verdict-report summary {
+  cursor: pointer; font-size: 11.5px; color: var(--dim);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.compare-verdict-meta { font-size: 10px; color: var(--faint); }
+.compare-verdict-report pre {
+  margin: 8px 0 0; padding: 10px;
+  max-height: 260px; overflow-y: auto;
+  font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+  background: var(--side); border: 1px solid var(--divider); border-radius: 8px;
 }
 
 /* ---------- reduced motion ---------- */

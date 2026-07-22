@@ -5,7 +5,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   comparePair, paneLabel, paneStatus, paneChannel,
-  broadcastTargets, canBroadcast, sendPlan, judgeAlternatives
+  broadcastTargets, canBroadcast, sendPlan, judgeAlternatives,
+  diffResolvedFlows
 } from '../src/compareRun.js';
 
 // A minimal snapshot for a run at a given stage. finalAnswer reads the output
@@ -129,4 +130,72 @@ test('judgeAlternatives needs both answers, then labels them A/B', () => {
   ]);
   // One side without an answer yet -> nothing to compare.
   assert.equal(judgeAlternatives([a, snap('b', 'execution')]), null);
+});
+
+// --- diffResolvedFlows (CONFIGS-COMPARE P2) -----------------------------------
+// The "what differed" header is computed from the two runs' RESOLVED flow.json
+// snapshots, so it stays accurate no matter how the live flow changed since.
+
+const rflow = nodes => ({ id: 'f', name: 'F', nodes, edges: [] });
+const rnode = (id, data = {}) => ({ id, type: 'aiStep', kind: 'ai', data });
+
+test('diffResolvedFlows: identical configs collapse to the sampling line', () => {
+  const f = rflow([rnode('work', { title: 'Work', effort: 'medium', worker: { provider: 'x', model: 'm' } })]);
+  const res = diffResolvedFlows(f, structuredClone(f));
+  assert.equal(res.identical, true);
+  assert.deepEqual(res.entries, []);
+  assert.equal(res.summary, 'same configuration — outputs differ only by sampling');
+});
+
+test('diffResolvedFlows: a uniform worker swap condenses to one Model token', () => {
+  const a = rflow([
+    rnode('refine', { worker: { provider: 'anthropic', model: 'claude-fable-5' } }),
+    rnode('work', { worker: { provider: 'anthropic', model: 'claude-fable-5' }, effort: 'medium' })
+  ]);
+  const b = rflow([
+    rnode('refine', { worker: { provider: 'openai', model: 'gpt-5' } }),
+    rnode('work', { worker: { provider: 'openai', model: 'gpt-5' }, effort: 'high' })
+  ]);
+  const res = diffResolvedFlows(a, b);
+  assert.equal(res.identical, false);
+  assert.equal(res.summary, 'Model: claude-fable-5 vs gpt-5 · work.effort: medium vs high');
+  // The per-node/field entries remain the ground truth behind the summary.
+  assert.equal(res.entries.filter(e => e.kind === 'worker').length, 2);
+  assert.deepEqual(
+    res.entries.find(e => e.field === 'effort'),
+    { nodeId: 'work', node: 'work', field: 'effort', kind: 'scalar', a: 'medium', b: 'high', text: 'work.effort: medium vs high' }
+  );
+});
+
+test('diffResolvedFlows: system prompts compare but never print; scalars name values', () => {
+  const a = rflow([rnode('refine', { system: 'Be nice.', worker: null }),
+                   rnode('orch', { maxNodes: 5 })]);
+  const b = rflow([rnode('refine', { system: 'Be strict.', worker: null }),
+                   rnode('orch', { maxNodes: 10 })]);
+  const res = diffResolvedFlows(a, b);
+  assert.ok(res.summary.includes('refine.system: differs'));
+  assert.ok(!res.summary.includes('Be strict')); // long prompts are never inlined
+  assert.ok(res.summary.includes('orch.maxNodes: 5 vs 10'));
+});
+
+test('diffResolvedFlows: non-uniform worker swaps stay per-node; mixed node sets noted', () => {
+  const a = rflow([rnode('x', { worker: { provider: 'p', model: 'm1' } }),
+                   rnode('y', { worker: { provider: 'p', model: 'm1' } }),
+                   rnode('gone', {})]);
+  const b = rflow([rnode('x', { worker: { provider: 'p', model: 'm2' } }),
+                   rnode('y', { worker: { provider: 'p', model: 'm3' } })]);
+  const res = diffResolvedFlows(a, b);
+  assert.ok(res.summary.includes('x.model: m1 vs m2'));
+  assert.ok(res.summary.includes('y.model: m1 vs m3'));
+  assert.ok(!res.summary.startsWith('Model:'));
+  assert.ok(res.summary.includes('gone: only in run A'));
+});
+
+test('diffResolvedFlows: absent and false approval gates read as equal', () => {
+  const a = rflow([rnode('work', {})]);                                  // no flag
+  const b = rflow([rnode('work', { requiresApproval: false })]);         // explicit off
+  assert.equal(diffResolvedFlows(a, b).identical, true);
+  const c = rflow([rnode('work', { requiresApproval: true })]);
+  const res = diffResolvedFlows(a, c);
+  assert.ok(res.summary.includes('work.requiresApproval: false vs true'));
 });

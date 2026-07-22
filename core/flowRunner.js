@@ -36,6 +36,7 @@ import { createWriteLedger } from './writeLedger.js';
 import { executeTool } from './tools/index.js';
 import { checkToolCall } from './safetyCheck.js';
 import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, parseRefineQuestions, stripRefineQuestions, extractJson } from './planEval.js';
+import { JUDGE_SYSTEM, buildJudgePrompt, parseJudgeVerdict } from './judge.js';
 import { deriveRunName } from './state.js';
 import {
   createNodeFromTemplate, getTemplate, resolveFlow, resolveInstance, primaryPort,
@@ -882,6 +883,73 @@ export class FlowRunner {
     return { ok: true, status, output, retro, logTail, summary, model, ...(summaryError ? { summaryError } : {}) };
   }
 
+  // CONFIGS-COMPARE P3 (T13's end state): judge two finished runs against
+  // each other. One direct compare-role call over both runs' final outputs —
+  // A is runIdA, B is runIdB, and the judge is blind to which config produced
+  // which (provenance goes to the logs/record, not the prompt). Returns the
+  // verdict payload for the comparison record; PERSISTING it is the IPC
+  // handler's job — the runner doesn't know which record the pair belongs to.
+  async judgeComparison(runIdA, runIdB, { judgeModel = null } = {}) {
+    const settled = (runId, label) => {
+      let meta;
+      try { meta = this.store.readMeta(runId); } catch { throw new Error(`Run ${label} (${runId}) not found.`); }
+      if (!TERMINAL_STAGES.has(meta?.stage)) {
+        throw new Error(`Run ${label} hasn't settled yet (stage: ${meta?.stage ?? 'unknown'}) — judge once both sides are done.`);
+      }
+      // The final answer, same definition as the sidebar's: the output node's
+      // primary output. Classic (flow-less) runs have nothing to compare.
+      const flow = this.store.readFlow(runId);
+      const out = flow?.nodes.find(n => n.type === 'output');
+      const text = (out ? this.store.readNodeOutput(runId, out.id) : null)?.trim();
+      if (!text) throw new Error(`Run ${label} produced no final output to judge.`);
+      return { meta, text };
+    };
+    const a = settled(runIdA, 'A');
+    const b = settled(runIdB, 'B');
+    // Manual pairings may couple runs from different prompts; A's is the
+    // reference, with B's as the fallback when A's file is gone.
+    let prompt = '';
+    try { prompt = this.store.readPrompt(runIdA); } catch { /* fall through */ }
+    if (!prompt) { try { prompt = this.store.readPrompt(runIdB); } catch { /* unknown */ } }
+    // What was actually compared — recorded in both runs' logs (the record
+    // knows the runs; the runs know their configs).
+    const configs = { A: a.meta.modeId ?? 'default', B: b.meta.modeId ?? 'default' };
+
+    // Judge model (P3): the configured pick, resolved like an active-model
+    // node worker; unset falls back to the default worker, like triage.
+    const worker = judgeModel
+      ? resolveCallTarget({ provider: 'auto', model: judgeModel }, this.config)
+      : resolveCallTarget(resolveWorker({}, this.config), this.config);
+    const judge = { provider: worker.provider, model: worker.model };
+    for (const runId of [runIdA, runIdB]) {
+      this.store.appendLog(runId, { event: 'compare_judge_start', with: runId === runIdA ? runIdB : runIdA, judge, configs });
+    }
+    const result = await callModel({
+      ...worker, apiKey: worker.apiKey,
+      system: JUDGE_SYSTEM,
+      prompt: buildJudgePrompt({ prompt, alternatives: [{ label: 'A', text: a.text }, { label: 'B', text: b.text }] }),
+      retry: this.config.retry,
+      onRetry: this.retryLogger(runIdA, 'compare-judge')
+    });
+    const outText = String(result.text ?? '').trim();
+    if (!outText) throw new Error('The judge returned an empty report.');
+    // A missing/malformed JSON half degrades to summary-only (null fields) —
+    // the report still renders, the record just stays un-scored.
+    const parsed = parseJudgeVerdict(outText);
+    const verdict = {
+      summary: parsed.summary,
+      winner: parsed.winner,
+      axes: parsed.axes,
+      notes: parsed.notes,
+      judgeModel: worker.model,
+      at: new Date().toISOString()
+    };
+    for (const runId of [runIdA, runIdB]) {
+      this.store.appendLog(runId, { event: 'compare_judged', with: runId === runIdA ? runIdB : runIdA, judge, configs, winner: verdict.winner });
+    }
+    return verdict;
+  }
+
   // Tasks belonging to (or spawned under) a set of reset nodes go back to
   // 'pending' so the relaunched walk re-claims them, and their stale outputs
   // are deleted. createdBy names either a task id (executor-spawned) or a node
@@ -1303,7 +1371,7 @@ export class FlowRunner {
   //   'ask'    — pause before every destructive tool call.
   //   'smart'  — screen each call (core/safetyCheck.js); pause only on risk.
   //   'always' — never pause. The dangerous one.
-  start(flow, { userInput = '', workspace = null, approvalMode = null, modeId = null, overrides = null } = {}) {
+  start(flow, { userInput = '', workspace = null, approvalMode = null, modeId = null, overrides = null, compareGroup = null } = {}) {
     // Pre-run gate (REFACTOR-PLAN §4): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
@@ -1350,6 +1418,12 @@ export class FlowRunner {
       // this records the intent behind that snapshot.
       ...(modeId ? { modeId, modeName: mode?.name ?? modeId } : {}),
       ...(hasLaunch ? { launchOverrides } : {}),
+      // Compare provenance (CONFIGS-COMPARE P2): both runs of a launch-compare
+      // or rematch carry the shared group id + their A/B label, so the pairing
+      // is discoverable from either side even before the record is read.
+      ...(compareGroup?.id
+        ? { compareGroup: { id: String(compareGroup.id), label: compareGroup.label === 'B' ? 'B' : 'A' } }
+        : {}),
       nodeStatus: Object.fromEntries(flow.nodes.map(n => [n.id, 'pending']))
     });
     this.store.appendLog(runId, {
@@ -1357,6 +1431,7 @@ export class FlowRunner {
       approvalMode: normalizeApprovalMode(approvalMode ?? this.config.approvalMode),
       ...(modeId ? { modeId } : {}),
       ...(hasLaunch ? { overrideNodes: Object.keys(launchOverrides) } : {}),
+      ...(compareGroup?.id ? { compareGroup: String(compareGroup.id) } : {}),
       nodes: flow.nodes.length, edges: flow.edges.length
     });
     this.notify(runId);

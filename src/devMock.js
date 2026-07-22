@@ -289,6 +289,7 @@ const mockProjects = {
   storage: 'workspace'
 };
 let mockRunCursor = 0; // rotates runFlow over the fixtures (compare preview)
+const mockComparisons = []; // in-memory comparison records (P2 preview)
 const mockAppdataSlugs = () => new Set(
   mockProjects.tabs.filter(t => t.kind === 'appdata').map(t => t.id.replace(/^appdata:/, '')));
 
@@ -499,6 +500,34 @@ export function installDevMock() {
       const ids = Object.keys(snapshots).sort().reverse();
       if (!ids.length) return null;
       return ids[mockRunCursor++ % ids.length];
+    },
+    // Comparison records (CONFIGS-COMPARE P2): kept in memory so the launch,
+    // rematch and select-compare paths all run in the browser preview.
+    beginCompare: async (_pid) => ({ id: 'cmp-mock-' + Date.now().toString(36) }),
+    saveCompare: async (_pid, rec) => {
+      const i = mockComparisons.findIndex(c => c.id === rec.id);
+      if (i >= 0) mockComparisons[i] = { ...mockComparisons[i], ...rec };
+      else mockComparisons.unshift({ createdAt: new Date().toISOString(), verdict: null, ...rec });
+      return rec;
+    },
+    listComparisons: async (_pid) => [...mockComparisons],
+    // P3 preview: a canned verdict, written straight into the pair's record.
+    judgeRuns: async (_pid, a, b, cmpId = null) => {
+      let rec = cmpId ? mockComparisons.find(c => c.id === cmpId) : null;
+      rec ??= mockComparisons.find(c => c.runIds?.[0] === a && c.runIds?.[1] === b);
+      if (!rec) {
+        rec = { id: 'cmp-mock-' + Date.now().toString(36), runIds: [a, b], createdAt: new Date().toISOString(), origin: 'manual', verdict: null };
+        mockComparisons.unshift(rec);
+      }
+      rec.verdict = {
+        summary: '# Comparison\n\n## Agreements\nBoth answer the brief.\n\n## Differences\nB is more thorough; A is terser.\n\n## Verdict\nB edges it on completeness.',
+        winner: 'B',
+        axes: { correctness: 'tie', completeness: 'B' },
+        notes: 'B covers the edge cases A skips; correctness is equal.',
+        judgeModel: 'mock-judge',
+        at: new Date().toISOString()
+      };
+      return rec;
     },
     listNodeTemplates: async () => [...mockTemplates.values()].map(t => normalizeTemplate(structuredClone(t)))
       .sort((a, b) => a.name.localeCompare(b.name)),

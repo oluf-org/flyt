@@ -9,7 +9,7 @@ import { pickSafetyModel, SAFETY_MODEL_CANDIDATES } from '../core/safetyCheck.js
 import { Workspace } from '../core/workspace.js';
 import { ProjectRegistry, DEFAULT_PROJECT_ID } from '../core/projects.js';
 import { lintFlow, lintText } from '../core/flowlang/lint.js';
-import { resolveFlow, exposedFields } from '../src/flowTypes.js';
+import { resolveFlow, exposedFields, diffOverrides } from '../src/flowTypes.js';
 import { parseFlow } from '../core/flowlang/parse.js';
 import { serializeFlow } from '../core/flowlang/serialize.js';
 import { diffSnapshot } from '../core/snapshotDiff.js';
@@ -203,7 +203,11 @@ function publicSettings() {
     approvalMode: normalizeApprovalMode(settings.approvalMode ?? 'ask'),
     safetyModel: settings.safetyModel ?? 'auto',
     resolvedSafetyModel: effectiveSafetyModel(),
-    safetyCandidates: SAFETY_MODEL_CANDIDATES.map(c => ({ ...c, connected: hasKey(c.provider) }))
+    // P3: the comparison judge's pinned model ('' = the default worker).
+    judgeModel: settings.judgeModel ?? '',
+    safetyCandidates: SAFETY_MODEL_CANDIDATES.map(c => ({
+      ...c, connected: [c.provider, ...(c.altProviders ?? [])].some(hasKey)
+    }))
   };
 }
 
@@ -447,7 +451,10 @@ ipcMain.handle('flow:run', (_e, projectId, flowId, userInput = '', workspaceDir 
     workspace,
     approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : runtimeConfig.approvalMode,
     modeId: launch?.modeId ?? null,
-    overrides: launch?.overrides ?? null
+    overrides: launch?.overrides ?? null,
+    // Compare launches (CONFIGS-COMPARE P2) stamp both runs with the shared
+    // group id + A/B label; the record itself lands via compare:save.
+    compareGroup: launch?.compareGroup ?? null
   });
 });
 ipcMain.handle('run:approve', (_e, projectId, runId) => proj(projectId).runner.approvePlan(runId));
@@ -517,8 +524,31 @@ ipcMain.handle('run:delete', (_e, projectId, runId) => {
   const entry = proj(projectId);
   if (entry.runner.live.has(runId)) throw new Error('This run is still executing. Wait for it to finish before deleting it.');
   entry.store.deleteRun(runId);
+  entry.store.deleteComparisonsFor(runId); // P2: pairings naming the run go with it
   pushStateFor(entry.id).channels.delete(runId); // drop the patch baseline; the id is gone for good
   return true;
+});
+
+// --- Comparison records (CONFIGS-COMPARE P2) ---
+// compare:begin mints the shared group id BEFORE the two runs start (their
+// metas carry it from creation); compare:save persists the record and stamps
+// both runs (label A/B) — including retroactively for rematch/manual pairs.
+ipcMain.handle('compare:begin', (_e, projectId) => ({ id: proj(projectId).store.newComparisonId() }));
+ipcMain.handle('compare:save', (_e, projectId, rec) => proj(projectId).store.saveComparison(rec ?? {}));
+ipcMain.handle('compare:list', (_e, projectId) => proj(projectId).store.listComparisons());
+// P3 (T13): judge a pair. The runner makes the blind compare-role call and
+// returns the parsed verdict; this handler owns the record — explicit
+// comparisonId when the renderer knows it, else the newest record for the
+// pair, else a fresh 'manual' one (judging an unrecorded pair still lands in
+// a record, so the verdict is never orphaned). Re-judging replaces verdict.
+ipcMain.handle('run:judge', async (_e, projectId, runIdA, runIdB, comparisonId = null) => {
+  const entry = proj(projectId);
+  const verdict = await entry.runner.judgeComparison(runIdA, runIdB, { judgeModel: settings.judgeModel ?? null });
+  const records = entry.store.listComparisons();
+  let rec = comparisonId ? records.find(c => c.id === comparisonId) : null;
+  rec ??= records.find(c => c.runIds?.[0] === runIdA && c.runIds?.[1] === runIdB);
+  rec ??= entry.store.saveComparison({ runIds: [runIdA, runIdB], origin: 'manual' });
+  return entry.store.saveComparisonVerdict(rec.id, verdict);
 });
 // Full snapshot + the rev naming it, for a renderer that fetches one (on first
 // view or after a missed patch). The two are minted from the SAME instant and
@@ -687,6 +717,46 @@ ipcMain.handle('flow:delete', (_e, id) => flows.remove(id));
 ipcMain.handle('flow:lint', (_e, id) =>
   lintFlow(flows.load(id), { templates: nodeLibrary.listFull() }));
 
+// --- Configs (CONFIGS-COMPARE P1): modes as first-class bundles ---
+// A config IS a mode in the flow's modes: block; these are thin passes into
+// the FlowStore helpers (the .flow.yaml stays the source of truth).
+ipcMain.handle('flow:saveConfig', (_e, flowId, modeId, config = {}) =>
+  flows.saveConfig(flowId, String(modeId ?? ''), config && typeof config === 'object' ? config : {}));
+ipcMain.handle('flow:duplicateConfig', (_e, flowId, sourceId, newId, name = null) =>
+  flows.duplicateConfig(flowId, String(sourceId ?? ''), String(newId ?? ''), { name: name == null ? null : String(name) }));
+// Promote a finished run's launch configuration to a named config on its flow:
+// meta.launchOverrides becomes the override map, the run's modeId (if any) the
+// derivedFrom lineage. Closes the tweak → run → it-works → save-it loop.
+ipcMain.handle('flow:promoteRunConfig', (_e, projectId, runId, name = null) => {
+  const entry = proj(projectId);
+  const meta = entry.store.readMeta(runId);
+  if (!meta?.flowId) throw new Error('Only flow runs can be promoted to a config.');
+  return { flowId: meta.flowId, ...flows.promoteRunConfig(meta.flowId, meta, { name: name == null ? null : String(name) }) };
+});
+// Per-flow config summaries with diff-against-Default badges (P1 picker
+// upgrade): every flow's configs, each with its description/lineage and the
+// human-readable badge lines the pickers render. Keyed by flow id; flows
+// without configs are absent.
+ipcMain.handle('flow:listConfigs', () => {
+  const templates = nodeLibrary.listFull();
+  const out = {};
+  for (const f of flows.list()) {
+    if (!f.modes?.length) continue;
+    try {
+      const flow = flows.load(f.id);
+      const resolved = resolveFlow(flow, templates);
+      out[f.id] = Object.entries(flow.modes ?? {}).map(([id, m]) => ({
+        id,
+        name: m?.name || id,
+        ...(m?.description ? { description: m.description } : {}),
+        ...(m?.derivedFrom ? { derivedFrom: m.derivedFrom } : {}),
+        badges: diffOverrides(resolved, m?.overrides).map(b => b.text)
+      }));
+    } catch { /* unresolvable flow — picker shows it without badges */ }
+  }
+  return out;
+});
+
 // The exposed run inputs (MODES-COMPARE T10) of a flow: which node fields the
 // author surfaced as composer controls, resolved so the renderer can build the
 // controls without re-parsing YAML. Each: { nodeId, title, field, current }.
@@ -793,6 +863,13 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
   // user who wants their own cheap model for this should be able to name it.
   if (typeof patch.safetyModel === 'string' && patch.safetyModel.trim()) {
     settings.safetyModel = patch.safetyModel.trim();
+  }
+  // The comparison judge's model (CONFIGS-COMPARE P3): an explicit model id,
+  // or '' to clear back to the default worker. Same free-id rule as the
+  // safety model — resolved at call time, so an unrouted id fails then, not here.
+  if (typeof patch.judgeModel === 'string') {
+    const v = patch.judgeModel.trim();
+    if (v) settings.judgeModel = v; else delete settings.judgeModel;
   }
   persistSettings();
   rebuildRuntimeConfig();

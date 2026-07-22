@@ -33,6 +33,14 @@ export const SEED_PIPELINE_IDS = ['pipeline-low', 'pipeline-medium', 'pipeline-h
 
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
+// A mode id slugged from a human name ("GPT-5 · strict" -> "gpt-5-strict");
+// null when nothing usable remains.
+function slugModeId(name) {
+  if (typeof name !== 'string') return null;
+  const slug = name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
+  return slug || null;
+}
+
 // The enriched planner brief the "High" and "Ultra" tiers run at high effort —
 // carried as node DATA (a `system` override) so the tier is pure content, not a
 // code fork (T8). It still opens with `ROLE: plan-start` so role detection and
@@ -90,9 +98,14 @@ export class FlowStore {
         const flow = parseFlow(fs.readFileSync(path.join(this.rootDir, f), 'utf8'));
         // A modes summary rides in the catalog (MODES-COMPARE T4) so the launch
         // picker can expand a flow into its named configurations without
-        // re-reading the file.
+        // re-reading the file. P1 (CONFIGS-COMPARE) adds the pass-through
+        // scalars so pickers/cards can show description + lineage.
         const modes = flow.modes && Object.keys(flow.modes).length
-          ? Object.entries(flow.modes).map(([id, m]) => ({ id, name: m?.name || id }))
+          ? Object.entries(flow.modes).map(([id, m]) => ({
+              id, name: m?.name || id,
+              ...(typeof m?.description === 'string' && m.description.trim() ? { description: m.description } : {}),
+              ...(typeof m?.derivedFrom === 'string' && m.derivedFrom.trim() ? { derivedFrom: m.derivedFrom } : {})
+            }))
           : null;
         entries.set(flow.id, { id: flow.id, name: flow.name, ...(modes ? { modes } : {}) });
       } catch { /* unparseable — ignore in the catalog */ }
@@ -209,6 +222,79 @@ export class FlowStore {
     fs.rmSync(this.flowPath(id), { force: true });
     fs.rmSync(this.layoutPath(id), { force: true });
     fs.rmSync(this.legacyPath(id), { force: true });
+  }
+
+  // --- Configs (CONFIGS-COMPARE P1): modes as first-class, editable bundles ---
+  //
+  // A config IS a mode in the flow's `modes:` block — these helpers load the
+  // flow, upsert one mode, and save through the normal path (DSL stays the
+  // source of truth; lint validates the result). `derivedFrom` is lineage
+  // metadata only: duplicating copies the FULL override map and records the
+  // parent; nothing is merged or inherited at run time.
+
+  // Create or update one config on a flow. Fields left undefined keep their
+  // previous value (patch semantics); `overrides` replaces wholesale when
+  // given. Returns the stored mode.
+  saveConfig(flowId, modeId, config = {}) {
+    if (!SAFE_ID.test(modeId)) throw new Error(`Invalid mode id "${modeId}"`);
+    const flow = this.load(flowId);
+    const prev = flow.modes?.[modeId] ?? null;
+    const text = v => (typeof v === 'string' && v.trim() ? v.trim() : null);
+    const scalar = (key) => {
+      const v = config[key];
+      if (v === undefined) return prev?.[key] ?? null; // untouched: keep
+      return text(v); // given: set, or clear on blank
+    };
+    const mode = {
+      ...(scalar('name') ? { name: scalar('name') } : {}),
+      ...(scalar('description') ? { description: scalar('description') } : {}),
+      ...(scalar('derivedFrom') ? { derivedFrom: scalar('derivedFrom') } : {}),
+      overrides: config.overrides !== undefined
+        ? (config.overrides ?? {})
+        : (prev?.overrides ?? {})
+    };
+    const modes = { ...(flow.modes ?? {}), [modeId]: mode };
+    this.save({ ...flow, modes });
+    return mode;
+  }
+
+  // Copy a config's full override map under a new id, recording the source as
+  // `derivedFrom` (lineage only). Refuses to overwrite an existing config.
+  duplicateConfig(flowId, sourceId, newId, { name = null } = {}) {
+    if (!SAFE_ID.test(newId)) throw new Error(`Invalid mode id "${newId}"`);
+    const flow = this.load(flowId);
+    const src = flow.modes?.[sourceId];
+    if (!src) throw new Error(`Flow "${flowId}" has no config "${sourceId}".`);
+    if (flow.modes?.[newId]) throw new Error(`Flow "${flowId}" already has a config "${newId}".`);
+    const mode = this.saveConfig(flowId, newId, {
+      name: name?.trim() || `${src.name ?? sourceId} (copy)`,
+      description: src.description,
+      derivedFrom: sourceId,
+      overrides: structuredClone(src.overrides ?? {})
+    });
+    return mode;
+  }
+
+  // Promote a finished run's launch configuration to a named config on its
+  // flow (P1: tweak at launch → run → it works → one click makes it a named,
+  // comparable config). `meta` is the run's meta.json: its launchOverrides
+  // become the override map, its modeId (if any) becomes derivedFrom. The new
+  // id is slugged from the given name (or the source mode) and deduped.
+  promoteRunConfig(flowId, meta, { name = null } = {}) {
+    const overrides = meta?.launchOverrides;
+    if (!overrides || typeof overrides !== 'object' || !Object.keys(overrides).length) {
+      throw new Error('This run used the default configuration — nothing to save as a config.');
+    }
+    const base = slugModeId(name) ?? slugModeId(meta?.modeId) ?? 'run-config';
+    const flow = this.load(flowId);
+    let id = base;
+    for (let n = 2; flow.modes?.[id]; n++) id = `${base}-${n}`;
+    const mode = this.saveConfig(flowId, id, {
+      name: name?.trim() || `Saved from run`,
+      derivedFrom: meta?.modeId,
+      overrides: structuredClone(overrides)
+    });
+    return { modeId: id, mode };
   }
 
   // The classic plan → approve → route → execute → verify pipeline, rebuilt

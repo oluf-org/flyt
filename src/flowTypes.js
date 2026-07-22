@@ -777,3 +777,69 @@ export function mergeOverrideMaps(...maps) {
   }
   return out;
 }
+
+// --- Config diff badges (CONFIGS-COMPARE P1) ---------------------------------
+//
+// diffOverrides answers the one question a config card or picker row must:
+// "what does this config actually change?" It diffs a per-node override map
+// against Default — the flow as authored on the canvas, passed in RESOLVED
+// (resolveFlow(flow, templates) with no launch overrides) so the comparison
+// baseline is what a default run would use. Pure; shared by the Configs
+// panel, the pickers, and the main-process badge builder.
+//
+// Returns one entry per visible difference:
+//   { nodeId, node, field, kind, from?, to?, text }
+// `text` is the human badge, e.g. "work · model: claude-fable-5 → gpt-5",
+// "refine · system rewritten", "work · effort: medium → high". Overrides that
+// restate the default produce no entry; an override pointing at a deleted
+// node yields a single 'unknown-node' entry (the linter also warns).
+const DIFF_FIELD_ORDER = [
+  'worker', 'effort', 'category', 'evalType', 'language', 'minNodes', 'maxNodes',
+  'system', 'instructions', 'tools', 'requiresApproval', 'approveToolCalls'
+];
+
+export function diffOverrides(resolvedFlow, overrides) {
+  const entries = [];
+  if (!overrides || typeof overrides !== 'object') return entries;
+  const byId = new Map((resolvedFlow?.nodes ?? []).map(n => [n.id, n]));
+  for (const [nodeId, fields] of Object.entries(overrides)) {
+    const node = byId.get(nodeId);
+    if (!node) {
+      entries.push({ nodeId, node: nodeId, field: null, kind: 'unknown-node', text: `${nodeId} · node not in flow` });
+      continue;
+    }
+    if (!fields || typeof fields !== 'object') continue;
+    const title = node.data?.title ?? nodeId;
+    const allowed = overridableFields(node);
+    const push = (field, text, extra = {}) =>
+      entries.push({ nodeId, node: title, field, kind: 'change', text, ...extra });
+    const rank = k => { const i = DIFF_FIELD_ORDER.indexOf(k); return i === -1 ? DIFF_FIELD_ORDER.length : i; };
+    const keys = Object.keys(fields)
+      .filter(k => fields[k] !== undefined)
+      .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    for (const field of keys) {
+      const value = fields[field];
+      const cur = node.data?.[field];
+      if (!allowed.has(field)) {
+        entries.push({ nodeId, node: title, field, kind: 'not-overridable', text: `${title} · ${field}: not overridable` });
+        continue;
+      }
+      if (field === 'worker') {
+        // Badges name the model (the spec's "model: claude-fable-5 → gpt-5");
+        // 'default' marks the flow's own pick (template/app default).
+        const from = cur?.model ?? 'default';
+        const to = value?.model ?? 'default';
+        if (from !== to) push(field, `${title} · model: ${from} → ${to}`, { from, to });
+      } else if (field === 'system') {
+        if ((cur ?? '') !== (value ?? '')) push(field, `${title} · system rewritten`);
+      } else if (field === 'instructions') {
+        if ((cur ?? '') !== (value ?? '')) push(field, `${title} · instructions rewritten`);
+      } else if (field === 'tools') {
+        if (JSON.stringify(cur ?? null) !== JSON.stringify(value ?? null)) push(field, `${title} · tools changed`);
+      } else {
+        if (cur !== value) push(field, `${title} · ${field}: ${cur ?? 'default'} → ${value}`, { from: cur ?? null, to: value });
+      }
+    }
+  }
+  return entries;
+}

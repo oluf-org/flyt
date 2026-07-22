@@ -326,6 +326,115 @@ export class RunStore {
     return out;
   }
 
+  // --- comparison records (CONFIGS-COMPARE P2) -------------------------------
+  // A comparison is a persisted relationship between two runs of this project:
+  //   { id, runIds: [a, b], createdAt, origin: 'launch'|'rematch'|'manual',
+  //     verdict: null | {...} }
+  // The verdict slot is P3's (the judge writes it); P2 always stores null.
+  // Records live in comparisons/ next to runs/ (the store root's sibling), and
+  // meta.compareGroup on each run mirrors the pairing so siblings are
+  // discoverable from either side. Tab state (compareRunIds) stays the *open
+  // view* pointer; these records make pairings restorable across restarts.
+  #comparisonsDir() { return path.join(path.dirname(this.rootDir), 'comparisons'); }
+
+  newComparisonId() {
+    return 'cmp-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' +
+      Math.random().toString(36).slice(2, 6);
+  }
+
+  comparisonPath(id) {
+    if (!/^cmp-[a-zA-Z0-9_-]+$/.test(String(id))) throw new Error(`Invalid comparison id "${id}"`);
+    return path.join(this.#comparisonsDir(), `${id}.json`);
+  }
+
+  // Create or update a comparison record, then stamp meta.compareGroup on both
+  // runs (label A/B by runIds order) so the pairing is discoverable from
+  // either side. Runs already carrying a group keep it (a run may sit in
+  // several comparisons; the meta pointer is first-come). An update preserves
+  // createdAt and any verdict P3 has written.
+  saveComparison({ id = null, runIds, origin = 'manual' } = {}) {
+    if (!Array.isArray(runIds) || runIds.length !== 2
+      || runIds.some(r => typeof r !== 'string' || !r) || runIds[0] === runIds[1]) {
+      throw new Error('A comparison needs two distinct run ids.');
+    }
+    if (!['launch', 'rematch', 'manual'].includes(origin)) {
+      throw new Error(`Unknown comparison origin "${origin}".`);
+    }
+    const cid = id ?? this.newComparisonId();
+    const p = this.comparisonPath(cid);
+    let prev = null;
+    try { prev = readJson(p); } catch { /* new record */ }
+    const record = {
+      id: cid,
+      runIds: [runIds[0], runIds[1]],
+      createdAt: prev?.createdAt ?? new Date().toISOString(),
+      origin,
+      verdict: prev?.verdict ?? null
+    };
+    fs.mkdirSync(this.#comparisonsDir(), { recursive: true });
+    writeJson(p, record);
+    for (const [i, label] of [[0, 'A'], [1, 'B']]) {
+      try {
+        const meta = this.readMeta(runIds[i]);
+        if (meta && !meta.compareGroup) {
+          this.writeMeta(runIds[i], { ...meta, compareGroup: { id: cid, label } });
+        }
+      } catch { /* run unreadable/gone — the record still stands */ }
+    }
+    return record;
+  }
+
+  listComparisons() {
+    const dir = this.#comparisonsDir();
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => { try { return readJson(path.join(dir, f)); } catch { return null; } })
+      .filter(Boolean)
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+
+  // P3: the judge's half of the record. Written after a run:judge call;
+  // re-judging REPLACES the verdict (the record keeps the latest word, the
+  // run logs keep every call). Shape per the design:
+  //   { summary, winner?, axes?, judgeModel, at }   (+ notes — see core/judge.js)
+  // Fields are sanitized here so a renderer (or a future automation) can never
+  // land arbitrary junk in the file.
+  saveComparisonVerdict(id, verdict = {}) {
+    const p = this.comparisonPath(id); // validates the id shape
+    let rec;
+    try { rec = readJson(p); } catch { throw new Error(`Comparison ${id} not found.`); }
+    const side = v => (v === 'A' || v === 'B' || v === 'tie' ? v : null);
+    let axes = null;
+    if (verdict.axes && typeof verdict.axes === 'object' && !Array.isArray(verdict.axes)) {
+      const clean = {};
+      for (const [k, v] of Object.entries(verdict.axes)) {
+        const s = side(v);
+        if (String(k).trim() && s) clean[String(k).trim()] = s;
+      }
+      if (Object.keys(clean).length) axes = clean;
+    }
+    rec.verdict = {
+      summary: String(verdict.summary ?? ''),
+      winner: side(verdict.winner),
+      axes,
+      notes: typeof verdict.notes === 'string' && verdict.notes.trim() ? verdict.notes.trim() : null,
+      judgeModel: typeof verdict.judgeModel === 'string' && verdict.judgeModel ? verdict.judgeModel : 'unknown',
+      at: typeof verdict.at === 'string' && verdict.at ? verdict.at : new Date().toISOString()
+    };
+    writeJson(p, rec);
+    return rec;
+  }
+
+  // Run-deletion hygiene: comparisons naming the run go with it.
+  deleteComparisonsFor(runId) {
+    for (const rec of this.listComparisons()) {
+      if (rec.runIds?.includes(runId)) {
+        try { fs.rmSync(this.comparisonPath(rec.id), { force: true }); } catch { /* best effort */ }
+      }
+    }
+  }
+
   // --- audit log: every AI action observable ---
   // Safe under the concurrent writers that parallel agentTasks introduce (V1
   // task 6): appendFileSync opens/appends/closes in one synchronous call, which

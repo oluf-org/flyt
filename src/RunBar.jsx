@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { runProgress, formatElapsed } from './runProgress.js';
+import { runProgress, formatElapsed, isTerminal } from './runProgress.js';
 import { sigil } from './sigil.js';
 import Tip from './Tip.jsx';
 
@@ -10,7 +10,7 @@ import Tip from './Tip.jsx';
 //
 // While the run is live it also carries the run controls (RUN-CONTROL): pause /
 // resume and a two-click stop, mirrored by the canvas's right-click menu.
-export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace, docView, onDocView, onPause, onResume, onStop }) {
+export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace, docView, onDocView, onPause, onResume, onStop, onSaveConfig, onRematch }) {
   const [now, setNow] = useState(() => Date.now());
   const p = runProgress(snapshot, now);
   const live = Boolean(p?.live);
@@ -138,6 +138,31 @@ export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace, docVie
       <button className="ghost mini" onClick={onOpenFolder} title="Open this run's folder — every artifact as plain files">
         Open run folder
       </button>
+      {/* Save as config (CONFIGS-COMPARE P1): a finished run that ran with a
+          launch configuration can promote it to a named config on its flow —
+          tweak at launch → it works → one click makes it named & comparable. */}
+      {onSaveConfig
+        && isTerminal(snapshot.meta?.stage)
+        && Object.keys(snapshot.meta?.launchOverrides ?? {}).length > 0 && (
+        <button
+          className="ghost mini"
+          onClick={() => onSaveConfig(snapshot.meta.runId)}
+          title="Save this run's launch configuration as a named config on its flow"
+        >
+          Save as config
+        </button>
+      )}
+      {/* Rematch (CONFIGS-COMPARE P2): re-fire this run's prompt against a
+          different config of the same flow and open the two side by side. */}
+      {onRematch && isTerminal(snapshot.meta?.stage) && snapshot.meta?.flowId && (
+        <button
+          className="ghost mini"
+          onClick={() => onRematch(snapshot.meta.runId)}
+          title="Re-run this prompt with a different config and compare side by side"
+        >
+          Compare against…
+        </button>
+      )}
       {workspace && (
         <button className="ghost mini" onClick={onOpenWorkspace} title="Open the bound project folder">
           Open workspace

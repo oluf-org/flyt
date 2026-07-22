@@ -20,12 +20,31 @@ const TRASH = (
   </svg>
 );
 
-export default function RunsList({ runs, activeRunId, onOpen, onRename, onDelete }) {
+export default function RunsList({ runs, activeRunId, onOpen, onRename, onDelete, comparisons = [], onCompareRuns, onOpenComparison }) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState('');
   const [now, setNow] = useState(() => Date.now());
   const inputRef = useRef(null);
   const cancelled = useRef(false);
+
+  // CONFIGS-COMPARE P2 — manual select-compare: tick any two runs (even from
+  // different prompts — inspection is still useful) and open them side by side.
+  // Selection is capped at two; picking a third drops the oldest.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState([]);
+  const toggleSelectMode = () => { setSelectMode(m => !m); setSelected([]); };
+  const togglePick = id => setSelected(prev =>
+    prev.includes(id) ? prev.filter(x => x !== id)
+      : prev.length >= 2 ? [prev[1], id]
+      : [...prev, id]);
+  const fireCompare = () => {
+    if (selected.length !== 2) return;
+    onCompareRuns?.(selected);
+    setSelectMode(false);
+    setSelected([]);
+  };
+  // Newest-first list → first match is the latest pairing for this run.
+  const comparisonFor = id => comparisons.find(c => c.runIds?.includes(id));
 
   // Sections are relative to `now`, so an app left open past midnight would keep
   // filing this morning's runs under "Yesterday". Re-render only when the
@@ -79,6 +98,33 @@ export default function RunsList({ runs, activeRunId, onOpen, onRename, onDelete
 
   return (
     <div className="explorer-list run-explorer">
+      {onCompareRuns && (
+        <div className="run-compare-bar">
+          <button
+            type="button"
+            className={'ghost mini' + (selectMode ? ' active' : '')}
+            onClick={toggleSelectMode}
+            title="Pick any two runs and open them side by side"
+          >
+            {selectMode ? 'Cancel' : 'Select to compare'}
+          </button>
+          {selectMode && (
+            <>
+              <span className="run-compare-hint">
+                {selected.length === 0 ? 'Pick two runs' : selected.length === 1 ? 'Pick one more' : '2 picked'}
+              </span>
+              <button
+                type="button"
+                className="primary mini"
+                disabled={selected.length !== 2}
+                onClick={fireCompare}
+              >
+                Compare
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {groupRuns(runs, now).map(group => (
         <section className="run-group" key={group.key}>
           <div className="run-group-label section-label">{group.label}</div>
@@ -86,20 +132,36 @@ export default function RunsList({ runs, activeRunId, onOpen, onRename, onDelete
             const status = runStatus(run);
             const editing = editingId === run.id;
             const active = run.id === activeRunId;
+            const picked = selected.includes(run.id);
+            const cmp = comparisonFor(run.id);
             return (
               <div
                 key={run.id}
-                className={'run-row' + (active ? ' active' : '') + (editing ? ' editing' : '')}
-                onClick={() => !editing && onOpen(run.id)}
+                className={'run-row' + (active ? ' active' : '') + (editing ? ' editing' : '') + (selectMode ? ' selectable' : '') + (picked ? ' picked' : '')}
+                onClick={() => {
+                  if (editing) return;
+                  if (selectMode) togglePick(run.id);
+                  else onOpen(run.id);
+                }}
                 onKeyDown={e => {
                   if (editing) return;
-                  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(run.id); }
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    if (selectMode) togglePick(run.id);
+                    else onOpen(run.id);
+                  }
                 }}
                 role="button"
                 tabIndex={editing ? -1 : 0}
                 aria-current={active ? 'true' : undefined}
+                aria-pressed={selectMode ? picked : undefined}
                 title={`${run.name}\n${runTimeTitle(run)} · ${status.label}\n${run.id}`}
               >
+                {selectMode && (
+                  <span className={'run-check' + (picked ? ' on' : '')} aria-hidden="true">
+                    {picked ? '✓' : ''}
+                  </span>
+                )}
                 <span
                   className={'run-sigil ' + status.kind}
                   aria-hidden="true"
@@ -129,6 +191,14 @@ export default function RunsList({ runs, activeRunId, onOpen, onRename, onDelete
                   </div>
                 </div>
                 <div className="run-row-actions">
+                  {cmp && onOpenComparison && !selectMode && (
+                    <button
+                      className="row-action compare-badge"
+                      onClick={e => { e.stopPropagation(); onOpenComparison(cmp); }}
+                      title={`Part of a comparison (${cmp.origin ?? 'manual'}) — reopen side by side`}
+                      aria-label={`Open the comparison containing run ${run.name}`}
+                    >⚖</button>
+                  )}
                   <button
                     className="row-action"
                     onClick={e => startEdit(run, e)}

@@ -93,3 +93,87 @@ export function judgeAlternatives(snapshots) {
   const alts = snapshots.map((s, i) => ({ label: `Run ${paneLabel(i)}`, text: finalAnswer(s) }));
   return alts.some(a => !a.text) ? null : alts;
 }
+
+// --- "What differed" header (CONFIGS-COMPARE P2) ------------------------------
+//
+// Both runs carry their fully RESOLVED flow.json snapshot, so what actually
+// differed between two runs is computable after the fact — for any pair,
+// weeks later, even if the flow and its modes have been edited twenty times
+// since. diffResolvedFlows diffs those two snapshots (never the live flows)
+// over the config-relevant fields and condenses the result into a one-line
+// header summary. Pure, like the rest of this module.
+//
+// Returns { identical, entries, summary }:
+//   entries — [{ nodeId, node, field, kind, a, b, text }] per difference
+//   summary — e.g. "Model: fable vs gpt-5 · work.effort: medium vs high ·
+//             refine.system: differs", or the sampling line when identical.
+const FLOW_DIFF_FIELDS = [
+  'worker', 'effort', 'category', 'evalType', 'language', 'minNodes', 'maxNodes',
+  'system', 'instructions', 'tools', 'requiresApproval', 'approveToolCalls'
+];
+
+export function diffResolvedFlows(flowA, flowB) {
+  const entries = [];
+  const byIdA = new Map((flowA?.nodes ?? []).map(n => [n.id, n]));
+  const byIdB = new Map((flowB?.nodes ?? []).map(n => [n.id, n]));
+  const allIds = [...new Set([...byIdA.keys(), ...byIdB.keys()])];
+  for (const id of allIds) {
+    const a = byIdA.get(id);
+    const b = byIdB.get(id);
+    if (!a || !b) {
+      entries.push({
+        nodeId: id, node: id, field: null, kind: 'node-missing',
+        a: Boolean(a), b: Boolean(b),
+        text: `${id}: only in run ${a ? 'A' : 'B'}`
+      });
+      continue;
+    }
+    const da = a.data ?? {};
+    const db = b.data ?? {};
+    const title = da.title ?? db.title ?? id;
+    for (const field of FLOW_DIFF_FIELDS) {
+      const va = da[field];
+      const vb = db[field];
+      if (field === 'worker') {
+        const ma = va?.model ?? 'default';
+        const mb = vb?.model ?? 'default';
+        if (ma !== mb) entries.push({ nodeId: id, node: title, field, kind: 'worker', a: ma, b: mb, text: `${id}.model: ${ma} vs ${mb}` });
+      } else if (field === 'system' || field === 'instructions') {
+        // Long prompts are compared, never printed — the header says "differs".
+        if ((va ?? '') !== (vb ?? '')) {
+          entries.push({ nodeId: id, node: title, field, kind: 'text', a: va ?? null, b: vb ?? null, text: `${id}.${field}: differs` });
+        }
+      } else if (field === 'tools') {
+        if (JSON.stringify(va ?? null) !== JSON.stringify(vb ?? null)) {
+          entries.push({ nodeId: id, node: title, field, kind: 'scalar', a: va ?? null, b: vb ?? null, text: `${id}.tools: differ` });
+        }
+      } else if (field === 'requiresApproval' || field === 'approveToolCalls') {
+        // Absent and false are the same gate; compare the effective boolean.
+        if (Boolean(va) !== Boolean(vb)) {
+          entries.push({ nodeId: id, node: title, field, kind: 'scalar', a: Boolean(va), b: Boolean(vb), text: `${id}.${field}: ${Boolean(va)} vs ${Boolean(vb)}` });
+        }
+      } else if (va !== vb && (va !== undefined || vb !== undefined)) {
+        entries.push({ nodeId: id, node: title, field, kind: 'scalar', a: va ?? 'default', b: vb ?? 'default', text: `${id}.${field}: ${va ?? 'default'} vs ${vb ?? 'default'}` });
+      }
+    }
+  }
+
+  // Condensed summary: a uniform worker swap across nodes collapses into one
+  // "Model: a vs b" token (the headline case — same flow, two brains).
+  const workers = entries.filter(e => e.kind === 'worker');
+  const rest = entries.filter(e => e.kind !== 'worker');
+  const parts = [];
+  if (workers.length) {
+    const uniform = workers.every(e => e.a === workers[0].a && e.b === workers[0].b);
+    parts.push(...(uniform ? [`Model: ${workers[0].a} vs ${workers[0].b}`] : workers.map(e => e.text)));
+  }
+  parts.push(...rest.map(e => e.text));
+  const identical = entries.length === 0;
+  return {
+    identical,
+    entries,
+    summary: identical
+      ? 'same configuration — outputs differ only by sampling'
+      : parts.join(' · ')
+  };
+}

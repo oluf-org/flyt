@@ -17,14 +17,15 @@ import { feedItems } from './nodeFeedData.js';
 import { mergeSnapshot } from '../core/snapshotDiff.js';
 import { sigil } from './sigil.js';
 import {
-  paneLabel, paneStatus, sendPlan, canBroadcast
+  paneLabel, paneStatus, sendPlan, canBroadcast, diffResolvedFlows
 } from './compareRun.js';
 
 export default function CompareRun({
   runIds, projectId, seed,
   onExit, runControlFor,
   onFollowUp, onAnswerInput, onApprove, onReject,
-  onOpenRun, onOpenFolder
+  onOpenRun, onOpenFolder, onSaveConfig, onRematch,
+  comparison, onJudge, judging
 }) {
   const [snaps, setSnaps] = useState({}); // runId -> snapshot (with .rev)
   const snapsRef = useRef(snaps);
@@ -78,6 +79,19 @@ export default function CompareRun({
   // The shared prompt: both runs launched from the same text, so read it from
   // whichever snapshot has landed (falling back to the seed for the first beat).
   const prompt = paneSnaps.find(s => s?.prompt)?.prompt ?? seed ?? '';
+
+  // P2 "what differed" header: computed from the two runs' own RESOLVED
+  // flow.json snapshots, so it stays accurate even if the flow and its modes
+  // were edited twenty times since. Identical configs collapse to one line.
+  const flowDiff = (paneSnaps[0]?.flow && paneSnaps[1]?.flow)
+    ? diffResolvedFlows(paneSnaps[0].flow, paneSnaps[1].flow)
+    : null;
+
+  // Manual pairings may couple runs launched from different prompts — legal
+  // (the question is inspection, not a new run), but worth a hint.
+  const promptsDiffer = paneSnaps.length === 2
+    && paneSnaps.every(s => s?.prompt != null)
+    && paneSnaps[0].prompt !== paneSnaps[1].prompt;
 
   // --- Shared composer --------------------------------------------------------
   const [text, setText] = useState('');
@@ -167,6 +181,84 @@ export default function CompareRun({
         {prompt && (
           <div className="chat-msg user"><pre>{prompt}</pre></div>
         )}
+        {promptsDiffer && (
+          <div className="compare-diff warn" role="note">
+            <span className="compare-diff-glyph" aria-hidden>⚠</span>
+            These two runs were launched from different prompts — compare with care.
+          </div>
+        )}
+        {flowDiff && (
+          <div
+            className={'compare-diff' + (flowDiff.identical ? ' identical' : '')}
+            title={flowDiff.entries.length ? flowDiff.entries.map(e => e.text).join('\n') : undefined}
+          >
+            <span className="compare-diff-glyph" aria-hidden>⇄</span>
+            {flowDiff.summary}
+          </div>
+        )}
+
+        {/* P3 verdict panel (T13): the judge's report between the panes — a
+            summary, not a gate. Before the first call it's just the Judge
+            action; afterwards the structured half (winner, axes, notes) leads
+            and the full report folds open on demand. Re-judging replaces it. */}
+        {onJudge && (
+          <div className="compare-verdict">
+            {comparison?.verdict ? (
+              <>
+                <div className="compare-verdict-head">
+                  {comparison.verdict.winner && (
+                    <span className={'compare-verdict-badge ' + (comparison.verdict.winner === 'tie' ? 'tie' : 'win')}>
+                      {comparison.verdict.winner === 'tie' ? 'Tie' : `Winner: ${comparison.verdict.winner}`}
+                    </span>
+                  )}
+                  {comparison.verdict.axes && Object.entries(comparison.verdict.axes).map(([axis, side]) => (
+                    <span key={axis} className="compare-verdict-axis mono" title={`${axis}: ${side}`}>
+                      {axis}: <strong>{side}</strong>
+                    </span>
+                  ))}
+                  <div className="toolbar-spacer" />
+                  <button
+                    type="button"
+                    className="ghost mini"
+                    disabled={judging || !statuses.every(s => s.settled)}
+                    onClick={onJudge}
+                    title="Judge again — replaces this verdict"
+                  >
+                    {judging ? 'Judging…' : 'Re-judge'}
+                  </button>
+                </div>
+                {comparison.verdict.notes && (
+                  <div className="compare-verdict-notes">{comparison.verdict.notes}</div>
+                )}
+                <details className="compare-verdict-report">
+                  <summary>
+                    Judge's report
+                    <span className="compare-verdict-meta">
+                      {comparison.verdict.judgeModel} · {new Date(comparison.verdict.at).toLocaleString()}
+                    </span>
+                  </summary>
+                  <pre>{comparison.verdict.summary}</pre>
+                </details>
+              </>
+            ) : (
+              <div className="compare-verdict-head">
+                <span className="compare-verdict-hint">No verdict yet — the judge reads both final outputs and grades them. A summary, not a gate.</span>
+                <div className="toolbar-spacer" />
+                <button
+                  type="button"
+                  className="primary mini"
+                  disabled={judging || !statuses.every(s => s.settled)}
+                  onClick={onJudge}
+                  title={statuses.every(s => s.settled)
+                    ? 'Run the compare judge over both final outputs'
+                    : 'Both runs must settle before they can be judged'}
+                >
+                  {judging ? 'Judging…' : '⚖ Judge'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="compare-panes">
@@ -203,6 +295,8 @@ export default function CompareRun({
                     onPause={() => runControlFor(runId).pause()}
                     onResume={() => runControlFor(runId).resume()}
                     onStop={() => runControlFor(runId).stop()}
+                    onSaveConfig={onSaveConfig}
+                    onRematch={onRematch}
                   />
 
                   {/* Per-pane approval gate: a compact dock, never the blocking

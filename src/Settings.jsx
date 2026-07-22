@@ -553,6 +553,67 @@ function ModelsTab({ s, save }) {
           </div>
         )}
       </section>
+
+      <JudgeModelSection s={s} save={save} active={active} />
     </>
+  );
+}
+
+// --- Judge model (CONFIGS-COMPARE P3) ---------------------------------------
+// Which model judges two runs side by side. Unset = the default worker (the
+// same fallback triage uses); any active model can be pinned instead, and a
+// free-text id covers everything else — it resolves at call time, exactly
+// like the safety model.
+function JudgeModelSection({ s, save, active }) {
+  const configured = s.judgeModel ?? '';
+  const known = active.some(m => m.id === configured);
+  const isCustom = Boolean(configured) && !known;
+  const [showCustom, setShowCustom] = useState(isCustom);
+  const [custom, setCustom] = useState(isCustom ? configured : '');
+
+  return (
+    <section>
+      <div className="settings-section-head">
+        <span className="section-label">Judge model</span>
+        {configured
+          ? <span className="status-pill pill-neutral mono">{configured}</span>
+          : <span className="status-pill pill-neutral">default worker</span>}
+      </div>
+      <p className="settings-hint">
+        Used by the <strong>Judge</strong> action when comparing two runs. The default worker is a
+        reasonable judge; pin a stronger model here if you want verdicts graded by your best brain.
+      </p>
+      <div className="settings-row">
+        <select
+          value={isCustom ? 'custom' : configured}
+          onChange={e => {
+            if (e.target.value === 'custom') { setShowCustom(true); return; }
+            setShowCustom(false);
+            save({ judgeModel: e.target.value });
+          }}
+          aria-label="Judge model"
+        >
+          <option value="">Default worker{s.workers?.executor?.model ? ` (${s.workers.executor.model})` : ''}</option>
+          {active.filter(m => m.enabled !== false).map(m => (
+            <option key={m.id} value={m.id}>{m.id}</option>
+          ))}
+          <option value="custom">Another model…</option>
+        </select>
+      </div>
+      {(showCustom || isCustom) && (
+        <div className="settings-row">
+          <input
+            type="text"
+            placeholder="Model id, e.g. moonshotai/kimi-k2.6"
+            value={custom}
+            onChange={e => setCustom(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && custom.trim()) save({ judgeModel: custom.trim() }); }}
+          />
+          <button className="primary" onClick={() => custom.trim() && save({ judgeModel: custom.trim() })} disabled={!custom.trim()}>
+            Use
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
