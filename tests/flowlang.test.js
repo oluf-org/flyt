@@ -243,3 +243,46 @@ test('serialize: implicit input/output are omitted from nodes:', () => {
   assert.match(yaml, /- input -> plan/);
   assert.match(yaml, /- verify -> output/);
 });
+
+test('flow: parent (containment) survives a parse/serialize round-trip', () => {
+  const text = [
+    'version: 1',
+    'id: cont-demo',
+    'name: Containment demo',
+    '',
+    'nodes:',
+    '  orch:',
+    '    type: orchestrator',
+    '    title: Orchestrator',
+    '  worker:',
+    '    type: aiStep',
+    '    parent: orch',
+    '    role: execute',
+    '    title: Inside job',
+    '  lib:',
+    '    use: work',
+    '    parent: orch',
+    '    title: Library child',
+    '',
+    'flow:',
+    '  - input -> orch',
+    '  - orch -> worker',
+    '  - orch -> output'
+  ].join('\n') + '\n';
+  const flow = parseFlow(text);
+  const worker = flow.nodes.find(n => n.id === 'worker');
+  assert.equal(worker.parentId, 'orch');
+  assert.equal(worker.data.role, 'execute', 'parent is not swallowed into data');
+  const lib = flow.nodes.find(n => n.id === 'lib');
+  assert.equal(lib.parentId, 'orch');
+  assert.equal(lib.templateId, 'work');
+  assert.deepEqual(lib.overrides, { title: 'Library child' });
+
+  const out = serializeFlow(flow);
+  assert.match(out, /worker:\n(?:.+\n)*?\s+parent: orch\n/);
+  const reparsed = parseFlow(out);
+  assert.equal(reparsed.nodes.find(n => n.id === 'worker').parentId, 'orch');
+  assert.equal(reparsed.nodes.find(n => n.id === 'lib').parentId, 'orch');
+  // Byte-stable second pass: serializer output parses to identical YAML.
+  assert.equal(serializeFlow(reparsed), out);
+});

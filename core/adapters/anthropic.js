@@ -5,9 +5,9 @@
 // forwarded it. Reading only process.env — as this did — meant a key entered in
 // the app was silently dropped and every Anthropic run failed as unconfigured.
 // ANTHROPIC_API_KEY remains a fallback for running from a shell.
-import { sseEvents, apiError } from './http.js';
+import { sseEvents, apiError, abortError } from './http.js';
 
-export async function anthropicAdapter({ model, system, prompt, maxTokens, apiKey, onText }) {
+export async function anthropicAdapter({ model, system, prompt, maxTokens, apiKey, onText, signal }) {
   const key = apiKey || process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('Anthropic API key is not set. Add it in Settings, or set ANTHROPIC_API_KEY.');
 
@@ -25,7 +25,9 @@ export async function anthropicAdapter({ model, system, prompt, maxTokens, apiKe
       system,
       messages: [{ role: 'user', content: prompt }],
       ...(stream ? { stream: true } : {})
-    })
+    }),
+    // RUN-CONTROL: optional cooperative cancellation (stop()).
+    ...(signal ? { signal } : {})
   });
 
   if (!res.ok) {
@@ -36,6 +38,7 @@ export async function anthropicAdapter({ model, system, prompt, maxTokens, apiKe
     let text = '';
     let usage = null;
     for await (const event of sseEvents(res.body)) {
+      if (signal?.aborted) throw abortError(); // RUN-CONTROL stop mid-stream
       let msg;
       try { msg = JSON.parse(event); } catch { continue; }
       if (msg.type === 'content_block_delta' && msg.delta?.type === 'text_delta') {

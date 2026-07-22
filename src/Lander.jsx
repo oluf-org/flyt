@@ -17,29 +17,156 @@
 // The picker is a keyboard-navigable listbox (arrow keys, Home/End, Esc back to
 // the chip); the constellation is aria-hidden; focus order is composer → chip →
 // run → recents.
-import { useEffect, useRef, useState } from 'react';
+//
+// MODES-COMPARE T11 adds the Compare toggle: the workflow chip splits into two
+// slots (A / B), each an independent flow+mode selection, and one prompt fires
+// two runs shown side by side. The picker is extracted to WorkflowPicker so a
+// slot and the single-run chip share exactly one keyboard-correct listbox.
+import { Fragment, useEffect, useRef, useState } from 'react';
 import Constellation from './Constellation.jsx';
+import LaunchInputs from './LaunchInputs.jsx';
 import { sigil } from './sigil.js';
 import { runStatus, runTimeLabel } from './runList.js';
+
+// One workflow chip + its listbox popover. Owns only its open/close and roving
+// focus; the selection and the pick handler come from the parent, so a slot and
+// the single-run chip are the same control with different wiring.
+function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const chipRef = useRef(null);
+  const listRef = useRef(null);
+
+  const selectedFlow = flows.find(f => f.id === flowId) ?? null;
+  const selectedMode = selectedFlow?.modes?.find(m => m.id === modeId) ?? null;
+  const chipLabel = selectedFlow
+    ? (selectedMode ? `${selectedFlow.name} · ${selectedMode.name}` : selectedFlow.name)
+    : (flows.length ? 'Select workflow' : 'No workflows');
+
+  // Dismissal: Esc closes (and returns focus to the chip), a click or focus
+  // move outside closes too.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = e => {
+      if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); chipRef.current?.focus(); }
+    };
+    const outside = e => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('pointerdown', outside, true);
+    window.addEventListener('focusin', outside);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('focusin', outside);
+    };
+  }, [open]);
+
+  // On open, focus the selected option (or the first) so it is arrow-navigable.
+  useEffect(() => {
+    if (!open) return;
+    const items = listRef.current?.querySelectorAll('.lander-picker-item');
+    if (!items?.length) return;
+    ([...items].find(el => el.getAttribute('aria-selected') === 'true') ?? items[0]).focus();
+  }, [open]);
+
+  const onListKeyDown = e => {
+    const items = [...(listRef.current?.querySelectorAll('.lander-picker-item') ?? [])];
+    if (!items.length) return;
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1 + items.length) % items.length].focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+    else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+    else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+  };
+
+  const pick = (id, mode = null) => {
+    onPick(id, mode);
+    setOpen(false);
+    composerRef?.current?.focus(); // straight back to typing after choosing
+  };
+
+  return (
+    <div className="lander-chip-wrap" ref={wrapRef}>
+      <button
+        ref={chipRef}
+        type="button"
+        className={'lander-chip' + (open ? ' open' : '')}
+        onClick={() => setOpen(o => !o)}
+        disabled={!flows.length}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`${ariaLabel}: ${chipLabel}`}
+        title="Choose the workflow to run"
+      >
+        <span className="lander-chip-glyph" aria-hidden>◇</span>
+        <span className="lander-chip-name">{chipLabel}</span>
+        <span className="lander-chip-caret" aria-hidden>▾</span>
+      </button>
+      {open && (
+        <div className="lander-picker" role="listbox" aria-label={ariaLabel} ref={listRef} onKeyDown={onListKeyDown}>
+          {flows.map(f => {
+            // A flow with modes expands to a flat list: the flow itself (its
+            // stored default) followed by each named mode (T4).
+            const flowSelected = f.id === flowId && !modeId;
+            return (
+              <Fragment key={f.id}>
+                <button
+                  type="button"
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={flowSelected}
+                  className={'lander-picker-item' + (flowSelected ? ' selected' : '')}
+                  onClick={() => pick(f.id, null)}
+                >
+                  <span className="lander-picker-check" aria-hidden>{flowSelected ? '✓' : ''}</span>
+                  <span className="lander-picker-name">{f.name}</span>
+                  {f.modes?.length > 0 && <span className="lander-picker-badge">{f.modes.length} modes</span>}
+                </button>
+                {(f.modes ?? []).map(m => {
+                  const modeSelected = f.id === flowId && modeId === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      role="option"
+                      tabIndex={-1}
+                      aria-selected={modeSelected}
+                      className={'lander-picker-item lander-picker-mode' + (modeSelected ? ' selected' : '')}
+                      onClick={() => pick(f.id, m.id)}
+                    >
+                      <span className="lander-picker-check" aria-hidden>{modeSelected ? '✓' : ''}</span>
+                      <span className="lander-picker-name">{m.name}</span>
+                    </button>
+                  );
+                })}
+              </Fragment>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Lander({
   projectName, projectless, recents = [], seed,
   runs = [], onOpenRun,
-  flows = [], flowId, onSelectFlow,
+  flows = [], flowId, modeId = null, onSelect,
+  compareOn = false, onToggleCompare, slotB = null, onSelectB,
+  launchInputs = [], launchValues, onLaunchInput, models = [], activeModels = [],
   hasKey = true, onOpenSettings,
   busy, inputRef, onSubmit, onOpenProject, onOpenFolder
 }) {
   const [text, setText] = useState('');
-  const [pickerOpen, setPickerOpen] = useState(false);
   const localRef = useRef(null);
   const taRef = inputRef ?? localRef;
-  const chipWrapRef = useRef(null);
-  const chipRef = useRef(null);
-  const pickerRef = useRef(null);
   const canRun = text.trim().length > 0 && !busy;
 
-  const selectedFlow = flows.find(f => f.id === flowId) ?? null;
-  const chipLabel = selectedFlow?.name ?? (flows.length ? 'Select workflow' : 'No workflows');
+  // Slot B falls back to slot A's flow (default mode) until the user repoints it.
+  const bFlowId = slotB?.flowId ?? flowId;
+  const bModeId = slotB?.modeId ?? null;
 
   const submit = () => {
     if (!canRun) return;
@@ -54,56 +181,6 @@ export default function Lander({
       e.preventDefault();
       submit();
     }
-  };
-
-  // Picker dismissal: Esc closes it (and only it — the lander stays put) and
-  // returns focus to the chip (the ARIA-correct trigger); a click or a focus
-  // move outside closes it too.
-  useEffect(() => {
-    if (!pickerOpen) return;
-    const onKey = e => {
-      if (e.key === 'Escape') { e.stopPropagation(); setPickerOpen(false); chipRef.current?.focus(); }
-    };
-    const onPointer = e => {
-      if (chipWrapRef.current && !chipWrapRef.current.contains(e.target)) setPickerOpen(false);
-    };
-    const onFocusIn = e => {
-      if (chipWrapRef.current && !chipWrapRef.current.contains(e.target)) setPickerOpen(false);
-    };
-    window.addEventListener('keydown', onKey, true);
-    window.addEventListener('pointerdown', onPointer, true);
-    window.addEventListener('focusin', onFocusIn);
-    return () => {
-      window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('pointerdown', onPointer, true);
-      window.removeEventListener('focusin', onFocusIn);
-    };
-  }, [pickerOpen]);
-
-  // On open, move focus to the selected option (or the first) so the listbox is
-  // immediately arrow-navigable for keyboard users.
-  useEffect(() => {
-    if (!pickerOpen) return;
-    const items = pickerRef.current?.querySelectorAll('.lander-picker-item');
-    if (!items?.length) return;
-    ([...items].find(el => el.getAttribute('aria-selected') === 'true') ?? items[0]).focus();
-  }, [pickerOpen]);
-
-  // Roving focus within the listbox: arrows wrap, Home/End jump to the ends.
-  const onPickerKeyDown = e => {
-    const items = [...(pickerRef.current?.querySelectorAll('.lander-picker-item') ?? [])];
-    if (!items.length) return;
-    const i = items.indexOf(document.activeElement);
-    if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1 + items.length) % items.length].focus(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
-    else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
-    else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
-  };
-
-  const pickFlow = id => {
-    onSelectFlow?.(id);
-    setPickerOpen(false);
-    taRef.current?.focus(); // straight back to typing after choosing
   };
 
   return (
@@ -132,59 +209,54 @@ export default function Lander({
             rows={3}
           />
           <div className="lander-composer-footer">
-            {/* Workflow chip (L3): the only place workflow choice appears on the
-                lander. Opens a compact picker of the real flow list; the choice
-                persists per tab via App's run-flow state. */}
-            <div className="lander-chip-wrap" ref={chipWrapRef}>
-              <button
-                ref={chipRef}
-                type="button"
-                className={'lander-chip' + (pickerOpen ? ' open' : '')}
-                onClick={() => setPickerOpen(o => !o)}
-                disabled={!flows.length}
-                aria-haspopup="listbox"
-                aria-expanded={pickerOpen}
-                aria-label={`Workflow: ${chipLabel}`}
-                title="Choose the workflow to run"
-              >
-                <span className="lander-chip-glyph" aria-hidden>◇</span>
-                <span className="lander-chip-name">{chipLabel}</span>
-                <span className="lander-chip-caret" aria-hidden>▾</span>
-              </button>
-              {pickerOpen && (
-                <div
-                  className="lander-picker"
-                  role="listbox"
-                  aria-label="Workflow"
-                  ref={pickerRef}
-                  onKeyDown={onPickerKeyDown}
-                >
-                  {flows.map(f => (
-                    <button
-                      key={f.id}
-                      type="button"
-                      role="option"
-                      tabIndex={-1}
-                      aria-selected={f.id === flowId}
-                      className={'lander-picker-item' + (f.id === flowId ? ' selected' : '')}
-                      onClick={() => pickFlow(f.id)}
-                    >
-                      <span className="lander-picker-check" aria-hidden>{f.id === flowId ? '✓' : ''}</span>
-                      <span className="lander-picker-name">{f.name}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Workflow choice (L3 / T11). One chip normally; two slots (A vs B)
+                when Compare is on — each an independent flow+mode selection. */}
+            {compareOn ? (
+              <div className="lander-compare-slots">
+                <span className="compare-slot-label" aria-hidden>A</span>
+                <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow A" composerRef={taRef} />
+                <span className="compare-vs" aria-hidden>vs</span>
+                <span className="compare-slot-label" aria-hidden>B</span>
+                <WorkflowPicker flows={flows} flowId={bFlowId} modeId={bModeId} onPick={onSelectB} ariaLabel="Workflow B" composerRef={taRef} />
+              </div>
+            ) : (
+              <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow" composerRef={taRef} />
+            )}
+
+            {/* Compare toggle (T11): splits the chip into A/B slots and fires two
+                runs from one prompt. Off by default — the common path is one run. */}
+            <button
+              type="button"
+              className={'lander-compare-toggle' + (compareOn ? ' active' : '')}
+              onClick={onToggleCompare}
+              disabled={!flows.length}
+              aria-pressed={compareOn}
+              title="Compare two workflows or modes side by side on one prompt"
+            >
+              <span aria-hidden>⚖</span> Compare
+            </button>
+
             <button
               type="button"
               className="lander-run primary"
               onClick={submit}
               disabled={!canRun}
             >
-              {busy ? 'Starting…' : 'Run'}<kbd className="shortcut">↵</kbd>
+              {busy ? 'Starting…' : compareOn ? 'Compare' : 'Run'}<kbd className="shortcut">↵</kbd>
             </button>
           </div>
+          {/* Exposed run inputs (MODES-COMPARE T10): controls the selected flow
+              surfaced, layered on the mode at launch. Hidden in compare mode —
+              the two modes carry their own config. */}
+          {!compareOn && (
+            <LaunchInputs
+              inputs={launchInputs}
+              values={launchValues}
+              onChange={onLaunchInput}
+              models={models}
+              activeModels={activeModels}
+            />
+          )}
         </div>
 
         {/* First-ever-launch (no key): a single quiet line under the composer,

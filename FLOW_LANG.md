@@ -78,6 +78,76 @@ nodes exist mainly so older flows keep loading.
 `input` / `output` are implicit: referencing them in `flow` declares them.
 Declare an input explicitly only to attach default `text:` to it.
 
+### Containment (`parent` + `box`)
+
+Any non-structural node may live **inside** an orchestrator's box: set
+`parent: <orchestrator-id>` on the node (both `use:` and `type:` shapes).
+A child keeps its normal fields; its canvas position (stored in the
+`*.layout.json` sidecar) is relative to the box's top-left corner.
+
+```yaml
+nodes:
+  orch:
+    type: orchestrator
+    box: { w: 420, h: 260 }   # box size; grown/shrunk by the editor as children move
+  worker:
+    use: summarize
+    parent: orch              # runs inside orch's box
+```
+
+Rules: the parent must exist and be an orchestrator; `input`, `output` and
+orchestrator nodes themselves can never be contained (one level deep).
+Deleting an orchestrator deletes its children. At run time authored children
+**replace** autonomous planning — the orchestrator runs exactly the nodes in
+its box instead of materializing a swarm. The editor manages all of this by
+dragging (drop a node onto a box to attach, drag it out to detach); hand-edit
+`parent` only when you want to be explicit.
+
+### Modes (`modes`)
+
+A **mode** is a named, saved bundle of per-node overrides applied at run start —
+one graph, several configurations ("High — Fable", "High — GPT"). Picked when
+you launch the flow; it is not a fork or a version. The block is optional; a
+flow with no `modes` runs in its single implicit default configuration.
+
+```yaml
+modes:
+  fable-high:
+    name: High — Fable          # label shown in the launch picker
+    overrides:
+      refine:      { worker: { provider: anthropic, model: claude-fable-5 } }
+      orchestrate: { maxNodes: 10 }
+  gpt-high:
+    name: High — GPT
+    overrides:
+      refine:      { worker: { provider: openai, model: gpt-5 } }
+```
+
+Each override is keyed by node id and may set only fields that node accepts —
+the same whitelist the runner enforces at launch: `worker`, `effort`,
+`instructions`, `system`, `requiresApproval`, `approveToolCalls` on any AI
+node, plus `category` (work nodes), `evalType` (evaluation), `language`
+(translate), `minNodes`/`maxNodes` (orchestrator), and `tools` (agentTask).
+Precedence at run time is **run input > mode > node override > template**.
+
+### Run inputs (`expose`)
+
+A node may declare `expose: [field, ...]` — the subset of its overridable
+fields the flow author wants surfaced as ad-hoc controls in the run composer.
+It is a first-class node field (like `parent`), not an override value.
+
+```yaml
+nodes:
+  work:
+    use: work
+    category: Code general
+    expose: [worker, effort]   # a model dropdown + effort control in the composer
+```
+
+At run start those composer values become launch overrides layered on top of
+the chosen mode (**run input > mode > node override > template**). Each exposed
+field must be one the node accepts, or the linter reports it (`expose`).
+
 ### YAML subset
 
 Files are parsed by a strict subset parser (`core/flowlang/yaml.js`): block
@@ -104,6 +174,9 @@ scalars, or multi-document files — the linter reports these as parse errors.
 | `dead-end` | warning | node output never reaches an output node |
 | `duplicate-edge` | warning | same edge stated twice |
 | `orphan-approval` | warning | `requiresApproval` on an input/output node |
+| `parent` | error | `parent:` missing, not an orchestrator, or a structural/orchestrator node is contained |
+| `mode` | error/warning | mode override field the node can't accept (error), or override of a node not in the flow (warning) |
+| `expose` | error | a node exposes a field it cannot accept as a run input |
 
 Templates are loaded at lint time, so the rules always reflect the current
 Node Library rather than a stale schema.

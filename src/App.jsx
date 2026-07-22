@@ -1,17 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import FlowCanvas, { FlowEditor } from './FlowCanvas.jsx';
+import FlowCanvas, { FlowEditor, freshNodeId } from './FlowCanvas.jsx';
 import Inspector, { FlowInspector } from './Inspector.jsx';
 import Settings from './Settings.jsx';
 import NodesPage from './NodesPage.jsx';
+import NodePicker from './NodePicker.jsx';
 import FlowYamlEditor from './FlowYamlEditor.jsx';
 import LiveStream from './LiveStream.jsx';
 import RunBar from './RunBar.jsx';
 import RunResult from './RunResult.jsx';
 import RunsList from './RunsList.jsx';
+import NodeFocus from './NodeFocus.jsx';
 import { isTerminal } from './runProgress.js';
 import { resolveFlow, namedFlow, UNTITLED_FLOW, isStructuralNode } from './flowTypes.js';
-import { layoutPositions } from './flowLayout.js';
+import { comparePair } from './compareRun.js';
+import { layoutPositions, shrinkOrchBox } from './flowLayout.js';
 import { mergeSnapshot } from '../core/snapshotDiff.js';
 import { runDocument } from './runDocument.js';
 import { foldReplay, replaySnapshot } from './runReplay.js';
@@ -19,6 +22,10 @@ import ReplayStrip from './ReplayStrip.jsx';
 import TabStrip, { NewTabPage } from './TabStrip.jsx';
 import TabDeck from './TabDeck.jsx';
 import Lander from './Lander.jsx';
+import ChatRun from './ChatRun.jsx';
+import CompareRun from './CompareRun.jsx';
+import ApprovalModePicker from './ApprovalModePicker.jsx';
+import LaunchInputs from './LaunchInputs.jsx';
 
 function setTheme(mode) { // 'light' | 'dark'
   document.documentElement.dataset.theme = mode;
@@ -26,6 +33,12 @@ function setTheme(mode) { // 'light' | 'dark'
   // Keep the native window controls in step with the custom title bar.
   window.llmflow?.setTitleBarTheme?.(mode);
 }
+
+// The engine puts the whole reason in an IPC rejection's message; the wrapper
+// around it ("Error invoking remote method …") is noise. The older call sites
+// inline this same strip; new run-control paths share it.
+const ipcMessage = err => String(err?.message ?? err)
+  .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '');
 
 // Crossfade a whole-tree swap (theme flip, section change) via the View
 // Transitions API instead of transitioning every element's colours on every
@@ -38,9 +51,54 @@ function withViewTransition(update) {
   document.startViewTransition(() => flushSync(update));
 }
 
-let nodeSeq = 0;
-function freshNodeId(prefix) {
-  return `${prefix}-${Date.now().toString(36)}${(nodeSeq++).toString(36)}`;
+// Column widths (left explorer / right run panel) are user-resizable and
+// remembered. Drag the edge handle; double-click snaps back to the default.
+function useResizableColumn(storageKey, initial, { min, max }, dir) {
+  const clamp = w => Math.min(max, Math.max(min, Math.round(w)));
+  const [width, setWidth] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem(storageKey));
+      return Number.isFinite(v) && v > 0 ? clamp(v) : initial;
+    } catch { return initial; }
+  });
+  const start = useCallback(e => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = width;
+    document.body.classList.add('col-resizing');
+    const onMove = ev => setWidth(clamp(startW + (ev.clientX - startX) * dir));
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.body.classList.remove('col-resizing');
+      setWidth(w => {
+        try { localStorage.setItem(storageKey, String(w)); } catch {}
+        return w;
+      });
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  }, [width, storageKey, dir]);
+  return [width, start, useCallback(() => {
+    setWidth(initial);
+    try { localStorage.removeItem(storageKey); } catch {}
+  }, [initial, storageKey])];
+}
+
+// The drag handle between two columns. `dir` is +1 when dragging right grows
+// the column (left sidebar) and -1 when dragging left grows it (right panel).
+function ColumnResizer({ onStart, onReset, label }) {
+  return (
+    <div
+      className="col-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      title={`${label} — drag to resize, double-click to reset`}
+      onPointerDown={onStart}
+      onDoubleClick={onReset}
+    />
+  );
 }
 
 // --- Activity rail: refined line icons in the app's geometric language.
@@ -126,6 +184,19 @@ function RunMirror({ snapshot }) {
 export default function App() {
   const [runs, setRuns] = useState([]); // summaries (id, name, createdAt, stage…), newest first
   const [activeRunId, setActiveRunId] = useState(null);
+  // CHAT-RUN: the run attached to the home chat surface. When set and the
+  // section is 'home', home renders the chat thread + unfolding flow instead
+  // of the lander. chatSeed holds the submitted prompt for the instant before
+  // the first snapshot lands.
+  const [chatRunId, setChatRunId] = useState(null);
+  const [chatSeed, setChatSeed] = useState('');
+  // COMPARE (MODES-COMPARE T11/T12): a compare launch fires two ordinary runs
+  // from one prompt. `compareRunIds` = [a, b] takes over the home surface (the
+  // split-view CompareRun) when set; `compareOn` is the composer's A/B toggle
+  // and `compareB` slot B's flow+mode selection — both persisted per tab.
+  const [compareOn, setCompareOn] = useState(false);
+  const [compareB, setCompareB] = useState(null); // { flowId, modeId } | null
+  const [compareRunIds, setCompareRunIds] = useState(null); // [runIdA, runIdB] | null
   const [snapshot, setSnapshot] = useState(null);
   // Mirror of `snapshot` for the incremental-update handler to read without a
   // stale closure: it needs the currently-viewed run + rev to decide whether an
@@ -148,7 +219,11 @@ export default function App() {
   const [flowLint, setFlowLint] = useState(null); // { ok, errors, warnings } for the open flow
   const [models, setModels] = useState([]);
   const [flowViewMode, setFlowViewMode] = useState('canvas'); // 'canvas' | 'yaml'
+  const [pickerOpen, setPickerOpen] = useState(false); // the add-node panel over the canvas
   const [runView2, setRunView2] = useState('canvas'); // run view: 'canvas' | 'document'
+  // Resizable outer columns (explorer left, run panel right).
+  const [leftColW, startLeftResize, resetLeftCol] = useResizableColumn('llmflow.col.left', 288, { min: 208, max: 520 }, 1);
+  const [rightColW, startRightResize, resetRightCol] = useResizableColumn('llmflow.col.right', 372, { min: 300, max: 640 }, -1);
   // Replay scrubber (finished runs): folded frames + where the scrubber sits
   // (null = live/final), and whether it's playing.
   const [replayFrames, setReplayFrames] = useState(null);
@@ -160,12 +235,29 @@ export default function App() {
 
   // Unified run entry (the run panel): workflow dropdown + user input.
   const [runFlowId, setRunFlowId] = useState('');
+  // MODES-COMPARE T4: the picked mode of the selected flow (null = default).
+  // Persisted per tab beside runFlowId; layered as a launch override at start.
+  const [runModeId, setRunModeId] = useState(null);
+  // MODES-COMPARE T10: exposed run-input values, per flow: { flowId: { nodeId:
+  // { field: value } } }. The current flow's bucket IS the override map sent at
+  // start; last-used values persist per flow per tab.
+  const [runInputs, setRunInputs] = useState({});
+  // The exposed-input spec of the selected flow (fetched, not persisted).
+  const [launchInputSpec, setLaunchInputSpec] = useState([]);
   const [runInput, setRunInput] = useState('');
   const [workspaceDir, setWorkspaceDir] = useState(''); // bound target project folder (optional)
   const [busy, setBusy] = useState(false);
   const [resuming, setResuming] = useState(false); // continuing an interrupted run
   // Explicitly reopened the run form while watching a live run (see `watching`).
   const [newRunOpen, setNewRunOpen] = useState(false);
+  // --- Run mode (RUN-CONTROL) ---
+  // Follow-execution camera (default ON per session; the canvas remounts on
+  // tab switch, so it lives here), the Node Focus panel's target, a transient
+  // toast for run-action rejections, and the one-time newcomer tip.
+  const [followRun, setFollowRun] = useState(true);
+  const [focusNodeId, setFocusNodeId] = useState(null);
+  const [runToast, setRunToast] = useState(null);
+  const [coachTip, setCoachTip] = useState(false);
 
   // Primary navigation. The active section drives which explorer list shows and
   // which document the main area renders; each section keeps its own selection
@@ -297,10 +389,18 @@ export default function App() {
   // closes so adding a key clears the hint without a restart.
   const [hasKey, setHasKey] = useState(false);
   const [activeModels, setActiveModels] = useState([]);
+  // Tool-call approval (APPROVAL-MODES §3). The saved default seeds the chip;
+  // changing it in the chatbox saves it back, so the picker beside Run and the
+  // Settings control are two views of one value — with the per-run capture
+  // happening main-side at start, from whatever the chip shows at that moment.
+  const [approvalMode, setApprovalMode] = useState('ask');
+  const [safetyModel, setSafetyModel] = useState(null);
   const refreshSettings = useCallback(() => {
     window.llmflow.getSettings().then(s => {
       setHasKey(Boolean(s.hasKey));
       setActiveModels(s.activeModels ?? []);
+      setApprovalMode(s.approvalMode ?? 'ask');
+      setSafetyModel(s.resolvedSafetyModel ?? null);
       // The openrouter live catalog only feeds the legacy free-text fallback
       // in worker pickers; the curated active-models list is the primary offer.
       if (s.providers?.openrouter?.hasKey) window.llmflow.listModels('openrouter').then(setModels).catch(() => setModels([]));
@@ -532,6 +632,7 @@ export default function App() {
     }
     // The run being watched can be the one deleted: drop the view with it.
     setActiveRunId(prev => (prev === id ? null : prev));
+    setChatRunId(prev => (prev === id ? null : prev));
     setSnapshot(prev => (prev?.meta?.runId === id ? null : prev));
     await refreshRuns();
   }, [refreshRuns]);
@@ -568,9 +669,10 @@ export default function App() {
 
   const captureBundle = () => ({
     activeActivity, activeFlowId, flow: flowRef.current, flowLint,
-    activeRunId, snapshot, selectedNode,
+    activeRunId, snapshot, selectedNode, chatRunId,
+    compareOn, compareB, compareRunIds,
     undo: [...undoStack.current], redo: [...redoStack.current],
-    runFlowId, runInput, workspaceDir, newRunOpen,
+    runFlowId, runModeId, runInputs, runInput, workspaceDir, newRunOpen,
     flowViewMode, runView2, runs
   });
 
@@ -578,7 +680,13 @@ export default function App() {
     activeActivity: b.activeActivity,
     activeFlowId: b.activeFlowId,
     activeRunId: b.activeRunId,
+    chatRunId: b.chatRunId,
+    compareOn: b.compareOn,
+    compareB: b.compareB,
+    compareRunIds: b.compareRunIds,
     runFlowId: b.runFlowId,
+    runModeId: b.runModeId,
+    runInputs: b.runInputs,
     runInput: b.runInput,
     workspaceDir: b.workspaceDir,
     flowViewMode: b.flowViewMode,
@@ -594,6 +702,11 @@ export default function App() {
     setSaveState('saved'); // leave always flushes, so the incoming tab is saved by construction
     setFlowLint(b.flowLint ?? null);
     setActiveRunId(b.activeRunId ?? null);
+    setChatRunId(b.chatRunId ?? null);
+    setCompareOn(b.compareOn ?? false);
+    setCompareB(b.compareB ?? null);
+    setCompareRunIds(comparePair(b.compareRunIds));
+    setChatSeed('');
     setSnapshot(b.snapshot ?? null);
     setSelectedNode(b.selectedNode ?? null);
     undoStack.current = b.undo ?? [];
@@ -601,6 +714,8 @@ export default function App() {
     lastHistoryPush.current = 0;
     setHistorySize({ undo: undoStack.current.length, redo: redoStack.current.length });
     setRunFlowId(prev => b.runFlowId || prev); // fresh tabs keep the catalog default
+    setRunModeId(b.runModeId ?? null);
+    setRunInputs(b.runInputs ?? {});
     setRunInput(b.runInput ?? '');
     setWorkspaceDir(b.workspaceDir ?? '');
     setNewRunOpen(b.newRunOpen ?? false);
@@ -616,7 +731,12 @@ export default function App() {
   const restoreSlim = async (slim = {}) => {
     const b = {
       activeActivity: slim.activeActivity, activeRunId: slim.activeRunId ?? null,
-      runFlowId: slim.runFlowId, runInput: slim.runInput,
+      chatRunId: slim.chatRunId ?? null,
+      compareOn: slim.compareOn ?? false,
+      compareB: slim.compareB ?? null,
+      compareRunIds: slim.compareRunIds ?? null,
+      runFlowId: slim.runFlowId, runModeId: slim.runModeId ?? null,
+      runInputs: slim.runInputs ?? {}, runInput: slim.runInput,
       workspaceDir: slim.workspaceDir,
       flowViewMode: slim.flowViewMode, runView2: slim.runView2,
       runs: []
@@ -745,6 +865,8 @@ export default function App() {
       refreshRuns(); // runs moved with the same ids — re-read from the new store
     }
   };
+
+  const revealTab = id => { window.llmflow.revealProject?.(id); };
 
   const openNewTabPage = async () => {
     setRecents(await window.llmflow.projectRecents?.() ?? []);
@@ -966,6 +1088,13 @@ export default function App() {
     });
   };
 
+  // The node picker's click-to-add (drag-to-canvas drops are handled by the
+  // editor itself). The panel stays open so several nodes can be added in a row.
+  const addFromPicker = spec => {
+    if (spec?.kind === 'orchestrator') addStructuralNode('orchestrator');
+    else if (spec?.kind === 'template') addTemplateNode(spec.templateId);
+  };
+
   // Legacy raw nodes (aiStep/agentTask) still edit through data.
   const changeNodeData = (nodeId, patch) => {
     changeFlow(f => ({
@@ -995,14 +1124,117 @@ export default function App() {
     changeFlow(f => {
       // The pinned structural nodes (input/output) never leave the canvas.
       if (isStructuralNode(f.nodes.find(n => n.id === nodeId))) return f;
+      // Deleting an orchestrator deletes the nodes inside its box too.
+      const drop = new Set([nodeId]);
+      for (const n of f.nodes) if (n.parentId && drop.has(n.parentId)) drop.add(n.id);
       return {
         ...f,
-        nodes: f.nodes.filter(n => n.id !== nodeId),
-        edges: f.edges.filter(e => e.source !== nodeId && e.target !== nodeId)
+        nodes: f.nodes.filter(n => !drop.has(n.id)),
+        edges: f.edges.filter(e => !drop.has(e.source) && !drop.has(e.target))
       };
     });
     setSelectedNode(null);
   };
+
+  // Take a node out of its orchestrator box (inspector "Remove from box"):
+  // the position becomes absolute, the box's ownership wire goes with it,
+  // and the box shrinks back around whatever remains inside.
+  const detachNode = nodeId => {
+    changeFlow(f => {
+      const node = f.nodes.find(n => n.id === nodeId);
+      if (!node?.parentId) return f;
+      const parent = f.nodes.find(n => n.id === node.parentId);
+      if (!parent) return f;
+      const abs = {
+        x: (parent.position?.x ?? 0) + (node.position?.x ?? 0),
+        y: (parent.position?.y ?? 0) + (node.position?.y ?? 0)
+      };
+      const nodes = f.nodes.map(n => n.id === nodeId
+        ? (() => { const { parentId, ...rest } = n; return { ...rest, position: abs }; })()
+        : n);
+      return {
+        ...f,
+        nodes: nodes.map(n => n.id === parent.id
+          ? { ...n, data: { ...n.data, box: shrinkOrchBox(nodes.filter(c => c.parentId === n.id)) } }
+          : n),
+        edges: f.edges.filter(e => !(e.source === parent.id && e.target === nodeId))
+      };
+    });
+  };
+
+  // Picking a mode in the chatbox both governs the next run and becomes the new
+  // saved default — the alternative (a per-run choice that forgets itself) means
+  // a user who wants unattended runs re-arms the dangerous mode every time,
+  // which is exactly the habit that stops people reading the warning.
+  const changeApprovalMode = useCallback(mode => {
+    setApprovalMode(mode);
+    window.llmflow.setSettings({ approvalMode: mode })
+      .then(s => setSafetyModel(s.resolvedSafetyModel ?? null))
+      .catch(() => {});
+  }, []);
+
+  // Pick a workflow (and optionally one of its modes) for the next run. A flow
+  // change clears any stale mode, so the mode always belongs to the flow shown.
+  const selectRunFlow = useCallback((flowId, modeId = null) => {
+    setRunFlowId(flowId);
+    setRunModeId(modeId ?? null);
+  }, []);
+
+  // Fetch the selected flow's exposed run inputs (T10). Refetched on flow change;
+  // the values themselves live in runInputs, keyed per flow so they persist.
+  useEffect(() => {
+    let live = true;
+    if (!runFlowId) { setLaunchInputSpec([]); return; }
+    window.llmflow.flowLaunchInputs?.(runFlowId)
+      .then(spec => { if (live) setLaunchInputSpec(spec ?? []); })
+      .catch(() => { if (live) setLaunchInputSpec([]); });
+    return () => { live = false; };
+  }, [runFlowId]);
+
+  // Set one exposed run-input value into the current flow's bucket. A null value
+  // clears the override (back to the mode/node default).
+  const setRunInputValue = useCallback((nodeId, field, value) => {
+    setRunInputs(prev => {
+      const flowBucket = { ...(prev[runFlowId] ?? {}) };
+      const nodeBucket = { ...(flowBucket[nodeId] ?? {}) };
+      if (value == null || value === '') delete nodeBucket[field];
+      else nodeBucket[field] = value;
+      if (Object.keys(nodeBucket).length) flowBucket[nodeId] = nodeBucket;
+      else delete flowBucket[nodeId];
+      return { ...prev, [runFlowId]: flowBucket };
+    });
+  }, [runFlowId]);
+
+  // The launch payload (MODES-COMPARE): a picked mode + exposed run-input
+  // overrides. Null when neither is set — an ordinary default run. Shared by the
+  // single-run path and each compare slot.
+  const launchForSelection = (modeId, overrides = null) => {
+    const hasOverrides = overrides && Object.values(overrides).some(f => f && Object.keys(f).length);
+    if (!modeId && !hasOverrides) return null;
+    return {
+      ...(modeId ? { modeId } : {}),
+      ...(hasOverrides ? { overrides } : {})
+    };
+  };
+  const launchFor = () => launchForSelection(runModeId, runInputs[runFlowId] ?? {});
+
+  // Toggle the composer's Compare mode. Turning it on seeds slot B with a
+  // distinct config — a different mode of the same flow if one exists, else the
+  // same flow (repointed by the user) — so the two slots aren't identical.
+  const toggleCompare = useCallback(() => {
+    setCompareOn(on => {
+      const next = !on;
+      if (next) {
+        setCompareB(prev => {
+          if (prev) return prev;
+          const f = flowsList.find(x => x.id === runFlowId);
+          const altMode = f?.modes?.find(m => m.id !== runModeId)?.id ?? null;
+          return { flowId: runFlowId, modeId: altMode };
+        });
+      }
+      return next;
+    });
+  }, [flowsList, runFlowId, runModeId]);
 
   // The one run entry: selected workflow + user input -> User Input node.
   const startRun = async () => {
@@ -1010,7 +1242,7 @@ export default function App() {
     setBusy(true);
     try {
       await flushSave();
-      const runId = await window.llmflow.runFlow(activeTabRef.current, runFlowId, runInput.trim(), workspaceDir || null);
+      const runId = await window.llmflow.runFlow(activeTabRef.current, runFlowId, runInput.trim(), workspaceDir || null, approvalMode, launchFor());
       setRunInput('');
       await openRun(runId);
       await refreshRuns();
@@ -1020,9 +1252,11 @@ export default function App() {
   };
 
   // The lander's front door (LANDER-PLAN.md §5): the composer text becomes the
-  // run's User Input on the currently-selected workflow, then the view hands
-  // off to the live run. Phase 1 is a plain navigation (openRun switches to the
-  // Runs section); the unfold choreography lands in Phase 4.
+  // run's User Input on the currently-selected workflow. CHAT-RUN: the view no
+  // longer hands off to the Runs section — home becomes the chat surface and
+  // the flow unfolds below the message. activeRunId still points at the run so
+  // the snapshot stream follows it; opening the run full-screen is one click
+  // away in the Runs list.
   const runFromLander = async text => {
     if (!runFlowId || busy || !text.trim()) return;
     setBusy(true);
@@ -1038,14 +1272,91 @@ export default function App() {
         await enterTab(pid, payload.tabs.find(t => t.id === pid)?.state);
       }
       await flushSave();
-      const runId = await window.llmflow.runFlow(pid, runFlowId, text.trim(), workspaceDir || null);
+      const runId = await window.llmflow.runFlow(pid, runFlowId, text.trim(), workspaceDir || null, approvalMode, launchFor());
       setRunInput('');
-      await openRun(runId);
+      withViewTransition(() => {
+        setChatSeed(text.trim());
+        setChatRunId(runId);
+        setActiveRunId(runId);
+        setSelectedNode(null);
+      });
       await refreshRuns();
     } finally {
       setBusy(false);
     }
   };
+
+  // Compare launch (T11/T12): one prompt fires two ordinary runs — slot A is the
+  // composer's flow+mode, slot B the compare picker's — and the home surface
+  // switches to the split-view. Same auto-create-project path as runFromLander.
+  const runCompareFromLander = async text => {
+    if (!runFlowId || busy || !text.trim()) return;
+    const slotA = { flowId: runFlowId, modeId: runModeId };
+    const slotB = compareB ?? { flowId: runFlowId, modeId: null };
+    setBusy(true);
+    try {
+      let pid = activeTabRef.current;
+      if (pid == null) {
+        const payload = await window.llmflow.createProject(text.trim());
+        setTabs(payload.tabs);
+        pid = payload.opened;
+        await enterTab(pid, payload.tabs.find(t => t.id === pid)?.state);
+      }
+      await flushSave();
+      const prompt = text.trim();
+      // Slot inputs aren't exposed in compare mode (the modes carry the config),
+      // so each slot's launch is just its mode.
+      const runIdA = await window.llmflow.runFlow(pid, slotA.flowId, prompt, workspaceDir || null, approvalMode, launchForSelection(slotA.modeId));
+      const runIdB = await window.llmflow.runFlow(pid, slotB.flowId, prompt, workspaceDir || null, approvalMode, launchForSelection(slotB.modeId));
+      setRunInput('');
+      withViewTransition(() => {
+        setChatSeed(prompt);
+        setCompareRunIds([runIdA, runIdB]);
+        setChatRunId(null);
+        setActiveRunId(runIdA);
+        setSelectedNode(null);
+      });
+      await refreshRuns();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // New chat: the conversation surface resets to the lander. The run(s) are
+  // untouched — they keep going (or stay finished) in the Runs section.
+  const startNewChat = useCallback(() => {
+    withViewTransition(() => {
+      setChatRunId(null);
+      setChatSeed('');
+      setCompareRunIds(null);
+      setActiveRunId(null);
+      setSnapshot(null);
+      setSelectedNode(null);
+      setFocusNodeId(null);
+    });
+  }, []);
+
+  // The chat composer speaks follow-up: the engine triages the reply and grows
+  // the flow in place (terminal runs only — the composer disables otherwise).
+  // Rejections read as a toast over the chat, never an alert.
+  const chatFollowUp = useCallback(async text => {
+    try {
+      await window.llmflow.followUpRun(activeTabRef.current, chatRunId, text);
+    } catch (err) {
+      setRunToast(ipcMessage(err));
+    }
+  }, [chatRunId]);
+
+  // Answer a run parked at the refiner's awaiting_input gate (MODES-COMPARE T6):
+  // a distinct IPC from follow-up — it closes the in-flight question and re-runs
+  // the refine node, rather than opening a new turn.
+  const chatAnswerInput = useCallback(async text => {
+    try {
+      await window.llmflow.answerInput(activeTabRef.current, chatRunId, text);
+    } catch (err) {
+      setRunToast(ipcMessage(err));
+    }
+  }, [chatRunId]);
 
   // Continue a run the app died in the middle of. The main process keeps the
   // completed nodes and picks the walk up from there (V1 task 7).
@@ -1055,6 +1366,75 @@ export default function App() {
     try { await window.llmflow.resumeRun(activeTabRef.current, activeRunId); }
     finally { setResuming(false); }
   };
+
+  // --- Run control (RUN-CONTROL): the canvas menu, RunBar and Node Focus all
+  // call through here. Rejections surface as a transient toast over the canvas,
+  // never an alert; { ok:false, error:'not-live' } resolves read the same way.
+  const showRunToast = useCallback(err => setRunToast(ipcMessage(err)), []);
+  // The run-control set bound to a given run. The single-run views use the
+  // active run's; a compare pane binds its own so the two panes drive
+  // independently (RUN-CONTROL + T12).
+  const makeRunControl = useCallback(runId => {
+    // fn() is invoked inside the try: a missing bridge method throws
+    // synchronously, and that deserves the same toast as a rejection.
+    const guard = fn => {
+      let p;
+      try { p = fn(); } catch (e) { showRunToast(e); return Promise.resolve(); }
+      return p
+        .then(res => {
+          if (res && res.ok === false) {
+            setRunToast(res.error === 'not-live' ? 'That run is no longer live.' : (res.error ?? 'Run action failed.'));
+          }
+          return res;
+        })
+        .catch(e => showRunToast(e));
+    };
+    return {
+      pause: () => guard(() => window.llmflow.pauseRun(activeTabRef.current, runId)),
+      resume: () => guard(() => window.llmflow.resumeRun(activeTabRef.current, runId)),
+      stop: () => guard(() => window.llmflow.stopRun(activeTabRef.current, runId)),
+      restart: (nodeId, guidance) =>
+        guard(() => window.llmflow.restartNode(activeTabRef.current, runId, nodeId, guidance)),
+      // A successful branch launches the fork — switch the view to the new run.
+      branch: nodeId =>
+        guard(() => window.llmflow.branchRun(activeTabRef.current, runId, nodeId))
+          .then(async res => {
+            if (res?.runId) { await openRun(res.runId); refreshRunsSoon(); }
+          })
+    };
+  }, [openRun, refreshRunsSoon, showRunToast]);
+  const runControl = useMemo(() => makeRunControl(activeRunId), [makeRunControl, activeRunId]);
+
+  // Compare-pane callbacks (T12): follow-up / answer / approve / reject routed
+  // to a specific pane's run, not the active one. Rejections read as a toast.
+  const compareFollowUp = useCallback(async (runId, text) => {
+    try { await window.llmflow.followUpRun(activeTabRef.current, runId, text); }
+    catch (err) { setRunToast(ipcMessage(err)); }
+  }, []);
+  const compareAnswerInput = useCallback(async (runId, text) => {
+    try { await window.llmflow.answerInput(activeTabRef.current, runId, text); }
+    catch (err) { setRunToast(ipcMessage(err)); }
+  }, []);
+  const exitCompare = useCallback(() => {
+    withViewTransition(() => {
+      setCompareRunIds(null);
+      setChatSeed('');
+      setActiveRunId(null);
+      setSnapshot(null);
+      setSelectedNode(null);
+      setFocusNodeId(null);
+    });
+  }, []);
+
+  // The toast dismisses itself; a new one re-arms the clock.
+  useEffect(() => {
+    if (!runToast) return;
+    const id = setTimeout(() => setRunToast(null), 4000);
+    return () => clearTimeout(id);
+  }, [runToast]);
+
+  // The picker belongs to one flow's canvas — navigation and view switches close it.
+  useEffect(() => { setPickerOpen(false); }, [activeFlowId, flowViewMode, activeActivity]);
 
   const stage = snapshot?.meta?.stage;
   // A bound tab IS the workspace (T19): its runs always target the tab's
@@ -1067,7 +1447,31 @@ export default function App() {
   // run is live the "Run a workflow" form collapses to a button so the column
   // belongs to live output; it comes back on its own once the run settles.
   const watching = runView && Boolean(snapshot) && !isTerminal(stage);
+  // The chat surface streams the same run without leaving home — live-ness for
+  // the one-time context-menu tip has to count both surfaces.
+  const chatLive = Boolean(
+    chatRunId && activeActivity === 'home' &&
+    snapshot?.meta?.runId === chatRunId && !isTerminal(stage)
+  );
   const showRunForm = !watching || newRunOpen;
+
+  // Node Focus belongs to one run's view: switching runs or leaving the run
+  // view closes it rather than leaving it pointing at another run's node.
+  useEffect(() => { setFocusNodeId(null); }, [activeRunId]);
+  useEffect(() => { if (!runView) setFocusNodeId(null); }, [runView]);
+
+  // One-time newcomer tip: the first live run introduces the node context
+  // menu, then localStorage remembers forever — once ever, never naggy.
+  useEffect(() => {
+    if ((!watching && !chatLive) || coachTip) return;
+    let seen = '1';
+    try { seen = localStorage.getItem('llmflow.tip.nodeMenu'); } catch { /* storage blocked: don't nag */ }
+    if (!seen) setCoachTip(true);
+  }, [watching, chatLive, coachTip]);
+  const dismissCoachTip = () => {
+    setCoachTip(false);
+    try { localStorage.setItem('llmflow.tip.nodeMenu', '1'); } catch {}
+  };
   const homeView = activeActivity === 'home';
   // Projectless (L6): no tab open — the lander shows its no-project variant.
   const projectless = activeTab == null;
@@ -1112,6 +1516,7 @@ export default function App() {
           onNewTab={openNewTabPage}
           onRename={renameTab}
           onAdopt={adoptTab}
+          onReveal={revealTab}
         />
         {flowView
           ? <span className="titlebar-doc mono">{flow.name}</span>
@@ -1179,6 +1584,43 @@ export default function App() {
         </nav>
 
         {homeView ? (
+          compareRunIds ? (
+            <CompareRun
+              runIds={compareRunIds}
+              projectId={activeTab}
+              seed={chatSeed}
+              onExit={exitCompare}
+              runControlFor={makeRunControl}
+              onFollowUp={compareFollowUp}
+              onAnswerInput={compareAnswerInput}
+              onApprove={runId => window.llmflow.approvePlan(activeTab, runId)}
+              onReject={runId => window.llmflow.rejectPlan(activeTab, runId, 'Rejected by user')}
+              onOpenRun={openRun}
+              onOpenFolder={runId => window.llmflow.openRunFolder(activeTab, runId)}
+            />
+          ) : chatRunId ? (
+            <ChatRun
+              snapshot={snapshot?.meta?.runId === chatRunId ? snapshot : null}
+              runId={chatRunId}
+              projectId={activeTab}
+              seed={chatSeed}
+              followRun={followRun}
+              onFollowChange={setFollowRun}
+              runControl={runControl}
+              onFollowUp={chatFollowUp}
+              onAnswerInput={chatAnswerInput}
+              onNewChat={startNewChat}
+              onOpenFolder={() => window.llmflow.openRunFolder(activeTab, chatRunId)}
+              onOpenWorkspace={() => window.llmflow.openWorkspace(activeTab, chatRunId)}
+              onResume={resumeRun}
+              resuming={resuming}
+              onApprove={() => window.llmflow.approvePlan(activeTab, chatRunId)}
+              onReject={() => window.llmflow.rejectPlan(activeTab, chatRunId, 'Rejected by user')}
+              runToast={runToast}
+              coachTip={coachTip}
+              onDismissCoachTip={dismissCoachTip}
+            />
+          ) : (
           <Lander
             projectName={landerProjectName}
             projectless={projectless}
@@ -1188,21 +1630,32 @@ export default function App() {
             onOpenRun={openRun}
             flows={flowsList}
             flowId={runFlowId}
-            onSelectFlow={setRunFlowId}
+            modeId={runModeId}
+            onSelect={selectRunFlow}
+            compareOn={compareOn}
+            onToggleCompare={toggleCompare}
+            slotB={compareB}
+            onSelectB={(flowId, modeId = null) => setCompareB({ flowId, modeId })}
+            launchInputs={launchInputSpec}
+            launchValues={runInputs[runFlowId]}
+            onLaunchInput={setRunInputValue}
+            models={models}
+            activeModels={activeModels}
             hasKey={hasKey}
             onOpenSettings={() => setShowSettings(true)}
             inputRef={landerInputRef}
             busy={busy}
-            onSubmit={runFromLander}
+            onSubmit={text => (compareOn ? runCompareFromLander(text) : runFromLander(text))}
             onOpenProject={openProjectTab}
             onOpenFolder={async () => {
               const dir = await window.llmflow.pickProjectFolder?.();
               if (dir) openProjectTab(dir);
             }}
           />
+          )
         ) : (
         <>
-        <aside className="sidebar">
+        <aside className="sidebar" style={{ width: leftColW }}>
           {activeActivity === 'flows' && (
             <>
               <div className="sidebar-section">
@@ -1269,6 +1722,8 @@ export default function App() {
           )}
         </aside>
 
+        <ColumnResizer onStart={startLeftResize} onReset={resetLeftCol} label="Resize explorer" />
+
         <main className="canvas-area">
           {flowView && (
             <div className="editor-bar">
@@ -1312,23 +1767,14 @@ export default function App() {
                 </button>
               </div>
               {flowViewMode !== 'yaml' && (
-                <div className="palette">
-                  {/* User Input / Output are pinned structural nodes: always on
-                      the canvas, never added or removed by hand. */}
-                  <button className="palette-btn" onClick={() => addStructuralNode('orchestrator')} title="Add an Orchestrator — plans autonomously and creates & runs task nodes inside its box, no human intervention">
-                    <span className="palette-icon">▦</span>Orchestrator
-                  </button>
-                  {templates.map(t => (
-                    <button
-                      key={t.id}
-                      className="palette-btn"
-                      onClick={() => addTemplateNode(t.id)}
-                      title={`${t.name}: ${t.description || 'Node Library template'}`}
-                    >
-                      <span className="palette-icon">{t.icon || '✦'}</span>{t.name}
-                    </button>
-                  ))}
-                </div>
+                <button
+                  type="button"
+                  className={'add-node-btn' + (pickerOpen ? ' active' : '')}
+                  onClick={() => setPickerOpen(o => !o)}
+                  title="Add a node — search the library, click to add, or drag onto the canvas"
+                >
+                  <span aria-hidden>＋</span> Add node
+                </button>
               )}
               <div className="toolbar-spacer" />
               {flowViewMode !== 'yaml' && (
@@ -1338,6 +1784,18 @@ export default function App() {
                   <button className="ghost mini" onClick={autoLayout} title="Arrange nodes into dependency layers">Auto-layout</button>
                   <button className="ghost mini" onClick={duplicateFlow} title="Duplicate this workflow">Duplicate</button>
                 </>
+              )}
+              {/* Modes summary (MODES-COMPARE T3): a count chip that jumps to
+                  the YAML editor, where modes are authored. Tooltip lists them. */}
+              {flow?.modes && Object.keys(flow.modes).length > 0 && (
+                <button
+                  type="button"
+                  className="modes-chip"
+                  onClick={() => setFlowViewMode('yaml')}
+                  title={'Modes (edit in the YAML view):\n' + Object.entries(flow.modes).map(([id, m]) => `• ${m.name || id}`).join('\n')}
+                >
+                  ◑ {Object.keys(flow.modes).length} mode{Object.keys(flow.modes).length === 1 ? '' : 's'}
+                </button>
               )}
               {flowLint && (flowLint.errors.length + flowLint.warnings.length > 0 ? (
                 <span
@@ -1364,6 +1822,9 @@ export default function App() {
               onOpenWorkspace={() => window.llmflow.openWorkspace(activeTab, activeRunId)}
               docView={runView2}
               onDocView={v => withViewTransition(() => setRunView2(v))}
+              onPause={runControl.pause}
+              onResume={runControl.resume}
+              onStop={runControl.stop}
             />
           )}
           {runView && snapshot?.meta?.interrupted && (
@@ -1379,7 +1840,7 @@ export default function App() {
             </div>
           )}
           {runView && stage === 'awaiting_approval' && (
-            <div className="approval-bar">
+            <div className={'approval-bar' + (snapshot?.meta?.pendingToolCall?.risk === 'danger' ? ' danger' : '')}>
               <span className="section-label">
                 {snapshot?.meta?.pendingGateKind === 'tool' ? 'Tool approval' : 'Approval gate'}
               </span>
@@ -1390,6 +1851,17 @@ export default function App() {
                     {snapshot.meta.pendingToolCall.summary
                       ? <> on <span className="mono">{snapshot.meta.pendingToolCall.summary}</span></>
                       : null}. Approve to run it, or reject to abort the task.
+                    {/* Smart mode only stops for a reason, so say what it was —
+                        a pause with no explanation trains people to click
+                        Approve without reading, which defeats the gate. */}
+                    {snapshot.meta.pendingToolCall.reason && (
+                      <span className={'risk-note risk-' + (snapshot.meta.pendingToolCall.risk ?? 'caution')}>
+                        <span className="risk-pill">
+                          {snapshot.meta.pendingToolCall.risk === 'danger' ? '⚠ danger' : '◈ caution'}
+                        </span>
+                        {snapshot.meta.pendingToolCall.reason}
+                      </span>
+                    )}
                   </span>
                 )
                 : <span>Review the work so far, then approve to continue or reject to stop.</span>}
@@ -1452,6 +1924,12 @@ export default function App() {
                             : snapshot}
                           selectedNode={selectedNode}
                           onSelect={setSelectedNode}
+                          live={watching}
+                          paused={Boolean(snapshot.meta?.paused)}
+                          follow={followRun}
+                          onFollowChange={setFollowRun}
+                          onInvestigate={setFocusNodeId}
+                          control={runControl}
                         />
                         <ReplayStrip
                           frames={replayFrames}
@@ -1476,9 +1954,30 @@ export default function App() {
                       Select a flow to edit its graph —<br />or press ＋ New to start one.
                     </div>
                   )}
+          {flowView && flowViewMode !== 'yaml' && pickerOpen && (
+            <>
+              <div className="picker-backdrop" onClick={() => setPickerOpen(false)} />
+              <NodePicker templates={templates} onAdd={addFromPicker} onClose={() => setPickerOpen(false)} />
+            </>
+          )}
+
+          {/* Run-mode overlays: action rejections (transient) and the one-time
+              context-menu tip. Both live over the canvas, clear of the panels. */}
+          {runToast && <div className="run-toast" role="status">{runToast}</div>}
+          {coachTip && (
+            <div className="coach-tip" role="note">
+              <span className="section-label">Tip</span>
+              <span className="coach-tip-text">
+                Right-click any node for run actions — investigate, restart, branch, pause, stop.
+              </span>
+              <button className="link" onClick={dismissCoachTip} aria-label="Dismiss tip">✕</button>
+            </div>
+          )}
         </main>
 
-        <div className="right-col">
+        <ColumnResizer onStart={startRightResize} onReset={resetRightCol} label="Resize run panel" />
+
+        <div className="right-col" style={{ width: rightColW }}>
           {!showRunForm && (
             <button className="new-run-btn" onClick={() => setNewRunOpen(true)}>
               <span aria-hidden>＋</span> New run
@@ -1491,11 +1990,32 @@ export default function App() {
             <span className="section-label">Run a workflow</span>
             <select
               value={runFlowId}
-              onChange={e => setRunFlowId(e.target.value)}
+              onChange={e => selectRunFlow(e.target.value)}
               aria-label="Workflow to run"
             >
               {flowsList.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
+            {/* Mode picker (MODES-COMPARE T4): only when the selected flow ships
+                modes. "Default" runs the flow's stored configuration. */}
+            {(flowsList.find(f => f.id === runFlowId)?.modes?.length > 0) && (
+              <select
+                value={runModeId ?? ''}
+                onChange={e => setRunModeId(e.target.value || null)}
+                aria-label="Mode"
+              >
+                <option value="">Default</option>
+                {flowsList.find(f => f.id === runFlowId).modes.map(m =>
+                  <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            )}
+            {/* Exposed run inputs (MODES-COMPARE T10). */}
+            <LaunchInputs
+              inputs={launchInputSpec}
+              values={runInputs[runFlowId]}
+              onChange={setRunInputValue}
+              models={models}
+              activeModels={activeModels}
+            />
             <textarea
               placeholder="Type what you want done — this becomes the User Input node…"
               value={runInput}
@@ -1532,6 +2052,14 @@ export default function App() {
                   : <span className="muted">No workspace (files stay in the run folder)</span>}
               </div>
             )}
+            {/* Sits directly above Run, because it is a property OF the run you
+                are about to start — not a project setting that happens to live
+                nearby. */}
+            <ApprovalModePicker
+              mode={approvalMode}
+              onChange={changeApprovalMode}
+              safetyModel={safetyModel}
+            />
             <button className="primary" onClick={startRun} disabled={busy || !runFlowId}>
               {busy ? 'Starting…' : 'Run'}<kbd className="shortcut">⌘↵</kbd>
             </button>
@@ -1558,9 +2086,25 @@ export default function App() {
                 onChangeData={changeNodeData}
                 onChangeOverrides={changeNodeOverrides}
                 onDeleteNode={deleteNode}
+                onDetachNode={detachNode}
               />
             : snapshot && runView
-              ? <Inspector snapshot={snapshot} selectedNode={selectedNode} />
+              ? <>
+                  {focusNodeId && (
+                    <NodeFocus
+                      snapshot={snapshot}
+                      nodeId={focusNodeId}
+                      projectId={activeTab}
+                      runId={activeRunId}
+                      live={watching}
+                      onClose={() => setFocusNodeId(null)}
+                      onRestart={runControl.restart}
+                      onBranch={runControl.branch}
+                      onOpenFolder={() => window.llmflow.openRunFolder(activeTab, activeRunId)}
+                    />
+                  )}
+                  <Inspector snapshot={snapshot} selectedNode={selectedNode} />
+                </>
               : (
                 <aside className="inspector">
                   <div className="inspector-body">

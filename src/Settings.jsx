@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { APPROVAL_MODE_OPTIONS } from './ApprovalModePicker.jsx';
 
 // Settings page (PROVIDERS-PLAN §5): two tabs behind a slim rail.
 //   Providers — five compact cards (keys, test, Kimi key-kind), overview-first:
@@ -79,7 +80,7 @@ export default function Settings({ onClose }) {
         </div>
 
         <div className="settings-tabs" role="tablist" aria-label="Settings sections">
-          {[['providers', 'Providers'], ['models', 'Models']].map(([id, label]) => (
+          {[['providers', 'Providers'], ['models', 'Models'], ['safety', 'Safety']].map(([id, label]) => (
             <button
               key={id} role="tab" aria-selected={tab === id}
               className={'settings-tab' + (tab === id ? ' active' : '')}
@@ -92,6 +93,7 @@ export default function Settings({ onClose }) {
           {!s && !error && <div className="muted">Loading…</div>}
           {s && tab === 'providers' && <ProvidersTab s={s} save={save} />}
           {s && tab === 'models' && <ModelsTab s={s} save={save} />}
+          {s && tab === 'safety' && <SafetyTab s={s} save={save} />}
           {error && <div className="settings-error mono">{error}</div>}
         </div>
       </div>
@@ -224,6 +226,124 @@ function ProvidersTab({ s, save }) {
             <option value="appdata">App data — keyed by project path, repo untouched</option>
           </select>
         </div>
+      </section>
+    </>
+  );
+}
+
+// --- Safety tab -------------------------------------------------------------
+// Two settings, in the order they matter: what a run does before it touches
+// your files, and — only if you picked the mode that needs one — which model
+// makes that judgement. The mode list is shared with the chatbox picker so the
+// two places can never drift into describing the same mode differently.
+
+function SafetyTab({ s, save }) {
+  const mode = s.approvalMode ?? 'ask';
+  const candidates = s.safetyCandidates ?? [];
+  const configured = s.safetyModel ?? 'auto';
+  // A saved id that isn't one of the candidates is by definition a custom one,
+  // so the free-text field opens itself rather than hiding what is in effect.
+  const isCustom = configured !== 'auto' && !candidates.some(c => c.id === configured);
+  const [showCustom, setShowCustom] = useState(isCustom);
+  const [custom, setCustom] = useState(isCustom ? configured : '');
+
+  return (
+    <>
+      <section>
+        <div className="settings-section-head">
+          <span className="section-label">Tool approval</span>
+        </div>
+        <p className="settings-hint">
+          What happens before an agent writes a file or runs a shell command in your project.
+          This is the default for new runs — the chip beside the Run button changes it per run.
+        </p>
+        <div className="approval-modes" role="radiogroup" aria-label="Default tool approval mode">
+          {APPROVAL_MODE_OPTIONS.map(o => (
+            <label
+              key={o.id}
+              className={'approval-mode-row' + (mode === o.id ? ' active' : '') + (o.danger ? ' danger' : '')}
+            >
+              <input
+                type="radio"
+                name="approval-mode"
+                checked={mode === o.id}
+                onChange={() => save({ approvalMode: o.id })}
+              />
+              <span className="approval-mode-glyph" aria-hidden>{o.glyph}</span>
+              <span className="approval-mode-text">
+                <span className="approval-mode-label">
+                  {o.label}
+                  {o.danger && <span className="approval-danger-tag">dangerous</span>}
+                </span>
+                <span className="approval-mode-detail">{o.detail}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        {mode === 'always' && (
+          <p className="settings-hint approval-warning">
+            Every command runs unattended, including ones that delete files or rewrite git history.
+            Keep a clean working tree, or a backup, while this is on.
+          </p>
+        )}
+      </section>
+
+      <section>
+        <div className="settings-section-head">
+          <span className="section-label">Safety model</span>
+          {s.resolvedSafetyModel
+            ? <span className="status-pill pill-neutral mono">{s.resolvedSafetyModel}</span>
+            : <span className="status-pill pill-err">no provider</span>}
+        </div>
+        <p className="settings-hint">
+          Used by <strong>Smart approval</strong> to judge each command. A small, cheap model is the
+          right tool here — the answer is one word, and obviously-destructive commands are caught by
+          a built-in pattern check that never calls a model at all.
+        </p>
+        <div className="settings-row">
+          <select
+            value={isCustom ? 'custom' : configured}
+            onChange={e => {
+              if (e.target.value === 'custom') { setShowCustom(true); return; }
+              setShowCustom(false);
+              save({ safetyModel: e.target.value });
+            }}
+            aria-label="Safety model"
+            disabled={mode !== 'smart'}
+          >
+            <option value="auto">
+              Auto — cheapest connected{s.resolvedSafetyModel ? ` (${s.resolvedSafetyModel})` : ''}
+            </option>
+            {candidates.filter(c => c.provider !== 'mock').map(c => (
+              <option key={c.id} value={c.id} disabled={!c.connected}>
+                {c.label}{c.connected ? '' : ' — no key'}
+              </option>
+            ))}
+            <option value="custom">Another model…</option>
+          </select>
+        </div>
+        {(showCustom || isCustom) && (
+          <div className="settings-row">
+            <input
+              type="text"
+              placeholder="Model id, e.g. moonshotai/kimi-k2.6"
+              value={custom}
+              onChange={e => setCustom(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && custom.trim()) save({ safetyModel: custom.trim() }); }}
+              disabled={mode !== 'smart'}
+            />
+            <button className="primary" onClick={() => custom.trim() && save({ safetyModel: custom.trim() })} disabled={!custom.trim()}>
+              Use
+            </button>
+          </div>
+        )}
+        {mode !== 'smart' && (
+          <p className="settings-hint muted">Switch to Smart approval above to use this.</p>
+        )}
+        <p className="settings-hint">
+          If the check fails, times out, or no provider is connected, the run asks you instead of
+          guessing — a safety check that fails open is not a safety check.
+        </p>
       </section>
     </>
   );

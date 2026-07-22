@@ -1,13 +1,15 @@
-import { app, BrowserWindow, ipcMain, shell, Menu, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { FlowStore } from '../core/flowstore.js';
 import { NodeStore } from '../core/nodestore.js';
-import { FlowRunner } from '../core/flowRunner.js';
+import { FlowRunner, normalizeApprovalMode, APPROVAL_MODES } from '../core/flowRunner.js';
+import { pickSafetyModel, SAFETY_MODEL_CANDIDATES } from '../core/safetyCheck.js';
 import { Workspace } from '../core/workspace.js';
 import { ProjectRegistry, DEFAULT_PROJECT_ID } from '../core/projects.js';
 import { lintFlow, lintText } from '../core/flowlang/lint.js';
+import { resolveFlow, exposedFields } from '../src/flowTypes.js';
 import { parseFlow } from '../core/flowlang/parse.js';
 import { serializeFlow } from '../core/flowlang/serialize.js';
 import { diffSnapshot } from '../core/snapshotDiff.js';
@@ -45,6 +47,7 @@ const baseConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'config.jso
 const flows = new FlowStore(path.join(projectRoot, 'flows'));
 const nodeLibrary = new NodeStore(path.join(projectRoot, 'nodes')); // seeds itself on first launch
 flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable workflow
+flows.ensureSeedPipelines();   // the tiered Low/Medium/High/Ultra pipelines (MODES-COMPARE T7)
 
 // --- Settings & secrets ---
 // settings.json lives in userData (never the repo). Shape (PROVIDERS-PLAN §1):
@@ -53,6 +56,8 @@ flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable w
 //     activeModels: [{ id, source: 'auto'|providerId, enabled }],
 //     workers: { executor: { provider, model } },
 //     projectStorage: 'workspace' | 'appdata',        // T2a — where per-project files live
+//     approvalMode: 'ask' | 'smart' | 'always',       // default tool-call gate for new runs
+//     safetyModel: 'auto' | modelId,                  // classifier for 'smart' mode
 //     projects: { open, active, recents, tabState } } // D22 — tab session (T17)
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 
@@ -146,6 +151,24 @@ function rebuildRuntimeConfig() {
   runtimeConfig.modelCapabilities = settings.modelCapabilities ?? {};
   // Category → worker mapping for advanced planning flows (FLOW_NODES.md)
   runtimeConfig.categoryWorkers = baseConfig.categoryWorkers ?? {};
+  // Default tool-call approval mode for runs started without an explicit one.
+  // 'ask' is the shipped default: an agent with a shell should not run
+  // unattended because nobody got round to choosing.
+  runtimeConfig.approvalMode = normalizeApprovalMode(settings.approvalMode ?? 'ask');
+  // What 'smart' mode screens with. The runner gets a resolver, never a key —
+  // same contract as resolveModelSource above.
+  runtimeConfig.safety = {
+    model: effectiveSafetyModel(),
+    resolveModelSource
+  };
+}
+
+// The classifier 'smart' mode actually uses: the user's pin, or — for 'auto' —
+// the cheapest candidate whose provider has a key (core/safetyCheck.js keeps
+// the ranked list). Null when no provider is connected at all, which
+// checkToolCall reports as 'caution' and the gate turns into a normal ask.
+function effectiveSafetyModel() {
+  return pickSafetyModel(settings.safetyModel ?? 'auto', hasKey);
 }
 rebuildRuntimeConfig();
 
@@ -173,7 +196,14 @@ function publicSettings() {
     },
     // T2a: where per-project files are written ('workspace' = in-repo .llmflow/,
     // 'appdata' = under userData). Read at project-open time.
-    projectStorage: settings.projectStorage === 'appdata' ? 'appdata' : 'workspace'
+    projectStorage: settings.projectStorage === 'appdata' ? 'appdata' : 'workspace',
+    // Tool-call approval (APPROVAL-MODES): the default new runs start under,
+    // the classifier 'smart' mode screens with, and enough about the candidate
+    // list for Settings to render pickers without duplicating the ranking.
+    approvalMode: normalizeApprovalMode(settings.approvalMode ?? 'ask'),
+    safetyModel: settings.safetyModel ?? 'auto',
+    resolvedSafetyModel: effectiveSafetyModel(),
+    safetyCandidates: SAFETY_MODEL_CANDIDATES.map(c => ({ ...c, connected: hasKey(c.provider) }))
   };
 }
 
@@ -188,6 +218,21 @@ const CHROME = {
 };
 
 let win = null;
+
+// --- Approval-gate nudge (CHAT-RUN rework) ---
+// A run parked at an approval gate waits forever if the user doesn't notice.
+// The renderer reports gate state (app:approvalGate); while the window is
+// unfocused we raise an OS notification and flash the taskbar until the gate
+// settles or the window regains focus. One notice at a time — a new gate
+// replaces the old one.
+let approvalNotice = null;
+
+function clearApprovalSignal() {
+  approvalNotice?.close();
+  approvalNotice = null;
+  if (win && !win.isDestroyed()) win.flashFrame(false);
+}
+
 
 // --- Projects (D22): one RunStore + FlowRunner per project tab ---
 // Push plumbing is per project. Bursts of state changes (parallel waves,
@@ -349,6 +394,9 @@ function createWindow() {
   // The window title is the active project's name (T16), not the page's.
   win.on('page-title-updated', e => e.preventDefault());
   updateWindowTitle();
+  // Regaining focus answers the approval-gate nudge by itself — stop the
+  // taskbar flash and dismiss the notification the moment the user is back.
+  win.on('focus', clearApprovalSignal);
   // Ctrl+Tab / Ctrl+Shift+Tab cycle tabs (T14). Intercepted here so a focused
   // canvas/webview/text field can never eat them; the renderer gets a clean
   // event stream (cycle presses + the Ctrl release that commits a deck pick).
@@ -375,7 +423,11 @@ const proj = projectId => registry.get(projectId);
 
 // One engine, one entry point: pick a workflow, type a request, run it.
 // The user input becomes the flow's User Input node content for that run.
-ipcMain.handle('flow:run', (_e, projectId, flowId, userInput = '', workspaceDir = null) => {
+// approvalMode rides in from the chatbox picker (APPROVAL-MODES §3): the mode
+// shown beside the Run button is the mode the run is captured under, so what
+// the user saw when they pressed Run is what governs it for its whole life.
+// Omitted (or unrecognized) falls back to the saved default.
+ipcMain.handle('flow:run', (_e, projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) => {
   const entry = proj(projectId);
   // Bind the target workspace at run time (D15): validate the folder, create
   // its .llmflow/ config dir, and pass the confined absolute root to the runner
@@ -388,16 +440,72 @@ ipcMain.handle('flow:run', (_e, projectId, flowId, userInput = '', workspaceDir 
   // appData home (Q-L5); runs there always bind to it, like a bound tab.
   else if (entry.kind === 'appdata') workspace = new Workspace(entry.workspaceRoot).ensure().root;
   else if (workspaceDir) workspace = new Workspace(workspaceDir).ensure().root;
-  return entry.runner.start(flows.load(flowId), { userInput: String(userInput ?? ''), workspace });
+  // launch (MODES-COMPARE) carries the picked mode and any exposed run-input
+  // overrides: { modeId?, overrides? }. Absent = an ordinary default-mode run.
+  return entry.runner.start(flows.load(flowId), {
+    userInput: String(userInput ?? ''),
+    workspace,
+    approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : runtimeConfig.approvalMode,
+    modeId: launch?.modeId ?? null,
+    overrides: launch?.overrides ?? null
+  });
 });
 ipcMain.handle('run:approve', (_e, projectId, runId) => proj(projectId).runner.approvePlan(runId));
+// The chat run reports gate state so a parked workflow can find its user:
+// 'pending' while gated (notify + flash only when the window is unfocused —
+// a user already looking at the dialog needs no nudge), 'resolved' on settle.
+ipcMain.handle('app:approvalGate', (_e, info = {}) => {
+  if (!win || win.isDestroyed()) return;
+  if (info.state === 'resolved') { clearApprovalSignal(); return; }
+  // A new gate replaces any previous gate's notice.
+  approvalNotice?.close();
+  approvalNotice = null;
+  // A user already looking at the dialog needs no nudge.
+  if (win.isFocused()) { win.flashFrame(false); return; }
+  win.flashFrame(true);
+  if (!Notification.isSupported()) return;
+  approvalNotice = new Notification({
+    title: String(info.title ?? 'Approval needed — LLM Flow'),
+    body: String(info.body ?? 'A workflow is paused until you approve or reject it.')
+  });
+  approvalNotice.on('click', () => {
+    if (win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  });
+  approvalNotice.show();
+});
 ipcMain.handle('run:reject', (_e, projectId, runId, reason) => proj(projectId).runner.rejectPlan(runId, reason));
 // Continue a run the app died in the middle of. Completed nodes are kept and
-// not re-executed (V1 task 7).
+// not re-executed (V1 task 7). RUN-CONTROL: also releases a soft-paused run —
+// the runner resolves the pause gate and the walk clears meta.paused itself.
 ipcMain.handle('run:resume', (_e, projectId, runId) => proj(projectId).runner.resume(runId));
+// Hard stop a live run (RUN-CONTROL): aborts in-flight model calls, settles
+// any pending approval/pause gate, marks the run 'cancelled' with cancelledAt,
+// and frees the live registry — which is what unblocks run:delete below.
+ipcMain.handle('run:stop', (_e, projectId, runId) => proj(projectId).runner.stop(runId));
+// Soft pause (RUN-CONTROL): the run holds at the next wave boundary — the wave
+// in flight always settles first. meta.paused flips true only once the hold
+// has actually landed; run:resume releases it.
+ipcMain.handle('run:pause', (_e, projectId, runId) => proj(projectId).runner.pause(runId));
+// Re-run one node and everything downstream of it (RUN-CONTROL), with optional
+// guidance injected into the retry prompt. Only on a non-live run.
+ipcMain.handle('run:restartNode', (_e, projectId, runId, nodeId, guidance = '') =>
+  proj(projectId).runner.restartNode(runId, nodeId, String(guidance ?? '')));
+// Fork a finished run at a node (RUN-CONTROL): upstream outputs are preserved
+// as context, downstream nodes re-run in the copy.
+ipcMain.handle('run:branch', (_e, projectId, runId, nodeId) => proj(projectId).runner.branch(runId, nodeId));
+// Plain-language status read on one node (RUN-CONTROL): status, (partial)
+// output, retrospective, log tail, and a model-written summary.
+ipcMain.handle('run:investigateNode', (_e, projectId, runId, nodeId) =>
+  proj(projectId).runner.investigateNode(runId, nodeId));
 // Reply to a finished run (FOLLOWUP-PLAN): the flow grows with a continuation
 // subgraph and the walk executes it; completed nodes are never re-run.
 ipcMain.handle('run:followUp', (_e, projectId, runId, text) => proj(projectId).runner.followUp(runId, String(text ?? '')));
+// Answer a run parked at the refiner's awaiting_input gate (MODES-COMPARE T6).
+// Distinct from run:followUp — this closes an in-flight question and re-runs
+// the refine node with the answer; it does not open a new follow-up turn.
+ipcMain.handle('run:answerInput', (_e, projectId, runId, text) => proj(projectId).runner.answerInput(runId, String(text ?? '')));
 // Summaries, not bare ids: the list names, groups and sorts runs, and reading
 // meta + prompt per run is a handful of small synchronous reads.
 ipcMain.handle('run:list', (_e, projectId) => proj(projectId).store.runSummaries());
@@ -496,6 +604,14 @@ ipcMain.handle('project:adopt', (_e, projectId, folder) => {
   updateWindowTitle();
   return { ...projectListPayload(), oldId, opened: newId };
 });
+// Reveal a tab's project directory in the OS file manager (folder tabs open the
+// bound workspace; appdata tabs open their app-managed dir). The path comes from
+// the registry entry, never from the renderer.
+ipcMain.handle('project:reveal', (_e, projectId) => {
+  const e = registry.get(projectId);
+  const dir = e.folder ?? e.appDir;
+  return dir ? shell.openPath(dir) : null;
+});
 ipcMain.handle('project:close', (_e, projectId) => {
   // T13: closing a tab never kills work — the entry (store + runner) stays
   // live in this process; only the tab goes.
@@ -570,6 +686,22 @@ ipcMain.handle('flow:delete', (_e, id) => flows.remove(id));
 // On-save validation for the canvas badge: full rule set, structured findings.
 ipcMain.handle('flow:lint', (_e, id) =>
   lintFlow(flows.load(id), { templates: nodeLibrary.listFull() }));
+
+// The exposed run inputs (MODES-COMPARE T10) of a flow: which node fields the
+// author surfaced as composer controls, resolved so the renderer can build the
+// controls without re-parsing YAML. Each: { nodeId, title, field, current }.
+ipcMain.handle('flow:launchInputs', (_e, id) => {
+  try {
+    const resolved = resolveFlow(flows.load(id), nodeLibrary.listFull());
+    const out = [];
+    for (const n of resolved.nodes) {
+      for (const field of exposedFields(n)) {
+        out.push({ nodeId: n.id, title: n.data?.title ?? n.id, field, current: n.data?.[field] ?? null });
+      }
+    }
+    return out;
+  } catch { return []; }
+});
 
 // Raw YAML source for the code viewer/editor. Allows users (and AIs) to inspect
 // and hand-edit the canonical *.flow.yaml while the canvas works on the model.
@@ -651,6 +783,16 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
   // store they were opened with.
   if (patch.projectStorage === 'workspace' || patch.projectStorage === 'appdata') {
     settings.projectStorage = patch.projectStorage;
+  }
+  // The default new runs inherit. 'node' stays accepted so an existing config
+  // can keep the per-node behavior, but it isn't offered in the UI.
+  if (APPROVAL_MODES.includes(patch.approvalMode)) {
+    settings.approvalMode = patch.approvalMode;
+  }
+  // 'auto' or an explicit model id. Not restricted to the candidate list: a
+  // user who wants their own cheap model for this should be able to name it.
+  if (typeof patch.safetyModel === 'string' && patch.safetyModel.trim()) {
+    settings.safetyModel = patch.safetyModel.trim();
   }
   persistSettings();
   rebuildRuntimeConfig();

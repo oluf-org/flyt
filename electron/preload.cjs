@@ -6,7 +6,22 @@ contextBridge.exposeInMainWorld('llmflow', {
   approvePlan: (pid, runId) => ipcRenderer.invoke('run:approve', pid, runId),
   rejectPlan: (pid, runId, reason) => ipcRenderer.invoke('run:reject', pid, runId, reason),
   resumeRun: (pid, runId) => ipcRenderer.invoke('run:resume', pid, runId),
+  // --- Run control (RUN-CONTROL): stop / pause / restart / branch / investigate.
+  // resumeRun doubles as the pause-release; restartNode/branchRun reject while live.
+  stopRun: (pid, runId) => ipcRenderer.invoke('run:stop', pid, runId),
+  pauseRun: (pid, runId) => ipcRenderer.invoke('run:pause', pid, runId),
+  restartNode: (pid, runId, nodeId, guidance) =>
+    ipcRenderer.invoke('run:restartNode', pid, runId, nodeId, guidance),
+  branchRun: (pid, runId, nodeId) => ipcRenderer.invoke('run:branch', pid, runId, nodeId),
+  investigateNode: (pid, runId, nodeId) =>
+    ipcRenderer.invoke('run:investigateNode', pid, runId, nodeId),
   followUpRun: (pid, runId, text) => ipcRenderer.invoke('run:followUp', pid, runId, text),
+  // Answer a run parked at the refiner's awaiting_input gate (MODES-COMPARE T6).
+  answerInput: (pid, runId, text) => ipcRenderer.invoke('run:answerInput', pid, runId, text),
+  // Approval gates: the chat run tells the main process when a run parks at a
+  // gate (and when it settles), so an unfocused window can raise an OS
+  // notification + taskbar flash — a stopped workflow must find the user.
+  signalApprovalGate: (info) => ipcRenderer.invoke('app:approvalGate', info),
   listRuns: (pid) => ipcRenderer.invoke('run:list', pid),
   renameRun: (pid, runId, name) => ipcRenderer.invoke('run:rename', pid, runId, name),
   deleteRun: (pid, runId) => ipcRenderer.invoke('run:delete', pid, runId),
@@ -15,7 +30,8 @@ contextBridge.exposeInMainWorld('llmflow', {
   openRunFolder: (pid, runId) => ipcRenderer.invoke('run:openFolder', pid, runId),
   pickWorkspace: () => ipcRenderer.invoke('workspace:pick'),
   openWorkspace: (pid, runId) => ipcRenderer.invoke('workspace:open', pid, runId),
-  runFlow: (pid, id, userInput, workspaceDir) => ipcRenderer.invoke('flow:run', pid, id, userInput, workspaceDir),
+  runFlow: (pid, id, userInput, workspaceDir, approvalMode, launch = null) =>
+    ipcRenderer.invoke('flow:run', pid, id, userInput, workspaceDir, approvalMode, launch),
   getConfig: () => ipcRenderer.invoke('config:get'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
@@ -27,6 +43,7 @@ contextBridge.exposeInMainWorld('llmflow', {
   newFlow: () => ipcRenderer.invoke('flow:new'),
   deleteFlow: (id) => ipcRenderer.invoke('flow:delete', id),
   lintFlow: (id) => ipcRenderer.invoke('flow:lint', id),
+  flowLaunchInputs: (id) => ipcRenderer.invoke('flow:launchInputs', id),
   getFlowYaml: (flow) => ipcRenderer.invoke('flow:toYaml', flow),
   saveFlowFromYaml: (id, yaml) => ipcRenderer.invoke('flow:saveFromYaml', id, yaml),
   lintFlowYaml: (yamlText) => ipcRenderer.invoke('flow:lintYaml', yamlText),
@@ -43,6 +60,7 @@ contextBridge.exposeInMainWorld('llmflow', {
   createProject: (promptOrName) => ipcRenderer.invoke('project:create', promptOrName),
   renameProject: (pid, name) => ipcRenderer.invoke('project:rename', pid, name),
   adoptProject: (pid, folder) => ipcRenderer.invoke('project:adopt', pid, folder),
+  revealProject: (pid) => ipcRenderer.invoke('project:reveal', pid),
   closeProject: (pid) => ipcRenderer.invoke('project:close', pid),
   activateProject: (pid) => ipcRenderer.invoke('project:activate', pid),
   reorderProjects: (ids) => ipcRenderer.invoke('project:reorder', ids),

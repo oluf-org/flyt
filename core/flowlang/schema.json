@@ -18,9 +18,26 @@
     "flow": {
       "type": "array",
       "items": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)?(\\s*->\\s*[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)?)+$" }
+    },
+    "modes": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
+      "additionalProperties": { "$ref": "#/$defs/mode" }
     }
   },
   "$defs": {
+    "mode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "overrides": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
+          "additionalProperties": { "type": "object" }
+        }
+      }
+    },
     "contextSpec": {
       "type": "object",
       "required": ["files"],
@@ -54,6 +71,8 @@
       "additionalProperties": false,
       "properties": {
         "use": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+        "parent": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+        "expose": { "type": "array", "items": { "type": "string" } },
         "title": { "type": "string" },
         "instructions": { "type": "string" },
         "goal": { "type": "string" },
@@ -75,6 +94,8 @@
       "properties": {
         "type": { "enum": ["input", "output", "aiStep", "agentTask", "orchestrator"] },
         "kind": { "enum": ["user", "ai"] },
+        "parent": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+        "expose": { "type": "array", "items": { "type": "string" } },
         "title": { "type": "string" },
         "role": { "type": "string" },
         "system": { "type": "string" },
@@ -91,6 +112,14 @@
         "tools": { "type": "array", "items": { "type": "string" } },
         "skills": { "type": "array", "items": { "type": "string" } },
         "constraints": { "type": "array" },
+        "box": {
+          "type": "object",
+          "required": ["w", "h"],
+          "properties": {
+            "w": { "type": "number" },
+            "h": { "type": "number" }
+          }
+        },
         "outputs": {
           "type": "array",
           "items": {

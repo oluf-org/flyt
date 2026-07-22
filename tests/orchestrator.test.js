@@ -139,3 +139,66 @@ test('an edge with sourceHandle carries the auxiliary port artifact (step-eval v
   assert.match(sinkPrompt, /"verdict": "pass"/);
   assert.ok(!sinkPrompt.includes('Long report text.'), 'chosen port replaces the full report');
 });
+
+test('orchestrator with authored children skips planning and runs exactly them', async () => {
+  const store = makeStore();
+  let planCalls = 0;
+  const ran = [];
+  setScript(({ system, prompt }) => {
+    if (roleOf(system) === 'orchestrate') { planCalls += 1; return CONTRACT({ nodes: [], summary: 'unused' }); }
+    ran.push((prompt.match(/GOAL:\n(.+)/) ?? [])[1] ?? '?');
+    return 'authored result';
+  });
+  // Two nodes placed inside the box by hand (parentId, no managedBy): they
+  // ARE the plan — no orchestrate call, both run in the sub-walk, outputs
+  // aggregated into the orchestrator's primary output.
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('orch', 'orchestrator', { title: 'Orchestrator', box: { w: 522, h: 270 } }),
+     { id: 'a', type: 'aiStep', parentId: 'orch', position: { x: 22, y: 58 },
+       data: { title: 'Authored A', role: 'execute', goal: 'goal-a' } },
+     { id: 'b', type: 'aiStep', parentId: 'orch', position: { x: 272, y: 58 },
+       data: { title: 'Authored B', role: 'execute', goal: 'goal-b' } },
+     node('out', 'output')],
+    [edge('in', 'orch'), edge('orch', 'a'), edge('orch', 'b'), edge('orch', 'out')]);
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(flow, { userInput: 'brief' });
+  await waitForStage(store, runId, ['done', 'failed']);
+
+  const meta = store.readMeta(runId);
+  assert.equal(meta.stage, 'done');
+  assert.equal(planCalls, 0, 'authored children replace the planning call');
+  assert.equal(meta.nodeStatus.orch, 'done');
+  assert.equal(meta.nodeStatus.a, 'done');
+  assert.equal(meta.nodeStatus.b, 'done');
+  assert.deepEqual(ran.sort(), ['goal-a', 'goal-b']);
+
+  const agg = store.readNodeOutput(runId, 'orch');
+  assert.match(agg, /Authored A \(a\)/);
+  assert.match(agg, /Authored B \(b\)/);
+  // The summary sidecar lists the authored inventory.
+  assert.match(store.readNodeOutput(runId, 'orch.summary'), /2 authored node\(s\)/);
+});
+
+test('authored children are never scheduled by the outer walk', async () => {
+  const store = makeStore();
+  const ran = [];
+  setScript(({ system, prompt }) => {
+    if (roleOf(system) === 'orchestrate') return CONTRACT({ nodes: [], summary: 'unused' });
+    ran.push((prompt.match(/GOAL:\n(.+)/) ?? [])[1] ?? '?');
+    return 'ok';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('orch', 'orchestrator', { title: 'Orchestrator' }),
+     { id: 'kid', type: 'aiStep', parentId: 'orch', position: { x: 22, y: 58 },
+       data: { title: 'Kid', role: 'execute', goal: 'kid-goal' } },
+     node('out', 'output')],
+    [edge('in', 'orch'), edge('orch', 'kid'), edge('orch', 'out')]);
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(flow, { userInput: 'brief' });
+  await waitForStage(store, runId, ['done', 'failed']);
+  assert.equal(store.readMeta(runId).stage, 'done');
+  // Exactly once: the sub-walk ran it, the outer scheduler did not.
+  assert.deepEqual(ran, ['kid-goal']);
+});

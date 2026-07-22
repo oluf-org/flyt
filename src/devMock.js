@@ -118,6 +118,48 @@ const snapshots = {
       w1: 'Export service implemented.',
       orch_plan: '```json\n{ "nodes": [ … ], "summary": "Three nodes: service, formatter, docs." }\n```'
     }
+  },
+  // Parked at a danger tool gate — previews the blocking approval dialog, the
+  // waiting rail on the gated node, and the gate copy (CHAT-RUN rework).
+  'run-20260720-091500': {
+    meta: {
+      runId: 'run-20260720-091500', stage: 'awaiting_approval', error: null,
+      flowId: 'orch-demo', flowName: 'Orchestrated build',
+      name: 'CSV export, with tests',
+      createdAt: new Date(Date.now() - 4 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 30 * 1000).toISOString(),
+      nodeStatus: { in: 'done', plan: 'done', apply: 'waiting', out: 'pending' },
+      pendingGateKind: 'tool',
+      pendingToolCall: {
+        tool: 'bash',
+        summary: 'rm -rf node_modules && npm ci',
+        risk: 'danger',
+        reason: 'Deletes a directory tree from the project root before reinstalling — irreversible.'
+      }
+    },
+    prompt: 'Reinstall dependencies cleanly and rerun the export tests.',
+    flow: {
+      id: 'orch-demo', name: 'Orchestrated build',
+      nodes: [
+        { id: 'in', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
+        { id: 'plan', type: 'aiStep', kind: 'ai', position: { x: 0, y: 120 },
+          data: { title: 'Plan the reinstall', role: 'plan' } },
+        { id: 'apply', type: 'aiStep', kind: 'ai', position: { x: 0, y: 240 },
+          data: { title: 'Reinstall & test', role: 'execute' } },
+        { id: 'out', type: 'output', kind: 'user', position: { x: 0, y: 360 }, data: {} }
+      ],
+      edges: [
+        { id: 'e-in-plan', source: 'in', target: 'plan' },
+        { id: 'e-plan-apply', source: 'plan', target: 'apply' },
+        { id: 'e-apply-out', source: 'apply', target: 'out' }
+      ]
+    },
+    retrospectives: {
+      plan: { status: 'success', confidence: 0.86, problems: [], recommendation: 'Pin npm ci to the lockfile so the reinstall stays reproducible.' }
+    },
+    nodeOutputs: {
+      plan: 'Plan: wipe node_modules, reinstall from the lockfile, rerun the export test suite.'
+    }
   }
 };
 
@@ -137,7 +179,18 @@ const mockSettings = {
     executor: { provider: 'mock', model: 'mock-large' }
   },
   summary: { connected: 0, activeModelCount: 0 },
-  projectStorage: 'workspace'
+  projectStorage: 'workspace',
+  approvalMode: 'ask',
+  safetyModel: 'auto',
+  resolvedSafetyModel: 'mock-small',
+  safetyCandidates: [
+    { id: 'claude-haiku-4-5', provider: 'anthropic', label: 'Claude Haiku 4.5', connected: false },
+    { id: 'gpt-5.6-luna', provider: 'openai', label: 'GPT-5.6 Luna', connected: false },
+    { id: 'kimi-k2.6', provider: 'kimi', label: 'Kimi K2.6', connected: false },
+    { id: 'moonshotai/kimi-k2.6', provider: 'openrouter', label: 'Kimi K2.6 (OpenRouter)', connected: false },
+    { id: 'anthropic/claude-haiku-4.5', provider: 'openrouter', label: 'Claude Haiku 4.5 (OpenRouter)', connected: false },
+    { id: 'mock-small', provider: 'mock', label: 'Mock (dry runs only)', connected: true }
+  ]
 };
 const refreshMockSummary = () => {
   mockSettings.summary = {
@@ -201,7 +254,13 @@ const mockFlows = {
     edges: [
       { id: 'e-user-input-fix', source: 'user-input', target: 'fix' },
       { id: 'e-fix-result', source: 'fix', target: 'result' }
-    ]
+    ],
+    // Two example modes so the launch picker's expansion (MODES-COMPARE T4) is
+    // exercised in the browser preview.
+    modes: {
+      fable: { name: 'Fable', overrides: { fix: { worker: { provider: 'anthropic', model: 'claude-fable-5' } } } },
+      gpt: { name: 'GPT', overrides: { fix: { worker: { provider: 'openai', model: 'gpt-5' } } } }
+    }
   }
 };
 
@@ -209,7 +268,7 @@ const mockFlows = {
 // not just an id. The fixtures are dated relative to now so the date sections
 // are actually exercised when previewing the list in a browser.
 const runNameOverrides = {};
-const mockRunAge = { 'run-20260716-142200': 0, 'run-20260714-091500': 0, 'run-20260712-101512': 3 }; // days ago
+const mockRunAge = { 'run-20260720-091500': 0, 'run-20260716-142200': 0, 'run-20260714-091500': 0, 'run-20260712-101512': 3 }; // days ago
 const derivedName = id => (snapshots[id]?.prompt ?? '').split('\n')[0].trim() || 'Untitled run';
 const daysAgo = n => {
   const d = new Date();
@@ -229,6 +288,7 @@ const mockProjects = {
   active: 'appdata:fix-auth-flow',
   storage: 'workspace'
 };
+let mockRunCursor = 0; // rotates runFlow over the fixtures (compare preview)
 const mockAppdataSlugs = () => new Set(
   mockProjects.tabs.filter(t => t.kind === 'appdata').map(t => t.id.replace(/^appdata:/, '')));
 
@@ -279,8 +339,21 @@ export function installDevMock() {
     },
     approvePlan: async () => {},
     rejectPlan: async () => {},
+    // No OS to nudge in the browser shell — the gate dialog itself is visible.
+    signalApprovalGate: async () => {},
     resumeRun: async () => {},
+    // Run-control stubs (RUN-CONTROL): the browser shell has no live engine,
+    // so these resolve with inert ok payloads — just enough to not crash.
+    stopRun: async () => ({ ok: true }),
+    pauseRun: async () => ({ ok: true }),
+    restartNode: async () => ({ ok: true }),
+    branchRun: async (_pid, runId) => ({ ok: true, runId }),
+    investigateNode: async () => ({
+      ok: true, status: 'done', output: '', retro: null, logTail: [],
+      summary: '(mock) This node completed normally.', model: 'mock'
+    }),
     followUpRun: async () => ({ turn: 1 }),
+    answerInput: async () => ({ ok: true }),
     openRunFolder: async () => {},
     pickWorkspace: async () => null, // no native folder picker in the browser dev shell
     openWorkspace: async () => {},
@@ -369,6 +442,11 @@ export function installDevMock() {
       if (Array.isArray(patch.activeModels)) mockSettings.activeModels = structuredClone(patch.activeModels);
       if (patch.workers) Object.assign(mockSettings.workers, structuredClone(patch.workers));
       if (patch.projectStorage) mockSettings.projectStorage = patch.projectStorage;
+      if (patch.approvalMode) mockSettings.approvalMode = patch.approvalMode;
+      if (patch.safetyModel) {
+        mockSettings.safetyModel = patch.safetyModel;
+        mockSettings.resolvedSafetyModel = patch.safetyModel === 'auto' ? 'mock-small' : patch.safetyModel;
+      }
       refreshMockSummary();
       return structuredClone(mockSettings);
     },
@@ -384,7 +462,11 @@ export function installDevMock() {
         ? { ok: true }
         : { ok: false, error: `No API key saved for ${provider} yet.` }
     ),
-    listFlows: async () => Object.values(mockFlows).map(f => ({ id: f.id, name: f.name })),
+    listFlows: async () => Object.values(mockFlows).map(f => ({
+      id: f.id, name: f.name,
+      ...(f.modes && Object.keys(f.modes).length
+        ? { modes: Object.entries(f.modes).map(([id, m]) => ({ id, name: m?.name || id })) } : {})
+    })),
     loadFlow: async id => structuredClone(mockFlows[id]),
     saveFlow: async flow => { mockFlows[flow.id] = structuredClone(flow); return flow; },
     newFlow: async () => {
@@ -404,7 +486,20 @@ export function installDevMock() {
       return structuredClone(mockFlows[id]);
     },
     deleteFlow: async id => { delete mockFlows[id]; },
-    runFlow: async (_pid) => Object.keys(snapshots).sort().at(-1),
+    // Exposed run inputs (MODES-COMPARE T10): a canned spec for the mock
+    // quick-fix flow so the composer controls render in the browser preview.
+    flowLaunchInputs: async id => id === 'quick-fix'
+      ? [{ nodeId: 'fix', title: 'Fix', field: 'worker', current: null },
+         { nodeId: 'fix', title: 'Fix', field: 'effort', current: 'medium' }]
+      : [],
+    // Rotate over the fixture runs so a Compare launch (T11) — two runFlow
+    // calls from one prompt — yields two DISTINCT panes to preview. The first
+    // call still returns the newest (the gate run) for the single-run chat.
+    runFlow: async (_pid) => {
+      const ids = Object.keys(snapshots).sort().reverse();
+      if (!ids.length) return null;
+      return ids[mockRunCursor++ % ids.length];
+    },
     listNodeTemplates: async () => [...mockTemplates.values()].map(t => normalizeTemplate(structuredClone(t)))
       .sort((a, b) => a.name.localeCompare(b.name)),
     saveNodeTemplate: async tpl => { mockTemplates.set(tpl.id, structuredClone(tpl)); return tpl; },

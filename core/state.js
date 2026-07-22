@@ -25,7 +25,7 @@ export class RunStore {
     this.writeMeta(runId, {
       runId,
       createdAt: now.toISOString(),
-      stage: 'prompt',       // prompt | planning | awaiting_approval | routing | execution | verification | done | failed | rejected
+      stage: 'prompt',       // prompt | planning | awaiting_approval | awaiting_input | routing | execution | verification | done | failed | rejected | cancelled
       currentTaskId: null,
       error: null
     });
@@ -199,6 +199,30 @@ export class RunStore {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, markdown, 'utf8');
   }
+  // Delete a node's output artifacts: nodes/<id>.md plus any auxiliary port
+  // files nodes/<id>.<port>.md. RUN-CONTROL: a node being re-run (restartNode,
+  // branch) must never hand its stale output to a downstream prompt.
+  deleteNodeOutputs(runId, nodeId) {
+    const dir = path.join(this.runDir(runId), 'nodes');
+    if (!fs.existsSync(dir)) return;
+    const safe = `${String(nodeId).replace(/[^a-zA-Z0-9_-]/g, '_')}.md`;
+    for (const f of fs.readdirSync(dir)) {
+      // Exact match, or `<id>.<port>.md` (a `.` boundary, so node "a" never
+      // matches "ab.md").
+      if (f === safe || (f.startsWith(safe.slice(0, -3) + '.') && f.endsWith('.md'))) {
+        fs.rmSync(path.join(dir, f), { force: true });
+      }
+    }
+  }
+  deleteTaskOutput(runId, taskId) {
+    const p = path.join(this.runDir(runId), 'tasks', `${taskId}.md`);
+    if (fs.existsSync(p)) fs.rmSync(p, { force: true });
+  }
+  // Duplicate one run directory into another (RUN-CONTROL branch): a full
+  // recursive copy, so the fork carries every artifact the source produced.
+  copyRunDir(srcRunId, destRunId) {
+    fs.cpSync(this.runDir(srcRunId), this.runDir(destRunId), { recursive: true });
+  }
   readNodeOutput(runId, nodeId) {
     const p = this.nodeOutputPath(runId, nodeId);
     return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
@@ -214,6 +238,21 @@ export class RunStore {
   }
   writeResult(runId, markdown) {
     fs.writeFileSync(path.join(this.runDir(runId), 'result.md'), markdown, 'utf8');
+  }
+
+  // --- refiner input gate (MODES-COMPARE T6): a refine node's clarifying
+  // questions, parked until the user answers from the composer ---
+  #questionsPath(runId, nodeId) {
+    return path.join(this.runDir(runId), 'nodes', `${String(nodeId).replace(/[^a-zA-Z0-9_-]/g, '_')}.questions.json`);
+  }
+  writeNodeQuestions(runId, nodeId, questions) {
+    const p = this.#questionsPath(runId, nodeId);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    writeJson(p, questions);
+  }
+  readNodeQuestions(runId, nodeId) {
+    const p = this.#questionsPath(runId, nodeId);
+    return fs.existsSync(p) ? readJson(p) : null;
   }
 
   // --- follow-up turns (FOLLOWUP-PLAN): each reply to a finished run gets a
