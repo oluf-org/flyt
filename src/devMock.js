@@ -382,6 +382,11 @@ export function installDevMock() {
     }),
     followUpRun: async () => ({ turn: 1 }),
     answerInput: async () => ({ ok: true }),
+    // Summary-node stubs (B4): no engine in the browser shell — summarize
+    // reports the no-model state so the retry card path can be previewed.
+    summarizeRun: async () => ({ ok: false, error: 'no-model' }),
+    deleteSummary: async () => ({ ok: true }),
+    moveSummary: async () => ({ ok: true }),
     openRunFolder: async () => {},
     pickWorkspace: async () => null, // no native folder picker in the browser dev shell
     openWorkspace: async () => {},

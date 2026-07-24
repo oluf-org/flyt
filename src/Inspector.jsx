@@ -5,7 +5,6 @@ import {
   nodeLabel, isInstance, resolveInstance, nodePorts, isStructuralNode,
   overridableFields, resolveFlow, diffOverrides
 } from './flowTypes.js';
-import { outputKey } from './runGraph.js';
 
 // Right-hand panel: shows the artifacts and retrospective for whichever node
 // is selected on the canvas. Everything shown here is read straight from the
@@ -31,7 +30,7 @@ export function statusPill(status) {
 }
 
 export default function Inspector({ snapshot, selectedNode }) {
-  const { meta, prompt, plan, tasks, retrospectives, taskOutputs, flow, nodeOutputs } = snapshot;
+  const { meta, prompt, tasks, retrospectives, flow } = snapshot;
 
   let title = 'Run overview';
   let icon = '◆';
@@ -49,11 +48,17 @@ export default function Inspector({ snapshot, selectedNode }) {
       ['Prompt', prompt]
     ];
   } else if (flowNode) {
-    // Flow-run node: artifacts by node type, straight from the run's files.
+    // Flow-run node: config + facts, straight from the run's files.
+    // D11 (output-view phase 4): OUTPUT sections (nodes/<id>.md, task outputs,
+    // result.md, orchestration plan/aggregate) no longer render here — the
+    // canvas is the reader (expand the node card; NodeFocus keeps its own
+    // output view). What stays: goal/constraints, tool calls, retrospective.
     title = nodeLabel(flowNode);
     icon = TYPE_META[flowNode.type]?.icon ?? '▢';
     typeLabel = `${TYPE_META[flowNode.type]?.label.toLowerCase() ?? flowNode.type} · ${flowNode.kind}`;
     status = meta.nodeStatus?.[selectedNode];
+    // Points at the reading surface wherever an output section was removed.
+    const outputHint = ['Output', 'Expand the node card on the canvas to read this node\'s output (or right-click → Investigate node).'];
     if (flowNode.type === 'input') {
       sections = [['prompt.md', prompt]];
     } else if (flowNode.type === 'agentTask') {
@@ -61,29 +66,26 @@ export default function Inspector({ snapshot, selectedNode }) {
       sections = [
         ['Goal', flowNode.data?.goal || '(none)'],
         flowNode.data?.constraints?.length ? ['Constraints', flowNode.data.constraints.join('\n')] : null,
-        task ? [`Output — ${task.id}`, taskOutputs?.[task.id] ?? '(not yet produced)'] : ['Output', '(task not yet created)'],
+        outputHint,
         task ? toolCallsSection(retrospectives?.[`executor-${task.id}`]) : null,
         task ? retroSection(retrospectives?.[`executor-${task.id}`]) : null
       ];
     } else if (flowNode.type === 'aiStep') {
       sections = [
-        [`nodes/${flowNode.id}.md`, nodeOutputs?.[flowNode.id] ?? '(not yet produced)'],
+        outputHint,
         retroSection(retrospectives?.[flowNode.id])
       ];
     } else if (flowNode.type === 'orchestrator') {
-      // Port sidecars are stored with sanitized filenames (id.port -> id_port).
-      const sidecar = port => nodeOutputs?.[outputKey(`${flowNode.id}.${port}`)];
       const children = flow.nodes.filter(n => n.data?.managedBy === flowNode.id);
       sections = [
-        ['Orchestration plan', sidecar('plan') ?? '(not yet produced)'],
         children.length
           ? ['Created nodes', children.map(n => `${n.id} [${meta.nodeStatus?.[n.id] ?? 'pending'}] — ${n.data?.title ?? n.id}`).join('\n')]
           : ['Created nodes', '(none yet — nodes appear inside the box once planning completes)'],
-        ['Aggregated results', nodeOutputs?.[flowNode.id] ?? '(not yet produced)'],
+        outputHint,
         retroSection(retrospectives?.[flowNode.id])
       ];
     } else {
-      sections = [['result.md', nodeOutputs?.[flowNode.id] ?? '(not yet produced)']];
+      sections = [outputHint];
     }
   } else if (selectedNode === 'prompt') {
     title = 'Prompt';
@@ -94,7 +96,11 @@ export default function Inspector({ snapshot, selectedNode }) {
     title = 'Planning';
     ({ icon, typeLabel } = NODE_META.planner);
     status = retrospectives?.planner?.status;
-    sections = [['plan.md', plan ?? '(not yet produced)'], retroSection(retrospectives?.planner)];
+    // D11: plan.md moved to the canvas reader; the retrospective stays.
+    sections = [
+      ['Output', 'Expand the node card on the canvas to read the plan.'],
+      retroSection(retrospectives?.planner)
+    ];
   } else if (selectedNode === 'router') {
     title = 'Routing';
     ({ icon, typeLabel } = NODE_META.router);
@@ -125,7 +131,8 @@ export default function Inspector({ snapshot, selectedNode }) {
       ['Goal', task.goal],
       task.constraints.length ? ['Constraints', task.constraints.join('\n')] : null,
       task.dependsOn.length ? ['Depends on', task.dependsOn.join(', ')] : null,
-      ['Output', taskOutputs?.[task.id] ?? '(not yet produced)'],
+      // D11: the task's output moved to the canvas reader; facts stay.
+      ['Output', 'Expand the task card on the canvas to read this task\'s output.'],
       toolCallsSection(retrospectives?.[`executor-${task.id}`]),
       retroSection(retrospectives?.[`executor-${task.id}`])
     ] : [];

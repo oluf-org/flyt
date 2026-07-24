@@ -44,6 +44,7 @@ import {
   validateOverrideMap, mergeOverrideMaps
 } from '../src/flowTypes.js';
 import { pickDefaultWorker } from './modelPriority.js';
+import { taskNodeStatus } from '../src/runGraph.js';
 import { layoutPositions, containerLayout } from '../src/flowLayout.js';
 import { lintFlow, RUNTIME_RULES } from './flowlang/lint.js';
 
@@ -312,10 +313,32 @@ const INVESTIGATE_SYSTEM = [
   'no output yet, say so plainly instead of guessing. No headers, no jargon.'
 ].join('\n');
 
+// The summarizeOutputs prompt (OUTPUT-VIEW-PLAN B4/D7): not a node role — a
+// direct call that condenses one or more node outputs into the summary node's
+// fixed shape: one bold TL;DR line, then 3-6 bullets, grounded only in the
+// sources it's given (D8 offers it on anything with output; multi-source
+// summaries name each source section).
+const SUMMARIZE_SYSTEM = [
+  'ROLE: summarizer',
+  'You summarize outputs of AI workflow nodes for the flow\'s owner.',
+  'Produce exactly this shape, nothing else:',
+  '**TL;DR** — <one sentence>',
+  'then 3-6 Markdown bullet points with the key facts, decisions and numbers.',
+  'Ground every claim ONLY in the provided source output(s) — no outside',
+  'knowledge, no speculation. When several sources are given, each is named;',
+  'cover all of them. If a source has no output yet, say so in one bullet.',
+  'Long sources are truncated to a character budget and the prompt says so;',
+  'note genuinely missing information rather than guessing.'
+].join('\n');
+
 // How often a token stream may reach the disk and the renderer. Every flush is
 // a file write plus an IPC push, and adapters call onText per chunk — at real
 // token rates that is hundreds of calls a second. 250ms still reads as live.
 const STREAM_FLUSH_MS = 250;
+
+// Per-source character budget inside a summarize prompt (D-risk: concatenated
+// outputs may be huge; investigate truncates its log/output the same way).
+const SUMMARY_SOURCE_BUDGET = 3000;
 
 // Unified worker resolution for aiStep AND agentTask nodes:
 //   1. an explicit worker set on the node wins,
@@ -881,6 +904,133 @@ export class FlowRunner {
       this.store.appendLog(runId, { event: 'investigate_summary_failed', node: nodeId, error: String(err?.message ?? err).slice(0, 300) });
     }
     return { ok: true, status, output, retro, logTail, summary, model, ...(summaryError ? { summaryError } : {}) };
+  }
+
+  // A source's output text, every shape a summarizeable thing comes in (B4/D8):
+  // a flow node (aiStep / orchestrator plan sidecar / agentTask / the input's
+  // prompt), a run-time-spawned task with no flow node, or a legacy stage id.
+  // Mirrors the renderer's nodeOutputText (src/runGraph.js) against the store.
+  readSourceOutput(runId, sourceId) {
+    const flow = this.store.readFlow(runId);
+    const flowNode = flow?.nodes.find(n => n.id === sourceId) ?? null;
+    if (flowNode) {
+      if (flowNode.type === 'input') { try { return this.store.readPrompt(runId); } catch { return null; } }
+      if (flowNode.type === 'agentTask') {
+        return this.store.readTaskOutput(runId, flowNode.data?.taskId ?? '')
+          ?? this.store.readNodeOutput(runId, sourceId);
+      }
+      if (flowNode.type === 'orchestrator') {
+        return this.store.readNodeOutput(runId, `${sourceId}.plan`)
+          ?? this.store.readNodeOutput(runId, sourceId);
+      }
+      return this.store.readNodeOutput(runId, sourceId);
+    }
+    const task = this.store.readTasks(runId)?.tasks?.find(t => t.id === sourceId);
+    if (task) return this.store.readTaskOutput(runId, task.id);
+    if (sourceId === 'prompt') { try { return this.store.readPrompt(runId); } catch { return null; } }
+    if (sourceId === 'planner') return this.store.readPlan(runId);
+    return null;
+  }
+
+  // A source's canvas status at creation time (D6): the summary badges itself
+  // "summarized before completion" forever when any source wasn't terminal.
+  sourceStatusAt(runId, sourceId) {
+    const meta = this.store.readMeta(runId);
+    if (meta?.nodeStatus?.[sourceId]) return meta.nodeStatus[sourceId];
+    const task = this.store.readTasks(runId)?.tasks?.find(t => t.id === sourceId);
+    if (task) return taskNodeStatus(task.status);
+    if (sourceId === 'prompt') return 'done';
+    if (sourceId === 'planner') return this.store.readPlan(runId) ? 'done' : 'pending';
+    return 'unknown';
+  }
+
+  // Summarize one or more node outputs into a summary node (B4/D5). The model
+  // resolves exactly like investigateNode (the configured default worker);
+  // without one the call degrades to { ok:false, error:'no-model' } and nothing
+  // is persisted — the renderer keeps a retryable placeholder. The artifact is
+  // summaries/<key>.md + an index.json entry; flow.json is never touched.
+  async summarizeOutputs(runId, sourceIds, { position = null } = {}) {
+    try { this.store.readMeta(runId); } catch { throw new Error(`Run ${runId} not found.`); }
+    const ids = [...new Set((sourceIds ?? []).map(String).filter(Boolean))];
+    if (!ids.length) throw new Error('Summarize needs at least one source node.');
+    const sources = ids.map(id => ({
+      id,
+      statusAtCreation: this.sourceStatusAt(runId, id),
+      text: this.readSourceOutput(runId, id)
+    }));
+    if (!sources.some(s => s.text?.trim())) {
+      throw new Error(ids.length === 1
+        ? `Node ${ids[0]} has no output to summarize yet.`
+        : 'None of the selected nodes has output to summarize yet.');
+    }
+
+    // Same model choice as follow-up triage / investigate: the configured
+    // default worker. A model that can't even be dialed (unknown provider, no
+    // saved key) is the no-model state; any other call failure is a retryable
+    // error — the renderer shows them differently (B4).
+    let worker;
+    try {
+      worker = resolveCallTarget(resolveWorker({}, this.config), this.config);
+    } catch {
+      return { ok: false, error: 'no-model' };
+    }
+    const key = ids.map(id => String(id).replace(/[^a-zA-Z0-9_-]/g, '_')).join('+');
+    const id = `sum-${key}`;
+    const prompt = [
+      `RUN: ${this.store.readMeta(runId)?.flowName ?? runId} (${runId}) — stage: ${this.store.readMeta(runId)?.stage ?? 'unknown'}`,
+      `Summarize the following ${sources.length} source output(s). Each source is truncated to ${SUMMARY_SOURCE_BUDGET} characters.`,
+      ...sources.map(s =>
+        `## SOURCE: ${s.id} (status: ${s.statusAtCreation})\n${s.text?.trim() ? s.text.slice(0, SUMMARY_SOURCE_BUDGET) : '(no output recorded yet)'}`)
+    ].join('\n\n');
+    let text;
+    try {
+      const result = await callModel({
+        ...worker, apiKey: worker.apiKey,
+        system: SUMMARIZE_SYSTEM,
+        prompt,
+        retry: this.config.retry,
+        onRetry: this.retryLogger(runId, `summarize:${id}`)
+      });
+      text = String(result.text ?? '').trim();
+      if (!text) throw new Error('empty response');
+    } catch (err) {
+      const msg = String(err?.message ?? err).slice(0, 300);
+      // Resolution-style failures (unknown provider, no saved key) surface as
+      // the no-model state — same degradation investigateNode applies.
+      const noModel = /unknown provider|api key is not set/i.test(msg);
+      this.store.appendLog(runId, { event: 'summarize_failed', sources: ids, error: msg });
+      return { ok: false, error: noModel ? 'no-model' : msg };
+    }
+    const model = { provider: worker.provider, model: worker.model };
+    const entry = this.store.saveSummary(runId, {
+      id,
+      sources: sources.map(({ id, statusAtCreation }) => ({ id, statusAtCreation })),
+      at: new Date().toISOString(),
+      model,
+      file: `${key}.md`,
+      ...(position ? { position: { x: Math.round(position.x), y: Math.round(position.y) } } : {})
+    }, text);
+    this.store.appendLog(runId, { event: 'summary_created', id, sources: ids, model });
+    this.notify(runId);
+    return { ok: true, summary: { ...entry, text } };
+  }
+
+  // Delete a summary node: file + index entry (B4). Summaries never rerun, so
+  // there's nothing else to unwind.
+  deleteSummary(runId, summaryId) {
+    const removed = this.store.deleteSummary(runId, String(summaryId ?? ''));
+    if (!removed) return { ok: false, error: 'not-found' };
+    this.store.appendLog(runId, { event: 'summary_deleted', id: summaryId });
+    this.notify(runId);
+    return { ok: true };
+  }
+
+  // The user dragged a summary card: persist its canvas position so it
+  // survives reload (B4 placement rule).
+  moveSummary(runId, summaryId, position) {
+    const entry = this.store.updateSummaryPosition(runId, String(summaryId ?? ''), position);
+    if (!entry) return { ok: false, error: 'not-found' };
+    return { ok: true };
   }
 
   // CONFIGS-COMPARE P3 (T13's end state): judge two finished runs against

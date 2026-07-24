@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import MarkdownView from './MarkdownView.jsx';
 import { statusPill } from './Inspector.jsx';
 import { TYPE_META, nodeLabel } from './flowTypes.js';
-import { outputKey, taskNodeStatus } from './runGraph.js';
+import { nodeOutputText, taskNodeStatus } from './runGraph.js';
 import { formatElapsed } from './runProgress.js';
 
 // Node Focus (RUN-CONTROL investigate): the right-column panel a node's
@@ -26,21 +27,13 @@ function resolveFocusNode(snapshot, nodeId) {
   if (!snapshot) return null;
   const flowNode = snapshot.flow?.nodes?.find(n => n.id === nodeId) ?? null;
   if (flowNode) {
-    const outputs = snapshot.nodeOutputs ?? {};
     return {
       flowBacked: true,
       title: nodeLabel(flowNode),
       icon: flowNode.data?.icon ?? TYPE_META[flowNode.type]?.icon ?? '▢',
       sub: `${TYPE_META[flowNode.type]?.label.toLowerCase() ?? flowNode.type} · ${flowNode.kind}`,
       status: snapshot.meta?.nodeStatus?.[nodeId] ?? 'pending',
-      text: flowNode.type === 'agentTask'
-        ? snapshot.taskOutputs?.[flowNode.data?.taskId] ?? ''
-        : flowNode.type === 'input'
-          ? snapshot.prompt ?? ''
-          : flowNode.type === 'orchestrator'
-            // The orchestrator's own call is its planning turn, a port sidecar.
-            ? outputs[outputKey(`${nodeId}.plan`)] ?? outputs[outputKey(nodeId)] ?? ''
-            : outputs[outputKey(nodeId)] ?? '',
+      text: nodeOutputText(snapshot, nodeId),
       retro: snapshot.retrospectives?.[nodeId] ?? null
     };
   }
@@ -229,13 +222,13 @@ export default function NodeFocus({
 
         <section>
           <h3>Output</h3>
-          <pre className="live-body focus-stream" ref={bodyRef} onScroll={onScroll}>
+          <div className="live-body focus-stream" ref={bodyRef} onScroll={onScroll}>
             {info.text
-              ? <>{info.text}{status === 'active' && <span className="live-caret" aria-hidden />}</>
+              ? <MarkdownView text={info.text} streaming={status === 'active'} />
               : <span className="live-idle">
                   {status === 'active' ? 'Waiting for the first tokens…' : 'No output recorded for this node.'}
                 </span>}
-          </pre>
+          </div>
         </section>
 
         {facts.length > 0 && (

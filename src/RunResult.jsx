@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import MarkdownView from './MarkdownView.jsx';
 import { isTerminal } from './runProgress.js';
 import { outputKey } from './runGraph.js';
 
@@ -33,7 +34,7 @@ function TurnSegment({ turn, snapshot }) {
         </div>
       )}
       {outcome
-        ? <pre className="result-body">{outcome}</pre>
+        ? <div className="result-body"><MarkdownView text={outcome} /></div>
         : <pre className="result-body result-empty">This turn produced no review output yet — its nodes are on the canvas.</pre>}
     </div>
   );
@@ -83,7 +84,7 @@ function Composer({ stage, onFollowUp }) {
   );
 }
 
-export default function RunResult({ snapshot, onFollowUp }) {
+export default function RunResult({ snapshot, onFollowUp, onSummarize }) {
   const meta = snapshot?.meta;
   if (!meta || !isTerminal(meta.stage)) return null;
 
@@ -141,12 +142,20 @@ export default function RunResult({ snapshot, onFollowUp }) {
       <div className="result-head">
         <span className="result-badge">Done</span>
         <span className="section-label">Result</span>
+        {onSummarize && outputs.length > 0 && (
+          <button
+            type="button"
+            className="ghost mini result-summarize"
+            title="Summarize the run result into a summary node on the canvas"
+            onClick={() => onSummarize(outputs.map(o => o.id))}
+          >◇ Summarize</button>
+        )}
       </div>
       {outputs.length
         ? outputs.map(o => (
           <div key={o.id}>
             {outputs.length > 1 && <span className="result-sub mono">{o.id}</span>}
-            <pre className="result-body">{o.text}</pre>
+            <div className="result-body"><MarkdownView text={o.text} /></div>
           </div>
         ))
         : <pre className="result-body result-empty">

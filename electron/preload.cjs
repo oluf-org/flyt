@@ -15,6 +15,13 @@ contextBridge.exposeInMainWorld('llmflow', {
   branchRun: (pid, runId, nodeId) => ipcRenderer.invoke('run:branch', pid, runId, nodeId),
   investigateNode: (pid, runId, nodeId) =>
     ipcRenderer.invoke('run:investigateNode', pid, runId, nodeId),
+  // Summary nodes (B4): summarize sources / delete / persist a dragged position.
+  summarizeRun: (pid, runId, sourceIds, position = null) =>
+    ipcRenderer.invoke('run:summarize', pid, runId, sourceIds, position),
+  deleteSummary: (pid, runId, summaryId) =>
+    ipcRenderer.invoke('run:deleteSummary', pid, runId, summaryId),
+  moveSummary: (pid, runId, summaryId, position) =>
+    ipcRenderer.invoke('run:moveSummary', pid, runId, summaryId, position),
   followUpRun: (pid, runId, text) => ipcRenderer.invoke('run:followUp', pid, runId, text),
   // Answer a run parked at the refiner's awaiting_input gate (MODES-COMPARE T6).
   answerInput: (pid, runId, text) => ipcRenderer.invoke('run:answerInput', pid, runId, text),

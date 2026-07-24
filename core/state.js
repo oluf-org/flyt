@@ -240,6 +240,71 @@ export class RunStore {
     fs.writeFileSync(path.join(this.runDir(runId), 'result.md'), markdown, 'utf8');
   }
 
+  // --- summary nodes (OUTPUT-VIEW-PLAN B4/D5) ---
+  // Right-click summarization artifacts: one Markdown file per summary under
+  // summaries/, plus an index.json registering every summary's provenance —
+  // { id, sources: [{ id, statusAtCreation }], at, model, file, position? }.
+  // A summary is a run artifact, never part of flow.json, and never re-runs:
+  // it's a snapshot of what it read (D6), staleness is only recorded
+  // (statusAtCreation), not tracked.
+  summariesDir(runId) { return path.join(this.runDir(runId), 'summaries'); }
+
+  // Summary ids/files are derived from source ids, so a crafted id must never
+  // escape the summaries dir on delete/read.
+  #summaryFile(file) {
+    const f = String(file ?? '');
+    if (!/^[a-zA-Z0-9_+-]+\.md$/.test(f)) throw new Error(`Invalid summary file "${f}"`);
+    return f;
+  }
+
+  readSummaries(runId) {
+    const p = path.join(this.summariesDir(runId), 'index.json');
+    if (!fs.existsSync(p)) return [];
+    try { return readJson(p)?.summaries ?? []; } catch { return []; }
+  }
+  writeSummaries(runId, summaries) {
+    const dir = this.summariesDir(runId);
+    fs.mkdirSync(dir, { recursive: true });
+    writeJson(path.join(dir, 'index.json'), { summaries });
+  }
+  readSummaryText(runId, file) {
+    const p = path.join(this.summariesDir(runId), this.#summaryFile(file));
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+  }
+  // Write the Markdown and upsert the index entry (same id replaces — a
+  // re-summarize of the same sources refreshes in place).
+  saveSummary(runId, entry, markdown) {
+    const dir = this.summariesDir(runId);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = this.#summaryFile(entry.file);
+    fs.writeFileSync(path.join(dir, file), markdown, 'utf8');
+    const list = this.readSummaries(runId);
+    const idx = list.findIndex(e => e.id === entry.id);
+    if (idx >= 0) list[idx] = { ...list[idx], ...entry };
+    else list.push(entry);
+    this.writeSummaries(runId, list);
+    return entry;
+  }
+  updateSummaryPosition(runId, summaryId, position) {
+    const list = this.readSummaries(runId);
+    const e = list.find(x => x.id === summaryId);
+    if (!e) return null;
+    e.position = { x: Math.round(Number(position?.x) || 0), y: Math.round(Number(position?.y) || 0) };
+    this.writeSummaries(runId, list);
+    return e;
+  }
+  // Delete removes BOTH the file and the index entry (B4): a summary is only
+  // ever the pair together.
+  deleteSummary(runId, summaryId) {
+    const list = this.readSummaries(runId);
+    const e = list.find(x => x.id === summaryId);
+    if (!e) return false;
+    try { fs.rmSync(path.join(this.summariesDir(runId), this.#summaryFile(e.file)), { force: true }); }
+    catch { /* file already gone — the entry still goes */ }
+    this.writeSummaries(runId, list.filter(x => x.id !== summaryId));
+    return true;
+  }
+
   // --- refiner input gate (MODES-COMPARE T6): a refine node's clarifying
   // questions, parked until the user answers from the composer ---
   #questionsPath(runId, nodeId) {
@@ -463,7 +528,11 @@ export class RunStore {
       flow: this.readFlow(runId),
       nodeOutputs: this.readNodeOutputs(runId),
       // Follow-up turns (empty for runs that were never replied to).
-      followups: this.readFollowups(runId)
+      followups: this.readFollowups(runId),
+      // Summary nodes (D5): index entries joined with their Markdown text, so
+      // the canvas derives summary cards + dashed edges with no extra reads.
+      summaries: this.readSummaries(runId)
+        .map(e => ({ ...e, text: this.readSummaryText(runId, e.file) }))
     };
   }
 

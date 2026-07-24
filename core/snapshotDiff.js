@@ -9,7 +9,7 @@
 // and the renderer (to apply them), keeping the two sides provably symmetric.
 
 // Whole-value fields: replaced wholesale when they differ. These stay small.
-const WHOLE_FIELDS = ['meta', 'prompt', 'plan', 'tasks', 'flow', 'followups'];
+const WHOLE_FIELDS = ['meta', 'prompt', 'plan', 'tasks', 'flow', 'followups', 'summaries'];
 // Map fields: diffed per key so only the touched entries travel.
 const MAP_FIELDS = ['retrospectives', 'taskOutputs', 'nodeOutputs'];
 

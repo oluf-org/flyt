@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow, Background, Controls, MiniMap, Handle, Position,
-  ReactFlowProvider, useReactFlow, applyNodeChanges, applyEdgeChanges
+  ReactFlowProvider, useReactFlow, applyNodeChanges, applyEdgeChanges, NodeResizer
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -12,11 +12,32 @@ import {
   wouldCreateCycle, arrangeForCanvas, absolutePosition,
   fitOrchBox, shrinkOrchBox, ORCH_BOX_DEFAULT, ORCH_PAD
 } from './flowLayout.js';
-import { spawnedTasks, taskNodeStatus } from './runGraph.js';
-import { formatElapsed } from './runProgress.js';
+import { spawnedTasks, taskNodeStatus, nodeOutputText } from './runGraph.js';
+import { formatElapsed, isTerminal } from './runProgress.js';
+import { computeDisplacement, rectsOverlap } from './displace.js';
+import MarkdownView from './MarkdownView.jsx';
+import { statusPill } from './Inspector.jsx';
 import FlowEdge from './FlowEdge.jsx';
 import NodeMenu from './NodeMenu.jsx';
 import Tip from './Tip.jsx';
+
+// Expanded reader cards (output-view phase 2, plan B2): a node grows into a
+// readable markdown card at this default size, freely resizable down to the
+// minimum via NodeResizer; the chosen size is remembered per node.
+const EXPANDED_DEFAULT = { w: 560, h: 640 };
+const EXPANDED_MIN = { w: 360, h: 240 };
+// How long the .displacing transition class stays on a shifted node (matches
+// the 240ms transform transition in styles.css, plus a settle margin).
+const DISPLACE_MS = 280;
+
+// Summary nodes (plan B4): fixed-width reader cards derived from the run's
+// summaries index — never from flow.json. The width is pinned so the
+// displacement math has a stable rect before React Flow measures.
+const SUMMARY_WIDTH = 400;
+// Placement estimate before measure (plan B4: prefer right, then below).
+const SUMMARY_ESTIMATE = { w: SUMMARY_WIDTH, h: 220 };
+// Node statuses that count as "the source had completed" for the D6 badge.
+const TERMINAL_NODE_STATUS = new Set(['done', 'failed', 'skipped']);
 
 // One custom edge for every canvas: weight (context bytes) + streaming signal
 // dot. Registered under a named key (overriding the reserved 'default' key
@@ -143,7 +164,7 @@ function ElapsedTicker({ since }) {
   return <span className="node-elapsed mono">{formatElapsed(Math.max(0, now - since))}</span>;
 }
 
-function NodeCard({ data, vertical, noTarget, noSource }) {
+function NodeCard({ id, data, vertical, noTarget, noSource }) {
   const ports = noSource ? [] : (data.ports ?? []);
   return (
     <div className={`flow-node status-${data.status}` + (data.kind ? ` kind-${data.kind}` : '') + (data.selected ? ' selected' : '')}>
@@ -161,6 +182,16 @@ function NodeCard({ data, vertical, noTarget, noSource }) {
           <div className="node-sub">{data.sub}</div>
         </div>
         <StatusGlyph status={data.status} />
+        {/* Reader affordance (output-view phase 2): run-canvas cards only —
+            the editor never sets onToggleExpand, so nothing changes there. */}
+        {data.onToggleExpand && data.expandable && (
+          <button
+            type="button"
+            className="node-expand-btn nodrag"
+            title="Expand to read this node's output (or double-click the card)"
+            onClick={e => { e.stopPropagation(); data.onToggleExpand(id); }}
+          >⤢</button>
+        )}
       </div>
       <PortRow ports={ports} />
       {!noSource && ports.length === 0 && <Handle type="source" position={vertical ? Position.Bottom : Position.Right} />}
@@ -257,17 +288,211 @@ function OrchestratorCard({ data }) {
   );
 }
 
+// The expanded reader card (plan B2/D10): header with title, status pill, a
+// Rendered/Raw toggle (raw = the old mono pre), Copy and a collapse button,
+// over a scrolling MarkdownView body that sticks to the tail while the node
+// streams (the same 24px rule NodeFocus uses). NodeResizer is mounted only
+// here, so only expanded cards resize; size changes arrive as dimension
+// changes on the canvas's onNodesChange and are remembered in `expanded`.
+// Handles mirror the collapsed card exactly so edges don't re-anchor.
+function ExpandedNodeCard({ id, data }) {
+  const [raw, setRaw] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const ports = data.ports ?? [];
+
+  // Stick-to-tail: pinned to the newest text unless the user scrolls up.
+  const bodyRef = useRef(null);
+  const stick = useRef(true);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [data.outputText, raw]);
+  const onScroll = () => {
+    const el = bodyRef.current;
+    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  };
+
+  const copy = async () => {
+    if (!data.outputText) return;
+    try {
+      await navigator.clipboard.writeText(data.outputText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch { /* clipboard blocked — the text is selectable */ }
+  };
+
+  return (
+    <div className={`flow-node node-reader status-${data.status}` + (data.kind ? ` kind-${data.kind}` : '') + (data.selected ? ' selected' : '')}>
+      <NodeResizer isVisible minWidth={EXPANDED_MIN.w} minHeight={EXPANDED_MIN.h} />
+      <Handle type="target" position={Position.Top} />
+      <div className="node-reader-head">
+        <span className="node-icon">{data.icon}</span>
+        <div className="node-text">
+          <div className="node-title">{data.label}</div>
+          <div className="node-sub">{data.sub}</div>
+        </div>
+        {statusPill(data.status)}
+        <div className="node-reader-toggle nodrag" role="group" aria-label="Output view">
+          <button type="button" className={!raw ? 'active' : ''} onClick={() => setRaw(false)}>Rendered</button>
+          <button type="button" className={raw ? 'active' : ''} onClick={() => setRaw(true)}>Raw</button>
+        </div>
+        <button type="button" className="ghost mini nodrag" onClick={copy} disabled={!data.outputText} title="Copy this node's output">
+          {copied ? 'Copied ✓' : 'Copy'}
+        </button>
+        <button
+          type="button"
+          className="node-expand-btn nodrag"
+          title="Collapse"
+          onClick={e => { e.stopPropagation(); data.onToggleExpand?.(id); }}
+        >⤡</button>
+      </div>
+      <div className="node-reader-body nowheel nodrag nopan" ref={bodyRef} onScroll={onScroll}>
+        {data.outputText
+          ? raw
+            ? <pre className="node-reader-raw">{data.outputText}</pre>
+            : <MarkdownView text={data.outputText} streaming={data.status === 'active'} inCanvas />
+          : <span className="live-idle">
+              {data.status === 'active' ? 'Waiting for the first tokens…' : 'No output recorded for this node.'}
+            </span>}
+      </div>
+      {ports.map((p, i) => (
+        <Handle
+          key={p.id}
+          type="source"
+          id={i === 0 ? undefined : p.id}
+          position={Position.Bottom}
+          className="port-handle"
+          style={ports.length > 1 ? { left: `${((i + 1) / (ports.length + 1)) * 100}%` } : undefined}
+        />
+      ))}
+      {ports.length === 0 && <Handle type="source" position={Position.Bottom} />}
+      {data.feedbackPoint && (
+        <Handle
+          type="source"
+          id={FEEDBACK_HANDLE}
+          position={Position.Top}
+          className="feedback-handle"
+          style={{ left: '82%' }}
+          title="Feedback point — drag to the upstream node this one should judge"
+        />
+      )}
+    </div>
+  );
+}
+
 // Snapshot pushes rebuild every node's data object; memoize on the rendered
 // fields so unchanged cards skip re-rendering (positions are applied by the
 // React Flow wrapper, not by NodeCard, so they don't belong in the compare).
+// outputText/expanded are only attached to expanded cards, so the 250ms tick
+// re-renders exactly the one streaming reader, not the whole canvas.
 const cardEqual = (prev, next) =>
-  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'emptyHint', 'turn', 'feedbackPoint', 'stack', 'dropTarget', 'childCount', 'activeSince']
+  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'emptyHint', 'turn', 'feedbackPoint', 'stack', 'dropTarget', 'childCount', 'activeSince', 'expanded', 'outputText', 'expandable', 'hasOutput']
     .every(k => prev.data[k] === next.data[k]);
 
-const StageNode = React.memo(props => <NodeCard {...props} vertical />, cardEqual);
+const StageNode = React.memo(props => props.data.expanded
+  ? <ExpandedNodeCard {...props} />
+  : <NodeCard {...props} vertical />, cardEqual);
 const OrchNode = React.memo(props => <OrchestratorCard {...props} />, cardEqual);
 
-const nodeTypes = { stage: StageNode, task: StageNode, orchestrator: OrchNode };
+// A summary node (plan B4): a run artifact rendered as a distinct reader card
+// — accent border, ◇ icon, markdown body, mid-run badge when any source
+// hadn't completed at creation (D6, persistent). Two non-artifact variants
+// share the shell: the shimmer placeholder while the model writes, and the
+// failure card (no-model note / error + Retry) when it couldn't.
+function SummaryNode({ id, data }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    if (!data.outputText) return;
+    try {
+      await navigator.clipboard.writeText(data.outputText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch { /* clipboard blocked — the text is selectable */ }
+  };
+
+  if (data.pending) {
+    return (
+      <div className="flow-node node-summary node-summary-pending">
+        <Handle type="target" position={Position.Top} />
+        <div className="node-reader-head">
+          <span className="node-icon">◇</span>
+          <div className="node-text">
+            <div className="node-title">Summary</div>
+            <div className="node-sub">summarizing {data.sourceIds?.join(', ')}…</div>
+          </div>
+          <span className="node-status"><span className="spinner" /></span>
+        </div>
+        <div className="summary-shimmer" aria-label="Summarizing…" />
+      </div>
+    );
+  }
+  if (data.failed) {
+    return (
+      <div className="flow-node node-summary node-summary-failed">
+        <Handle type="target" position={Position.Top} />
+        <div className="node-reader-head">
+          <span className="node-icon">◇</span>
+          <div className="node-text">
+            <div className="node-title">Summary</div>
+            <div className="node-sub">couldn't summarize</div>
+          </div>
+        </div>
+        <div className="node-reader-body">
+          <p className="focus-summary-note">
+            {data.failed === 'no-model'
+              ? 'No model configured — add a provider key in Settings to summarize outputs.'
+              : data.failed}
+          </p>
+          <div className="focus-actions-inline">
+            <button type="button" className="link nodrag" onClick={() => data.onRetry?.(id)}>Retry</button>
+            <button type="button" className="link nodrag" onClick={() => data.onDiscard?.(id)}>Dismiss</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className={'flow-node node-summary' + (data.selected ? ' selected' : '')}>
+      <Handle type="target" position={Position.Top} />
+      <div className="node-reader-head">
+        <span className="node-icon">◇</span>
+        <div className="node-text">
+          <div className="node-title">Summary</div>
+          <div className="node-sub">{data.sub}</div>
+        </div>
+        <button type="button" className="ghost mini nodrag" onClick={copy} disabled={!data.outputText} title="Copy this summary">
+          {copied ? 'Copied ✓' : 'Copy'}
+        </button>
+        <button
+          type="button"
+          className="node-expand-btn nodrag"
+          title="Delete this summary (removes the run artifact)"
+          onClick={e => { e.stopPropagation(); data.onDeleteSummary?.(id); }}
+        >✕</button>
+      </div>
+      {data.midRun && (
+        <div className="summary-badge" title="At least one source was still running when this summary was made — it's a snapshot of partial output">
+          ◔ summarized before completion
+        </div>
+      )}
+      <div className="node-reader-body nowheel nodrag nopan summary-body">
+        {data.outputText
+          ? <MarkdownView text={data.outputText} inCanvas />
+          : <span className="live-idle">The summary text is missing from the run folder.</span>}
+      </div>
+      <div className="summary-sources mono" title="Summarized from">
+        ← {data.summary?.sources?.map(s => s.id).join(', ')}
+      </div>
+    </div>
+  );
+}
+
+const summaryEqual = (prev, next) =>
+  ['label', 'sub', 'summary', 'outputText', 'midRun', 'pending', 'failed', 'selected', 'sourceIds']
+    .every(k => prev.data[k] === next.data[k]);
+const SummaryNodeMemo = React.memo(SummaryNode, summaryEqual);
+
+const nodeTypes = { stage: StageNode, task: StageNode, orchestrator: OrchNode, summary: SummaryNodeMemo };
 
 // Editor node: same neutral card, handles depend on the node type
 // (input has no target, output has no source).
@@ -749,7 +974,7 @@ export default function FlowCanvas(props) {
   );
 }
 
-function FlowCanvasInner({ snapshot, selectedNode, onSelect, live = false, paused = false, follow = true, onFollowChange, onInvestigate, control }) {
+function FlowCanvasInner({ snapshot, selectedNode, onSelect, live = false, paused = false, follow = true, onFollowChange, onInvestigate, control, focusOpen = false }) {
   const rf = useReactFlow();
   // Which orchestrator's collapsed swarm list is open (null = none).
   const [stackOpenFor, setStackOpenFor] = useState(null);
@@ -779,11 +1004,328 @@ function FlowCanvasInner({ snapshot, selectedNode, onSelect, live = false, pause
     }
     return g;
   }, [snapshot, selectedNode]);
-  const { nodes, edges, dimming, onNodeMouseEnter, onNodeMouseLeave } =
+  const { nodes: litNodes, edges, dimming, onNodeMouseEnter, onNodeMouseLeave } =
     useLineageFocus(baseNodes, baseEdges);
   const stack = stackOpenFor
     ? baseNodes.find(n => n.id === stackOpenFor)?.data?.stack ?? null
     : null;
+
+  // --- Canvas reader (output-view phase 2, plan B2/B3/D4/D9) ---
+  // Per-run, in-memory-only UI state: which nodes are expanded (with their
+  // remembered sizes), local position overrides (displacement + user drags —
+  // never written back to run files), and the displacement restore records.
+  // Everything resets on a run switch; the canvas itself remounts per tab.
+  const [expanded, setExpanded] = useState({});          // nodeId -> {w, h}
+  const [posOverrides, setPosOverrides] = useState({});  // nodeId -> {x, y}
+  const [displacing, setDisplacing] = useState(() => new Set()); // animated movers
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+  const userMoved = useRef(new Set());           // manually dragged — restore loses to these
+  const displacedBy = useRef(new Map());         // expandedId -> [{id, from}]
+  const rememberedSizes = useRef({});            // nodeId -> {w, h}; survives collapse
+  const displaceTimer = useRef(null);
+  const autoExpanded = useRef(false);            // D9 fires once per run
+  const userClosedOut = useRef(new Set());       // a collapsed Output stays collapsed
+  const baseNodesRef = useRef(baseNodes);
+  baseNodesRef.current = baseNodes;
+
+  const runId = snapshot?.meta?.runId;
+  const prevReaderRun = useRef(runId);
+  useEffect(() => {
+    if (prevReaderRun.current === runId) return;
+    prevReaderRun.current = runId;
+    setExpanded({});
+    setPosOverrides({});
+    setDisplacing(new Set());
+    userMoved.current = new Set();
+    displacedBy.current = new Map();
+    rememberedSizes.current = {};
+    autoExpanded.current = false;
+    userClosedOut.current = new Set();
+    selectionRef.current = new Set();
+    placedSummaries.current = new Set();
+    setPendingSummaries([]);
+    setFailedSummaries([]);
+  }, [runId]);
+
+  // Top-level absolute rect for a node, preferring the remembered expanded
+  // size over the measured collapsed card (React Flow measures lazily).
+  const rectOf = useCallback(id => {
+    const internal = rf.getInternalNode(id);
+    if (!internal || internal.parentId) return null; // orch children stay out of displacement
+    const p = internal.internals?.positionAbsolute ?? internal.position;
+    const ex = expandedRef.current[id];
+    return {
+      id, x: p.x, y: p.y,
+      w: ex?.w ?? internal.measured?.width ?? 232,
+      h: ex?.h ?? internal.measured?.height ?? 76
+    };
+  }, [rf]);
+
+  // Shift nodes to their displaced/restored positions and animate them there
+  // via the .displacing transform transition (cleared after it settles).
+  const applyMoves = useCallback(moves => {
+    if (!moves.length) return;
+    setPosOverrides(prev => {
+      const next = { ...prev };
+      for (const m of moves) next[m.id] = { x: m.to.x, y: m.to.y };
+      return next;
+    });
+    setDisplacing(new Set(moves.map(m => m.id)));
+    clearTimeout(displaceTimer.current);
+    displaceTimer.current = setTimeout(() => setDisplacing(new Set()), DISPLACE_MS);
+  }, []);
+
+  const expandNode = useCallback(id => {
+    if (expandedRef.current[id]) return;
+    const size = rememberedSizes.current[id] ?? EXPANDED_DEFAULT;
+    // D4 local displacement: the expanded bbox pushes overlapping top-level
+    // neighbors aside (cascading); every mover's origin is recorded so the
+    // collapse can restore exactly.
+    const target = rectOf(id);
+    if (target) {
+      const others = baseNodesRef.current
+        .filter(n => n.id !== id && !n.parentId)
+        .map(n => rectOf(n.id))
+        .filter(Boolean);
+      const moves = computeDisplacement(others, { ...target, w: size.w, h: size.h });
+      displacedBy.current.set(id, moves.map(m => ({ id: m.id, from: m.from })));
+      applyMoves(moves);
+    }
+    setExpanded(prev => ({ ...prev, [id]: size }));
+  }, [rectOf, applyMoves]);
+
+  const collapseNode = useCallback(id => {
+    userClosedOut.current.add(id);
+    setExpanded(prev => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    // Restore recorded positions exactly — except nodes the user dragged
+    // meanwhile; their manual placement wins (plan D4).
+    const recs = displacedBy.current.get(id) ?? [];
+    displacedBy.current.delete(id);
+    applyMoves(recs
+      .filter(r => !userMoved.current.has(r.id))
+      .map(r => ({ id: r.id, to: r.from })));
+  }, [applyMoves]);
+
+  const toggleExpand = useCallback(id => {
+    if (expandedRef.current[id]) collapseNode(id);
+    else expandNode(id);
+  }, [expandNode, collapseNode]);
+
+  // --- Summary nodes (plan B4/D5–D8) ---
+  // Local-only companion state for the artifact-backed summaries the snapshot
+  // carries: the shimmer placeholder while the model writes, the retryable
+  // failure card when it couldn't, which summaries have been auto-placed, and
+  // the canvas multi-selection (for "Summarize N nodes").
+  const [pendingSummaries, setPendingSummaries] = useState([]); // [{ tempId, sourceIds }]
+  const [failedSummaries, setFailedSummaries] = useState([]);   // [{ tempId, sourceIds, error }]
+  const pendingSeq = useRef(0);
+  const placedSummaries = useRef(new Set());
+  const selectionRef = useRef(new Set());
+  const [, bumpSelection] = useState(0);
+
+  // Where a new summary card goes (B4): beside the source(s) — prefer right
+  // of the rightmost source at the sources' centroid height, then below; when
+  // both spots are taken, displace the neighbors with the D4 routine.
+  const placementFor = useCallback(sourceIds => {
+    const rects = baseNodesRef.current
+      .filter(n => !n.parentId)
+      .map(n => rectOf(n.id))
+      .filter(Boolean);
+    const srcs = sourceIds.map(id => rects.find(r => r.id === id)).filter(Boolean);
+    const cx = srcs.length ? srcs.reduce((a, r) => a + r.x + r.w / 2, 0) / srcs.length : 0;
+    const cy = srcs.length ? srcs.reduce((a, r) => a + r.y + r.h / 2, 0) / srcs.length : 0;
+    const rightEdge = Math.max(0, ...srcs.map(r => r.x + r.w));
+    const bottomEdge = Math.max(0, ...srcs.map(r => r.y + r.h));
+    const candidates = [
+      { x: rightEdge + 24, y: Math.round(cy - SUMMARY_ESTIMATE.h / 2) }, // prefer right
+      { x: Math.round(cx - SUMMARY_ESTIMATE.w / 2), y: bottomEdge + 24 } // then below
+    ];
+    for (const c of candidates) {
+      if (!rects.some(r => rectsOverlap(r, { ...c, ...SUMMARY_ESTIMATE }))) return c;
+    }
+    const pos = candidates[1];
+    applyMoves(computeDisplacement(rects, { ...pos, ...SUMMARY_ESTIMATE }));
+    return pos;
+  }, [rectOf, applyMoves]);
+
+  // Fire a summarize: shimmer placeholder at its spot immediately, then the
+  // engine call — success swaps the placeholder for the artifact card (via
+  // the snapshot push), failure becomes the retryable error card.
+  const summarize = useCallback(async (sourceIds, position = null, reuseId = null) => {
+    const ids = [...new Set((sourceIds ?? []).filter(Boolean))];
+    if (!ids.length || !control?.summarize) return;
+    const tempId = reuseId ?? `sum-pending-${Date.now().toString(36)}${(pendingSeq.current++).toString(36)}`;
+    const pos = position ?? placementFor(ids);
+    setPosOverrides(prev => ({ ...prev, [tempId]: pos }));
+    setPendingSummaries(prev => [...prev, { tempId, sourceIds: ids }]);
+    const res = await control.summarize(ids, pos);
+    setPendingSummaries(prev => prev.filter(p => p.tempId !== tempId));
+    if (res?.ok) {
+      // Hand the placeholder's spot to the real card (the engine saved it
+      // into the index, but be idempotent).
+      setPosOverrides(prev => {
+        const next = { ...prev };
+        if (res.summary?.id) next[res.summary.id] = pos;
+        delete next[tempId];
+        return next;
+      });
+    } else {
+      // Keep the override: the failure card stays where the shimmer was.
+      setFailedSummaries(prev => [...prev, { tempId, sourceIds: ids, error: res?.error ?? 'Summarize failed.' }]);
+    }
+  }, [control, placementFor]);
+
+  const retrySummary = useCallback(tempId => {
+    setFailedSummaries(prev => {
+      const f = prev.find(x => x.tempId === tempId);
+      if (f) summarize(f.sourceIds, posOverrides[tempId], tempId);
+      return prev.filter(x => x.tempId !== tempId);
+    });
+  }, [summarize, posOverrides]);
+
+  const discardSummary = useCallback(tempId => {
+    setFailedSummaries(prev => prev.filter(x => x.tempId !== tempId));
+    setPosOverrides(prev => { const next = { ...prev }; delete next[tempId]; return next; });
+  }, []);
+
+  const deleteSummary = useCallback(id => { control?.deleteSummary?.(id); }, [control]);
+
+  // Summaries that arrive without a saved position (created before positions
+  // existed, or by another surface) get placed once, then the spot is saved
+  // back into the index so it survives reload.
+  const summaries = snapshot?.summaries ?? [];
+  useEffect(() => {
+    for (const s of summaries) {
+      if (s.position || placedSummaries.current.has(s.id)) continue;
+      placedSummaries.current.add(s.id);
+      if (posOverrides[s.id]) continue; // our own placeholder handoff placed it
+      const pos = placementFor((s.sources ?? []).map(x => x.id));
+      setPosOverrides(prev => ({ ...prev, [s.id]: pos }));
+      control?.moveSummary?.(s.id, pos);
+    }
+  }, [summaries, posOverrides, placementFor, control]);
+
+  // D9: the Output node(s) auto-expand when the run reaches a terminal stage;
+  // everything else mounts collapsed.
+  const stage = snapshot?.meta?.stage;
+  useEffect(() => {
+    if (autoExpanded.current || !isTerminal(stage)) return;
+    autoExpanded.current = true;
+    for (const n of snapshot?.flow?.nodes ?? []) {
+      if (n.type === 'output' && !userClosedOut.current.has(n.id)) expandNode(n.id);
+    }
+  }, [stage, snapshot?.flow, expandNode]);
+
+  // Drags and NodeResizer resizes land here. Both are folded into the local
+  // override maps — run files stay untouched. A finished drag marks the node
+  // user-moved so a later collapse won't restore over it; a finished drag on
+  // a summary card also persists its position into the summaries index (B4).
+  const onNodesChange = useCallback(changes => {
+    for (const c of changes) {
+      if (c.type === 'position' && c.position) {
+        setPosOverrides(prev => ({ ...prev, [c.id]: { x: c.position.x, y: c.position.y } }));
+        if (c.dragging === false) {
+          userMoved.current.add(c.id);
+          if (c.id.startsWith('sum-') && !c.id.startsWith('sum-pending-')) {
+            control?.moveSummary?.(c.id, c.position);
+          }
+        }
+      } else if (c.type === 'dimensions' && c.dimensions && c.setAttributes && expandedRef.current[c.id]) {
+        rememberedSizes.current[c.id] = { w: c.dimensions.width, h: c.dimensions.height };
+        setExpanded(prev => prev[c.id]
+          ? { ...prev, [c.id]: rememberedSizes.current[c.id] }
+          : prev);
+      } else if (c.type === 'select') {
+        // Multi-selection for "Summarize N nodes" (D8). We never write
+        // `selected` back onto nodes — the single-select ring stays App's —
+        // this is just the menu's source list.
+        if (c.selected) selectionRef.current.add(c.id);
+        else selectionRef.current.delete(c.id);
+        bumpSelection(v => v + 1);
+      }
+    }
+  }, [control]);
+
+  // The rendered node list: lineage-lit base + reader overlay (positions,
+  // expansion, affordance callbacks). Output text is resolved ONLY for
+  // expanded nodes — the memoized cards otherwise see no per-tick churn.
+  // Summary placeholders (shimmer / failure) are local-only and appended here.
+  const nodes = useMemo(() => {
+    const view = litNodes.map(n => {
+      const ex = expanded[n.id];
+      const o = posOverrides[n.id];
+      const expandable = n.type !== 'orchestrator' && n.type !== 'summary' && !n.parentId;
+      if (!ex && !o && !displacing.has(n.id) && !expandable && n.type !== 'summary') return n;
+      let cls = n.className ?? '';
+      if (displacing.has(n.id)) cls += ' displacing';
+      if (ex) cls += ' node-expanded';
+      return {
+        ...n,
+        ...(o ? { position: o } : {}),
+        ...(cls ? { className: cls.trim() } : {}),
+        ...(ex ? { style: { ...n.style, width: ex.w, height: ex.h } } : {}),
+        data: {
+          ...n.data,
+          expandable,
+          onToggleExpand: toggleExpand,
+          ...(n.type === 'summary' ? { onDeleteSummary: deleteSummary } : {}),
+          ...(ex ? { expanded: true, outputText: nodeOutputText(snapshot, n.id) } : {})
+        }
+      };
+    });
+    for (const p of pendingSummaries) {
+      view.push({
+        id: p.tempId, type: 'summary',
+        position: posOverrides[p.tempId] ?? { x: 0, y: 0 },
+        style: { width: SUMMARY_WIDTH },
+        data: { pending: true, sourceIds: p.sourceIds, ports: [] }
+      });
+    }
+    for (const f of failedSummaries) {
+      view.push({
+        id: f.tempId, type: 'summary',
+        position: posOverrides[f.tempId] ?? { x: 0, y: 0 },
+        style: { width: SUMMARY_WIDTH },
+        data: {
+          failed: f.error, sourceIds: f.sourceIds, ports: [],
+          onRetry: retrySummary, onDiscard: discardSummary
+        }
+      });
+    }
+    return view;
+  }, [litNodes, expanded, posOverrides, displacing, toggleExpand, snapshot,
+    pendingSummaries, failedSummaries, deleteSummary, retrySummary, discardSummary]);
+
+  // Double-click does what the ⤢ button does (expand only — collapse is the
+  // ⤡ button, so double-clicking text inside a reader never collapses it).
+  const onNodeDoubleClick = useCallback((_e, node) => {
+    if (node.type === 'orchestrator' || node.type === 'summary' || node.parentId) return;
+    if (!expandedRef.current[node.id]) expandNode(node.id);
+  }, [expandNode]);
+
+  // Keyboard polish (output-view phase 4): Enter expands the selected node,
+  // Esc collapses it. Focus discipline: never while typing in a field, while
+  // a canvas menu/modal is open, or while NodeFocus owns Esc (it closes on
+  // the same keypress and the two would race).
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key !== 'Enter' && e.key !== 'Escape') return;
+      const t = e.target;
+      if (t?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      if (menu || stackOpenFor || focusOpen) return;
+      const node = selectedNode ? baseNodesRef.current.find(n => n.id === selectedNode) : null;
+      if (!node || node.type === 'orchestrator' || node.type === 'summary' || node.parentId) return;
+      if (e.key === 'Enter' && !expandedRef.current[node.id]) { e.preventDefault(); expandNode(node.id); }
+      else if (e.key === 'Escape' && expandedRef.current[node.id]) collapseNode(node.id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedNode, menu, stackOpenFor, focusOpen, expandNode, collapseNode]);
 
   // --- Follow execution: the chat-scrolls-to-the-nodes camera. ---
   const nodeStatus = snapshot?.meta?.nodeStatus;
@@ -887,6 +1429,15 @@ function FlowCanvasInner({ snapshot, selectedNode, onSelect, live = false, pause
     ? baseNodes.find(n => n.id === menu.id) ?? null
     : null;
 
+  // The sources a "Summarize" menu click would act on (D8): the right-clicked
+  // node's whole multi-selection when it's part of one, else the node alone —
+  // filtered to nodes that actually have output. Summary nodes are excluded
+  // (no summarize-on-summary).
+  const summarizeIds = menu?.kind === 'node'
+    ? (selectionRef.current.has(menu.id) ? [...selectionRef.current] : [menu.id])
+      .filter(id => baseNodes.some(n => n.id === id && n.type !== 'summary' && n.data?.hasOutput))
+    : [];
+
   return (
     <div className={'run-canvas' + (live ? ' canvas-live' : '')}>
       <ReactFlow
@@ -902,10 +1453,12 @@ function FlowCanvasInner({ snapshot, selectedNode, onSelect, live = false, pause
         onNodeContextMenu={onNodeContextMenu}
         onPaneContextMenu={onPaneContextMenu}
         onMoveStart={onMoveStart}
+        onNodesChange={onNodesChange}
+        onNodeDoubleClick={onNodeDoubleClick}
         fitView
         fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
         proOptions={{ hideAttribution: true }}
-        nodesDraggable={false}
+        nodesDraggable
         nodesConnectable={false}
         minZoom={0.2}
         maxZoom={1.75}
@@ -935,6 +1488,9 @@ function FlowCanvasInner({ snapshot, selectedNode, onSelect, live = false, pause
           live={live}
           paused={paused}
           follow={follow}
+          summarizeCount={summarizeIds.length}
+          onSummarize={() => summarize(summarizeIds)}
+          onDeleteSummary={() => deleteSummary(menu.id)}
           onClose={() => setMenu(null)}
           onInvestigate={() => onInvestigate?.(menu.id)}
           onRestart={guidance => control?.restart?.(menu.id, guidance)}
@@ -1050,6 +1606,7 @@ function buildGraph(snapshot, selectedNode, onOpenStack) {
       sub: def.sub,
       icon: STAGE_ICONS[def.id],
       status: def.id === 'prompt' ? 'done' : stageStatus(def.stage, meta),
+      hasOutput: Boolean(nodeOutputText(snapshot, def.id)),
       selected: selectedNode === def.id
     }
   }));
@@ -1082,6 +1639,7 @@ function buildGraph(snapshot, selectedNode, onOpenStack) {
           sub: `tool · ${t.worker.provider}/${t.worker.model}`,
           icon: '⚙',
           status: running ? 'active' : t.status === 'done' ? 'done' : t.status === 'failed' ? 'failed' : 'pending',
+          hasOutput: Boolean(snapshot.taskOutputs?.[t.id]),
           selected: selectedNode === t.id
         }
       });
@@ -1156,6 +1714,8 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
           ? { empty: false, box: { w: 380, h: 230 }, stack: stackFor(n.id), onOpenStack: () => onOpenStack?.(n.id) }
           : { empty: childrenOf(n.id).length === 0, box: n.data?.box }
         : {}),
+      // Feeds the NodeMenu's Summarize item (D8: offered on any node WITH output).
+      hasOutput: Boolean(nodeOutputText(snapshot, n.id)),
       selected: selectedNode === n.id
     }
   }));
@@ -1210,6 +1770,7 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
           kind: 'ai',
           status,
           ports: [],
+          hasOutput: Boolean(snapshot.taskOutputs?.[task.id]),
           selected: selectedNode === task.id
         }
       });
@@ -1226,6 +1787,43 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
         });
       }
     });
+  }
+
+  // Summary nodes (plan B4/D5): derived from the run's summaries index — a run
+  // artifact, never part of flow.json. Each gets a dashed edge from every
+  // source it read (ghost sources — deleted nodes, legacy ids — just don't
+  // draw one). The card itself is rendered by SummaryNode; position comes
+  // from the index (saved on drag) or the canvas's placement pass.
+  for (const s of snapshot.summaries ?? []) {
+    nodes.push({
+      id: s.id,
+      type: 'summary',
+      position: s.position ?? { x: 0, y: 0 },
+      style: { width: SUMMARY_WIDTH },
+      data: {
+        label: 'Summary',
+        sub: s.model ? `◇ ${s.model.provider}/${s.model.model}` : '◇ summary',
+        icon: '◇',
+        kind: 'ai',
+        status: 'done',
+        summary: s,
+        outputText: s.text ?? '',
+        midRun: (s.sources ?? []).some(src => !TERMINAL_NODE_STATUS.has(src.statusAtCreation)),
+        ports: [],
+        selected: selectedNode === s.id
+      }
+    });
+    for (const src of s.sources ?? []) {
+      if (!nodes.some(n => n.id === src.id)) continue;
+      edges.push({
+        id: `e-sum-${src.id}__${s.id}`,
+        source: src.id,
+        target: s.id,
+        type: EDGE_TYPE,
+        className: 'edge-spawned', // dashed: derived at view time, not authored
+        data: { sourceStatus: statusOf(src.id) ?? 'done' }
+      });
+    }
   }
   return { nodes, edges };
 }

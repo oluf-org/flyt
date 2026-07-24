@@ -53,6 +53,31 @@ export function spawnedTasks(snapshot) {
     .map(t => ({ task: t, ownerNodeId: ownerOf(t) }));
 }
 
+// One resolver for a node's output TEXT, every shape a node comes in: a flow
+// node (aiStep / orchestrator plan / agentTask / input's prompt), a run-time
+// task with no flow node, or a legacy stage id from pre-flow runs. Shared by
+// NodeFocus and the canvas reader cards (output-view phase 2) so the port-
+// sidecar and task-output rules live in exactly one place.
+export function nodeOutputText(snapshot, nodeId) {
+  if (!snapshot) return '';
+  const flowNode = snapshot.flow?.nodes?.find(n => n.id === nodeId);
+  if (flowNode) {
+    const outputs = snapshot.nodeOutputs ?? {};
+    if (flowNode.type === 'agentTask') return snapshot.taskOutputs?.[flowNode.data?.taskId] ?? '';
+    if (flowNode.type === 'input') return snapshot.prompt ?? '';
+    if (flowNode.type === 'orchestrator') {
+      // The orchestrator's own call is its planning turn, a port sidecar.
+      return outputs[outputKey(`${nodeId}.plan`)] ?? outputs[outputKey(nodeId)] ?? '';
+    }
+    return outputs[outputKey(nodeId)] ?? '';
+  }
+  const task = snapshot.tasks?.tasks?.find(t => t.id === nodeId);
+  if (task) return snapshot.taskOutputs?.[task.id] ?? '';
+  if (nodeId === 'prompt') return snapshot.prompt ?? '';
+  if (nodeId === 'planner') return snapshot.plan ?? '';
+  return '';
+}
+
 // tasks.json statuses -> the canvas status vocabulary (see StatusGlyph).
 export function taskNodeStatus(status) {
   if (status === 'running') return 'active';

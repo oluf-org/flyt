@@ -486,7 +486,7 @@ schema/validation/logging) with `createdBy: <stitch-node-id>` and executed by
 the executor before the flow continues. Invalid entries are dropped and
 reported; omitting the block or `"fixTasks": []` means nothing to fix.
 
-### followup-triage → turn classification (FOLLOWUP-PLAN)
+### followup-triage → turn classification (DECISIONS.md D21)
 
 Not a node role: a direct call `FlowRunner.followUp()` makes when the user
 replies to a finished run. One ```json block:

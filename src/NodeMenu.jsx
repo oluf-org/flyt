@@ -17,7 +17,8 @@ import { statusPill } from './Inspector.jsx';
 export default function NodeMenu({
   menu, node, flowBacked, live, paused, follow,
   onClose, onInvestigate, onRestart, onBranch,
-  onPause, onResume, onStop, onToggleFollow
+  onPause, onResume, onStop, onToggleFollow,
+  summarizeCount = 0, onSummarize, onDeleteSummary
 }) {
   const menuRef = useRef(null);
   const [pos, setPos] = useState({ x: menu.x, y: menu.y });
@@ -145,8 +146,29 @@ export default function NodeMenu({
               {node?.data?.status && statusPill(node.data.status)}
             </div>
           )}
-          {menu.kind === 'node' && (
+          {menu.kind === 'node' && node?.type === 'summary' && (
             <>
+              {/* Summary nodes are artifacts, not work: no restart / branch /
+                  investigate, and no summarize-on-summary (D8) — just delete. */}
+              <button type="button" role="menuitem" className="node-menu-item danger" onClick={act(onDeleteSummary)}>
+                <span className="node-menu-glyph" aria-hidden>✕</span> Delete summary
+              </button>
+              <div className="node-menu-sep" role="separator" />
+            </>
+          )}
+          {menu.kind === 'node' && node?.type !== 'summary' && (
+            <>
+              <button
+                type="button" role="menuitem" className="node-menu-item"
+                disabled={!summarizeCount}
+                title={summarizeCount
+                  ? summarizeCount > 1 ? `Summarize ${summarizeCount} nodes into one summary` : 'Summarize this node\'s output into a summary node'
+                  : 'Nothing to summarize yet — the node has no output'}
+                onClick={act(onSummarize)}
+              >
+                <span className="node-menu-glyph" aria-hidden>◇</span>
+                {summarizeCount > 1 ? `Summarize ${summarizeCount} nodes` : 'Summarize output'}
+              </button>
               <button type="button" role="menuitem" className="node-menu-item" onClick={act(onInvestigate)}>
                 <span className="node-menu-glyph" aria-hidden>◈</span> Investigate node
               </button>

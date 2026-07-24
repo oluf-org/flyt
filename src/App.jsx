@@ -1653,7 +1653,20 @@ export default function App() {
         guard(() => window.llmflow.branchRun(activeTabRef.current, runId, nodeId))
           .then(async res => {
             if (res?.runId) { await openRun(res.runId); refreshRunsSoon(); }
-          })
+          }),
+      // Summary nodes (B4): summarize resolves { ok, summary } / { ok:false,
+      // error } — NOT toasted, the canvas shows a retryable failure card
+      // instead. delete/move are fire-and-forget (the snapshot push confirms).
+      summarize: async (sourceIds, position = null) => {
+        try {
+          return await window.llmflow.summarizeRun(activeTabRef.current, runId, sourceIds, position);
+        } catch (e) {
+          return { ok: false, error: ipcMessage(e) };
+        }
+      },
+      deleteSummary: summaryId => guard(() => window.llmflow.deleteSummary(activeTabRef.current, runId, summaryId)),
+      moveSummary: (summaryId, position) =>
+        window.llmflow.moveSummary?.(activeTabRef.current, runId, summaryId, position)?.catch(() => {})
     };
   }, [openRun, refreshRunsSoon, showRunToast]);
   const runControl = useMemo(() => makeRunControl(activeRunId), [makeRunControl, activeRunId]);
@@ -2206,6 +2219,7 @@ export default function App() {
                           follow={followRun}
                           onFollowChange={setFollowRun}
                           onInvestigate={setFocusNodeId}
+                          focusOpen={Boolean(focusNodeId)}
                           control={runControl}
                         />
                         <ReplayStrip
@@ -2380,6 +2394,7 @@ export default function App() {
             <RunResult
               snapshot={snapshot}
               onFollowUp={text => window.llmflow.followUpRun(activeTab, activeRunId, text)}
+              onSummarize={runControl?.summarize}
             />
           )}
 

@@ -1,7 +1,7 @@
 # Configs & Compare-Anything — Design Proposal
 
-**Status:** 2026-07-22 — proposal, not started.
-**Read with:** `MODES-COMPARE-PLAN.md` (T1–T13), `FLOW_LANG.md`, `src/flowTypes.js`,
+**Status:** 2026-07-22 — P1 (configs UX), P2 (compare-anything), and P3 (blind judge) are **implemented**; P4 (sweeps) is open.
+**Read with:** `DECISIONS.md` D27 (the override-map primitive), `FLOW_LANG.md`, `src/flowTypes.js`,
 `src/compareRun.js`, `core/state.js`.
 
 ## Problem
@@ -21,7 +21,7 @@
 ## Principles
 
 - **Keep the one primitive.** Modes, run inputs, and comparison already reduce
-  to *a per-node override map applied at run start* (MODES-COMPARE-PLAN). The
+  to *a per-node override map applied at run start* (DECISIONS.md D27). The
   redesign changes **who assembles the map and when** — never the runner.
 - **Everything stays data in the flow file.** No flow forks, no versions. A
   config is a named override bundle; the resolved `flow.json` snapshot in each

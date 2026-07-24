@@ -78,6 +78,56 @@ error.
   so provenance is always visible. This is how you explore "what if the analysis had
   gone the other way" without losing the original.
 
+## Reading the output (OUTPUT-VIEW rework)
+
+Until now every output rendered as raw mono `<pre>` in a 372 px column. The canvas
+is now the reader: markdown renders everywhere, and the node you care about grows
+into a real reading card in place.
+
+### The node card is the reader
+
+- **Expand in place** — every card has a quiet ⤢ affordance; double-click (or Enter
+  on the selected node) does the same. The card grows to ~560×640 with a header
+  (title, status pill, **Rendered/Raw** toggle — Raw is the old mono `pre`, for
+  investigating exact bytes — Copy, ⤡ collapse / Esc) over a scrolling markdown
+  body that sticks to the tail while the node streams.
+- **Resizable, remembered** — a React Flow `NodeResizer` (active only while
+  expanded) sizes the card freely; the size is remembered per node for the session.
+- **Local displacement, not re-layout** — neighbors the expanded card would cover
+  slide just far enough aside (minimal translation + gutter, cascading with a depth
+  cap, 240 ms glide, off under reduced motion). Collapse restores their exact
+  positions — unless you dragged one meanwhile; your placement always wins.
+- **Markdown everywhere** — `src/MarkdownView.jsx` (react-markdown + remark-gfm,
+  no raw HTML) backs the canvas card, Node Focus, the run result, and the live
+  stream. A half-streamed code fence is closed before parsing so streaming never
+  swallows the document.
+- **The Output node opens itself** — when a run settles, its Output node(s)
+  auto-expand; everything else mounts collapsed. The Inspector dropped its output
+  sections (D11): it keeps config, goal/constraints, tool calls, and retrospective,
+  and points at the canvas for reading.
+
+### ◇ Summary nodes: condensation as a run artifact
+
+Right-click any node **with output** → **◇ Summarize output** (a multi-selection
+reads "Summarize N nodes" and produces one combined summary; the Run Result panel
+has the same button for result.md). A model condenses the source(s) into
+**TL;DR + 3–6 bullets**, and the result lands on the canvas as a distinct
+accent-bordered ◇ card, edge-linked (dashed) from everything it read.
+
+- **It's a file, not a view** — `runs/<id>/summaries/<key>.md` plus an entry in
+  `summaries/index.json` (`sources` with each source's status at creation, model,
+  timestamp, canvas position). Never part of flow.json, never re-runs. Deleting
+  the card (✕ on it, or the context menu) removes both.
+- **Honest about timing** — summarize mid-run and the card permanently badges
+  "summarized before completion": a summary is a snapshot of what it read.
+- **Degrades honestly** — no configured model → a note, not an error; a failed
+  call → the error with Retry, in place. While writing, the card is a shimmer
+  placeholder.
+- **Placement** — beside the source(s) (prefer right, then below; multi-source at
+  the centroid), using the same displacement routine to make room. Drag it
+  anywhere; the position saves back into the index and survives reload.
+
+
 ## The chat run surface (CHAT-RUN rework)
 
 Running from the home chat keeps the conversation put and unfolds the run

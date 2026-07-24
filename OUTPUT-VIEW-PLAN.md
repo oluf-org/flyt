@@ -2,7 +2,7 @@
 
 **Feature:** Readable LLM output (especially markdown) on the run canvas, plus right-click
 summarization that creates a summary node.
-**Status:** Decided 2026-07-22 (owner Q&A, three rounds). Ready for implementation.
+**Status:** Shipped 2026-07-23 — all four phases implemented (505/505 tests, build green).
 
 **Problem.** Every LLM output today renders as raw mono `<pre>` inside the 372px right
 column: Inspector sections, NodeFocus stream (fixed 140px), RunResult (max 220px),

@@ -109,12 +109,12 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 **Status.** Decided.
 
 ### D21 — Follow-up turns: a finished run is re-openable and its flow grows (FU1–FU10)
-**Context.** A run reaching a terminal stage ended the conversation; feedback meant a new run with no context. Full decision series (FU1–FU10) in `FOLLOWUP-PLAN.md`, dated 2026-07-17.
+**Context.** A run reaching a terminal stage ended the conversation; feedback meant a new run with no context. The full decision series (FU1–FU10) was recorded 2026-07-17 in `FOLLOWUP-PLAN.md`, retired after implementation (git history).
 **Decision.** Implemented as designed: `FlowRunner.followUp(runId, text)` accepts a reply at any terminal stage (done/failed/rejected). A triage call classifies it — `question` (answered in place, `followups/<n>/answer.md`), `fix` (1–2 executor nodes), or `feature` (plan → gated plan-eval → stitch segment) — and the continuation subgraph is appended to the run's `flow.json` behind a visible `fu<n>-input` node carrying the feedback. Completed nodes are never re-run; prior outputs reach new nodes via edges only. A `feedback-review` node closes every turn (`solved` | `more-work`, bounded to 2 extensions, then the human escalation gate). Failed/rejected runs retire their unfinished path as `skipped` and route around it. Every turn snapshots `flow.json`/`meta.json` to `followups/<n>/before/` first. One turn at a time.
-**Status.** Decided & implemented (engine + parsers + thread UI/composer + canvas turn badges; tests in `tests/followup.test.js`).
+**Status.** Decided & implemented (engine + parsers + thread UI/composer + canvas turn badges; tests in `tests/followup.test.js`). Deferred by decision, not forgotten: **Q-FU1** collapse-by-turn UI for long multi-turn runs; **Q-FU2** edit/delete a follow-up turn; **Q-FU3** multi-feedback batching (reply while running).
 
 ### D22 — Project tabs: data model, architecture, and UX (T1–T19 resolved)
-**Context.** Tabs A (baseline strip) + D (deck switcher) are in scope (`POLISH-IMPLEMENTATION-PLAN.md` Phase 4). The app had no project entity — `flows/`, `runs/`, `nodes/` are single global directories, and a workspace folder binds per run. `TABS-DECISIONS.md` enumerated the decisions (T1–T19); this entry resolves the Phase 4.0 gate set (2026-07-19). Format: each T in one line; the reasoning lives in `TABS-DECISIONS.md`.
+**Context.** Tabs A (baseline strip) + D (deck switcher) were in scope of the polish plan's Phase 4 (plan retired after implementation). The app had no project entity — `flows/`, `runs/`, `nodes/` were single global directories, and a workspace folder bound per run. The T1–T19 option space was enumerated in `TABS-DECISIONS.md` (retired; this entry is the authority, the reasoning record survives in git history); this entry resolves the Phase 4.0 gate set (2026-07-19).
 
 **Decisions.**
 - **T1 — A project IS a workspace folder.** Tab = folder, like tab = site. `.llmflow/` inside it is its config (D15).
@@ -132,6 +132,31 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 **Riding defaults (explicitly not gated):** T4 per-project settings deferred — API keys and worker config stay global. T9 follows T7 (background runs execute; streams push only to the active project; resync on switch). T10/T11/T12/T15 follow demo A as specced in Phase 4.1 (strip in the titlebar; folder-name label, unsaved dot, live-run micro-indicator, hover ×, middle-click close, drag reorder, ＋ → recents/folder-picker page, Chrome-style shrink-then-scroll). T16 window title `<project> — LLM Flow`; drag-tab-out-to-new-window out of scope for v1. T18 project identity = absolute path for v1. T19 the run panel's workspace picker disappears in bound tabs (runs target the tab's folder) and remains only in unbound tabs.
 
 **Status.** Decided & implemented (2026-07-19): `core/projects.js` registry (per-project `RunStore`/`FlowRunner`, T2a storage resolution, T17 persistence; tests in `tests/projects.test.js`), projectId-scoped IPC + active-only diffed pushes with a per-project activity channel, per-tab state bundling in `App.jsx`, `TabStrip.jsx` strip + new-tab page, `TabDeck.jsx` Ctrl+Tab deck, T2a Settings UI.
+
+### D23 — Provider auth: delegate to vendor CLIs; ToS feasibility decides the provider list
+**Context.** Multi-provider support raised how to authenticate each provider (`PROVIDERS-PLAN.md` §0, `SUBSCRIPTION-AUTH-GUIDE.md`; both plans now retired/shipped).
+**Decision.** Never reimplement a vendor's OAuth — delegate authentication to the vendor's own CLI/SDK (Claude Code, Codex CLI). ToS feasibility verdicts: Claude and GPT *subscription* login dropped (subscription tokens are restricted to the vendor's own first-party clients); Kimi-Code subscription key allowed. Dropped options stay visible in the UI as disabled entries with the reason, so the user learns why rather than wondering where the button went.
+**Status.** Decided & implemented (`core/adapters/claudeCode.js`, `codexCli.js`, `cliDelegate.js`, `SUBSCRIPTION_PROVIDERS` in `core/modelSource.js`; tests in `tests/subscription.test.js`). The underlying OAuth/ToS research is kept in `SUBSCRIPTION-AUTH-GUIDE.md`.
+
+### D24 — Flow DSL is zero-dependency
+**Context.** Choosing a YAML/validation stack for the `.flow.yaml` DSL (retired `REFACTOR-PLAN.md`).
+**Decision.** Hand-written strict-subset YAML parser + custom validator instead of `yaml`/`ajv`, to keep the dependency footprint at zero.
+**Status.** Decided & implemented (`core/flowlang/`). Living spec: `FLOW_LANG.md`.
+
+### D25 — The lander is the home of every tab (L1–L6)
+**Context.** With tabs = projects (D22), each tab needed a home surface (retired `LANDER-PLAN.md`).
+**Decision.** The lander is the home of every tab, and its chat prompt is the tab's primary input; the chat unfolds into the live canvas on submit. App-open auto-creates an appdata project so there is no empty scratch state, and the old unbound scratch tab is retired — every tab is a project.
+**Status.** Decided & implemented (`src/Lander.jsx`, `src/Constellation.jsx`, `core/projects.js`). Deferred stretch: the dot-morph unfold (constellation dots gliding to the real workflow's node positions on submit); the crossfade shipped instead — revisit only if the crossfade feels flat.
+
+### D26 — Visual polish constraints: the anti-ideas list
+**Context.** `DESIGN-POLISH-IDEAS.md` (now retired) enumerated techniques; a few were explicitly rejected, and the rejections are standing constraints on future work.
+**Decision.** Never ship: large-area `backdrop-filter`, animated mesh gradients, 3D tilt, or skeleton shimmer — file-based state loads instantly, so shimmer would be fake latency theater. Because Electron pins the Chromium version, the app may use the newest CSS (oklch, `light-dark()`, `field-sizing`, anchor positioning, scroll-driven animations) years before the open web. The Tier 3 ideas (depth model, heartbeat chrome, zoom-level-of-detail canvas, command palette) are rejected as out of scope.
+**Status.** Decided (constraints are permanent). The polish work itself (phases 0–4 of the retired `POLISH-IMPLEMENTATION-PLAN.md`) is fully implemented.
+
+### D27 — One run-configuration primitive: the per-node override map
+**Context.** Modes, run inputs, configs, and comparison looked like four separate features (retired `MODES-COMPARE-PLAN.md`; `CONFIGS-COMPARE-DESIGN.md`).
+**Decision.** All four reduce to *a per-node override map applied at run start*. Precedence: **run input > mode > node override > template**. Comparison is a relationship between two runs, not a composer mode — the diff is computed from the runs' own snapshots, so it stays accurate even if the flow and its modes have been edited twenty times since. The judge is blind to contestant identity: a judge that knows the contestants grades the contestants, not the work.
+**Status.** Decided & implemented (`core/judge.js`, `compare:begin/save/list` IPC, `src/CompareRun.jsx`, `src/ConfigsPanel.jsx`). Open remainder: P4 sweeps — see `CONFIGS-COMPARE-DESIGN.md` Part 4.
 
 ---
 
@@ -159,7 +184,8 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 ## Suggested next actions
 
 1. ~~Apply the D9 correction to `GOALS.md` (relax the one-animation rule).~~ **Done** — `GOALS.md` principle text and NFR updated.
-2. Retire `CRITICAL-REVIEW.md` — it is superseded by `DESIGN-SPEC.md`/`DECISIONS.md`. **Action still required: delete the file manually** (it is marked superseded in the docs but not yet removed from the repo).
-3. Also completed (2026-07-15 doc pass): aligned the stale format references in `README.md`, `GOALS.md`, and `FLOW_NODES.md` to `flows/<id>.flow.yaml` + `.layout.json`, and corrected `REFACTOR-PLAN.md` (custom parser/validator, no `yaml`/`ajv` dependency).
-4. Prioritize the v1-critical planned items: real workspace binding + file/bash tools (D14, D15), parallel agentTasks (D7), and streaming UI (D10) — these three are what turn the scaffolding into a daily-use coding agent.
-4. Work the Open Questions down, promoting each from Open → Provisional → Decided here as they're resolved.
+2. ~~Retire `CRITICAL-REVIEW.md`~~ **Done** — the file is no longer in the repo.
+3. Also completed (2026-07-15 doc pass): aligned the stale format references in `README.md`, `GOALS.md`, and `FLOW_NODES.md` to `flows/<id>.flow.yaml` + `.layout.json`, and corrected the flow-DSL plan (custom parser/validator, no `yaml`/`ajv` dependency — D24).
+4. ~~Prioritize the v1-critical planned items: real workspace binding + file/bash tools (D14, D15), parallel agentTasks (D7), and streaming UI (D10).~~ **Done** (V1 tasks 1–12; see D7, D10, D17, D18).
+5. 2026-07-22 doc cleanup: retired the fully-implemented plans `V1-PLAN.md`, `REFACTOR-PLAN.md`, `MODES-COMPARE-PLAN.md`, `FOLLOWUP-PLAN.md`, `POLISH-IMPLEMENTATION-PLAN.md`, `PROVIDERS-PLAN.md`, `TABS-DECISIONS.md`, `DESIGN-POLISH-IDEAS.md`, and `LANDER-PLAN.md`. Their decisions are folded into D21–D27; the full text survives in git history. Remaining known gaps: README still doesn't mention modes/refiner/compare (MODES-COMPARE T14); the LANDER dot-morph stretch (D25); P4 sweeps (D27).
+6. Work the Open Questions down, promoting each from Open → Provisional → Decided here as they're resolved. Current active plan: `OUTPUT-VIEW-PLAN.md`.
