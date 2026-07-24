@@ -1,6 +1,6 @@
 {
   "name": "llm-flow",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI-first orchestration MVP: flowchart canvas over a file-based multi-model pipeline",
   "main": "electron/main.js",
   "type": "module",
