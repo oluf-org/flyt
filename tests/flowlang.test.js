@@ -5,11 +5,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYaml, formatScalar, formatInline } from '../core/flowlang/yaml.js';
 import { parseFlow, parseEdgeExpr, FlowParseError } from '../core/flowlang/parse.js';
 import { serializeFlow } from '../core/flowlang/serialize.js';
+import { FlowStore } from '../core/flowstore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const flowsDir = path.join(__dirname, '..', 'flows');
@@ -210,10 +212,20 @@ test('round-trip: parse(serialize(x)) ≡ x for a legacy-format flow', () => {
 });
 
 test('round-trip: every shipped .flow.yaml is byte-stable', () => {
-  const files = fs.readdirSync(flowsDir).filter(f => f.endsWith('.flow.yaml'));
+  // flows/ is user data (gitignored); on a fresh checkout it is empty, so seed
+  // the shipped pipelines into a temp dir and check those instead.
+  let dir = flowsDir;
+  let files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.flow.yaml')) : [];
+  if (files.length === 0) {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipped-flows-'));
+    const store = new FlowStore(dir);
+    store.ensureDefaultPipeline();
+    store.ensureSeedPipelines();
+    files = fs.readdirSync(dir).filter(f => f.endsWith('.flow.yaml'));
+  }
   assert.ok(files.length >= 1, 'expected shipped DSL flows');
   for (const f of files) {
-    const text = fs.readFileSync(path.join(flowsDir, f), 'utf8');
+    const text = fs.readFileSync(path.join(dir, f), 'utf8');
     assert.equal(serializeFlow(parseFlow(text)), text, `byte-stability mismatch for ${f}`);
   }
 });
