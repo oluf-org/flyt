@@ -9,19 +9,28 @@
     "build": "vite build",
     "start": "npm run build && electron .",
     "test": "node --test \"tests/**/*.test.js\"",
-    "flow": "node core/flowlang/cli.js"
+    "flow": "node core/flowlang/cli.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux",
+    "release": "electron-builder --publish always"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
     "electron": "^33.2.0",
+    "electron-builder": "^26.15.3",
     "vite": "^6.0.3",
     "wait-on": "^8.0.1"
   },
   "dependencies": {
     "@xyflow/react": "^12.3.6",
+    "electron-updater": "^6.8.9",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   }
 }

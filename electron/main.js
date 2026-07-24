@@ -564,6 +564,15 @@ ipcMain.handle('run:branch', (_e, projectId, runId, nodeId) => proj(projectId).r
 // output, retrospective, log tail, and a model-written summary.
 ipcMain.handle('run:investigateNode', (_e, projectId, runId, nodeId) =>
   proj(projectId).runner.investigateNode(runId, nodeId));
+// Summary nodes (OUTPUT-VIEW-PLAN B4): summarize one or more node outputs into
+// a run artifact (summaries/<key>.md + index.json); delete removes both; move
+// persists a dragged card's canvas position.
+ipcMain.handle('run:summarize', (_e, projectId, runId, sourceIds, position = null) =>
+  proj(projectId).runner.summarizeOutputs(runId, sourceIds, { position }));
+ipcMain.handle('run:deleteSummary', (_e, projectId, runId, summaryId) =>
+  proj(projectId).runner.deleteSummary(runId, summaryId));
+ipcMain.handle('run:moveSummary', (_e, projectId, runId, summaryId, position) =>
+  proj(projectId).runner.moveSummary(runId, summaryId, position));
 // Reply to a finished run (FOLLOWUP-PLAN): the flow grows with a continuation
 // subgraph and the walk executes it; completed nodes are never re-run.
 ipcMain.handle('run:followUp', (_e, projectId, runId, text) => proj(projectId).runner.followUp(runId, String(text ?? '')));
@@ -1027,6 +1036,25 @@ ipcMain.handle('titlebar:setTheme', (_e, mode) => {
 // The custom title bar replaces the native menu; drop the default one.
 Menu.setApplicationMenu(null);
 
-app.whenReady().then(createWindow);
+// Auto-update via GitHub Releases (BUILD-AND-CICD-PLAN). Packaged builds only;
+// dev runs skip this entirely. Failures are logged, never fatal.
+function setupAutoUpdate() {
+  if (!app.isPackaged) return;
+  import('electron-updater').then(({ autoUpdater }) => {
+    autoUpdater.logger = console;
+    autoUpdater.on('update-downloaded', () => {
+      dialog.showMessageBox({
+        type: 'info',
+        title: 'Update ready',
+        message: 'A new version of LLM Flow has been downloaded. Restart to apply it.',
+        buttons: ['Restart now', 'Later']
+      }).then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); });
+    });
+    autoUpdater.on('error', err => console.error('[auto-update]', err));
+    autoUpdater.checkForUpdates().catch(err => console.error('[auto-update]', err));
+  }).catch(err => console.error('[auto-update]', err));
+}
+
+app.whenReady().then(() => { createWindow(); setupAutoUpdate(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

@@ -1,0 +1,35 @@
+appId: com.olaaxe.llmflow
+productName: LLM Flow
+directories:
+  output: release
+files:
+  - dist/**
+  - electron/**
+  - core/**
+  - nodes/**
+  - flows/**
+  - src/**/*.js
+  - config.json
+  - package.json
+  - "!**/*.map"
+  - "!**/*.md"
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+publish:
+  provider: github
+  owner: olaaxe
+  repo: flyt
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+linux:
+  target:
+    - AppImage
+  category: Development
