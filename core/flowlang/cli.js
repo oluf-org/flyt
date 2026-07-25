@@ -4,6 +4,9 @@
 //   npm run flow -- lint <file> [--json]     validate a *.flow.yaml (exit 1 on errors)
 //   npm run flow -- templates [--json]       Node Library templates + ports + allowed overrides
 //   npm run flow -- migrate [--json]         convert legacy flows/*.json → .flow.yaml + .layout.json
+//   npm run flow -- adopt [--json]           list flows in the INSTALLED app
+//   npm run flow -- adopt <id> [--as <new-id>] [--from <dir>] [--force]
+//                                            copy one into flows/ as a shipped default
 //
 // --json output is machine-readable so an AI can act on it programmatically.
 import fs from 'node:fs';
@@ -14,6 +17,7 @@ import { lintText } from './lint.js';
 import { serializeFlow } from './serialize.js';
 import { parseFlow } from './parse.js';
 import { NodeStore } from '../nodestore.js';
+import { installedFlowsDir, listFlows, adoptFlow, willShip } from './adopt.js';
 import { ROLE_PORTS, AGENT_TOOLS } from '../../src/flowTypes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -21,7 +25,19 @@ const projectRoot = path.join(__dirname, '..', '..');
 
 const args = process.argv.slice(2);
 const json = args.includes('--json');
-const positional = args.filter(a => !a.startsWith('--'));
+
+// Value flags (--as x, --as=x, --from dir). Consumed values are kept out of the
+// positional list so `adopt <id> --as foo` still sees exactly one positional.
+const VALUE_FLAGS = new Set(['as', 'from']);
+const flags = {};
+const positional = [];
+for (let i = 0; i < args.length; i++) {
+  const a = args[i];
+  if (!a.startsWith('--')) { positional.push(a); continue; }
+  const [name, inline] = a.slice(2).split(/=(.*)/s);
+  if (!VALUE_FLAGS.has(name)) continue;            // boolean flag (--json, --rm, --force)
+  flags[name] = inline ?? args[++i] ?? '';
+}
 const [cmd, target] = positional;
 
 const out = obj => process.stdout.write(JSON.stringify(obj, null, 2) + '\n');
@@ -106,6 +122,58 @@ function cmdMigrate() {
   if (results.some(r => !r.ok)) process.exitCode = 1;
 }
 
+// Promote a flow designed in the installed app into a shipped default (D28).
+// With no <id> it lists what's available, because after a session in the app
+// you remember the flow's NAME, not its generated id.
+function cmdAdopt() {
+  const from = flags.from ? path.resolve(flags.from) : installedFlowsDir();
+  const repoFlows = path.join(projectRoot, 'flows');
+
+  if (!target) {
+    const list = listFlows(from);
+    if (json) { out({ dir: from, flows: list.map(({ mtime, ...f }) => f) }); return; }
+    console.log(`installed flows: ${from}`);
+    if (!list.length) {
+      console.log('  (none — is the app installed and has it been run?  override with --from <dir>)');
+      return;
+    }
+    for (const f of list) {
+      console.log(`  ${f.id.padEnd(24)} ${f.name}${f.ships ? '  [already a shipping id]' : ''}`);
+    }
+    console.log('\nadopt one with:  npm run flow -- adopt <id> [--as <new-id>]');
+    return;
+  }
+
+  const force = args.includes('--force');
+  let r;
+  try {
+    r = adoptFlow({ from, to: repoFlows, id: target, as: flags.as || null, overwrite: force });
+  } catch (err) {
+    if (json) { out({ ok: false, error: err.message }); process.exitCode = 1; return; }
+    fail(err.message);
+  }
+
+  // Adopted, but is it actually valid against THIS repo's node library? An id
+  // referencing a template that only exists in the installed app would ship broken.
+  const lint = lintText(fs.readFileSync(r.file, 'utf8'), { templates: loadTemplates() });
+
+  if (json) {
+    out({ ok: lint.ok, ...r, lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings } });
+  } else {
+    console.log(`adopted  ${r.from} → flows/${r.id}.flow.yaml${r.layout ? ' (+ .layout.json)' : ' (no layout sidecar found)'}`);
+    console.log(`         "${r.name}"`);
+    for (const f of lint.findings) console.log(`  ${f.severity === 'error' ? 'ERROR  ' : 'warning'}  ${f.rule}  ${f.message}`);
+    if (!r.ships) {
+      console.log(`  WARNING  id "${r.id}" starts with "flow-", which electron-builder excludes from the package.`);
+      console.log(`           Re-run with --as <id> to give it a shipping id.`);
+    }
+    console.log(lint.ok
+      ? '  OK — commit it and it ships as a default on the next build.'
+      : '  FAILED lint — fix the errors above before shipping it.');
+  }
+  if (!lint.ok) process.exitCode = 1;
+}
+
 function fail(msg) {
   console.error(msg);
   process.exit(2);
@@ -115,6 +183,15 @@ switch (cmd) {
   case 'lint': cmdLint(); break;
   case 'templates': cmdTemplates(); break;
   case 'migrate': cmdMigrate(); break;
+  case 'adopt': cmdAdopt(); break;
   default:
-    fail('usage: npm run flow -- <lint <file> | templates | migrate [dir] [--rm]> [--json]');
+    fail([
+      'usage: npm run flow -- <command> [--json]',
+      '  lint <file>                                 validate a *.flow.yaml',
+      '  templates                                   list Node Library templates',
+      '  migrate [dir] [--rm]                        legacy *.json → *.flow.yaml',
+      '  adopt                                       list flows in the installed app',
+      '  adopt <id> [--as <new-id>] [--from <dir>] [--force]',
+      '                                              promote one into flows/ as a default'
+    ].join('\n'));
 }

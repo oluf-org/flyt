@@ -28,13 +28,37 @@ import ApprovalModePicker from './ApprovalModePicker.jsx';
 import LaunchInputs from './LaunchInputs.jsx';
 import ConfigsPanel, { slugConfigId } from './ConfigsPanel.jsx';
 import RematchPicker from './RematchPicker.jsx';
+import Logo from './Logo.jsx';
+import { LEGACY_STORAGE_PREFIX } from '../core/brand.js';
+
+const THEME_KEY = 'flyt-theme';
 
 function setTheme(mode) { // 'light' | 'dark'
   document.documentElement.dataset.theme = mode;
-  try { localStorage.setItem('llmflow-theme', mode); } catch {}
+  try { localStorage.setItem(THEME_KEY, mode); } catch {}
   // Keep the native window controls in step with the custom title bar.
-  window.llmflow?.setTitleBarTheme?.(mode);
+  window.flyt?.setTitleBarTheme?.(mode);
 }
+
+// D29 storage-key migration. Only the theme is worth carrying over: index.html
+// reads it before first paint, so losing it means a visible light/dark flash on
+// the first launch after updating. Column widths and the node-menu tip are
+// deliberately NOT migrated — the cost of resetting them is one drag and one
+// tooltip, which is cheaper than three more migration paths to maintain.
+// Runs once on mount; the old key is removed so this is genuinely one-shot.
+function migrateThemeKey() {
+  try {
+    if (localStorage.getItem(THEME_KEY)) return;
+    const legacy = localStorage.getItem(`${LEGACY_STORAGE_PREFIX}-theme`);
+    if (!legacy) return;
+    localStorage.setItem(THEME_KEY, legacy);
+    localStorage.removeItem(`${LEGACY_STORAGE_PREFIX}-theme`);
+  } catch { /* storage blocked: the bootstrap default is fine */ }
+}
+// Module scope, not an effect: index.html has already applied the theme from
+// whichever key it found, so this only needs to settle the storage before the
+// first toggle writes to it.
+migrateThemeKey();
 
 // The engine puts the whole reason in an IPC rejection's message; the wrapper
 // around it ("Error invoking remote method …") is noise. The older call sites
@@ -238,8 +262,8 @@ export default function App() {
   const [judging, setJudging] = useState(false);
   const [runView2, setRunView2] = useState('canvas'); // run view: 'canvas' | 'document'
   // Resizable outer columns (explorer left, run panel right).
-  const [leftColW, startLeftResize, resetLeftCol] = useResizableColumn('llmflow.col.left', 288, { min: 208, max: 520 }, 1);
-  const [rightColW, startRightResize, resetRightCol] = useResizableColumn('llmflow.col.right', 372, { min: 300, max: 640 }, -1);
+  const [leftColW, startLeftResize, resetLeftCol] = useResizableColumn('flyt.col.left', 288, { min: 208, max: 520 }, 1);
+  const [rightColW, startRightResize, resetRightCol] = useResizableColumn('flyt.col.right', 372, { min: 300, max: 640 }, -1);
   // Replay scrubber (finished runs): folded frames + where the scrubber sits
   // (null = live/final), and whether it's playing.
   const [replayFrames, setReplayFrames] = useState(null);
@@ -315,7 +339,7 @@ export default function App() {
   };
 
   // Sync the native title-bar overlay to the boot theme once on mount.
-  useEffect(() => { window.llmflow?.setTitleBarTheme?.(theme); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { window.flyt?.setTitleBarTheme?.(theme); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Opening a different run always lands on the canvas, not the last run's doc,
   // and clears any replay state from the previous run. Bundle restores are the
@@ -332,9 +356,9 @@ export default function App() {
   useEffect(() => {
     const stage = snapshot?.meta?.stage;
     const flow = snapshot?.flow;
-    if (activeActivity === 'runs' && activeRunId && flow && isTerminal(stage) && window.llmflow?.readRunLog) {
+    if (activeActivity === 'runs' && activeRunId && flow && isTerminal(stage) && window.flyt?.readRunLog) {
       let cancelled = false;
-      window.llmflow.readRunLog(activeTabRef.current, activeRunId)
+      window.flyt.readRunLog(activeTabRef.current, activeRunId)
         .then(log => { if (!cancelled) setReplayFrames(foldReplay(log, flow)); })
         .catch(() => {});
       return () => { cancelled = true; };
@@ -367,11 +391,11 @@ export default function App() {
     // no tab, no runs — never call the run store with a null project id.
     const pid = activeTabRef.current;
     if (pid == null) { setRuns([]); setComparisons([]); return; }
-    const list = await window.llmflow.listRuns(pid);
+    const list = await window.flyt.listRuns(pid);
     if (activeTabRef.current === pid) setRuns(list);
     // Comparison records (P2) ride the same refresh — they change only when a
     // comparison is created or a run is deleted, both of which refresh runs.
-    window.llmflow.listComparisons?.(pid)
+    window.flyt.listComparisons?.(pid)
       .then(recs => { if (activeTabRef.current === pid) setComparisons(recs ?? []); })
       .catch(() => {});
   }, []);
@@ -389,17 +413,17 @@ export default function App() {
   }, [refreshRuns]);
   useEffect(() => () => clearTimeout(runsRefreshTimer.current), []);
   const refreshFlows = useCallback(async () => {
-    const list = await window.llmflow.listFlows();
+    const list = await window.flyt.listFlows();
     setFlowsList(list);
     // Keep the run panel pointed at a real workflow (default pipeline first).
     setRunFlowId(prev => list.some(f => f.id === prev) ? prev : (list[0]?.id ?? ''));
     // Config badges for the pickers (P1) ride the same refresh — a flow save
     // is the only thing that changes them, and every save re-runs this.
-    window.llmflow.listConfigs?.().then(setConfigsByFlow).catch(() => {});
+    window.flyt.listConfigs?.().then(setConfigsByFlow).catch(() => {});
     return list;
   }, []);
   const refreshTemplates = useCallback(async () => {
-    setTemplates(await window.llmflow.listNodeTemplates());
+    setTemplates(await window.flyt.listNodeTemplates());
   }, []);
 
   // Global catalogs (flows, templates) load once; per-project data (runs, the
@@ -423,7 +447,7 @@ export default function App() {
   const [approvalMode, setApprovalMode] = useState('ask');
   const [safetyModel, setSafetyModel] = useState(null);
   const refreshSettings = useCallback(() => {
-    window.llmflow.getSettings().then(s => {
+    window.flyt.getSettings().then(s => {
       setHasKey(Boolean(s.hasKey));
       setClaudeSubActive(Boolean(s.claudeSubscriptionActive));
       setActiveModels(s.activeModels ?? []);
@@ -431,7 +455,7 @@ export default function App() {
       setSafetyModel(s.resolvedSafetyModel ?? null);
       // The openrouter live catalog only feeds the legacy free-text fallback
       // in worker pickers; the curated active-models list is the primary offer.
-      if (s.providers?.openrouter?.hasKey) window.llmflow.listModels('openrouter').then(setModels).catch(() => setModels([]));
+      if (s.providers?.openrouter?.hasKey) window.flyt.listModels('openrouter').then(setModels).catch(() => setModels([]));
     });
   }, []);
   useEffect(() => { refreshSettings(); }, [refreshSettings]);
@@ -446,7 +470,7 @@ export default function App() {
   // the currently-viewed run's snapshot; a base that doesn't line up means we
   // missed one (e.g. a push during a run switch), so we resync from files.
   useEffect(() => {
-    return window.llmflow.onRunUpdate(payload => {
+    return window.flyt.onRunUpdate(payload => {
       const { runId } = payload;
       // Scoped pushes (T7): a background project's run must never patch the
       // foreground tab's snapshot. Same guard shape as the rev matching below.
@@ -464,7 +488,7 @@ export default function App() {
       // fetch the full snapshot.
       if (!cur || cur.meta?.runId !== runId) return;
       if (payload.base !== cur.rev) {
-        window.llmflow.getSnapshot(activeTabRef.current, runId).then(s => {
+        window.flyt.getSnapshot(activeTabRef.current, runId).then(s => {
           // Ignore a resync that lost a race: another fetch (or the patch
           // stream) may have already carried this run past the rev we asked
           // for, and applying it would rewind the view.
@@ -484,7 +508,7 @@ export default function App() {
     // switch resyncs the (background-stale) snapshot from files even when the
     // restored bundle carried one (T9: background projects don't stream).
     let cancelled = false;
-    window.llmflow.getSnapshot(activeTab, activeRunId).then(s => { if (!cancelled) setSnapshot(s); });
+    window.flyt.getSnapshot(activeTab, activeRunId).then(s => { if (!cancelled) setSnapshot(s); });
     return () => { cancelled = true; };
   }, [activeRunId, activeTab]);
 
@@ -493,7 +517,7 @@ export default function App() {
   // *.flow.yaml source of truth) to drive the validity badge in the toolbar.
   const refreshLint = useCallback(async id => {
     if (!id) { setFlowLint(null); return; }
-    try { setFlowLint(await window.llmflow.lintFlow(id)); }
+    try { setFlowLint(await window.flyt.lintFlow(id)); }
     catch { setFlowLint(null); }
   }, []);
 
@@ -502,7 +526,7 @@ export default function App() {
   // and say so in the badge instead of claiming a save that never landed.
   const persist = useCallback(async flow => {
     try {
-      await window.llmflow.saveFlow(namedFlow(flow));
+      await window.flyt.saveFlow(namedFlow(flow));
       setSaveState('saved');
       refreshFlows(); // name may have changed
       refreshLint(flow.id);
@@ -558,7 +582,7 @@ export default function App() {
   // Used by the YAML editor after a manual save-from-yaml succeeds.
   const reloadCurrentFlow = useCallback(async () => {
     if (!activeFlowId) return;
-    const f = await window.llmflow.loadFlow(activeFlowId);
+    const f = await window.flyt.loadFlow(activeFlowId);
     flowRef.current = f;
     setFlow(f);
     setSaveState('saved');
@@ -593,7 +617,7 @@ export default function App() {
 
   const openFlow = useCallback(async id => {
     await flushSave();
-    const f = await window.llmflow.loadFlow(id);
+    const f = await window.flyt.loadFlow(id);
     flowRef.current = f;
     setFlow(f);
     setSaveState('saved');
@@ -644,13 +668,13 @@ export default function App() {
   }, [flushSave]);
 
   const renameRun = useCallback(async (id, name) => {
-    await window.llmflow.renameRun(activeTabRef.current, id, name);
+    await window.flyt.renameRun(activeTabRef.current, id, name);
     await refreshRuns();
   }, [refreshRuns]);
 
   const deleteRun = useCallback(async id => {
     try {
-      await window.llmflow.deleteRun(activeTabRef.current, id);
+      await window.flyt.deleteRun(activeTabRef.current, id);
     } catch (err) {
       // The main process refuses while the run is still executing; that reason
       // is the whole message, so show it rather than the IPC wrapper around it.
@@ -682,7 +706,7 @@ export default function App() {
   }, [flushSave]);
 
   const newTemplate = useCallback(async () => {
-    const tpl = await window.llmflow.newNodeTemplate();
+    const tpl = await window.flyt.newNodeTemplate();
     await refreshTemplates();
     withViewTransition(() => { setSelectedTemplateId(tpl.id); setActiveActivity('library'); });
   }, [refreshTemplates]);
@@ -771,7 +795,7 @@ export default function App() {
     };
     if (slim.activeFlowId) {
       try {
-        b.flow = await window.llmflow.loadFlow(slim.activeFlowId);
+        b.flow = await window.flyt.loadFlow(slim.activeFlowId);
         b.activeFlowId = slim.activeFlowId;
       } catch { /* flow deleted since — open the section empty */ }
     }
@@ -788,7 +812,7 @@ export default function App() {
     await flushSave();
     const bundle = captureBundle();
     bundles.current.set(cur, bundle);
-    window.llmflow.saveProjectState?.(cur, slimOf(bundle));
+    window.flyt.saveProjectState?.(cur, slimOf(bundle));
   };
 
   const enterTab = async (id, savedState) => {
@@ -797,7 +821,7 @@ export default function App() {
     // takes over with no stale run/flow from the tab we just left.
     if (id == null) {
       withViewTransition(() => { setActiveTab(null); applyBundle({}); });
-      window.llmflow.projectRecents?.().then(r => setRecents(r ?? []));
+      window.flyt.projectRecents?.().then(r => setRecents(r ?? []));
       return;
     }
     mruRef.current = [id, ...mruRef.current.filter(x => x !== id)];
@@ -814,7 +838,7 @@ export default function App() {
     if (!id || id === activeTabRef.current || !tabs.some(t => t.id === id)) return;
     await leaveCurrentTab();
     await enterTab(id, tabs.find(t => t.id === id)?.state);
-    const payload = await window.llmflow.activateProject?.(id);
+    const payload = await window.flyt.activateProject?.(id);
     if (payload) setTabs(payload.tabs);
   };
 
@@ -824,7 +848,7 @@ export default function App() {
     await leaveCurrentTab();
     let payload;
     try {
-      payload = await window.llmflow.openProject(folder);
+      payload = await window.flyt.openProject(folder);
     } catch (err) {
       window.alert(String(err?.message ?? err)
         .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, ''));
@@ -841,7 +865,7 @@ export default function App() {
   // just drop the view. No confirm: nothing is lost.
   const closeTab = async id => {
     if (id === activeTabRef.current) await leaveCurrentTab();
-    const payload = await window.llmflow.closeProject(id);
+    const payload = await window.flyt.closeProject(id);
     bundles.current.delete(id);
     mruRef.current = mruRef.current.filter(x => x !== id);
     setTabs(payload.tabs);
@@ -853,7 +877,7 @@ export default function App() {
 
   const reorderTabs = async ids => {
     setTabs(prev => [...prev].sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)));
-    const payload = await window.llmflow.reorderProjects?.(ids);
+    const payload = await window.flyt.reorderProjects?.(ids);
     if (payload) setTabs(payload.tabs);
   };
 
@@ -861,7 +885,7 @@ export default function App() {
   // the appdata directory keeps its creation slug, so run paths and the tab id
   // never churn. Main persists the override so it survives restarts (T17).
   const renameTab = async (id, name) => {
-    const payload = await window.llmflow.renameProject?.(id, name);
+    const payload = await window.flyt.renameProject?.(id, name);
     if (payload) setTabs(payload.tabs);
   };
 
@@ -869,11 +893,11 @@ export default function App() {
   // migrates the files and swaps the tab in place; here we re-key the per-tab
   // bundle + MRU from the old id to the new one, and resync if it was active.
   const adoptTab = async id => {
-    const dir = await window.llmflow.pickProjectFolder?.();
+    const dir = await window.flyt.pickProjectFolder?.();
     if (!dir) return;
     let payload;
     try {
-      payload = await window.llmflow.adoptProject?.(id, dir);
+      payload = await window.flyt.adoptProject?.(id, dir);
     } catch (err) {
       window.alert(String(err?.message ?? err)
         .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, ''));
@@ -894,10 +918,10 @@ export default function App() {
     }
   };
 
-  const revealTab = id => { window.llmflow.revealProject?.(id); };
+  const revealTab = id => { window.flyt.revealProject?.(id); };
 
   const openNewTabPage = async () => {
-    setRecents(await window.llmflow.projectRecents?.() ?? []);
+    setRecents(await window.flyt.projectRecents?.() ?? []);
     setNewTabOpen(true);
   };
 
@@ -907,7 +931,7 @@ export default function App() {
     if (bootedRef.current) return;
     bootedRef.current = true;
     (async () => {
-      const p = await window.llmflow.listProjects?.();
+      const p = await window.flyt.listProjects?.();
       if (!p) { // bridge without projects (stale mock): single scratch tab
         activeTabRef.current = 'default';
         setTabs([{ id: 'default', folder: null, name: 'Scratch', live: 0, state: {} }]);
@@ -928,7 +952,7 @@ export default function App() {
       // recent-projects strip.
       if (p.active == null) {
         mruRef.current = p.tabs.map(t => t.id);
-        setRecents(await window.llmflow.projectRecents?.() ?? []);
+        setRecents(await window.flyt.projectRecents?.() ?? []);
         return;
       }
       mruRef.current = [p.active, ...p.tabs.map(t => t.id).filter(x => x !== p.active)];
@@ -937,7 +961,7 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live-run indicators for every tab, active or not (T9's featherweight push).
-  useEffect(() => window.llmflow.onProjectActivity?.(({ projectId, live }) => {
+  useEffect(() => window.flyt.onProjectActivity?.(({ projectId, live }) => {
     setTabLive(prev => ({ ...prev, [projectId]: live.length }));
   }), []);
 
@@ -1005,7 +1029,7 @@ export default function App() {
     // the DOM never sees the key; the window capture listeners are the
     // fallback for input that bypasses the native pipeline (and make the
     // feature testable). A duplicated 'release' is a no-op by construction.
-    const unsub = window.llmflow.onTabsKey?.(handle);
+    const unsub = window.flyt.onTabsKey?.(handle);
     const onKeyDown = e => {
       if (e.key === 'Tab' && e.ctrlKey) {
         e.preventDefault();
@@ -1044,7 +1068,7 @@ export default function App() {
   }, [goActivity, activeActivity]);
 
   const newFlow = async () => {
-    const f = await window.llmflow.newFlow();
+    const f = await window.flyt.newFlow();
     await refreshFlows();
     await openFlow(f.id);
   };
@@ -1052,9 +1076,9 @@ export default function App() {
   const duplicateFlow = async () => {
     if (!flow) return;
     await flushSave();
-    const fresh = await window.llmflow.newFlow();
+    const fresh = await window.flyt.newFlow();
     const copy = { ...structuredClone(flow), id: fresh.id, name: `${flow.name} (copy)` };
-    await window.llmflow.saveFlow(copy);
+    await window.flyt.saveFlow(copy);
     await refreshFlows();
     await openFlow(fresh.id);
   };
@@ -1064,7 +1088,7 @@ export default function App() {
     if (!window.confirm(`Delete flow "${flow.name}"?`)) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = null;
-    await window.llmflow.deleteFlow(flow.id);
+    await window.flyt.deleteFlow(flow.id);
     flowRef.current = null;
     setFlow(null);
     setActiveFlowId(null);
@@ -1300,7 +1324,7 @@ export default function App() {
     const name = window.prompt('Save this run\'s launch configuration as a config:', 'Saved config');
     if (name == null) return;
     try {
-      const res = await window.llmflow.promoteRunConfig(activeTabRef.current, runId, name);
+      const res = await window.flyt.promoteRunConfig(activeTabRef.current, runId, name);
       await refreshFlows();
       // If the promoted flow is open in the editor, reload it so the new
       // config shows in the panel/pickers (the debounced saver is idle: the
@@ -1318,7 +1342,7 @@ export default function App() {
   // which is exactly the habit that stops people reading the warning.
   const changeApprovalMode = useCallback(mode => {
     setApprovalMode(mode);
-    window.llmflow.setSettings({ approvalMode: mode })
+    window.flyt.setSettings({ approvalMode: mode })
       .then(s => setSafetyModel(s.resolvedSafetyModel ?? null))
       .catch(() => {});
   }, []);
@@ -1335,7 +1359,7 @@ export default function App() {
   useEffect(() => {
     let live = true;
     if (!runFlowId) { setLaunchInputSpec([]); return; }
-    window.llmflow.flowLaunchInputs?.(runFlowId)
+    window.flyt.flowLaunchInputs?.(runFlowId)
       .then(spec => { if (live) setLaunchInputSpec(spec ?? []); })
       .catch(() => { if (live) setLaunchInputSpec([]); });
     return () => { live = false; };
@@ -1392,7 +1416,7 @@ export default function App() {
     setBusy(true);
     try {
       await flushSave();
-      const runId = await window.llmflow.runFlow(activeTabRef.current, runFlowId, runInput.trim(), workspaceDir || null, approvalMode, launchFor());
+      const runId = await window.flyt.runFlow(activeTabRef.current, runFlowId, runInput.trim(), workspaceDir || null, approvalMode, launchFor());
       setRunInput('');
       await openRun(runId);
       await refreshRuns();
@@ -1416,13 +1440,13 @@ export default function App() {
       // picker. The slug is derived main-side, atomic with the mkdir; we open
       // the returned tab, then run in it exactly as a bound tab would.
       if (pid == null) {
-        const payload = await window.llmflow.createProject(text.trim());
+        const payload = await window.flyt.createProject(text.trim());
         setTabs(payload.tabs);
         pid = payload.opened;
         await enterTab(pid, payload.tabs.find(t => t.id === pid)?.state);
       }
       await flushSave();
-      const runId = await window.llmflow.runFlow(pid, runFlowId, text.trim(), workspaceDir || null, approvalMode, launchFor());
+      const runId = await window.flyt.runFlow(pid, runFlowId, text.trim(), workspaceDir || null, approvalMode, launchFor());
       setRunInput('');
       withViewTransition(() => {
         setChatSeed(text.trim());
@@ -1447,7 +1471,7 @@ export default function App() {
     try {
       let pid = activeTabRef.current;
       if (pid == null) {
-        const payload = await window.llmflow.createProject(text.trim());
+        const payload = await window.flyt.createProject(text.trim());
         setTabs(payload.tabs);
         pid = payload.opened;
         await enterTab(pid, payload.tabs.find(t => t.id === pid)?.state);
@@ -1459,12 +1483,12 @@ export default function App() {
       // P2: mint the comparison id BEFORE the runs start so both run metas
       // carry the group from creation; the record is written once both run
       // ids exist (original = A, compare slot = B).
-      const cmp = await window.llmflow.beginCompare(pid);
+      const cmp = await window.flyt.beginCompare(pid);
       const launchA = { ...(launchForSelection(slotA.modeId) ?? {}), compareGroup: { id: cmp.id, label: 'A' } };
       const launchB = { ...(launchForSelection(slotB.modeId) ?? {}), compareGroup: { id: cmp.id, label: 'B' } };
-      const runIdA = await window.llmflow.runFlow(pid, slotA.flowId, prompt, workspaceDir || null, approvalMode, launchA);
-      const runIdB = await window.llmflow.runFlow(pid, slotB.flowId, prompt, workspaceDir || null, approvalMode, launchB);
-      await window.llmflow.saveCompare(pid, { id: cmp.id, runIds: [runIdA, runIdB], origin: 'launch' });
+      const runIdA = await window.flyt.runFlow(pid, slotA.flowId, prompt, workspaceDir || null, approvalMode, launchA);
+      const runIdB = await window.flyt.runFlow(pid, slotB.flowId, prompt, workspaceDir || null, approvalMode, launchB);
+      await window.flyt.saveCompare(pid, { id: cmp.id, runIds: [runIdA, runIdB], origin: 'launch' });
       setRunInput('');
       withViewTransition(() => {
         setChatSeed(prompt);
@@ -1500,7 +1524,7 @@ export default function App() {
   // the user has picked a configuration.
   const startRematch = async runId => {
     const pid = activeTabRef.current;
-    const s = await window.llmflow.getSnapshot(pid, runId).catch(() => null);
+    const s = await window.flyt.getSnapshot(pid, runId).catch(() => null);
     const meta = s?.meta;
     if (!meta?.flowId) return;
     setRematch({
@@ -1522,11 +1546,11 @@ export default function App() {
       await flushSave();
       // Same shape as a launch-compare: id first, then the run, then the
       // record — original stays pane A, the fresh rematch is pane B.
-      const cmp = await window.llmflow.beginCompare(pid);
-      const runIdB = await window.llmflow.runFlow(
+      const cmp = await window.flyt.beginCompare(pid);
+      const runIdB = await window.flyt.runFlow(
         pid, r.flowId, r.prompt, r.workspace || workspaceDir || null, approvalMode,
         { ...(modeId ? { modeId } : {}), compareGroup: { id: cmp.id, label: 'B' } });
-      await window.llmflow.saveCompare(pid, { id: cmp.id, runIds: [r.runId, runIdB], origin: 'rematch' });
+      await window.flyt.saveCompare(pid, { id: cmp.id, runIds: [r.runId, runIdB], origin: 'rematch' });
       await openCompare([r.runId, runIdB]);
     } catch (err) {
       window.alert(ipcMessage(err));
@@ -1540,8 +1564,8 @@ export default function App() {
     const pid = activeTabRef.current;
     if (pid == null || !Array.isArray(ids) || ids.length !== 2) return;
     try {
-      const cmp = await window.llmflow.beginCompare(pid);
-      await window.llmflow.saveCompare(pid, { id: cmp.id, runIds: ids, origin: 'manual' });
+      const cmp = await window.flyt.beginCompare(pid);
+      await window.flyt.saveCompare(pid, { id: cmp.id, runIds: ids, origin: 'manual' });
       await openCompare(ids);
     } catch (err) {
       window.alert(ipcMessage(err));
@@ -1566,7 +1590,7 @@ export default function App() {
     if (!ids || pid == null || judging) return;
     setJudging(true);
     try {
-      await window.llmflow.judgeRuns(pid, ids[0], ids[1], activeComparison?.id ?? null);
+      await window.flyt.judgeRuns(pid, ids[0], ids[1], activeComparison?.id ?? null);
       await refreshRuns();
     } catch (err) {
       window.alert(ipcMessage(err));
@@ -1594,7 +1618,7 @@ export default function App() {
   // Rejections read as a toast over the chat, never an alert.
   const chatFollowUp = useCallback(async text => {
     try {
-      await window.llmflow.followUpRun(activeTabRef.current, chatRunId, text);
+      await window.flyt.followUpRun(activeTabRef.current, chatRunId, text);
     } catch (err) {
       setRunToast(ipcMessage(err));
     }
@@ -1605,7 +1629,7 @@ export default function App() {
   // the refine node, rather than opening a new turn.
   const chatAnswerInput = useCallback(async text => {
     try {
-      await window.llmflow.answerInput(activeTabRef.current, chatRunId, text);
+      await window.flyt.answerInput(activeTabRef.current, chatRunId, text);
     } catch (err) {
       setRunToast(ipcMessage(err));
     }
@@ -1616,7 +1640,7 @@ export default function App() {
   const resumeRun = async () => {
     if (!activeRunId || resuming) return;
     setResuming(true);
-    try { await window.llmflow.resumeRun(activeTabRef.current, activeRunId); }
+    try { await window.flyt.resumeRun(activeTabRef.current, activeRunId); }
     finally { setResuming(false); }
   };
 
@@ -1643,14 +1667,14 @@ export default function App() {
         .catch(e => showRunToast(e));
     };
     return {
-      pause: () => guard(() => window.llmflow.pauseRun(activeTabRef.current, runId)),
-      resume: () => guard(() => window.llmflow.resumeRun(activeTabRef.current, runId)),
-      stop: () => guard(() => window.llmflow.stopRun(activeTabRef.current, runId)),
+      pause: () => guard(() => window.flyt.pauseRun(activeTabRef.current, runId)),
+      resume: () => guard(() => window.flyt.resumeRun(activeTabRef.current, runId)),
+      stop: () => guard(() => window.flyt.stopRun(activeTabRef.current, runId)),
       restart: (nodeId, guidance) =>
-        guard(() => window.llmflow.restartNode(activeTabRef.current, runId, nodeId, guidance)),
+        guard(() => window.flyt.restartNode(activeTabRef.current, runId, nodeId, guidance)),
       // A successful branch launches the fork — switch the view to the new run.
       branch: nodeId =>
-        guard(() => window.llmflow.branchRun(activeTabRef.current, runId, nodeId))
+        guard(() => window.flyt.branchRun(activeTabRef.current, runId, nodeId))
           .then(async res => {
             if (res?.runId) { await openRun(res.runId); refreshRunsSoon(); }
           }),
@@ -1659,14 +1683,14 @@ export default function App() {
       // instead. delete/move are fire-and-forget (the snapshot push confirms).
       summarize: async (sourceIds, position = null) => {
         try {
-          return await window.llmflow.summarizeRun(activeTabRef.current, runId, sourceIds, position);
+          return await window.flyt.summarizeRun(activeTabRef.current, runId, sourceIds, position);
         } catch (e) {
           return { ok: false, error: ipcMessage(e) };
         }
       },
-      deleteSummary: summaryId => guard(() => window.llmflow.deleteSummary(activeTabRef.current, runId, summaryId)),
+      deleteSummary: summaryId => guard(() => window.flyt.deleteSummary(activeTabRef.current, runId, summaryId)),
       moveSummary: (summaryId, position) =>
-        window.llmflow.moveSummary?.(activeTabRef.current, runId, summaryId, position)?.catch(() => {})
+        window.flyt.moveSummary?.(activeTabRef.current, runId, summaryId, position)?.catch(() => {})
     };
   }, [openRun, refreshRunsSoon, showRunToast]);
   const runControl = useMemo(() => makeRunControl(activeRunId), [makeRunControl, activeRunId]);
@@ -1674,11 +1698,11 @@ export default function App() {
   // Compare-pane callbacks (T12): follow-up / answer / approve / reject routed
   // to a specific pane's run, not the active one. Rejections read as a toast.
   const compareFollowUp = useCallback(async (runId, text) => {
-    try { await window.llmflow.followUpRun(activeTabRef.current, runId, text); }
+    try { await window.flyt.followUpRun(activeTabRef.current, runId, text); }
     catch (err) { setRunToast(ipcMessage(err)); }
   }, []);
   const compareAnswerInput = useCallback(async (runId, text) => {
-    try { await window.llmflow.answerInput(activeTabRef.current, runId, text); }
+    try { await window.flyt.answerInput(activeTabRef.current, runId, text); }
     catch (err) { setRunToast(ipcMessage(err)); }
   }, []);
   const exitCompare = useCallback(() => {
@@ -1731,12 +1755,12 @@ export default function App() {
   useEffect(() => {
     if ((!watching && !chatLive) || coachTip) return;
     let seen = '1';
-    try { seen = localStorage.getItem('llmflow.tip.nodeMenu'); } catch { /* storage blocked: don't nag */ }
+    try { seen = localStorage.getItem('flyt.tip.nodeMenu'); } catch { /* storage blocked: don't nag */ }
     if (!seen) setCoachTip(true);
   }, [watching, chatLive, coachTip]);
   const dismissCoachTip = () => {
     setCoachTip(false);
-    try { localStorage.setItem('llmflow.tip.nodeMenu', '1'); } catch {}
+    try { localStorage.setItem('flyt.tip.nodeMenu', '1'); } catch {}
   };
   const homeView = activeActivity === 'home';
   // Projectless (L6): no tab open — the lander shows its no-project variant.
@@ -1768,8 +1792,7 @@ export default function App() {
     <div className="app">
       <div className="titlebar">
         <div className="brand">
-          <div className="brand-mark">◆</div>
-          <span className="brand-name">LLM Flow</span>
+          <Logo markSize={17} />
         </div>
         <TabStrip
           tabs={tabs}
@@ -1859,10 +1882,10 @@ export default function App() {
               runControlFor={makeRunControl}
               onFollowUp={compareFollowUp}
               onAnswerInput={compareAnswerInput}
-              onApprove={runId => window.llmflow.approvePlan(activeTab, runId)}
-              onReject={runId => window.llmflow.rejectPlan(activeTab, runId, 'Rejected by user')}
+              onApprove={runId => window.flyt.approvePlan(activeTab, runId)}
+              onReject={runId => window.flyt.rejectPlan(activeTab, runId, 'Rejected by user')}
               onOpenRun={openRun}
-              onOpenFolder={runId => window.llmflow.openRunFolder(activeTab, runId)}
+              onOpenFolder={runId => window.flyt.openRunFolder(activeTab, runId)}
               onSaveConfig={saveRunAsConfig}
               onRematch={startRematch}
               comparison={activeComparison}
@@ -1881,12 +1904,12 @@ export default function App() {
               onFollowUp={chatFollowUp}
               onAnswerInput={chatAnswerInput}
               onNewChat={startNewChat}
-              onOpenFolder={() => window.llmflow.openRunFolder(activeTab, chatRunId)}
-              onOpenWorkspace={() => window.llmflow.openWorkspace(activeTab, chatRunId)}
+              onOpenFolder={() => window.flyt.openRunFolder(activeTab, chatRunId)}
+              onOpenWorkspace={() => window.flyt.openWorkspace(activeTab, chatRunId)}
               onResume={resumeRun}
               resuming={resuming}
-              onApprove={() => window.llmflow.approvePlan(activeTab, chatRunId)}
-              onReject={() => window.llmflow.rejectPlan(activeTab, chatRunId, 'Rejected by user')}
+              onApprove={() => window.flyt.approvePlan(activeTab, chatRunId)}
+              onReject={() => window.flyt.rejectPlan(activeTab, chatRunId, 'Rejected by user')}
               runToast={runToast}
               coachTip={coachTip}
               onDismissCoachTip={dismissCoachTip}
@@ -1921,7 +1944,7 @@ export default function App() {
             onSubmit={text => (compareOn ? runCompareFromLander(text) : runFromLander(text))}
             onOpenProject={openProjectTab}
             onOpenFolder={async () => {
-              const dir = await window.llmflow.pickProjectFolder?.();
+              const dir = await window.flyt.pickProjectFolder?.();
               if (dir) openProjectTab(dir);
             }}
           />
@@ -2106,8 +2129,8 @@ export default function App() {
           {runView && snapshot && (
             <RunBar
               snapshot={snapshot}
-              onOpenFolder={() => window.llmflow.openRunFolder(activeTab, activeRunId)}
-              onOpenWorkspace={() => window.llmflow.openWorkspace(activeTab, activeRunId)}
+              onOpenFolder={() => window.flyt.openRunFolder(activeTab, activeRunId)}
+              onOpenWorkspace={() => window.flyt.openWorkspace(activeTab, activeRunId)}
               docView={runView2}
               onDocView={v => withViewTransition(() => setRunView2(v))}
               onPause={runControl.pause}
@@ -2155,8 +2178,8 @@ export default function App() {
                   </span>
                 )
                 : <span>Review the work so far, then approve to continue or reject to stop.</span>}
-              <button className="primary" onClick={() => window.llmflow.approvePlan(activeTab, activeRunId)}>Approve</button>
-              <button className="reject" onClick={() => window.llmflow.rejectPlan(activeTab, activeRunId, 'Rejected by user')}>Reject</button>
+              <button className="primary" onClick={() => window.flyt.approvePlan(activeTab, activeRunId)}>Approve</button>
+              <button className="reject" onClick={() => window.flyt.rejectPlan(activeTab, activeRunId, 'Rejected by user')}>Reject</button>
             </div>
           )}
           {libraryView
@@ -2356,7 +2379,7 @@ export default function App() {
                 <button
                   className="ghost"
                   onClick={async () => {
-                    const dir = await window.llmflow.pickWorkspace();
+                    const dir = await window.flyt.pickWorkspace();
                     if (dir) setWorkspaceDir(dir);
                   }}
                   title="Bind this run to a real project folder"
@@ -2393,7 +2416,7 @@ export default function App() {
           {runView && snapshot && (
             <RunResult
               snapshot={snapshot}
-              onFollowUp={text => window.llmflow.followUpRun(activeTab, activeRunId, text)}
+              onFollowUp={text => window.flyt.followUpRun(activeTab, activeRunId, text)}
               onSummarize={runControl?.summarize}
             />
           )}
@@ -2425,7 +2448,7 @@ export default function App() {
                       onClose={() => setFocusNodeId(null)}
                       onRestart={runControl.restart}
                       onBranch={runControl.branch}
-                      onOpenFolder={() => window.llmflow.openRunFolder(activeTab, activeRunId)}
+                      onOpenFolder={() => window.flyt.openRunFolder(activeTab, activeRunId)}
                     />
                   )}
                   <Inspector snapshot={snapshot} selectedNode={selectedNode} />
@@ -2433,8 +2456,8 @@ export default function App() {
               : (
                 <aside className="inspector">
                   <div className="inspector-body">
-                    <section>
-                      <h3>LLM Flow</h3>
+                    <section className="about-panel">
+                      <Logo stacked markSize={40} />
                       <pre>{'Pick a workflow, type your request, run it.\n\nWorkflows are built from Node Library templates on the canvas; every run is a folder of plain files you can open.'}</pre>
                     </section>
                   </div>
@@ -2458,12 +2481,12 @@ export default function App() {
         <NewTabPage
           recents={recents}
           onOpenFolder={async () => {
-            const dir = await window.llmflow.pickProjectFolder?.();
+            const dir = await window.flyt.pickProjectFolder?.();
             if (dir) openProjectTab(dir);
           }}
           onOpenRecent={openProjectTab}
           onRemoveRecent={async folder => {
-            setRecents(await window.llmflow.removeProjectRecent?.(folder) ?? []);
+            setRecents(await window.flyt.removeProjectRecent?.(folder) ?? []);
           }}
           onClose={() => setNewTabOpen(false)}
         />

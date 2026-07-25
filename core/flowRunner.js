@@ -1512,7 +1512,7 @@ export class FlowRunner {
   // self-contained snapshot (template edits never mutate past runs).
   // userInput becomes the content of the flow's User Input node for this run.
   // workspace (an absolute path to a bound project folder, already validated +
-  // .llmflow/-provisioned by the caller) is recorded in meta.json so the run,
+  // .flyt/-provisioned by the caller) is recorded in meta.json so the run,
   // its tools, and the UI all know which real repo it operates on (D15).
   // approvalMode (APPROVAL-MODES §1) is captured PER RUN, at start, and stored
   // in meta.json. It is not read live from settings, because a run that began

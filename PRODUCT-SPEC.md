@@ -1,4 +1,4 @@
-# LLM Flow — Product Specification
+# Flyt — Product Specification
 
 **Status:** Design specification (pre-implementation for most of the product vision).
 **Last defined:** 2026-07-15, via a structured design interview with the owner (Olav).
@@ -10,13 +10,13 @@
 
 ## 1. The thesis
 
-LLM Flow exists to test one idea:
+Flyt exists to test one idea:
 
 > **The power of a good result may come less from the raw strength of a single model and more from the way tasks are decomposed, routed, and handled.**
 
-The project began with an observation while using a strong model (Fable): maybe what felt powerful was not only the model, but a *structured way of handling tasks*. LLM Flow is the attempt to make that structure explicit, visible, and reusable — to build a "powerful AI agent" by splitting work into well-defined tasks, routing each to the right model, and showing the whole thing happening transparently.
+The project began with an observation while using a strong model (Fable): maybe what felt powerful was not only the model, but a *structured way of handling tasks*. Flyt is the attempt to make that structure explicit, visible, and reusable — to build a "powerful AI agent" by splitting work into well-defined tasks, routing each to the right model, and showing the whole thing happening transparently.
 
-Everything else in this document serves that thesis. If decomposition + routing genuinely beats a single strong prompt, LLM Flow should be able to *demonstrate* it (see §7, model-comparison / ranking).
+Everything else in this document serves that thesis. If decomposition + routing genuinely beats a single strong prompt, Flyt should be able to *demonstrate* it (see §7, model-comparison / ranking).
 
 ---
 
@@ -30,7 +30,7 @@ The canvas is not the product and the engine is not the product; the two work ha
 
 ## 3. Who it's for
 
-**Primary audience:** developers — specifically users of coding agents like Claude Code, GPT/Codex, and Cursor. LLM Flow aims to be a **better replacement for a chat window** for building software, and a real step up for "vibe-coding": pointing an agent at your project and having it build features.
+**Primary audience:** developers — specifically users of coding agents like Claude Code, GPT/Codex, and Cursor. Flyt aims to be a **better replacement for a chat window** for building software, and a real step up for "vibe-coding": pointing an agent at your project and having it build features.
 
 **Secondary / origin user:** the owner, as a power user, building large and complex features for coding projects — with good documentation and visualization of what was done, so it's possible to keep an overview of what's going on across a big change.
 
@@ -42,8 +42,8 @@ The canvas is not the product and the engine is not the product; the two work ha
 
 Honest positioning against Claude Code / Cursor / Codex:
 
-- **What LLM Flow will *not* win on:** being the fastest, cheapest, or absolute easiest to start. Incumbents own those. Failing to be *roughly competitive* on speed/cost/ease is, by the owner's own statement, the thing that would kill the project (see §8).
-- **What LLM Flow wins on — the felt outcome:** **mastery and control.** An AI builder that makes the user feel more in command of the agent, rather than at the mercy of a chat box. Customizability (of workflows, nodes, models, and tools) exists in service of that feeling: the user shapes *how* the work is done, sees every step, and can intervene.
+- **What Flyt will *not* win on:** being the fastest, cheapest, or absolute easiest to start. Incumbents own those. Failing to be *roughly competitive* on speed/cost/ease is, by the owner's own statement, the thing that would kill the project (see §8).
+- **What Flyt wins on — the felt outcome:** **mastery and control.** An AI builder that makes the user feel more in command of the agent, rather than at the mercy of a chat box. Customizability (of workflows, nodes, models, and tools) exists in service of that feeling: the user shapes *how* the work is done, sees every step, and can intervene.
 
 The one-line value proposition to a future user:
 

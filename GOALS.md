@@ -1,6 +1,6 @@
-# LLM Flow — Goals & Architecture
+# Flyt — Goals & Architecture
 
-**Project:** llm-flow
+**Project:** flyt (formerly LLM Flow — D29)
 **Status (as of 2026-07-17):** **V1 tasks 1–12 complete.** The coding-agent loop runs end to end on a real repo with a real model: plan → human gate → decomposed work with real file/bash tools → verify → the change landed and the suite green. Validated live (`DESIGN-SPEC.md` §4.1, §12) with known gaps recorded there. Earlier: product refocus implemented — Node Library + one engine ship; `core/pipeline.js` retired (see "Migration" below).
 **Primary audience:** Future AI agents and human contributors. **Read this file first.**
 
@@ -47,7 +47,7 @@ A node template defines:
 - **Worker (provider + model)** — which model runs it.
 - **Optional extra instructions** — short guidance appended to the auto-generated prompt.
 - **Tool availability** — which agent tools (write_file, create_task, …) the node may use.
-- **Skills** — reusable expertise attached to the node *by name*; the bound project supplies the content as `.llmflow/skills/<name>.md`. The template says which expertise it wants, the project says what that means here.
+- **Skills** — reusable expertise attached to the node *by name*; the bound project supplies the content as `.flyt/skills/<name>.md`. The template says which expertise it wants, the project says what that means here.
 
 **Crucially, templates do not contain hand-written prompts.** The model generates its own prompt from the task description and upstream context. The template constrains *how* (model, tools, instructions, skills), the task defines *what*.
 
@@ -103,7 +103,7 @@ All six steps landed on 2026-07-14 (branch `flow-builder`):
 5. **Default pipeline as workflow** ✅ — shipped as `flows/default-pipeline.flow.yaml` (User Input → Plan → gated Plan evaluation → Final evaluation → Output) with parity verified in tests (post-planning gate, retrospectives, historyDigest); `core/pipeline.js` and the read-only builtin emulation are deleted.
 6. **Cleanup** ✅ — dual-mode branching removed from `src/App.jsx`; README/GOALS/FLOW_NODES updated.
 
-Template `skills` are injected into execution as of V1 task 10 — the bound project supplies each one as `.llmflow/skills/<name>.md`, so a template names the expertise it wants and each repo answers with its own. See `DESIGN-SPEC.md` §6.2.
+Template `skills` are injected into execution as of V1 task 10 — the bound project supplies each one as `.flyt/skills/<name>.md`, so a template names the expertise it wants and each repo answers with its own. See `DESIGN-SPEC.md` §6.2.
 
 ---
 

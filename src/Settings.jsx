@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { APPROVAL_MODE_OPTIONS } from './ApprovalModePicker.jsx';
+import { APP_NAME, CONFIG_DIR } from '../core/brand.js';
 
 // Settings page (PROVIDERS-PLAN §5): two tabs behind a slim rail.
 //   Providers — five compact cards (keys, test, Kimi key-kind), overview-first:
@@ -20,9 +21,9 @@ const PROVIDER_META = {
   },
   'claude-code': {
     name: 'Claude subscription', subscription: true,
-    blurb: 'Your Claude Pro/Max plan, via the Claude Code CLI you are already signed in to. llm-flow never sees a token — it launches the official CLI, which authenticates itself.',
+    blurb: `Your Claude Pro/Max plan, via the Claude Code CLI you are already signed in to. ${APP_NAME} never sees a token — it launches the official CLI, which authenticates itself.`,
     loginHint: <>Not signed in — run <code className="mono">claude</code> in a terminal and use <code className="mono">/login</code>, then re-open Settings.</>,
-    warning: 'Heads-up before enabling: every call here spends your Claude plan’s usage limits (5-hour and weekly windows) — a multi-node workflow can burn through them quickly. Anthropic permits subscription sign-in only through its own Claude Code app, which is exactly what llm-flow launches, but the usage still lands on your personal account and is governed by your plan’s terms. Prefer an API key for heavy or unattended runs.'
+    warning: `Heads-up before enabling: every call here spends your Claude plan’s usage limits (5-hour and weekly windows) — a multi-node workflow can burn through them quickly. Anthropic permits subscription sign-in only through its own Claude Code app, which is exactly what ${APP_NAME} launches, but the usage still lands on your personal account and is governed by your plan’s terms. Prefer an API key for heavy or unattended runs.`
   },
   openai: {
     name: 'OpenAI', blurb: 'GPT models — key from platform.openai.com',
@@ -31,7 +32,7 @@ const PROVIDER_META = {
   },
   codex: {
     name: 'ChatGPT subscription', subscription: true,
-    blurb: 'Your ChatGPT Plus/Pro plan, via the Codex CLI you are already signed in to. llm-flow never sees a token — it launches the official CLI, which authenticates itself.',
+    blurb: `Your ChatGPT Plus/Pro plan, via the Codex CLI you are already signed in to. ${APP_NAME} never sees a token — it launches the official CLI, which authenticates itself.`,
     loginHint: <>Not signed in — run <code className="mono">codex login</code> in a terminal, then re-open Settings.</>,
     warning: 'Calls here spend your ChatGPT plan’s Codex usage limits and are governed by your ChatGPT workspace policies.'
   },
@@ -67,7 +68,7 @@ export default function Settings({ onClose }) {
   const [s, setS] = useState(null); // the public settings payload
   const [error, setError] = useState('');
 
-  useEffect(() => { window.llmflow.getSettings().then(setS).catch(e => setError(String(e?.message ?? e))); }, []);
+  useEffect(() => { window.flyt.getSettings().then(setS).catch(e => setError(String(e?.message ?? e))); }, []);
 
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onClose(); };
@@ -77,7 +78,7 @@ export default function Settings({ onClose }) {
 
   const save = async patch => {
     setError('');
-    try { setS(await window.llmflow.setSettings(patch)); }
+    try { setS(await window.flyt.setSettings(patch)); }
     catch (err) { setError(String(err?.message ?? err)); }
   };
 
@@ -119,6 +120,32 @@ export default function Settings({ onClose }) {
 
 // --- Providers tab ----------------------------------------------------------
 
+// Where the flow files live, with a Reveal button. In a packaged build this is
+// userData/flows (D28) — not a path anyone would guess, and the folder you copy
+// a hand-designed flow out of when promoting it to a shipped default.
+function FlowFilesSection() {
+  const [info, setInfo] = useState(null);
+  useEffect(() => { window.flyt.flowFolder?.().then(setInfo).catch(() => {}); }, []);
+  if (!info?.dir) return null;
+  return (
+    <section>
+      <div className="settings-section-head">
+        <span className="section-label">Flow files</span>
+      </div>
+      <p className="settings-hint">
+        Every flow is a plain <code className="mono">&lt;id&gt;.flow.yaml</code> plus a{' '}
+        <code className="mono">.layout.json</code> sidecar in this folder — editable, copyable,
+        diffable. To turn a flow you designed here into one the app ships with, run{' '}
+        <code className="mono">npm run flow -- adopt</code> in the repo checkout.
+      </p>
+      <div className="settings-row">
+        <code className="mono settings-path">{info.dir}</code>
+        <button onClick={() => window.flyt.openFlowFolder()}>Reveal</button>
+      </div>
+    </section>
+  );
+}
+
 function ProvidersTab({ s, save }) {
   const [expanded, setExpanded] = useState(null);
   const [keyInputs, setKeyInputs] = useState({});
@@ -138,7 +165,7 @@ function ProvidersTab({ s, save }) {
 
   const test = async p => {
     setTests(t => ({ ...t, [p]: { state: 'running' } }));
-    const r = await window.llmflow.testProvider(p);
+    const r = await window.flyt.testProvider(p);
     setTests(t => ({ ...t, [p]: r.ok ? { state: 'ok' } : { state: 'err', error: r.error } }));
   };
 
@@ -253,11 +280,13 @@ function ProvidersTab({ s, save }) {
             onChange={e => save({ projectStorage: e.target.value })}
             aria-label="Project storage location"
           >
-            <option value="workspace">Inside the project — .llmflow/ in the folder, gitignored</option>
+            <option value="workspace">Inside the project — {CONFIG_DIR}/ in the folder, gitignored</option>
             <option value="appdata">App data — keyed by project path, repo untouched</option>
           </select>
         </div>
       </section>
+
+      <FlowFilesSection />
     </>
   );
 }
@@ -299,7 +328,7 @@ function SubscriptionCard({ p, meta, sub, connected, save, test, t }) {
       )}
       {connected && (
         <p className="settings-hint">
-          Signed in — credentials stay with the CLI (<span className="mono">{sub.credentialPath}</span>); llm-flow only launches it.
+          Signed in — credentials stay with the CLI (<span className="mono">{sub.credentialPath}</span>); {APP_NAME} only launches it.
         </p>
       )}
 
@@ -480,7 +509,7 @@ function ModelsTab({ s, save }) {
   useEffect(() => {
     let alive = true;
     Promise.all(CATALOG_PROVIDERS.map(p =>
-      window.llmflow.listModels(p)
+      window.flyt.listModels(p)
         .then(list => list.map(m => ({ ...m, provider: p })))
         .catch(() => [])
     )).then(lists => {
@@ -497,7 +526,7 @@ function ModelsTab({ s, save }) {
     setFetching(true);
     setCatalogError('');
     try {
-      const list = await window.llmflow.listModels('openrouter');
+      const list = await window.flyt.listModels('openrouter');
       setCatalog(c => [...c.filter(m => m.provider !== 'openrouter'), ...list.map(m => ({ ...m, provider: 'openrouter' }))]);
     } catch (err) {
       setCatalogError(String(err?.message ?? err));

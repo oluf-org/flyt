@@ -1,16 +1,27 @@
-appId: com.olaaxe.llmflow
-productName: LLM Flow
+# appId and productName mirror core/brand.js (D29). productName is load-bearing:
+# Electron derives userData from it, so changing it moves every install's
+# settings/projects/flows — main.js carries the one-shot migration.
+appId: com.olaaxe.flyt
+productName: Flyt
 directories:
   output: release
 files:
   - dist/**
   - electron/**
   - core/**
-  - nodes/**
-  - flows/**
   - src/**/*.js
   - config.json
   - package.json
+  # flows/ ships as FIRST-RUN SEEDS, not as a store — the packaged copy lives
+  # inside app.asar and is read-only; main.js copies it into userData (D28).
+  # Scratch flows (flow:new mints ids like flow-mrkhw5q9-eaxv) never ship, so
+  # promoting a flow to a default means giving it a stable slug id — that is
+  # exactly what `npm run flow -- adopt` does.
+  - flows/**
+  - "!flows/flow-*"
+  # nodes/ is deliberately NOT packaged: NodeStore seeds itself from
+  # SEED_NODE_TEMPLATES in code, so a bundled copy would only be a second,
+  # silently-diverging source of truth for the same templates.
   - "!**/*.map"
   - "!**/*.md"
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
@@ -18,18 +29,24 @@ publish:
   provider: github
   owner: olaaxe
   repo: flyt
+# Icons are generated from the in-app mark's own geometry by
+# `npm run icons` (scripts/make-icons.mjs) — sage on transparent. Without these
+# entries packaged builds ship the default Electron icon.
 win:
+  icon: build/icon.ico
   target:
     - nsis
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 mac:
+  icon: build/icon.icns
   target:
     - dmg
     - zip
   category: public.app-category.developer-tools
 linux:
+  icon: build/icon.png
   target:
     - AppImage
   category: Development

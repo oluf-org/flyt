@@ -1,4 +1,4 @@
-# LLM Flow — Decisions Log
+# Flyt — Decisions Log
 
 **Purpose:** Capture the decisions made during the 2026-07-15 design interview, and collect every unresolved question in one place. This is the "why we chose it" companion to `PRODUCT-SPEC.md` (what) and `DESIGN-SPEC.md` (how).
 
@@ -157,6 +157,39 @@ Each decision: **Context → Decision → Status.** Status is `Decided`, `Provis
 **Context.** Modes, run inputs, configs, and comparison looked like four separate features (retired `MODES-COMPARE-PLAN.md`; `CONFIGS-COMPARE-DESIGN.md`).
 **Decision.** All four reduce to *a per-node override map applied at run start*. Precedence: **run input > mode > node override > template**. Comparison is a relationship between two runs, not a composer mode — the diff is computed from the runs' own snapshots, so it stays accurate even if the flow and its modes have been edited twenty times since. The judge is blind to contestant identity: a judge that knows the contestants grades the contestants, not the work.
 **Status.** Decided & implemented (`core/judge.js`, `compare:begin/save/list` IPC, `src/CompareRun.jsx`, `src/ConfigsPanel.jsx`). Open remainder: P4 sweeps — see `CONFIGS-COMPARE-DESIGN.md` Part 4.
+
+### D28 — Packaged builds keep mutable state out of the app bundle
+**Context.** The first installed Windows build crashed at startup with `ENOTDIR` from `FlowStore`'s `fs.mkdirSync`. `electron/main.js` resolved `flows/`, `nodes/`, and `runs/` against `projectRoot` (`__dirname/..`), which in a packaged build is a path *inside* `app.asar`. The archive is a file, so creating a directory under it fails — a bug invisible in `npm start` because the checkout is a real writable directory.
+**Decision.** Split the two roots explicitly. `projectRoot` is read-only bundled code and assets (`config.json`, `dist/`, the seed `flows/`). `dataRoot` is writable state — the checkout in dev, `app.getPath('userData')` when `app.isPackaged`. Every read-write store (`flows/`, `nodes/`, `runs/`) resolves against `dataRoot`.
+
+`seedFromBundle()` copies bundled seeds out of the archive **per file, and only when the destination file is missing**. Per-file rather than per-directory is the deliberate choice: a one-shot "copy the whole directory if it doesn't exist" would mean a default flow added in a later release never reaches anyone who already installed the app. A seed the user deleted does reappear, which is how `ensureDefaultPipeline()` has always behaved.
+
+`nodes/` is *not* packaged at all. `NodeStore` seeds itself from `SEED_NODE_TEMPLATES` in code, so a bundled copy would be a second source of truth for the same templates, free to diverge silently (the checkout's `nodes/plan-start.json` had already drifted from the code seed).
+
+**Promoting a flow to a default.** Because the packaged app's flows live in `userData/flows`, a flow designed in the installed app is outside the repo. Two pieces close the loop: Settings shows the flows path with a Reveal button (`flow:folder` / `flow:openFolder`), and `npm run flow -- adopt` (`core/flowlang/adopt.js`) lists the installed app's flows and copies one into the repo's `flows/` — re-id'd to a slug of its name, layout sidecar following the rename, then linted against *this* repo's node library. The re-id is not cosmetic: `electron-builder.yml` excludes `flows/flow-*`, the id shape `flow:new` mints, so **having a stable slug id is what makes a flow ship**. Scratch flows stay out of the installer for free.
+
+**Status.** Decided & implemented (`electron/main.js`, `electron-builder.yml`, `core/flowlang/adopt.js`, `tests/adopt.test.js`). Corollaries: any future read-write path must use `dataRoot`; listing a store directory in `electron-builder.yml` `files` makes it a *seed*, not a location; and a flow named something like "Flow test" slugs to `flow-test` and will be excluded — `adopt` warns about this and `--as` is the escape hatch.
+
+---
+
+### D29 — Flyt is the brand; "flow" stays the domain noun
+**Context.** "LLM Flow" is a category description, not a name. The rename to **Flyt** (Norwegian for *flow*) forced a scope question first, because the word "flow" does two unrelated jobs in this repo: it is the product's name *and* the noun for the thing you build in it. Renaming both meant ~3,800 hits across 120 files, a migration for every existing `.flow.yaml`, and English UI copy that stops being grammatical ("a flyt", "three flyts").
+
+**Decision.** Rename **brand surfaces only**: app name, `appId`, npm package, window and notification titles, the `window.flyt` IPC bridge, `flyt.*` storage keys, log prefixes, the `.flyt/` project config directory, docs headers, and the mark. The **domain vocabulary is untouched** — a *flow* is still what you build, so `flow.nodes`, `.flow.yaml`, `flowlang`, `FlowRunner`, and `FLOW_NODES.md` keep their names. This is the Figma/frame, Linear/issue split. Nothing on disk moves for flows, no DSL migration, no churn in `tests/flow*.test.js`.
+
+`grep -i flow` returning thousands of hits is therefore the **intended end state, not unfinished work**. `tests/brand.test.js` pins the boundary by forbidding only the brand strings (`LLM Flow`, `llm-flow`, `llmflow`) across `src/`, `core/`, `electron/`, `index.html`, `package.json`, `electron-builder.yml` and `.github/`. `core/brand.js` is the single source of truth for the name and the only file exempt from that scan — every legacy literal lives there, next to the migration that consumes it. The one unavoidable exception is `index.html`'s pre-paint theme bootstrap, which runs before any module loads and is tagged `brand-legacy`.
+
+**Two migrations, because two things were keyed on the old name.**
+1. **userData.** Electron derives the userData path from the app name, so the rename silently orphans every install's `settings.json`, project registry, and seeded `flows/`. `electron/main.js` carries a one-shot directory rename at module top level — above `dataRoot` and `settingsPath`, both of which resolve eagerly. It checks *two* legacy names (`LLM Flow` from the packaged `productName`, `llm-flow` from the dev `package.json` name) and refuses to overwrite a userData directory that already has content.
+2. **`.llmflow/` → `.flyt/`.** The most visible leak — it sits in the user's own repo next to `.git`. Resolved with a read-both fallback (`configDirName`/`adoptConfigDir` in `core/workspace.js`): reads prefer the new name and fall back to the old, and the first write adopts the project by renaming the directory once. A failed rename keeps using the legacy directory in place rather than splitting config across two.
+
+Storage keys got the cheaper treatment: only `flyt-theme` is migrated, because `index.html` reads it before first paint and losing it means a visible light/dark flash. Column widths and the node-menu tip reset — one drag and one tooltip, against three more migration paths to maintain.
+
+**The mark.** Extends `sigil.js` rather than introducing a second visual vocabulary: the sigils are seeded noise, the logo is the canonical, unseeded member of the same family. Eleven rays at a 30° step over a 300° arc, lengths ramping short→long, the 60° gap at the bottom so the shortest and longest rays flank it — the "Current" concept, chosen by the owner from four rendered candidates. `currentColor` only, so it themes for free; optically centred, since a ramp is asymmetric by construction and would otherwise hang low-right in its box. Below 20px it drops to 6 rays at 60° — the same arc and silhouette at a cadence that survives a favicon. Type is Figtree 700 at −4% tracking, already loaded. Anti-ideas (D26) respected: flat, single-colour, geometric, no gradient (unlike `sigil()`, which needs one for its barcode read), no shadow, no animated variant.
+
+App icons are the one place `currentColor` cannot apply. `scripts/make-icons.mjs` (`npm run icons`) rasterizes `logoGeometry()` — the same numbers the SVG uses, so the two renderers cannot drift — into `build/icon.{png,ico,icns}` in sage on transparent, with a hand-rolled supersampled rasterizer and PNG/ICO/ICNS encoders. Adding a native image dependency to draw eleven lines and two circles was the worse trade.
+
+**Status.** Decided & implemented (`core/brand.js`, `electron/main.js`, `electron/preload.cjs`, `core/workspace.js`, `core/projects.js`, `core/skills.js`, `src/logo.js`, `src/Logo.jsx`, `scripts/make-icons.mjs`, `tests/brand.test.js`, `tests/workspace.test.js`). D15's `.llmflow/` and D22's references to it are historical: the directory is `.flyt/` as of this entry.
 
 ---
 

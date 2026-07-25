@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { WorkerPicker } from './Inspector.jsx';
 import { AI_ROLES, NODE_CATEGORIES, AGENT_TOOLS, EFFORT_LEVELS, DEFAULT_EFFORT, EVAL_TYPES } from './flowTypes.js';
+import { CONFIG_DIR } from '../core/brand.js';
 
 // Node Library editor: edit/save/delete the reusable AI node template selected
 // in the explorer (the list lives in the sidebar so Library shares the one
@@ -34,7 +35,7 @@ export default function NodesPage({ templates, selectedId, models, activeModels,
     if (!draft) return;
     setError('');
     try {
-      await window.llmflow.saveNodeTemplate(draft);
+      await window.flyt.saveNodeTemplate(draft);
       setSaved(true);
       await onChanged();
     } catch (err) {
@@ -45,7 +46,7 @@ export default function NodesPage({ templates, selectedId, models, activeModels,
   const remove = async () => {
     if (!draft) return;
     if (!window.confirm(`Delete node template "${draft.name}"?\n\nWorkflows using it will flag the missing template.`)) return;
-    await window.llmflow.deleteNodeTemplate(draft.id);
+    await window.flyt.deleteNodeTemplate(draft.id);
     onSelect?.(null);
     await onChanged();
   };
@@ -174,7 +175,7 @@ export default function NodesPage({ templates, selectedId, models, activeModels,
             <h3>Skills — comma-separated (optional)</h3>
             <div className="settings-hint">
               Expertise the <em>bound project</em> supplies. Each name loads{' '}
-              <span className="mono">.llmflow/skills/&lt;name&gt;.md</span> from the run's workspace and
+              <span className="mono">{CONFIG_DIR}/skills/&lt;name&gt;.md</span> from the run's workspace and
               appends it to this node's prompt — so the same template follows each project's own
               conventions. A name with no file is skipped and recorded in the run log.
             </div>

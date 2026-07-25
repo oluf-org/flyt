@@ -1,4 +1,4 @@
-# LLM Flow
+# Flyt
 
 **Read [GOALS.md](./GOALS.md) first.** It is the authoritative source of project intent, principles, current architecture, maturity, and non-functional requirements — especially performance, responsiveness, and feel.
 
@@ -55,6 +55,21 @@ runs/<runId>/
 Because state is plain files, every step is inspectable ("Open run folder" in
 the UI), reproducible, and resumable — approval gates survive an app restart.
 
+In a dev checkout those directories are the checkout's own. In an **installed
+build** they live in the app's user-data folder, because the packaged copy is
+inside a read-only archive (D28) — Settings → Flow files shows the path and
+reveals it. To promote a flow you designed in the installed app into one the
+app ships with:
+
+```
+npm run flow -- adopt                  # list flows in the installed app
+npm run flow -- adopt <id> [--as <new-id>]   # copy it into flows/ as a default
+```
+
+Adopt re-ids the flow to a slug of its name, brings the layout sidecar along,
+and lints it. The slug matters: the installer excludes `flows/flow-*` (the ids
+the app mints for new flows), so a stable id is what makes a flow ship.
+
 ### Layout
 
 - `core/` — model-agnostic orchestration. No Electron imports; runnable headless.
@@ -84,7 +99,7 @@ the UI), reproducible, and resumable — approval gates survive an app restart.
 ### Skills — per-project expertise
 
 A node template attaches skills **by name**; the bound project supplies them as
-`.llmflow/skills/<name>.md`, committed alongside its code. At run time each name
+`.flyt/skills/<name>.md`, committed alongside its code. At run time each name
 is resolved against the run's workspace and appended to that node's prompt, so
 one template ("Code (general)", say) follows whichever project it is pointed at.
 A name the project doesn't define is skipped and recorded in `log.jsonl`

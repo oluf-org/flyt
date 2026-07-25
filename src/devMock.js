@@ -1,4 +1,4 @@
-// Browser-only fallback for window.llmflow so the renderer can be previewed
+// Browser-only fallback for window.flyt so the renderer can be previewed (D29)
 // (and the design iterated on) outside Electron. Never active in the app:
 // installed only when the preload bridge is missing.
 import { SEED_NODE_TEMPLATES, normalizeTemplate } from './flowTypes.js';
@@ -321,7 +321,7 @@ const mockAppdataSlugs = () => new Set(
   mockProjects.tabs.filter(t => t.kind === 'appdata').map(t => t.id.replace(/^appdata:/, '')));
 
 export function installDevMock() {
-  window.llmflow = {
+  window.flyt = {
     listRuns: async (_pid) => Object.keys(snapshots)
       .map(id => ({
         id,

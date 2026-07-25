@@ -1,6 +1,6 @@
 // Shared machinery for the subscription (CLI-delegation) adapters.
 //
-// The delegation model (SUBSCRIPTION-AUTH-GUIDE): llm-flow never touches an
+// The delegation model (SUBSCRIPTION-AUTH-GUIDE): Flyt never touches an
 // OAuth token. Each provider's official CLI — `claude` (Claude Code) and
 // `codex` — is the authentication authority; it finds, refreshes, and uses the
 // credentials its own `login` flow stored on disk. We spawn it as a child
@@ -109,12 +109,12 @@ export function codexCredentialStatus(home = null) {
 
 // --- Neutral working directory ----------------------------------------------
 // The CLIs are agents; run them somewhere empty so they cannot wander into the
-// user's project (llm-flow supplies all context in the prompt) and leave no
+// user's project (Flyt supplies all context in the prompt) and leave no
 // per-project state behind.
 let neutralDir = null;
 export function neutralCwd() {
   if (!neutralDir) {
-    neutralDir = path.join(os.tmpdir(), 'llm-flow-cli');
+    neutralDir = path.join(os.tmpdir(), 'flyt-cli');
     fs.mkdirSync(neutralDir, { recursive: true });
   }
   return neutralDir;
@@ -181,7 +181,7 @@ export function spawnCliCall({ command, args, stdinText = '', env = process.env,
 //   - drop the provider's auth/session variables, so the CLI authenticates
 //     with the user's stored SUBSCRIPTION credentials rather than an API key,
 //     token, or base-URL override that happens to be exported in the shell
-//     (llm-flow itself launched from a Claude Code session exports exactly
+//     (Flyt itself launched from a Claude Code session exports exactly
 //     such context, and the inherited values 401 the child);
 //   - optionally repoint the home directory, which is how an account is
 //     selected (a credential store IS an account — guide Part 4 §4).

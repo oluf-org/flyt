@@ -1,4 +1,4 @@
-# LLM Flow — Standard Example Nodes & Flowchart Patterns
+# Flyt — Standard Example Nodes & Flowchart Patterns
 
 > **Node rework (2026-07-20).** The catalog below describes the original
 > per-role templates; the shipped library has since been combined:

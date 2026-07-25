@@ -4,4 +4,6 @@ runs/
 .env
 settings.json
 flows/
+.flyt/
+# Pre-D29 name; kept so a stale directory in an old checkout stays ignored.
 .llmflow/

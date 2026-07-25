@@ -5,7 +5,7 @@ import './styles.css';
 
 // No top-level await: the production build target (chrome87+) rejects it.
 async function boot() {
-  if (!window.llmflow) {
+  if (!window.flyt) {
     const { installDevMock } = await import('./devMock.js');
     installDevMock();
   }

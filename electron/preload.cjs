@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // Run-scoped calls take the projectId of the tab they act for (D22 T7); flows,
 // templates and settings are global (T2) and stay unscoped.
-contextBridge.exposeInMainWorld('llmflow', {
+const api = {
   approvePlan: (pid, runId) => ipcRenderer.invoke('run:approve', pid, runId),
   rejectPlan: (pid, runId, reason) => ipcRenderer.invoke('run:reject', pid, runId, reason),
   resumeRun: (pid, runId) => ipcRenderer.invoke('run:resume', pid, runId),
@@ -56,6 +56,8 @@ contextBridge.exposeInMainWorld('llmflow', {
   saveFlow: (flow) => ipcRenderer.invoke('flow:save', flow),
   newFlow: () => ipcRenderer.invoke('flow:new'),
   deleteFlow: (id) => ipcRenderer.invoke('flow:delete', id),
+  flowFolder: () => ipcRenderer.invoke('flow:folder'),
+  openFlowFolder: () => ipcRenderer.invoke('flow:openFolder'),
   lintFlow: (id) => ipcRenderer.invoke('flow:lint', id),
   // Configs (CONFIGS-COMPARE P1): create/update, duplicate, and promote a
   // finished run's launch config — all modes on a flow, stored in its YAML.
@@ -108,4 +110,10 @@ contextBridge.exposeInMainWorld('llmflow', {
     ipcRenderer.on('tabs:key', handler);
     return () => ipcRenderer.removeListener('tabs:key', handler);
   }
-});
+};
+
+// D29: renamed from the old brand. The temporary aliasing proxy that guarded
+// the codemod is gone — the app was exercised against `window.flyt` alone
+// (every panel, and the flow/template/settings/project IPC round trips), and
+// tests/brand.test.js now forbids the old name from reappearing.
+contextBridge.exposeInMainWorld('flyt', api);

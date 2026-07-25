@@ -1,4 +1,4 @@
-# LLM Flow — Build Plan & CI/CD Pipeline
+# Flyt — Build Plan & CI/CD Pipeline
 
 **Date:** 2026-07-23
 **Current state (verified):** Electron 33 + React 18 + Vite 6 app ("AI-first orchestration MVP"). Working core: file-based state, node library, canvas (@xyflow/react), flow DSL (`core/flowlang/cli.js`), one execution engine with mock/real model adapters. Tests: `node --test`. **No packaging tooling (electron-builder/forge), no GitHub repo/CI yet.** Most of the product vision (coding-agent toolbox, workspace binding, streaming UI, model routing, subscription/auth per `SUBSCRIPTION-AUTH-GUIDE.md`) is specified but not built.

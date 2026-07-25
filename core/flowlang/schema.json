@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://llm-flow.dev/flow.schema.json",
+  "$id": "https://flyt.dev/flow.schema.json",
   "title": "Flow DSL (*.flow.yaml), version 1",
   "type": "object",
   "required": ["version", "id", "name", "flow"],

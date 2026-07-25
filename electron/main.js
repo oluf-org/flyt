@@ -22,9 +22,69 @@ import {
 // resolution. Presence checks only — no token is ever read (SUBSCRIPTION-AUTH-GUIDE).
 import { claudeCredentialStatus, resolveClaudeCli } from '../core/adapters/claudeCode.js';
 import { codexCredentialStatus, resolveCodexCli } from '../core/adapters/codexCli.js';
+import { APP_NAME, LOG_TAG, LEGACY_APP_DIRS } from '../core/brand.js';
+import { migrateUserDataDir } from '../core/migrate.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Where the app's own code and bundled assets live. When packaged this is
+// INSIDE app.asar — readable, never writable (fs.mkdirSync there fails with
+// ENOTDIR because the archive is a file, not a directory).
 const projectRoot = path.join(__dirname, '..');
+// --- One-shot userData migration into the renamed profile (D29) -----------
+// Electron derives userData from the app name, so the rename silently orphans
+// every existing install's settings.json, project registry and seeded flows.
+// This MUST run before anything below captures a path — dataRoot and
+// settingsPath both resolve eagerly, at module load.
+//
+// Two legacy names, because the two builds disagreed: packaged installs used
+// electron-builder's productName, dev used package.json `name`. The rules (and
+// the guards that keep this from clobbering an existing profile) live in
+// core/migrate.js so they can be tested without Electron.
+migrateUserDataDir({
+  appDataRoot: app.getPath('appData'),
+  userDataDir: app.getPath('userData'),
+  legacyNames: LEGACY_APP_DIRS,
+  log: msg => console.log(`${LOG_TAG} ${msg}`)
+});
+
+// Where mutable state lives: the repo checkout in dev, userData when packaged.
+// flows/, nodes/ and runs/ are all read-write stores, so they must never be
+// resolved against projectRoot in a packaged build.
+const dataRoot = app.isPackaged ? app.getPath('userData') : projectRoot;
+
+function dataDir(name) {
+  const dir = path.join(dataRoot, name);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// Copy a bundled asset directory out of the (read-only) app bundle into the
+// writable data root. Flat directories only — deliberately shallow so it works
+// over the asar fs shim.
+//
+// Copying is per FILE, not per directory: a file is written only when it is
+// missing at the destination. That gives both halves of what we want — the
+// user's edits to a seeded flow are never clobbered by an update, and a NEW
+// default flow added in a later release still lands on existing installs
+// instead of being locked out by a one-shot first-run copy. A seed the user
+// deleted does come back, which matches how ensureDefaultPipeline() has always
+// behaved.
+function seedFromBundle(name) {
+  const dest = dataDir(name);
+  if (dataRoot === projectRoot) return dest; // dev: the bundle IS the data dir
+  const src = path.join(projectRoot, name);
+  try {
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const to = path.join(dest, entry.name);
+      if (fs.existsSync(to)) continue;
+      fs.writeFileSync(to, fs.readFileSync(path.join(src, entry.name)));
+    }
+  } catch (err) {
+    console.warn(`${LOG_TAG} could not seed ${name} from the app bundle:`, err.message);
+  }
+  return dest;
+}
 
 // One instance per runs/ directory, claimed before anything reads or writes it.
 // runs/ is a shared mutable store and liveness is tracked in process memory
@@ -48,8 +108,8 @@ const baseConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'config.jso
 // Flows and Node Library templates stay global for v1 (D22 T2) — reusable
 // expertise shared across every project tab. Runs are per-project; their
 // stores live in the project registry below.
-const flows = new FlowStore(path.join(projectRoot, 'flows'));
-const nodeLibrary = new NodeStore(path.join(projectRoot, 'nodes')); // seeds itself on first launch
+const flows = new FlowStore(seedFromBundle('flows'));
+const nodeLibrary = new NodeStore(dataDir('nodes')); // seeds itself from code on first launch
 flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable workflow
 flows.ensureSeedPipelines();   // the tiered Low/Medium/High/Ultra pipelines (MODES-COMPARE T7)
 
@@ -252,7 +312,7 @@ function publicSettings() {
       connected: connectable.filter(hasKey).length,
       activeModelCount: activeModels.filter(m => m.enabled !== false).length
     },
-    // T2a: where per-project files are written ('workspace' = in-repo .llmflow/,
+    // T2a: where per-project files are written ('workspace' = in-repo .flyt/,
     // 'appdata' = under userData). Read at project-open time.
     projectStorage: settings.projectStorage === 'appdata' ? 'appdata' : 'workspace',
     // Tool-call approval (APPROVAL-MODES): the default new runs start under,
@@ -376,7 +436,7 @@ const pushUpdateFor = projectId => runId => {
 };
 
 const registry = new ProjectRegistry({
-  defaultRunsDir: path.join(projectRoot, 'runs'),
+  defaultRunsDir: path.join(dataRoot, 'runs'),
   appDataDir: app.getPath('userData'),
   // T2a: the storage location is a Settings choice, read at project-open time.
   getStorage: () => (settings.projectStorage === 'appdata' ? 'appdata' : 'workspace'),
@@ -386,7 +446,7 @@ const registry = new ProjectRegistry({
     // still in a non-terminal stage was cut off by the app dying. Flag those
     // once so the run view can offer Resume (V1 task 7).
     const interrupted = runner.reconcileInterrupted();
-    if (interrupted.length) console.log(`[llm-flow] ${projectId}: ${interrupted.length} interrupted run(s) marked resumable`);
+    if (interrupted.length) console.log(`${LOG_TAG} ${projectId}: ${interrupted.length} interrupted run(s) marked resumable`);
     return runner;
   },
   onPersist: () => {
@@ -419,31 +479,34 @@ function migrateScratchIfNeeded() {
     try {
       fs.cpSync(path.join(registry.defaultRunsDir, id), path.join(project.appDir, 'runs', id), { recursive: true });
     } catch (e) {
-      console.warn(`[llm-flow] scratch migrate: skipped ${id} — ${e.message}`);
+      console.warn(`${LOG_TAG} scratch migrate: skipped ${id} — ${e.message}`);
     }
   }
   // Don't steal focus from a restored tab; the migrated project is just added.
   if (prevActive != null) registry.activeId = prevActive;
   persistSettings();
-  console.log(`[llm-flow] migrated ${runIds.length} scratch run(s) into ${project.id}`);
+  console.log(`${LOG_TAG} migrated ${runIds.length} scratch run(s) into ${project.id}`);
 }
 migrateScratchIfNeeded();
 
 function updateWindowTitle() {
   if (!win || win.isDestroyed()) return;
   // Projectless (L6): no tab open — the app's own name, no project.
-  if (registry.activeId == null) { win.setTitle('LLM Flow'); return; }
+  if (registry.activeId == null) { win.setTitle(APP_NAME); return; }
   const entry = registry.get(registry.activeId);
-  // T16: <project> — LLM Flow. Both bound folders and appdata projects name the
+  // T16: <project> — Flyt. Both bound folders and appdata projects name the
   // window; the legacy default (were it ever active) is just the app.
-  win.setTitle(entry.kind === 'default' ? 'LLM Flow' : `${entry.name} — LLM Flow`);
+  win.setTitle(entry.kind === 'default' ? APP_NAME : `${entry.name} — ${APP_NAME}`);
 }
 
 function createWindow() {
   win = new BrowserWindow({
     width: 1400,
     height: 900,
-    title: 'LLM Flow',
+    title: APP_NAME,
+    // Windows/Linux read the window icon from here; on macOS the bundle owns it.
+    // Without this, dev runs and Linux builds show the default Electron icon.
+    icon: path.join(projectRoot, 'build', 'icon.png'),
     backgroundColor: CHROME.light.color, // matches the title bar, not the canvas, to avoid a light flash at the top
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     ...(isMac ? {} : { titleBarOverlay: CHROME.light }),
@@ -492,7 +555,7 @@ const proj = projectId => registry.get(projectId);
 ipcMain.handle('flow:run', (_e, projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) => {
   const entry = proj(projectId);
   // Bind the target workspace at run time (D15): validate the folder, create
-  // its .llmflow/ config dir, and pass the confined absolute root to the runner
+  // its .flyt/ config dir, and pass the confined absolute root to the runner
   // so it lands in meta.json. A bound tab IS the workspace — its runs always
   // target the tab's folder (T19); only the unbound scratch tab still picks a
   // workspace per run (or none — mock/no-file flows run without one).
@@ -530,7 +593,7 @@ ipcMain.handle('app:approvalGate', (_e, info = {}) => {
   win.flashFrame(true);
   if (!Notification.isSupported()) return;
   approvalNotice = new Notification({
-    title: String(info.title ?? 'Approval needed — LLM Flow'),
+    title: String(info.title ?? `Approval needed — ${APP_NAME}`),
     body: String(info.body ?? 'A workflow is paused until you approve or reject it.')
   });
   approvalNotice.on('click', () => {
@@ -780,6 +843,12 @@ ipcMain.handle('flow:save', (_e, flow) => flows.save(flow));
 ipcMain.handle('flow:new', () =>
   flows.create(nodeLibrary.get('work') ? 'work' : null));
 ipcMain.handle('flow:delete', (_e, id) => flows.remove(id));
+// Where the .flow.yaml files actually live, and a way to open that folder.
+// In a packaged build this is userData/flows (D28), which is otherwise hard to
+// find — and it's the folder `npm run flow -- adopt` reads from when promoting
+// a flow designed in the installed app into a shipped default.
+ipcMain.handle('flow:folder', () => ({ dir: flows.rootDir, packaged: app.isPackaged }));
+ipcMain.handle('flow:openFolder', () => shell.openPath(flows.rootDir));
 // On-save validation for the canvas badge: full rule set, structured findings.
 ipcMain.handle('flow:lint', (_e, id) =>
   lintFlow(flows.load(id), { templates: nodeLibrary.listFull() }));
@@ -1046,7 +1115,7 @@ function setupAutoUpdate() {
       dialog.showMessageBox({
         type: 'info',
         title: 'Update ready',
-        message: 'A new version of LLM Flow has been downloaded. Restart to apply it.',
+        message: `A new version of ${APP_NAME} has been downloaded. Restart to apply it.`,
         buttons: ['Restart now', 'Later']
       }).then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); });
     });

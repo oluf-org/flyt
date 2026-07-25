@@ -111,7 +111,7 @@ export default function FlowYamlEditor({ flow, onApplied, onLint, embedded = fal
   const refreshFromFlow = useCallback(async (f = flow) => {
     if (!f) { setText(''); setLint(null); setDirty(false); return; }
     try {
-      const y = await window.llmflow.getFlowYaml(f);
+      const y = await window.flyt.getFlowYaml(f);
       setText(y);
       setDirty(false);
       runLint(y);
@@ -125,7 +125,7 @@ export default function FlowYamlEditor({ flow, onApplied, onLint, embedded = fal
     if (!flow?.id || busy) return;
     setBusy(true);
     try {
-      const y = await window.llmflow.loadFlowSource(flow.id);
+      const y = await window.flyt.loadFlowSource(flow.id);
       setText(y);
       setDirty(true); // user may want to keep or tweak the disk version
       runLint(y);
@@ -149,7 +149,7 @@ export default function FlowYamlEditor({ flow, onApplied, onLint, embedded = fal
   async function runLint(yaml) {
     if (!yaml || typeof yaml !== 'string') { setLint(null); return; }
     try {
-      const res = await window.llmflow.lintFlowYaml(yaml);
+      const res = await window.flyt.lintFlowYaml(yaml);
       setLint(res);
       if (onLint) onLint(res);
     } catch (e) {
@@ -172,7 +172,7 @@ export default function FlowYamlEditor({ flow, onApplied, onLint, embedded = fal
     if (!flow?.id || busy) return;
     setBusy(true);
     try {
-      await window.llmflow.saveFlowFromYaml(flow.id, text);
+      await window.flyt.saveFlowFromYaml(flow.id, text);
       setDirty(false);
       // After a successful save-from-yaml the model on disk changed.
       // Ask the parent to reload the canonical flow object so canvas + inspector update.

@@ -12,7 +12,7 @@ import { formatElapsed } from './runProgress.js';
 // "Technical details" so the panel reads calm first and forensic second.
 //
 // Everything raw comes from the snapshot the renderer already has; only the
-// plain-language summary costs a call (window.llmflow.investigateNode), and
+// plain-language summary costs a call (window.flyt.investigateNode), and
 // its absence degrades to the raw facts rather than an error.
 
 // The engine's rejection carries the whole reason; the IPC wrapper around it
@@ -131,10 +131,10 @@ export default function NodeFocus({
   };
 
   const explain = async () => {
-    if (loading || !window.llmflow?.investigateNode) return;
+    if (loading || !window.flyt?.investigateNode) return;
     setLoading(true);
     try {
-      setInv(await window.llmflow.investigateNode(projectId, runId, nodeId));
+      setInv(await window.flyt.investigateNode(projectId, runId, nodeId));
     } catch (err) {
       setInv({ failed: ipcMessage(err) });
     } finally {

@@ -1,5 +1,5 @@
 /* =========================================================================
-   LLM Flow — Slate & Sage design system
+   Flyt — Slate & Sage design system
    One accent, spent deliberately. Neutrals do the work.
    Never hard-code these hex values in components — reference the tokens.
 
@@ -184,13 +184,32 @@ body {
   -webkit-user-select: none; user-select: none;
 }
 .brand { display: flex; align-items: center; gap: 8px; }
-.brand-mark {
-  width: 18px; height: 18px; border-radius: 5px;
-  display: grid; place-items: center;
-  background: var(--accent); color: var(--accent-tx);
-  font-size: 10px; font-weight: 700;
+
+/* ---------- the mark & wordmark lockup (D29) ----------
+   currentColor throughout, so a lockup is coloured by setting `color` on it and
+   nothing else. The mark is the accent; the word is body text — the pairing is
+   what makes it a lockup rather than two adjacent things. */
+.lockup { display: inline-flex; align-items: center; gap: 7px; }
+.lockup-stacked { flex-direction: column; gap: 10px; }
+.logo-mark-wrap { display: inline-flex; color: var(--accent); }
+.logo-mark { display: block; }
+.wordmark {
+  font-family: Figtree, system-ui, sans-serif;
+  font-weight: 700; letter-spacing: -0.04em;
+  font-size: 13px; color: var(--app-tx);
 }
-.brand-name { font-size: 12.5px; font-weight: 600; color: var(--app-tx); }
+.titlebar .lockup { -webkit-app-region: drag; }
+
+/* The lander's brand line replaces a mono section label, so it stays quiet:
+   the word drops back to the faint tone and only the mark carries the accent. */
+.lander-greeting .lander-lockup { align-self: center; }
+.lander-greeting .lander-lockup .wordmark { font-size: 12px; color: var(--faint); }
+
+/* The About panel is the one place that introduces the app rather than
+   labelling it — the stacked lockup, centred, at display size. */
+.about-panel { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.about-panel .wordmark { font-size: 22px; }
+.about-panel pre { align-self: stretch; }
 .titlebar-doc { margin-left: auto; font-size: 11px; color: var(--app-dim); }
 
 /* ---------- toolbar ---------- */
@@ -1916,6 +1935,13 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
 
 .settings-row { display: flex; gap: 8px; }
 .settings-row input { flex: 1; min-width: 0; }
+/* A read-only path shown next to a Reveal button — wraps rather than widening
+   the panel, since userData paths are long. */
+.settings-path {
+  flex: 1; min-width: 0; align-self: center;
+  font-size: 11.5px; color: var(--dim);
+  overflow-wrap: anywhere;
+}
 
 .settings-panel input,
 .settings-panel select {

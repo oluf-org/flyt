@@ -24,6 +24,7 @@
 // slot and the single-run chip share exactly one keyboard-correct listbox.
 import { Fragment, useEffect, useRef, useState } from 'react';
 import Constellation from './Constellation.jsx';
+import Logo from './Logo.jsx';
 import ConfigModal from './ConfigModal.jsx';
 import { sigil } from './sigil.js';
 import { runStatus, runTimeLabel } from './runList.js';
@@ -220,7 +221,7 @@ export default function Lander({
       )}
       <div className="lander-stage">
         <div className="lander-greeting">
-          <span className="section-label">LLM Flow</span>
+          <Logo className="lander-lockup" markSize={15} />
           <h1 className="lander-title">
             {projectName
               ? <>What should we build in <span className="mono">{projectName}</span>?</>

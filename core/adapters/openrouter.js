@@ -7,13 +7,14 @@
 // missing-key help text. Behavior (streaming, tool-call reassembly, usage
 // chunks, empty-stream guard) is pinned by tests/adapterHttp.test.js.
 import { openaiCompatible } from './http.js';
+import { APP_NAME } from '../brand.js';
 
 export const openrouterAdapter = openaiCompatible({
   provider: 'OpenRouter',
   baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
   headers: {
-    'HTTP-Referer': 'https://github.com/llm-flow/llm-flow',
-    'X-Title': 'LLM Flow'
+    'HTTP-Referer': 'https://github.com/olaaxe/flyt',
+    'X-Title': APP_NAME
   },
   keyHelp: 'Add it in Settings, or switch the worker to the "mock" provider.'
 });

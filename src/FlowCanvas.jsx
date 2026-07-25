@@ -20,6 +20,7 @@ import { statusPill } from './Inspector.jsx';
 import FlowEdge from './FlowEdge.jsx';
 import NodeMenu from './NodeMenu.jsx';
 import Tip from './Tip.jsx';
+import { APP_SLUG } from '../core/brand.js';
 
 // Expanded reader cards (output-view phase 2, plan B2): a node grows into a
 // readable markdown card at this default size, freely resizable down to the
@@ -57,7 +58,7 @@ export function freshNodeId(prefix) {
 }
 
 // The drag-and-drop payload the node picker puts on the dataTransfer.
-export const DND_MIME = 'application/x-llmflow-node';
+export const DND_MIME = `application/x-${APP_SLUG}-node`;
 export const dndOrchestrator = () => ({ kind: 'orchestrator' });
 export const dndTemplate = templateId => ({ kind: 'template', templateId });
 

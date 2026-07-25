@@ -4,6 +4,7 @@
 // shows, rendered for a terminal/issue/PR instead of a graph. Pure:
 // runDocument(snapshot) → string, monospace, box-drawing rules + aligned columns.
 import { outputKey, spawnedTasks } from './runGraph.js';
+import { APP_NAME } from '../core/brand.js';
 
 const RULE = '─';
 const WIDTH = 62;
@@ -48,7 +49,7 @@ export function runDocument(snapshot) {
 
   // ---- header ----
   const runName = (prompt ?? '').split('\n').map(s => s.trim()).find(Boolean) || 'Untitled run';
-  L.push('LLM FLOW — RUN DOSSIER');
+  L.push(`${APP_NAME.toUpperCase()} — RUN DOSSIER`);
   L.push('═'.repeat(WIDTH));
   L.push('');
   L.push(`  Run       ${runName}`);

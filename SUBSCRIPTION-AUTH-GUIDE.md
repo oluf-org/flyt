@@ -16,7 +16,7 @@ Their own README states the prerequisite plainly: before using T3 Code you must 
 
 T3 Code then spawns/embeds those tools as subprocesses and lets them find their own tokens. This is the whole trick. It is also the only approach that is clearly within each provider's terms of service (more on that below). If you take one thing from this document: **delegate authentication to the vendor's own CLI/SDK, don't reimplement their OAuth.**
 
-The rest of this guide explains (1) exactly how that delegation works so you can replicate it in `llm-flow`, and (2) as a reference, the underlying OAuth mechanics the CLIs themselves use, in case you decide to go direct — along with the compliance caveats that make that risky.
+The rest of this guide explains (1) exactly how that delegation works so you can replicate it in Flyt, and (2) as a reference, the underlying OAuth mechanics the CLIs themselves use, in case you decide to go direct — along with the compliance caveats that make that risky.
 
 > This guide was written from reading T3 Code's public source and the providers' own docs. No T3 Code source was copied; the code samples here are original illustrations of standard, publicly documented OAuth patterns.
 
@@ -163,7 +163,7 @@ If your goal is a shippable product, use delegation. Reserve the direct-OAuth kn
 
 ---
 
-## Part 4 — Recommended design for `llm-flow`
+## Part 4 — Recommended design for Flyt
 
 A clean-room adapter layer that mirrors T3's model without copying it:
 
@@ -183,7 +183,7 @@ A clean-room adapter layer that mirrors T3's model without copying it:
 
 5. **Health/status:** poll each runtime for a lightweight "am I authenticated?" signal (e.g. a cheap capability/whoami call or the presence + validity of the credential file) and reflect Connected / Needs-login in the UI.
 
-6. **Do not persist or log tokens** anywhere in `llm-flow`. Since the vendor runtime owns them, your app's attack surface stays minimal.
+6. **Do not persist or log tokens** anywhere in Flyt. Since the vendor runtime owns them, your app's attack surface stays minimal.
 
 This gives you subscription-based Claude and ChatGPT usage with essentially none of the OAuth burden, and keeps you within both providers' terms.
 

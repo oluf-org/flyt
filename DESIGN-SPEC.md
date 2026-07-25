@@ -1,4 +1,4 @@
-# LLM Flow — Design Specification
+# Flyt — Design Specification
 
 **Status:** Design specification. Mixes *current reality* with *intended design*. Every subsection is tagged.
 **Last defined:** 2026-07-15 (design interview) + code verification against the `flow-builder` state.
@@ -170,7 +170,7 @@ D4 makes the canvas the **live transparency view of execution**. The run view is
 
 **Was:** `skills: string[]` was plumbed the whole way — `nodes/*.json` → `normalizeTemplate` → `resolveInstance` → `node.data.skills` → the run's `flow.json`, editable on the Nodes page and in the DSL — and then read by nothing. The last mile was missing, but so was the feature itself: a skill was a bare *name* with no body, no store, and no definition anywhere.
 
-**The design.** A template attaches a skill **by name**; the **bound project** supplies it as `.llmflow/skills/<name>.md` (D15 — per-project config is version-controllable and travels with the repo). That indirection is the point: templates and workflows stay workspace-agnostic (Q-D5), while what they *do* adapts per project. The same "Code (general)" node follows this repo's conventions because this repo committed them next to its code. The same flow run against two projects behaves differently — there's a test for exactly that.
+**The design.** A template attaches a skill **by name**; the **bound project** supplies it as `.flyt/skills/<name>.md` (D15 — per-project config is version-controllable and travels with the repo). That indirection is the point: templates and workflows stay workspace-agnostic (Q-D5), while what they *do* adapts per project. The same "Code (general)" node follows this repo's conventions because this repo committed them next to its code. The same flow run against two projects behaves differently — there's a test for exactly that.
 
 **Assembly** (`core/skills.js`): `loadSkills(workspace, names)` → `{ found, missing }`; `withSkillsSection(system, found)` appends a labelled block to the **system** prompt (skills are *how*, and the base prompt is kept, not replaced). Two call sites, because there are two execution paths:
 - `aiStep` / `orchestrator` → `FlowRunner.applySkills()` resolves against `meta.workspace`.
@@ -183,7 +183,7 @@ D4 makes the canvas the **live transparency view of execution**. The run view is
 - **Confined twice.** Skill names come from templates and flow YAML — i.e. from users — and are interpolated into a path, so they are validated against `^[a-zA-Z0-9_-]+$` *and* resolved through `Workspace.resolve()` (which also catches symlink escapes).
 - An **empty** skill file counts as missing rather than as silent success.
 
-`.llmflow/skills/` is deliberately **not** created by `Workspace.ensure()`: an empty directory wouldn't survive a commit, and binding shouldn't litter every repo it touches.
+`.flyt/skills/` is deliberately **not** created by `Workspace.ensure()`: an empty directory wouldn't survive a commit, and binding shouldn't litter every repo it touches.
 
 ---
 
@@ -209,7 +209,7 @@ The agent loop (`core/agent.js`) runs tools two ways: **NATIVE** (OpenRouter fun
 
 **[PLANNED] — target workspace + project config.**
 - On use, the app is **given a target workspace** (a project folder). Runs operate against it: reads, creates, writes, and (planned) shell commands act on the real project.
-- **Per-project configuration lives in a `.llmflow/` folder inside the project** (not in appdata) — so it travels with the repo and is version-controllable/shareable.
+- **Per-project configuration lives in a `.flyt/` folder inside the project** (not in appdata) — so it travels with the repo and is version-controllable/shareable.
 - **Binding model (to define):** a workflow template is reusable across workspaces; the *workspace* is selected at run time, not baked into the workflow. Confirm and specify.
 
 ---
@@ -245,7 +245,7 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 |---|---|---|
 | File-based state, RunStore/NodeStore/FlowStore | BUILT | Single source of truth |
 | Node Library + Nodes page (9 templates) | BUILT | Work templates are agentTasks with real tools (V1 task 12) |
-| Template `skills` injected into execution | BUILT | V1 task 10 — project supplies `.llmflow/skills/<name>.md` (§6.2) |
+| Template `skills` injected into execution | BUILT | V1 task 10 — project supplies `.flyt/skills/<name>.md` (§6.2) |
 | Canvas (React Flow), Inspector, run panel, Settings | BUILT | Canvas is authoring + run view |
 | Run view mode (header, live panel, spawned tasks, outcome) | BUILT | V1 task 9 — see §6.1 |
 | Flow DSL (`.flow.yaml`), lint/parse/serialize/migrate/CLI | BUILT | See `FLOW_LANG.md` |
@@ -265,7 +265,7 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | Context Analysis step (cheap-model strategy) | PLANNED | `contextSpec` honored when present |
 | `read_file` / `create_file` / `bash` tools | PLANNED | Only `write_file` (run-scoped) today |
 | Toolbox creation page (user-authored tools) | PLANNED | Registry exists in code only |
-| Real workspace binding + `.llmflow/` config | PLANNED | Writes are run-scoped, not repo |
+| Real workspace binding + `.flyt/` config | PLANNED | Writes are run-scoped, not repo |
 | Safety: command-guard node, opt-out, diff preview | PLANNED | Approvals + run-scoped sandbox today |
 | Model comparison / ranking mode | PLANNED | Feeds routing matrix |
 | Streaming status-summary sidebar | PLANNED | After single-node streaming |
@@ -307,7 +307,7 @@ Consolidated in `DECISIONS.md`; summarized here:
 2. **Spawn guards beyond depth:** budget/node-count ceilings; whether spawned nodes get their own gates and retrospectives.
 3. **Context strategy selection:** who runs the analysis step, what model, and how "none/pointers/summarized/full" is chosen and represented.
 4. **Routing matrix schema:** exact axes (task type, language, complexity, cost) and how ranking data updates it.
-5. **Workspace binding:** run-time selection vs. workflow-bound; `.llmflow/` contents and schema.
+5. **Workspace binding:** run-time selection vs. workflow-bound; `.flyt/` contents and schema.
 6. **Safety envelope:** allowlist/denylist, diff preview, network policy, and the limits of "skip safety."
 7. ~~**Streaming vs. snapshot IPC:** incremental update path so streaming doesn't re-send the whole snapshot.~~ **Resolved** (V1 task 5) — see §10.
 8. **Retrospective loop scope:** keep narrow (which model wins which task type → routing) vs. broader adaptation.

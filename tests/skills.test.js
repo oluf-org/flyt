@@ -1,5 +1,5 @@
 // Template skills injected into execution (V1 task 10, core/skills.js).
-// A skill is expertise the bound PROJECT supplies (.llmflow/skills/<name>.md);
+// A skill is expertise the bound PROJECT supplies (.flyt/skills/<name>.md);
 // a template only names it, so the same template adapts per repo (D15, Q-D5).
 // These tests prove the thing that was missing: attaching a skill measurably
 // changes what the model is asked, and every hit and miss is in the audit log.
@@ -15,7 +15,7 @@ import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } 
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'llm-flow-skill-'));
 
-// A workspace with the given skills written into .llmflow/skills/.
+// A workspace with the given skills written into .flyt/skills/.
 function wsWithSkills(skills = {}) {
   const ws = new Workspace(tmpDir()).ensure();
   for (const [name, content] of Object.entries(skills)) {
@@ -46,7 +46,7 @@ test('loadSkills reports a missing file with a reason instead of throwing', () =
   const { found, missing } = loadSkills(ws, ['nope']);
   assert.deepEqual(found, []);
   assert.equal(missing.length, 1);
-  assert.match(missing[0].reason, /no \.llmflow\/skills\/nope\.md/);
+  assert.match(missing[0].reason, /no \.flyt\/skills\/nope\.md/);
 });
 
 test('loadSkills without a bound workspace reports why, rather than silently doing nothing', () => {
@@ -56,7 +56,7 @@ test('loadSkills without a bound workspace reports why, rather than silently doi
 });
 
 // Skill names come from templates and flow YAML (i.e. from users) and are
-// interpolated into a path — they must not be able to reach out of .llmflow/.
+// interpolated into a path — they must not be able to reach out of .flyt/.
 test('loadSkills rejects names that try to escape the skills directory', () => {
   const ws = wsWithSkills({});
   fs.writeFileSync(path.join(ws.root, 'secret.md'), 'do not read me', 'utf8');
@@ -175,7 +175,7 @@ test('an attached skill the project does not define is logged, and the run conti
   const miss = readLog(store, runId).find(e => e.event === 'skill_missing');
   assert.equal(miss.skill, 'absent');
   assert.equal(miss.node, 'step');
-  assert.match(miss.reason, /no \.llmflow\/skills\/absent\.md/);
+  assert.match(miss.reason, /no \.flyt\/skills\/absent\.md/);
 });
 
 // The same flow, run against two projects, must behave differently — that

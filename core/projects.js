@@ -27,6 +27,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { RunStore } from './state.js';
 import { slugFromPrompt, dedupeSlug } from './projectName.js';
+import { configDirFor, adoptConfigDir } from './workspace.js';
+import { APP_NAME } from './brand.js';
 
 export const DEFAULT_PROJECT_ID = 'default';
 export const DEFAULT_PROJECT_NAME = 'Scratch';
@@ -53,7 +55,9 @@ export function runsDirFor(folder, { storage = 'workspace', appDataDir, defaultR
   if (storage === 'appdata') {
     return path.join(appDataDir, 'projects', appDataKey(folder), 'runs');
   }
-  return path.join(folder, '.llmflow', 'runs');
+  // configDirFor, not a literal: a project created before D29 keeps its runs in
+  // the legacy directory until a write adopts it (core/workspace.js).
+  return path.join(configDirFor(folder), 'runs');
 }
 
 // A folder name that survives any path: readable basename + a short hash of the
@@ -65,16 +69,18 @@ export function appDataKey(folder) {
 }
 
 // In-repo storage must never leak run artifacts into version control (T2a):
-// .llmflow/config.json stays committable (D15), everything the app generates
-// under .llmflow/ is ignored. Only written when missing — a hand-edited
-// .gitignore is the project's business.
-export function ensureLlmflowGitignore(folder) {
-  const dir = path.join(folder, '.llmflow');
+// .flyt/config.json stays committable (D15), everything the app generates under
+// .flyt/ is ignored. Only written when missing — a hand-edited .gitignore is
+// the project's business.
+//
+// This is also a write path, so it adopts a pre-D29 config directory (D29).
+export function ensureConfigGitignore(folder) {
+  const dir = adoptConfigDir(folder);
   fs.mkdirSync(dir, { recursive: true });
   const p = path.join(dir, '.gitignore');
   if (!fs.existsSync(p)) {
     fs.writeFileSync(p,
-      '# Written by LLM Flow: run artifacts never belong in version control.\n' +
+      `# Written by ${APP_NAME}: run artifacts never belong in version control.\n` +
       '# config.json and skills/ are yours to commit.\n' +
       'runs/\n', 'utf8');
   }
@@ -125,7 +131,7 @@ export class ProjectRegistry {
       throw new Error(`Project folder "${folder}" is not an existing directory`);
     }
     const storage = this.getStorage();
-    if (resolved != null && storage !== 'appdata') ensureLlmflowGitignore(resolved);
+    if (resolved != null && storage !== 'appdata') ensureConfigGitignore(resolved);
     const runsDir = runsDirFor(resolved, {
       storage, appDataDir: this.appDataDir, defaultRunsDir: this.defaultRunsDir
     });
@@ -260,7 +266,7 @@ export class ProjectRegistry {
     if (fs.existsSync(srcWs)) {
       fs.cpSync(srcWs, resolved, { recursive: true, force: false, errorOnExist: false });
     }
-    if (storage !== 'appdata') ensureLlmflowGitignore(resolved);
+    if (storage !== 'appdata') ensureConfigGitignore(resolved);
     // 3. The appdata home is fully migrated — remove it.
     fs.rmSync(old.appDir, { recursive: true, force: true });
 

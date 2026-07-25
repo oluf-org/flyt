@@ -35,7 +35,7 @@ export function buildCodexArgs({ model, cwd, lastMessageFile }) {
     '--ephemeral',            // don't persist session files for these calls
     '--skip-git-repo-check',  // the neutral cwd is not a repo, by design
     '--color', 'never',
-    '-s', 'read-only',        // the model must not execute writes; llm-flow owns tools
+    '-s', 'read-only',        // the model must not execute writes; Flyt owns tools
     '-C', String(cwd),
     '-o', String(lastMessageFile)
   ];
@@ -111,7 +111,7 @@ export async function codexAdapter({ model, system, prompt, onText, signal, cliH
 
   // The most robust "final answer" channel exec offers: it writes the last
   // agent message to a file. The JSONL stream feeds onText along the way.
-  const lastMsgFile = path.join(os.tmpdir(), 'llm-flow-cli', `codex-out-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+  const lastMsgFile = path.join(os.tmpdir(), 'flyt-cli', `codex-out-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
 
   const env = cliEnv({
     // Same reasoning as the Claude adapter: an exported platform key or

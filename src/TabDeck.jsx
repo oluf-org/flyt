@@ -17,7 +17,7 @@ export default function TabDeck({ order, index, tabs, onPick, onCancel, onNav })
     let alive = true;
     // The card extras (latest run, topology) come from files; the deck opens
     // instantly on tab names and enriches when the read lands.
-    window.llmflow.deckData?.()
+    window.flyt.deckData?.()
       .then(list => { if (alive) setCards(new Map(list.map(c => [c.id, c]))); })
       .catch(() => {});
     return () => { alive = false; };

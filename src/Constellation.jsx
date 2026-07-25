@@ -11,13 +11,16 @@
 // is fully contained so it never triggers layout on the rest of the page.
 import { useMemo } from 'react';
 import { hash, rng } from './sigil.js';
+import { APP_SLUG } from '../core/brand.js';
 
 // A generous viewBox the SVG covers with `slice`, so dots stay circular (never
 // stretched) whatever the pane's aspect ratio. Positions live in this space.
 const VW = 1200, VH = 800;
 const MARGIN = 90;
 const MIN_GAP = 130; // rejection-sampled spacing so pairs never sit on top of each other
-const APP_SEED = 'llm-flow'; // neutral constellation when there is no project
+// Neutral constellation when there is no project. The seed drives the PRNG, so
+// changing it changes the no-project layout — intended, and harmless (D29).
+const APP_SEED = APP_SLUG;
 
 // Where the composer visually sits over the constellation (~centre, a touch
 // above middle). The nearest dot gets tinted on focus — the canvas noticing

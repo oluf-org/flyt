@@ -31,6 +31,7 @@ import ApprovalModal, { gateCopy } from './ApprovalModal.jsx';
 import { feedItems } from './nodeFeedData.js';
 import { isTerminal } from './runProgress.js';
 import { sigil } from './sigil.js';
+import { APP_NAME } from '../core/brand.js';
 
 // View + sidebar preferences survive the session — a user who prefers the
 // graph (or always wants summaries) shouldn't have to re-pick per run.
@@ -150,23 +151,23 @@ export default function ChatRun({
       setGateMinimized(false);
       const runLabel = meta?.name ?? meta?.flowName ?? 'A run';
       if (awaitingInput) {
-        window.llmflow?.signalApprovalGate?.({
+        window.flyt?.signalApprovalGate?.({
           state: 'pending',
-          title: 'Input needed — LLM Flow',
+          title: `Input needed — ${APP_NAME}`,
           body: `${runLabel} is waiting for your answer to continue.`
         });
       } else {
         const copy = gateCopy(meta);
-        window.llmflow?.signalApprovalGate?.({
+        window.flyt?.signalApprovalGate?.({
           state: 'pending',
-          title: copy.danger ? 'Dangerous tool call needs approval' : 'Approval needed — LLM Flow',
+          title: copy.danger ? 'Dangerous tool call needs approval' : `Approval needed — ${APP_NAME}`,
           body: copy.kind === 'tool'
             ? `${runLabel} wants to run ${copy.tool.tool}${copy.tool.summary ? ` on ${copy.tool.summary}` : ''}. Paused until you decide.`
             : `${runLabel} is parked at an approval gate. Paused until you decide.`
         });
       }
     } else if (was) {
-      window.llmflow?.signalApprovalGate?.({ state: 'resolved' });
+      window.flyt?.signalApprovalGate?.({ state: 'resolved' });
     }
     // meta is read for the copy only; the gate key owns re-firing.
     // eslint-disable-next-line react-hooks/exhaustive-deps

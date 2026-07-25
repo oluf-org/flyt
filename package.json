@@ -1,7 +1,7 @@
 {
-  "name": "llm-flow",
+  "name": "flyt",
   "version": "0.1.1",
-  "description": "AI-first orchestration MVP: flowchart canvas over a file-based multi-model pipeline",
+  "description": "Flyt — AI-first orchestration: a flowchart canvas over a file-based multi-model pipeline",
   "main": "electron/main.js",
   "type": "module",
   "scripts": {
@@ -10,6 +10,7 @@
     "start": "npm run build && electron .",
     "test": "node --test \"tests/**/*.test.js\"",
     "flow": "node core/flowlang/cli.js",
+    "icons": "node scripts/make-icons.mjs",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",

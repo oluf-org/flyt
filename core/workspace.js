@@ -1,16 +1,51 @@
 // A bound target workspace: the real project folder a run operates on
 // (selected at run time, so workflows stay workspace-agnostic — DECISIONS.md
-// D15/Q-D5). Per-project configuration lives in <workspace>/.llmflow/ so it is
+// D15/Q-D5). Per-project configuration lives in <workspace>/.flyt/ so it is
 // version-controllable and travels with the repo, NOT in appdata.
 //
 // This class owns three things:
 //   1. validating that the bound path is a real directory,
-//   2. creating/reading the .llmflow/ config folder inside it,
+//   2. creating/reading the .flyt/ config folder inside it,
 //   3. confining every path the run resolves to the workspace root.
 // (3) is the foundation the real file/bash tools build on in V1 task 2 — for
-// now it guarantees .llmflow/ itself can never be written outside the root.
+// now it guarantees .flyt/ itself can never be written outside the root.
 import fs from 'node:fs';
 import path from 'node:path';
+import { APP_NAME, CONFIG_DIR, LEGACY_CONFIG_DIR } from './brand.js';
+
+// --- The config directory, across the D29 rename -------------------------
+// The pre-D29 directory (LEGACY_CONFIG_DIR in core/brand.js) became `.flyt/`.
+// Reads resolve to whichever directory a project
+// actually has (new name wins); the first WRITE adopts the legacy one by
+// renaming it, so a project converts exactly once and nothing is copied twice.
+//
+// Both live in this module because the project registry needs the same rules —
+// a project's runs/ sits inside this directory too.
+
+// Read-only resolution: no side effects, safe on a folder that doesn't exist.
+export function configDirName(root) {
+  try {
+    if (fs.existsSync(path.join(root, CONFIG_DIR))) return CONFIG_DIR;
+    if (fs.existsSync(path.join(root, LEGACY_CONFIG_DIR))) return LEGACY_CONFIG_DIR;
+  } catch { /* unreadable root: fall through to the current name */ }
+  return CONFIG_DIR;
+}
+
+export function configDirFor(root) { return path.join(root, configDirName(root)); }
+
+// Write path: adopt a pre-rename directory, then return the path to use. If the
+// rename fails (locked, read-only, permissions) we keep using the legacy
+// directory in place rather than splitting the project's config across two —
+// a failed migration must never look like an empty one.
+export function adoptConfigDir(root) {
+  const target = path.join(root, CONFIG_DIR);
+  const legacy = path.join(root, LEGACY_CONFIG_DIR);
+  if (!fs.existsSync(target) && fs.existsSync(legacy)) {
+    try { fs.renameSync(legacy, target); }
+    catch { return legacy; }
+  }
+  return target;
+}
 
 export class Workspace {
   constructor(root) {
@@ -21,21 +56,26 @@ export class Workspace {
     this.root = resolved;
   }
 
-  get configDir() { return path.join(this.root, '.llmflow'); }
+  get configDir() { return configDirFor(this.root); }
   get configPath() { return path.join(this.configDir, 'config.json'); }
+  // Just the directory name ('.flyt', or the legacy one on a project that has
+  // not been adopted yet) — skills.js builds workspace-relative paths from it.
+  get configDirName() { return configDirName(this.root); }
   // Skills a node template can attach by name (core/skills.js). Not created by
   // ensure(): an empty directory wouldn't survive a commit anyway, and this
   // shouldn't litter every repo it binds to. Projects create it when they have
   // something to say.
   get skillsDir() { return path.join(this.configDir, 'skills'); }
 
-  // Create .llmflow/ (+ a default config.json) on first bind; idempotent, so
+  // Create .flyt/ (+ a default config.json) on first bind; idempotent, so
   // re-binding an already-configured project leaves its config untouched.
+  // This is the "first write" that adopts a pre-D29 config directory.
   ensure() {
-    fs.mkdirSync(this.configDir, { recursive: true });
+    const dir = adoptConfigDir(this.root);
+    fs.mkdirSync(dir, { recursive: true });
     if (!fs.existsSync(this.configPath)) {
       writeJson(this.configPath, {
-        comment: 'Per-project LLM Flow configuration (version-controllable). '
+        comment: `Per-project ${APP_NAME} configuration (version-controllable). `
           + 'Created on first bind; safe to commit and hand-edit.',
         version: 1
       });

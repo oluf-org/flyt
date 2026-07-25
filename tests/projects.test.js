@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   ProjectRegistry, DEFAULT_PROJECT_ID,
-  projectIdFor, runsDirFor, appDataKey, ensureLlmflowGitignore
+  projectIdFor, runsDirFor, appDataKey, ensureConfigGitignore
 } from '../core/projects.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'llm-flow-proj-'));
@@ -38,7 +38,7 @@ test('projects: runs dir per storage mode (T2a)', () => {
   assert.equal(runsDirFor(null, { storage: 'workspace', ...common }), 'C:/app/runs');
   assert.equal(
     runsDirFor(folder, { storage: 'workspace', ...common }),
-    path.join(folder, '.llmflow', 'runs'));
+    path.join(folder, '.flyt', 'runs'));
   const appdata = runsDirFor(folder, { storage: 'appdata', ...common });
   assert.ok(appdata.startsWith(path.join('C:/appdata', 'projects')));
   assert.ok(appdata.endsWith('runs'));
@@ -48,13 +48,13 @@ test('projects: runs dir per storage mode (T2a)', () => {
   assert.notEqual(appDataKey(folder), appDataKey(twin));
 });
 
-test('projects: workspace storage writes .llmflow/.gitignore once', () => {
+test('projects: workspace storage writes .flyt/.gitignore once', () => {
   const folder = tmp();
-  ensureLlmflowGitignore(folder);
-  const p = path.join(folder, '.llmflow', '.gitignore');
+  ensureConfigGitignore(folder);
+  const p = path.join(folder, '.flyt', '.gitignore');
   assert.ok(fs.readFileSync(p, 'utf8').includes('runs/'));
   fs.writeFileSync(p, 'mine\n');
-  ensureLlmflowGitignore(folder); // a hand-edited file is left alone
+  ensureConfigGitignore(folder); // a hand-edited file is left alone
   assert.equal(fs.readFileSync(p, 'utf8'), 'mine\n');
 });
 
@@ -248,7 +248,7 @@ test('projects: adopt migrates an appdata project into a folder (Phase 6)', () =
   assert.ok(!registry.has(oldId), 'the appdata entry is gone');
   // Files landed in the repo; the appdata home is removed.
   assert.equal(fs.readFileSync(path.join(target, 'index.js'), 'utf8'), 'console.log(1)\n');
-  assert.ok(fs.existsSync(path.join(target, '.llmflow', 'runs', 'run-1', 'meta.json')));
+  assert.ok(fs.existsSync(path.join(target, '.flyt', 'runs', 'run-1', 'meta.json')));
   assert.ok(!fs.existsSync(appDir), 'the appdata directory is migrated away');
   assert.ok(registry.recents.includes(path.resolve(target)));
 });
@@ -287,7 +287,7 @@ test('projects: rename overrides the display name for a bound folder too', () =>
   assert.equal(registry.listOpen()[0].name, 'My Repo');
 });
 
-test('projects: workspace storage creates .llmflow on open; runners are per project', () => {
+test('projects: workspace storage creates .flyt on open; runners are per project', () => {
   const runners = [];
   const { registry } = makeRegistry({
     createRunner: (store, projectId) => {
@@ -299,8 +299,8 @@ test('projects: workspace storage creates .llmflow on open; runners are per proj
   const folder = tmp();
   registry.open(null);
   registry.open(folder);
-  assert.ok(fs.existsSync(path.join(folder, '.llmflow', '.gitignore')));
-  assert.ok(fs.existsSync(path.join(folder, '.llmflow', 'runs')));
+  assert.ok(fs.existsSync(path.join(folder, '.flyt', '.gitignore')));
+  assert.ok(fs.existsSync(path.join(folder, '.flyt', 'runs')));
   assert.equal(runners.length, 2);
   assert.equal(runners[1].projectId, projectIdFor(folder));
   assert.notEqual(runners[0].store.rootDir, runners[1].store.rootDir);

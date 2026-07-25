@@ -102,7 +102,7 @@ export async function claudeCodeAdapter({ model, system, prompt, onText, signal,
   // Scrub every ANTHROPIC_*/CLAUDE_CODE_* variable so the CLI authenticates
   // from the credential store alone: an exported API key must not silently
   // take over billing, and inherited session context (ANTHROPIC_BASE_URL,
-  // OAuth scopes — present whenever llm-flow itself was launched from a
+  // OAuth scopes — present whenever Flyt itself was launched from a
   // Claude Code session) makes the child 401. CLAUDE_CONFIG_DIR survives. The
   // node-dispatch path (npm shim) needs ELECTRON_RUN_AS_NODE inside Electron.
   const env = cliEnv({

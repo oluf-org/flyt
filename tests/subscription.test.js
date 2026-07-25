@@ -23,7 +23,7 @@ import {
 import { pickDefaultWorker, PROVIDER_ORDER, PROVIDER_MODEL_PRIORITY } from '../core/modelPriority.js';
 import { pickSafetyModel, SAFETY_MODEL_CANDIDATES } from '../core/safetyCheck.js';
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'llmflow-sub-'));
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-sub-'));
 
 // --- registry & id rules -----------------------------------------------------
 

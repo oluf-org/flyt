@@ -1,6 +1,6 @@
 # FLOW_LANG — the Flow DSL (`*.flow.yaml`)
 
-The AI-facing contract for authoring LLM Flow workflows as text. A flow file
+The AI-facing contract for authoring Flyt workflows as text. A flow file
 defines **structure** (nodes, template refs, overrides, relations, ports,
 approval gates); canvas positions are presentation and live in a sidecar
 `flows/<id>.layout.json` written only by the app. A flow with no layout file
@@ -66,7 +66,7 @@ Template instances (`use:`) accept these overrides: `title`, `worker`
 `tools` (registry: `write_file`, `create_task`, `write_task_md`).
 
 `skills` names expertise the **bound project** supplies as
-`.llmflow/skills/<name>.md`; it is appended to that node's prompt at run time,
+`.flyt/skills/<name>.md`; it is appended to that node's prompt at run time,
 so the same flow adapts to whichever project it runs against. See
 `DESIGN-SPEC.md` §6.2.
 

@@ -101,7 +101,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     }
   };
   // Skills the task carries (from its node's template) resolved against the
-  // bound project's .llmflow/skills/ (V1 task 10). Logged either way, so an
+  // bound project's .flyt/skills/ (V1 task 10). Logged either way, so an
   // attached-but-absent skill is distinguishable in the audit log from one
   // that applied — a skill that silently did nothing was the original bug.
   const { found: skills, missing: missingSkills } = loadSkills(workspace, task.skills);

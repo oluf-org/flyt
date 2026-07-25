@@ -1,5 +1,5 @@
 // Skills: reusable expertise a node template attaches BY NAME, resolved at run
-// time against the bound project's .llmflow/skills/<name>.md (D15 — per-project
+// time against the bound project's .flyt/skills/<name>.md (D15 — per-project
 // config is version-controllable and travels with the repo).
 //
 // The indirection is the whole point. A template names a skill it wants
@@ -13,14 +13,18 @@
 // envelope (V1 task 4), and a skill that could widen the tool set would let
 // expertise quietly expand what an agent is allowed to do.
 import fs from 'node:fs';
+import { CONFIG_DIR } from './brand.js';
 
 // Skill names come from templates and flow YAML, i.e. from users, and are
 // interpolated into a path. Confining the NAME is the first of two defenses;
 // Workspace.resolve() is the second (it also catches symlink escapes).
 const SAFE_NAME = /^[a-zA-Z0-9_-]+$/;
 
-export const SKILLS_DIR = '.llmflow/skills';
-export const skillPath = name => `${SKILLS_DIR}/${name}.md`;
+// Workspace-relative. `dir` is the project's config directory name, which a
+// pre-D29 project still reports as the legacy one until a write adopts it — so
+// skills keep resolving either way (core/workspace.js).
+export const SKILLS_DIR = `${CONFIG_DIR}/skills`;
+export const skillPath = (name, dir = CONFIG_DIR) => `${dir}/skills/${name}.md`;
 
 // Resolve attached skill names against a bound workspace.
 // Returns { found: [{ name, content }], missing: [{ name, reason }] }.
@@ -41,9 +45,10 @@ export function loadSkills(workspace, names) {
       missing.push({ name, reason: 'no workspace bound to this run' });
       continue;
     }
+    const rel = skillPath(name, workspace.configDirName);
     let content = null;
     try {
-      const p = workspace.resolve(skillPath(name));
+      const p = workspace.resolve(rel);
       content = fs.existsSync(p) && fs.statSync(p).isFile()
         ? fs.readFileSync(p, 'utf8').trim()
         : null;
@@ -52,7 +57,7 @@ export function loadSkills(workspace, names) {
       continue;
     }
     if (content) found.push({ name, content });
-    else missing.push({ name, reason: `no ${skillPath(name)} in the workspace` });
+    else missing.push({ name, reason: `no ${rel} in the workspace` });
   }
   return { found, missing };
 }

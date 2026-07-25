@@ -16,6 +16,7 @@ import { gateCopy } from './ApprovalModal.jsx';
 import { feedItems } from './nodeFeedData.js';
 import { mergeSnapshot } from '../core/snapshotDiff.js';
 import { sigil } from './sigil.js';
+import { APP_NAME } from '../core/brand.js';
 import {
   paneLabel, paneStatus, sendPlan, canBroadcast, diffResolvedFlows
 } from './compareRun.js';
@@ -41,7 +42,7 @@ export default function CompareRun({
     let live = true;
     setSnaps({});
     for (const id of runIds) {
-      window.llmflow.getSnapshot(projectId, id)
+      window.flyt.getSnapshot(projectId, id)
         .then(s => { if (live && s) setSnaps(prev => ({ ...prev, [id]: s })); })
         .catch(() => {});
     }
@@ -51,7 +52,7 @@ export default function CompareRun({
 
   // Live stream: mirror App's onRunUpdate merge, but for both runs in the pair.
   useEffect(() => {
-    return window.llmflow.onRunUpdate(payload => {
+    return window.flyt.onRunUpdate(payload => {
       const { runId } = payload;
       if (payload.projectId && payload.projectId !== projectId) return;
       if (!runIds.includes(runId)) return;
@@ -62,7 +63,7 @@ export default function CompareRun({
       }
       if (!cur) return; // no baseline yet — the initial fetch will carry it
       if (payload.base !== cur.rev) {
-        window.llmflow.getSnapshot(projectId, runId).then(s => {
+        window.flyt.getSnapshot(projectId, runId).then(s => {
           const now = snapsRef.current[runId];
           if (s && (now?.rev ?? 0) <= s.rev) setSnaps(prev => ({ ...prev, [runId]: s }));
         });
@@ -141,13 +142,13 @@ export default function CompareRun({
     prevParkSig.current = parkSig;
     const parked = parkSig.replace(/\|/g, '') !== '';
     if (parked) {
-      window.llmflow?.signalApprovalGate?.({
+      window.flyt?.signalApprovalGate?.({
         state: 'pending',
-        title: 'A comparison run needs you — LLM Flow',
+        title: `A comparison run needs you — ${APP_NAME}`,
         body: 'One side is parked at a gate. Paused until you decide.'
       });
     } else if (wasParked) {
-      window.llmflow?.signalApprovalGate?.({ state: 'resolved' });
+      window.flyt?.signalApprovalGate?.({ state: 'resolved' });
     }
   }, [parkSig]);
 

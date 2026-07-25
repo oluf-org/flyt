@@ -29,7 +29,7 @@ import { openaiAdapter } from './openai.js';
 import { kimiAdapter } from './kimi.js';
 import { mockAdapter } from './mock.js';
 // Subscription (CLI-delegation) providers: the vendor's own CLI is spawned as
-// the authenticated runtime — llm-flow never holds a token
+// the authenticated runtime — Flyt never holds a token
 // (SUBSCRIPTION-AUTH-GUIDE). Same callModel contract as every other adapter.
 import { claudeCodeAdapter } from './claudeCode.js';
 import { codexAdapter } from './codexCli.js';
