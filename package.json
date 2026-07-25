@@ -1,6 +1,6 @@
 {
   "name": "flyt",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Flyt — AI-first orchestration: a flowchart canvas over a file-based multi-model pipeline",
   "main": "electron/main.js",
   "type": "module",
