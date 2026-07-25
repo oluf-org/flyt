@@ -125,12 +125,21 @@ test('brand: "flow" is still the domain noun and was NOT renamed', () => {
                    'core/flowRunner.js', 'core/flowstore.js', 'FLOW_LANG.md', 'FLOW_NODES.md']) {
     assert.ok(fs.existsSync(path.join(REPO, p)), `${p} must keep its name (D29)`);
   }
-  // Flows on disk are still *.flow.yaml — renaming them would have meant a
-  // migration for every existing project, which D29 explicitly declined.
-  const flows = fs.existsSync(path.join(REPO, 'flows'))
-    ? fs.readdirSync(path.join(REPO, 'flows')).filter(f => f.endsWith('.flow.yaml'))
-    : [];
-  assert.ok(flows.length > 0, 'flows/ should still hold *.flow.yaml files');
+  // Flows on disk are still *.flow.yaml — renaming the extension would have
+  // meant a migration for every existing project, which D29 explicitly
+  // declined. Asserted against the store that mints the filenames, NOT against
+  // flows/ on disk: that directory is gitignored user data and simply does not
+  // exist on a fresh checkout (which is where CI runs).
+  const store = fs.readFileSync(path.join(REPO, 'core/flowstore.js'), 'utf8');
+  assert.match(store, /'\.flow\.yaml'/, 'the on-disk flow extension must not be rebranded');
+
+  // If a working copy does have flows/, they must match that extension too.
+  const flowsDir = path.join(REPO, 'flows');
+  if (fs.existsSync(flowsDir)) {
+    const stray = fs.readdirSync(flowsDir)
+      .filter(f => f.endsWith('.yaml') && !f.endsWith('.flow.yaml'));
+    assert.deepEqual(stray, [], 'flows/ should only hold *.flow.yaml files');
+  }
 
   // And the word survives in code at scale: if some future pass "finished" the
   // rename, this count would collapse.
