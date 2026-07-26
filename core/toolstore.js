@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeTool, toolSummary, TOOL_ID } from '../src/toolTypes.js';
 import { builtinDefinitions } from './tools/builtins.js';
+import { normalizeToolset, SEED_TOOLSETS, SET_ID } from './toolsets.js';
 
 // Fields a user may own on a built-in. Everything else — schema, description,
 // effects, risk — comes from the module, because that is what actually runs.
@@ -27,6 +28,59 @@ export class ToolStore {
     fs.mkdirSync(rootDir, { recursive: true });
     this.problems = [];     // files that could not be read, for the Tools page
     this.seedBuiltins();
+    this.seedToolsets();
+  }
+
+  // --- toolsets (tools/sets/<id>.json) ---------------------------------------
+  setsDir() { return path.join(this.rootDir, 'sets'); }
+
+  // Seeded once, then the user's. Unlike a built-in tool — whose run() lives in
+  // source and whose file must therefore stay truthful — a set is pure data, so
+  // an edited set is simply the user's answer and is never overwritten.
+  seedToolsets() {
+    fs.mkdirSync(this.setsDir(), { recursive: true });
+    const written = [];
+    for (const def of SEED_TOOLSETS) {
+      const p = path.join(this.setsDir(), `${def.id}.json`);
+      if (fs.existsSync(p)) continue;
+      fs.writeFileSync(p, JSON.stringify(normalizeToolset(def), null, 2), 'utf8');
+      written.push(def.id);
+    }
+    return written;
+  }
+
+  setPath(id) {
+    if (!SET_ID.test(String(id ?? ''))) throw new Error(`Invalid toolset id "${id}"`);
+    return path.join(this.setsDir(), `${id}.json`);
+  }
+
+  listSets() {
+    if (!fs.existsSync(this.setsDir())) return [];
+    const out = [];
+    for (const f of fs.readdirSync(this.setsDir()).filter(n => n.endsWith('.json'))) {
+      try { out.push(normalizeToolset(JSON.parse(fs.readFileSync(path.join(this.setsDir(), f), 'utf8')))); }
+      catch (err) { this.problems.push({ file: `sets/${f}`, error: String(err?.message ?? err) }); }
+    }
+    return out.sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  getSet(id) {
+    try { return normalizeToolset(JSON.parse(fs.readFileSync(this.setPath(id), 'utf8'))); }
+    catch { return null; }
+  }
+
+  saveSet(def) {
+    const clean = normalizeToolset(def);
+    fs.mkdirSync(this.setsDir(), { recursive: true });
+    fs.writeFileSync(this.setPath(clean.id), JSON.stringify(clean, null, 2), 'utf8');
+    return clean;
+  }
+
+  // The whole library in the shape the linter and the grant resolver take:
+  // `{ tools, sets }`. One name for the pair so a caller cannot hand half of
+  // it over and get a silently empty library back.
+  catalog() {
+    return { tools: this.listFull(), sets: this.listSets() };
   }
 
   // Idempotent: writes a built-in's file when it is missing or when the

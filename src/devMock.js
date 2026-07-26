@@ -585,11 +585,14 @@ export function installDevMock() {
     deleteNodeTemplate: async id => { mockTemplates.delete(id); },
     // The browser-dev shim has no ToolStore behind it: report the built-ins,
     // which is exactly what a fresh library seeds to.
-    listTools: async () => AGENT_TOOLS.map(id => ({
-      id, title: id, description: '', provider: 'builtin',
-      effects: id === 'bash' ? ['shell'] : id === 'read_file' ? ['read'] : ['write'],
-      risk: id === 'read_file' ? 'safe' : 'caution', trust: 'trusted', enabled: true
-    })),
+    listTools: async () => AGENT_TOOLS.map(id => {
+      const effects = id === 'bash' ? ['shell'] : /^read_/.test(id) ? ['read'] : ['write'];
+      return {
+        id, title: id, description: '', provider: 'builtin', effects,
+        scope: /^(create_task|write_task_md)$/.test(id) ? 'run' : 'workspace',
+        risk: effects[0] === 'read' ? 'safe' : 'caution', trust: 'trusted', enabled: true
+      };
+    }),
     toolsFolder: async () => ({ dir: 'tools', packaged: false }),
     // No shell to open a file with in a browser; the link is still exercised.
     openRunArtifact: async (_pid, _runId, rel) => { console.info('[devMock] would open', rel); }

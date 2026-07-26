@@ -12,7 +12,7 @@ import RunResult from './RunResult.jsx';
 import RunsList from './RunsList.jsx';
 import NodeFocus from './NodeFocus.jsx';
 import { isTerminal } from './runProgress.js';
-import { resolveFlow, namedFlow, UNTITLED_FLOW, isStructuralNode, setKnownTools } from './flowTypes.js';
+import { resolveFlow, namedFlow, UNTITLED_FLOW, isStructuralNode, setKnownTools, setToolCatalog } from './flowTypes.js';
 import { comparePair } from './compareRun.js';
 import { layoutPositions, shrinkOrchBox } from './flowLayout.js';
 import { mergeSnapshot } from '../core/snapshotDiff.js';
@@ -433,6 +433,9 @@ export default function App() {
     const list = (await window.flyt.listTools?.()) ?? [];
     setTools(list);
     setKnownTools(list.filter(t => t.enabled).map(t => t.id));
+    // The records too, so a picker can offer only what a node type may hold
+    // (an aiStep: read-effect tools only — TOOLS-PLAN §6.4).
+    setToolCatalog(list);
     return list;
   }, []);
 

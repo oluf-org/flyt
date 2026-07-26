@@ -17,14 +17,19 @@ const BASE_TYPES = [
 ];
 
 export default function NodesPage({ templates, tools = [], selectedId, models, activeModels, mockEnabled = false, onChanged, onSelect }) {
-  // The grantable set comes from the tool library (tools/<id>.json) — falling
-  // back to the shipped built-ins only before the first IPC round trip.
-  const grantable = tools.filter(t => t.enabled).map(t => t.id);
-  const toolIds = grantable.length ? grantable : AGENT_TOOLS;
-  const toolMeta = Object.fromEntries(tools.map(t => [t.id, t]));
   const [draft, setDraft] = useState(null);
   const [saved, setSaved] = useState(true);
   const [error, setError] = useState('');
+
+  // What this template may be granted, from the tool library (tools/<id>.json)
+  // — falling back to the shipped built-ins before the first IPC round trip.
+  // An AI step gets read-effect tools only: anything else is dropped at run
+  // time (TOOLS-PLAN §6.4), so offering it here would be a lie.
+  const grantable = tools
+    .filter(t => t.enabled && (draft?.baseType === 'agentTask' || (t.effects ?? []).every(e => e === 'read')))
+    .map(t => t.id);
+  const toolIds = grantable.length ? grantable : AGENT_TOOLS;
+  const toolMeta = Object.fromEntries(tools.map(t => [t.id, t]));
 
   // Load the selected template into the draft (fresh copy, never live-edited).
   useEffect(() => {
@@ -160,9 +165,9 @@ export default function NodesPage({ templates, tools = [], selectedId, models, a
             />
           </section>
 
-          {draft.baseType === 'agentTask' && (
+          {toolIds.length > 0 && (
             <section>
-              <h3>Tool availability</h3>
+              <h3>Tool availability{draft.baseType === 'agentTask' ? '' : ' — read-only on an AI step'}</h3>
               {toolIds.map(tool => (
                 <label className="check-row" key={tool}>
                   <input

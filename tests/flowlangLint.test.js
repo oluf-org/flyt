@@ -72,8 +72,6 @@ const CASES = [
     doc('nodes:\n  a:\n    use: plan-start\nflow:\n  - input -> a\n')],
   ['duplicate-edge', 'warning',
     doc('nodes:\n  a:\n    use: plan-start\nflow:\n  - input -> a -> output\n  - input -> a\n')],
-  ['invalid-override', 'error',
-    doc('nodes:\n  a:\n    use: plan-start\n    tools: [write_file]\nflow:\n  - input -> a -> output\n')],
   ['unknown-tool', 'error',
     doc('nodes:\n  a:\n    use: work\n    tools: [rm_rf]\nflow:\n  - input -> a -> output\n')],
   ['orphan-approval', 'warning',
@@ -89,6 +87,27 @@ for (const [rule, severity, text] of CASES) {
     if (severity === 'error') assert.equal(r.ok, false);
   });
 }
+
+// invalid-override is unreachable through lintText (the schema layer rejects
+// any key it doesn't know first), so it is exercised on a flow OBJECT — which
+// is also how the runner's pre-run gate sees a flow. Since TOOLS-PLAN P3 the
+// rule no longer fires for `tools`: an aiStep may hold read-effect tools, and
+// `readonly-tools` polices which (tests/grants.test.js).
+test('lint rule: invalid-override (error) on an unknown override key', () => {
+  const flow = {
+    id: 'p', name: 'P',
+    nodes: [
+      { id: 'input', type: 'input', data: {} },
+      { id: 'a', templateId: 'plan-start', overrides: { nonsense: 1 } },
+      { id: 'output', type: 'output', data: {} }
+    ],
+    edges: [{ id: 'e1', source: 'input', target: 'a' }, { id: 'e2', source: 'a', target: 'output' }]
+  };
+  const r = lintFlow(flow, { templates });
+  const hit = r.findings.find(f => f.rule === 'invalid-override');
+  assert.ok(hit, `expected invalid-override in [${rulesOf(r)}]`);
+  assert.equal(r.ok, false);
+});
 
 test('lint: tools override IS valid on agentTask templates', () => {
   const r = lintText(

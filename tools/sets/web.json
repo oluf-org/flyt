@@ -1,0 +1,13 @@
+{
+  "id": "web",
+  "title": "Web",
+  "description": "Reaching the network: fetching pages and searching. Empty until the v1 catalog lands (P4).",
+  "include": [
+    "uses:network"
+  ],
+  "includeSets": [],
+  "exclude": [],
+  "source": {
+    "kind": "builtin"
+  }
+}

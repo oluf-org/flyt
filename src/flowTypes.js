@@ -34,6 +34,36 @@ export const AGENT_TOOLS = ['read_file', 'create_file', 'write_file', 'bash', 'c
 // and an unknown id is still dropped rather than carried into a run.
 let knownToolIds = AGENT_TOOLS;
 export const knownTools = () => knownToolIds;
+
+// The same snapshot with each tool's record (effects, risk, trust), installed
+// by the renderer so a picker can offer only what the node can actually hold —
+// an aiStep may be granted read-effect tools and nothing else (§6.4), and a
+// checkbox for a tool the runtime will drop is the "silently does nothing"
+// failure this codebase keeps writing tests against.
+let toolRecords = [];
+export const toolCatalog = () => toolRecords;
+export function setToolCatalog(records) {
+  toolRecords = Array.isArray(records) ? records : [];
+  return toolRecords;
+}
+// Ids a node of this type may be granted.
+export function grantableTools(type) {
+  if (!toolRecords.length) return knownTools();
+  const usable = type === 'agentTask'
+    ? toolRecords
+    : toolRecords.filter(t => (t.effects ?? []).every(e => e === 'read'));
+  return usable.filter(t => t.enabled !== false).map(t => t.id);
+}
+
+// A ceiling is a toolset id, a selector, a literal list, or absent. Stored as
+// written (a string stays a string) so the file reads like it was authored.
+export function normalizeCeiling(value) {
+  if (Array.isArray(value)) {
+    const list = value.filter(v => typeof v === 'string' && v.trim()).map(v => v.trim());
+    return list.length ? list : null;
+  }
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
 export function setKnownTools(ids) {
   knownToolIds = Array.isArray(ids) && ids.length ? [...new Set(ids.map(String))] : AGENT_TOOLS;
   return knownToolIds;
@@ -610,6 +640,12 @@ export function normalizeTemplate(tpl) {
       ? { provider: tpl.worker.provider, model: tpl.worker.model } : null,
     instructions: tpl.instructions ?? '',
     tools: Array.isArray(tpl.tools) ? tpl.tools.filter(t => knownTools().includes(t)) : null,
+    // The ceiling is NOT filtered against the known tools: it may name a
+    // toolset or a selector (`effects:read`), and it is resolved against the
+    // library at run time (core/tools/index.js resolveTools). Absent ⇒ the
+    // ceiling is the static grant, which is what keeps every pre-ceiling flow
+    // at exactly its present envelope (TOOLS-PLAN §6.1).
+    toolCeiling: normalizeCeiling(tpl.toolCeiling),
     skills: Array.isArray(tpl.skills) ? tpl.skills.map(String) : [],
     requiresApproval: Boolean(tpl.requiresApproval),
     approveToolCalls: Boolean(tpl.approveToolCalls),
@@ -639,6 +675,11 @@ export function resolveInstance(node, tpl) {
   const isWork = t?.id === 'work';
   const workTools = isWork ? (WORK_TOOLS[category] ?? WORK_TOOLS.default) : null;
   const tools = ov.tools ?? t?.tools ?? workTools;
+  // Ceiling precedence, narrowest wins: the instance's own, else the
+  // template's. Absent from both, the static grant IS the ceiling — resolved
+  // downstream rather than materialized here, so a flow file stays honest
+  // about what its author actually wrote (TOOLS-PLAN §5, §6.1).
+  const toolCeiling = normalizeCeiling(ov.toolCeiling) ?? t?.toolCeiling ?? null;
   const workGate = isWork && (tools ?? []).includes('bash');
   const data = {
     templateId: node.templateId,
@@ -657,6 +698,7 @@ export function resolveInstance(node, tpl) {
     ...(typeof ov.system === 'string' && ov.system.trim() ? { system: ov.system } : {}),
     ...(category ? { category } : {}),
     ...(tools ? { tools } : {}),
+    ...(toolCeiling ? { toolCeiling } : {}),
     ...((ov.skills ?? t?.skills)?.length ? { skills: ov.skills ?? t.skills } : {}),
     requiresApproval: ov.requiresApproval ?? t?.requiresApproval ?? false,
     approveToolCalls: ov.approveToolCalls ?? (workGate ? true : t?.approveToolCalls ?? false),
@@ -746,9 +788,13 @@ export function overridableFields(node) {
   if (d.category != null || d.role === 'execute') fields.add('category');
   if (d.evalType != null || d.role === 'evaluation') fields.add('evalType');
   if (d.role === 'translate' || d.language != null) fields.add('language');
-  // Only agentTask nodes can hold tools (the agent executor); mirror the lint
-  // rule so a tools override is legal exactly where it means something.
-  if (type === 'agentTask') fields.add('tools');
+  // `tools` is the grant. agentTask nodes hold any of them; an aiStep may hold
+  // read-effect ones (a planner that can check the time or read a page plans
+  // better — TOOLS-PLAN §6.4), which the linter polices by effect.
+  if (type === 'agentTask' || type === 'aiStep') fields.add('tools');
+  // `toolCeiling` is the hard limit the grant lives inside. On an orchestrator
+  // it is the envelope its generated children inherit (§6.3).
+  if (type === 'agentTask' || type === 'aiStep' || type === 'orchestrator') fields.add('toolCeiling');
   return fields;
 }
 

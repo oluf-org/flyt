@@ -27,13 +27,15 @@
 //                retry-for-<node>.md guidance) | escalate (human gate)
 //   stitch    -> fixTasks[] routed through the existing create_task tool
 import { callModel, abortError, isAbortError } from './adapters/index.js';
+import { runAgent, toolProtocol } from './agent.js';
 import { makeRetrospective } from './retrospective.js';
 import { resolveCallTarget } from './modelSource.js';
 import { runExecutorTask } from './nodes/executor.js';
 import { Workspace } from './workspace.js';
 import { loadSkills, withSkillsSection } from './skills.js';
 import { createWriteLedger } from './writeLedger.js';
-import { executeTool } from './tools/index.js';
+import { executeTool, grantContext, resolveTools, toolLibraryForLint } from './tools/index.js';
+import { narrowCeiling } from '../src/toolGrants.js';
 import { checkToolCall } from './safetyCheck.js';
 import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, parseRefineQuestions, stripRefineQuestions, extractJson } from './planEval.js';
 import { JUDGE_SYSTEM, buildJudgePrompt, parseJudgeVerdict } from './judge.js';
@@ -536,6 +538,48 @@ export class FlowRunner {
     } finally {
       this.untrackAbort(runId, ctl);
     }
+  }
+
+  // An aiStep with a grant runs through the agent loop instead of a bare model
+  // call (TOOLS-PLAN §6.4): a planner that can check the time or read a page
+  // plans better. Only read-effect tools may be granted here — the linter's
+  // `readonly-tools` rule — and runAgent with an empty tool list IS
+  // trackedCallModel, so every existing aiStep takes exactly its old path.
+  async trackedRunAgent(runId, nodeId, params, tools) {
+    if (!tools.length) return this.trackedCallModel(runId, params);
+    const ctl = this.trackAbort(runId);
+    try {
+      return await runAgent({
+        ...params, tools, signal: ctl.signal,
+        ctx: { store: this.store, runId, nodeId, workspace: this.workspaceFor(runId) }
+      });
+    } finally {
+      this.untrackAbort(runId, ctl);
+    }
+  }
+
+  // The tools an aiStep node actually gets, resolved and logged like an
+  // agentTask's (§5). Read-effect only: anything else is dropped here as well
+  // as flagged by the linter, because a lint warning is not a safety boundary.
+  aiStepTools(runId, node) {
+    if (!Array.isArray(node.data?.tools) || !node.data.tools.length) return [];
+    const grant = resolveTools({ grant: node.data.tools, ceiling: node.data.toolCeiling ?? null });
+    const readOnly = grant.tools.filter(t => (t.effects ?? []).every(e => e === 'read'));
+    const dropped = grant.tools.filter(t => !readOnly.includes(t));
+    this.store.appendLog(runId, {
+      event: 'tool_resolved', node: node.id, tools: readOnly.map(t => t.name),
+      ceiling: grant.ceiling, source: 'static'
+    });
+    for (const r of grant.refused) {
+      this.store.appendLog(runId, { event: 'tool_grant_refused', node: node.id, tool: r.tool, ceiling: grant.ceiling });
+    }
+    for (const m of grant.missing) {
+      this.store.appendLog(runId, { event: 'tool_missing', node: node.id, tool: m.tool, reason: m.reason });
+    }
+    for (const t of dropped) {
+      this.store.appendLog(runId, { event: 'tool_missing', node: node.id, tool: t.name, reason: 'not read-only on an aiStep' });
+    }
+    return readOnly;
   }
 
   // The run's bound project, or null when it has none / the folder is gone.
@@ -1525,7 +1569,7 @@ export class FlowRunner {
     // Pre-run gate (REFACTOR-PLAN §4): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
-    const gate = lintFlow(flow, { templates: this.nodeStore?.listFull() ?? null, rules: RUNTIME_RULES });
+    const gate = lintFlow(flow, { templates: this.nodeStore?.listFull() ?? null, rules: RUNTIME_RULES, library: toolLibraryForLint() });
     if (!gate.ok) {
       throw new Error(`Flow "${flow.name ?? flow.id}" failed validation:\n`
         + gate.errors.map(e => `- [${e.rule}] ${e.message}`).join('\n'));
@@ -2441,6 +2485,11 @@ export class FlowRunner {
         // Tool availability comes from the node template (overridable per
         // workflow); undefined = the full registry.
         ...(Array.isArray(node.data?.tools) ? { tools: node.data.tools } : {}),
+        // The ceiling rides along for the same reason the grant does: the
+        // executor runs from tasks.json alone and never sees the node. Absent
+        // ⇒ the ceiling is the grant (TOOLS-PLAN §6.1), so a task written
+        // before ceilings existed keeps exactly its envelope.
+        ...(node.data?.toolCeiling ? { toolCeiling: node.data.toolCeiling } : {}),
         // Skills ride on the task for the same reason tools do: the executor
         // runs from tasks.json alone and never sees the node. Resolved against
         // the bound project at execution time, not here (V1 task 10).
@@ -2469,9 +2518,17 @@ export class FlowRunner {
       const role = effectiveRole(node.data?.role ?? 'custom', node.data?.evalType);
       const worker = resolveCallTarget(resolveWorker(node, this.config), this.config);
       const apiKey = worker.apiKey;
+      // Read-only tools on a planning node (§6.4). Resolved before node_start
+      // so the log records HOW this node will call them, the same way an
+      // agentTask's does — the gap the `protocol` field exists to close.
+      const stepTools = this.aiStepTools(runId, node);
+      if (stepTools.length && worker.provider !== 'mock' && worker.provider !== 'anthropic') {
+        worker.supportsTools = Boolean(this.config.modelCapabilities?.[worker.model]);
+      }
       this.store.appendLog(runId, {
         event: 'node_start', node: node.id, type: 'aiStep', role,
         worker: { provider: worker.provider, model: worker.model },
+        ...(stepTools.length ? { protocol: toolProtocol(worker), tools: stepTools.map(t => t.name) } : {}),
         ...(node.data?.effort ? { effort: node.data.effort } : {})
       });
       let system = this.applySkills(runId, node.id,
@@ -2525,12 +2582,12 @@ export class FlowRunner {
 
       let result;
       try {
-        result = await this.trackedCallModel(runId, {
+        result = await this.trackedRunAgent(runId, node.id, {
           ...worker, apiKey, system, prompt: userMsg, onText,
           // Effort level sets the response budget; medium keeps the default.
           ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
           onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
-        });
+        }, stepTools);
         // A call that comes back with nothing is not a success. Recording one as
         // success wrote a 0-byte artifact, marked the node done, and handed
         // emptiness to every downstream node — the run read as healthy the whole
@@ -3159,17 +3216,34 @@ export class FlowRunner {
       }
     }
 
+    // A generated node inherits its owner's ceiling, narrowed by its own
+    // (TOOLS-PLAN §6.3). This is the hole that would otherwise open the moment
+    // planning became tool-aware: a node that decides what other nodes may do
+    // must not be able to decide they may do more than IT may.
+    const ownerCeiling = ownerNode.data?.toolCeiling ?? null;
+    const ctx = ownerCeiling ? grantContext() : null;
+
     const created = [];
     for (const s of specs) {
       const node = this.specNode(s);
+      const ceiling = ownerCeiling
+        ? narrowCeiling(ownerCeiling, node.data?.toolCeiling ?? null, ctx)
+        : node.data?.toolCeiling ?? null;
       node.data = {
         ...node.data,
         ...(s.taskRef ? { taskRef: s.taskRef } : {}),
         generatedBy: ownerNode.id,
+        ...(ceiling ? { toolCeiling: ceiling } : {}),
         // Container children run autonomously: managed by the orchestrator's
         // inline sub-walk, never pausing at an approval gate.
         ...(parentId ? { managedBy: parentId, requiresApproval: false } : {})
       };
+      if (ownerCeiling) {
+        this.store.appendLog(runId, {
+          event: 'tool_ceiling_inherited', node: node.id, from: ownerNode.id,
+          ceiling, ...(node.data.toolCeiling !== (s.toolCeiling ?? null) && s.toolCeiling ? { declared: s.toolCeiling } : {})
+        });
+      }
       if (parentId) {
         node.parentId = parentId;
         node.extent = 'parent';

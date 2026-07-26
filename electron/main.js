@@ -877,7 +877,7 @@ ipcMain.handle('flow:folder', () => ({ dir: flows.rootDir, packaged: app.isPacka
 ipcMain.handle('flow:openFolder', () => shell.openPath(flows.rootDir));
 // On-save validation for the canvas badge: full rule set, structured findings.
 ipcMain.handle('flow:lint', (_e, id) =>
-  lintFlow(flows.load(id), { templates: nodeLibrary.listFull() }));
+  lintFlow(flows.load(id), { templates: nodeLibrary.listFull(), library: toolLibrary.catalog() }));
 
 // --- Configs (CONFIGS-COMPARE P1): modes as first-class bundles ---
 // A config IS a mode in the flow's modes: block; these are thin passes into
@@ -963,7 +963,7 @@ ipcMain.handle('tool:folder', () => ({ dir: toolLibrary.rootDir, packaged: app.i
   return flows.save({ ...parsed, nodes });
 });
 ipcMain.handle('flow:lintYaml', (_e, yamlText) =>
-  lintText(yamlText, { templates: nodeLibrary.listFull() }));
+  lintText(yamlText, { templates: nodeLibrary.listFull(), library: toolLibrary.catalog() }));
 
 // Exact on-disk source (the committed *.flow.yaml). Useful to see what was
 // last persisted vs the live in-memory model.

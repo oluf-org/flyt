@@ -2,7 +2,7 @@
 // retrospective. Sequential orchestration lives in pipeline.js; this module
 // only knows how to execute a single self-describing task from file state.
 import { runAgent, toolProtocol } from '../agent.js';
-import { getTools } from '../tools/index.js';
+import { resolveTools } from '../tools/index.js';
 import { makeRetrospective } from '../retrospective.js';
 import { Workspace } from '../workspace.js';
 import { loadSkills, withSkillsSection } from '../skills.js';
@@ -35,9 +35,26 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     worker.supportsTools = Boolean(config.modelCapabilities?.[worker.model]);
   }
 
-  // Toolset: everything in the registry unless the task names a subset
-  // (task.tools: string[]).
-  const tools = getTools(task.tools);
+  // The grant, intersected with the ceiling (TOOLS-PLAN §6). Absent ceiling ⇒
+  // the ceiling is the grant, and an absent grant is the whole library — the
+  // pre-ceiling semantics, unchanged.
+  //
+  // Nothing here is fatal, and the two failure modes are deliberately
+  // different: a MISSING tool degrades the node quietly (the skills rule), a
+  // REFUSED one means something tried to exceed its envelope and is recorded
+  // as a problem on the retrospective as well as in the log.
+  const grant = resolveTools({ grant: task.tools ?? null, ceiling: task.toolCeiling ?? null });
+  const tools = grant.tools;
+  store.appendLog(runId, {
+    event: 'tool_resolved', node: `executor:${taskId}`,
+    tools: tools.map(t => t.name), ceiling: grant.ceiling, source: 'static'
+  });
+  for (const m of grant.missing) {
+    store.appendLog(runId, { event: 'tool_missing', node: `executor:${taskId}`, tool: m.tool, reason: m.reason });
+  }
+  for (const r of grant.refused) {
+    store.appendLog(runId, { event: 'tool_grant_refused', node: `executor:${taskId}`, tool: r.tool, ceiling: grant.ceiling });
+  }
 
   // `protocol` records HOW this agent will call its tools. The log said only
   // that tools were called, so the native and text paths were indistinguishable
@@ -152,6 +169,10 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     // is its business; whether the run remembers is ours.
     const redCommands = result.toolCalls.filter(c => c.ok && c.tool === 'bash' && c.result?.exitCode !== 0);
     const problems = [
+      // A refused grant is a problem even when the task succeeded: something
+      // asked for more than its ceiling allows, and that must be visible
+      // rather than merely absent (TOOLS-PLAN §5.3).
+      ...grant.refused.map(r => `Tool "${r.tool}" was refused: outside this node's toolCeiling.`),
       ...failedCalls.map(c => `Tool call ${c.tool} failed: ${c.error}`),
       ...redCommands.map(c => `Command exited ${c.result.exitCode}: ${String(c.result.command ?? '').slice(0, 120)}`)
     ];

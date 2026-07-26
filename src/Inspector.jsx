@@ -1,9 +1,10 @@
 import React from 'react';
 import {
-  // knownTools() is the live tool library (tools/<id>.json) snapshot App
-  // installs at boot, before any inspector panel renders; it falls back to the
-  // shipped built-ins when there is no library to read.
-  TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, knownTools,
+  // grantableTools(type) reads the live tool library (tools/<id>.json) snapshot
+  // App installs at boot, before any inspector panel renders, and returns what
+  // THIS node type may hold; it falls back to the shipped built-ins when there
+  // is no library to read.
+  TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, grantableTools,
   EFFORT_LEVELS, DEFAULT_EFFORT, EVAL_TYPES, WORK_CATEGORIES,
   nodeLabel, isInstance, resolveInstance, nodePorts, isStructuralNode,
   overridableFields, resolveFlow, diffOverrides
@@ -819,11 +820,14 @@ function InstanceInspector({ node, parent, template, models, activeModels, onCha
           />
         </section>
 
-        {template?.baseType === 'agentTask' && (
+        {(template?.baseType === 'agentTask' || template?.baseType === 'aiStep') && (
           <section>
             <h3>Tools <OverrideTag active={ov.tools != null} onReset={() => unset('tools')} /></h3>
-            {knownTools().map(tool => {
-              const effective = ov.tools ?? template?.tools ?? knownTools();
+            {/* An aiStep is offered read-effect tools only: anything else is
+                dropped at run time (TOOLS-PLAN §6.4), and a checkbox for a
+                tool that will be dropped is worse than no checkbox. */}
+            {grantableTools(template?.baseType).map(tool => {
+              const effective = ov.tools ?? template?.tools ?? grantableTools(template?.baseType);
               return (
                 <label className="check-row" key={tool}>
                   <input
@@ -1066,8 +1070,8 @@ function ConfigNodeEditor({ node, mode, template, models, activeModels, onChange
             {has('tools') && (
               <section>
                 <h3>Tools {tag('tools')}</h3>
-                {knownTools().map(tool => {
-                  const effective = ov.tools ?? eff.tools ?? knownTools();
+                {grantableTools(eff.type ?? node?.type).map(tool => {
+                  const effective = ov.tools ?? eff.tools ?? grantableTools(eff.type ?? node?.type);
                   return (
                     <label className="check-row" key={tool}>
                       <input

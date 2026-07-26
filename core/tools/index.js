@@ -14,6 +14,8 @@ import { BUILTIN_MODULES, builtinDefinition } from './builtins.js';
 import { getProvider } from './providers.js';
 import { previewResult, handleNote } from './preview.js';
 import { redactArgs } from './redact.js';
+import { normalizeToolset, SEED_TOOLSETS } from '../toolsets.js';
+import { makeContext, resolveGrant } from '../../src/toolGrants.js';
 import { normalizeTool, isDestructive as effectsAreDestructive } from '../../src/toolTypes.js';
 
 export { validateArgs, schemaProblems, MAX_SCHEMA_DEPTH } from './schema.js';
@@ -77,19 +79,49 @@ export function registerDefinition(def) {
 // Replace the registry with a library's definitions (what the app does at
 // startup with ToolStore.listFull()). Returns what loaded and what didn't,
 // with reasons — resolution is never silent (TOOLS-PLAN §5).
-export function loadLibrary(defs = []) {
+export function loadLibrary(defs = [], sets = null) {
   registry.clear();
   const loaded = [], skipped = [];
   for (const def of defs) {
     const r = registerDefinition(def);
     if (r.ok) loaded.push(r.id); else skipped.push({ id: r.id, reason: r.reason });
   }
+  if (sets) loadToolsets(sets);
   return { loaded, skipped };
 }
 
-// The built-ins, as a working default for every host without a library.
+// Toolsets are the names ceilings are written in (TOOLS-PLAN §4.2). They live
+// beside the library in tools/sets/ and are cached here so grant resolution
+// has one source at run time, whether or not a ToolStore exists.
+let toolsets = SEED_TOOLSETS.map(normalizeToolset);
+export function loadToolsets(sets = []) {
+  toolsets = sets.map(s => { try { return normalizeToolset(s); } catch { return null; } }).filter(Boolean);
+  return toolsets;
+}
+export const getToolsets = () => toolsets;
+
+// Everything grant resolution needs: the live library plus the sets ceilings
+// are written in.
+export const grantContext = () => makeContext({ library: [...registry.values()], sets: toolsets });
+
+// The same pair in the shape the linter takes, so the pre-run gate judges
+// ceilings against exactly what the run will bind.
+export const toolLibraryForLint = () => ({ tools: [...registry.values()], sets: toolsets });
+
+// Resolve one node's grant against its ceiling (TOOLS-PLAN §6). Returns the
+// bound tool objects plus what was refused or missing, so the caller can log
+// and surface both — a refused grant means something tried to exceed its
+// envelope, which must never be silently absent.
+export function resolveTools({ grant = null, ceiling = null } = {}) {
+  const resolved = resolveGrant({ grant, ceiling, ctx: grantContext() });
+  return { ...resolved, tools: getTools(resolved.tools) };
+}
+
+// The built-ins and the seeded sets, as a working default for every host
+// without a library (the test suite, the CLI).
 export function registerBuiltins() {
   for (const tool of BUILTIN_MODULES) registerTool(tool);
+  toolsets = SEED_TOOLSETS.map(normalizeToolset);
 }
 
 // All registered tools, or the named subset (unknown names are ignored so a

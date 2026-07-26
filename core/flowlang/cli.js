@@ -48,13 +48,16 @@ const out = obj => process.stdout.write(JSON.stringify(obj, null, 2) + '\n');
 // from a constant. Installed first: template grants are filtered against it.
 const toolLibrary = new ToolStore(path.join(projectRoot, 'tools'));
 const availableTools = toolLibrary.ids();
+const readOnlyTools = toolLibrary.listFull()
+  .filter(t => t.enabled && (t.effects ?? []).every(e => e === 'read'))
+  .map(t => t.id);
 setKnownTools(availableTools);
 
 function loadTemplates() {
   return new NodeStore(path.join(projectRoot, 'nodes')).listFull();
 }
 
-const COMMON_OVERRIDES = ['title', 'worker', 'instructions', 'requiresApproval', 'approveToolCalls', 'goal', 'category', 'contextSpec', 'skills'];
+const COMMON_OVERRIDES = ['title', 'worker', 'instructions', 'requiresApproval', 'approveToolCalls', 'goal', 'category', 'contextSpec', 'skills', 'toolCeiling', 'tools'];
 
 function templateInfo(t) {
   return {
@@ -67,15 +70,19 @@ function templateInfo(t) {
     requiresApproval: t.requiresApproval,
     outputs: (t.outputs?.length ? t.outputs : ROLE_PORTS[t.role] ?? ROLE_PORTS.custom)
       .map(p => ({ id: p.id, label: p.label ?? p.id, ...(p.description ? { description: p.description } : {}) })),
-    allowedOverrides: [...COMMON_OVERRIDES, ...(t.baseType === 'agentTask' ? ['tools'] : [])],
-    ...(t.baseType === 'agentTask' ? { availableTools } : {})
+    allowedOverrides: COMMON_OVERRIDES,
+    // What may be granted here. An aiStep may hold read-effect tools only
+    // (TOOLS-PLAN §6.4), so it is told a narrower list than an agentTask —
+    // and both are told the toolsets a ceiling can be written in.
+    availableTools: t.baseType === 'agentTask' ? availableTools : readOnlyTools,
+    toolsets: toolLibrary.listSets().map(s => ({ id: s.id, description: s.description }))
   };
 }
 
 function cmdLint() {
   if (!target) fail('usage: flow lint <file.flow.yaml> [--json]');
   const text = fs.readFileSync(target, 'utf8');
-  const r = lintText(text, { templates: loadTemplates() });
+  const r = lintText(text, { templates: loadTemplates(), library: toolLibrary.catalog() });
   if (json) {
     out({ ok: r.ok, errors: r.errors, warnings: r.warnings });
   } else {
@@ -163,7 +170,7 @@ function cmdAdopt() {
 
   // Adopted, but is it actually valid against THIS repo's node library? An id
   // referencing a template that only exists in the installed app would ship broken.
-  const lint = lintText(fs.readFileSync(r.file, 'utf8'), { templates: loadTemplates() });
+  const lint = lintText(fs.readFileSync(r.file, 'utf8'), { templates: loadTemplates(), library: toolLibrary.catalog() });
 
   if (json) {
     out({ ok: lint.ok, ...r, lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings } });
