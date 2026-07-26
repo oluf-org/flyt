@@ -50,7 +50,7 @@
   ],
   "result": {
     "preview": "json",
-    "maxPreviewChars": 2000,
+    "maxPreviewChars": 4000,
     "artifact": true
   }
 }

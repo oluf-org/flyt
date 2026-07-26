@@ -13,10 +13,25 @@ import { fileHost } from './fileHost.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
-const MAX_OUTPUT = 100_000; // per stream, characters
+// Per stream, characters. This used to be 100k and was the point where output
+// was DESTROYED. Since TOOLS-PLAN P2 the full result is archived to
+// runs/<id>/tools/<seq>-bash.json and the model sees a bounded preview, so the
+// cap here only has to stop a runaway process from exhausting memory — hence
+// 5 MB rather than a context-sized number.
+const MAX_OUTPUT = 5_000_000;
 
 export default {
   name: 'bash',
+  title: 'Run a shell command',
+  effects: ['shell'],
+  risk: 'caution',
+  keywords: ['shell', 'command', 'terminal', 'run', 'test', 'build', 'git', 'npm'],
+  examples: ['run the test suite', 'check git status', 'build the project'],
+  // Command output is long and read end-first — the failure at the top, the
+  // verdict at the bottom — and the json preview keeps exitCode intact while
+  // cutting stdout/stderr head-and-tail. A bigger budget than the default,
+  // because a test run's output IS the deliverable.
+  result: { preview: 'json', maxPreviewChars: 4000, artifact: true },
   description: 'Run a shell command in the workspace (the bound target project) as the working directory — e.g. run tests, a build, or git. Returns { exitCode, stdout, stderr }. Non-zero exit codes are returned (not thrown) so you can read the error and react. Output is truncated if very long.',
   parameters: {
     type: 'object',

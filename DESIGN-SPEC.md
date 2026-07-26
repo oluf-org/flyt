@@ -187,30 +187,31 @@ D4 makes the canvas the **live transparency view of execution**. The run view is
 
 ---
 
-## 7. The Toolbox — [PARTIAL] → [PLANNED]
+## 7. The Toolbox — [PARTIAL], being built out by `TOOLS-PLAN.md`
 
-**Today [PARTIAL]:** a real tool registry exists (`core/tools/index.js`): a tool is `{ name, description, parameters (JSON Schema), run(args, ctx) }`; `ctx = { store, runId, taskId, defaultWorker }` gives sandboxed access to the run's files; every call is validated and logged to `log.jsonl`. Registered tools:
-- `write_file` — writes into `runs/<runId>/workspace/` only; path traversal rejected.
-- `create_task`, `write_task_md` — task spawning / task-output authoring.
+**Today [BUILT]:** six tools, defined as **files**, executed through one registry.
 
-The agent loop (`core/agent.js`) runs tools two ways: **NATIVE** (OpenRouter function-tool calling when `worker.supportsTools`) and **TEXT** (a fenced ```` ```tool ```` block protocol, used by mock and non-tool models). Iteration cap: 8.
+- **A tool is a file** (TOOLS-PLAN P1): `tools/<id>.json`, app-level, peer to `nodes/<id>.json`, owned by `core/toolstore.js`. Every record carries its schema plus what it costs you if it misbehaves (`effects`, `scope`, `risk`, `autoExecute`) and where it came from (`source`, `trust`). Definitions are inspectable, diffable and version-controllable like everything else in the app. Tools are app-level while skills are project-level (§6.2) on purpose: capability is portable, expertise is not.
+- **Built-ins are seeded files bound to modules.** `core/tools/builtins.js` is the source of truth for the six shipped tools; `ToolStore` seeds `tools/*.json` from it on first launch and refreshes a file when a release changes the shipped definition, preserving the user's own fields (`enabled`, `keywords`, `examples`). They are read-only by design — the `run()` lives in source, so an editable definition would lie about what executes.
+- **Registered tools:** `read_file`, `create_file`, `write_file` (all workspace-confined via `core/tools/fileHost.js` — the bound project when one is set, else the run's sandbox), `bash` (cwd-confined, capped, time-bounded), `create_task`, `write_task_md` (both run-scoped).
+- **`core/tools/index.js`** is the in-memory registry the run loop reads: `loadLibrary(defs)` builds it from the files through a provider interface (`builtin` today; `http`/`mcp`/`flow` fail with an honest "not available yet"), `getTools(names)` returns a named subset (unknown names dropped, so a stale flow can't crash a run), and `executeTool` validates → runs → times → **never throws** → appends `tool_call` to `log.jsonl`.
+- **Gating is derived, not hardcoded.** `isDestructive()` reads the record's `effects`/`scope`: a call that mutates something outside the run gates under `approveToolCalls`; a run-scoped write does not; an **unknown tool gates** (fail-closed). The old three-name `DESTRUCTIVE_TOOLS` set survives as a deprecated alias for one release.
+- **Every result is an artifact** (TOOLS-PLAN P2). `executeTool` writes the full, untruncated result to `runs/<id>/tools/<seq>-<tool>.json` and hands the model a **bounded preview plus a handle** (`@tool:7`); `read_tool_result(handle, jsonPath?)` redeems it, whole or narrowed. The `json` preview is structure-preserving (keys kept, long strings cut head-and-tail), so `bash`'s `exitCode` survives beside a 200 KB stdout that no longer has to fit in a prompt. Credentials are redacted from the arguments before anything is written, so the audit trail is safe to share. The inspector links each artifact.
+- **Argument validation is a hand-rolled JSON Schema 2020-12 subset** (`core/tools/schema.js`, D24): types incl. arrays and `integer`, `const`/`enum`, numeric and string bounds, array bounds, `allOf`/`anyOf`/`oneOf`/`not`, and **local** `$ref` into `$defs`. External `$ref` URIs are never dereferenced (a validator that fetches a URL out of an untrusted schema is an SSRF primitive) and depth is bounded at 32 — a definition failing either is stored **disabled with the reason**, never silently accepted.
+- **What a node may be granted is a snapshot, not a constant.** `AGENT_TOOLS` is now the built-in fallback; `setKnownTools()` installs the real library, delivered to the renderer over `tool:list` and read by the CLI's `availableTools`.
 
-**[PLANNED] — Toolbox as a first-class page.** A creation suite, peer to the Nodes page:
-- **View and author custom tools** in-app (not only in code).
-- Ship the core coding-agent tools: **`read_file`, `create_file`, `write_file`, and likely `bash`/shell.**
-- Support **user-defined tools** — e.g. arbitrary HTTP GET requests as a tool, and basic computer-control primitives.
-- "Transparent" = tool creation/usage is visible and logged; "extensible" = a user can add capabilities without touching source.
+The agent loop (`core/agent.js`) runs tools two ways: **NATIVE** (OpenAI-style function calling on `openrouter | openai | kimi` when `worker.supportsTools`) and **TEXT** (a fenced ```` ```tool ```` block protocol, used by anthropic and mock). Iteration cap: 8.
+
+**[PLANNED] — see `TOOLS-PLAN.md` (P2–P10)** for the rest: result artifacts and handles, two-tier grants (`toolCeiling`), the v1 catalog (`edit_file`, `glob`, `grep`, `get_time`, `http_fetch`, `web_search`, `ask_human`), declarative HTTP tools + secrets, an MCP client, the tool index and clerk, the Tools page, code mode, and Flyt as an MCP server exposing flows.
 
 ---
 
-## 8. Workspace binding — [PLANNED]
+## 8. Workspace binding — [BUILT] (V1 task 1, D15/D22)
 
-**Today:** there is **no** binding to a user's real project. `write_file` writes land in `runs/<runId>/workspace/` — a per-run scratch area, *not* the user's repo. So the coding-agent loop does not yet operate on real code.
+**Today:** a run is bound to a target workspace (`core/workspace.js`, `meta.workspace`), and the file tools act on the real project through `core/tools/fileHost.js` — falling back to `runs/<runId>/workspace/` only when no project is bound. Every path is confined to the workspace root; `bash` starts there. The V1 acceptance run (§11.1) landed a feature in a real git repo this way.
 
-**[PLANNED] — target workspace + project config.**
-- On use, the app is **given a target workspace** (a project folder). Runs operate against it: reads, creates, writes, and (planned) shell commands act on the real project.
-- **Per-project configuration lives in a `.flyt/` folder inside the project** (not in appdata) — so it travels with the repo and is version-controllable/shareable.
-- **Binding model (to define):** a workflow template is reusable across workspaces; the *workspace* is selected at run time, not baked into the workflow. Confirm and specify.
+- **Per-project configuration lives in a `.flyt/` folder inside the project** (not in appdata) — so it travels with the repo and is version-controllable/shareable. `Workspace.ensure()` creates `.flyt/config.json`; skills live in `.flyt/skills/` (§6.2).
+- **Binding model:** a workflow template is reusable across workspaces; the *workspace* is selected at run time (the project tab, D22), never baked into the workflow.
 
 ---
 
@@ -219,7 +220,7 @@ The agent loop (`core/agent.js`) runs tools two ways: **NATIVE** (OpenRouter fun
 A coding agent with `write_file` + `bash` against a real workspace has real blast radius (destructive commands, mass deletes, network exfiltration). Intended layers, mirroring norms from existing agent tools with the ability to opt out:
 
 - **Human approval gates** — per-node (`requiresApproval`), already the default oversight mechanism. **[BUILT]**
-- **Sandboxing / path confinement** — writes confined to the workspace; today they're confined to the run's own workspace dir (§7). Extend to a confined-but-real workspace with path-traversal rejection. **[PARTIAL]**
+- **Sandboxing / path confinement** — every file tool resolves through `fileHost.js` against the bound workspace root (or the run's sandbox when unbound); traversal is rejected. `bash` is confined only by its cwd — a shell can still `cd ..`, which is why the approval gate is the stronger guard there. **[BUILT]**
 - **Opt-out** — approvals and sandboxes should be *skippable* by choice, for speed, at the user's risk. **[PLANNED]**
 - **Command-guard evaluator node** — a dedicated evaluator model, running as its own node, that inspects commands (especially shell) for danger before they execute. Because it's a node, its verdict is a logged, inspectable artifact. **[PLANNED]**
 
@@ -253,7 +254,7 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | Parallel `aiStep` + `agentTask` execution (`maxParallel` 4) | BUILT | Atomic task claiming; gated tasks stay solo (§2.1) |
 | Mid-run node materialization | BUILT | `plan-eval` + orchestrator spawn nodes |
 | Orchestrator node (spawns children, inline sub-walk) | PARTIAL | Seed of sub-agents; no depth/budget guard yet |
-| Agent loop + tool registry (native + text) | BUILT | `write_file`, `create_task`, `write_task_md` |
+| Agent loop + tool registry (native + text) | BUILT | Six tools: `read_file`, `create_file`, `write_file`, `bash`, `create_task`, `write_task_md` |
 | Adapters (mock/anthropic/openrouter), retry/backoff | BUILT | Default = mock; contract pinned + validated live (§4.1) |
 | BYO-key real-model path | BUILT | OpenRouter validated live; Anthropic is env-var only (§4.1) |
 | **V1 acceptance: coding loop on a real repo** | **PASSED** | Feature landed + suite green; limits and gaps in §11.1 |
@@ -263,9 +264,12 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | Two-tier orchestrator depth guard | PLANNED | Design rule; not enforced in code |
 | Model routing matrix + LLM tiebreaker | PLANNED | Today: static `categoryWorkers` |
 | Context Analysis step (cheap-model strategy) | PLANNED | `contextSpec` honored when present |
-| `read_file` / `create_file` / `bash` tools | PLANNED | Only `write_file` (run-scoped) today |
-| Toolbox creation page (user-authored tools) | PLANNED | Registry exists in code only |
-| Real workspace binding + `.flyt/` config | PLANNED | Writes are run-scoped, not repo |
+| `read_file` / `create_file` / `bash` tools | BUILT | Workspace-confined; `bash` gated by `core/safetyCheck.js` |
+| Tools are files (`tools/*.json`, `core/toolstore.js`) | BUILT | D34 draft P1 — effects/risk/trust/source per record; registry loaded from the library (§7) |
+| Tool results as artifacts + handles (`runs/<id>/tools/`) | BUILT | D34 draft P2 — bounded previews, `read_tool_result`, redacted records |
+| Grants, ceilings, MCP, HTTP tools, clerk, code mode | PLANNED | D34 draft — `TOOLS-PLAN.md` P3–P10 |
+| Toolbox creation page (user-authored tools) | PLANNED | `TOOLS-PLAN.md` P8; definitions are editable files today |
+| Real workspace binding + `.flyt/` config | BUILT | D15/D22 — `core/workspace.js`; file tools act on the bound project |
 | Safety: command-guard node, opt-out, diff preview | PLANNED | Approvals + run-scoped sandbox today |
 | Model comparison / ranking mode | PLANNED | Feeds routing matrix |
 | Streaming status-summary sidebar | PLANNED | After single-node streaming |

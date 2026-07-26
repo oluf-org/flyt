@@ -142,6 +142,47 @@ export class RunStore {
       try { return l.trim() ? JSON.parse(l) : null; } catch { return null; }
     }).filter(Boolean);
   }
+  // --- tool results: every call's full result as an artifact (TOOLS-PLAN §13) -
+  // The model gets a bounded preview and a handle; the untruncated result
+  // lives here, so "file-based state is the single source of truth" holds for
+  // what a tool returned as well as for what a node wrote.
+  toolResultsDir(runId) { return path.join(this.runDir(runId), 'tools'); }
+
+  // Claims the next free sequence number by CREATING the file exclusively
+  // ('wx'), retrying on collision. Parallel agentTasks (V1 task 6) write here
+  // concurrently, and a counter in memory is exactly the state a crash
+  // destroys — the directory is the counter.
+  writeToolResult(runId, record) {
+    const dir = this.toolResultsDir(runId);
+    fs.mkdirSync(dir, { recursive: true });
+    const name = String(record?.tool ?? 'tool').replace(/[^a-zA-Z0-9_-]/g, '_');
+    let seq = 1;
+    for (const f of fs.readdirSync(dir)) {
+      const n = Number((f.match(/^(\d+)-/) ?? [])[1]);
+      if (Number.isInteger(n) && n >= seq) seq = n + 1;
+    }
+    for (;;) {
+      const file = `${seq}-${name}.json`;
+      try {
+        fs.writeFileSync(path.join(dir, file), JSON.stringify({ seq, ...record }, null, 2), { encoding: 'utf8', flag: 'wx' });
+        return { seq, file, path: `tools/${file}`, handle: `@tool:${seq}` };
+      } catch (err) {
+        if (err.code !== 'EEXIST') throw err;
+        seq += 1;
+      }
+    }
+  }
+
+  // Read one back by sequence number (what read_tool_result resolves a handle
+  // to). Null — never a throw — when there is no such artifact.
+  readToolResult(runId, seq) {
+    const dir = this.toolResultsDir(runId);
+    if (!Number.isInteger(seq) || seq < 1 || !fs.existsSync(dir)) return null;
+    const file = fs.readdirSync(dir).find(f => f.startsWith(`${seq}-`) && f.endsWith('.json'));
+    if (!file) return null;
+    try { return readJson(path.join(dir, file)); } catch { return null; }
+  }
+
   // Task spec markdown (written by the write_task_md tool): the agent's own
   // structured description of the task it is executing.
   writeTaskSpec(runId, taskId, markdown) {

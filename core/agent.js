@@ -8,7 +8,7 @@
 // Both paths share the same registry, the same validation, the same
 // executeTool wrapper, and the same iteration cap.
 import { callModel } from './adapters/index.js';
-import { executeTool, DESTRUCTIVE_TOOLS } from './tools/index.js';
+import { executeTool, isDestructive } from './tools/index.js';
 
 const MAX_ITERATIONS = 8;
 
@@ -16,8 +16,10 @@ const MAX_ITERATIONS = 8;
 // (an agentTask node flagged approveToolCalls), pause before every DESTRUCTIVE
 // tool call and wait for a human decision. Rejection throws a marked error that
 // aborts the task — the caller reports it as an abort, not a model failure.
+// Which calls are destructive is derived from the tool record's effects/scope
+// (core/tools/index.js), and an unknown tool gates: fail-closed.
 async function gateToolCall(ctx, name, args) {
-  if (!ctx?.approveToolCall || !DESTRUCTIVE_TOOLS.has(name)) return;
+  if (!ctx?.approveToolCall || !isDestructive(name)) return;
   const approved = await ctx.approveToolCall({ tool: name, args });
   if (!approved) {
     throw Object.assign(
@@ -56,6 +58,15 @@ export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx
     ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal })
     : await textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal });
   return { ...out, durationMs: Date.now() - started };
+}
+
+// What the model is told a call returned. The result may be a bounded preview
+// of an artifact on disk (TOOLS-PLAN §13); when it is, the handle note rides
+// along so the model knows the rest exists and how to redeem it — a preview
+// with no way back to the full result would just make it re-run the call.
+function toolMessage(record) {
+  const body = JSON.stringify(record.ok ? record.result : { error: record.error });
+  return record.note ? `${body}\n${record.note}` : body;
 }
 
 // Merge token usage across loop iterations so retrospectives stay honest.
@@ -108,11 +119,7 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
         record = await executeTool(name, args, ctx);
       }
       toolCalls.push(record);
-      messages.push({
-        role: 'tool',
-        tool_call_id: call.id,
-        content: JSON.stringify(record.ok ? record.result : { error: record.error })
-      });
+      messages.push({ role: 'tool', tool_call_id: call.id, content: toolMessage(record) });
     }
   }
   return { text: lastText || '(agent stopped: tool-call iteration cap reached)', toolCalls, usage, capped: true };
@@ -165,7 +172,7 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
       '--- your previous reply ---',
       res.text.trim(),
       '',
-      `TOOL RESULT (${record.tool}): ${JSON.stringify(record.ok ? record.result : { error: record.error })}`,
+      `TOOL RESULT (${record.tool}): ${toolMessage(record)}`,
       '',
       'Continue. Emit another ```tool block if needed, otherwise produce the final deliverable with no tool block.'
     ].join('\n');

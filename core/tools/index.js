@@ -1,29 +1,95 @@
 // Tool registry: the single toolbox both agent execution paths (native
-// tool-calling and the text protocol) draw from. A tool is
-//   { name, description, parameters (JSON Schema), run(args, ctx) }
+// tool-calling and the text protocol) draw from. A registry entry is
+//   { name, description, parameters (JSON Schema), run(args, ctx),
+//     effects, scope, risk, trust, autoExecute, provider }
 // where ctx = { store, runId, taskId, defaultWorker } gives sandboxed access
-// to the run's files. Adding a tool = one file in core/tools/ + one
-// registerTool call below.
-import writeFile from './write_file.js';
-import createFile from './create_file.js';
-import readFile from './read_file.js';
-import bash from './bash.js';
-import createTask from './create_task.js';
-import writeTaskMd from './write_task_md.js';
+// to the run's files.
+//
+// The DEFINITIONS live in files (tools/<id>.json, owned by core/toolstore.js);
+// this module is the in-memory cache the run loop reads. The built-ins are
+// registered at import so anything that doesn't run a ToolStore — the test
+// suite, the CLI — still has a working toolbox; a host with a library calls
+// loadLibrary() to replace the registry with what is actually on disk.
+import { BUILTIN_MODULES, builtinDefinition } from './builtins.js';
+import { getProvider } from './providers.js';
+import { previewResult, handleNote } from './preview.js';
+import { redactArgs } from './redact.js';
+import { normalizeTool, isDestructive as effectsAreDestructive } from '../../src/toolTypes.js';
+
+export { validateArgs, schemaProblems, MAX_SCHEMA_DEPTH } from './schema.js';
+import { validateArgs } from './schema.js';
 
 const registry = new Map();
 
-// Tools that MUTATE the workspace (write files or run shell commands). These
-// are the calls a per-node approval gate pauses on (V1 task 4 safety envelope);
-// read-only tools like read_file are never gated.
-export const DESTRUCTIVE_TOOLS = new Set(['write_file', 'create_file', 'bash']);
+// Tools that MUTATE something outside the run (write the bound project or run
+// shell commands). These are the calls a per-node approval gate pauses on (V1
+// task 4 safety envelope); read-only tools like read_file are never gated.
+//
+// Derived from the record's `effects`/`scope` rather than a literal name list,
+// so an imported tool is gated on what it does instead of on whether someone
+// remembered to add it here. Unknown names gate: fail-closed is the house rule
+// (core/safetyCheck.js).
+export function isDestructive(nameOrTool) {
+  if (typeof nameOrTool !== 'string') return effectsAreDestructive(nameOrTool);
+  const tool = registry.get(nameOrTool);
+  return tool ? effectsAreDestructive(tool) : true;
+}
 
+// Deprecated alias, kept for one release (TOOLS-PLAN §18.3): a Set-shaped view
+// over the registry so `DESTRUCTIVE_TOOLS.has(name)` keeps working. Use
+// isDestructive() — the Set cannot express "unknown tools gate".
+export const DESTRUCTIVE_TOOLS = { has: name => isDestructive(name) };
+
+// Register a runnable tool module (built-in shape: { name, description,
+// parameters, run }). Metadata absent from the module is defaulted through the
+// same normalizer the files go through, so a registry entry and a stored
+// definition always agree on effects/risk/trust.
 export function registerTool(tool) {
   if (!tool?.name || typeof tool.run !== 'function' || !tool.parameters) {
     throw new Error('A tool needs { name, description, parameters, run }');
   }
-  registry.set(tool.name, tool);
-  return tool;
+  const def = normalizeTool(builtinDefinition(tool));
+  const entry = { ...def, name: def.id, description: tool.description, parameters: tool.parameters, run: tool.run.bind(tool) };
+  registry.set(entry.name, entry);
+  return entry;
+}
+
+// Bind one stored definition through its provider. Never throws: an
+// unresolvable tool (missing built-in module, provider not built yet) comes
+// back as { ok: false, reason } so a bad definition degrades the library
+// instead of failing the launch.
+export function registerDefinition(def) {
+  let tool;
+  try { tool = normalizeTool(def); }
+  catch (err) { return { ok: false, id: def?.id ?? null, reason: String(err?.message ?? err) }; }
+  if (!tool.enabled) return { ok: false, id: tool.id, reason: tool.disabledReason ?? 'disabled' };
+  const provider = getProvider(tool.provider);
+  if (!provider) return { ok: false, id: tool.id, reason: `unknown provider "${tool.provider}"` };
+  try {
+    const run = provider.load(tool);
+    registry.set(tool.id, { ...tool, name: tool.id, run });
+    return { ok: true, id: tool.id };
+  } catch (err) {
+    return { ok: false, id: tool.id, reason: String(err?.message ?? err) };
+  }
+}
+
+// Replace the registry with a library's definitions (what the app does at
+// startup with ToolStore.listFull()). Returns what loaded and what didn't,
+// with reasons — resolution is never silent (TOOLS-PLAN §5).
+export function loadLibrary(defs = []) {
+  registry.clear();
+  const loaded = [], skipped = [];
+  for (const def of defs) {
+    const r = registerDefinition(def);
+    if (r.ok) loaded.push(r.id); else skipped.push({ id: r.id, reason: r.reason });
+  }
+  return { loaded, skipped };
+}
+
+// The built-ins, as a working default for every host without a library.
+export function registerBuiltins() {
+  for (const tool of BUILTIN_MODULES) registerTool(tool);
 }
 
 // All registered tools, or the named subset (unknown names are ignored so a
@@ -33,39 +99,19 @@ export function getTools(names) {
   return names.map(n => registry.get(n)).filter(Boolean);
 }
 
-// Minimal JSON Schema validation — enough for the flat schemas tools declare
-// (type, required, properties, items, enum, additionalProperties). Returns a
-// list of human-readable error strings; empty means valid.
-export function validateArgs(schema, value, at = 'args') {
-  const errors = [];
-  const typeOf = v => Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v;
-  if (schema.type && typeOf(value) !== schema.type &&
-      !(schema.type === 'number' && typeOf(value) === 'number')) {
-    return [`${at}: expected ${schema.type}, got ${typeOf(value)}`];
-  }
-  if (schema.enum && !schema.enum.includes(value)) {
-    errors.push(`${at}: must be one of ${schema.enum.join(', ')}`);
-  }
-  if (schema.type === 'object' && value && typeof value === 'object') {
-    for (const key of schema.required ?? []) {
-      if (!(key in value)) errors.push(`${at}.${key}: required property missing`);
-    }
-    for (const [key, v] of Object.entries(value)) {
-      const sub = schema.properties?.[key];
-      if (sub) errors.push(...validateArgs(sub, v, `${at}.${key}`));
-      else if (schema.additionalProperties === false) errors.push(`${at}.${key}: unknown property`);
-    }
-  }
-  if (schema.type === 'array' && Array.isArray(value) && schema.items) {
-    value.forEach((v, i) => errors.push(...validateArgs(schema.items, v, `${at}[${i}]`)));
-  }
-  return errors;
-}
+// Registered ids — the live answer to "what may a node be granted?".
+export const toolNames = () => [...registry.keys()];
 
 // Validate + run + time one tool call. Never throws: failures (unknown tool,
 // bad args, runtime error) come back as { ok: false, error } so the agent
-// loop can hand them to the model for self-correction. Every call is
-// appended to the run's log.jsonl.
+// loop can hand them to the model for self-correction.
+//
+// The full result is written to runs/<id>/tools/<seq>-<tool>.json and the
+// record carries a BOUNDED preview plus a handle (TOOLS-PLAN §13) — so a
+// 200 KB command output survives on disk instead of being destroyed by
+// truncation, and the model gets something it can ask more about. Without a
+// store (a unit test, the planned Tools-page test-run) there is nowhere to
+// put an artifact, so the full result stays inline exactly as before.
 export async function executeTool(name, args, ctx) {
   const started = Date.now();
   const record = { tool: name, args, ok: false };
@@ -80,13 +126,45 @@ export async function executeTool(name, args, ctx) {
     record.error = String(err?.message ?? err);
   }
   record.ms = Date.now() - started;
+
+  // The audit trail must be safe to read, share and attach to a bug report:
+  // credentials are redacted from the arguments before anything is written,
+  // and the record the caller gets back is the redacted one.
+  record.args = redactArgs(record.args, ctx?.secrets);
+  archiveResult(record, tool, ctx);
+
   ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: ctx.taskId ? `executor:${ctx.taskId}` : undefined, ...record });
   return record;
 }
 
-registerTool(writeFile);
-registerTool(createFile);
-registerTool(readFile);
-registerTool(bash);
-registerTool(createTask);
-registerTool(writeTaskMd);
+// Writes the artifact and swaps the record's result for its preview. Failing
+// to write must never fail a call that already succeeded: a full disk should
+// cost you the archive, not the work.
+function archiveResult(record, tool, ctx) {
+  if (!ctx?.store?.writeToolResult || !ctx.runId || record.result === undefined) return;
+  const shape = tool?.result ?? {};
+  if (shape.artifact === false) return;
+  let written;
+  try {
+    written = ctx.store.writeToolResult(ctx.runId, {
+      tool: record.tool, node: ctx.taskId ? `executor:${ctx.taskId}` : undefined, task: ctx.taskId ?? undefined,
+      args: record.args, ok: record.ok, ms: record.ms,
+      ...(record.ok ? { result: record.result } : { error: record.error })
+    });
+  } catch (err) {
+    ctx.store.appendLog?.(ctx.runId, { event: 'tool_artifact_failed', tool: record.tool, error: String(err?.message ?? err) });
+    return;
+  }
+  record.artifact = written.path;
+  record.handle = written.handle;
+  if (!record.ok) return;
+
+  const { value, truncated } = previewResult(record.result, shape);
+  if (!truncated) return;
+  record.bytes = Buffer.byteLength(JSON.stringify(record.result) ?? '', 'utf8');
+  record.result = value;
+  record.truncated = true;
+  record.note = handleNote({ handle: written.handle, path: written.path, bytes: record.bytes });
+}
+
+registerBuiltins();

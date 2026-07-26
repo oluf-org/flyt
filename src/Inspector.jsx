@@ -1,6 +1,9 @@
 import React from 'react';
 import {
-  TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, AGENT_TOOLS,
+  // knownTools() is the live tool library (tools/<id>.json) snapshot App
+  // installs at boot, before any inspector panel renders; it falls back to the
+  // shipped built-ins when there is no library to read.
+  TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, knownTools,
   EFFORT_LEVELS, DEFAULT_EFFORT, EVAL_TYPES, WORK_CATEGORIES,
   nodeLabel, isInstance, resolveInstance, nodePorts, isStructuralNode,
   overridableFields, resolveFlow, diffOverrides
@@ -29,7 +32,7 @@ export function statusPill(status) {
   return <span className={'status-pill' + cls}>{label}</span>;
 }
 
-export default function Inspector({ snapshot, selectedNode }) {
+export default function Inspector({ snapshot, selectedNode, onOpenArtifact = null }) {
   const { meta, prompt, tasks, retrospectives, flow } = snapshot;
 
   let title = 'Run overview';
@@ -149,10 +152,19 @@ export default function Inspector({ snapshot, selectedNode }) {
         {statusPill(status)}
       </div>
       <div className="inspector-body">
-        {sections.filter(Boolean).map(([label, body]) => (
+        {sections.filter(Boolean).map(([label, body, artifacts]) => (
           <section key={label}>
             <h3>{label}</h3>
             <pre>{body}</pre>
+            {/* Result artifacts (TOOLS-PLAN §13): the preview above is bounded,
+                the file holds everything. Opening it is the point. */}
+            {onOpenArtifact && artifacts?.length ? (
+              <div className="artifact-links">
+                {artifacts.map(rel => (
+                  <button key={rel} className="link-button mono" onClick={() => onOpenArtifact(rel)}>{rel}</button>
+                ))}
+              </div>
+            ) : null}
           </section>
         ))}
       </div>
@@ -810,8 +822,8 @@ function InstanceInspector({ node, parent, template, models, activeModels, onCha
         {template?.baseType === 'agentTask' && (
           <section>
             <h3>Tools <OverrideTag active={ov.tools != null} onReset={() => unset('tools')} /></h3>
-            {AGENT_TOOLS.map(tool => {
-              const effective = ov.tools ?? template?.tools ?? AGENT_TOOLS;
+            {knownTools().map(tool => {
+              const effective = ov.tools ?? template?.tools ?? knownTools();
               return (
                 <label className="check-row" key={tool}>
                   <input
@@ -1054,8 +1066,8 @@ function ConfigNodeEditor({ node, mode, template, models, activeModels, onChange
             {has('tools') && (
               <section>
                 <h3>Tools {tag('tools')}</h3>
-                {AGENT_TOOLS.map(tool => {
-                  const effective = ov.tools ?? eff.tools ?? AGENT_TOOLS;
+                {knownTools().map(tool => {
+                  const effective = ov.tools ?? eff.tools ?? knownTools();
                   return (
                     <label className="check-row" key={tool}>
                       <input
@@ -1116,10 +1128,13 @@ function toolCallsSection(retro) {
     `[${c.ok ? 'ok' : 'FAILED'}] ${c.tool}${c.ms != null ? ` · ${c.ms} ms` : ''}`,
     c.args !== undefined ? `  args: ${JSON.stringify(c.args)}` : null,
     c.ok
-      ? (c.result !== undefined ? `  result: ${JSON.stringify(c.result)}` : null)
-      : `  error: ${c.error}`
+      ? (c.result !== undefined ? `  result${c.truncated ? ' (preview)' : ''}: ${JSON.stringify(c.result)}` : null)
+      : `  error: ${c.error}`,
+    c.artifact
+      ? `  full result: ${c.artifact}${c.bytes ? ` (${c.bytes.toLocaleString('en-US')} bytes)` : ''}${c.handle ? ` · ${c.handle}` : ''}`
+      : null
   ].filter(Boolean).join('\n'));
-  return [`Tool calls (${calls.length})`, lines.join('\n\n')];
+  return [`Tool calls (${calls.length})`, lines.join('\n\n'), calls.filter(c => c.artifact).map(c => c.artifact)];
 }
 
 function retroSection(retro) {
@@ -1134,3 +1149,6 @@ function retroSection(retro) {
   ].filter(Boolean);
   return ['Retrospective', lines.join('\n')];
 }
+// Since P2 the result shown here may be a bounded preview — the full,
+// untruncated result is the artifact named on the last line, and the whole
+// point of writing it is that you can go and read it.

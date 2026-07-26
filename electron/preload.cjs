@@ -42,6 +42,7 @@ const api = {
   getSnapshot: (pid, runId) => ipcRenderer.invoke('run:snapshot', pid, runId),
   readRunLog: (pid, runId) => ipcRenderer.invoke('run:log', pid, runId),
   openRunFolder: (pid, runId) => ipcRenderer.invoke('run:openFolder', pid, runId),
+  openRunArtifact: (pid, runId, relPath) => ipcRenderer.invoke('run:openArtifact', pid, runId, relPath),
   pickWorkspace: () => ipcRenderer.invoke('workspace:pick'),
   openWorkspace: (pid, runId) => ipcRenderer.invoke('workspace:open', pid, runId),
   runFlow: (pid, id, userInput, workspaceDir, approvalMode, launch = null) =>
@@ -75,6 +76,8 @@ const api = {
   newNodeTemplate: () => ipcRenderer.invoke('node:new'),
   deleteNodeTemplate: (id) => ipcRenderer.invoke('node:delete', id),
   setTitleBarTheme: (mode) => ipcRenderer.invoke('titlebar:setTheme', mode),
+  listTools: () => ipcRenderer.invoke('tool:list'),
+  toolsFolder: () => ipcRenderer.invoke('tool:folder'),
 
   // --- Project tabs (D22) ---
   listProjects: () => ipcRenderer.invoke('project:list'),

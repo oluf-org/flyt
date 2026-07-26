@@ -4,12 +4,14 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { FlowStore } from '../core/flowstore.js';
 import { NodeStore } from '../core/nodestore.js';
+import { ToolStore } from '../core/toolstore.js';
+import { loadLibrary } from '../core/tools/index.js';
 import { FlowRunner, normalizeApprovalMode, APPROVAL_MODES } from '../core/flowRunner.js';
 import { pickSafetyModel, SAFETY_MODEL_CANDIDATES } from '../core/safetyCheck.js';
 import { Workspace } from '../core/workspace.js';
 import { ProjectRegistry, DEFAULT_PROJECT_ID } from '../core/projects.js';
 import { lintFlow, lintText } from '../core/flowlang/lint.js';
-import { resolveFlow, exposedFields, diffOverrides } from '../src/flowTypes.js';
+import { resolveFlow, exposedFields, diffOverrides, setKnownTools } from '../src/flowTypes.js';
 import { parseFlow } from '../core/flowlang/parse.js';
 import { serializeFlow } from '../core/flowlang/serialize.js';
 import { diffSnapshot } from '../core/snapshotDiff.js';
@@ -112,6 +114,19 @@ const flows = new FlowStore(seedFromBundle('flows'));
 const nodeLibrary = new NodeStore(dataDir('nodes')); // seeds itself from code on first launch
 flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable workflow
 flows.ensureSeedPipelines();   // the tiered Low/Medium/High/Ultra pipelines (MODES-COMPARE T7)
+// The tool library is files too (TOOLS-PLAN §4.1): tools/<id>.json seeds from
+// the built-in modules, and the runtime registry is loaded FROM the files — so
+// what a run can call is what the library says, not what happens to be
+// imported. App-level like nodes/: capability is portable, expertise (skills,
+// D15) is not.
+const toolLibrary = new ToolStore(dataDir('tools'));
+const toolLoad = loadLibrary(toolLibrary.listFull());
+// Template grants are filtered against the real library, here as well as in
+// the renderer: normalizeTemplate() drops unknown tool ids, and without this
+// it would drop every tool the built-ins don't happen to include.
+setKnownTools(toolLoad.loaded);
+for (const { id, reason } of toolLoad.skipped) console.warn(`${LOG_TAG} tool "${id}" not loaded: ${reason}`);
+for (const { file, error } of toolLibrary.problems) console.warn(`${LOG_TAG} tools/${file}: ${error}`);
 
 // --- Settings & secrets ---
 // settings.json lives in userData (never the repo). Shape (PROVIDERS-PLAN §1):
@@ -766,6 +781,17 @@ ipcMain.handle('project:adopt', (_e, projectId, folder) => {
 });
 // Reveal a tab's project directory in the OS file manager (folder tabs open the
 // bound workspace; appdata tabs open their app-managed dir). The path comes from
+// Open one file inside a run — today the tool-result artifacts the inspector
+// links (TOOLS-PLAN §13). The path comes from the renderer, so it is resolved
+// against the run directory and rejected if it escapes: a relative path from
+// a record is data, and data does not get to name a file outside the run.
+ipcMain.handle('run:openArtifact', (_e, projectId, runId, relPath) => {
+  const dir = path.resolve(proj(projectId).store.runDir(runId));
+  const target = path.resolve(dir, String(relPath ?? ''));
+  if (target !== dir && !target.startsWith(dir + path.sep)) throw new Error('Path escapes the run directory');
+  if (!fs.existsSync(target)) throw new Error('No such file in this run');
+  return shell.openPath(target);
+});
 // the registry entry, never from the renderer.
 ipcMain.handle('project:reveal', (_e, projectId) => {
   const e = registry.get(projectId);
@@ -920,6 +946,13 @@ ipcMain.handle('flow:saveFromYaml', (_e, id, yamlText) => {
   const parsed = parseFlow(yamlText); // validates + produces canonical model (no pos)
   // Preserve any existing layout positions for nodes that survive the edit.
   let layout = {};
+// --- Tool Library (tools/<id>.json) ---
+// Read-only over IPC in P1: the renderer uses it to validate grants against
+// what actually exists instead of a hardcoded array. Authoring arrives with
+// the Tools page (TOOLS-PLAN P8).
+ipcMain.handle('tool:list', () => toolLibrary.list());
+ipcMain.handle('tool:folder', () => ({ dir: toolLibrary.rootDir, packaged: app.isPackaged }));
+
   try {
     layout = JSON.parse(fs.readFileSync(flows.layoutPath(id), 'utf8')) || {};
   } catch {}

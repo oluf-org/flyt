@@ -12,7 +12,7 @@ import RunResult from './RunResult.jsx';
 import RunsList from './RunsList.jsx';
 import NodeFocus from './NodeFocus.jsx';
 import { isTerminal } from './runProgress.js';
-import { resolveFlow, namedFlow, UNTITLED_FLOW, isStructuralNode } from './flowTypes.js';
+import { resolveFlow, namedFlow, UNTITLED_FLOW, isStructuralNode, setKnownTools } from './flowTypes.js';
 import { comparePair } from './compareRun.js';
 import { layoutPositions, shrinkOrchBox } from './flowLayout.js';
 import { mergeSnapshot } from '../core/snapshotDiff.js';
@@ -425,12 +425,22 @@ export default function App() {
   const refreshTemplates = useCallback(async () => {
     setTemplates(await window.flyt.listNodeTemplates());
   }, []);
+  // The tool library is files (TOOLS-PLAN §4.1), so what a node may be granted
+  // is a snapshot, not a constant: install it before templates load, or a
+  // grant naming a user-authored tool would be filtered out as unknown.
+  const [tools, setTools] = useState([]);
+  const refreshTools = useCallback(async () => {
+    const list = (await window.flyt.listTools?.()) ?? [];
+    setTools(list);
+    setKnownTools(list.filter(t => t.enabled).map(t => t.id));
+    return list;
+  }, []);
 
-  // Global catalogs (flows, templates) load once; per-project data (runs, the
-  // restored selection) loads in the project boot effect further down, after
-  // the tab machinery is defined.
-  useEffect(() => { refreshFlows(); refreshTemplates(); },
-    [refreshFlows, refreshTemplates]);
+  // Global catalogs (flows, templates, tools) load once; per-project data
+  // (runs, the restored selection) loads in the project boot effect further
+  // down, after the tab machinery is defined.
+  useEffect(() => { refreshTools().then(refreshTemplates); refreshFlows(); },
+    [refreshFlows, refreshTemplates, refreshTools]);
 
   // Worker defaults + model options for the node editor's worker pickers, plus
   // whether a key exists (drives the lander's no-key hint). Re-read when Settings
@@ -2190,6 +2200,7 @@ export default function App() {
                 activeModels={activeModels}
                 onChanged={refreshTemplates}
                 onSelect={setSelectedTemplateId}
+                tools={tools}
               />
             : flowView
               ? (flowViewMode === 'yaml'
@@ -2451,7 +2462,11 @@ export default function App() {
                       onOpenFolder={() => window.flyt.openRunFolder(activeTab, activeRunId)}
                     />
                   )}
-                  <Inspector snapshot={snapshot} selectedNode={selectedNode} />
+                  <Inspector
+                    snapshot={snapshot}
+                    selectedNode={selectedNode}
+                    onOpenArtifact={rel => window.flyt.openRunArtifact?.(activeTab, activeRunId, rel)}
+                  />
                 </>
               : (
                 <aside className="inspector">

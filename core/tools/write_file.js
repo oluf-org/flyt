@@ -5,7 +5,12 @@ import { fileHost, writeText, noteWorkspaceWrite } from './fileHost.js';
 
 export default {
   name: 'write_file',
+  title: 'Write a file',
   description: 'Create or OVERWRITE a text file in the workspace (the bound target project). Use write_file when the file may already exist; use create_file when it must be new. Forward-slash relative paths like "src/app.js"; the path is confined to the workspace root.',
+  effects: ['write'],
+  risk: 'caution',
+  keywords: ['write', 'file', 'save', 'overwrite', 'edit'],
+  examples: ['save the report to report.md', 'overwrite src/app.js with the new version'],
   parameters: {
     type: 'object',
     required: ['path', 'content'],

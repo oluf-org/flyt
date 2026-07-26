@@ -3,7 +3,13 @@
 // so the pipeline's execution loop picks it up like any routed task.
 export default {
   name: 'create_task',
+  title: 'Create a follow-up task',
   description: 'Create a new task in this run\'s task queue. It will be executed after the current task, by the given worker or the default executor.',
+  effects: ['write'],
+  scope: 'run', // appends to runs/<id>/tasks.json — never touches the repo
+  risk: 'caution',
+  keywords: ['task', 'queue', 'follow-up', 'spawn', 'delegate'],
+  examples: ['queue a follow-up task to write the tests'],
   parameters: {
     type: 'object',
     required: ['title', 'goal'],

@@ -22,8 +22,22 @@ export const UNTITLED_FLOW = 'Untitled flow';
 // without this, that keystroke fails the save and the rename is stranded.
 export const namedFlow = flow => (flow.name?.trim() ? flow : { ...flow, name: UNTITLED_FLOW });
 
-// Tools an agentTask node may be granted (core/tools/index.js registry).
-export const AGENT_TOOLS = ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md'];
+// Tools an agentTask node may be granted. The tool library is data now
+// (tools/<id>.json, core/toolstore.js), so this array is the BUILT-IN
+// fallback: what every build ships and what a host without a library — the
+// test suite, a renderer before its first IPC round trip — validates against.
+export const AGENT_TOOLS = ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md', 'read_tool_result'];
+
+// The live snapshot, installed by the renderer from the main process's
+// ToolStore (`tool:list`). Grants are filtered against this, so a template can
+// name a user-authored or imported tool without flowTypes knowing about it —
+// and an unknown id is still dropped rather than carried into a run.
+let knownToolIds = AGENT_TOOLS;
+export const knownTools = () => knownToolIds;
+export function setKnownTools(ids) {
+  knownToolIds = Array.isArray(ids) && ids.length ? [...new Set(ids.map(String))] : AGENT_TOOLS;
+  return knownToolIds;
+}
 
 // --- Output ports: what each node CREATES -----------------------------------
 //
@@ -170,9 +184,14 @@ export const WORK_CATEGORIES = NODE_CATEGORIES;
 // Per-task-type tool grants for the Work node (template id 'work'):
 // Test-creation is the one that runs commands, so it alone gets bash and
 // ships with the per-call approval gate on by default.
+//
+// read_tool_result is on every list because a truncated result the node
+// cannot read the rest of is worse than no truncation at all (TOOLS-PLAN §13):
+// it is read-effect, run-scoped, and can only reach results this same run
+// already produced — so granting it widens nothing.
 export const WORK_TOOLS = {
-  'Test-creation': ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md'],
-  default: ['read_file', 'create_file', 'write_file', 'write_task_md']
+  'Test-creation': ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md', 'read_tool_result'],
+  default: ['read_file', 'create_file', 'write_file', 'write_task_md', 'read_tool_result']
 };
 
 // The Evaluation node's evalType option -> the concrete runtime role.
@@ -590,7 +609,7 @@ export function normalizeTemplate(tpl) {
     worker: tpl.worker?.provider && tpl.worker?.model
       ? { provider: tpl.worker.provider, model: tpl.worker.model } : null,
     instructions: tpl.instructions ?? '',
-    tools: Array.isArray(tpl.tools) ? tpl.tools.filter(t => AGENT_TOOLS.includes(t)) : null,
+    tools: Array.isArray(tpl.tools) ? tpl.tools.filter(t => knownTools().includes(t)) : null,
     skills: Array.isArray(tpl.skills) ? tpl.skills.map(String) : [],
     requiresApproval: Boolean(tpl.requiresApproval),
     approveToolCalls: Boolean(tpl.approveToolCalls),

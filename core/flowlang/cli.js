@@ -17,8 +17,9 @@ import { lintText } from './lint.js';
 import { serializeFlow } from './serialize.js';
 import { parseFlow } from './parse.js';
 import { NodeStore } from '../nodestore.js';
+import { ToolStore } from '../toolstore.js';
 import { installedFlowsDir, listFlows, adoptFlow, willShip } from './adopt.js';
-import { ROLE_PORTS, AGENT_TOOLS } from '../../src/flowTypes.js';
+import { ROLE_PORTS, setKnownTools } from '../../src/flowTypes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, '..', '..');
@@ -42,6 +43,13 @@ const [cmd, target] = positional;
 
 const out = obj => process.stdout.write(JSON.stringify(obj, null, 2) + '\n');
 
+// The tool library is data (tools/<id>.json), so `availableTools` — what an AI
+// authoring a flow is told it may grant — is read from the library rather than
+// from a constant. Installed first: template grants are filtered against it.
+const toolLibrary = new ToolStore(path.join(projectRoot, 'tools'));
+const availableTools = toolLibrary.ids();
+setKnownTools(availableTools);
+
 function loadTemplates() {
   return new NodeStore(path.join(projectRoot, 'nodes')).listFull();
 }
@@ -60,7 +68,7 @@ function templateInfo(t) {
     outputs: (t.outputs?.length ? t.outputs : ROLE_PORTS[t.role] ?? ROLE_PORTS.custom)
       .map(p => ({ id: p.id, label: p.label ?? p.id, ...(p.description ? { description: p.description } : {}) })),
     allowedOverrides: [...COMMON_OVERRIDES, ...(t.baseType === 'agentTask' ? ['tools'] : [])],
-    ...(t.baseType === 'agentTask' ? { availableTools: AGENT_TOOLS } : {})
+    ...(t.baseType === 'agentTask' ? { availableTools } : {})
   };
 }
 

@@ -16,7 +16,12 @@ const BASE_TYPES = [
   { value: 'agentTask', label: 'Agent task — full executor with tools' }
 ];
 
-export default function NodesPage({ templates, selectedId, models, activeModels, onChanged, onSelect }) {
+export default function NodesPage({ templates, tools = [], selectedId, models, activeModels, mockEnabled = false, onChanged, onSelect }) {
+  // The grantable set comes from the tool library (tools/<id>.json) — falling
+  // back to the shipped built-ins only before the first IPC round trip.
+  const grantable = tools.filter(t => t.enabled).map(t => t.id);
+  const toolIds = grantable.length ? grantable : AGENT_TOOLS;
+  const toolMeta = Object.fromEntries(tools.map(t => [t.id, t]));
   const [draft, setDraft] = useState(null);
   const [saved, setSaved] = useState(true);
   const [error, setError] = useState('');
@@ -53,7 +58,7 @@ export default function NodesPage({ templates, selectedId, models, activeModels,
 
   const toggleTool = tool => {
     // tools: null = full registry; an explicit array otherwise.
-    const current = draft.tools ?? [...AGENT_TOOLS];
+    const current = draft.tools ?? [...toolIds];
     const next = current.includes(tool) ? current.filter(t => t !== tool) : [...current, tool];
     set({ tools: next });
   };
@@ -158,14 +163,17 @@ export default function NodesPage({ templates, selectedId, models, activeModels,
           {draft.baseType === 'agentTask' && (
             <section>
               <h3>Tool availability</h3>
-              {AGENT_TOOLS.map(tool => (
+              {toolIds.map(tool => (
                 <label className="check-row" key={tool}>
                   <input
                     type="checkbox"
-                    checked={(draft.tools ?? AGENT_TOOLS).includes(tool)}
+                    checked={(draft.tools ?? toolIds).includes(tool)}
                     onChange={() => toggleTool(tool)}
                   />
                   <span className="mono">{tool}</span>
+                  {toolMeta[tool]?.effects?.length ? (
+                    <span className="node-sub"> {toolMeta[tool].effects.join(' · ')}</span>
+                  ) : null}
                 </label>
               ))}
             </section>

@@ -1,7 +1,7 @@
 // Browser-only fallback for window.flyt so the renderer can be previewed (D29)
 // (and the design iterated on) outside Electron. Never active in the app:
 // installed only when the preload bridge is missing.
-import { SEED_NODE_TEMPLATES, normalizeTemplate } from './flowTypes.js';
+import { SEED_NODE_TEMPLATES, normalizeTemplate, AGENT_TOOLS } from './flowTypes.js';
 import { slugFromPrompt, dedupeSlug } from '../core/projectName.js';
 
 const snapshots = {
@@ -71,8 +71,11 @@ const snapshots = {
         model: { provider: 'openai', model: 'gpt-4o' }, durationMs: 5400,
         recommendation: 'Task "Scaffold mobile-first shell" completed using 2 tool call(s).',
         toolCalls: [
-          { tool: 'write_task_md', args: { content: '# Spec — shell scaffold…' }, ok: true, result: { written: 'tasks/task-1.spec.md' }, ms: 3 },
-          { tool: 'write_file', args: { path: 'src/App.jsx', content: '…' }, ok: false, error: 'Invalid arguments: args.content: required property missing', ms: 1 }
+          { tool: 'write_task_md', args: { content: '# Spec — shell scaffold…' }, ok: true, result: { written: 'tasks/task-1.spec.md' }, ms: 3, artifact: 'tools/1-write_task_md.json', handle: '@tool:1' },
+          // A truncated result: preview in context, full result on disk (P2).
+          { tool: 'bash', args: { command: 'npm test' }, ok: true, ms: 8400, truncated: true, bytes: 204_112, artifact: 'tools/2-bash.json', handle: '@tool:2',
+            result: { command: 'npm test', exitCode: 0, stdout: '> flyt@0.1.3 test\n…[203,900 characters omitted]…\n# pass 583\n# fail 0', stderr: '' } },
+          { tool: 'write_file', args: { path: 'src/App.jsx', content: '…' }, ok: false, error: 'Invalid arguments: args.content: required property missing', ms: 1, artifact: 'tools/3-write_file.json', handle: '@tool:3' }
         ]
       }
     },
@@ -579,6 +582,16 @@ export function installDevMock() {
       mockTemplates.set(tpl.id, tpl);
       return structuredClone(tpl);
     },
-    deleteNodeTemplate: async id => { mockTemplates.delete(id); }
+    deleteNodeTemplate: async id => { mockTemplates.delete(id); },
+    // The browser-dev shim has no ToolStore behind it: report the built-ins,
+    // which is exactly what a fresh library seeds to.
+    listTools: async () => AGENT_TOOLS.map(id => ({
+      id, title: id, description: '', provider: 'builtin',
+      effects: id === 'bash' ? ['shell'] : id === 'read_file' ? ['read'] : ['write'],
+      risk: id === 'read_file' ? 'safe' : 'caution', trust: 'trusted', enabled: true
+    })),
+    toolsFolder: async () => ({ dir: 'tools', packaged: false }),
+    // No shell to open a file with in a browser; the link is still exercised.
+    openRunArtifact: async (_pid, _runId, rel) => { console.info('[devMock] would open', rel); }
   };
 }
