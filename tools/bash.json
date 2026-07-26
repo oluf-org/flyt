@@ -1,0 +1,56 @@
+{
+  "id": "bash",
+  "title": "Run a shell command",
+  "description": "Run a shell command in the workspace (the bound target project) as the working directory — e.g. run tests, a build, or git. Returns { exitCode, stdout, stderr }. Non-zero exit codes are returned (not thrown) so you can read the error and react. Output is truncated if very long.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "shell"
+  ],
+  "scope": "workspace",
+  "risk": "caution",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "command"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "The shell command line to run, e.g. \"npm test\" or \"git status\"."
+      },
+      "timeoutMs": {
+        "type": "number",
+        "description": "Optional wall-clock timeout in ms (default 120000, max 600000)."
+      }
+    }
+  },
+  "keywords": [
+    "shell",
+    "command",
+    "terminal",
+    "run",
+    "test",
+    "build",
+    "git",
+    "npm"
+  ],
+  "examples": [
+    "run the test suite",
+    "check git status",
+    "build the project"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

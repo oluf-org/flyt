@@ -1,0 +1,85 @@
+{
+  "id": "create_task",
+  "title": "Create a follow-up task",
+  "description": "Create a new task in this run's task queue. It will be executed after the current task, by the given worker or the default executor.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "write"
+  ],
+  "scope": "run",
+  "risk": "caution",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "title",
+      "goal"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "Short human-readable task title."
+      },
+      "goal": {
+        "type": "string",
+        "description": "What the task must produce, fully self-describing."
+      },
+      "constraints": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Hard requirements the task must respect."
+      },
+      "dependsOn": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Prerequisite task ids (e.g. [\"task-1\"]). Their outputs become inputs."
+      },
+      "worker": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "Provider name, e.g. \"openrouter\" or \"mock\"."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model id for that provider."
+          }
+        },
+        "description": "Worker to run the task; omit to use the default executor worker."
+      }
+    }
+  },
+  "keywords": [
+    "task",
+    "queue",
+    "follow-up",
+    "spawn",
+    "delegate"
+  ],
+  "examples": [
+    "queue a follow-up task to write the tests"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}
