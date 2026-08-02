@@ -169,7 +169,7 @@ export default function Lander({
   runs = [], onOpenRun,
   flows = [], flowId, modeId = null, onSelect, configs = {},
   compareOn = false, onToggleCompare, slotB = null, onSelectB,
-  launchInputs = [], launchValues, onLaunchInput, models = [], activeModels = [],
+  launchInputs = [], launchValues, onLaunchInput, models = [], activeModels = [], mockEnabled = false,
   hasKey = true, claudeSubActive = false, onOpenSettings,
   busy, inputRef, onSubmit, onOpenProject, onOpenFolder
 }) {
@@ -216,6 +216,7 @@ export default function Lander({
           onLaunchInput={onLaunchInput}
           models={models}
           activeModels={activeModels}
+          mockEnabled={mockEnabled}
           onClose={() => { setConfigOpen(false); taRef.current?.focus(); }}
         />
       )}

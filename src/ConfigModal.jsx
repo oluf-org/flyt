@@ -45,7 +45,7 @@ function ConfigRow({ selected, name, description, badges, onSelect }) {
 export default function ConfigModal({
   flow, configs = [], modeId = null, onSelect,
   launchInputs = [], launchValues, onLaunchInput,
-  models = [], activeModels = [], onClose
+  models = [], activeModels = [], mockEnabled = false, onClose
 }) {
   const cardRef = useRef(null);
 
@@ -111,6 +111,7 @@ export default function ConfigModal({
                 onChange={onLaunchInput}
                 models={models}
                 activeModels={activeModels}
+                mockEnabled={mockEnabled}
               />
             </div>
           )}

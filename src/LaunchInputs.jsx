@@ -13,7 +13,7 @@ const FIELD_LABEL = {
 };
 const fieldLabel = f => FIELD_LABEL[f] ?? f;
 
-function Control({ inp, value, onChange, models, activeModels }) {
+function Control({ inp, value, onChange, models, activeModels, mockEnabled }) {
   const cur = value ?? inp.current;
   switch (inp.field) {
     case 'worker':
@@ -22,6 +22,7 @@ function Control({ inp, value, onChange, models, activeModels }) {
           worker={cur ?? undefined}
           models={models}
           activeModels={activeModels}
+          mockEnabled={mockEnabled}
           idPrefix={`li-${inp.nodeId}`}
           onChange={onChange}
         />
@@ -71,7 +72,7 @@ function Control({ inp, value, onChange, models, activeModels }) {
   }
 }
 
-export default function LaunchInputs({ inputs, values, onChange, models, activeModels }) {
+export default function LaunchInputs({ inputs, values, onChange, models, activeModels, mockEnabled = false }) {
   if (!inputs?.length) return null;
   return (
     <div className="launch-inputs">
@@ -86,6 +87,7 @@ export default function LaunchInputs({ inputs, values, onChange, models, activeM
               onChange={v => onChange(inp.nodeId, inp.field, v)}
               models={models}
               activeModels={activeModels}
+              mockEnabled={mockEnabled}
             />
           </div>
         ))}

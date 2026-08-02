@@ -24,36 +24,22 @@ export const DEFAULT_PRIORITY = ['anthropic', 'claude-code', 'openai', 'codex', 
 // model endpoints are inconsistent, so a short static list + the free-text
 // field covers it. OpenRouter keeps its live catalog fetch. `keyKind` on a
 // Kimi entry marks which endpoint the id is valid on.
+//
+// Since SETTINGS-MODELS-PLAN §2 (P1) the lists are DERIVED from the bundled
+// model catalog (core/modelCatalog.js) — a model is a record there, and this
+// export keeps the long-standing { id, name, supportsTools, keyKind? } shape
+// so models:list and every existing caller keep working unchanged. The
+// subscription runtimes serve the same frontier ids as their API siblings
+// (the priority walk decides who takes a call), plus the codex-tuned models
+// only the Codex CLI reaches.
+import { modelsForProvider } from './modelCatalog.js';
+
 export const CURATED_MODELS = {
-  anthropic: [
-    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', supportsTools: true },
-    { id: 'claude-opus-4-5', name: 'Claude Opus 4.5', supportsTools: true },
-    { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', supportsTools: true }
-  ],
-  openai: [
-    { id: 'gpt-5.2', name: 'GPT-5.2', supportsTools: true },
-    { id: 'gpt-5', name: 'GPT-5', supportsTools: true },
-    { id: 'gpt-5-mini', name: 'GPT-5 mini', supportsTools: true },
-    { id: 'o4', name: 'o4 (reasoning)', supportsTools: true }
-  ],
-  kimi: [
-    { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', supportsTools: true, keyKind: 'platform' },
-    { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsTools: true, keyKind: 'platform' },
-    { id: 'kimi-for-coding', name: 'Kimi for Coding (Kimi Code subscription)', supportsTools: true, keyKind: 'code' }
-  ],
-  // The subscription runtimes serve the same frontier ids as their API
-  // siblings (the priority walk decides who takes a call), plus the
-  // codex-tuned models only the Codex CLI reaches.
-  'claude-code': [
-    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 (subscription)', supportsTools: true },
-    { id: 'claude-opus-4-5', name: 'Claude Opus 4.5 (subscription)', supportsTools: true },
-    { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5 (subscription)', supportsTools: true }
-  ],
-  codex: [
-    { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex (subscription)', supportsTools: true },
-    { id: 'gpt-5.2', name: 'GPT-5.2 (subscription)', supportsTools: true },
-    { id: 'gpt-5.1-codex-mini', name: 'GPT-5.1 Codex mini (subscription)', supportsTools: true }
-  ]
+  anthropic: modelsForProvider('anthropic'),
+  openai: modelsForProvider('openai'),
+  kimi: modelsForProvider('kimi'),
+  'claude-code': modelsForProvider('claude-code', { subscriptionSuffix: true }),
+  codex: modelsForProvider('codex', { subscriptionSuffix: true })
 };
 
 // One cheap model per provider for the Settings "Test" button: proves the key
@@ -115,7 +101,88 @@ export function migrateSettings(raw) {
     subs[p] = entry;
   }
   s.subscriptions = subs;
+
+  // User state over the model catalog (SETTINGS-MODELS-PLAN §3). All of it is
+  // defaulted and none of it is required; unknown shapes are dropped.
+  // favouriteModels: ordered shortlist, deduped. seenModels: id → first time
+  // this install saw it (the NEW-badge ledger). acknowledgedModels: the ids
+  // the user has explicitly cleared via settings:markSeen — kept separate from
+  // seenModels so a badge can outlive one settings read and expire on its own
+  // 21-day clock (see stampSeenModels/computeNewModelIds below).
+  s.favouriteModels = [...new Set((Array.isArray(s.favouriteModels) ? s.favouriteModels : [])
+    .filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))];
+  const seenModels = {};
+  if (s.seenModels && typeof s.seenModels === 'object') {
+    for (const [id, ts] of Object.entries(s.seenModels)) {
+      if (id.trim() && typeof ts === 'string' && ts.trim()) seenModels[id] = ts;
+    }
+  }
+  s.seenModels = seenModels;
+  s.acknowledgedModels = [...new Set((Array.isArray(s.acknowledgedModels) ? s.acknowledgedModels : [])
+    .filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))];
+  s.modelGrouping = ['provider', 'tier', 'cost'].includes(s.modelGrouping) ? s.modelGrouping : 'provider';
+  s.showAllModels = s.showAllModels === true;
+
+  // The mock provider's settings (G8). `enabled` gates mock out of every
+  // picker; the rest is authoring state consumed by core/adapters/mock.js via
+  // runtimeConfig.mock (P4 wires the adapter; the state lands here first).
+  const rawMock = (s.mock && typeof s.mock === 'object') ? s.mock : {};
+  const perRole = {};
+  if (rawMock.perRole && typeof rawMock.perRole === 'object') {
+    for (const [role, text] of Object.entries(rawMock.perRole)) {
+      if (typeof role === 'string' && role.trim() && typeof text === 'string') perRole[role] = text;
+    }
+  }
+  s.mock = {
+    enabled: rawMock.enabled === true,
+    mode: ['roles', 'custom', 'echo', 'error'].includes(rawMock.mode) ? rawMock.mode : 'roles',
+    customResponse: typeof rawMock.customResponse === 'string' ? rawMock.customResponse : '',
+    perRole,
+    latencyMs: Number.isFinite(rawMock.latencyMs) && rawMock.latencyMs >= 0 ? Math.min(rawMock.latencyMs, 60_000) : 700,
+    streaming: rawMock.streaming !== false,
+    failureRate: Number.isFinite(rawMock.failureRate) ? Math.min(Math.max(rawMock.failureRate, 0), 1) : 0
+  };
   return s;
+}
+
+// --- NEW-model badges (SETTINGS-MODELS-PLAN §3, G4) ---------------------------
+//
+// Computed in the main process, never the renderer. seenModels is the ledger
+// (id → first-seen ISO timestamp); acknowledgedModels is what the user has
+// cleared by expanding the containing group (settings:markSeen). A badge shows
+// while an id is fresh (< 21 days) and unacknowledged; the first run ever
+// stamps AND acknowledges everything, because a fresh install where all 40
+// models glow NEW is noise, not information.
+export const NEW_MODEL_WINDOW_DAYS = 21;
+const DAY_MS = 86_400_000;
+
+// Stamp newly discovered catalog ids into seenModels. First run ever
+// (seenModels empty): stamp and acknowledge everything. Returns the updated
+// maps and whether anything changed (so the caller persists only on change).
+export function stampSeenModels(catalogIds, seenModels, acknowledgedModels = [], now = new Date()) {
+  const seen = { ...(seenModels ?? {}) };
+  const ack = [...new Set(acknowledgedModels ?? [])];
+  const firstRun = Object.keys(seen).length === 0;
+  const iso = now.toISOString();
+  let changed = false;
+  for (const id of catalogIds) {
+    if (!(id in seen)) { seen[id] = iso; changed = true; }
+    if (firstRun && !ack.includes(id)) { ack.push(id); changed = true; }
+  }
+  return { seenModels: seen, acknowledgedModels: ack, firstRun, changed };
+}
+
+// The badge list, derived: stamped within the window and not acknowledged.
+// Pure — the renderer's `newModelIds` is this function's output.
+export function computeNewModelIds(catalogIds, seenModels, acknowledgedModels = [], now = new Date()) {
+  const seen = seenModels ?? {};
+  const ack = new Set(acknowledgedModels ?? []);
+  const nowMs = now.getTime();
+  return catalogIds.filter(id => {
+    if (ack.has(id) || !(id in seen)) return false;
+    const stampMs = Date.parse(seen[id]);
+    return Number.isFinite(stampMs) && (nowMs - stampMs) < NEW_MODEL_WINDOW_DAYS * DAY_MS;
+  });
 }
 
 // The resolution rule (PROVIDERS-PLAN §2), as a closure over the live
@@ -151,13 +218,15 @@ export function createResolver({ hasKey, canServe, priority }) {
 // resolved through the main process's resolver — priority walk, pin override,
 // key + keyKind stamping. Anything else keeps the legacy lookup.
 export function resolveCallTarget(worker, config) {
+  const withMock = t =>
+    t.provider === 'mock' && config?.mock ? { ...t, mock: config.mock } : t;
   if (worker?.provider === 'auto' && typeof config?.resolveModelSource === 'function') {
-    return config.resolveModelSource(worker.model);
+    return withMock(config.resolveModelSource(worker.model));
   }
-  return {
+  return withMock({
     provider: worker.provider,
     model: worker.model,
     apiKey: config?.providerKeys?.[worker.provider] ?? null,
     ...(worker.keyKind ? { keyKind: worker.keyKind } : {})
-  };
+  });
 }

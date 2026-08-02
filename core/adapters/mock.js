@@ -1,13 +1,50 @@
 // Mock adapter: lets the whole pipeline run end-to-end with no API key.
 // It keys off the "ROLE:" marker each node puts in its system prompt and
 // returns plausible, correctly-shaped output for that node type.
+//
+// SETTINGS-MODELS-PLAN §6 (G8/P4): the adapter takes its behaviour from the
+// `mock` call option — runtimeConfig.mock, stamped on by rebuildRuntimeConfig()
+// and attached to mock call targets by resolveCallTarget(). Modes:
+//   roles   — today's canned per-role output (the default; the role table
+//             below is byte-identical to pre-G8 behaviour, and the test suite
+//             drives this path directly with NO config at all)
+//   custom  — settings.mock.customResponse, verbatim, for every call
+//   echo    — the prompt it received (inspect assembled context)
+//   error   — always throws (retry / failure-UI testing)
+// A per-role override beats the mode for that role; failureRate injects
+// transient adapter errors; latencyMs/streaming tune the simulated cadence.
 import { abortError } from './http.js';
 
-export async function mockAdapter({ system, prompt, onText, signal }) {
+// No config (unit tests, direct drives) preserves the legacy feel exactly:
+// roles mode, the old 600–1500ms random latency, streaming on, no failures.
+function normalizeMockConfig(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return { mode: 'roles', customResponse: '', perRole: {}, latencyMs: null, streaming: true, failureRate: 0 };
+  }
+  return {
+    mode: ['roles', 'custom', 'echo', 'error'].includes(raw.mode) ? raw.mode : 'roles',
+    customResponse: typeof raw.customResponse === 'string' ? raw.customResponse : '',
+    perRole: (raw.perRole && typeof raw.perRole === 'object') ? raw.perRole : {},
+    latencyMs: Number.isFinite(raw.latencyMs) && raw.latencyMs >= 0 ? Math.min(raw.latencyMs, 60_000) : 700,
+    streaming: raw.streaming !== false,
+    failureRate: Number.isFinite(raw.failureRate) ? Math.min(Math.max(raw.failureRate, 0), 1) : 0
+  };
+}
+
+export async function mockAdapter({ model, system, prompt, maxTokens, onText, signal, mock: mockConfig, captureWire = false }) {
   // RUN-CONTROL: honor the stop signal like a real adapter would (fetch +
   // stream checks), so stop() works against mock runs too.
   if (signal?.aborted) throw abortError();
-  await sleepAbortable(600 + Math.random() * 900, signal); // simulate latency so the canvas animates
+  const cfg = normalizeMockConfig(mockConfig);
+  await sleepAbortable(cfg.latencyMs ?? (600 + Math.random() * 900), signal); // simulate latency so the canvas animates
+
+  // Injected failures look transient to the retry loop, so a failure rate
+  // exercises retry first and the failure UI once retries exhaust.
+  if (cfg.failureRate > 0 && Math.random() < cfg.failureRate) {
+    throw mockInjectedError(`Mock injected failure (failureRate ${cfg.failureRate})`);
+  }
+  if (cfg.mode === 'error') throw mockInjectedError('Mock error mode: always fails');
+
   let role = (system.match(/ROLE:\s*([\w-]+)/) ?? [])[1] ?? 'generic';
   // Also recognize explicit role in the prompt/context for flow aiSteps that put role in user message
   if (!role || role === 'generic') {
@@ -16,11 +53,23 @@ export async function mockAdapter({ system, prompt, onText, signal }) {
   }
   const goal = (prompt.match(/USER PROMPT:\n([\s\S]{0,120})/) ?? [])[1]?.trim() ?? 'the request';
 
+  // Mode branch. A per-role override beats whatever the mode would have said
+  // (§6), so one mock run can drive a whole multi-node flow with distinct
+  // outputs.
+  let reply = null;
+  if (typeof cfg.perRole[role] === 'string') {
+    reply = { text: cfg.perRole[role], usage: { input_tokens: 100, output_tokens: 200 } };
+  } else if (cfg.mode === 'custom') {
+    reply = { text: cfg.customResponse, usage: { input_tokens: 100, output_tokens: 200 } };
+  } else if (cfg.mode === 'echo') {
+    reply = { text: prompt, usage: { input_tokens: 100, output_tokens: 200 } };
+  }
+
+  // 'roles' mode: the canned table below, byte-identical to pre-G8 behaviour.
   // When the agent loop's text protocol is active (core/agent.js injects a
   // TOOL PROTOCOL section), an executor emits one example tool call first so
   // the whole registry + text path can be exercised with no API key.
-  let reply = null;
-  if (role === 'executor' && system.includes('TOOL PROTOCOL')) {
+  if (!reply && role === 'executor' && system.includes('TOOL PROTOCOL')) {
     reply = !prompt.includes('TOOL RESULT')
       ? {
         text: [
@@ -184,8 +233,8 @@ The explicit per-file context descriptions worked: only the listed files were re
   // exercised with no API key. Every role streams, the executor's tool-calling
   // turns included — those are what an agentTask's live output actually shows
   // (V1 task 8), so a mock that skipped them would hide the feature on exactly
-  // the path it matters most.
-  if (onText) {
+  // the path it matters most. settings.mock.streaming turns this off (§6).
+  if (onText && cfg.streaming) {
     const step = Math.max(20, Math.ceil(reply.text.length / 8));
     for (let end = step; end < reply.text.length; end += step) {
       if (signal?.aborted) throw abortError(); // stopped mid-stream
@@ -195,7 +244,27 @@ The explicit per-file context descriptions worked: only the listed files were re
     onText(reply.text, { final: true });
   }
 
-  return reply;
+  // The mock captures a wire too (PIVOT-PLAN §4.3). There is no HTTP here, so
+  // the record is synthetic and says so — but it means the wire viewer, the
+  // redaction scan and the whole investigator surface are exercisable with no
+  // API key, which is the reason this adapter exists at all.
+  if (!captureWire) return reply;
+  return {
+    ...reply,
+    wire: {
+      request: { url: 'mock://adapter', method: 'POST', headers: { 'content-type': 'application/json' },
+        body: { model: model ?? 'mock', max_tokens: maxTokens ?? null, system, messages: [{ role: 'user', content: prompt }] } },
+      response: { kind: 'synthetic', status: 200, body: { role, text: reply.text, usage: reply.usage ?? null } }
+    }
+  };
+}
+
+// Injected failures (failureRate, error mode): marked transient so the retry
+// loop engages first — that is the path these switches exist to exercise.
+function mockInjectedError(message) {
+  const err = new Error(message);
+  err.transient = true;
+  return err;
 }
 
 // The mock provider serves its own ids (mock-large / mock-small) — a real

@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   migrateSettings, createResolver, resolveCallTarget,
-  DEFAULT_PRIORITY, CURATED_MODELS
+  DEFAULT_PRIORITY, CURATED_MODELS, stampSeenModels, computeNewModelIds
 } from '../core/modelSource.js';
 import { canServe, callModel } from '../core/adapters/index.js';
 
@@ -146,6 +146,100 @@ test('curated catalogs are consistent with canServe', () => {
   for (const [provider, list] of Object.entries(CURATED_MODELS)) {
     for (const m of list) assert.ok(canServe(provider, m.id), `${provider} must serve its curated id ${m.id}`);
   }
+});
+
+// --- catalog overlay state (SETTINGS-MODELS-PLAN §3, P2) ----------------------
+
+test('migration defaults the new catalog-state keys and drops unknown shapes', () => {
+  const s = migrateSettings({
+    favouriteModels: [' claude-sonnet-5 ', 'gpt-5.2', 'gpt-5.2', 42, ''],
+    seenModels: { 'claude-sonnet-5': '2026-07-01T00:00:00Z', 'bad': 42, '': 'x' },
+    acknowledgedModels: ['claude-opus-4-5', null],
+    modelGrouping: 'bogus',
+    showAllModels: 'yes',
+    mock: { enabled: 1, mode: 'bogus', customResponse: 7, perRole: { a: 'ok', b: 3 },
+            latencyMs: -5, streaming: 'no', failureRate: 4 },
+    unrelatedKey: 'kept'
+  });
+  assert.deepEqual(s.favouriteModels, ['claude-sonnet-5', 'gpt-5.2']);
+  assert.deepEqual(s.seenModels, { 'claude-sonnet-5': '2026-07-01T00:00:00Z' });
+  assert.deepEqual(s.acknowledgedModels, ['claude-opus-4-5']);
+  assert.equal(s.modelGrouping, 'provider');
+  assert.equal(s.showAllModels, false);
+  assert.deepEqual(s.mock, {
+    enabled: false, mode: 'roles', customResponse: '', perRole: { a: 'ok' },
+    latencyMs: 700, streaming: true, failureRate: 1
+  });
+});
+
+test('migration fills catalog-state defaults when absent', () => {
+  const s = migrateSettings({});
+  assert.deepEqual(s.favouriteModels, []);
+  assert.deepEqual(s.seenModels, {});
+  assert.deepEqual(s.acknowledgedModels, []);
+  assert.equal(s.modelGrouping, 'provider');
+  assert.equal(s.showAllModels, false);
+  assert.deepEqual(s.mock, {
+    enabled: false, mode: 'roles', customResponse: '', perRole: {},
+    latencyMs: 700, streaming: true, failureRate: 0
+  });
+});
+
+test('migration keeps valid mock overrides and clamps their ranges', () => {
+  const s = migrateSettings({
+    mock: { enabled: true, mode: 'custom', customResponse: 'hi',
+            latencyMs: 120_000, streaming: false, failureRate: 0.5 }
+  });
+  assert.deepEqual(s.mock, {
+    enabled: true, mode: 'custom', customResponse: 'hi', perRole: {},
+    latencyMs: 60_000, streaming: false, failureRate: 0.5
+  });
+});
+
+// --- NEW-badge diff, as pure functions (not through the UI) -------------------
+
+const T0 = new Date('2026-07-01T12:00:00Z');
+const daysLater = (d, n) => new Date(d.getTime() + n * 86_400_000);
+
+test('NEW badges: first run ever stamps everything and badges nothing', () => {
+  const r = stampSeenModels(['a', 'b', 'c'], {}, [], T0);
+  assert.equal(r.firstRun, true);
+  assert.equal(r.changed, true);
+  assert.deepEqual(Object.keys(r.seenModels).sort(), ['a', 'b', 'c']);
+  assert.deepEqual(computeNewModelIds(['a', 'b', 'c'], r.seenModels, r.acknowledgedModels, T0), [],
+    'a fresh install where all models glow NEW is noise, not information');
+});
+
+test('NEW badges: a second run with a new catalog entry badges exactly that entry', () => {
+  const first = stampSeenModels(['a', 'b'], {}, [], T0);
+  const second = stampSeenModels(['a', 'b', 'c'], first.seenModels, first.acknowledgedModels, daysLater(T0, 3));
+  assert.equal(second.firstRun, false);
+  assert.equal(second.seenModels['c'], daysLater(T0, 3).toISOString(), 'the new id is stamped at detection');
+  assert.deepEqual(
+    computeNewModelIds(['a', 'b', 'c'], second.seenModels, second.acknowledgedModels, daysLater(T0, 3)),
+    ['c']);
+});
+
+test('NEW badges: markSeen acknowledgement clears the badge immediately', () => {
+  const first = stampSeenModels(['a'], {}, [], T0);
+  const second = stampSeenModels(['a', 'b'], first.seenModels, first.acknowledgedModels, daysLater(T0, 1));
+  const acked = [...second.acknowledgedModels, 'b']; // settings:markSeen(['b'])
+  assert.deepEqual(computeNewModelIds(['a', 'b'], second.seenModels, acked, daysLater(T0, 1)), []);
+});
+
+test('NEW badges: an unacknowledged badge expires after 21 days', () => {
+  const first = stampSeenModels(['a'], {}, [], T0);
+  const second = stampSeenModels(['a', 'b'], first.seenModels, first.acknowledgedModels, T0);
+  assert.deepEqual(computeNewModelIds(['a', 'b'], second.seenModels, second.acknowledgedModels, daysLater(T0, 20)), ['b']);
+  assert.deepEqual(computeNewModelIds(['a', 'b'], second.seenModels, second.acknowledgedModels, daysLater(T0, 22)), [],
+    'the badge expires on its own clock even if the user never expands the group');
+});
+
+test('NEW badges: stamping is idempotent — no change, no persist needed', () => {
+  const first = stampSeenModels(['a', 'b'], {}, [], T0);
+  const again = stampSeenModels(['a', 'b'], first.seenModels, first.acknowledgedModels, daysLater(T0, 1));
+  assert.equal(again.changed, false);
+  assert.deepEqual(again.seenModels, first.seenModels);
 });
 
 // --- new adapters over the shared factory (fetch-stubbed) -------------------
