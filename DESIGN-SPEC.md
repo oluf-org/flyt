@@ -193,10 +193,12 @@ D4 makes the canvas the **live transparency view of execution**. The run view is
 
 - **A tool is a file** (TOOLS-PLAN P1): `tools/<id>.json`, app-level, peer to `nodes/<id>.json`, owned by `core/toolstore.js`. Every record carries its schema plus what it costs you if it misbehaves (`effects`, `scope`, `risk`, `autoExecute`) and where it came from (`source`, `trust`). Definitions are inspectable, diffable and version-controllable like everything else in the app. Tools are app-level while skills are project-level (§6.2) on purpose: capability is portable, expertise is not.
 - **Built-ins are seeded files bound to modules.** `core/tools/builtins.js` is the source of truth for the six shipped tools; `ToolStore` seeds `tools/*.json` from it on first launch and refreshes a file when a release changes the shipped definition, preserving the user's own fields (`enabled`, `keywords`, `examples`). They are read-only by design — the `run()` lives in source, so an editable definition would lie about what executes.
-- **Registered tools:** `read_file`, `create_file`, `write_file` (all workspace-confined via `core/tools/fileHost.js` — the bound project when one is set, else the run's sandbox), `bash` (cwd-confined, capped, time-bounded), `create_task`, `write_task_md` (both run-scoped).
+- **Registered tools (14).** Read: `read_file`, `glob`, `grep` (both search the repo without the shell, respecting `.gitignore`), `read_tool_result`, `get_time`. Write: `edit_file` (exact-match replacement returning a unified diff — the tool that stops an agent reproducing a 2,000-line file to change one line), `create_file`, `write_file`, all workspace-confined via `core/tools/fileHost.js`. Shell: `bash` (cwd-confined, capped, time-bounded). Run-scoped: `create_task`, `write_task_md`, `ask_human`. Network: `http_fetch`, `web_search`, both under the policy below.
 - **`core/tools/index.js`** is the in-memory registry the run loop reads: `loadLibrary(defs)` builds it from the files through a provider interface (`builtin` today; `http`/`mcp`/`flow` fail with an honest "not available yet"), `getTools(names)` returns a named subset (unknown names dropped, so a stale flow can't crash a run), and `executeTool` validates → runs → times → **never throws** → appends `tool_call` to `log.jsonl`.
 - **Gating is derived, not hardcoded.** `isDestructive()` reads the record's `effects`/`scope`: a call that mutates something outside the run gates under `approveToolCalls`; a run-scoped write does not; an **unknown tool gates** (fail-closed). The old three-name `DESTRUCTIVE_TOOLS` set survives as a deprecated alias for one release.
 - **Every result is an artifact** (TOOLS-PLAN P2). `executeTool` writes the full, untruncated result to `runs/<id>/tools/<seq>-<tool>.json` and hands the model a **bounded preview plus a handle** (`@tool:7`); `read_tool_result(handle, jsonPath?)` redeems it, whole or narrowed. The `json` preview is structure-preserving (keys kept, long strings cut head-and-tail), so `bash`'s `exitCode` survives beside a 200 KB stdout that no longer has to fit in a prompt. Credentials are redacted from the arguments before anything is written, so the audit trail is safe to share. The inspector links each artifact.
+- **Network policy** (TOOLS-PLAN P4/§10.2), closing §9's "network policy for HTTP tools": private space is denied by name and by DNS answer (loopback, RFC1918, link-local incl. cloud metadata at `169.254.169.254`), the vetted address is **pinned** for the connection so a name cannot re-resolve somewhere else, every redirect hop is re-checked, and bodies stream to a byte cap. Per-tool `allowPrivate` exists for local dev servers; `http_fetch` never gets it.
+- **`ask_human`** parks a run at the existing `awaiting_input` gate — the same mechanism the prompt refiner uses — capped at 3 questions per task. Answers are files (`runs/<id>/answers/<task>.json`), so a task re-run after a crash recalls what the user already said rather than asking twice.
 - **Grants are two-tier** (TOOLS-PLAN P3). A node's `toolCeiling` is authored and static — a toolset id (`repo-write`), a selector (`effects:read`, `uses:network`, `trust:trusted`, `provider:mcp`, `*`), or a literal list — and the grant it actually gets is always intersected with it before binding. An orchestrator's children inherit its ceiling, narrowed by their own and never widened. **Absent a ceiling, the ceiling is exactly the static grant**, so every flow authored before ceilings existed keeps its envelope. A refused grant is logged *and* raised as a retrospective problem: something tried to exceed its envelope, which must be visible rather than merely absent. Toolsets live in `tools/sets/<id>.json`; the DSL gains `toolCeiling` and six lint rules (`unknown-toolset`, `grant-exceeds-ceiling`, `child-exceeds-parent`, `readonly-tools`, plus `ungated-danger` / `broad-ceiling` as warnings).
 - **An `aiStep` may hold read-effect tools.** A planner that can read a file plans better; anything that writes needs an agentTask. Granted steps run through the agent loop and record `protocol` on `node_start` like any agent.
 - **Argument validation is a hand-rolled JSON Schema 2020-12 subset** (`core/tools/schema.js`, D24): types incl. arrays and `integer`, `const`/`enum`, numeric and string bounds, array bounds, `allOf`/`anyOf`/`oneOf`/`not`, and **local** `$ref` into `$defs`. External `$ref` URIs are never dereferenced (a validator that fetches a URL out of an untrusted schema is an SSRF primitive) and depth is bounded at 32 — a definition failing either is stored **disabled with the reason**, never silently accepted.
@@ -261,6 +263,11 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | BYO-key real-model path | BUILT | OpenRouter validated live; Anthropic is env-var only (§4.1) |
 | **V1 acceptance: coding loop on a real repo** | **PASSED** | Feature landed + suite green; limits and gaps in §11.1 |
 | Streaming (`onText` contract) | BUILT | Runner + executor consume it; live panel in the right column (§6) |
+| Markdown output view (expandable node cards, Rendered/Raw) | BUILT | D30 — `src/MarkdownView.jsx`, `src/displace.js`; no `rehype-raw` by design |
+| Summary nodes (`run:summarize`) | BUILT | D30 — run artifacts in `runs/<id>/summaries/`; never rerun, no chains |
+| Configs, compare-anything, blind judge | BUILT | D27 — `core/judge.js`, `comparisons/` store, `src/ConfigsPanel.jsx` |
+| Sweeps (N configs × M prompts + leaderboard) | PLANNED | D27 — design settled, unbuilt; reuses `runFlow` and comparison records |
+| Model catalog (price, context, tier, training policy) | PARTIAL | D32 draft — `core/modelCatalog.js` + settings overlay landed; Models tab and shared `ModelPicker` outstanding (`SETTINGS-MODELS-PLAN.md` P6–P7) |
 | Retrospectives + `historyDigest` | BUILT | One-way into planning today |
 | Approval gates + restart resume | BUILT | Completed steps survive a crash; explicit Resume (§10). Pending *tool* gates still abandon |
 | Two-tier orchestrator depth guard | PLANNED | Design rule; not enforced in code |
@@ -270,7 +277,8 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | Tools are files (`tools/*.json`, `core/toolstore.js`) | BUILT | D34 draft P1 — effects/risk/trust/source per record; registry loaded from the library (§7) |
 | Tool results as artifacts + handles (`runs/<id>/tools/`) | BUILT | D34 draft P2 — bounded previews, `read_tool_result`, redacted records |
 | Two-tier grants: `toolCeiling`, toolsets, selectors | BUILT | D34 draft P3 — intersection, orchestrator inheritance, six lint rules (§7) |
-| MCP, HTTP tools, the v1 catalog, clerk, code mode | PLANNED | D34 draft — `TOOLS-PLAN.md` P4–P10 |
+| v1 tool catalog + network policy (`edit_file`, `glob`, `grep`, `get_time`, `http_fetch`, `web_search`, `ask_human`) | BUILT | D34 draft P4 — resolve-then-pin, `ask_human` on the `awaiting_input` gate |
+| Declarative HTTP tools + secrets, MCP, clerk, Tools page, code mode | PLANNED | D34 draft — `TOOLS-PLAN.md` P5–P10 |
 | Toolbox creation page (user-authored tools) | PLANNED | `TOOLS-PLAN.md` P8; definitions are editable files today |
 | Real workspace binding + `.flyt/` config | BUILT | D15/D22 — `core/workspace.js`; file tools act on the bound project |
 | Safety: command-guard node, opt-out, diff preview | PLANNED | Approvals + run-scoped sandbox today |
@@ -278,7 +286,8 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | Streaming status-summary sidebar | PLANNED | After single-node streaming |
 | AI-helper workflow builder | PLANNED | Canvas is manual today; the view-mode half of D5 is done (§6.1) |
 | Subscription / capped-key backend | PLANNED | BYO key today |
-| Packaging / distribution | NOT STARTED | Explicitly not on radar |
+| Packaging / distribution / auto-update | BUILT | D31 — electron-builder + GitHub Actions CI/Release; unsigned by design |
+| Code signing / notarization, lint gate, crash reporting | DEFERRED | D31 — signing needs certificates; no ESLint config in the repo yet |
 
 ---
 

@@ -1,0 +1,7 @@
+{
+  "id": "shell",
+  "name": "Shell",
+  "icon": "⌘",
+  "description": "Running commands. Path confinement does not apply here.",
+  "order": 1
+}

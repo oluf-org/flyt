@@ -119,6 +119,11 @@ export function normalizeTool(def = {}) {
     autoExecute,
     source,
     trust,
+    // Which column of the Tool Library board this sits in. `null` = derived
+    // from effects/scope (core/toolCategories.js) — so a library that has
+    // never been filed still sorts itself, and no tool file is rewritten
+    // until someone actually drags a card.
+    categoryId: str(def.categoryId).trim() || null,
     // The offending schema is KEPT (so the reason can be shown against what
     // caused it); it is the `enabled: false` above that keeps it out of the
     // registry, and only a registered tool is ever validated against.
@@ -142,6 +147,7 @@ export function normalizeTool(def = {}) {
 export const toolSummary = t => ({
   id: t.id, title: t.title, description: t.description, provider: t.provider,
   effects: t.effects, scope: t.scope, risk: t.risk, trust: t.trust, enabled: t.enabled,
-  autoExecute: t.autoExecute, source: t.source,
+  autoExecute: t.autoExecute, source: t.source, categoryId: t.categoryId,
+  keywords: t.keywords, parameters: t.parameters,
   ...(t.disabledReason ? { disabledReason: t.disabledReason } : {})
 });

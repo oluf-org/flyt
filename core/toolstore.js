@@ -17,10 +17,14 @@ import path from 'node:path';
 import { normalizeTool, toolSummary, TOOL_ID } from '../src/toolTypes.js';
 import { builtinDefinitions } from './tools/builtins.js';
 import { normalizeToolset, SEED_TOOLSETS, SET_ID } from './toolsets.js';
+import { normalizeCategory, sortCategories, SEED_CATEGORIES, CATEGORY_ID } from './toolCategories.js';
 
 // Fields a user may own on a built-in. Everything else — schema, description,
 // effects, risk — comes from the module, because that is what actually runs.
-const USER_OWNED = ['enabled', 'keywords', 'examples'];
+// `categoryId` is here because filing a tool on the board is the user's
+// answer, not the module's: a release that re-seeds a built-in must not drag
+// its card back to the column the shipped definition happened to imply.
+const USER_OWNED = ['enabled', 'keywords', 'examples', 'categoryId'];
 
 export class ToolStore {
   constructor(rootDir) {
@@ -29,6 +33,81 @@ export class ToolStore {
     this.problems = [];     // files that could not be read, for the Tools page
     this.seedBuiltins();
     this.seedToolsets();
+    this.seedCategories();
+  }
+
+  // --- categories (tools/categories/<id>.json) -------------------------------
+  // A subdirectory, like sets/, so listFull()'s `*.json` sweep of tools/ never
+  // reads a category as a malformed tool.
+  categoriesDir() { return path.join(this.rootDir, 'categories'); }
+
+  // Seeded once, then the user's — pure data, like a toolset, so an edited or
+  // deleted category is simply the answer and is never written back.
+  seedCategories() {
+    fs.mkdirSync(this.categoriesDir(), { recursive: true });
+    // Any file at all means the user has a board; re-seeding a category they
+    // deleted would make deletion impossible.
+    if (fs.readdirSync(this.categoriesDir()).some(n => n.endsWith('.json'))) return [];
+    const written = [];
+    for (const def of SEED_CATEGORIES) {
+      fs.writeFileSync(
+        path.join(this.categoriesDir(), `${def.id}.json`),
+        JSON.stringify(normalizeCategory(def), null, 2), 'utf8'
+      );
+      written.push(def.id);
+    }
+    return written;
+  }
+
+  categoryPath(id) {
+    if (!CATEGORY_ID.test(String(id ?? ''))) throw new Error(`Invalid category id "${id}"`);
+    return path.join(this.categoriesDir(), `${id}.json`);
+  }
+
+  listCategories() {
+    if (!fs.existsSync(this.categoriesDir())) return [];
+    const out = [];
+    for (const f of fs.readdirSync(this.categoriesDir()).filter(n => n.endsWith('.json'))) {
+      try { out.push(normalizeCategory(JSON.parse(fs.readFileSync(path.join(this.categoriesDir(), f), 'utf8')))); }
+      catch (err) { this.problems.push({ file: `categories/${f}`, error: String(err?.message ?? err) }); }
+    }
+    return sortCategories(out);
+  }
+
+  saveCategory(def) {
+    const clean = normalizeCategory(def);
+    fs.mkdirSync(this.categoriesDir(), { recursive: true });
+    fs.writeFileSync(this.categoryPath(clean.id), JSON.stringify(clean, null, 2), 'utf8');
+    return clean;
+  }
+
+  // Deleting a column does not delete its tools: each one falls back to its
+  // derived placement (categoryOf) on the next paint. Clearing the now-dangling
+  // `categoryId` keeps the files honest rather than leaving them pointing at a
+  // column that no longer exists.
+  removeCategory(id) {
+    fs.rmSync(this.categoryPath(id), { force: true });
+    for (const tool of this.listFull()) {
+      if (tool.categoryId === id) this.write(normalizeTool({ ...tool, categoryId: null }));
+    }
+  }
+
+  // The board's column order, persisted as the `order` field so a hand-edited
+  // file and a dragged column mean the same thing.
+  reorderCategories(ids) {
+    const byId = new Map(this.listCategories().map(c => [c.id, c]));
+    const ordered = (Array.isArray(ids) ? ids : []).filter(id => byId.has(id));
+    for (const id of byId.keys()) if (!ordered.includes(id)) ordered.push(id);
+    return ordered.map((id, order) => this.saveCategory({ ...byId.get(id), order }));
+  }
+
+  // Filing one tool. Separate from save() because it is the one write the
+  // board makes constantly (drag, and the wizard's destination chip) and it
+  // must never round-trip an entire definition the renderer may hold a stale
+  // copy of — a built-in's schema lives in its module, not in the card.
+  setCategory(id, categoryId) {
+    const tool = this.load(id);
+    return this.write(normalizeTool({ ...tool, categoryId: categoryId || null }));
   }
 
   // --- toolsets (tools/sets/<id>.json) ---------------------------------------

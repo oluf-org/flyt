@@ -466,6 +466,7 @@ other nodes may do must not be able to decide they may do more than it may.
   | `child-exceeds-parent` | error | child ceiling ⊄ orchestrator ceiling |
   | `ungated-danger` | **warn** | a `danger`-risk tool granted with `approveToolCalls: false` |
   | `broad-ceiling` | warn | ceiling is `*` |
+  | `readonly-tools` | error | *(built)* a non-agentTask node grants a tool whose effects ⊄ `{read}` — the relaxed `invalid-override` rule, given its own name |
 
 `npm run flow -- lint` stays the machine gate (`GOALS.md`): an AI authoring a flow with tools
 lints until `ok: true`, exactly as today.
@@ -1106,6 +1107,7 @@ anything reading today's logs keeps working.
 | `code_mode_script` | script about to run | `node`, `scriptHash`, `reachableTools[]`, `gated: bool` |
 | `secret_missing` | tool disabled for an unset secret | `tool`, `secret` |
 | `tool_artifact_failed` | the result artifact could not be written (P2) | `tool`, `error` |
+| `tool_ceiling_inherited` | a generated node took its owner's ceiling (P3) | `node`, `from`, `ceiling`, `declared?` |
 
 `node_start.protocol` (set in `core/nodes/executor.js`) gains `code`. Every field above exists so a question that is currently
 answered by intuition — "did the clerk earn its cost?", "what actually got granted?", "which
@@ -1209,16 +1211,62 @@ Notes on what the build settled:
   a full disk must cost you the archive, not the call that already succeeded — and a silent
   best-effort write is exactly the thing this plan's "never silent" rule forbids.
 
-### P3 — Grants and ceilings
+### P3 — Grants and ceilings — **[LANDED 2026-07-26]**
 `toolCeiling`, toolsets + selectors, intersection, orchestrator inheritance, the six lint
 rules, `tools` relaxed to read-only on `aiStep`.
 **Accept:** `grants.test.js` green including the no-ceiling regression; `npm run flow -- lint`
-rejects a grant exceeding a ceiling with a useful message.
+rejects a grant exceeding a ceiling with a useful message. — *Both met: 16 tests in
+`tests/grants.test.js`, and the CLI reports* `ERROR grant-exceeds-ceiling node "research": tool
+"bash" is granted but outside its toolCeiling (read-only)` *with exit 1.*
 
-### P4 — The v1 catalog
+Notes on what the build settled:
+- **A second selector, `uses:`.** `effects:read` is a SUBSET test ("reaches nothing beyond
+  read"), which is what a *ceiling* wants — but it makes `effects:network` admit every
+  read-only tool, so the seeded `web` set would have meant "everything that only reads".
+  `uses:network` is the membership twin, and a *grant* usually wants that one.
+- **`readonly-tools` replaces the old `invalid-override` job.** Relaxing `tools` to `aiStep`
+  left `invalid-override` with nothing to catch through the schema layer (every schema-legal
+  key is now overridable), so the read-only constraint became its own rule. It is in
+  `RUNTIME_RULES`: a lint warning is not a safety boundary, and the runner drops a non-read
+  tool from an `aiStep` regardless.
+- **The aiStep half is wired, not just linted.** A granted `aiStep` runs through `runAgent`
+  (`trackedRunAgent`), records `protocol` on `node_start` like an agentTask, and falls back to
+  the plain model call when the grant is empty — so every existing flow takes its old path.
+- **`ToolStore.catalog()` returns `{ tools, sets }`** — the shape the linter reads. It was
+  `{ library, sets }` for an hour, which silently gave every ceiling rule an EMPTY library and
+  passed a flow that granted `bash` under `read-only`. `tests/grants.test.js` pins the shape.
+- **One event beyond §16: `tool_ceiling_inherited`** (`node`, `from`, `ceiling`) when an
+  orchestrator's ceiling reaches a node it generated.
+
+### P4 — The v1 catalog — **[LANDED 2026-07-26]**
 `edit_file`, `glob`, `grep`, `get_time`, `http_fetch`, `web_search`, `ask_human`.
 **Accept:** a real coding run edits a large file surgically (diff shows only the intended
-hunk); `ask_human` parks, answers and resumes, including across an app restart.
+hunk); `ask_human` parks, answers and resumes, including across an app restart. — *The
+`edit_file` half is met at the tool level rather than through a live model: a 2,000-line file
+is edited, the other 1,999 lines are asserted byte-identical, and the returned diff contains
+exactly the two intended `+`/`-` lines (`tests/catalog.test.js`). The `ask_human` half is met
+end to end in `tests/askHuman.test.js`, restart included.*
+
+Notes on what the build settled:
+- **The network policy (§10.2) landed here, not in P5**, because §14.3 says `http_fetch` obeys
+  it and a network tool without it would be the SSRF primitive this plan keeps naming.
+  `core/tools/net.js` denies private space by name and by DNS answer, **pins** the vetted
+  address (`node:http`'s `lookup`, not `fetch` — global fetch would resolve a second time, and
+  the gap between the two resolutions is the rebinding window), re-checks every redirect hop,
+  and streams to a byte cap. P5's declarative HTTP tools reuse it.
+- **`ask_human`'s restart story is the ANSWER, not the promise.** A crash takes the call stack
+  with it, as it always has. Answers are files (`runs/<id>/answers/<task>.json`), so the
+  rewound task recalls what it was already told instead of asking twice — which also makes the
+  3-question cap survive a restart.
+- **`glob`/`grep` are read-effect on purpose.** Searching a repo through `bash` would need a
+  ceiling containing the shell; now a node that only needs to FIND things never does. Both
+  respect `.gitignore` plus a hardcoded floor (`node_modules`, `.git`, `dist`, …).
+- **`web_search` is disabled with a reason, not failed at call time.** The main process
+  re-reads the library on every settings change, so adding a key makes the tool appear without
+  a restart. **Stated gap:** there is no Settings *field* for the key yet — `settings:set`
+  accepts `{ search: { provider, apiKey } }` and `publicSettings()` reports only whether one
+  exists. The field is deferred to P8 rather than added now, because Settings is mid-redesign
+  under `SETTINGS-MODELS-PLAN` and this would collide with it.
 
 ### P5 — Declarative HTTP + secrets
 `provider: http`, positional escaping, network policy, `secrets.json` + env fallback,

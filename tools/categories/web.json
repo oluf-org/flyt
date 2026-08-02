@@ -1,0 +1,7 @@
+{
+  "id": "web",
+  "name": "Web",
+  "icon": "◍",
+  "description": "Reaching the network — fetching pages, searching.",
+  "order": 2
+}

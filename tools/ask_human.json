@@ -1,0 +1,61 @@
+{
+  "id": "ask_human",
+  "title": "Ask the person running this flow",
+  "description": "Ask the user a question and wait for their answer. Use it when a decision is genuinely theirs — an ambiguous requirement, a missing credential, which of two approaches they want — not for anything you can determine yourself. The run pauses until they reply. Bounded: at most 3 questions per task.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "read"
+  ],
+  "scope": "run",
+  "risk": "safe",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "question"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "question": {
+        "type": "string",
+        "description": "One clear question, in plain language. Ask about the decision, not about your implementation."
+      },
+      "context": {
+        "type": "string",
+        "description": "Optional one or two lines of background so the question makes sense on its own."
+      },
+      "options": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Optional concrete choices. Offering options usually gets a faster, clearer answer than an open question."
+      }
+    }
+  },
+  "keywords": [
+    "ask",
+    "human",
+    "user",
+    "question",
+    "clarify",
+    "decide",
+    "confirm"
+  ],
+  "examples": [
+    "ask which database they want to use",
+    "confirm the breaking change is intended"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

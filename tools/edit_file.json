@@ -1,0 +1,64 @@
+{
+  "id": "edit_file",
+  "title": "Edit part of a file",
+  "description": "Replace an exact snippet inside an existing file, leaving the rest untouched. `oldString` must appear EXACTLY ONCE (include surrounding lines to make it unique) unless replaceAll is true. Prefer this over write_file for any change to an existing file. Returns a unified diff of what changed.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "write"
+  ],
+  "scope": "workspace",
+  "risk": "caution",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "path",
+      "oldString",
+      "newString"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Relative path inside the workspace, e.g. \"src/app.js\"."
+      },
+      "oldString": {
+        "type": "string",
+        "description": "The exact text to replace, copied from the file including indentation."
+      },
+      "newString": {
+        "type": "string",
+        "description": "The replacement text. Use an empty string to delete the snippet."
+      },
+      "replaceAll": {
+        "type": "boolean",
+        "description": "Replace every occurrence instead of requiring exactly one. Default false."
+      }
+    }
+  },
+  "keywords": [
+    "edit",
+    "replace",
+    "change",
+    "patch",
+    "modify",
+    "fix",
+    "diff"
+  ],
+  "examples": [
+    "change the timeout in src/config.js",
+    "rename the helper in one file"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "id": "files",
+  "name": "Files",
+  "icon": "⌸",
+  "description": "Reading, searching and editing files in the bound workspace.",
+  "order": 0
+}

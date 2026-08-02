@@ -1,0 +1,56 @@
+{
+  "id": "glob",
+  "title": "Find files by name",
+  "description": "Find files in the workspace by path pattern — \"src/**/*.js\", \"**/*.test.ts\", \"{README,LICENSE}*\". Returns paths, newest first, capped. Respects .gitignore and skips node_modules/.git/dist. Use grep to search file CONTENTS.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "read"
+  ],
+  "scope": "workspace",
+  "risk": "safe",
+  "autoExecute": true,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "pattern"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "pattern": {
+        "type": "string",
+        "description": "Glob pattern relative to the workspace root, e.g. \"src/**/*.js\"."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 500,
+        "description": "Maximum paths to return (default 100, max 500)."
+      }
+    }
+  },
+  "keywords": [
+    "find",
+    "files",
+    "glob",
+    "pattern",
+    "list",
+    "search",
+    "ls"
+  ],
+  "examples": [
+    "find every test file",
+    "what components exist under src/"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "id": "http_fetch",
+  "title": "Fetch a URL",
+  "description": "Make an HTTP request and return the status, headers and body (text, truncated if large). Public http/https only — requests into private network space are refused. Use this to read a page or call a public API.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "network"
+  ],
+  "scope": "workspace",
+  "risk": "caution",
+  "autoExecute": true,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "url"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "Absolute http/https URL."
+      },
+      "method": {
+        "enum": [
+          "GET",
+          "HEAD",
+          "POST",
+          "PUT",
+          "PATCH",
+          "DELETE"
+        ],
+        "description": "HTTP method (default GET)."
+      },
+      "headers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Request headers. Do not put credentials here — see the tool library for authenticated HTTP tools."
+      },
+      "body": {
+        "type": "string",
+        "description": "Request body for POST/PUT/PATCH."
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 60000,
+        "description": "Wall-clock timeout (default 15000, max 60000)."
+      }
+    }
+  },
+  "keywords": [
+    "http",
+    "fetch",
+    "url",
+    "web",
+    "request",
+    "api",
+    "download",
+    "page"
+  ],
+  "examples": [
+    "fetch the changelog page",
+    "call the public status API"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 3000,
+    "artifact": true
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "id": "web_search",
+  "title": "Search the web",
+  "description": "Search the web and return ranked results (title, URL, snippet). Use it to find pages worth fetching; use http_fetch to read one. Needs a search provider key in Settings.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "network"
+  ],
+  "scope": "workspace",
+  "risk": "safe",
+  "autoExecute": true,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "query"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "What to search for, in plain words."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "description": "How many results (default 5, max 10)."
+      }
+    }
+  },
+  "keywords": [
+    "search",
+    "web",
+    "google",
+    "find",
+    "lookup",
+    "research",
+    "internet"
+  ],
+  "examples": [
+    "search for the current React 19 migration guide",
+    "find the docs for this error message"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 3000,
+    "artifact": true
+  }
+}

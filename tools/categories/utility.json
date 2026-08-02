@@ -1,0 +1,7 @@
+{
+  "id": "utility",
+  "name": "Utility",
+  "icon": "✦",
+  "description": "Small, safe, stateless helpers.",
+  "order": 4
+}

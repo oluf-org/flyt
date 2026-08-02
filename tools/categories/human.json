@@ -1,0 +1,7 @@
+{
+  "id": "human",
+  "name": "Human",
+  "icon": "☖",
+  "description": "Tools that park the run at the awaiting-input gate and ask.",
+  "order": 5
+}

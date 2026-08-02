@@ -12,7 +12,7 @@ import { normalizeToolset, SEED_TOOLSETS } from '../core/toolsets.js';
 import { normalizeTool } from '../src/toolTypes.js';
 import { builtinDefinitions } from '../core/tools/builtins.js';
 import { lintFlow } from '../core/flowlang/lint.js';
-import { SEED_NODE_TEMPLATES, normalizeTemplate, resolveInstance } from '../src/flowTypes.js';
+import { PRESET_NODE_TEMPLATES, normalizeTemplate, resolveInstance } from '../src/flowTypes.js';
 import { runExecutorTask } from '../core/nodes/executor.js';
 import { ToolStore } from '../core/toolstore.js';
 import { makeStore, setScript, testConfig } from './helpers.js';
@@ -28,8 +28,8 @@ const ids = r => r.tools.slice().sort();
 test('selectors resolve by what a tool IS, not by a list someone maintains', () => {
   // effects:read is a SUBSET test — a tool that also writes can never sneak in.
   const readOnly = [...expandRefs('effects:read', ctx).ids].sort();
-  assert.deepEqual(readOnly, ['read_file', 'read_tool_result']);
-  assert.ok(!readOnly.includes('write_file'));
+  assert.deepEqual(readOnly, ['ask_human', 'get_time', 'glob', 'grep', 'read_file', 'read_tool_result']);
+  assert.ok(!readOnly.includes('write_file') && !readOnly.includes('http_fetch'));
 
   assert.deepEqual([...expandRefs('trust:trusted', ctx).ids].sort(), library.map(t => t.id).sort());
   assert.deepEqual([...expandRefs('provider:mcp', ctx).ids], []);
@@ -38,9 +38,10 @@ test('selectors resolve by what a tool IS, not by a list someone maintains', () 
   // `uses:` is the membership twin: "can reach the network" rather than
   // "reaches nothing beyond the network". Using the subset test here would
   // sweep in every read-only tool.
-  assert.deepEqual([...expandRefs('uses:write', ctx).ids].sort(), ['create_file', 'create_task', 'write_file', 'write_task_md']);
-  assert.deepEqual([...expandRefs('uses:network', ctx).ids], [], 'no network tools until P4');
-  assert.deepEqual([...expandRefs('web', ctx).ids], [], 'the web set is empty, not "everything that only reads"');
+  assert.deepEqual([...expandRefs('uses:write', ctx).ids].sort(), ['create_file', 'create_task', 'edit_file', 'write_file', 'write_task_md']);
+  assert.deepEqual([...expandRefs('uses:network', ctx).ids].sort(), ['http_fetch', 'web_search']);
+  assert.deepEqual([...expandRefs('web', ctx).ids].sort(), ['http_fetch', 'web_search'],
+    'the web set is the network tools — not "everything whose effects stay within {network}", which would be every read-only tool');
 
   const bad = expandRefs('effects:teleport', ctx);
   assert.deepEqual([...bad.ids], []);
@@ -64,7 +65,7 @@ test('the store\'s catalog is the shape the linter reads', () => {
 });
 
 test('toolsets compose, exclude wins, and a cycle degrades instead of hanging', () => {
-  assert.deepEqual([...expandRefs('read-only', ctx).ids].sort(), ['read_file', 'read_tool_result']);
+  assert.deepEqual([...expandRefs('read-only', ctx).ids].sort(), ['ask_human', 'get_time', 'glob', 'grep', 'read_file', 'read_tool_result']);
   // repo-write includes read-only and every write tool, minus bash.
   const repoWrite = [...expandRefs('repo-write', ctx).ids].sort();
   assert.ok(repoWrite.includes('write_file') && repoWrite.includes('read_file'));
@@ -102,7 +103,8 @@ test('MIGRATION: absent a ceiling, the ceiling IS the static grant', () => {
 });
 
 test('an absent grant means everything the ceiling allows', () => {
-  assert.deepEqual(ids(resolveGrant({ grant: null, ceiling: 'read-only', ctx })), ['read_file', 'read_tool_result']);
+  assert.deepEqual(ids(resolveGrant({ grant: null, ceiling: 'read-only', ctx })),
+    ['ask_human', 'get_time', 'glob', 'grep', 'read_file', 'read_tool_result']);
   assert.deepEqual(ids(resolveGrant({ grant: null, ceiling: 'none', ctx })), []);
 });
 
@@ -124,7 +126,8 @@ test('an orchestrator child narrows its parent, and can never widen it', () => {
   // Declares nothing → inherits verbatim, so the canvas still reads "repo-write".
   assert.equal(narrowCeiling('repo-write', null, ctx), 'repo-write');
   // Narrows → keeps only what both allow.
-  assert.deepEqual(narrowCeiling('repo-write', 'read-only', ctx).sort(), ['read_file', 'read_tool_result']);
+  assert.deepEqual(narrowCeiling('repo-write', 'read-only', ctx).sort(),
+    ['ask_human', 'get_time', 'glob', 'grep', 'read_file', 'read_tool_result']);
   // Tries to widen → the parent still wins; bash never appears.
   const widened = narrowCeiling('repo-write', 'repo-full', ctx);
   assert.ok(!widened.includes('bash'), 'a child cannot decide it may do more than its parent');
@@ -135,7 +138,7 @@ test('an orchestrator child narrows its parent, and can never widen it', () => {
 
 // --- the lint rules ---------------------------------------------------------
 
-const templates = SEED_NODE_TEMPLATES.map(normalizeTemplate);
+const templates = PRESET_NODE_TEMPLATES.map(normalizeTemplate);
 const lintLibrary = { tools: library, sets };
 const flowWith = nodes => ({
   id: 'p', name: 'P',

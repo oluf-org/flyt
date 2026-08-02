@@ -1,0 +1,7 @@
+{
+  "id": "run",
+  "name": "Run",
+  "icon": "❖",
+  "description": "Tools confined to the run's own directory: tasks, notes, earlier results.",
+  "order": 3
+}
