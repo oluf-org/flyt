@@ -15,7 +15,11 @@ import { resolveCallTarget } from '../modelSource.js';
 // AbortSignal the runner fires on stop(); the agent loop's model calls reject
 // with an AbortError, which lands in the catch below as a STOPPED task —
 // requeued to 'pending', never marked failed.
-export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, retry = null, signal = null } = {}) {
+// `ledger` is the WRITE ledger (core/writeLedger.js) that flags concurrent
+// writes to the same path; `callLedger` is the model-call ledger (PIVOT-PLAN
+// §4). Two different things with one unfortunate word between them — the write
+// ledger got there first.
+export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, askHuman = null, ledger = null, callLedger = null, onText = null, onRetry = null, retry = null, signal = null, timeoutMs = null } = {}) {
   const tasksDoc = store.readTasks(runId);
   const task = tasksDoc.tasks.find(t => t.id === taskId);
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
@@ -109,6 +113,13 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     // Present only when the node opted into per-tool approval: the agent loop
     // calls it before each destructive tool call (V1 task 4).
     approveToolCall,
+    // How ask_human reaches the person running the flow (TOOLS-PLAN §14.5).
+    // Absent outside a run, which is why the tool says so rather than hanging.
+    askHuman,
+    // The configured web-search provider, key included. It reaches web_search
+    // here rather than through the tool definition, so no credential is ever
+    // written to a file the model can read (§10.3).
+    ...(config.search ? { search: config.search } : {}),
     // Present when this task is part of a parallel batch: file tools use it to
     // flag a write to a path another in-flight task also wrote (V1 task 6).
     ledger,
@@ -138,6 +149,10 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   ].filter(Boolean).join('\n'), skills);
 
   const userMsg = [
+    // PIVOT-PLAN §5.2: the node's own prompt, first and unwrapped. See the
+    // matching block in core/flowRunner.js — it is the instruction; everything
+    // below it is the request and the context.
+    task.prompt?.trim() ? task.prompt.trim() : '',
     `USER PROMPT:\n${store.readPrompt(runId)}`,
     `TASK: ${task.title}`,
     `GOAL: ${task.goal}`,
@@ -148,7 +163,10 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   let retro;
   let status;
   try {
-    const result = await runAgent({ worker, apiKey, system, prompt: userMsg, tools, ctx, onText, onRetry, retry: retry ?? config.retry, signal });
+    const result = await runAgent({
+      worker, apiKey, system, prompt: userMsg, tools, ctx, onText, onRetry,
+      retry: retry ?? config.retry, signal, ledger: callLedger, timeoutMs
+    });
     // An agent that produced no deliverable has not done the task, whatever the
     // transport says. Marking it done would leave the streamed partial (or a
     // 0-byte file) standing as the task's output and let dependents run on it.

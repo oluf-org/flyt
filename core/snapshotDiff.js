@@ -9,7 +9,11 @@
 // and the renderer (to apply them), keeping the two sides provably symmetric.
 
 // Whole-value fields: replaced wholesale when they differ. These stay small.
-const WHOLE_FIELDS = ['meta', 'prompt', 'plan', 'tasks', 'flow', 'followups', 'summaries'];
+// `metrics` (PIVOT-PLAN P3) is whole-value on purpose. It is a fold of the call
+// ledger — a few hundred bytes even for a long run — and every node's numbers
+// move together when a call lands, so per-key diffing would cost more in
+// bookkeeping than it saves on the wire.
+const WHOLE_FIELDS = ['meta', 'prompt', 'plan', 'tasks', 'flow', 'followups', 'summaries', 'metrics'];
 // Map fields: diffed per key so only the touched entries travel.
 const MAP_FIELDS = ['retrospectives', 'taskOutputs', 'nodeOutputs'];
 

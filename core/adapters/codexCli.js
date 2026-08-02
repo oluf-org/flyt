@@ -152,7 +152,9 @@ export async function codexAdapter({ model, system, prompt, onText, signal, cliH
     }
     if (!text) throw new Error(`Codex CLI produced no output${stderr ? `: ${stderr.trim().slice(0, 300)}` : ''}`);
     onText?.(text, { final: true });
-    return { text, usage: st.usage ?? null };
+    // See claudeCode.js: a CLI delegate has no HTTP wire of its own to record
+    // (PIVOT-PLAN §4.3, "honest holes").
+    return { text, usage: st.usage ?? null, wire: null, wireUnavailable: 'cli-delegate' };
   } finally {
     try { fs.unlinkSync(lastMsgFile); } catch { /* never written */ }
   }

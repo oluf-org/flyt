@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { runProgress, formatElapsed, isTerminal } from './runProgress.js';
 import { sigil } from './sigil.js';
+import { RunMetricStrip } from './RunMetrics.jsx';
 import Tip from './Tip.jsx';
 
 // The run view's header (V1 task 9). D4 makes the canvas the live transparency
@@ -95,6 +96,9 @@ export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace, docVie
       {p.waiting > 0 && <span className="run-stat run-stat-wait">{p.waiting} waiting</span>}
       {p.failed > 0 && <span className="run-stat run-stat-fail">{p.failed} failed</span>}
       <span className="run-stat mono" title="Elapsed">{formatElapsed(p.elapsedMs)}</span>
+      {/* PIVOT-PLAN §6.1: what this run has spent, sent and retried — folded
+          from the call ledger and ticking as calls land. */}
+      <RunMetricStrip metrics={snapshot.metrics} />
 
       <div className="toolbar-spacer" />
 

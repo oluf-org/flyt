@@ -138,7 +138,11 @@ function describeCall({ tool, args }) {
 // Returns { risk, reason, source, model?, durationMs? }. Never throws: the
 // caller is a safety gate, and a gate that throws is a gate that stops the run
 // for the wrong reason.
-export async function checkToolCall(call, { resolve, model, retry } = {}) {
+// `ledger` (optional, PIVOT-PLAN §4.2): the screening call costs money and adds
+// latency to every gated tool call, so it is ledgered like any other — "what
+// did safety mode cost me?" is a question the investigator must be able to
+// answer.
+export async function checkToolCall(call, { resolve, model, retry, ledger = null } = {}) {
   if (call?.tool === 'bash') {
     const screened = screenCommand(call.args?.command);
     if (screened) return screened;
@@ -152,6 +156,7 @@ export async function checkToolCall(call, { resolve, model, retry } = {}) {
     const r = await Promise.race([
       callModel({
         ...target,
+        ledger,
         system: SYSTEM,
         prompt: describeCall(call),
         maxTokens: 120,

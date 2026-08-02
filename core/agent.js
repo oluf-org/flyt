@@ -47,16 +47,20 @@ const NATIVE_TOOL_PROVIDERS = new Set(['openrouter', 'openai', 'kimi']);
 export const toolProtocol = worker =>
   (NATIVE_TOOL_PROVIDERS.has(worker?.provider) && worker?.supportsTools) ? 'native' : 'text';
 
-export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, retry, signal = null }) {
+// ledger (optional, PIVOT-PLAN §4.2): the call ledger, forwarded untouched to
+// every turn. This is the layer where per-call granularity used to be destroyed
+// — a node that took six agent turns reported ONE summed usage number — so the
+// ledger reaching each turn individually is the whole point.
+export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, retry, signal = null, ledger = null, timeoutMs = null }) {
   const started = Date.now();
   if (!tools.length) {
-    const r = await callModel({ ...worker, apiKey, system, prompt, onText, onRetry, retry, signal });
-    return { text: r.text, toolCalls: [], usage: r.usage, durationMs: r.durationMs };
+    const r = await callModel({ ...worker, apiKey, system, prompt, onText, onRetry, retry, signal, ledger, timeoutMs, protocol: 'none' });
+    return { text: r.text, toolCalls: [], usage: r.usage, durationMs: r.durationMs, turns: 1 };
   }
   const native = toolProtocol(worker) === 'native';
   const out = native
-    ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal })
-    : await textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal });
+    ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal, ledger, timeoutMs })
+    : await textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal, ledger, timeoutMs });
   return { ...out, durationMs: Date.now() - started };
 }
 
@@ -69,7 +73,12 @@ function toolMessage(record) {
   return record.note ? `${body}\n${record.note}` : body;
 }
 
-// Merge token usage across loop iterations so retrospectives stay honest.
+// Merge token usage across loop iterations.
+//
+// PIVOT-PLAN §4.2: this is now a DERIVED ROLLUP, not the record. It exists so
+// the retrospective's summary line still reads "this node used N tokens"; the
+// ledger holds one record per turn and is the truth. Never reach for this
+// number when per-call granularity matters — that is exactly what it destroys.
 function addUsage(total, usage) {
   if (!usage) return total;
   const t = total ?? {};
@@ -80,7 +89,7 @@ function addUsage(total, usage) {
 }
 
 // --- NATIVE path: OpenAI function-tool format over the messages API ---
-async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal }) {
+async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal, ledger, timeoutMs }) {
   const messages = [
     { role: 'system', content: system },
     { role: 'user', content: prompt }
@@ -99,11 +108,14 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
     // non-streaming response carries) — so this path stays silent until an
     // adapter can reassemble tool_calls from deltas. Honoring the contract here
     // means that becomes an adapter change alone.
-    const res = await callModel({ ...worker, apiKey, messages, tools: oaTools, onText, onRetry, retry, signal });
+    const res = await callModel({
+      ...worker, apiKey, messages, tools: oaTools, onText, onRetry, retry, signal,
+      ledger, timeoutMs, protocol: 'native'
+    });
     usage = addUsage(usage, res.usage);
     lastText = res.text || lastText;
     const calls = res.message?.tool_calls;
-    if (!calls?.length) return { text: res.text, toolCalls, usage };
+    if (!calls?.length) return { text: res.text, toolCalls, usage, turns: i + 1 };
 
     // Echo the assistant turn back verbatim, then answer each call with a
     // role:'tool' message (result on success, the error on failure so the
@@ -122,7 +134,7 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
       messages.push({ role: 'tool', tool_call_id: call.id, content: toolMessage(record) });
     }
   }
-  return { text: lastText || '(agent stopped: tool-call iteration cap reached)', toolCalls, usage, capped: true };
+  return { text: lastText || '(agent stopped: tool-call iteration cap reached)', toolCalls, usage, capped: true, turns: MAX_ITERATIONS };
 }
 
 // --- TEXT path: fenced ```tool blocks parsed out of plain completions ---
@@ -142,7 +154,7 @@ export function textProtocolInstructions(tools) {
   ].join('\n');
 }
 
-async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal }) {
+async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal, ledger, timeoutMs }) {
   const fullSystem = system + '\n\n' + textProtocolInstructions(tools);
   const toolCalls = [];
   let usage = null;
@@ -150,11 +162,14 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
   let lastText = '';
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const res = await callModel({ ...worker, apiKey, system: fullSystem, prompt: transcript, onText, onRetry, retry, signal });
+    const res = await callModel({
+      ...worker, apiKey, system: fullSystem, prompt: transcript, onText, onRetry, retry, signal,
+      ledger, timeoutMs, protocol: 'text'
+    });
     usage = addUsage(usage, res.usage);
     lastText = res.text;
     const match = res.text.match(TOOL_BLOCK);
-    if (!match) return { text: res.text.trim(), toolCalls, usage };
+    if (!match) return { text: res.text.trim(), toolCalls, usage, turns: i + 1 };
 
     let record;
     try {
@@ -178,5 +193,5 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
     ].join('\n');
   }
   // Cap reached: strip any dangling tool block from the last reply.
-  return { text: (lastText.replace(TOOL_BLOCK, '').trim() || '(agent stopped: tool-call iteration cap reached)'), toolCalls, usage, capped: true };
+  return { text: (lastText.replace(TOOL_BLOCK, '').trim() || '(agent stopped: tool-call iteration cap reached)'), toolCalls, usage, capped: true, turns: MAX_ITERATIONS };
 }

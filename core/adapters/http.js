@@ -85,8 +85,13 @@ export async function* sseEvents(readable) {
 //                               OpenAI function-tool definitions. The raw
 //                               assistant message comes back so the loop can
 //                               echo tool_calls and read finish_reason.
+//
+// captureWire (optional, PIVOT-PLAN §4.3): when set, the adapter returns the
+// literal request it sent and the response it got, for the call ledger. The
+// adapter does NOT redact or bound them — core/callLedger.js owns both, so
+// there is exactly one place that decides what reaches disk.
 export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'Add it in Settings.', envKey = null }) {
-  return async function openaiCompatibleAdapter({ model, system, prompt, messages, tools, maxTokens, apiKey, onText, signal }) {
+  return async function openaiCompatibleAdapter({ model, system, prompt, messages, tools, maxTokens, apiKey, onText, signal, captureWire = false }) {
     const key = apiKey || (envKey ? process.env[envKey] : null);
     if (!key) throw new Error(`${provider} API key is not set. ${keyHelp}`);
 
@@ -110,13 +115,21 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       body.stream_options = { include_usage: true };
     }
 
+    const reqHeaders = {
+      'Authorization': `Bearer ${key}`,
+      'content-type': 'application/json',
+      ...headers
+    };
+    // The wire request: params, messages, tool schemas and headers exactly as
+    // sent. Built only when the ledger asked for it — assembling it otherwise
+    // is a pure copy of every message for nobody to read.
+    const wireRequest = captureWire
+      ? { url: baseUrl, method: 'POST', headers: reqHeaders, body }
+      : null;
+
     const res = await fetch(baseUrl, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${key}`,
-        'content-type': 'application/json',
-        ...headers
-      },
+      headers: reqHeaders,
       body: JSON.stringify(body),
       // RUN-CONTROL: optional cooperative cancellation (stop()). fetch rejects
       // with an AbortError when it fires; the stream loop below checks it too.
@@ -124,7 +137,14 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
     });
 
     if (!res.ok) {
-      throw apiError(provider, res, await res.text());
+      const bodyText = await res.text();
+      const err = apiError(provider, res, bodyText);
+      // A failed attempt is a ledger record too, and the response body is the
+      // most useful thing in it — "429, and here is what the provider said".
+      if (captureWire) {
+        err.wire = { request: wireRequest, response: { status: res.status, body: safeJson(bodyText) } };
+      }
+      throw err;
     }
 
     if (stream) {
@@ -182,26 +202,44 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
           { transient: true }
         );
       }
+      const message = {
+        role: 'assistant',
+        content: text || null,
+        ...(toolCalls.length ? { tool_calls: toolCalls } : {})
+      };
       return {
-        text, usage, finishReason,
-        message: {
-          role: 'assistant',
-          content: text || null,
-          ...(toolCalls.length ? { tool_calls: toolCalls } : {})
-        }
+        text, usage, finishReason, message,
+        // A streamed response has no single body to capture, so what the wire
+        // record holds is the ASSEMBLED turn, marked as such. Storing the raw
+        // SSE frames instead would be several times the bytes to say the same
+        // thing, and unreadable in the viewer.
+        ...(captureWire
+          ? { wire: { request: wireRequest, response: { kind: 'assembled-stream', status: res.status, message, usage, finishReason } } }
+          : {})
       };
     }
 
     const data = await res.json();
     const choice = data.choices?.[0];
-    if (!choice?.message) throw new Error(`${provider} returned no choices: ${JSON.stringify(data).slice(0, 300)}`);
+    if (!choice?.message) {
+      const err = new Error(`${provider} returned no choices: ${JSON.stringify(data).slice(0, 300)}`);
+      if (captureWire) err.wire = { request: wireRequest, response: { kind: 'body', status: res.status, body: data } };
+      throw err;
+    }
     return {
       text: choice.message.content ?? '',
       usage: data.usage ?? null,
       finishReason: choice.finish_reason ?? null,
-      message: choice.message
+      message: choice.message,
+      ...(captureWire ? { wire: { request: wireRequest, response: { kind: 'body', status: res.status, body: data } } } : {})
     };
   };
+}
+
+// An error body is usually JSON and occasionally an HTML error page. Keep the
+// structure when there is one, the text when there isn't.
+function safeJson(text) {
+  try { return JSON.parse(text); } catch { return String(text).slice(0, 20000); }
 }
 
 // A watchable view of the turn in progress, for onText.

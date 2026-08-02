@@ -136,7 +136,11 @@ export async function claudeCodeAdapter({ model, system, prompt, onText, signal,
   const text = st.resultText ?? st.text;
   if (!text) throw new Error(`Claude Code CLI produced no output${stderr ? `: ${stderr.trim().slice(0, 300)}` : ''}`);
   onText?.(text, { final: true });
-  return { text, usage: st.usage ?? null };
+  // An honest hole (PIVOT-PLAN §4.3): this adapter spawns the vendor's own CLI,
+  // which owns the HTTP conversation. There IS no wire to capture, so the
+  // ledger gets usage, timing and text with an explicit reason — never an empty
+  // wire panel the user is left to interpret as a bug.
+  return { text, usage: st.usage ?? null, wire: null, wireUnavailable: 'cli-delegate' };
 }
 
 // Same rule as the API adapter: this provider serves claude-* ids. Which of
