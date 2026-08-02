@@ -4,6 +4,10 @@ import FlowCanvas, { FlowEditor, freshNodeId } from './FlowCanvas.jsx';
 import Inspector, { FlowInspector } from './Inspector.jsx';
 import Settings from './Settings.jsx';
 import NodesPage from './NodesPage.jsx';
+import ToolsPage from './ToolsPage.jsx';
+import Investigator from './Investigator.jsx';
+import CreateDialog from './CreateDialog.jsx';
+import { boardCounts } from './toolBoard.js';
 import NodePicker from './NodePicker.jsx';
 import FlowYamlEditor from './FlowYamlEditor.jsx';
 import LiveStream from './LiveStream.jsx';
@@ -159,6 +163,16 @@ const RailIcon = {
       <path d="M3.5 8.3A9 9 0 1 1 3 12" /><path d="M3.2 4v4.3h4.3" /><path d="M12 7.6V12l3 1.8" />
     </svg>
   ),
+  // Tools — the Tool Library. A diamond outline with a socket on each side:
+  // a capability with somewhere to plug in, in the same 1.6-stroke geometry
+  // as the rest of the rail. Not a wrench — the toolbox is a catalog of
+  // contracts, not a drawer of implements.
+  tools: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 4.6 19.4 12 12 19.4 4.6 12z" />
+      <path d="M12 9.2 14.8 12 12 14.8 9.2 12z" />
+    </svg>
+  ),
   // Settings — a gear (utility, foot of the rail)
   settings: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -170,11 +184,18 @@ const RailIcon = {
 
 // The three primary sections, in rail order. Each is a self-contained mode
 // with its own explorer list + remembered selection (Ctrl+1/2/3).
+// `library` is the NODE Library and keeps its key — the Tool Library is a
+// different catalog of a different thing, and quietly reassigning the route
+// would break every restored selection pointing at a node template.
 const NAV = [
   { key: 'home', label: 'Home', hint: 'Home  (Ctrl+1)' },
   { key: 'flows', label: 'Flows', hint: 'Flows  (Ctrl+2)' },
   { key: 'library', label: 'Library', hint: 'Node Library  (Ctrl+3)' },
-  { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+4)' }
+  { key: 'tools', label: 'Tools', hint: 'Tool Library  (Ctrl+4)' },
+  { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+5)' },
+  // PIVOT-PLAN §6.2: what a single run cannot answer — spend over time, latency
+  // distributions, and how models actually compare across everything you've run.
+  { key: 'metrics', label: 'Metrics', hint: 'Investigator  (Ctrl+6)' }
 ];
 
 // The run's plaintext mirror (flare 7): the same run as a typeset dossier you
@@ -246,6 +267,8 @@ export default function App() {
   const [models, setModels] = useState([]);
   const [flowViewMode, setFlowViewMode] = useState('canvas'); // 'canvas' | 'yaml'
   const [pickerOpen, setPickerOpen] = useState(false); // the add-node panel over the canvas
+  // PIVOT-PLAN §5.1: 'node' | 'flow' | null — which three-door Create dialog is open.
+  const [createKind, setCreateKind] = useState(null);
   // CONFIGS-COMPARE P1: the Configs panel (anchored at the modes chip) and the
   // Inspector's config edit target (null = editing the Flow, today's behavior).
   const [configsOpen, setConfigsOpen] = useState(false);
@@ -439,6 +462,55 @@ export default function App() {
     return list;
   }, []);
 
+  // --- Tool Library page (TOOLS-PLAN §15) ---
+  // The board's own state: tools plus the categories that column them. One
+  // IPC round trip, because a board that paints in three passes flickers.
+  const [toolBoard, setToolBoard] = useState({ tools: [], categories: [], problems: [] });
+  const refreshToolBoard = useCallback(async () => {
+    const next = (await window.flyt.toolBoard?.()) ?? { tools: [], categories: [], problems: [] };
+    setToolBoard(next);
+    // The grant pickers read the same library, so a tool authored here shows
+    // up on the Nodes page without a reload.
+    setKnownTools(next.tools.filter(t => t.enabled).map(t => t.id));
+    setToolCatalog(next.tools);
+    setTools(next.tools);
+    return next;
+  }, []);
+  // Which model drafts a tool is the user's choice and it persists, because
+  // re-picking it every visit is the kind of small tax that makes a feature
+  // feel like a demo (GOALS.md principle 7).
+  const [copilotWorker, setCopilotWorker] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('flyt.tools.copilotWorker')) ?? null; } catch { return null; }
+  });
+  const changeCopilotWorker = useCallback(w => {
+    setCopilotWorker(w);
+    try { localStorage.setItem('flyt.tools.copilotWorker', JSON.stringify(w)); } catch {}
+  }, []);
+  // Toolbar → page signals. A counter rather than a boolean: pressing ⌘N
+  // twice in a row has to fire twice, and a boolean that is already true
+  // silently swallows the second press.
+  const [searchSignal, setSearchSignal] = useState(0);
+  const [newToolSignal, setNewToolSignal] = useState(0);
+  const [copilotSignal, setCopilotSignal] = useState(0);
+
+  // Export is honest about its scope: schemas and categories travel, and
+  // credentials cannot, because a definition never contains one to begin with
+  // (§10.3 — secrets are references, resolved at request time). The signed
+  // `.agenttools` bundle is P5's job; this is the same content as plain JSON.
+  const exportTools = useCallback(async () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      categories: toolBoard.categories,
+      tools: toolBoard.tools
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setRunToast('Library copied to the clipboard as JSON.');
+    } catch {
+      setRunToast('Could not reach the clipboard.');
+    }
+  }, [toolBoard]);
+
   // Global catalogs (flows, templates, tools) load once; per-project data
   // (runs, the restored selection) loads in the project boot effect further
   // down, after the tab machinery is defined.
@@ -453,6 +525,9 @@ export default function App() {
   // draw on the user's Claude plan, the lander says so next to the composer.
   const [claudeSubActive, setClaudeSubActive] = useState(false);
   const [activeModels, setActiveModels] = useState([]);
+  // G8: the mock provider appears in pickers only while explicitly enabled in
+  // Settings → Advanced → Developer (SETTINGS-MODELS-PLAN §6).
+  const [mockEnabled, setMockEnabled] = useState(false);
   // Tool-call approval (APPROVAL-MODES §3). The saved default seeds the chip;
   // changing it in the chatbox saves it back, so the picker beside Run and the
   // Settings control are two views of one value — with the per-run capture
@@ -464,6 +539,7 @@ export default function App() {
       setHasKey(Boolean(s.hasKey));
       setClaudeSubActive(Boolean(s.claudeSubscriptionActive));
       setActiveModels(s.activeModels ?? []);
+      setMockEnabled(s.mock?.enabled === true);
       setApprovalMode(s.approvalMode ?? 'ask');
       setSafetyModel(s.resolvedSafetyModel ?? null);
       // The openrouter live catalog only feeds the legacy free-text fallback
@@ -723,6 +799,17 @@ export default function App() {
     await refreshTemplates();
     withViewTransition(() => { setSelectedTemplateId(tpl.id); setActiveActivity('library'); });
   }, [refreshTemplates]);
+
+  // PIVOT-PLAN §5.1: ＋ New opens the three-door dialog rather than minting a
+  // blank straight away. The library ships empty, so "new" has to be a question
+  // — blank, a preset, or describe it — not an assumption.
+  const openPresetInstalled = useCallback(async (id, alsoTemplates = []) => {
+    await refreshTemplates();
+    await refreshFlows();
+    if (alsoTemplates.length || id) {
+      withViewTransition(() => { setSelectedTemplateId(id); setActiveActivity('library'); });
+    }
+  }, [refreshTemplates, refreshFlows]);
 
   // ===================== Project tabs (D22) =====================
   // The per-tab bundle (T8): everything one project's view holds. Captured on
@@ -1061,12 +1148,14 @@ export default function App() {
     };
   }, []);
 
-  // Section shortcuts: Ctrl/Cmd + 1/2/3 jump between Flows / Library / Runs.
+  // Section shortcuts: Ctrl/Cmd + 1…5 jump between Home / Flows / Library /
+  // Tools / Runs. Indices are derived from NAV rather than listed, so adding a
+  // section can't leave the shortcut table one entry behind.
   useEffect(() => {
     const onKey = e => {
       if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
-      const idx = { '1': 0, '2': 1, '3': 2, '4': 3 }[e.key];
-      if (idx === undefined) return;
+      const idx = /^[1-9]$/.test(e.key) ? Number(e.key) - 1 : undefined;
+      if (idx === undefined || idx >= NAV.length) return;
       e.preventDefault();
       // Ctrl+1 goes Home; when already Home, it focuses the composer instead —
       // the fast path back to typing. (A fresh switch autofocuses on mount.)
@@ -1079,6 +1168,26 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [goActivity, activeActivity]);
+
+  // The Tool Library's own shortcuts. Scoped to the page — ⌘K and ⌘N mean
+  // different things elsewhere in the app, and a global binding that only
+  // works on one screen is worse than no binding at all.
+  useEffect(() => {
+    if (activeActivity !== 'tools') return;
+    const onKey = e => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      if (e.key === 'k' && !e.altKey) { e.preventDefault(); setSearchSignal(n => n + 1); }
+      else if (e.key === 'n' && !e.altKey) { e.preventDefault(); setNewToolSignal(n => n + 1); }
+      else if ((e.key === 'c' || e.code === 'KeyC') && e.altKey) { e.preventDefault(); setCopilotSignal(n => n + 1); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [activeActivity]);
+
+  // Load the board on first visit and refresh on every return: tools are
+  // files, and a file can change under the app between visits.
+  useEffect(() => { if (activeActivity === 'tools') refreshToolBoard(); }, [activeActivity, refreshToolBoard]);
 
   const newFlow = async () => {
     const f = await window.flyt.newFlow();
@@ -1783,6 +1892,8 @@ export default function App() {
   const landerProjectName = projectless || !activeTabInfo || activeTabInfo.kind === 'default'
     ? null : activeTabInfo.name;
   const libraryView = activeActivity === 'library';
+  const toolsView = activeActivity === 'tools';
+  const metricsView = activeActivity === 'metrics';
   const selectedTemplate = templates.find(t => t.id === selectedTemplateId) ?? null;
 
   // Display copy of the edited flow with template defaults merged in.
@@ -1797,6 +1908,8 @@ export default function App() {
   const activeRunName = runs.find(r => r.id === activeRunId)?.name ?? activeRunId;
   const crumb =
     homeView ? ['Home'] :
+    metricsView ? ['Workspace', 'Investigator'] :
+    toolsView ? ['Workspace', 'Tool Library'] :
     libraryView ? ['Library', selectedTemplate?.name].filter(Boolean) :
     activeActivity === 'runs' ? (activeRunId ? ['Runs', activeRunName] : ['Runs']) :
     flowView ? ['Flows', flow.name] : ['Flows'];
@@ -1842,7 +1955,19 @@ export default function App() {
           </>}
         </nav>
         {runView && stage && <span className="stage-chip">{stage.replace(/_/g, ' ')}</span>}
-        <div className="toolbar-spacer" />
+        {toolsView && (
+          <>
+            <span className="count-chip mono">{boardCounts(toolBoard.tools, toolBoard.categories)}</span>
+            <div className="toolbar-spacer" />
+            {/* Import and Export are neutral: the accent budget spends its one
+                board slot on `+ New tool`. Both are stubs pending P5 (OpenAPI
+                and MCP-manifest parsing) and say so rather than failing. */}
+            <button onClick={() => setCopilotSignal(n => n + 1)} title="Import — drop a spec on the page, or brief the copilot">↓ Import</button>
+            <button onClick={exportTools} title="Export the library as JSON">↑ Export</button>
+            <button className="primary" onClick={() => setNewToolSignal(n => n + 1)} title="New tool  (Ctrl+N)">＋ New tool</button>
+          </>
+        )}
+        {!toolsView && <div className="toolbar-spacer" />}
         <button type="button" className="theme-toggle" onClick={toggleTheme} title="Toggle appearance">
           <span>{theme === 'light' ? '☾' : '☀'}</span>
           {theme === 'light' ? 'Dark' : 'Light'}
@@ -1949,6 +2074,7 @@ export default function App() {
             onLaunchInput={setRunInputValue}
             models={models}
             activeModels={activeModels}
+            mockEnabled={mockEnabled}
             hasKey={hasKey}
             claudeSubActive={claudeSubActive}
             onOpenSettings={() => setShowSettings(true)}
@@ -1964,13 +2090,18 @@ export default function App() {
           )
         ) : (
         <>
+        {/* The Tool Library brings its own left column — the copilot — so the
+            explorer would be an empty 260px gutter beside it. The Investigator
+            is a single full-width surface for the same reason: it has nothing
+            to list. */}
+        {!toolsView && !metricsView && (
         <aside className="sidebar" style={{ width: leftColW }}>
           {activeActivity === 'flows' && (
             <>
               <div className="sidebar-section">
                 <div className="section-row">
                   <span className="section-label">Flows</span>
-                  <button className="ghost mini" onClick={newFlow}>＋ New</button>
+                  <button className="ghost mini" onClick={() => setCreateKind('flow')}>＋ New</button>
                 </div>
               </div>
               <div className="explorer-list">
@@ -1994,7 +2125,7 @@ export default function App() {
               <div className="sidebar-section">
                 <div className="section-row">
                   <span className="section-label">Node Library</span>
-                  <button className="ghost mini" onClick={newTemplate}>＋ New</button>
+                  <button className="ghost mini" onClick={() => setCreateKind('node')}>＋ New</button>
                 </div>
               </div>
               <div className="explorer-list">
@@ -2033,8 +2164,9 @@ export default function App() {
             </>
           )}
         </aside>
+        )}
 
-        <ColumnResizer onStart={startLeftResize} onReset={resetLeftCol} label="Resize explorer" />
+        {!toolsView && !metricsView && <ColumnResizer onStart={startLeftResize} onReset={resetLeftCol} label="Resize explorer" />}
 
         <main className="canvas-area">
           {flowView && (
@@ -2195,15 +2327,31 @@ export default function App() {
               <button className="reject" onClick={() => window.flyt.rejectPlan(activeTab, activeRunId, 'Rejected by user')}>Reject</button>
             </div>
           )}
-          {libraryView
+          {metricsView
+            ? <Investigator projectId={activeTab} />
+            : toolsView
+            ? <ToolsPage
+                board={toolBoard}
+                models={models}
+                activeModels={activeModels}
+                mockEnabled={mockEnabled}
+                copilotWorker={copilotWorker}
+                onCopilotWorker={changeCopilotWorker}
+                onReload={refreshToolBoard}
+                searchSignal={searchSignal}
+                newToolSignal={newToolSignal}
+                copilotSignal={copilotSignal}
+              />
+            : libraryView
             ? <NodesPage
                 templates={templates}
+                tools={tools}
                 selectedId={selectedTemplateId}
                 models={models}
                 activeModels={activeModels}
+                mockEnabled={mockEnabled}
                 onChanged={refreshTemplates}
                 onSelect={setSelectedTemplateId}
-                tools={tools}
               />
             : flowView
               ? (flowViewMode === 'yaml'
@@ -2373,6 +2521,7 @@ export default function App() {
               onChange={setRunInputValue}
               models={models}
               activeModels={activeModels}
+              mockEnabled={mockEnabled}
             />
             <textarea
               placeholder="Type what you want done — this becomes the User Input node…"
@@ -2441,6 +2590,7 @@ export default function App() {
                 selectedNode={selectedNode}
                 models={models}
                 activeModels={activeModels}
+                mockEnabled={mockEnabled}
                 templates={templates}
                 onChangeData={changeNodeData}
                 onChangeOverrides={changeNodeOverrides}
@@ -2468,6 +2618,7 @@ export default function App() {
                   <Inspector
                     snapshot={snapshot}
                     selectedNode={selectedNode}
+                    projectId={activeTab}
                     onOpenArtifact={rel => window.flyt.openRunArtifact?.(activeTab, activeRunId, rel)}
                   />
                 </>
@@ -2486,6 +2637,19 @@ export default function App() {
         )}
       </div>
 
+      {createKind && (
+        <CreateDialog
+          kind={createKind}
+          onClose={() => setCreateKind(null)}
+          onBlank={() => (createKind === 'flow' ? newFlow() : newTemplate())}
+          // The builder (§5.4) lands in P7; until then the third door is
+          // present and honest about needing it, rather than absent.
+          onDescribe={null}
+          onInstalled={(id, also) => (createKind === 'flow'
+            ? refreshFlows().then(() => openFlow(id))
+            : openPresetInstalled(id, also))}
+        />
+      )}
       {showSettings && <Settings onClose={() => { setShowSettings(false); refreshSettings(); }} />}
       {rematch && (
         <RematchPicker

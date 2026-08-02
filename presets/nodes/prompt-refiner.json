@@ -1,0 +1,16 @@
+{
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false,
+  "id": "prompt-refiner",
+  "name": "Prompt refiner",
+  "category": null,
+  "icon": "✍",
+  "baseType": "aiStep",
+  "role": "refine",
+  "effort": "medium",
+  "description": "Rewrites the run request into a precise, self-contained brief (goal, constraints, deliverable, acceptance). Asks clarifying questions only when an ambiguity would materially change the work."
+}

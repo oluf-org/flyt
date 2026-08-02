@@ -10,7 +10,7 @@ import { serializeFlow } from '../core/flowlang/serialize.js';
 import { lintText, lintFlow } from '../core/flowlang/lint.js';
 import {
   resolveFlow, overridableFields, validateOverrideMap, mergeOverrideMaps,
-  exposedFields, SEED_NODE_TEMPLATES
+  exposedFields, PRESET_NODE_TEMPLATES
 } from '../src/flowTypes.js';
 import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
@@ -28,29 +28,29 @@ function workFlow() {
 }
 
 test('resolveFlow merges launch overrides over instance overrides (launch wins)', () => {
-  const resolved = resolveFlow(workFlow(), SEED_NODE_TEMPLATES, { w: { effort: 'high' } });
+  const resolved = resolveFlow(workFlow(), PRESET_NODE_TEMPLATES, { w: { effort: 'high' } });
   const w = resolved.nodes.find(n => n.id === 'w');
   assert.equal(w.data.effort, 'high'); // launch beat the stored 'low'
   assert.equal(w.data.category, 'Code general'); // untouched field preserved
 });
 
 test('resolveFlow merges launch overrides into a raw node data', () => {
-  const resolved = resolveFlow(workFlow(), SEED_NODE_TEMPLATES, { orch: { maxNodes: 10, minNodes: 2 } });
+  const resolved = resolveFlow(workFlow(), PRESET_NODE_TEMPLATES, { orch: { maxNodes: 10, minNodes: 2 } });
   const orch = resolved.nodes.find(n => n.id === 'orch');
   assert.equal(orch.data.maxNodes, 10);
   assert.equal(orch.data.minNodes, 2);
 });
 
 test('resolveFlow never overrides structural input/output content', () => {
-  const resolved = resolveFlow(workFlow(), SEED_NODE_TEMPLATES, { input: { worker: { provider: 'x', model: 'y' } } });
+  const resolved = resolveFlow(workFlow(), PRESET_NODE_TEMPLATES, { input: { worker: { provider: 'x', model: 'y' } } });
   const input = resolved.nodes.find(n => n.id === 'input');
   assert.equal(input.data.worker, undefined);
   assert.equal(input.data.text, 'brief');
 });
 
 test('resolveFlow with no launch overrides is unchanged behavior', () => {
-  const a = resolveFlow(workFlow(), SEED_NODE_TEMPLATES);
-  const b = resolveFlow(workFlow(), SEED_NODE_TEMPLATES, null);
+  const a = resolveFlow(workFlow(), PRESET_NODE_TEMPLATES);
+  const b = resolveFlow(workFlow(), PRESET_NODE_TEMPLATES, null);
   assert.deepEqual(a.nodes.find(n => n.id === 'w').data.effort, 'low');
   assert.deepEqual(b.nodes.find(n => n.id === 'w').data.effort, 'low');
 });
@@ -58,7 +58,7 @@ test('resolveFlow with no launch overrides is unchanged behavior', () => {
 // --- T1: overridableFields / validateOverrideMap ----------------------------
 
 test('overridableFields gates fields by node type/role', () => {
-  const resolved = resolveFlow(workFlow(), SEED_NODE_TEMPLATES);
+  const resolved = resolveFlow(workFlow(), PRESET_NODE_TEMPLATES);
   const w = resolved.nodes.find(n => n.id === 'w');
   const orch = resolved.nodes.find(n => n.id === 'orch');
   const input = resolved.nodes.find(n => n.id === 'input');
@@ -75,7 +75,7 @@ test('overridableFields gates fields by node type/role', () => {
 });
 
 test('validateOverrideMap flags unknown nodes and illegal fields', () => {
-  const resolved = resolveFlow(workFlow(), SEED_NODE_TEMPLATES);
+  const resolved = resolveFlow(workFlow(), PRESET_NODE_TEMPLATES);
   assert.deepEqual(validateOverrideMap(resolved, { w: { effort: 'high' } }), []);
   const errs = validateOverrideMap(resolved, {
     nope: { effort: 'high' },        // unknown node
@@ -267,7 +267,7 @@ test('expose parses as a first-class node field and round-trips', () => {
 });
 
 test('resolveFlow surfaces expose on data; exposedFields filters to overridable', () => {
-  const resolved = resolveFlow(parseFlow(EXPOSE_YAML), SEED_NODE_TEMPLATES);
+  const resolved = resolveFlow(parseFlow(EXPOSE_YAML), PRESET_NODE_TEMPLATES);
   const work = resolved.nodes.find(n => n.id === 'work');
   assert.deepEqual(work.data.expose, ['worker', 'effort']);
   assert.deepEqual(exposedFields(work), ['worker', 'effort']);

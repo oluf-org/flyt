@@ -8,7 +8,14 @@ export const TYPE_META = {
   agentTask:    { icon: '☑', kind: 'user', label: 'Agent task',   sub: 'task · for the executor' },
   aiStep:       { icon: '✦', kind: 'ai',   label: 'AI step',      sub: 'llm · model call' },
   orchestrator: { icon: '▦', kind: 'ai',   label: 'Orchestrator', sub: 'container · creates & runs task nodes' },
-  output:       { icon: '◎', kind: 'user', label: 'Output',       sub: 'result · collects upstream' }
+  output:       { icon: '◎', kind: 'user', label: 'Output',       sub: 'result · collects upstream' },
+  // PIVOT-PLAN §5.3. Both are 'logic': they make no model call of their own,
+  // and a canvas that coloured them as AI nodes would be lying about where the
+  // money goes. This is what retires the DAG-only non-goal — narrowed, not
+  // abandoned: no arbitrary recursion, no unbounded iteration, no
+  // sub-flows-as-a-language.
+  branch:       { icon: '⑂', kind: 'logic', label: 'Branch',      sub: 'logic · one arm activates' },
+  loop:         { icon: '↻', kind: 'logic', label: 'Loop',        sub: 'container · repeats until bounded' }
 };
 
 // The name a flow carries until the user gives it one. Also what the editor
@@ -26,7 +33,11 @@ export const namedFlow = flow => (flow.name?.trim() ? flow : { ...flow, name: UN
 // (tools/<id>.json, core/toolstore.js), so this array is the BUILT-IN
 // fallback: what every build ships and what a host without a library — the
 // test suite, a renderer before its first IPC round trip — validates against.
-export const AGENT_TOOLS = ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md', 'read_tool_result'];
+export const AGENT_TOOLS = [
+  'read_file', 'glob', 'grep', 'edit_file', 'create_file', 'write_file', 'bash',
+  'create_task', 'write_task_md', 'read_tool_result',
+  'get_time', 'http_fetch', 'web_search', 'ask_human'
+];
 
 // The live snapshot, installed by the renderer from the main process's
 // ToolStore (`tool:list`). Grants are filtered against this, so a template can
@@ -138,7 +149,14 @@ export const TYPE_PORTS = {
     { id: 'results', label: 'results', description: 'Aggregated outputs of every node this orchestrator created and ran.' },
     { id: 'summary', label: 'summary', description: 'The orchestration plan summary + node inventory.' }
   ],
-  output: []
+  output: [],
+  // A branch produces no artifact of its own — it makes a decision, and the
+  // decision is recorded on the run rather than sent downstream as text.
+  branch: [{ id: 'decision', label: 'decision', description: 'Which arm was taken, the condition that decided it, and the values it read.' }],
+  loop: [
+    { id: 'results', label: 'results', description: 'The final iteration\'s body output.' },
+    { id: 'iterations', label: 'iterations', description: 'Every iteration in order, with why the loop stopped.' }
+  ]
 };
 
 // The declared outputs of a node: explicit template outputs win, then the
@@ -219,9 +237,12 @@ export const WORK_CATEGORIES = NODE_CATEGORIES;
 // cannot read the rest of is worse than no truncation at all (TOOLS-PLAN §13):
 // it is read-effect, run-scoped, and can only reach results this same run
 // already produced — so granting it widens nothing.
+// glob/grep are read-effect, so a work node can FIND things without a ceiling
+// that includes the shell; edit_file is listed before write_file because a
+// surgical edit is what you want on an existing file (TOOLS-PLAN §14.1).
 export const WORK_TOOLS = {
-  'Test-creation': ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md', 'read_tool_result'],
-  default: ['read_file', 'create_file', 'write_file', 'write_task_md', 'read_tool_result']
+  'Test-creation': ['read_file', 'glob', 'grep', 'edit_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md', 'read_tool_result'],
+  default: ['read_file', 'glob', 'grep', 'edit_file', 'create_file', 'write_file', 'write_task_md', 'read_tool_result']
 };
 
 // The Evaluation node's evalType option -> the concrete runtime role.
@@ -547,7 +568,7 @@ export function nodeSub(node) {
 //     template granting it ships approveToolCalls: true. Turn it off per node
 //     for an unattended run — that is D16's "skippable by choice", the right way
 //     round: a default that asks, not a default that acts.
-export const SEED_NODE_TEMPLATES = [
+export const PRESET_NODE_TEMPLATES = [
   {
     id: 'prompt-refiner', name: 'Prompt refiner', category: null, icon: '✍',
     baseType: 'aiStep', role: 'refine', effort: 'medium',
@@ -649,8 +670,47 @@ export function normalizeTemplate(tpl) {
     skills: Array.isArray(tpl.skills) ? tpl.skills.map(String) : [],
     requiresApproval: Boolean(tpl.requiresApproval),
     approveToolCalls: Boolean(tpl.approveToolCalls),
-    outputs: normalizeOutputs(tpl.outputs)
+    outputs: normalizeOutputs(tpl.outputs),
+    // --- PIVOT-PLAN §5.1 provenance -------------------------------------------
+    // `system: true` marks a KERNEL node: it exists only to run the builder
+    // flow, is hidden from the palette and the Nodes page, and is fully visible
+    // in run view when it executes. The floor beneath "no default nodes"
+    // (decision 3) — the user's library ships genuinely empty, and the app still
+    // has the two or three nodes it needs to write one.
+    ...(tpl.system ? { system: true } : {}),
+    // Where this template came from (§10.5, answered): 'preset' when it was
+    // installed from presets/nodes/, absent when the user wrote it. Mirrors the
+    // tool trust tiers — you can always tell what you wrote from what you
+    // accepted, and the answer lives in the file rather than in someone's
+    // memory.
+    ...(typeof tpl.origin === 'string' && tpl.origin.trim() ? { origin: tpl.origin.trim() } : {}),
+    ...(typeof tpl.fromPreset === 'string' && tpl.fromPreset.trim() ? { fromPreset: tpl.fromPreset.trim() } : {}),
+    // --- PIVOT-PLAN §5.2 -------------------------------------------------------
+    // The user-owned prompt. A model may DRAFT into this field; nothing is ever
+    // generated invisibly at run time (decision 2, and the principle that
+    // replaces "templates do not contain hand-written prompts").
+    ...(typeof tpl.prompt === 'string' && tpl.prompt.trim() ? { prompt: tpl.prompt } : {}),
+    // Per-node retry and timeout. Absent ⇒ the run's configured defaults.
+    ...(normalizeLimits(tpl.limits) ? { limits: normalizeLimits(tpl.limits) } : {})
   };
+}
+
+// `{ attempts, backoffMs, timeoutMs }` (PIVOT-PLAN §5.2). Every field optional;
+// null when nothing usable was given, so an absent `limits` stays absent rather
+// than becoming an object full of undefineds that overrides the run defaults
+// with nothing.
+export function normalizeLimits(limits) {
+  if (!limits || typeof limits !== 'object') return null;
+  const out = {};
+  const n = (v, max) => (Number.isFinite(v) && v >= 0 ? Math.min(Math.trunc(v), max) : null);
+  const attempts = n(limits.attempts, 20);
+  const backoffMs = n(limits.backoffMs, 300_000);
+  const timeoutMs = n(limits.timeoutMs, 3_600_000);
+  if (attempts != null && attempts > 0) out.attempts = attempts;
+  if (backoffMs != null) out.backoffMs = backoffMs;
+  // 0 is meaningful here: "no timeout", distinct from "not set".
+  if (timeoutMs != null) out.timeoutMs = timeoutMs;
+  return Object.keys(out).length ? out : null;
 }
 
 // True when the flow node is a template instance (vs structural/legacy raw).
@@ -691,6 +751,16 @@ export function resolveInstance(node, tpl) {
     ...(t?.role === 'evaluation' ? { evalType } : {}),
     ...(role === 'translate' ? { language: ov.language ?? t?.language ?? 'English' } : {}),
     worker: ov.worker ?? t?.worker ?? null,
+    // PIVOT-PLAN §5.2: the prompt is a REAL, USER-OWNED FIELD on the node. It
+    // replaces the retired principle that "templates do not contain
+    // hand-written prompts" — a model may draft into it, it may never conjure
+    // one at run time. The instance's own prompt wins over the template's, the
+    // same precedence every other field here follows.
+    ...(typeof (ov.prompt ?? t?.prompt) === 'string' && (ov.prompt ?? t.prompt).trim()
+      ? { prompt: ov.prompt ?? t.prompt } : {}),
+    // §5.2: retries and timeout as a graph decision. Instance over template;
+    // absent from both ⇒ the run's configured defaults.
+    ...(normalizeLimits(ov.limits) ?? t?.limits ? { limits: normalizeLimits(ov.limits) ?? t.limits } : {}),
     ...(instructions ? { instructions } : {}),
     // A `system` override replaces the role's default system prompt wholesale
     // (the runner reads node.data.system). Templates don't carry one, so this
@@ -771,7 +841,12 @@ export function exposedFields(node) {
 // The one whitelist of fields a launch override (and therefore a mode override
 // and an exposed run input) may set. Everything universal to AI nodes plus the
 // per-kind fields, which `overridableFields` gates by node type/role.
-export const LAUNCH_OVERRIDE_COMMON = ['worker', 'effort', 'instructions', 'system', 'requiresApproval', 'approveToolCalls'];
+// `prompt` and `limits` join the list with PIVOT-PLAN §5.2: the prompt because
+// it is now a user-owned field rather than something the model invents, and
+// limits because "how many attempts and how long may one take" is a per-node
+// graph decision — a sweep varying the timeout is exactly the kind of
+// experiment the investigator exists to make readable.
+export const LAUNCH_OVERRIDE_COMMON = ['worker', 'prompt', 'limits', 'effort', 'instructions', 'system', 'requiresApproval', 'approveToolCalls'];
 
 // The set of fields that may be overridden on ONE node, keyed off its resolved
 // shape (type + data.role/category/evalType). Structural input/output nodes

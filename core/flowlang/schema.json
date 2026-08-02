@@ -58,6 +58,31 @@
         }
       }
     },
+    "arms": {
+      "description": "A branch node's outgoing arms (PIVOT-PLAN §5.3). Evaluated top to bottom; the FIRST arm whose `when` holds is the one taken, and an arm with no `when` is the default. Exactly one arm activates, so exactly one downstream path runs.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["to"],
+        "additionalProperties": false,
+        "properties": {
+          "when": { "type": "string", "minLength": 1 },
+          "to": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+          "label": { "type": "string" }
+        }
+      }
+    },
+    "limits": {
+      "description": "Per-node retry and timeout (PIVOT-PLAN §5.2). attempts: how many tries this node's model call gets; backoffMs: the base backoff between them; timeoutMs: how long ONE attempt may take before it is aborted and retried (0 disables the timer). Absent fields fall back to the run's configured defaults.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "attempts": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "backoffMs": { "type": "integer", "minimum": 0 },
+        "timeoutMs": { "type": "integer", "minimum": 0 }
+      }
+    },
     "toolCeiling": {
       "description": "The hard limit a node's tool grant lives inside: a toolset id (repo-write), a selector (effects:read, provider:mcp, trust:trusted, *), a tool id, or a list of any of those. Absent means the ceiling is exactly the static grant.",
       "oneOf": [
@@ -83,6 +108,8 @@
         "parent": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
         "expose": { "type": "array", "items": { "type": "string" } },
         "title": { "type": "string" },
+        "prompt": { "type": "string" },
+        "limits": { "$ref": "#/$defs/limits" },
         "instructions": { "type": "string" },
         "goal": { "type": "string" },
         "category": { "type": "string" },
@@ -102,11 +129,13 @@
       "type": "object",
       "required": ["type"],
       "properties": {
-        "type": { "enum": ["input", "output", "aiStep", "agentTask", "orchestrator"] },
+        "type": { "enum": ["input", "output", "aiStep", "agentTask", "orchestrator", "branch", "loop"] },
         "kind": { "enum": ["user", "ai"] },
         "parent": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
         "expose": { "type": "array", "items": { "type": "string" } },
         "title": { "type": "string" },
+        "prompt": { "type": "string" },
+        "limits": { "$ref": "#/$defs/limits" },
         "role": { "type": "string" },
         "system": { "type": "string" },
         "text": { "type": "string" },
@@ -117,6 +146,11 @@
         "language": { "type": "string" },
         "minNodes": { "type": "integer", "minimum": 1 },
         "maxNodes": { "type": "integer", "minimum": 1 },
+        "arms": { "$ref": "#/$defs/arms" },
+        "maxIterations": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "until": { "type": "string", "minLength": 1 },
+        "maxCost": { "type": "number", "minimum": 0 },
+        "maxTokens": { "type": "integer", "minimum": 0 },
         "contextSpec": { "$ref": "#/$defs/contextSpec" },
         "worker": { "$ref": "#/$defs/worker" },
         "tools": { "type": "array", "items": { "type": "string" } },

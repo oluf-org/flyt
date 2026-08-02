@@ -1,0 +1,17 @@
+{
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false,
+  "id": "evaluation",
+  "name": "Evaluation",
+  "category": null,
+  "icon": "⚖",
+  "baseType": "aiStep",
+  "role": "evaluation",
+  "evalType": "step",
+  "effort": "medium",
+  "description": "The evaluation node: plan evaluation (creates work nodes), step evaluation (pass/retry/escalate), or final evaluation — pick the type and effort level on the node."
+}

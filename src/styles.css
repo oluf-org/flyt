@@ -1997,23 +1997,62 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
 .settings-tab:hover { color: var(--tx); }
 .settings-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 
-/* Provider cards: a collapsed card is one scannable line — name, status,
-   model count. One card open at a time. */
+/* Provider cards (SETTINGS-MODELS-PLAN §4, P5): a collapsed card is two
+   scannable lines — name + status + billing on top, and beneath it the
+   summary that answers "how many models, and what do they cost?" without
+   expanding anything. One card open at a time. */
+.provider-groups { display: flex; flex-direction: column; gap: 12px; }
+/* A paired group is one bordered unit because the API key and its
+   subscription sibling are two answers to a single question. */
+.provider-group.paired {
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 9px 9px 10px; background: color-mix(in srgb, var(--card) 45%, transparent);
+}
+.provider-group-head {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 0 3px 8px; flex-wrap: wrap;
+}
+.provider-group-label {
+  font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--dim); flex: none;
+}
+.provider-group-choice { font-size: 11px; color: var(--faint); }
 .provider-cards { display: flex; flex-direction: column; gap: 6px; }
 .provider-card {
   background: var(--card); border: 1px solid var(--border); border-radius: 10px;
   overflow: hidden;
 }
+.provider-card.connected { border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
 .provider-card.open { border-color: var(--accent); }
 .provider-card-head {
-  display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 10px 12px; border: none; background: none;
+  display: flex; flex-direction: column; align-items: stretch; gap: 3px; width: 100%;
+  padding: 9px 12px 10px; border: none; background: none;
   font: inherit; font-size: 12.5px; color: var(--tx); cursor: pointer; text-align: left;
 }
 .provider-card-head:hover { background: var(--chip); }
+.provider-head-line { display: flex; align-items: center; gap: 8px; }
 .provider-name { font-weight: 600; flex: none; min-width: 86px; }
-.provider-count { margin-left: auto; font-size: 11px; flex: none; }
-.provider-caret { color: var(--faint); flex: none; font-size: 10px; }
+/* Which balance does this spend? Persistent, so the answer survives the card
+   being collapsed. Warn-toned: it is a cost, not a status. */
+.billing-pill {
+  flex: none; font-size: 10.5px; font-weight: 600;
+  padding: 2px 8px; border-radius: 20px;
+  color: var(--warn); background: var(--warn-soft);
+}
+.provider-connect {
+  margin-left: auto; flex: none;
+  font-size: 11px; font-weight: 600; color: var(--accent);
+  padding: 2px 9px; border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.provider-summary {
+  font-size: 11px; color: var(--faint);
+  padding-left: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* The caret sits hard right; when a Connect affordance is present it takes the
+   free space instead and the caret trails it. */
+.provider-caret { color: var(--faint); flex: none; font-size: 10px; margin-left: auto; }
+.provider-connect + .provider-caret { margin-left: 0; }
 .provider-card-body { padding: 4px 12px 12px; }
 .provider-note { color: var(--faint); font-style: italic; }
 .provider-test-row { align-items: center; margin-top: 8px; }
@@ -2044,6 +2083,36 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   font-size: 12px; color: var(--tx); cursor: pointer;
 }
 .keykind-option input { accent-color: var(--accent); }
+
+/* Advanced tab — Developer details + mock provider (G8, SETTINGS-MODELS-PLAN §6). */
+.developer-details {
+  border: 1px dashed var(--border); border-radius: 10px;
+  padding: 8px 12px;
+}
+.developer-details > summary {
+  cursor: pointer; list-style: none;
+  display: flex; align-items: center; gap: 6px;
+}
+.developer-details > summary::before { content: '▸'; color: var(--faint); font-size: 11px; }
+.developer-details[open] > summary::before { content: '▾'; }
+.developer-details > summary::-webkit-details-marker { display: none; }
+.mock-section { margin-top: 10px; }
+.mock-custom-response {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  field-sizing: content; min-height: 96px;
+  background: var(--chip); color: var(--tx);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; line-height: 1.5;
+}
+.mock-role-name {
+  flex: 0 0 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis;
+  color: var(--faint); font-size: 11.5px; align-self: center;
+}
+.mock-field {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--muted);
+}
+.mock-field input[type='number'] { width: 88px; }
 
 /* Provider priority chips (Models tab top). */
 .priority-chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -3984,3 +4053,801 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
   /* Smooth scrolling is a nicety, not a necessity. */
   .chat-scroll { scroll-behavior: auto; }
 }
+
+/* =========================================================================
+   Tool Library (TOOLS-PLAN §15)
+   Three regions: the copilot that authors, the board that files, the sheet
+   that edits. The accent budget is spent in exactly six places on this page —
+   `+ New tool`, the selected card, the active step, the active view tab, the
+   copilot's send button and its `Add to library` CTA. Status is quiet: --ok,
+   --warn and --faint carry it, and no category ever gets a hue of its own.
+   ========================================================================= */
+
+.tools-page { flex: 1; min-height: 0; display: flex; background: var(--canvas); }
+
+/* The count chip in the app toolbar. Mono, because it is a measurement. */
+.count-chip {
+  font-size: 10.5px; color: var(--faint);
+  background: var(--chip); border-radius: 999px;
+  padding: 3px 9px; white-space: nowrap;
+}
+
+/* ---------- the copilot column ---------- */
+.tool-copilot {
+  flex: none; width: 340px; min-width: 340px;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--side); border-right: 1px solid var(--border);
+}
+.tool-copilot-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 12px 14px; border-bottom: 1px solid var(--border);
+}
+.tool-copilot-head .worker-picker { flex: 1; min-width: 0; }
+.tool-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.tool-thread-empty { color: var(--faint); font-size: 12.5px; line-height: 1.6; margin: 0; }
+
+/* User speaks in a bubble, the assistant speaks in the page. The asymmetry is
+   the point: one is an utterance, the other is the surface answering. */
+.tool-bubble {
+  align-self: flex-end; max-width: 88%;
+  background: var(--tx); color: var(--card);
+  border-radius: 12px 12px 3px 12px;
+  padding: 8px 11px; font-size: 12.5px; line-height: 1.5;
+}
+.tool-bubble-file { display: block; margin-top: 4px; font-size: 10.5px; opacity: .75; }
+.tool-reply { margin: 0; color: var(--dim); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
+.tool-reply.dim { color: var(--faint); }
+.tool-reply.error { color: var(--err); font-size: 11.5px; }
+
+/* ---------- the inline draft card ---------- */
+.tool-draft {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px; margin-top: 8px;
+  display: flex; flex-direction: column; gap: 8px;
+  box-shadow: var(--shadow-rest);
+}
+.tool-draft-head { display: flex; align-items: center; gap: 8px; }
+.tool-draft-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.tool-draft-title strong { font-size: 12.5px; }
+.tool-draft-id { font-size: 10.5px; color: var(--faint); }
+.tool-draft-params, .tool-response {
+  margin: 0; padding: 8px; border-radius: 8px;
+  background: var(--chip); color: var(--chip-tx);
+  font-size: 11px; line-height: 1.55; white-space: pre-wrap;
+  max-height: 220px; overflow: auto;
+}
+.tool-draft-meta { font-size: 10.5px; color: var(--faint); }
+.tool-draft-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tool-draft-state { font-size: 10.5px; color: var(--faint); margin-left: auto; }
+
+/* ---------- suggestions + composer ---------- */
+.tool-suggestions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 8px; }
+.tool-chip {
+  font-size: 11px; padding: 5px 10px; border-radius: 999px;
+  background: var(--chip); color: var(--chip-tx);
+  border: 1px solid transparent; cursor: pointer;
+}
+.tool-chip:hover:not(:disabled) { color: var(--tx); border-color: var(--border); box-shadow: none; }
+/* An active filter is an accent CHIP — inside the budget, and the only way to
+   see at a glance that the board is showing you a subset. */
+.tool-chip.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.tool-composer { padding: 10px 14px 12px; border-top: 1px solid var(--border); }
+.tool-composer-row { display: flex; gap: 6px; align-items: center; }
+.tool-composer-row input { flex: 1; min-width: 0; }
+.tool-send { flex: none; width: 34px; padding: 0; height: 32px; font-size: 14px; }
+.tool-composer-hint { margin-top: 6px; font-size: 10px; color: var(--faint); }
+.tool-attachment {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+  font-size: 10.5px; color: var(--dim);
+  background: var(--chip); border-radius: 8px; padding: 4px 8px;
+}
+
+/* ---------- the board ---------- */
+.tools-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.tools-toolbar {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; min-height: 44px;
+  background: var(--side); border-bottom: 1px solid var(--border);
+}
+.tools-filters { display: flex; gap: 6px; }
+/* 44px minimum hit target on anything clickable in a toolbar. The visual chip
+   stays small; the target is grown with padding-free min sizes so the layout
+   does not inflate to match. */
+.tools-toolbar button, .tools-toolbar .view-btn, .toolbar button {
+  min-height: 32px;
+}
+.tools-toolbar .tool-chip { min-height: 30px; }
+.tools-toolbar > *, .tools-toolbar { align-items: center; }
+@media (pointer: coarse) {
+  .tools-toolbar button, .tools-toolbar .tool-chip, .tools-toolbar .view-btn, .toolbar button { min-height: 44px; min-width: 44px; }
+}
+.tools-search { width: 200px; margin-left: auto; }
+.tools-hint { font-size: 10.5px; color: var(--faint); white-space: nowrap; }
+.tools-notice {
+  padding: 6px 14px; font-size: 11px; color: var(--accent);
+  background: var(--accent-soft); border-bottom: 1px solid var(--border);
+}
+
+.tool-board {
+  flex: 1; min-height: 0; display: flex; gap: 12px;
+  padding: 14px; overflow-x: auto; align-items: flex-start;
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+.tool-column {
+  flex: none; width: 246px; max-height: 100%;
+  display: flex; flex-direction: column; min-height: 0;
+  border-radius: 12px;
+}
+.tool-column.dropping { background: var(--accent-soft); }
+.tool-column-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px 8px;
+}
+.tool-column-head h3 { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--tx); }
+.tool-column-icon { font-size: 13px; color: var(--chip-tx); }
+.tool-column-count { font-size: 10.5px; color: var(--faint); margin-left: auto; }
+.tool-column-body { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 0; padding-bottom: 4px; }
+.tool-drop-slot {
+  border: 1px dashed var(--divider); border-radius: 10px;
+  min-height: 34px; display: flex; align-items: center; justify-content: center;
+  font-size: 10.5px; color: var(--faint);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+.tool-column.new { justify-content: flex-start; padding-top: 26px; }
+.tool-new-category {
+  width: 100%; border: 1px dashed var(--divider); background: transparent;
+  color: var(--dim); border-radius: 12px; padding: 14px; font-size: 12px;
+}
+
+/* ---------- a card ---------- */
+.tool-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow-rest);
+  transition: border-color .14s ease, box-shadow .16s ease, transform .24s var(--spring);
+}
+.tool-card:hover { border-color: var(--divider); }
+/* The clickable is a real button filling the card, so the focus ring is the
+   browser's and the hit target is the whole surface. */
+.tool-card-hit {
+  appearance: none; width: 100%; background: none; border: none;
+  border-radius: inherit; padding: 10px; cursor: pointer; text-align: left;
+  display: flex; flex-direction: column; gap: 7px; color: inherit; font: inherit;
+}
+.tool-card-hit:hover:not(:disabled) { border-color: transparent; box-shadow: none; }
+.tool-card-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Selection is the ONE accent state on the board. */
+.tool-card.selected {
+  border: 1.5px solid var(--accent);
+  box-shadow: 0 10px 24px -14px light-dark(rgba(0,0,0,.45), rgba(0,0,0,.75));
+}
+.tool-card.selected .tool-card-hit { padding: 9.5px; }
+.tool-card.selected .tool-icon-chip { background: var(--accent-soft); color: var(--accent); }
+.tool-card.dense .tool-card-hit { flex-direction: row; align-items: center; gap: 12px; }
+.tool-card.dense .tool-card-foot { margin-left: auto; }
+.tool-card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tool-icon-chip {
+  flex: none; width: 26px; height: 26px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--chip); color: var(--chip-tx); font-size: 12px;
+}
+.tool-card-name { display: flex; flex-direction: column; min-width: 0; }
+.tool-card-name strong { font-size: 12.5px; line-height: 1.3; }
+.tool-card-id {
+  font-size: 10.5px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tool-card-desc {
+  font-size: 11.5px; line-height: 1.5; color: var(--dim);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.tool-card-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tool-card-effects { font-size: 10px; color: var(--faint); margin-left: auto; }
+.tool-pill {
+  font-size: 10px; padding: 2px 7px; border-radius: 999px;
+  background: var(--chip); color: var(--chip-tx);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+.tool-pill.ok { background: var(--ok-soft); color: var(--ok); }
+/* Status: three tones, no fills, no new hues. */
+.tool-status { font-size: 10.5px; }
+.tool-status.ok { color: var(--ok); }
+.tool-status.warn { color: var(--warn); }
+.tool-status.faint { color: var(--faint); }
+
+.tool-card-menu {
+  position: absolute; z-index: 20; margin-top: 6px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; padding: 8px; box-shadow: var(--shadow-float);
+  display: flex; flex-direction: column; gap: 2px; align-items: stretch;
+}
+.tool-card { position: relative; }
+
+.tool-list, .tool-grid { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
+.tool-list { display: flex; flex-direction: column; gap: 8px; }
+.tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(246px, 1fr)); gap: 10px; align-content: start; }
+
+/* ---------- the inspector strip ---------- */
+.tool-inspector {
+  flex: none; border-top: 1px solid var(--border); background: var(--side);
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;
+  max-height: 42%; overflow-y: auto;
+}
+.tool-inspector-head { display: flex; align-items: center; gap: 10px; }
+.tool-inspector-head h3 { margin: 0; font-size: 13px; }
+.tool-inspector-head .tool-status { margin-left: auto; }
+.tool-inspector-desc { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--dim); }
+.tool-facts { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0; font-size: 11px; }
+.tool-facts > div { display: flex; gap: 6px; }
+.tool-facts dt { color: var(--faint); }
+.tool-facts dd { margin: 0; color: var(--dim); }
+.tool-inspector-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.tool-inspector-cat { align-self: flex-start; color: var(--err); }
+
+/* ---------- the wizard sheet ---------- */
+/* It PUSHES the board rather than overlaying it: you are filing a capability
+   into a library, and seeing the library while you do is the whole point. */
+.tool-sheet {
+  flex: none; width: 392px; min-width: 392px;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--side); border-left: 1px solid var(--border);
+  animation: sheet-in .22s var(--spring) both;
+}
+@keyframes sheet-in { from { transform: translateX(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+.tool-sheet-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px 8px; }
+.tool-sheet-title { display: flex; align-items: baseline; gap: 8px; flex: 1; }
+.tool-sheet-title h2 { margin: 0; font-size: 14px; }
+.tool-sheet-step { font-size: 10.5px; color: var(--faint); }
+
+.tool-steps { display: flex; gap: 6px; padding: 0 14px 10px; }
+.tool-step {
+  flex: 1; background: none; border: none; padding: 0; cursor: pointer;
+  display: flex; flex-direction: column; gap: 5px; align-items: stretch;
+}
+.tool-step:disabled { cursor: default; }
+.tool-step-bar { height: 3px; border-radius: 999px; background: var(--divider); }
+.tool-step.done .tool-step-bar { background: var(--accent); }
+.tool-step-label { font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); text-align: left; }
+.tool-step.done .tool-step-label { color: var(--dim); }
+
+.tool-sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 16px; }
+.tool-sheet-body section { display: flex; flex-direction: column; gap: 7px; }
+.tool-sheet-body h3.section-label { margin: 0; }
+.tool-sheet-body input, .tool-sheet-body textarea, .tool-sheet-body select {
+  background: var(--card); color: var(--tx);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 9px; font-family: inherit; font-size: 12.5px; width: 100%;
+}
+.tool-sheet-body input:focus, .tool-sheet-body textarea:focus, .tool-sheet-body select:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.tool-sheet-foot {
+  flex: none; display: flex; gap: 6px; align-items: center;
+  padding: 10px 14px; border-top: 1px solid var(--border);
+}
+.tool-sheet-foot .primary { margin-left: auto; }
+
+.tool-source-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tool-source-tile {
+  text-align: left; display: flex; flex-direction: column; gap: 4px;
+  padding: 10px; border-radius: 10px;
+  background: var(--card); border: 1px solid var(--border);
+}
+.tool-source-tile.selected { border: 1.5px solid var(--accent); padding: 9.5px; }
+.tool-source-label { font-size: 12px; font-weight: 600; color: var(--tx); }
+.tool-source-hint { font-size: 10.5px; line-height: 1.45; color: var(--faint); }
+
+.tool-note {
+  display: flex; gap: 8px; align-items: flex-start;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px; font-size: 11.5px; line-height: 1.55; color: var(--dim);
+}
+.tool-note-glyph { color: var(--accent); flex: none; }
+.tool-note.warn .tool-note-glyph { color: var(--warn); }
+
+.tool-endpoint { display: flex; gap: 6px; }
+.tool-endpoint select { width: auto; flex: none; }
+.tool-id-row { display: flex; align-items: center; gap: 4px; }
+.tool-id-prefix { font-size: 10.5px; color: var(--faint); flex: none; }
+
+.tool-param-table { display: flex; flex-direction: column; gap: 10px; }
+.tool-param-row { display: flex; flex-direction: column; gap: 4px; }
+.tool-param-head { display: flex; gap: 6px; align-items: center; }
+.tool-param-head select { width: auto; flex: none; }
+.tool-param-req { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--dim); white-space: nowrap; }
+.tool-param-req input { width: auto; }
+.tool-param-desc { font-size: 11.5px; }
+
+.tool-auth-row { display: flex; align-items: center; gap: 4px; }
+.tool-auth-row .mono { font-size: 11px; color: var(--faint); flex: none; }
+.tool-effects { display: flex; flex-wrap: wrap; gap: 6px; }
+.tool-effect {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; padding: 4px 9px; border-radius: 999px;
+  background: var(--chip); color: var(--chip-tx); cursor: pointer;
+}
+.tool-effect input { width: auto; }
+.tool-effect.on { background: var(--accent-soft); color: var(--accent); }
+.tool-risk-row { display: flex; align-items: center; gap: 8px; }
+.tool-risk-row select { width: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-sheet { animation: none; }
+  .tool-card { transition: none; }
+}
+
+/* Files the library could not read. Loud enough to notice, quiet enough not to
+   be an error state — the other fifty tools are fine. */
+.tools-problems {
+  padding: 8px 14px; border-bottom: 1px solid var(--border);
+  background: var(--warn-soft); color: var(--warn); font-size: 10.5px; line-height: 1.6;
+}
+.tools-problems .section-label { display: block; color: var(--warn); margin-bottom: 2px; }
+
+/* ================= the investigator surfaces (PIVOT-PLAN §6.1) ==============
+   Cost, tokens, latency and the wire record, wherever a run is on screen.
+   Everything here is derived from runs/<id>/calls/ — the numbers have files
+   behind them, and the styling's one job is to keep them legible without
+   turning a canvas into a dashboard. Motion policy (D9) holds: numbers tick,
+   nothing spins. */
+
+/* --- run header strip --- */
+.run-stat.metric { display: inline-flex; align-items: baseline; gap: 5px; }
+.run-stat.metric .metric-label {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint);
+}
+.run-stat.metric .metric-value { color: var(--tx); font-weight: 600; }
+.run-stat.metric.warn .metric-label,
+.run-stat.metric.warn { color: var(--warn); }
+.run-stat.metric .metric-value.dim { color: var(--faint); font-weight: 400; }
+.metric-note { color: var(--faint); font-weight: 400; }
+/* A run that predates the ledger says so once, quietly, instead of showing
+   zeros it cannot stand behind (decision 15). */
+.run-stat-premetrics {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--faint); border: 1px dashed var(--border);
+  padding: 1px 7px; border-radius: 999px;
+}
+
+/* --- node card badge --- */
+/* Sits under the node's subtitle. Deliberately small: the card is about the
+   node's output, and the money is a second glance. */
+.node-metrics { display: inline-flex; align-items: baseline; gap: 7px; margin-left: 8px; }
+.node-metric, .node-metrics .metric-value {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; color: var(--dim);
+}
+.node-metrics .node-metric-cost { color: var(--tx); font-weight: 600; }
+.node-metrics .node-metric-cost.dim { color: var(--faint); font-weight: 400; }
+/* The attempt badge — the first thing the investigator shows when a node was
+   slow (§4.2). Amber, not rose: a retried call recovered; it did not fail. */
+.node-metric.attempt {
+  color: var(--warn); background: var(--warn-soft);
+  padding: 0 5px; border-radius: 999px; font-weight: 600;
+}
+/* While a node is live its numbers are still moving. A one-off fade on change
+   would need JS to trigger; a steady, very low-amplitude breath on the badge
+   reads as "not final" without competing with the active-node animation. */
+.node-metrics.live .metric-value { color: var(--accent); }
+
+/* --- inspector tabs --- */
+.inspector-tabs {
+  display: flex; gap: 2px; padding: 0 12px;
+  border-bottom: 1px solid var(--border); background: var(--side);
+}
+.inspector-tab {
+  appearance: none; background: none; border: none; cursor: pointer;
+  padding: 9px 10px 8px; font: inherit; font-size: 11.5px; font-weight: 600;
+  color: var(--dim); border-bottom: 2px solid transparent; margin-bottom: -1px;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: color .18s ease, border-color .18s ease;
+}
+.inspector-tab:hover { color: var(--tx); }
+.inspector-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-count {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; font-weight: 500; padding: 1px 5px; border-radius: 999px;
+  background: var(--chip); color: var(--chip-tx);
+}
+.tab-count.warn { background: var(--warn-soft); color: var(--warn); }
+
+/* --- the calls tab --- */
+.section-count {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; color: var(--faint); text-transform: none; letter-spacing: 0;
+  margin-left: 8px;
+}
+.metric-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
+  margin-bottom: 10px;
+}
+.metric-cell {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 9px; padding: 8px 10px;
+}
+.metric-cell-label {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint);
+}
+.metric-cell-value { font-size: 13px; font-weight: 600; color: var(--tx); margin-top: 2px; }
+
+/* p50 · p95 · max, never an average — an average is what hid the 347-second
+   hang in DESIGN-SPEC §11.1 among a hundred fast calls (§6.2.3). */
+.dist-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 2px; }
+.dist-label {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--faint); min-width: 76px;
+}
+.dist-values { font-size: 11px; color: var(--dim); display: inline-flex; gap: 6px; }
+.dist-sep { color: var(--faint); }
+
+.call-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.call-row {
+  border: 1px solid var(--border); border-radius: 9px;
+  background: var(--card); overflow: hidden;
+}
+.call-row.failed { border-color: color-mix(in srgb, var(--err) 35%, var(--border)); }
+.call-row.open { box-shadow: var(--shadow-rest); }
+.call-head {
+  width: 100%; appearance: none; background: none; border: none; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  font: inherit; font-size: 11px; color: var(--dim); text-align: left;
+}
+.call-head:hover { background: var(--accent-soft); }
+.call-seq { color: var(--faint); flex: none; }
+.call-status { color: var(--ok); flex: none; }
+.call-status.err { color: var(--err); }
+.call-model { color: var(--tx); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-attempt {
+  flex: none; font-size: 9.5px; font-weight: 600; padding: 1px 6px;
+  border-radius: 999px; background: var(--warn-soft); color: var(--warn);
+}
+.call-grow { flex: 1; }
+.call-num { flex: none; color: var(--dim); }
+.call-caret { flex: none; color: var(--faint); }
+
+.call-detail { padding: 4px 10px 10px; border-top: 1px solid var(--border); }
+.call-facts {
+  display: grid; grid-template-columns: auto 1fr; gap: 2px 12px;
+  margin: 8px 0; font-size: 11px;
+}
+.call-facts dt {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint);
+  align-self: center;
+}
+.call-facts dd { margin: 0; color: var(--dim); font-size: 11px; }
+
+/* An honest hole, not an empty panel (§4.3). A stated limitation earns a
+   border; a missing feature would not. */
+.wire-unavailable, .wire-truncated {
+  margin: 8px 0 0; padding: 8px 10px; border-radius: 8px;
+  font-size: 10.5px; line-height: 1.55;
+  border: 1px dashed var(--border); background: var(--chip); color: var(--dim);
+}
+.wire-truncated { border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); color: var(--warn); }
+
+.wire-block { margin-top: 8px; }
+.wire-toggle {
+  width: 100%; appearance: none; background: none; border: none; cursor: pointer;
+  display: flex; align-items: center; gap: 7px; padding: 5px 0;
+  font: inherit; font-size: 10.5px; font-weight: 600; color: var(--dim); text-align: left;
+}
+.wire-toggle:hover { color: var(--tx); }
+.wire-size { margin-left: auto; color: var(--faint); font-weight: 400; }
+.wire-body {
+  max-height: 420px; overflow: auto; font-size: 10.5px !important;
+  white-space: pre !important;
+}
+.pre-err { color: var(--err) !important; border-color: color-mix(in srgb, var(--err) 35%, var(--border)) !important; }
+.inspector-body pre.dim { color: var(--faint); }
+
+/* The one setting with a real data-loss dimension says so where it is chosen,
+   not in a doc nobody opens (PIVOT-PLAN §4.3, risk: "wire records are a
+   data-loss liability"). Amber, not rose: it is a deliberate choice, not a
+   failure. */
+.settings-warn {
+  margin: 8px 0 0; padding: 9px 11px; border-radius: 9px;
+  font-size: 11.5px; line-height: 1.55; text-wrap: pretty;
+  background: var(--warn-soft); color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+/* ================= the Investigator page (PIVOT-PLAN §6.2) ==================
+   The cross-run surface: spend over time, latency distributions, and how models
+   actually compare. One scrolling column at a readable measure rather than a
+   grid of tiles — these are things you read in order, not glance at.
+
+   Charts are hand-rolled SVG (§10.1, answered in src/charts.jsx) and take their
+   colour from the same oklch tokens as everything else, so light/dark is free
+   and there is no second theming system to keep in step. */
+
+.page.investigator {
+  flex: 1; min-width: 0; overflow-y: auto;
+  padding: 26px 32px 40px;
+  display: flex; flex-direction: column; gap: 22px;
+  background: var(--canvas);
+}
+.page.investigator.busy { opacity: .72; transition: opacity .18s ease; }
+.investigator > * { max-width: 980px; width: 100%; }
+
+.inv-head { display: flex; align-items: flex-start; gap: 20px; }
+.inv-head h1 { font-size: 20px; font-weight: 600; margin: 0; color: var(--tx); letter-spacing: -.01em; }
+.inv-sub { margin: 4px 0 0; font-size: 12px; color: var(--dim); }
+.inv-filters { margin-left: auto; }
+
+/* Segmented control: one row, one active. Used for the time window and the
+   group-by, which are the only two switches on the page. */
+.seg { display: inline-flex; background: var(--chip); border-radius: 8px; padding: 2px; gap: 2px; }
+.seg-btn {
+  appearance: none; border: none; background: none; cursor: pointer;
+  font: inherit; font-size: 11.5px; font-weight: 600; color: var(--dim);
+  padding: 4px 10px; border-radius: 6px;
+  transition: background-color .16s ease, color .16s ease;
+}
+.seg-btn:hover { color: var(--tx); }
+.seg-btn.active { background: var(--card); color: var(--accent); box-shadow: var(--shadow-rest); }
+
+/* Headline tiles. Each carries a NOTE as well as a number, because every figure
+   on this page has a caveat worth one line ("exact", "plan capacity excluded",
+   "at least one call had no published price"). */
+.inv-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.inv-tile {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 12px; padding: 13px 15px;
+}
+.inv-tile-label {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint);
+}
+.inv-tile-value { font-size: 22px; font-weight: 600; color: var(--tx); margin: 3px 0 1px; letter-spacing: -.01em; }
+.inv-tile-note { font-size: 10.5px; color: var(--dim); text-wrap: pretty; }
+
+.inv-section {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px 18px 14px;
+}
+.inv-section-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
+.inv-section-head h2 { font-size: 13px; font-weight: 600; margin: 0; color: var(--tx); }
+.inv-section-head .seg { margin-left: auto; }
+.inv-note { font-size: 10.5px; color: var(--dim); text-wrap: pretty; flex: 1 1 260px; }
+/* §10.4 in one paragraph, where the table it applies to is. */
+.inv-warn {
+  margin: 0 0 12px; padding: 9px 11px; border-radius: 9px;
+  font-size: 11px; line-height: 1.55; text-wrap: pretty;
+  background: var(--warn-soft); color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+}
+
+.chart { width: 100%; height: auto; display: block; margin: 4px 0 10px; overflow: visible; }
+.chart-grid { stroke: var(--border); stroke-width: 1; }
+.chart-tick {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9px; fill: var(--faint);
+}
+.chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-area { fill: var(--accent); opacity: .10; stroke: none; }
+.chart-dot { fill: var(--accent); }
+.chart-bar { fill: var(--accent); opacity: .55; }
+.chart-bar:hover { opacity: .9; }
+/* The p95 marker: the number people act on, drawn over the bars that make it
+   believable. */
+.chart-marker { stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.chart-marker-label {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9px; fill: var(--warn); font-weight: 600;
+}
+.chart-rowlabel {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px; fill: var(--tx);
+}
+.box-whisker { stroke: var(--divider); stroke-width: 1.5; }
+.box-body { fill: var(--accent); opacity: .35; }
+.box-median { fill: var(--accent); }
+/* A sample too narrow to compare is drawn faintly and says so in the table —
+   present, but never mistakable for evidence. */
+.box-row.narrow .box-body { fill: var(--faint); opacity: .3; }
+.box-row.narrow .box-median { fill: var(--faint); }
+.box-row.narrow .chart-rowlabel { fill: var(--dim); }
+.chart-empty {
+  padding: 22px; text-align: center; font-size: 11.5px; color: var(--faint);
+  border: 1px dashed var(--border); border-radius: 9px; margin: 4px 0 10px;
+}
+
+.inv-table-wrap { overflow-x: auto; margin-top: 6px; }
+.inv-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.inv-table th {
+  text-align: left; font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint);
+  font-weight: 500; padding: 0 10px 6px 0; white-space: nowrap;
+}
+.inv-table th.num, .inv-table td.num { text-align: right; }
+.inv-table td { padding: 5px 10px 5px 0; border-top: 1px solid var(--border); color: var(--dim); white-space: nowrap; }
+.inv-table td:first-child { color: var(--tx); }
+.inv-table tr.narrow td { opacity: .68; }
+.sample-narrow {
+  font-size: 9.5px; font-weight: 600; padding: 1px 6px; border-radius: 999px;
+  background: var(--warn-soft); color: var(--warn);
+}
+
+.facet-row { display: flex; gap: 12px; align-items: baseline; margin-bottom: 8px; }
+.facet-label {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint);
+  min-width: 86px; flex: none;
+}
+.facet-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.facet-chip {
+  appearance: none; border: 1px solid var(--border); background: var(--card);
+  border-radius: 999px; padding: 3px 10px; cursor: pointer;
+  font: inherit; font-size: 10.5px; color: var(--dim);
+  transition: border-color .16s ease, color .16s ease, background-color .16s ease;
+}
+.facet-chip:hover { border-color: var(--accent); color: var(--tx); }
+.facet-chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.facet-count { color: var(--faint); font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9px; }
+
+.inv-foot {
+  display: flex; align-items: center; gap: 14px;
+  font-size: 10.5px; padding-top: 4px;
+}
+.inv-foot .dim { color: var(--faint); }
+.inv-foot code { font-size: 10px; }
+.page-empty {
+  padding: 40px 24px; text-align: center; color: var(--dim); font-size: 12.5px;
+  border: 1px dashed var(--border); border-radius: 12px; text-wrap: pretty;
+}
+.page-empty p { margin: 0 0 8px; }
+.page-empty .dim { color: var(--faint); font-size: 11.5px; }
+
+/* ================= Create node / Create flow (PIVOT-PLAN §5.1) ==============
+   Three doors out of an empty library: Blank · Start from a preset · Describe
+   it. The empty library is the plan's own named risk, and this dialog is the
+   answer to it — so the doors are given room to be read rather than compressed
+   into a menu. Same modal shell as Settings; one panel language in the app. */
+
+.modal-scrim {
+  position: fixed; inset: 0; z-index: 40;
+  display: grid; place-items: center;
+  background: rgba(15, 21, 18, .4);
+  animation: fade-in .18s ease both;
+}
+.create-dialog {
+  width: 640px; max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  display: flex; flex-direction: column;
+  background: var(--side);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow-selected);
+  animation: panel-rise .34s var(--spring) both;
+  overflow: hidden;
+}
+.create-head {
+  display: flex; align-items: center; gap: 11px;
+  padding: 16px 18px 14px; border-bottom: 1px solid var(--border);
+}
+.create-head h2 { font-size: 14px; font-weight: 600; margin: 0; color: var(--tx); flex: 1; }
+
+.create-doors { padding: 18px; display: grid; gap: 10px; }
+.create-door {
+  appearance: none; text-align: left; cursor: pointer;
+  display: grid; grid-template-columns: 34px 1fr; gap: 4px 13px; align-items: start;
+  padding: 14px 16px; font: inherit;
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  transition: border-color .16s ease, transform .18s var(--spring), box-shadow .16s ease;
+}
+.create-door:hover:not(:disabled) {
+  border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--shadow-float);
+}
+.create-door:disabled { opacity: .5; cursor: not-allowed; }
+.create-door-icon {
+  grid-row: 1 / span 3; width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center; font-size: 15px;
+  background: var(--chip); color: var(--chip-tx);
+}
+.create-door:hover:not(:disabled) .create-door-icon { background: var(--accent-soft); color: var(--accent); }
+.create-door-title { font-size: 13px; font-weight: 600; color: var(--tx); }
+.create-door-body { font-size: 11.5px; color: var(--dim); line-height: 1.5; text-wrap: pretty; }
+.create-door-note { font-size: 10.5px; color: var(--warn); }
+
+.create-presets { padding: 14px 18px 18px; overflow-y: auto; }
+.create-presets .back { display: inline-block; margin-bottom: 12px; font-size: 11.5px; }
+.create-error { color: var(--err); font-size: 11.5px; margin: 0 0 10px; }
+.create-empty { color: var(--dim); font-size: 11.5px; margin: 0 0 10px; }
+.preset-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.preset-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 11px 13px; background: var(--card);
+  border: 1px solid var(--border); border-radius: 11px;
+}
+.preset-row.installed { opacity: .62; }
+.preset-icon {
+  width: 28px; height: 28px; flex: none; border-radius: 8px;
+  display: grid; place-items: center; font-size: 13px;
+  background: var(--chip); color: var(--chip-tx);
+}
+.preset-text { flex: 1; min-width: 0; }
+.preset-name { font-size: 12.5px; font-weight: 600; color: var(--tx); display: flex; gap: 8px; align-items: baseline; }
+.preset-have {
+  font-size: 9.5px; font-weight: 500; color: var(--faint);
+  text-transform: uppercase; letter-spacing: .06em;
+}
+.preset-desc { font-size: 11px; color: var(--dim); line-height: 1.5; margin-top: 2px; text-wrap: pretty; }
+/* What else this click adds, said before the click (§5.1). */
+.preset-needs { font-size: 10.5px; color: var(--warn); margin-top: 4px; }
+
+/* ================= the prompt field (PIVOT-PLAN §5.2) ======================
+   `GOALS.md` used to say, as non-negotiable, that templates contain no
+   hand-written prompts: the model generated its own and the template only
+   constrained how. Decision 2 inverts that, and the replacement principle is
+   what this styling serves — nothing is sent to a model that the user cannot
+   see and could not have written. So the field is given the room a prompt
+   needs, and a drafted one is visibly NOT yet yours. */
+
+.prompt-field .prompt-textarea {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11.5px; line-height: 1.65;
+}
+.prompt-actions { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.prompt-count { margin-left: auto; font-size: 9.5px; color: var(--faint); }
+.prompt-error { color: var(--err); font-size: 11px; margin: 6px 0 0; }
+
+/* A draft is offered, never applied. The dashed border and the accent tint say
+   "this is a proposal" — the same separation ToolCopilot relies on for trust. */
+.prompt-draft {
+  margin-top: 10px; padding: 10px 12px;
+  border: 1px dashed var(--accent); border-radius: 10px;
+  background: var(--accent-soft);
+}
+.prompt-draft-head { margin-bottom: 6px; }
+.prompt-draft-head .section-label { color: var(--accent); }
+.prompt-draft-body {
+  white-space: pre-wrap; word-break: break-word; margin: 0;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 11px; font-size: 11px; line-height: 1.6; max-height: 260px; overflow-y: auto;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace; color: var(--tx);
+}
+
+/* Retries & timeout: two small fields side by side, because they are read
+   together — "three tries, ten minutes each" is one thought. */
+.limits-row { display: flex; gap: 10px; }
+.limits-cell { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.limits-label {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint);
+}
+.limits-cell input, .limits-cell select { width: 100%; }
+
+/* ================= control flow (PIVOT-PLAN §5.3) ==========================
+   A branch's arms read as a list of rules, because that is what they are:
+   first match wins, and the default is the one with an empty condition. The
+   arrow between condition and target does the explaining that a label would
+   otherwise have to. */
+
+.arm-row { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+.arm-when { flex: 1 1 55%; min-width: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; }
+.arm-arrow { color: var(--faint); flex: none; }
+.arm-to { flex: 0 1 34%; min-width: 0; }
+
+/* The condition vocabulary, closed by default. It is reference material — you
+   need it the first three times and never again. */
+.cond-help { margin-top: 10px; }
+.cond-help summary {
+  cursor: pointer; font-size: 11px; color: var(--dim);
+  padding: 4px 0; list-style: none;
+}
+.cond-help summary::marker, .cond-help summary::-webkit-details-marker { display: none; }
+.cond-help summary::before { content: '▸ '; color: var(--faint); }
+.cond-help[open] summary::before { content: '▾ '; }
+.cond-help summary:hover { color: var(--tx); }
+.cond-examples { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.cond-examples li { font-size: 10.5px; }
+.cond-examples code {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px;
+  background: var(--chip); color: var(--tx); padding: 1px 5px; border-radius: 4px;
+}
+.cond-examples .dim { color: var(--faint); }

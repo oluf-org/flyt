@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { DND_MIME, dndOrchestrator, dndTemplate } from './FlowCanvas.jsx';
+import { DND_MIME, dndOrchestrator, dndTemplate, dndPrimitive, PRIMITIVES } from './FlowCanvas.jsx';
+import { TYPE_META } from './flowTypes.js';
 
 // The node picker: the familiar "add node" panel of node editors (n8n,
 // Node-RED, Blueprints). Search-first, grouped, every row both click-to-add
@@ -17,6 +18,34 @@ const ORCH_ITEM = {
   description: 'AI container — plans autonomously and runs the nodes inside its box',
   spec: () => dndOrchestrator()
 };
+
+// PIVOT-PLAN §5.3: control flow. Both are structural — they make no model call
+// of their own, they decide what does.
+const CONTROL_ITEMS = [
+  {
+    key: 'branch', icon: '⑂', name: 'Branch',
+    description: 'Take one path or another, on a condition over what upstream nodes produced — or what they cost',
+    spec: () => dndPrimitive('branch')
+  },
+  {
+    key: 'loop', icon: '↻', name: 'Loop',
+    description: 'Repeat the nodes inside its box until a condition holds — always bounded',
+    spec: () => dndPrimitive('loop')
+  }
+];
+
+// PIVOT-PLAN §5.1: the engine primitives, always offered and listed FIRST when
+// the library is empty. The library ships empty by design, and a palette that
+// showed nothing at that moment would make the empty library a dead end instead
+// of a starting point. These are what "you can always build from zero by hand"
+// actually means.
+const PRIMITIVE_ITEMS = PRIMITIVES.map(p => ({
+  key: `primitive-${p.type}`,
+  icon: TYPE_META[p.type]?.icon ?? '▢',
+  name: p.name,
+  description: p.description,
+  spec: () => dndPrimitive(p.type)
+}));
 
 function groupTemplates(templates) {
   const groups = new Map();
@@ -51,12 +80,18 @@ export default function NodePicker({ templates, onAdd, onClose }) {
       || it.name.toLowerCase().includes(q)
       || it.description.toLowerCase().includes(q);
     const out = [];
-    const structural = [ORCH_ITEM].filter(match);
+    // Primitives first when there is no library to speak of; after the
+    // templates once the user has built one, because by then the templates are
+    // what they reach for.
+    const primitives = PRIMITIVE_ITEMS.filter(match);
+    const structural = [ORCH_ITEM, ...CONTROL_ITEMS].filter(match);
+    const groups = groupTemplates(templates)
+      .map(g => ({ label: g.label, items: g.items.filter(match) }))
+      .filter(g => g.items.length);
+    if (!templates.length && primitives.length) out.push({ label: 'Primitives', items: primitives });
     if (structural.length) out.push({ label: 'Structural', items: structural });
-    for (const g of groupTemplates(templates)) {
-      const items = g.items.filter(match);
-      if (items.length) out.push({ label: g.label, items });
-    }
+    for (const g of groups) out.push(g);
+    if (templates.length && primitives.length) out.push({ label: 'Primitives', items: primitives });
     return out;
   }, [templates, query]);
 

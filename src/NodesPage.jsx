@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import PromptField, { LimitsField } from './PromptField.jsx';
 import { WorkerPicker } from './Inspector.jsx';
 import { AI_ROLES, NODE_CATEGORIES, AGENT_TOOLS, EFFORT_LEVELS, DEFAULT_EFFORT, EVAL_TYPES } from './flowTypes.js';
 import { CONFIG_DIR } from '../core/brand.js';
@@ -110,7 +111,7 @@ export default function NodesPage({ templates, tools = [], selectedId, models, a
               </select>
             </section>
             <section>
-              <h3>Role (picks the auto-generated prompt)</h3>
+              <h3>Role (picks the default system prompt)</h3>
               <select value={draft.role} onChange={e => set({ role: e.target.value })}>
                 {AI_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
               </select>
@@ -150,16 +151,25 @@ export default function NodesPage({ templates, tools = [], selectedId, models, a
               Use the app default worker
             </label>
             {draft.worker && (
-              <WorkerPicker worker={draft.worker} models={models} activeModels={activeModels} idPrefix={`tpl-${draft.id}`}
+              <WorkerPicker worker={draft.worker} models={models} activeModels={activeModels} mockEnabled={mockEnabled} idPrefix={`tpl-${draft.id}`}
                 onChange={worker => set({ worker })} />
             )}
           </section>
 
+          {/* PIVOT-PLAN §5.2. `GOALS.md` used to say, as non-negotiable, that
+              "templates do not contain hand-written prompts" — the model
+              generated its own and the template only constrained how. Decision 2
+              inverts that: the prompt is a real field the user owns, and this is
+              where a template's default one is written. */}
+          <PromptField value={draft.prompt} onChange={prompt => set({ prompt })} />
+
+          <LimitsField limits={draft.limits} onChange={limits => set({ limits })} />
+
           <section>
-            <h3>Extra instructions — appended to the auto-generated prompt</h3>
+            <h3>Extra instructions — appended after the prompt</h3>
             <textarea
               rows={4}
-              placeholder="Short guidance, not a prompt. The model generates its own working prompt from the task."
+              placeholder="Short guidance that rides along with every instance of this node."
               value={draft.instructions ?? ''}
               onChange={e => set({ instructions: e.target.value })}
             />

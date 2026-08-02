@@ -60,28 +60,134 @@ custom syntax; everything else is plain YAML.
 
 ### Nodes
 
-Template instances (`use:`) accept these overrides: `title`, `worker`
-(`{ provider, model }`), `instructions`, `requiresApproval`, `goal`,
-`category`, `contextSpec`, `skills`, and — on agentTask templates only —
+Template instances (`use:`) accept these overrides: `title`, `prompt`,
+`worker` (`{ provider, model }`), `limits`, `instructions`, `requiresApproval`,
+`goal`, `category`, `contextSpec`, `skills`, and — on agentTask templates only —
 `tools` (registry: `write_file`, `create_task`, `write_task_md`).
+
+`prompt` is the node's own instruction to its model, sent on every run. It is a
+real, user-owned field: a model may *draft* one, it may never conjure one at run
+time (D35). Assembled upstream context is added automatically, so a prompt does
+not need to ask for it. Absent, the node behaves exactly as it did before the
+field existed.
+
+`limits` is `{ attempts, backoffMs, timeoutMs }` — how many tries this node's
+model call gets and how long ONE try may take before it is aborted and retried.
+`timeoutMs: 0` means no timer. Absent fields fall back to the run's configured
+defaults.
+
+```yaml
+nodes:
+  implement:
+    use: work
+    prompt: |-
+      Implement the change described upstream.
+      Touch only the files the plan names. If a test fails, fix the cause.
+    limits: { attempts: 3, timeoutMs: 600000 }
+```
 
 `skills` names expertise the **bound project** supplies as
 `.flyt/skills/<name>.md`; it is appended to that node's prompt at run time,
 so the same flow adapts to whichever project it runs against. See
 `DESIGN-SPEC.md` §6.2.
 
-Raw nodes (`type:`) are the structural/legacy shape: `input`, `output`,
-`aiStep`, `agentTask`, `orchestrator`, with their data fields flattened
+Raw nodes (`type:`) are the structural shape: `input`, `output`, `aiStep`,
+`agentTask`, `orchestrator`, `branch`, `loop`, with their data fields flattened
 (`role`, `system`, `text`, `goal`, `worker`, ...). Prefer templates; raw
 nodes exist mainly so older flows keep loading.
 
 `input` / `output` are implicit: referencing them in `flow` declares them.
 Declare an input explicitly only to attach default `text:` to it.
 
+### Control flow: `branch` and `loop`
+
+Two node types decide what runs, without calling a model themselves (D35).
+Neither appears in the call ledger — they are decisions, and what they decided
+is written to `runs/<id>/nodes/<node>.md` like any other artifact.
+
+**`branch`** evaluates its arms top to bottom and activates **exactly one**
+outgoing edge. Everything the other arms lead to is marked `skipped` for that
+run — except a node both arms feed into, which still runs. An arm with no
+`when` is the **default** and must come last; lint refuses a branch without one.
+
+```yaml
+nodes:
+  gate:
+    type: branch
+    arms:
+      - when: draft.cost.total > 0.50
+        to: cheap-rewrite
+      - when: draft.text contains "TODO"
+        to: finish-the-todos
+      - to: ship            # the default arm
+
+flow:
+  - input -> draft -> gate
+  - gate -> cheap-rewrite -> output
+  - gate -> finish-the-todos -> output
+  - gate -> ship -> output
+```
+
+**`loop`** re-runs the nodes inside its box (`parent:`) until a condition holds
+or a declared bound is hit. **`maxIterations` is required** — a loop without a
+bound can spend without limit, and lint refuses it. `maxCost` and `maxTokens`
+are optional budgets checked against the run's own ledger. `until` is evaluated
+*after* each pass, so it reads what that pass produced.
+
+```yaml
+nodes:
+  refine:
+    type: loop
+    maxIterations: 4
+    maxCost: 2.00
+    until: review.text contains "APPROVED"
+  draft:
+    use: work
+    parent: refine
+  review:
+    use: evaluation
+    parent: refine
+
+flow:
+  - input -> refine -> output
+```
+
+Each iteration starts from a clean body: the previous pass's outputs are
+deleted, so stale text is never read as this pass's result.
+
+#### Conditions
+
+A tiny, fixed grammar with no escape hatch into JavaScript — a flow file is
+data, and a condition that could execute code would quietly make every
+`.flow.yaml` a program.
+
+| Form | Example |
+|---|---|
+| field access | `implement.status == "done"` |
+| numbers | `implement.usage.outputTokens > 4000` |
+| strings | `plan.text contains "TODO"`, `matches`, `startsWith`, `endsWith` |
+| logic | `a.status == "done" and not b.empty`, `or`, parentheses |
+
+What a condition can read, per node id: `status`, `title`, `role`, `text`,
+`chars`, `lines`, `empty`, `calls`, `retries`, `errors`, `cost`
+(`.total`, `.estimated`), `usage` (`.inputTokens`, `.cachedInputTokens`,
+`.outputTokens`, `.totalTokens`, …), `latencyMs`, `maxLatencyMs`, `ttftMs`,
+`tps`, `model`, `provider`. Plus `run.*` (the same fold across the whole run)
+and, inside a loop body, `loop.iteration` / `loop.iterations`.
+
+**Conditions can read metrics**, and that is the point: the investigator's data
+becomes an input to control flow, so a flow can cheapen or escalate itself based
+on what it just spent.
+
+An unknown path is `null`, and `null` compares false. A malformed condition is
+`false` with the reason in the log — a branch falls through to its default arm
+rather than killing the run at a typo.
+
 ### Containment (`parent` + `box`)
 
-Any non-structural node may live **inside** an orchestrator's box: set
-`parent: <orchestrator-id>` on the node (both `use:` and `type:` shapes).
+Any non-structural node may live **inside** a container's box — an
+`orchestrator` or a `loop`: set `parent: <container-id>` on the node (both
+`use:` and `type:` shapes).
 A child keeps its normal fields; its canvas position (stored in the
 `*.layout.json` sidecar) is relative to the box's top-left corner.
 
@@ -95,8 +201,9 @@ nodes:
     parent: orch              # runs inside orch's box
 ```
 
-Rules: the parent must exist and be an orchestrator; `input`, `output` and
-orchestrator nodes themselves can never be contained (one level deep).
+Rules: the parent must exist and be a container (`orchestrator` or `loop`);
+`input`, `output` and container nodes themselves can never be contained (one
+level deep).
 Deleting an orchestrator deletes its children. At run time authored children
 **replace** autonomous planning — the orchestrator runs exactly the nodes in
 its box instead of materializing a swarm. The editor manages all of this by
@@ -184,7 +291,14 @@ scalars, or multi-document files — the linter reports these as parse errors.
 | `dead-end` | warning | node output never reaches an output node |
 | `duplicate-edge` | warning | same edge stated twice |
 | `orphan-approval` | warning | `requiresApproval` on an input/output node |
-| `parent` | error | `parent:` missing, not an orchestrator, or a structural/orchestrator node is contained |
+| `parent` | error | `parent:` missing, not a container, or a structural/container node is contained |
+| `unbounded-loop` | error | a `loop` with no `maxIterations` (or above the hard cap of 100) |
+| `unbounded-loop` | warning | a long loop with no `maxCost`/`maxTokens`, or a loop with an empty body |
+| `loop-no-exit` | error | `until` is not a valid condition, or reads a node that does not exist |
+| `loop-no-exit` | warning | no `until` at all, or one reading a node outside the loop body |
+| `branch-no-default` | error | a `branch` with no arms, no default arm, or an unparseable condition |
+| `unreachable-arm` | error | an arm points somewhere the branch has no edge to |
+| `unreachable-arm` | warning | a duplicate arm, an arm after the default, or an edge no arm selects |
 | `mode` | error/warning | mode override field the node can't accept (error), override of a node not in the flow (warning), or a `derivedFrom` pointing at a non-existent mode (warning) |
 | `expose` | error | a node exposes a field it cannot accept as a run input |
 

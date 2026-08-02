@@ -2,9 +2,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { lintText, lintFlow, RUNTIME_RULES } from '../core/flowlang/lint.js';
-import { SEED_NODE_TEMPLATES, normalizeTemplate } from '../src/flowTypes.js';
+import { PRESET_NODE_TEMPLATES, normalizeTemplate } from '../src/flowTypes.js';
 
-const templates = SEED_NODE_TEMPLATES.map(normalizeTemplate);
+const templates = PRESET_NODE_TEMPLATES.map(normalizeTemplate);
 
 const VALID = `version: 1
 id: p
@@ -188,7 +188,8 @@ test('lint: machine-readable finding shape', () => {
   assert.equal(f.nodeId, 'a');
 });
 
-test('lint: parent must be an existing orchestrator; structural/box nodes cannot be contained', () => {
+// PIVOT-PLAN §5.3 widened "container" from orchestrator to orchestrator-or-loop.
+test('lint: parent must be an existing container; structural/box nodes cannot be contained', () => {
   const base = {
     id: 'p', name: 'P',
     nodes: [
@@ -211,8 +212,8 @@ test('lint: parent must be an existing orchestrator; structural/box nodes cannot
   const { errors } = lintFlow(base, { templates: null });
   const parentErrors = errors.filter(e => e.rule === 'parent');
   assert.ok(parentErrors.some(e => e.message.includes('parent "ghost" does not exist')));
-  assert.ok(parentErrors.some(e => e.message.includes('parent "step" is not an orchestrator')));
-  assert.ok(parentErrors.some(e => e.message.includes('"nested": orchestrator nodes cannot live inside an orchestrator')));
+  assert.ok(parentErrors.some(e => e.message.includes('parent "step" is not a container')));
+  assert.ok(parentErrors.some(e => e.message.includes('"nested": orchestrator nodes cannot live inside a container')));
   assert.ok(!parentErrors.some(e => e.nodeId === 'step'), 'a valid child passes');
   assert.ok(RUNTIME_RULES.includes('parent'), 'a broken parent blocks the pre-run gate');
 });

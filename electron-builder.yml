@@ -12,16 +12,14 @@ files:
   - src/**/*.js
   - config.json
   - package.json
-  # flows/ ships as FIRST-RUN SEEDS, not as a store — the packaged copy lives
-  # inside app.asar and is read-only; main.js copies it into userData (D28).
-  # Scratch flows (flow:new mints ids like flow-mrkhw5q9-eaxv) never ship, so
-  # promoting a flow to a default means giving it a stable slug id — that is
-  # exactly what `npm run flow -- adopt` does.
-  - flows/**
-  - "!flows/flow-*"
-  # nodes/ is deliberately NOT packaged: NodeStore seeds itself from
-  # SEED_NODE_TEMPLATES in code, so a bundled copy would only be a second,
-  # silently-diverging source of truth for the same templates.
+  # presets/ ships the ten node templates and five pipelines as OFFERED data
+  # (PIVOT-PLAN §5.1, decision 4). Read in place from inside app.asar and copied
+  # into the user's library only when they click Add — never on first launch.
+  #
+  # flows/ and nodes/ are deliberately NOT packaged. Both stores ship empty now:
+  # the library is the user's, and a bundled copy of either would be a second,
+  # silently-diverging source of truth for the same definitions.
+  - presets/**
   - "!**/*.map"
   - "!**/*.md"
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}

@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
+import CallsPanel from './CallsPanel.jsx';
+import PromptField, { LimitsField } from './PromptField.jsx';
 import {
   // grantableTools(type) reads the live tool library (tools/<id>.json) snapshot
   // App installs at boot, before any inspector panel renders, and returns what
@@ -6,7 +8,7 @@ import {
   // is no library to read.
   TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, grantableTools,
   EFFORT_LEVELS, DEFAULT_EFFORT, EVAL_TYPES, WORK_CATEGORIES,
-  nodeLabel, isInstance, resolveInstance, nodePorts, isStructuralNode,
+  nodeLabel, isInstance, resolveInstance, nodePorts, isStructuralNode, isFeedbackEdge,
   overridableFields, resolveFlow, diffOverrides
 } from './flowTypes.js';
 
@@ -33,8 +35,12 @@ export function statusPill(status) {
   return <span className={'status-pill' + cls}>{label}</span>;
 }
 
-export default function Inspector({ snapshot, selectedNode, onOpenArtifact = null }) {
-  const { meta, prompt, tasks, retrospectives, flow } = snapshot;
+export default function Inspector({ snapshot, selectedNode, onOpenArtifact = null, projectId = null }) {
+  const { meta, prompt, tasks, retrospectives, flow, metrics } = snapshot;
+  // PIVOT-PLAN §6.1: the Calls tab. Two tabs rather than one more section,
+  // because the per-attempt list is a different KIND of thing from the run's
+  // artifacts — it is what the model did, not what it produced.
+  const [tab, setTab] = useState('details');
 
   let title = 'Run overview';
   let icon = '◆';
@@ -142,6 +148,18 @@ export default function Inspector({ snapshot, selectedNode, onOpenArtifact = nul
     ] : [];
   }
 
+  // Which ledger slice this selection means. A flow node is named directly; an
+  // agentTask's calls are filed under its task id as well, and a bare `task-N`
+  // selection has only the task id to go on.
+  const ledgerTaskId = flowNode?.type === 'agentTask'
+    ? (flowNode.data?.taskId ?? null)
+    : (selectedNode?.startsWith?.('task-') ? selectedNode : null);
+  const ledgerNodeId = flowNode ? flowNode.id : null;
+  const nodeMetrics = (ledgerNodeId && metrics?.nodes?.[ledgerNodeId])
+    ?? (ledgerTaskId && metrics?.tasks?.[ledgerTaskId])
+    ?? null;
+  const showCalls = Boolean(metrics) && (ledgerNodeId || ledgerTaskId || !selectedNode);
+
   return (
     <aside className="inspector">
       <div className="inspector-header">
@@ -152,6 +170,36 @@ export default function Inspector({ snapshot, selectedNode, onOpenArtifact = nul
         </div>
         {statusPill(status)}
       </div>
+      {showCalls && (
+        <div className="inspector-tabs" role="tablist" aria-label="Inspector view">
+          <button
+            type="button" role="tab" aria-selected={tab === 'details'}
+            className={'inspector-tab' + (tab === 'details' ? ' active' : '')}
+            onClick={() => setTab('details')}
+          >Details</button>
+          <button
+            type="button" role="tab" aria-selected={tab === 'calls'}
+            className={'inspector-tab' + (tab === 'calls' ? ' active' : '')}
+            onClick={() => setTab('calls')}
+          >
+            Calls
+            {nodeMetrics?.calls ? <span className="tab-count">{nodeMetrics.calls}</span> : null}
+            {nodeMetrics?.retries ? <span className="tab-count warn" title="retried attempts">↻{nodeMetrics.retries}</span> : null}
+          </button>
+        </div>
+      )}
+      {showCalls && tab === 'calls' ? (
+        <div className="inspector-body">
+          <CallsPanel
+            projectId={projectId}
+            runId={meta?.runId}
+            nodeId={ledgerNodeId}
+            taskId={ledgerTaskId}
+            metrics={selectedNode ? nodeMetrics : metrics?.run}
+            preMetrics={Boolean(metrics?.preMetrics)}
+          />
+        </div>
+      ) : (
       <div className="inspector-body">
         {sections.filter(Boolean).map(([label, body, artifacts]) => (
           <section key={label}>
@@ -169,6 +217,7 @@ export default function Inspector({ snapshot, selectedNode, onOpenArtifact = nul
           </section>
         ))}
       </div>
+      )}
     </aside>
   );
 }
@@ -179,17 +228,22 @@ export default function Inspector({ snapshot, selectedNode, onOpenArtifact = nul
 
 const MOCK_MODELS = ['mock-large', 'mock-small'];
 
-export function WorkerPicker({ worker, models, activeModels, onChange, idPrefix }) {
+// G8 (SETTINGS-MODELS-PLAN §6): mock is a developer tool gated behind
+// settings.mock.enabled — while disabled it appears in no picker. `mockEnabled`
+// is threaded from the public settings payload the same way `activeModels` is.
+export function WorkerPicker({ worker, models, activeModels, onChange, idPrefix, mockEnabled = false }) {
   const actives = (activeModels ?? []).filter(m => m.enabled !== false);
   const w = worker?.provider ? worker : { provider: 'mock', model: 'mock-large' };
 
   // Curated mode (PROVIDERS-PLAN §1): once the user has activated models, the
-  // picker offers ONLY those (plus mock) — thousands of catalog models exist,
-  // the picker shows the handful you chose. An active pick is stored as
-  // { provider: 'auto', model } and resolved per priority at call time.
+  // picker offers ONLY those (plus mock, while enabled) — thousands of catalog
+  // models exist, the picker shows the handful you chose. An active pick is
+  // stored as { provider: 'auto', model } and resolved per priority at call time.
   if (actives.length) {
     const value = w.provider === 'mock'
-      ? (MOCK_MODELS.includes(w.model) ? `mock:${w.model}` : `mock:${MOCK_MODELS[0]}`)
+      ? (mockEnabled
+          ? (MOCK_MODELS.includes(w.model) ? `mock:${w.model}` : `mock:${MOCK_MODELS[0]}`)
+          : 'mock-off')
       : actives.some(m => m.id === w.model) ? `active:${w.model}` : 'unset';
     return (
       <div className="worker-picker">
@@ -205,25 +259,33 @@ export function WorkerPicker({ worker, models, activeModels, onChange, idPrefix 
           {value === 'unset' && (
             <option value="unset" disabled>{w.provider}/{w.model} — not in active models</option>
           )}
+          {value === 'mock-off' && (
+            <option value="mock-off" disabled>{w.model} (mock — hidden; enable in Settings → Advanced → Developer)</option>
+          )}
           {actives.map(m => <option key={m.id} value={`active:${m.id}`}>{m.id}</option>)}
-          {MOCK_MODELS.map(m => <option key={m} value={`mock:${m}`}>{m} (mock)</option>)}
+          {mockEnabled && MOCK_MODELS.map(m => <option key={m} value={`mock:${m}`}>{m} (mock)</option>)}
         </select>
       </div>
     );
   }
 
-  // Legacy mode: nothing activated yet — mock + openrouter free text, as before.
+  // Legacy mode: nothing activated yet — mock (while enabled) + openrouter free
+  // text, as before. With mock disabled and nothing active, the picker explains
+  // what to do next rather than silently offering nothing (P3 done-when).
   const setProvider = provider => {
     if (provider === 'mock') onChange({ provider, model: MOCK_MODELS.includes(w.model) ? w.model : MOCK_MODELS[0] });
     else onChange({ provider, model: MOCK_MODELS.includes(w.model) ? (models[0]?.id ?? '') : w.model });
   };
   return (
     <div className="worker-picker">
-      <select value={w.provider} onChange={e => setProvider(e.target.value)} aria-label="provider">
-        <option value="mock">mock</option>
+      <select
+        value={w.provider === 'mock' && !mockEnabled ? 'openrouter' : w.provider}
+        onChange={e => setProvider(e.target.value)} aria-label="provider"
+      >
+        {mockEnabled && <option value="mock">mock</option>}
         <option value="openrouter">openrouter</option>
       </select>
-      {w.provider === 'mock' ? (
+      {w.provider === 'mock' && mockEnabled ? (
         <select value={w.model} onChange={e => onChange({ ...w, model: e.target.value })} aria-label="model">
           {MOCK_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
         </select>
@@ -231,14 +293,20 @@ export function WorkerPicker({ worker, models, activeModels, onChange, idPrefix 
         <>
           <input
             list={`${idPrefix}-models`}
-            value={w.model}
+            value={w.provider === 'mock' && !mockEnabled ? '' : w.model}
             placeholder={models.length ? 'Pick or type a model id' : 'e.g. openai/gpt-4o-mini'}
-            onChange={e => onChange({ ...w, model: e.target.value })}
+            onChange={e => onChange({ provider: 'openrouter', model: e.target.value })}
             aria-label="model"
           />
           <datalist id={`${idPrefix}-models`}>
             {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
           </datalist>
+          {!mockEnabled && (
+            <div className="settings-hint">
+              No models activated yet — add them in Settings → Models, or enable the mock
+              provider in Settings → Advanced → Developer for a dry run.
+            </div>
+          )}
         </>
       )}
     </div>
@@ -274,7 +342,7 @@ function EditTargetBar({ modes, editModeId, onEditMode }) {
   );
 }
 
-export function FlowInspector({ flow, selectedNode, models, activeModels, templates, onChangeData, onChangeOverrides, onDeleteNode, onDetachNode, editModeId = null, onEditMode, onChangeConfigOverrides }) {
+export function FlowInspector({ flow, selectedNode, models, activeModels, templates, onChangeData, onChangeOverrides, onDeleteNode, onDetachNode, editModeId = null, onEditMode, onChangeConfigOverrides, mockEnabled = false }) {
   const node = flow.nodes.find(n => n.id === selectedNode);
   const modes = flow.modes ?? {};
   const editMode = editModeId && modes[editModeId] ? { id: editModeId, ...modes[editModeId] } : null;
@@ -357,6 +425,7 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
         template={node.templateId ? templates?.find(t => t.id === node.templateId) ?? null : null}
         models={models}
         activeModels={activeModels}
+        mockEnabled={mockEnabled}
         onChangeConfigOverrides={onChangeConfigOverrides}
         banner={targetBar}
       />
@@ -373,6 +442,7 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
         template={templates?.find(t => t.id === node.templateId) ?? null}
         models={models}
         activeModels={activeModels}
+        mockEnabled={mockEnabled}
         onChangeOverrides={onChangeOverrides}
         onDeleteNode={onDeleteNode}
         onDetachNode={onDetachNode}
@@ -425,6 +495,12 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
             <h3>Title</h3>
             <input value={d.title ?? ''} disabled={readOnly} onChange={e => set({ title: e.target.value })} />
           </section>
+          {/* PIVOT-PLAN §5.2: the agent's own prompt, above the goal. The goal
+              says what this run must produce; the prompt says how this node
+              works, every run. */}
+          {!readOnly && (
+            <PromptField value={d.prompt} onChange={prompt => set({ prompt })} rows={6} />
+          )}
           <section>
             <h3>Goal</h3>
             <textarea rows={4} placeholder="What must this task produce?" value={d.goal ?? ''} disabled={readOnly}
@@ -437,8 +513,12 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
           </section>
           <section>
             <h3>Worker</h3>
-            <WorkerPicker worker={d.worker} models={models} activeModels={activeModels} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+            <WorkerPicker worker={d.worker} models={models} activeModels={activeModels}
+        mockEnabled={mockEnabled} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
           </section>
+          {!readOnly && (
+            <LimitsField limits={d.limits} onChange={limits => set({ limits })} />
+          )}
 
           {/* Advanced example node fields (category, template, contextSpec) — see FLOW_NODES.md */}
           {(node.type === 'agentTask' || node.type === 'aiStep') && (
@@ -561,15 +641,32 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
               {EFFORT_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
             </select>
           </section>
+          {/* PIVOT-PLAN §5.2. A raw aiStep is what an empty library gives you
+              (§5.1's palette primitives), so this is the first place most
+              prompts will be written. It sits above the system prompt because
+              this is the field you fill in; the system prompt is the one you
+              usually leave alone. */}
+          {!readOnly && (
+            <PromptField value={d.prompt} onChange={prompt => set({ prompt })} />
+          )}
           <section>
             <h3>System prompt — blank uses the role default</h3>
             <textarea rows={5} value={d.system ?? ''} disabled={readOnly} onChange={e => set({ system: e.target.value })} />
           </section>
           <section>
             <h3>Worker</h3>
-            <WorkerPicker worker={d.worker} models={models} activeModels={activeModels} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+            <WorkerPicker worker={d.worker} models={models} activeModels={activeModels}
+        mockEnabled={mockEnabled} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
           </section>
+          {!readOnly && (
+            <LimitsField limits={d.limits} onChange={limits => set({ limits })} />
+          )}
         </>}
+
+        {/* PIVOT-PLAN §5.3. Both editors lead with the thing lint will refuse
+            without: a branch needs a default arm, a loop needs a bound. */}
+        {node.type === 'branch' && !readOnly && <BranchEditor node={node} flow={flow} d={d} set={set} />}
+        {node.type === 'loop' && !readOnly && <LoopEditor d={d} set={set} />}
 
         {node.type === 'orchestrator' && <>
           <section>
@@ -626,7 +723,8 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
           </section>
           <section>
             <h3>Planner worker</h3>
-            <WorkerPicker worker={d.worker} models={models} activeModels={activeModels} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+            <WorkerPicker worker={d.worker} models={models} activeModels={activeModels}
+        mockEnabled={mockEnabled} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
           </section>
           <section>
             <h3>Creates</h3>
@@ -704,7 +802,7 @@ function ContainmentSection({ parent, onDetach }) {
   );
 }
 
-function InstanceInspector({ node, parent, template, models, activeModels, onChangeOverrides, onDeleteNode, onDetachNode, banner = null }) {
+function InstanceInspector({ node, parent, template, models, activeModels, onChangeOverrides, onDeleteNode, onDetachNode, banner = null, mockEnabled = false }) {
   const ov = node.overrides ?? {};
   const eff = resolveInstance(node, template).data; // effective (merged) values
   const set = patch => onChangeOverrides(node.id, patch);
@@ -790,12 +888,31 @@ function InstanceInspector({ node, parent, template, models, activeModels, onCha
               : 'app default worker (template)'}</pre>
           )}
           {ov.worker != null
-            ? <WorkerPicker worker={ov.worker} models={models} activeModels={activeModels} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
+            ? <WorkerPicker worker={ov.worker} models={models} activeModels={activeModels}
+        mockEnabled={mockEnabled} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
             : <button type="button" className="ghost mini"
                 onClick={() => set({ worker: template?.worker ?? { provider: 'mock', model: 'mock-large' } })}>
                 Override worker for this workflow
               </button>}
         </section>
+
+        {/* PIVOT-PLAN §5.2: the node's own prompt, placed above the older
+            "extra instructions" field. The two coexist on purpose — instructions
+            APPEND to whatever the role already says, a prompt IS what the node
+            says — and the ordering says which of them matters. */}
+        <PromptField
+          value={ov.prompt}
+          inherited={template?.prompt}
+          onChange={prompt => set({ prompt })}
+          overrideTag={<OverrideTag active={Boolean(ov.prompt)} onReset={() => unset('prompt')} />}
+        />
+
+        <LimitsField
+          limits={ov.limits}
+          inherited={template?.limits}
+          onChange={limits => set({ limits })}
+          overrideTag={<OverrideTag active={Boolean(ov.limits)} onReset={() => unset('limits')} />}
+        />
 
         <section>
           <h3>Extra instructions <OverrideTag active={Boolean(ov.instructions)} onReset={() => unset('instructions')} /></h3>
@@ -927,7 +1044,7 @@ function InstanceInspector({ node, parent, template, models, activeModels, onCha
 // checks), shown with the same override tags as the flow editor. Values
 // display EFFECTIVE (flow default + this config's override layered on);
 // writes land only in the config; clearing a field removes it from the config.
-function ConfigNodeEditor({ node, mode, template, models, activeModels, onChangeConfigOverrides, banner = null }) {
+function ConfigNodeEditor({ node, mode, template, models, activeModels, onChangeConfigOverrides, banner = null, mockEnabled = false }) {
   const ov = mode.overrides?.[node.id] ?? {};
   // Effective values: the flow default with this config's overrides on top —
   // for an instance, through the template merge; for a raw node, onto data.
@@ -967,7 +1084,8 @@ function ConfigNodeEditor({ node, mode, template, models, activeModels, onChange
                   <pre>{eff.worker ? `${eff.worker.provider}/${eff.worker.model} (flow default)` : 'app default worker (flow default)'}</pre>
                 )}
                 {ov.worker != null
-                  ? <WorkerPicker worker={ov.worker} models={models} activeModels={activeModels} idPrefix={`c-${node.id}`} onChange={worker => set({ worker })} />
+                  ? <WorkerPicker worker={ov.worker} models={models} activeModels={activeModels}
+        mockEnabled={mockEnabled} idPrefix={`c-${node.id}`} onChange={worker => set({ worker })} />
                   : <button type="button" className="ghost mini"
                       onClick={() => set({ worker: eff.worker ?? { provider: 'mock', model: 'mock-large' } })}>
                       Set a worker for this config
@@ -1125,6 +1243,9 @@ function ConfigNodeEditor({ node, mode, template, models, activeModels, onChange
 
 // What the agent actually did with its tools: one entry per call, straight
 // from the executor retrospective ({ tool, args, ok, result|error, ms }).
+// Since P2 the result shown here may be a bounded preview — the full,
+// untruncated result is the artifact named on the last line, and the whole
+// point of writing it is that you can go and read it.
 function toolCallsSection(retro) {
   const calls = retro?.toolCalls;
   if (!calls?.length) return null;
@@ -1153,6 +1274,145 @@ function retroSection(retro) {
   ].filter(Boolean);
   return ['Retrospective', lines.join('\n')];
 }
-// Since P2 the result shown here may be a bounded preview — the full,
-// untruncated result is the artifact named on the last line, and the whole
-// point of writing it is that you can go and read it.
+
+// --- Control flow editors (PIVOT-PLAN §5.3) ----------------------------------
+//
+// A branch's arms are evaluated top to bottom; the first whose condition holds
+// is taken, and an arm with no condition is the default. The editor states that
+// rule where the arms are, because "first match wins" is the one thing about a
+// branch that is not obvious from looking at it.
+
+const CONDITION_EXAMPLES = [
+  ['implement.status == "done"', 'the node finished'],
+  ['implement.text contains "TODO"', 'its output still has work in it'],
+  ['implement.cost.total > 0.50', 'it cost more than fifty cents'],
+  ['implement.usage.outputTokens > 4000', 'it wrote a lot'],
+  ['implement.retries > 0', 'it had to be retried'],
+  ['implement.latencyMs > 30000', 'it was slow']
+];
+
+function ConditionHelp() {
+  return (
+    <details className="cond-help">
+      <summary>What can a condition read?</summary>
+      <p className="settings-hint">
+        Any upstream node by id, and — this is the point — what that node cost as well as what it
+        said. <code>and</code>, <code>or</code>, <code>not</code>, parentheses,
+        {' '}<code>contains</code>, <code>matches</code>, <code>startsWith</code>, <code>endsWith</code>,
+        and the usual comparisons. No JavaScript: a flow file is data.
+      </p>
+      <ul className="cond-examples">
+        {CONDITION_EXAMPLES.map(([expr, why]) => (
+          <li key={expr}><code>{expr}</code> <span className="dim">— {why}</span></li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function BranchEditor({ node, flow, d, set }) {
+  const arms = Array.isArray(d.arms) ? d.arms : [];
+  const targets = (flow?.edges ?? []).filter(e => e.source === node.id && !isFeedbackEdge(e)).map(e => e.target);
+  const patch = next => set({ arms: next });
+  const hasDefault = arms.some(a => !a?.when?.trim());
+  return (
+    <>
+      <section>
+        <h3>Title</h3>
+        <input value={d.title ?? ''} placeholder="Branch" onChange={e => set({ title: e.target.value })} />
+      </section>
+      <section>
+        <h3>Arms — first match wins</h3>
+        <div className="settings-hint">
+          Exactly one arm activates. Everything the other arms lead to is skipped for this run.
+          An arm with no condition is the default and must come last.
+        </div>
+        {!targets.length && (
+          <p className="settings-warn">
+            This branch has no outgoing edges yet. Draw a line to each node an arm should lead to,
+            then pick it here.
+          </p>
+        )}
+        {arms.map((arm, i) => (
+          <div className="arm-row" key={i}>
+            <input
+              className="arm-when"
+              placeholder={i === arms.length - 1 ? 'blank = the default arm' : 'condition, e.g. draft.cost.total > 0.5'}
+              value={arm?.when ?? ''}
+              onChange={e => patch(arms.map((a, j) => (j === i ? { ...a, when: e.target.value || undefined } : a)))}
+            />
+            <span className="arm-arrow" aria-hidden>→</span>
+            <select
+              className="arm-to"
+              value={arm?.to ?? ''}
+              onChange={e => patch(arms.map((a, j) => (j === i ? { ...a, to: e.target.value } : a)))}
+            >
+              <option value="">(pick a node)</option>
+              {targets.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <button type="button" className="ghost mini" title="Remove this arm"
+              onClick={() => patch(arms.filter((_, j) => j !== i))}>✕</button>
+          </div>
+        ))}
+        <button type="button" className="ghost mini"
+          onClick={() => patch([...arms, { when: '', to: targets.find(t => !arms.some(a => a.to === t)) ?? '' }])}>
+          + Add arm
+        </button>
+        {arms.length > 0 && !hasDefault && (
+          <p className="settings-warn">
+            No default arm. Add one with a blank condition, or the run stops here when nothing matches.
+          </p>
+        )}
+        <ConditionHelp />
+      </section>
+    </>
+  );
+}
+
+function LoopEditor({ d, set }) {
+  return (
+    <>
+      <section>
+        <h3>Title</h3>
+        <input value={d.title ?? ''} placeholder="Loop" onChange={e => set({ title: e.target.value })} />
+      </section>
+      <section>
+        <h3>Bound — required</h3>
+        <div className="settings-hint">
+          The most iterations this loop may run. Required: a loop without a bound can spend without
+          limit, and lint refuses one.
+        </div>
+        <div className="limits-row">
+          <label className="limits-cell">
+            <span className="limits-label">max iterations</span>
+            <input type="number" min={1} max={100} value={d.maxIterations ?? 3}
+              onChange={e => set({ maxIterations: Math.max(1, Math.min(100, Number(e.target.value) || 1)) })} />
+          </label>
+          <label className="limits-cell">
+            <span className="limits-label">max cost ($)</span>
+            <input type="number" min={0} step="0.10" placeholder="none" value={d.maxCost ?? ''}
+              onChange={e => set({ maxCost: e.target.value === '' ? undefined : Number(e.target.value) })} />
+          </label>
+          <label className="limits-cell">
+            <span className="limits-label">max tokens</span>
+            <input type="number" min={0} step={1000} placeholder="none" value={d.maxTokens ?? ''}
+              onChange={e => set({ maxTokens: e.target.value === '' ? undefined : Number(e.target.value) })} />
+          </label>
+        </div>
+      </section>
+      <section>
+        <h3>Stop when…</h3>
+        <div className="settings-hint">
+          Checked after each pass, against what that pass produced. Without one the loop always runs
+          its full bound.
+        </div>
+        <input
+          placeholder='e.g. review.text contains "APPROVED"'
+          value={d.until ?? ''}
+          onChange={e => set({ until: e.target.value || undefined })}
+        />
+        <ConditionHelp />
+      </section>
+    </>
+  );
+}

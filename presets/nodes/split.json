@@ -1,0 +1,16 @@
+{
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false,
+  "id": "split",
+  "name": "Split",
+  "category": null,
+  "icon": "⑃",
+  "baseType": "aiStep",
+  "role": "split",
+  "effort": "medium",
+  "description": "Divide the upstream work into clearly labeled independent parts that downstream nodes can run in parallel."
+}

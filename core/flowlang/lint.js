@@ -19,6 +19,7 @@ import {
   FEEDBACK_HANDLE, isStructuralType, resolveInstance, overridableFields
 } from '../../src/flowTypes.js';
 import { makeContext, expandRefs, resolveGrant, WILDCARD } from '../../src/toolGrants.js';
+import { checkExpr } from './expr.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const SCHEMA = JSON.parse(fs.readFileSync(path.join(__dirname, 'schema.json'), 'utf8'));
@@ -210,11 +211,13 @@ export function lintFlow(flow, { templates = null, rules = null, library = null 
       const parent = byId.get(n.parentId);
       if (!parent) {
         out.push(finding('parent', 'error', `node "${n.id}": parent "${n.parentId}" does not exist`, { nodeId: n.id }));
-      } else if (parent.type !== 'orchestrator') {
-        out.push(finding('parent', 'error', `node "${n.id}": parent "${n.parentId}" is not an orchestrator — nodes can only live inside an orchestrator's box`, { nodeId: n.id }));
+      } else if (parent.type !== 'orchestrator' && parent.type !== 'loop') {
+        // PIVOT-PLAN §5.3: a loop is a container too, and its body is contained
+        // exactly the way an orchestrator's children are.
+        out.push(finding('parent', 'error', `node "${n.id}": parent "${n.parentId}" is not a container — nodes can only live inside an orchestrator's or a loop's box`, { nodeId: n.id }));
       }
-      if (isStructuralType(n.type) || n.type === 'orchestrator') {
-        out.push(finding('parent', 'error', `node "${n.id}": ${n.type} nodes cannot live inside an orchestrator`, { nodeId: n.id }));
+      if (isStructuralType(n.type) || n.type === 'orchestrator' || n.type === 'loop') {
+        out.push(finding('parent', 'error', `node "${n.id}": ${n.type} nodes cannot live inside a container`, { nodeId: n.id }));
       }
     }
   }
@@ -304,6 +307,21 @@ export function lintFlow(flow, { templates = null, rules = null, library = null 
       back.get(e.target).push(e.source);
     }
   }
+  // Containment counts as reachability. An orchestrator's children are reached
+  // by explicit `orch -> child` edges, but PIVOT-PLAN §5.3's loop body is
+  // reached by CONTAINMENT alone — the loop runs it, and there is no edge to
+  // say so. Without this every loop body lints as unreachable and every loop
+  // body's output as a dead end, which is a lie about a node the runner will
+  // very much execute.
+  for (const n of flow.nodes ?? []) {
+    if (!n.parentId || !fwd.has(n.parentId) || !fwd.has(n.id)) continue;
+    fwd.get(n.parentId).push(n.id);
+    back.get(n.id).push(n.parentId);
+    // The container's own output aggregates its children's, so a child's
+    // output does reach whatever the container reaches.
+    fwd.get(n.id).push(n.parentId);
+    back.get(n.parentId).push(n.id);
+  }
   if (inputs.length && on('unreachable')) {
     const reachable = reach(inputs.map(n => n.id), id => fwd.get(id) ?? []);
     for (const n of flow.nodes ?? []) {
@@ -384,6 +402,157 @@ export function lintFlow(flow, { templates = null, rules = null, library = null 
     }
   }
 
+  // --- Control flow (PIVOT-PLAN §5.3) — four new rules ------------------------
+  //
+  // Unbounded iteration against a metered API is the one way this feature
+  // becomes a liability, and lint is the place to stop it. Three of these four
+  // are errors for that reason; the fourth (an unreachable arm) is a warning,
+  // because a flow with a dead arm still runs correctly — it just contains a
+  // line its author probably didn't mean.
+
+  // unbounded-loop — every loop declares a bound, or lint fails.
+  if (on('unbounded-loop')) {
+    for (const n of flow.nodes ?? []) {
+      if (n.type !== 'loop') continue;
+      const d = n.data ?? {};
+      const max = Number(d.maxIterations);
+      if (!Number.isInteger(max) || max < 1) {
+        out.push(finding('unbounded-loop', 'error',
+          `loop "${n.id}": maxIterations is required and must be at least 1 — a loop without a bound can spend without limit`,
+          { nodeId: n.id }));
+      } else if (max > 100) {
+        out.push(finding('unbounded-loop', 'error',
+          `loop "${n.id}": maxIterations ${max} exceeds the hard cap of 100`, { nodeId: n.id }));
+      }
+      // A cost budget is the belt to maxIterations's suspenders. §11 says it
+      // "probably shouldn't stay optional"; a warning is the honest middle —
+      // loud enough to notice, not a wall in front of a two-iteration loop.
+      if (max > 3 && d.maxCost == null && d.maxTokens == null) {
+        out.push(finding('unbounded-loop', 'warning',
+          `loop "${n.id}": ${max} iterations with no maxCost or maxTokens — a bounded loop is only as safe as its bound`,
+          { nodeId: n.id }));
+      }
+      const body = (flow.nodes ?? []).filter(c => c.parentId === n.id);
+      if (!body.length) {
+        out.push(finding('unbounded-loop', 'warning',
+          `loop "${n.id}" has no nodes inside it — it will complete immediately`, { nodeId: n.id }));
+      }
+    }
+  }
+
+  // loop-no-exit — a loop that can only ever stop by exhausting its bound.
+  // Legal (the bound IS an exit) but almost always a mistake: it means every
+  // run pays for every iteration whether or not the work was already done.
+  if (on('loop-no-exit')) {
+    for (const n of flow.nodes ?? []) {
+      if (n.type !== 'loop') continue;
+      const until = n.data?.until;
+      if (until == null || String(until).trim() === '') {
+        out.push(finding('loop-no-exit', 'warning',
+          `loop "${n.id}" has no \`until\` condition — it will always run its full ${n.data?.maxIterations ?? '?'} iterations`,
+          { nodeId: n.id }));
+        continue;
+      }
+      const check = checkExpr(String(until));
+      if (!check.ok) {
+        out.push(finding('loop-no-exit', 'error',
+          `loop "${n.id}": \`until\` is not a valid condition — ${check.error}`, { nodeId: n.id }));
+        continue;
+      }
+      // A condition reading a node that isn't in this loop's body (or anywhere
+      // in the flow) can never become true from inside the loop.
+      const bodyIds = new Set((flow.nodes ?? []).filter(c => c.parentId === n.id).map(c => c.id));
+      for (const segments of check.paths) {
+        const root = segments[0];
+        if (root === 'loop' || root === 'run') continue;
+        if (!byId.has(root)) {
+          out.push(finding('loop-no-exit', 'error',
+            `loop "${n.id}": \`until\` reads "${root}", which is not a node in this flow`, { nodeId: n.id }));
+        } else if (!bodyIds.has(root)) {
+          out.push(finding('loop-no-exit', 'warning',
+            `loop "${n.id}": \`until\` reads "${root}", which is outside the loop body — nothing the loop does can change it`,
+            { nodeId: n.id }));
+        }
+      }
+    }
+  }
+
+  // branch-no-default — a branch whose every arm is conditional can match
+  // nothing, and a branch that matches nothing wedges the run. Cheap to fix
+  // (one arm without a `when`), expensive to discover at 2am.
+  if (on('branch-no-default')) {
+    for (const n of flow.nodes ?? []) {
+      if (n.type !== 'branch') continue;
+      const arms = Array.isArray(n.data?.arms) ? n.data.arms : [];
+      if (!arms.length) {
+        out.push(finding('branch-no-default', 'error',
+          `branch "${n.id}" declares no arms — it has nothing to decide between`, { nodeId: n.id }));
+        continue;
+      }
+      if (!arms.some(a => a && (a.when == null || String(a.when).trim() === ''))) {
+        out.push(finding('branch-no-default', 'error',
+          `branch "${n.id}" has no default arm — add one arm with no \`when\`, or the run stops here when nothing matches`,
+          { nodeId: n.id }));
+      }
+      for (const [i, arm] of arms.entries()) {
+        if (!arm?.when) continue;
+        const check = checkExpr(String(arm.when));
+        if (!check.ok) {
+          out.push(finding('branch-no-default', 'error',
+            `branch "${n.id}" arm ${i + 1}: not a valid condition — ${check.error}`, { nodeId: n.id }));
+          continue;
+        }
+        for (const segments of check.paths) {
+          const root = segments[0];
+          if (root === 'loop' || root === 'run') continue;
+          if (!byId.has(root)) {
+            out.push(finding('branch-no-default', 'error',
+              `branch "${n.id}" arm ${i + 1}: reads "${root}", which is not a node in this flow`, { nodeId: n.id }));
+          }
+        }
+      }
+    }
+  }
+
+  // unreachable-arm — an arm pointing somewhere the branch has no edge to,
+  // an arm after the default (which can never be reached), or a duplicate.
+  if (on('unreachable-arm')) {
+    for (const n of flow.nodes ?? []) {
+      if (n.type !== 'branch') continue;
+      const arms = Array.isArray(n.data?.arms) ? n.data.arms : [];
+      const targets = new Set(forwardEdges(flow.edges ?? []).filter(e => e.source === n.id).map(e => e.target));
+      let sawDefault = false;
+      const seen = new Set();
+      for (const [i, arm] of arms.entries()) {
+        const to = arm?.to;
+        if (!to) continue;
+        if (!targets.has(to)) {
+          out.push(finding('unreachable-arm', 'error',
+            `branch "${n.id}" arm ${i + 1} points at "${to}", but there is no edge "${n.id} -> ${to}" in the flow section`,
+            { nodeId: n.id }));
+        }
+        if (seen.has(to)) {
+          out.push(finding('unreachable-arm', 'warning',
+            `branch "${n.id}" has two arms pointing at "${to}" — only the first can ever be taken`, { nodeId: n.id }));
+        }
+        seen.add(to);
+        if (sawDefault) {
+          out.push(finding('unreachable-arm', 'warning',
+            `branch "${n.id}" arm ${i + 1} sits after the default arm and can never be reached`, { nodeId: n.id }));
+        }
+        if (arm.when == null || String(arm.when).trim() === '') sawDefault = true;
+      }
+      // Every outgoing edge should be claimed by an arm; one that isn't is a
+      // path the branch will always skip.
+      for (const t of targets) {
+        if (!seen.has(t)) {
+          out.push(finding('unreachable-arm', 'warning',
+            `branch "${n.id}" has an edge to "${t}" that no arm selects — that path can never run`, { nodeId: n.id }));
+        }
+      }
+    }
+  }
+
   return result(out);
 }
 
@@ -441,5 +610,8 @@ function result(findings) {
 // message beats starting one whose nodes quietly lose their tools.
 export const RUNTIME_RULES = [
   'unknown-template', 'unknown-node', 'unknown-port', 'cycle', 'unknown-tool', 'invalid-override', 'parent',
-  'unknown-toolset', 'grant-exceeds-ceiling', 'child-exceeds-parent', 'readonly-tools'
+  'unknown-toolset', 'grant-exceeds-ceiling', 'child-exceeds-parent', 'readonly-tools',
+  // PIVOT-PLAN §5.3: an unbounded loop overspends and a defaultless branch
+  // wedges the walk. Both are exactly the class this gate exists for.
+  'unbounded-loop', 'branch-no-default', 'unreachable-arm'
 ];

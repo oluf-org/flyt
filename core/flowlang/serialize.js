@@ -11,17 +11,24 @@ import { DSL_VERSION } from './parse.js';
 
 // Field order inside a node entry: use/type first, then the human-salient
 // fields, then anything else alphabetically. Purely cosmetic but FIXED.
+// `prompt` sits high, right after the title: PIVOT-PLAN §5.2 makes it the
+// node's most important field — the instruction the user owns and can read —
+// and a flow file should read the way the node does.
 const FIELD_ORDER = [
-  'title', 'role', 'category', 'evalType', 'effort', 'language', 'minNodes', 'maxNodes',
+  'title', 'prompt', 'role', 'category', 'evalType', 'effort', 'language', 'minNodes', 'maxNodes',
+  // Control flow (PIVOT-PLAN §5.3). `maxIterations` sits directly beside the
+  // condition it bounds, because a loop is only ever as safe as its bound and
+  // reading one without the other is how a metered API gets a surprise.
+  'arms', 'until', 'maxIterations', 'maxCost', 'maxTokens',
   'system', 'instructions', 'goal', 'contextSpec',
-  'text', 'worker', 'toolCeiling', 'tools', 'skills', 'constraints', 'outputs', 'requiresApproval', 'approveToolCalls'
+  'text', 'worker', 'limits', 'toolCeiling', 'tools', 'skills', 'constraints', 'outputs', 'requiresApproval', 'approveToolCalls'
 ];
 const fieldRank = k => {
   const i = FIELD_ORDER.indexOf(k);
   return i === -1 ? FIELD_ORDER.length : i;
 };
 
-const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai' };
+const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai', branch: 'logic', loop: 'logic' };
 
 function emitValue(lines, key, v, indent) {
   const pad = ' '.repeat(indent);

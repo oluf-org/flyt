@@ -12,7 +12,8 @@ import path from 'node:path';
 import { NodeStore } from '../core/nodestore.js';
 import { FlowStore, DEFAULT_PIPELINE_ID } from '../core/flowstore.js';
 import { FlowRunner, topoSort } from '../core/flowRunner.js';
-import { SEED_NODE_TEMPLATES, resolveFlow, resolveInstance, namedFlow, UNTITLED_FLOW } from '../src/flowTypes.js';
+import { PRESET_NODE_TEMPLATES, resolveFlow, resolveInstance, namedFlow, UNTITLED_FLOW } from '../src/flowTypes.js';
+import { installNodePreset } from '../core/presets.js';
 import { makeStore, setScript, roleOf, testConfig, waitForStage } from './helpers.js';
 
 const tmpDir = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -21,16 +22,18 @@ const makeFlowStore = () => new FlowStore(tmpDir('llm-flow-flows-'));
 
 // --- NodeStore ---
 
-test('NodeStore seeds the FLOW_NODES.md catalog into an empty directory', () => {
+// PIVOT-PLAN §5.1 / decision 4 inverts what this test used to assert. The
+// library shipped the FLOW_NODES.md catalog; now it ships EMPTY, and the same
+// templates are presets you choose (tests/presets.test.js covers that side).
+test('NodeStore ships an empty library, and files stay the source of truth', () => {
   const ns = makeNodeStore();
-  const ids = ns.listFull().map(t => t.id).sort();
-  assert.deepEqual(ids, SEED_NODE_TEMPLATES.map(t => t.id).sort());
-  // Files, not memory, are the source of truth.
+  assert.deepEqual(ns.listFull(), []);
+  const tpl = installNodePreset(ns, 'plan-start');
   assert.ok(fs.existsSync(path.join(ns.rootDir, 'plan-start.json')));
-  // A non-empty directory is never re-seeded.
-  ns.remove('split');
-  assert.equal(ns.seedIfEmpty(), false);
-  assert.equal(ns.get('split'), null);
+  assert.equal(tpl.id, 'plan-start');
+  ns.remove('plan-start');
+  assert.equal(ns.get('plan-start'), null);
+  assert.deepEqual(ns.listFull(), []);
 });
 
 test('NodeStore CRUD round-trips and normalizes templates', () => {
@@ -50,7 +53,7 @@ test('NodeStore CRUD round-trips and normalizes templates', () => {
 // --- resolution: template defaults + per-workflow overrides ---
 
 test('resolveFlow merges overrides over template defaults; structural nodes pass through', () => {
-  const tpl = SEED_NODE_TEMPLATES.find(t => t.id === 'work');
+  const tpl = PRESET_NODE_TEMPLATES.find(t => t.id === 'work');
   const flow = {
     id: 'f', name: 'F',
     nodes: [
@@ -94,7 +97,7 @@ test('ensureDefaultPipeline ships an editable User Input → plan → gated rout
   const flow = fsStore.load(DEFAULT_PIPELINE_ID);
   assert.equal(fsStore.list()[0].id, DEFAULT_PIPELINE_ID);
 
-  const resolved = resolveFlow(flow, SEED_NODE_TEMPLATES);
+  const resolved = resolveFlow(flow, PRESET_NODE_TEMPLATES);
   const order = topoSort(resolved).map(n => n.type);
   assert.equal(order[0], 'input');
   assert.equal(order.at(-1), 'output');
@@ -113,6 +116,9 @@ test('ensureDefaultPipeline ships an editable User Input → plan → gated rout
 test('default pipeline parity: user input, post-planning gate, retrospectives, historyDigest', async () => {
   const store = makeStore();
   const ns = makeNodeStore();
+  // The library is empty now (§5.1), so a flow that instantiates templates has
+  // to be handed them — which is exactly what installing a flow preset does.
+  for (const id of ['plan-start', 'evaluation', 'work']) installNodePreset(ns, id);
   const flows = makeFlowStore();
   flows.ensureDefaultPipeline();
   const runner = new FlowRunner(store, testConfig(), () => {}, ns);
@@ -163,6 +169,7 @@ test('default pipeline parity: user input, post-planning gate, retrospectives, h
 test('template + override instructions reach the model prompt; agentTask templates carry tools', async () => {
   const store = makeStore();
   const ns = makeNodeStore();
+  installNodePreset(ns, 'work');
   ns.save({ ...ns.load('work'), instructions: 'TPL-GUIDANCE' });
   const runner = new FlowRunner(store, testConfig(), () => {}, ns);
 

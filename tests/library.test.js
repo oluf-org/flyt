@@ -11,11 +11,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  SEED_NODE_TEMPLATES, AGENT_TOOLS, WORK_CATEGORIES, WORK_TOOLS, resolveInstance
+  PRESET_NODE_TEMPLATES, AGENT_TOOLS, WORK_CATEGORIES, WORK_TOOLS, resolveInstance
 } from '../src/flowTypes.js';
 
-const seed = id => SEED_NODE_TEMPLATES.find(t => t.id === id);
-const onDisk = id => JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'nodes', `${id}.json`), 'utf8'));
+const seed = id => PRESET_NODE_TEMPLATES.find(t => t.id === id);
+// PIVOT-PLAN §5.1: the shipped copies live in presets/nodes/ now. nodes/ is the
+// USER's library — empty on a fresh install and untracked — so a test reading it
+// would pass on this machine and fail on a clean clone.
+const onDisk = id => JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'presets', 'nodes', `${id}.json`), 'utf8'));
 
 // A Work node resolved to one task type — the shape the runner executes.
 const workNode = category =>
@@ -67,10 +70,11 @@ test('bash implies the tool gate; write-only task types stay ungated and paralle
   }
 });
 
-// nodes/*.json is the live source of truth; the seed only writes them on a fresh
-// install (or the rework migration). They must not drift apart.
-test('the shipped template files match the seed they came from', () => {
-  for (const t of SEED_NODE_TEMPLATES) {
+// presets/nodes/*.json are generated from PRESET_NODE_TEMPLATES by
+// scripts/build-presets.mjs; once generated the FILES are what gets installed.
+// They must not drift apart.
+test('the preset files match the definitions they were generated from', () => {
+  for (const t of PRESET_NODE_TEMPLATES) {
     const f = onDisk(t.id);
     assert.equal(f.baseType, t.baseType, `${t.id}: baseType drifted`);
     assert.deepEqual(f.tools, t.tools, `${t.id}: tools drifted`);

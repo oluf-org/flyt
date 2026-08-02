@@ -1,11 +1,30 @@
 # Flyt — Goals & Architecture
 
 **Project:** flyt (formerly LLM Flow — D29)
-**Status (as of 2026-07-17):** **V1 tasks 1–12 complete.** The coding-agent loop runs end to end on a real repo with a real model: plan → human gate → decomposed work with real file/bash tools → verify → the change landed and the suite green. Validated live (`DESIGN-SPEC.md` §4.1, §12) with known gaps recorded there. Earlier: product refocus implemented — Node Library + one engine ship; `core/pipeline.js` retired (see "Migration" below).
+**Status (as of 2026-08-02):** **The investigator pivot (D35) is landing.**
+P1–P6, P8 and P10 of `PIVOT-PLAN.md` are in: every model call now writes an
+immutable per-attempt record (usage, cost, latency, throughput, bounded redacted
+wire), the run surface and a cross-run Investigator page read them, the node
+library ships empty behind a hidden kernel with the old templates demoted to
+presets, prompts/models/retries/timeouts are user-owned node fields, and the DSL
+has conditionals and bounded loops that can branch on those metrics. P7 (the
+builder) and P9 (sweeps) are outstanding. Earlier: **V1 tasks 1–12 complete.** The coding-agent loop runs end to end on a real repo with a real model: plan → human gate → decomposed work with real file/bash tools → verify → the change landed and the suite green. Validated live (`DESIGN-SPEC.md` §4.1, §12) with known gaps recorded there. Earlier: product refocus implemented — Node Library + one engine ship; `core/pipeline.js` retired (see "Migration" below).
 **Primary audience:** Future AI agents and human contributors. **Read this file first.**
 
-> **One-sentence vision:**
-> An easy-to-use desktop app for AI workflows: you build workflows from a library of reusable AI node templates, pick a workflow from a dropdown, type what you want, and watch it execute transparently on a live canvas.
+> **One-sentence vision (D35):**
+> An instrument for LLM work: build the pipeline yourself, then see exactly what
+> every model call cost, sent, and returned — down to the wire.
+
+The canvas survives. The engine survives. What changed is where the value sits.
+The old pitch was *capability* — the app does things with LLMs. The pitch now is
+*legibility and control*: it is the only place you can watch an LLM pipeline run
+and interrogate it afterwards, and every part of the pipeline is something you
+built.
+
+Positioning is **both**. Flyt is still aimed at replacing a chat box for
+building software (`PRODUCT-SPEC.md` §3), and the V1 coding loop stays green.
+The investigator is the layer that makes the builder trustworthy, not a
+replacement for it.
 
 ---
 
@@ -23,14 +42,24 @@ There is **one execution engine**. The classic linear pipeline (plan → approve
 
 ## Non-Negotiable Principles
 
-Unchanged. Judge every change against these:
+Judge every change against these. Principle 6 was rewritten by D35 and principle
+8 is new; the rest are unchanged and load-bearing.
 
 1. **File-based state is the single source of truth.** All coordination between modules happens through plain files under `runs/<runId>/`. No hidden in-memory coordination. Node templates and workflows are also plain files (`nodes/<id>.json`, `flows/<id>.flow.yaml` + a `flows/<id>.layout.json` sidecar; see the Flow DSL section).
 2. **Human oversight by default.** Approval gates are per-node (`requiresApproval`); the default workflow keeps the post-planning gate.
 3. **Model-agnostic and multi-model by design.** The worker (provider + model) is a property of the node template, overridable per workflow.
 4. **Self-describing artifacts.** Tasks carry goal, inputs, constraints, dependsOn, worker. Every executed node emits a structured retrospective.
 5. **Inspectability > convenience.** "Open run folder" stays first-class; artifacts stay human-readable Markdown/JSON.
-6. **Ease of use is now a first-class principle.** A new user should understand the app in one sentence: *pick a workflow, type your request, run it.* Complexity (prompts, context assembly, task decomposition) is the system's job, not the user's.
+6. **Ease of use, without hiding the machine.** A new user should understand
+   the app in one sentence — *build a pipeline, run it, see what it did.* Some
+   complexity stays the system's job (context assembly, task decomposition, D35
+   decision 10); prompts and model choice explicitly do not. Convenience never
+   buys itself an invisible decision.
+8. **Nothing is sent to a model that the user cannot see and could not have
+   written (D35).** Prompts are authored artifacts. A model may draft one; it
+   may never conjure one at runtime. Assembled context stays automatic, but it
+   is *visible* in the wire record — which satisfies the principle without the
+   cost of making it editable.
 7. **Performance, responsiveness, and feel are incredibly important.** Slow AI steps are acceptable; a janky or confusing UI is not.
 
 ---
@@ -39,7 +68,15 @@ Unchanged. Judge every change against these:
 
 ### 1. AI Node Templates (the Node Library)
 
-Pre-defined, reusable node types that live **outside** any workflow, created and managed on a dedicated **Nodes page**. Examples: Code (general), Code (design), Documentation, Test-creation, Plan, Evaluation, Stitch.
+**The library ships empty (D35).** Templates live **outside** any workflow and
+are created on the **Nodes page**; nothing is installed on your behalf. The ten
+templates the app used to seed are now *presets* under `presets/nodes/`, offered
+inside *Create node* alongside *Blank* and *Describe it*. Beneath that floor sits
+a hidden **kernel** (`nodes/_system/`, `system: true`) — two or three nodes the
+builder runs on, absent from the palette and the Nodes page, fully visible in
+run view when they execute.
+
+Reusable node types, created and managed on a dedicated **Nodes page**. Examples: Code (general), Code (design), Documentation, Test-creation, Plan, Evaluation, Stitch.
 
 A node template defines:
 
@@ -49,7 +86,13 @@ A node template defines:
 - **Tool availability** — which agent tools (write_file, create_task, …) the node may use.
 - **Skills** — reusable expertise attached to the node *by name*; the bound project supplies the content as `.flyt/skills/<name>.md`. The template says which expertise it wants, the project says what that means here.
 
-**Crucially, templates do not contain hand-written prompts.** The model generates its own prompt from the task description and upstream context. The template constrains *how* (model, tools, instructions, skills), the task defines *what*.
+**Templates carry a real, user-owned `prompt` field (D35).** This inverts what
+this document said until 2026-08-02, which was that templates contain no
+hand-written prompts and the model generates its own. It does not any more: the
+prompt is a field you write and can read, *Draft with AI* fills that field
+rather than bypassing it, and adding a draft to the library stays a separate
+human gesture. The template still constrains *how* (model, tools, limits,
+skills); the prompt now says *what*.
 
 Templates persist as files (e.g. `nodes/<id>.json`) per principle 1.
 
@@ -88,7 +131,17 @@ No separate "run pipeline" vs "run flow" paths. One dropdown, one input, one eng
 
 One engine: `core/flowRunner.js` (topological walk, agentTask phases, per-node approval gates, retrospectives, materialization of AI-generated nodes). The reflective planning pattern in `FLOW_NODES.md` (plan-start → plan-eval → categorized work nodes with minimal `contextSpec` → stitch/step-eval → final-eval) remains the recommended shape for complex workflows and is expressed entirely with library node templates.
 
-Prompt assembly per node: task description + upstream context (`upstreamContext()`) + template instructions + instance override instructions → model generates its own working prompt. Context stays minimal via per-task `Context files:` declarations.
+Prompt assembly per node: the node's own `prompt` field (D35) + the run
+request + goal + upstream context (`upstreamContext()`) + template and instance
+instructions. Context stays minimal via per-task `Context files:` declarations.
+
+**Every model call writes a record (D35).** `runs/<id>/calls/<seq>.json`, one per
+*attempt* — usage, cost, latency, time-to-first-token, throughput, finish reason,
+and a bounded, redacted capture of the literal request and response. Written from
+one wrapper inside `callModel()`, so no adapter knows the ledger exists; adapters
+that spawn a vendor CLI produce an honest degraded record instead of an empty
+panel. The records are the truth; `runs/_index/calls.jsonl` is a disposable
+derived index that makes them queryable across runs.
 
 ---
 
@@ -121,9 +174,30 @@ Unchanged in spirit; ease of use added.
 
 ---
 
-## Explicit Non-Goals (unchanged)
+## Explicit Non-Goals
 
-Full general-purpose visual programming (loops, conditionals, sub-flows); true parallel execution; streaming token-by-token UI; automatic adaptive re-planning; large graphs, cost tracking, A/B testing, auto-layout; any non-file state store; production-grade sandboxing.
+Automatic adaptive re-planning; large graphs; auto-layout; production-grade
+sandboxing. Plus the three D35 narrowed rather than kept:
+
+- **No arbitrary recursion, no unbounded iteration, no sub-flows-as-a-language.**
+  What used to read "no loops or conditionals" is now this. `branch` and
+  `loop` are in the DSL; every loop declares a bound or lint fails.
+- **No non-file store may ever be the source of truth.** A *derived* index is
+  blessed (`runs/_index/`) — disposable, rebuildable, and never read as truth.
+- **No budgets or spend caps.** History and aggregates only. Enforcement is a
+  later chapter, though a loop's `maxCost` and a branch reading
+  `node.cost.total` give a flow-level approximation.
+
+**Promoted out of this list** (kept visible so the list is not read as current):
+parallel execution (D7), streaming token-by-token UI (D10), A/B testing (D27,
+shipped as compare + blind judge), and — as of D35 — **cost tracking**, which is
+now the product's centre rather than something it declines to do.
+
+**Also out of scope, and stated so it is not mistaken for an omission:** Flyt
+observes **its own runs only**. No proxy, no external-agent observation, no OTel
+import. If the app didn't make the call, it doesn't see it — the graph is the
+only way to produce data, which is what makes "you built every part of this
+pipeline" true of everything the investigator shows you.
 
 ---
 

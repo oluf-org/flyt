@@ -12,7 +12,12 @@ export const DSL_VERSION = 1;
 const REF_RE = /^([A-Za-z0-9_-]+)(?:\.([A-Za-z0-9_-]+))?$/;
 
 // baseType → kind, mirroring src/flowTypes.js TYPE_META.
-const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai' };
+// PIVOT-PLAN §5.3 adds two: `branch` (evaluates a condition and activates
+// exactly one outgoing arm) and `loop` (a container that re-runs its body until
+// a condition holds or a declared bound is hit). Both are 'logic' rather than
+// 'ai' — they make no model call of their own, and a canvas that coloured them
+// as AI nodes would be lying about where the money goes.
+const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai', branch: 'logic', loop: 'logic' };
 export const STRUCTURAL_TYPES = Object.keys(KIND_OF);
 
 export class FlowParseError extends Error {

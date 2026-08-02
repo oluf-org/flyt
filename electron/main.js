@@ -15,15 +15,25 @@ import { resolveFlow, exposedFields, diffOverrides, setKnownTools } from '../src
 import { parseFlow } from '../core/flowlang/parse.js';
 import { serializeFlow } from '../core/flowlang/serialize.js';
 import { diffSnapshot } from '../core/snapshotDiff.js';
+import { callsForNode } from '../core/runMetrics.js';
+import { ensureIndex, readIndex, readIndexMeta, rebuildIndex, clearIndex } from '../core/metricsIndex.js';
+import { filterRows, overview, rank, series, histogram, facets } from '../core/investigate.js';
+import { listNodePresets, listFlowPresets, installNodePreset, installFlowPreset } from '../core/presets.js';
 import { callModel, canServe } from '../core/adapters/index.js';
 import {
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
-  CURATED_MODELS, TEST_MODELS, migrateSettings, createResolver
+  CURATED_MODELS, TEST_MODELS, migrateSettings, createResolver,
+  stampSeenModels, computeNewModelIds
 } from '../core/modelSource.js';
+import { MODEL_CATALOG, mergeModelRecords, bundledIdForOpenRouterId } from '../core/modelCatalog.js';
 // Subscription (CLI-delegation) plumbing: sign-in detection + binary
 // resolution. Presence checks only — no token is ever read (SUBSCRIPTION-AUTH-GUIDE).
 import { claudeCredentialStatus, resolveClaudeCli } from '../core/adapters/claudeCode.js';
 import { codexCredentialStatus, resolveCodexCli } from '../core/adapters/codexCli.js';
+import { DRAFT_SYSTEM, buildDraftPrompt, parseDraft, credentialProblem } from '../core/toolDraft.js';
+import { schemaProblems } from '../core/tools/schema.js';
+import { checkTarget } from '../core/tools/net.js';
+import { getProvider } from '../core/tools/providers.js';
 import { APP_NAME, LOG_TAG, LEGACY_APP_DIRS } from '../core/brand.js';
 import { migrateUserDataDir } from '../core/migrate.js';
 
@@ -60,33 +70,12 @@ function dataDir(name) {
   return dir;
 }
 
-// Copy a bundled asset directory out of the (read-only) app bundle into the
-// writable data root. Flat directories only — deliberately shallow so it works
-// over the asar fs shim.
-//
-// Copying is per FILE, not per directory: a file is written only when it is
-// missing at the destination. That gives both halves of what we want — the
-// user's edits to a seeded flow are never clobbered by an update, and a NEW
-// default flow added in a later release still lands on existing installs
-// instead of being locked out by a one-shot first-run copy. A seed the user
-// deleted does come back, which matches how ensureDefaultPipeline() has always
-// behaved.
-function seedFromBundle(name) {
-  const dest = dataDir(name);
-  if (dataRoot === projectRoot) return dest; // dev: the bundle IS the data dir
-  const src = path.join(projectRoot, name);
-  try {
-    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      const to = path.join(dest, entry.name);
-      if (fs.existsSync(to)) continue;
-      fs.writeFileSync(to, fs.readFileSync(path.join(src, entry.name)));
-    }
-  } catch (err) {
-    console.warn(`${LOG_TAG} could not seed ${name} from the app bundle:`, err.message);
-  }
-  return dest;
-}
+// There used to be a seedFromBundle() here that copied flows/ out of the
+// read-only app bundle into the writable data root on first launch. PIVOT-PLAN
+// §5.1 removed the thing it existed for: nothing is installed on first launch
+// any more. The bundled pipelines live in presets/ and are read in place
+// (core/presets.js) — installing one is a deliberate click, which is exactly
+// the property a first-run copy could never have.
 
 // One instance per runs/ directory, claimed before anything reads or writes it.
 // runs/ is a shared mutable store and liveness is tracked in process memory
@@ -110,23 +99,16 @@ const baseConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'config.jso
 // Flows and Node Library templates stay global for v1 (D22 T2) — reusable
 // expertise shared across every project tab. Runs are per-project; their
 // stores live in the project registry below.
-const flows = new FlowStore(seedFromBundle('flows'));
-const nodeLibrary = new NodeStore(dataDir('nodes')); // seeds itself from code on first launch
-flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable workflow
-flows.ensureSeedPipelines();   // the tiered Low/Medium/High/Ultra pipelines (MODES-COMPARE T7)
-// The tool library is files too (TOOLS-PLAN §4.1): tools/<id>.json seeds from
-// the built-in modules, and the runtime registry is loaded FROM the files — so
-// what a run can call is what the library says, not what happens to be
-// imported. App-level like nodes/: capability is portable, expertise (skills,
-// D15) is not.
-const toolLibrary = new ToolStore(dataDir('tools'));
-const toolLoad = loadLibrary(toolLibrary.listFull());
-// Template grants are filtered against the real library, here as well as in
-// the renderer: normalizeTemplate() drops unknown tool ids, and without this
-// it would drop every tool the built-ins don't happen to include.
-setKnownTools(toolLoad.loaded);
-for (const { id, reason } of toolLoad.skipped) console.warn(`${LOG_TAG} tool "${id}" not loaded: ${reason}`);
-for (const { file, error } of toolLibrary.problems) console.warn(`${LOG_TAG} tools/${file}: ${error}`);
+// No longer seeded from the bundle: the flow store ships empty too (§5.1), and
+// the packaged app carries presets/ instead of a flows/ directory to copy in.
+const flows = new FlowStore(dataDir('flows'));
+// PIVOT-PLAN §5.1 / decision 4: NOTHING is installed here any more. The library
+// and the flow store both ship empty; the ten templates and five pipelines are
+// PRESETS (presets/, core/presets.js), offered inside *Create node* and *Create
+// flow*. The NodeStore still writes its KERNEL — the two or three system nodes
+// the builder runs on — which is the floor beneath "no default nodes"
+// (decision 3), hidden from every list the user sees.
+const nodeLibrary = new NodeStore(dataDir('nodes'));
 
 // --- Settings & secrets ---
 // settings.json lives in userData (never the repo). Shape (PROVIDERS-PLAN §1):
@@ -150,6 +132,30 @@ function persistSettings() {
 
 let settings = loadSettings();
 persistSettings(); // seal the migration (legacy openrouterApiKey is gone after this)
+
+// The tool library is files too (TOOLS-PLAN §4.1): tools/<id>.json seeds from
+// the built-in modules, and the runtime registry is loaded FROM the files — so
+// what a run can call is what the library says, not what happens to be
+// imported. App-level like nodes/: capability is portable, expertise (skills,
+// D15) is not. Loaded after settings, because a tool whose configuration is
+// missing must be DISABLED WITH A REASON rather than failing mid-run.
+const toolLibrary = new ToolStore(dataDir('tools'));
+
+function loadToolLibrary() {
+  const defs = toolLibrary.listFull().map(t =>
+    t.id === 'web_search' && t.enabled && !settings.search?.apiKey
+      ? { ...t, enabled: false, disabledReason: 'no web-search provider key is configured in Settings' }
+      : t);
+  const load = loadLibrary(defs, toolLibrary.listSets());
+  // Template grants are filtered against the real library, here as well as in
+  // the renderer: normalizeTemplate() drops unknown tool ids, and without this
+  // it would drop every tool the built-ins don't happen to include.
+  setKnownTools(load.loaded);
+  for (const { id, reason } of load.skipped) console.warn(`${LOG_TAG} tool "${id}" not loaded: ${reason}`);
+  for (const { file, error } of toolLibrary.problems) console.warn(`${LOG_TAG} tools/${file}: ${error}`);
+  return load;
+}
+loadToolLibrary();
 
 // A provider counts as connected when settings holds a key for it — or, for
 // anthropic/openai, when the shell environment provides one (the adapters
@@ -260,12 +266,37 @@ function rebuildRuntimeConfig() {
   runtimeConfig.kimiKeyKind = settings.providers?.kimi?.keyKind ?? 'platform';
   // Per-model tool support for task workers resolved at execution time.
   runtimeConfig.modelCapabilities = settings.modelCapabilities ?? {};
+  // The mock provider's authoring state (G8/§6): resolveCallTarget stamps it
+  // onto mock call targets, and core/adapters/mock.js branches on its mode.
+  runtimeConfig.mock = settings.mock ?? null;
+  // Web-search provider for the web_search tool (TOOLS-PLAN §14.3). The key
+  // lives in settings and reaches the tool through ctx at call time — never
+  // through a tool definition, and never into the model's context (§10.3).
+  runtimeConfig.search = settings.search?.apiKey
+    ? { provider: settings.search.provider ?? 'brave', apiKey: settings.search.apiKey }
+    : null;
   // Category → worker mapping for advanced planning flows (FLOW_NODES.md)
   runtimeConfig.categoryWorkers = baseConfig.categoryWorkers ?? {};
   // Default tool-call approval mode for runs started without an explicit one.
   // 'ask' is the shipped default: an agent with a shell should not run
   // unattended because nobody got round to choosing.
   runtimeConfig.approvalMode = normalizeApprovalMode(settings.approvalMode ?? 'ask');
+  // PIVOT-PLAN §4.4: the price table the call ledger costs against. Built from
+  // the MERGED catalog, so live OpenRouter pricing is used where the bundled
+  // file is stale and aggregator-only routes are priceable at all. A model
+  // missing from here yields `estimated: true`, never a fabricated zero.
+  runtimeConfig.modelPrices = Object.fromEntries(
+    publicCatalog().filter(m => m.price).map(m => [m.id, m.price])
+  );
+  // §4.3: wire capture. 'bounded' is the shipped default — redacted, capped at
+  // 256 KB per body. 'full' is opt-in because whole bodies are megabytes and
+  // runs accumulate forever; 'off' for anyone who'd rather not have prompts on
+  // disk at all.
+  runtimeConfig.wireCapture = ['off', 'bounded', 'full'].includes(settings.wireCapture)
+    ? settings.wireCapture : 'bounded';
+  // §5.2: the per-attempt timeout that finally fires the AbortSignal threaded
+  // everywhere by RUN-CONTROL. 0 disables it.
+  runtimeConfig.timeoutMs = Number.isFinite(settings.timeoutMs) ? settings.timeoutMs : 600_000;
   // What 'smart' mode screens with. The runner gets a resolver, never a key —
   // same contract as resolveModelSource above.
   runtimeConfig.safety = {
@@ -282,6 +313,56 @@ function effectiveSafetyModel() {
   return pickSafetyModel(settings.safetyModel ?? 'auto', hasKey);
 }
 rebuildRuntimeConfig();
+
+// --- Catalog state (SETTINGS-MODELS-PLAN §2/§3) -------------------------------
+
+// Every model id this install knows about: the bundled catalog plus the cached
+// OpenRouter fetch. The NEW diff runs over both, so a provider shipping a
+// model legitimately surfaces as NEW on the next read.
+function knownCatalogIds() {
+  const ids = MODEL_CATALOG.map(m => m.id);
+  for (const m of settings.modelCatalogCache?.openrouter?.models ?? []) ids.push(m.id);
+  return ids;
+}
+
+// Stamp newly discovered ids into the seen-ledger (main-side only, §3). Runs
+// on settings:get and on catalog fetch; persists only when something changed.
+function refreshSeenModels() {
+  const r = stampSeenModels(knownCatalogIds(), settings.seenModels, settings.acknowledgedModels);
+  if (r.changed) {
+    settings.seenModels = r.seenModels;
+    settings.acknowledgedModels = r.acknowledgedModels;
+    persistSettings();
+  }
+}
+
+// The merged catalog the renderer sees (§3): bundled records with live
+// OpenRouter price/context folded in where the ids map (bundled wins
+// name/tier/training, live wins price/contextLength), then the
+// aggregator-only routes appended with an honest 'unknown' training policy.
+function publicCatalog() {
+  const cached = settings.modelCatalogCache?.openrouter?.models ?? [];
+  const liveByBundled = {};
+  for (const m of cached) {
+    const b = bundledIdForOpenRouterId(m.id);
+    if (b && !liveByBundled[b]) liveByBundled[b] = m;
+  }
+  const bundled = MODEL_CATALOG.filter(m => !m.aliasOf).map(rec => {
+    const live = liveByBundled[rec.id];
+    return mergeModelRecords(rec,
+      live ? { price: live.price ?? null, contextLength: live.contextLength ?? null, releasedAt: live.releasedAt ?? null } : null);
+  });
+  const extras = cached.filter(m => !bundledIdForOpenRouterId(m.id)).map(m => ({
+    id: m.id, name: m.name, providers: ['openrouter'],
+    family: String(m.id).split('/')[0], tier: null,
+    releasedAt: m.releasedAt ?? null, contextLength: m.contextLength ?? null, maxOutput: null,
+    price: m.price ?? null,
+    caps: { tools: Boolean(m.supportsTools) },
+    training: { policy: 'unknown', scope: 'aggregator', note: '', source: null },
+    deprecated: false, aliasOf: null
+  }));
+  return [...bundled, ...extras];
+}
 
 // What the renderer is allowed to see: per-provider hasKey flags (never the
 // keys), the priority order, the active-model registry, worker assignments,
@@ -338,9 +419,27 @@ function publicSettings() {
     resolvedSafetyModel: effectiveSafetyModel(),
     // P3: the comparison judge's pinned model ('' = the default worker).
     judgeModel: settings.judgeModel ?? '',
+    // Web search (TOOLS-PLAN §14.3): whether the web_search tool is configured,
+    // never the key itself. Absent a key the tool is disabled with that reason
+    // showing in the library rather than failing in the middle of a run.
+    search: { provider: settings.search?.provider ?? 'brave', hasKey: Boolean(settings.search?.apiKey) },
     safetyCandidates: SAFETY_MODEL_CANDIDATES.map(c => ({
       ...c, connected: [c.provider, ...(c.altProviders ?? [])].some(hasKey)
-    }))
+    })),
+    // SETTINGS-MODELS-PLAN §3: the merged catalog and the user's overlay state
+    // over it. newModelIds is computed main-side; the renderer never diffs.
+    catalog: publicCatalog(),
+    favouriteModels: settings.favouriteModels ?? [],
+    newModelIds: computeNewModelIds(knownCatalogIds(), settings.seenModels, settings.acknowledgedModels),
+    modelGrouping: settings.modelGrouping ?? 'provider',
+    showAllModels: settings.showAllModels === true,
+    mock: settings.mock ?? {
+      enabled: false, mode: 'roles', customResponse: '', perRole: {},
+      latencyMs: 700, streaming: true, failureRate: 0
+    },
+    // PIVOT-PLAN §4.3 / §5.2: the call ledger's two knobs.
+    wireCapture: ['off', 'bounded', 'full'].includes(settings.wireCapture) ? settings.wireCapture : 'bounded',
+    timeoutMs: Number.isFinite(settings.timeoutMs) ? settings.timeoutMs : 600_000
   };
 }
 
@@ -715,7 +814,80 @@ ipcMain.handle('run:snapshot', (_e, projectId, runId) => {
   return { ...snapshot, rev };
 });
 ipcMain.handle('run:openFolder', (_e, projectId, runId) => shell.openPath(proj(projectId).store.runDir(runId)));
+// Open one file inside a run — today the tool-result artifacts the inspector
+// links (TOOLS-PLAN §13). The path comes from the renderer, so it is resolved
+// against the run directory and rejected if it escapes: a relative path from
+// a record is data, and data does not get to name a file outside the run.
+ipcMain.handle('run:openArtifact', (_e, projectId, runId, relPath) => {
+  const dir = path.resolve(proj(projectId).store.runDir(runId));
+  const target = path.resolve(dir, String(relPath ?? ''));
+  if (target !== dir && !target.startsWith(dir + path.sep)) throw new Error('Path escapes the run directory');
+  if (!fs.existsSync(target)) throw new Error('No such file in this run');
+  return shell.openPath(target);
+});
 ipcMain.handle('run:log', (_e, projectId, runId) => proj(projectId).store.readLog(runId));
+
+// --- The call ledger (PIVOT-PLAN §6.1) ---------------------------------------
+// The per-attempt list for a node, and the wire record for one call. The
+// snapshot already carries the FOLDED metrics; these two are what the Calls tab
+// and the wire viewer open on demand, because whole request bodies have no
+// business riding on every live push.
+ipcMain.handle('run:calls', (_e, projectId, runId, nodeId = null, taskId = null) => {
+  const calls = proj(projectId).store.readCalls(runId);
+  return (nodeId || taskId) ? callsForNode(calls, nodeId, taskId) : calls.map(({ rawUsage, ...c }) => c);
+});
+// Returns the record plus both wire bodies as TEXT — already redacted and
+// bounded when they were written, so there is nothing left to sanitise here.
+ipcMain.handle('run:callWire', (_e, projectId, runId, seq) => {
+  const store = proj(projectId).store;
+  const n = Number(seq);
+  const record = store.readCalls(runId).find(c => c.seq === n) ?? null;
+  if (!record) return { ok: false, error: 'No such call in this run.' };
+  return {
+    ok: true,
+    record,
+    request: store.readCallWire(runId, n, 'request'),
+    response: store.readCallWire(runId, n, 'response')
+  };
+});
+
+// --- The Investigator page (PIVOT-PLAN §6.2) ---------------------------------
+// One handler, because the three views are three folds of the same rows and
+// splitting them would mean scanning the index three times for one screen.
+// The index is rebuilt here whenever it is stale — silently, per §4.5 — so
+// deleting runs/_index/ is always safe and never something the user has to
+// know about.
+ipcMain.handle('metrics:query', (_e, projectId, filters = {}) => {
+  const store = proj(projectId).store;
+  ensureIndex(store);
+  const all = readIndex(store);
+  const rows = filterRows(all, filters);
+  return {
+    ok: true,
+    index: readIndexMeta(store),
+    // The unfiltered totals, so the page can say "showing 240 of 1,904 calls"
+    // rather than implying the filtered view is everything there is.
+    total: all.length,
+    overview: overview(rows),
+    leaderboard: rank(rows, { by: filters.by ?? 'model' }),
+    spend: series(rows, { bucket: filters.bucket ?? 'day' }),
+    latency: histogram(rows.filter(r => r.ok).map(r => r.durationMs)),
+    throughput: histogram(rows.filter(r => r.ok).map(r => r.tps)),
+    facets: {
+      model: facets(all, 'model'),
+      provider: facets(all, 'provider'),
+      role: facets(all, 'role'),
+      flowId: facets(all, 'flowId')
+    }
+  };
+});
+// Verification item 7 made reachable from the UI: delete the index, prove every
+// number comes back the same.
+ipcMain.handle('metrics:rebuild', (_e, projectId) => {
+  const store = proj(projectId).store;
+  clearIndex(store);
+  return { ok: true, index: rebuildIndex(store) };
+});
 
 // --- Workspace binding (target project folder for a run) ---
 ipcMain.handle('workspace:pick', async () => {
@@ -781,17 +953,6 @@ ipcMain.handle('project:adopt', (_e, projectId, folder) => {
 });
 // Reveal a tab's project directory in the OS file manager (folder tabs open the
 // bound workspace; appdata tabs open their app-managed dir). The path comes from
-// Open one file inside a run — today the tool-result artifacts the inspector
-// links (TOOLS-PLAN §13). The path comes from the renderer, so it is resolved
-// against the run directory and rejected if it escapes: a relative path from
-// a record is data, and data does not get to name a file outside the run.
-ipcMain.handle('run:openArtifact', (_e, projectId, runId, relPath) => {
-  const dir = path.resolve(proj(projectId).store.runDir(runId));
-  const target = path.resolve(dir, String(relPath ?? ''));
-  if (target !== dir && !target.startsWith(dir + path.sep)) throw new Error('Path escapes the run directory');
-  if (!fs.existsSync(target)) throw new Error('No such file in this run');
-  return shell.openPath(target);
-});
 // the registry entry, never from the renderer.
 ipcMain.handle('project:reveal', (_e, projectId) => {
   const e = registry.get(projectId);
@@ -946,13 +1107,6 @@ ipcMain.handle('flow:saveFromYaml', (_e, id, yamlText) => {
   const parsed = parseFlow(yamlText); // validates + produces canonical model (no pos)
   // Preserve any existing layout positions for nodes that survive the edit.
   let layout = {};
-// --- Tool Library (tools/<id>.json) ---
-// Read-only over IPC in P1: the renderer uses it to validate grants against
-// what actually exists instead of a hardcoded array. Authoring arrives with
-// the Tools page (TOOLS-PLAN P8).
-ipcMain.handle('tool:list', () => toolLibrary.list());
-ipcMain.handle('tool:folder', () => ({ dir: toolLibrary.rootDir, packaged: app.isPackaged }));
-
   try {
     layout = JSON.parse(fs.readFileSync(flows.layoutPath(id), 'utf8')) || {};
   } catch {}
@@ -979,7 +1133,161 @@ ipcMain.handle('node:save', (_e, tpl) => nodeLibrary.save(tpl));
 ipcMain.handle('node:new', () => nodeLibrary.create());
 ipcMain.handle('node:delete', (_e, id) => nodeLibrary.remove(id));
 
-ipcMain.handle('settings:get', () => publicSettings());
+// --- Presets (PIVOT-PLAN §5.1, decision 4) -----------------------------------
+// The second of the three doors out of an empty library: Blank · Start from a
+// preset · Describe it. `installed` marks presets already in the library, so
+// the gallery can say "you have this" instead of failing on the click.
+ipcMain.handle('preset:list', () => {
+  const have = new Set(nodeLibrary.listFull().map(t => t.id));
+  const haveFlows = new Set(flows.list().map(f => f.id));
+  return {
+    nodes: listNodePresets().map(p => ({
+      id: p.presetId, name: p.name, description: p.description, icon: p.icon,
+      category: p.category, baseType: p.baseType, role: p.role,
+      installed: have.has(p.presetId)
+    })),
+    flows: listFlowPresets().map(p => ({
+      id: p.presetId, name: p.name, description: p.description,
+      nodeCount: p.nodeCount, needs: p.needs,
+      // Which templates this preset would ALSO install. The dialog says so
+      // before the click: a flow quietly adding three templates to your library
+      // is exactly the behaviour the empty library exists to end.
+      willInstall: p.needs.filter(n => !have.has(n)),
+      installed: haveFlows.has(p.presetId)
+    }))
+  };
+});
+ipcMain.handle('preset:installNode', (_e, presetId, asId = null) => {
+  try { return { ok: true, template: installNodePreset(nodeLibrary, presetId, { asId }) }; }
+  catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
+});
+ipcMain.handle('preset:installFlow', (_e, presetId, asId = null) => {
+  try { return { ok: true, ...installFlowPreset(flows, nodeLibrary, presetId, { asId }) }; }
+  catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
+});
+
+// --- Tool Library (tools/<id>.json) ---
+// Read for the grant pickers, write for the Tools page. `tool:board` is the
+// one call the page opens with: tools, categories and the read problems in a
+// single round trip, so the board paints once instead of three times.
+ipcMain.handle('tool:list', () => toolLibrary.list());
+ipcMain.handle('tool:folder', () => ({ dir: toolLibrary.rootDir, packaged: app.isPackaged }));
+ipcMain.handle('tool:board', () => {
+  const tools = toolLibrary.list();
+  const categories = toolLibrary.listCategories();
+  return { tools, categories, problems: toolLibrary.problems };
+});
+// Every write reloads the runtime registry. Without this a tool authored on
+// the Tools page would exist as a file but not be callable until the next
+// launch — the library and what a run can actually reach would disagree, which
+// is the exact confusion "a tool is a file" exists to remove.
+const savedTool = value => { loadToolLibrary(); return value; };
+ipcMain.handle('tool:save', (_e, def) => savedTool(toolLibrary.save(def)));
+ipcMain.handle('tool:delete', (_e, id) => savedTool(toolLibrary.remove(id)));
+ipcMain.handle('tool:setEnabled', (_e, id, enabled) => savedTool(toolLibrary.setEnabled(id, enabled)));
+// Drag-to-recategorize. One field, so a stale card in the renderer can't
+// round-trip a whole definition over the top of the file that owns it.
+ipcMain.handle('tool:setCategory', (_e, id, categoryId) => toolLibrary.setCategory(id, categoryId));
+ipcMain.handle('tool:saveCategory', (_e, def) => toolLibrary.saveCategory(def));
+ipcMain.handle('tool:deleteCategory', (_e, id) => toolLibrary.removeCategory(id));
+ipcMain.handle('tool:reorderCategories', (_e, ids) => toolLibrary.reorderCategories(ids));
+
+// The wizard's "Run preflight". Deliberately NOT a live request: the `http`
+// provider lands in P5, so a button that claimed to have called the endpoint
+// would be theatre. What it does instead is real and is most of the value —
+// it validates the schema through the same validator the registry uses, and
+// runs the URL through the §10.2 network policy (checkTarget), which is the
+// check that actually refuses a tool at run time. A tool that passes preflight
+// is a tool that will load; whether the endpoint answers is P5's question.
+ipcMain.handle('tool:preflight', async (_e, def = {}) => {
+  const checks = [];
+  const problems = schemaProblems(def.parameters);
+  checks.push(problems.length
+    ? { ok: false, label: 'parameters', detail: problems.join('; ') }
+    : { ok: true, label: 'parameters', detail: `${Object.keys(def.parameters?.properties ?? {}).length} validated` });
+
+  const url = def?.http?.url ?? null;
+  if (url) {
+    // Strip the templating before the policy sees it: {{city}} and
+    // ${secrets.KEY} are not part of the host, and leaving them in would make
+    // every templated URL fail to parse rather than fail honestly.
+    const probe = String(url).replace(/\$\{secrets\.[A-Za-z0-9_]+\}/g, 'x').replace(/\{\{[^}]*\}\}/g, 'x');
+    try {
+      const verdict = await checkTarget(probe, { allowPrivate: def.http?.allowPrivate === true, allowedHosts: def.http?.allowedHosts ?? null });
+      checks.push(verdict.ok
+        ? { ok: true, label: 'network policy', detail: `${verdict.hostname} → ${verdict.address}` }
+        : { ok: false, label: 'network policy', detail: verdict.reason });
+    } catch (err) {
+      checks.push({ ok: false, label: 'network policy', detail: String(err?.message ?? err) });
+    }
+  }
+
+  const bad = credentialProblem(def);
+  checks.push(bad
+    ? { ok: false, label: 'secrets', detail: bad }
+    : { ok: true, label: 'secrets', detail: 'no literal credentials in the definition' });
+
+  if (def.provider && def.provider !== 'builtin') {
+    const provider = getProvider(def.provider);
+    let detail = `provider "${def.provider}" is unknown`;
+    let ok = false;
+    if (provider) {
+      try { provider.load(def); ok = true; detail = `${def.provider} provider ready`; }
+      catch (err) { detail = String(err?.message ?? err); }
+    }
+    // A provider that has not shipped is a WARNING, not a failure: the
+    // definition is still correct and still worth saving.
+    checks.push({ ok, warn: !ok, label: 'provider', detail });
+  }
+
+  return { ok: checks.every(c => c.ok || c.warn), checks };
+});
+
+// The Tool copilot: one direct model call, outside any run — the same shape as
+// the comparison judge and the Settings provider test. core/toolDraft.js owns
+// the contract and the parse; this owns only the round trip. It returns a
+// DRAFT, never a file: saving is `tool:save`, which the user triggers.
+ipcMain.handle('tool:draft', async (_e, { brief, modelId, attachment, history } = {}) => {
+  try {
+    const target = resolveModelSource(modelId || (settings.activeModels ?? [])[0]?.id || 'mock-large');
+    const prompt = buildDraftPrompt({
+      brief,
+      attachment,
+      history: Array.isArray(history) ? history : [],
+      categories: toolLibrary.listCategories(),
+      existingIds: toolLibrary.listFull().map(t => t.id)
+    });
+    const res = await callModel({
+      ...target,
+      system: DRAFT_SYSTEM,
+      prompt,
+      maxTokens: 3000
+    });
+    const text = typeof res === 'string' ? res : (res?.text ?? res?.content ?? '');
+    return { ok: true, model: target.model, ...parseDraft(text) };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err).slice(0, 400) };
+  }
+});
+
+ipcMain.handle('settings:get', () => {
+  refreshSeenModels();
+  return publicSettings();
+});
+
+// G4: the NEW badge clears when the user expands the group containing it —
+// an explicit acknowledgement, persisted so it survives restarts. The badge
+// would expire on its own 21-day clock regardless (computeNewModelIds).
+ipcMain.handle('settings:markSeen', (_e, ids) => {
+  const list = (Array.isArray(ids) ? ids : []).filter(id => typeof id === 'string' && id.trim());
+  if (list.length) {
+    const ack = new Set(settings.acknowledgedModels ?? []);
+    for (const id of list) ack.add(id.trim());
+    settings.acknowledgedModels = [...ack];
+    persistSettings();
+  }
+  return publicSettings();
+});
 
 ipcMain.handle('settings:set', (_e, patch = {}) => {
   // Provider keys are one-way, like the legacy OpenRouter key: only overwrite
@@ -991,6 +1299,23 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
       if (KEYED_PROVIDERS.includes(p) && typeof key === 'string' && key.trim()) {
         settings.providers[p] = { ...(settings.providers[p] ?? {}), apiKey: key.trim() };
       }
+    }
+  }
+  // Web-search provider for the web_search tool (TOOLS-PLAN §14.3). One-way
+  // like a provider key: a non-empty string sets it, the literal null clears
+  // it, and anything else leaves it alone — so saving other settings can never
+  // wipe the key. The key itself is never returned to the renderer.
+  if (patch.search && typeof patch.search === 'object') {
+    const key = patch.search.apiKey;
+    if (key === null) delete settings.search;
+    else if (typeof key === 'string' && key.trim()) {
+      settings.search = {
+        provider: typeof patch.search.provider === 'string' && patch.search.provider.trim()
+          ? patch.search.provider.trim() : (settings.search?.provider ?? 'brave'),
+        apiKey: key.trim()
+      };
+    } else if (typeof patch.search.provider === 'string' && settings.search) {
+      settings.search = { ...settings.search, provider: patch.search.provider.trim() };
     }
   }
   // Subscription opt-ins (SUBSCRIPTION-AUTH-GUIDE): per provider —
@@ -1058,8 +1383,61 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
     const v = patch.judgeModel.trim();
     if (v) settings.judgeModel = v; else delete settings.judgeModel;
   }
+  // Catalog overlay state (SETTINGS-MODELS-PLAN §3): favourites are an ordered
+  // deduped id list; grouping/show-all are plain validated scalars; mock is a
+  // partial merge over the §3 defaults, same field rules as migrateSettings.
+  if (Array.isArray(patch.favouriteModels)) {
+    settings.favouriteModels = [...new Set(patch.favouriteModels
+      .filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))];
+  }
+  if (['provider', 'tier', 'cost'].includes(patch.modelGrouping)) {
+    settings.modelGrouping = patch.modelGrouping;
+  }
+  if (typeof patch.showAllModels === 'boolean') {
+    settings.showAllModels = patch.showAllModels;
+  }
+  // PIVOT-PLAN §4.3 / §5.2 — the two knobs the call ledger exposes.
+  //
+  // Wire capture is the one setting in the app with a real data-loss dimension:
+  // 'full' keeps whole request bodies, which means source code and anything
+  // pasted into a prompt, uncapped, on disk, forever. It is opt-in for that
+  // reason and 'bounded' ships as the default.
+  if (['off', 'bounded', 'full'].includes(patch.wireCapture)) {
+    settings.wireCapture = patch.wireCapture;
+  }
+  // 0 disables the per-attempt timeout, which is the pre-pivot behaviour and
+  // stays reachable on purpose for slow local models.
+  if (Number.isFinite(patch.timeoutMs) && patch.timeoutMs >= 0) {
+    settings.timeoutMs = Math.min(Math.trunc(patch.timeoutMs), 3_600_000);
+  }
+  if (patch.mock && typeof patch.mock === 'object') {
+    const inc = patch.mock;
+    const next = {
+      enabled: false, mode: 'roles', customResponse: '', perRole: {},
+      latencyMs: 700, streaming: true, failureRate: 0,
+      ...(settings.mock ?? {})
+    };
+    if (typeof inc.enabled === 'boolean') next.enabled = inc.enabled;
+    if (['roles', 'custom', 'echo', 'error'].includes(inc.mode)) next.mode = inc.mode;
+    if (typeof inc.customResponse === 'string') next.customResponse = inc.customResponse;
+    if (inc.perRole && typeof inc.perRole === 'object') {
+      const perRole = {};
+      for (const [role, text] of Object.entries(inc.perRole)) {
+        if (typeof role === 'string' && role.trim() && typeof text === 'string') perRole[role] = text;
+      }
+      next.perRole = perRole;
+    }
+    if (Number.isFinite(inc.latencyMs) && inc.latencyMs >= 0) next.latencyMs = Math.min(inc.latencyMs, 60_000);
+    if (typeof inc.streaming === 'boolean') next.streaming = inc.streaming;
+    if (Number.isFinite(inc.failureRate)) next.failureRate = Math.min(Math.max(inc.failureRate, 0), 1);
+    settings.mock = next;
+  }
   persistSettings();
   rebuildRuntimeConfig();
+  // A tool can be disabled for want of configuration (web_search without a
+  // search key), so the library is re-read when settings change: adding the
+  // key must not require a restart to make the tool appear.
+  loadToolLibrary();
   return publicSettings();
 });
 
@@ -1081,18 +1459,38 @@ ipcMain.handle('models:list', async (_e, provider = 'openrouter') => {
     throw new Error(`OpenRouter models ${res.status}: ${body.slice(0, 300)}`);
   }
   const data = await res.json();
-  const models = (data.data ?? []).map(m => ({
-    id: m.id,
-    name: m.name ?? m.id,
-    contextLength: m.context_length ?? null,
-    supportsTools: (m.supported_parameters || []).includes('tools')
-  }));
+  const models = (data.data ?? []).map(m => {
+    // OpenRouter reports USD PER TOKEN in `pricing`; the catalog's unit is USD
+    // per 1M tokens (SETTINGS-MODELS-PLAN §2). `created` (unix seconds) is the
+    // release signal that feeds releasedAt and, downstream, the NEW diff.
+    const price = m.pricing ? {
+      input: m.pricing.prompt != null ? Number(m.pricing.prompt) * 1e6 : null,
+      output: m.pricing.completion != null ? Number(m.pricing.completion) * 1e6 : null
+    } : null;
+    return {
+      id: m.id,
+      name: m.name ?? m.id,
+      contextLength: m.context_length ?? null,
+      supportsTools: (m.supported_parameters || []).includes('tools'),
+      price,
+      releasedAt: m.created ? new Date(m.created * 1000).toISOString().slice(0, 10) : null
+    };
+  });
   // Remember which models can call tools natively so the agent loop can pick
   // the native path per worker (survives restarts via settings.json).
   settings.modelCapabilities = Object.fromEntries(
     models.filter(m => m.supportsTools).map(m => [m.id, true])
   );
+  // Cache the merged catalog so the cost bars and the NEW-model diff survive a
+  // restart without a key round-trip (SETTINGS-MODELS-PLAN §2).
+  settings.modelCatalogCache = {
+    ...(settings.modelCatalogCache ?? {}),
+    openrouter: { fetchedAt: new Date().toISOString(), models }
+  };
   persistSettings();
+  // A provider shipping a model is exactly the case G4 is about: stamp the
+  // freshly fetched ids so the next settings read badges them (§3).
+  refreshSeenModels();
   rebuildRuntimeConfig();
   return models;
 });

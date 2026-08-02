@@ -1,0 +1,16 @@
+{
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false,
+  "id": "general-analysis",
+  "name": "General analysis",
+  "category": null,
+  "icon": "◉",
+  "baseType": "aiStep",
+  "role": "analyze",
+  "effort": "medium",
+  "description": "General text analysis: summary, structure, claims and evidence, gaps, risks, recommendations. Effort level picks the depth."
+}

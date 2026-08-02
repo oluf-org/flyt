@@ -4,6 +4,12 @@ runs/
 .env
 settings.json
 flows/
+# The user's node library (PIVOT-PLAN §5.1 / D35): it ships EMPTY, so a tracked
+# copy would hand a fresh clone a library nobody chose. The shipped templates
+# live in presets/nodes/ and are copied in only when the user clicks Add.
+# nodes/_system/ is the app-owned kernel, rewritten from core/kernel.js on every
+# launch — generated, never authored.
+/nodes/
 .flyt/
 # Pre-D29 name; kept so a stale directory in an old checkout stays ignored.
 .llmflow/

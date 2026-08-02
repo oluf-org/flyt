@@ -10,14 +10,14 @@ import { FlowRunner, resolveWorker, topoSort } from '../core/flowRunner.js';
 import { NodeStore } from '../core/nodestore.js';
 import { lintFlow } from '../core/flowlang/lint.js';
 import {
-  SEED_NODE_TEMPLATES, resolveInstance, ensureStructuralNodes, migrateLegacyTemplates,
+  PRESET_NODE_TEMPLATES, resolveInstance, ensureStructuralNodes, migrateLegacyTemplates,
   FEEDBACK_HANDLE
 } from '../src/flowTypes.js';
 import { pickDefaultWorker, taskKindOf, PROVIDER_MODEL_PRIORITY, PROVIDER_ORDER, TASK_KINDS } from '../core/modelPriority.js';
 import { makeStore, setScript, roleOf, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'llm-flow-rework-'));
-const seed = id => SEED_NODE_TEMPLATES.find(t => t.id === id);
+const seed = id => PRESET_NODE_TEMPLATES.find(t => t.id === id);
 
 // --- Pinned structural nodes -------------------------------------------------
 
@@ -119,7 +119,7 @@ test('lint: a feedback edge may point backwards; structural endpoints are errors
     { id: 'e2', source: 'w', target: 'r' },
     { id: 'e3', source: 'r', target: 'output' }
   ];
-  const templates = SEED_NODE_TEMPLATES;
+  const templates = PRESET_NODE_TEMPLATES;
   // Backwards feedback edge: no cycle error.
   const ok = lintFlow({ id: 'f', name: 'F', nodes, edges: [...fwd, { id: 'fb', source: 'r', target: 'w', sourceHandle: FEEDBACK_HANDLE }] }, { templates });
   assert.equal(ok.ok, true, JSON.stringify(ok.errors));
@@ -251,18 +251,19 @@ test('effort level changes the default pick', () => {
   assert.equal(at('medium'), 'claude-sonnet-5');
 });
 
-test('resolveWorker: explicit worker > categoryWorkers > priority defaults > executor default', () => {
+test('resolveWorker: explicit worker > priority defaults > executor default', () => {
   const n = data => ({ type: 'aiStep', data });
   // Explicit wins over everything.
   assert.deepEqual(
     resolveWorker(n({ worker: { provider: 'mock', model: 'mock-large' }, category: 'Code general' }),
       testConfig({ providerKeys: { anthropic: 'k' } })),
     { provider: 'mock', model: 'mock-large' });
-  // categoryWorkers beats the priority table.
+  // §5.2: a categoryWorkers entry no longer routes anything — the priority
+  // table answers instead, and the node's own picker is how you change it.
   assert.deepEqual(
-    resolveWorker(n({ category: 'documentation' }),
+    resolveWorker(n({ role: 'execute', category: 'documentation', effort: 'medium' }),
       testConfig({ categoryWorkers: { documentation: { provider: 'openrouter', model: 'cheap/model' } }, providerKeys: { anthropic: 'k' } })),
-    { provider: 'openrouter', model: 'cheap/model' });
+    { provider: 'anthropic', model: 'claude-sonnet-5' });
   // Priority defaults apply when a real provider is connected.
   assert.deepEqual(
     resolveWorker(n({ role: 'execute', category: 'Code general', effort: 'medium' }),
@@ -276,22 +277,26 @@ test('resolveWorker: explicit worker > categoryWorkers > priority defaults > exe
 
 // --- Seed library shape ------------------------------------------------------
 
-test('the seed library is the combined set', () => {
-  const ids = SEED_NODE_TEMPLATES.map(t => t.id).sort();
+test('the preset library is the combined set', () => {
+  const ids = PRESET_NODE_TEMPLATES.map(t => t.id).sort();
   assert.deepEqual(ids, ['combine', 'compare', 'evaluation', 'general-analysis', 'plan-start', 'prompt-refiner', 'split', 'translation', 'work']);
 });
 
-test('NodeStore.migrateSeeds retires the old set and writes the combined one, once', () => {
+// PIVOT-PLAN §5.1 narrowed this: migrateSeeds still RETIRES the pre-rework
+// templates, but it no longer writes the replacements. The library ships empty
+// and stays exactly as large as the user made it — the combined Work node is
+// one click away in *Create node → Start from a preset*.
+test('NodeStore.migrateSeeds retires the old set without installing a new one', () => {
   const dir = tmp();
   // Fake a pre-rework library: one old seed file + one user template.
   fs.writeFileSync(path.join(dir, 'code-general-step.json'), JSON.stringify({ id: 'code-general-step', name: 'Code (general)' }));
   fs.writeFileSync(path.join(dir, 'my-custom.json'), JSON.stringify({ id: 'my-custom', name: 'Mine', baseType: 'aiStep', role: 'custom' }));
   const ns = new NodeStore(dir);
-  assert.equal(ns.get('code-general-step'), null, 'retired seed removed');
-  assert.ok(ns.get('work'), 'combined seed written');
+  assert.equal(ns.get('code-general-step'), null, 'retired template removed');
+  assert.equal(ns.get('work'), null, 'nothing is installed in its place');
   assert.ok(ns.get('my-custom'), 'user template untouched');
-  // Second construction: user deletions are respected (no re-seed).
-  ns.remove('split');
+  // A user deletion is never undone by a later construction.
+  ns.remove('my-custom');
   new NodeStore(dir);
-  assert.equal(ns.get('split'), null);
+  assert.equal(ns.get('my-custom'), null);
 });

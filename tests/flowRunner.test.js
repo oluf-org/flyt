@@ -31,16 +31,19 @@ test('topoSort throws on cycles', () => {
 
 // --- resolveWorker ---
 
-test('resolveWorker: explicit node worker wins over category and default', () => {
-  const config = testConfig({ categoryWorkers: { documentation: { provider: 'cat', model: 'cat-m' } } });
+test('resolveWorker: the node’s own worker wins over every default', () => {
   const n = node('x', 'aiStep', { category: 'documentation', worker: { provider: 'exp', model: 'exp-m' } });
-  assert.deepEqual(resolveWorker(n, config), { provider: 'exp', model: 'exp-m' });
+  assert.deepEqual(resolveWorker(n, testConfig()), { provider: 'exp', model: 'exp-m' });
 });
 
-test('resolveWorker: category worker beats the executor default', () => {
+// PIVOT-PLAN §5.2 / decision 10: the model is a GRAPH decision on every node.
+// The static `config.categoryWorkers` map that used to route by task type is
+// retired — an invisible config-file mapping able to redirect a node's model is
+// exactly the hidden routing the pivot exists to remove.
+test('resolveWorker: a category no longer routes the model', () => {
   const config = testConfig({ categoryWorkers: { documentation: { provider: 'cat', model: 'cat-m' } } });
   assert.deepEqual(resolveWorker(node('x', 'aiStep', { category: 'documentation' }), config),
-    { provider: 'cat', model: 'cat-m' });
+    { provider: 'script', model: 'test-model' }, 'categoryWorkers must no longer be consulted');
 });
 
 test('resolveWorker: falls back to the executor default', () => {
@@ -67,24 +70,15 @@ test('resolveWorker: an unmapped category follows the executor, so a real key re
   }
 });
 
-// The mechanism itself stays (V1 keeps static category routing) — an explicit
-// mapping still wins for anyone who hand-edits config.json.
-test('resolveWorker: an explicitly mapped category still overrides the executor', () => {
-  const config = testConfig({ categoryWorkers: { documentation: { provider: 'x', model: 'cheap' } } });
-  assert.deepEqual(resolveWorker(node('d', 'aiStep', { category: 'documentation' }), config),
-    { provider: 'x', model: 'cheap' });
-  assert.deepEqual(resolveWorker(node('c', 'aiStep', { category: 'Code general' }), config),
-    { provider: 'script', model: 'test-model' });
-});
-
-test('agentTask nodes get their category worker (unified resolution)', async () => {
+test('agentTask nodes take the worker set on the node (unified resolution)', async () => {
   const store = makeStore();
-  const config = testConfig({ categoryWorkers: { 'Test-creation': { provider: 'script', model: 'cat-model' } } });
+  const config = testConfig();
   setScript(() => 'Task complete.');
   const runner = new FlowRunner(store, config);
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
-     node('at', 'agentTask', { title: 'Make tests', goal: 'Write tests.', category: 'Test-creation' }),
+     node('at', 'agentTask', { title: 'Make tests', goal: 'Write tests.', category: 'Test-creation',
+       worker: { provider: 'script', model: 'cat-model' } }),
      node('out', 'output')],
     [edge('in', 'at'), edge('at', 'out')]);
   const runId = runner.start(flow);

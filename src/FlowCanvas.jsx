@@ -17,6 +17,7 @@ import { formatElapsed, isTerminal } from './runProgress.js';
 import { computeDisplacement, rectsOverlap } from './displace.js';
 import MarkdownView from './MarkdownView.jsx';
 import { statusPill } from './Inspector.jsx';
+import { NodeMetricBadge } from './RunMetrics.jsx';
 import FlowEdge from './FlowEdge.jsx';
 import NodeMenu from './NodeMenu.jsx';
 import Tip from './Tip.jsx';
@@ -61,15 +62,56 @@ export function freshNodeId(prefix) {
 export const DND_MIME = `application/x-${APP_SLUG}-node`;
 export const dndOrchestrator = () => ({ kind: 'orchestrator' });
 export const dndTemplate = templateId => ({ kind: 'template', templateId });
+// PIVOT-PLAN §5.1: the ENGINE PRIMITIVES. A raw node of a given type, carrying
+// no template at all — the thing that makes an empty library survivable. You
+// can build a working flow from zero by hand, with no library and no builder,
+// which is verification item 4 and the reason a broken builder is never a
+// broken product.
+export const dndPrimitive = type => ({ kind: 'primitive', type });
 
-// A fresh flow node from a picker spec at a canvas position: either the
-// built-in Orchestrator structural node or a Node Library template instance
-// (overrides start empty — the node inherits the template until edited).
+// Container node types: they hold other nodes inside a box on the canvas and
+// run them in an inline sub-walk. PIVOT-PLAN §5.3's `loop` joins `orchestrator`
+// here rather than getting a renderer of its own — the two differ in WHY the
+// body runs, not in how a box behaves.
+export const isContainer = n => n?.type === 'orchestrator' || n?.type === 'loop';
+
+// What the palette offers when the library is empty (and always, under
+// "Primitives"). These are the engine's own node types, not templates: dropping
+// one gives you a node you then fill in on the inspector.
+export const PRIMITIVES = [
+  { type: 'aiStep', name: 'AI step', description: 'One model call. Give it a prompt and a model; upstream context is assembled for it.' },
+  { type: 'agentTask', name: 'Agent task', description: 'An agent loop with tools — it can read, write and run things until the task is done.' },
+  { type: 'input', name: 'User input', description: 'Where the run request enters the flow. Every flow has one.' },
+  { type: 'output', name: 'Output', description: 'Where the flow\'s answer collects. Every flow has one.' }
+];
+
+// A fresh flow node from a picker spec at a canvas position: an engine
+// primitive, the built-in Orchestrator structural node, or a Node Library
+// template instance (overrides start empty — the node inherits the template
+// until edited).
 function nodeFromSpec(spec, position) {
   if (spec?.kind === 'orchestrator') {
     return {
       id: freshNodeId('orchestrator'), type: 'orchestrator', kind: 'ai',
       position, data: { title: 'Orchestrator' }
+    };
+  }
+  if (spec?.kind === 'primitive' && TYPE_META[spec.type]) {
+    return {
+      id: freshNodeId(spec.type), type: spec.type, kind: TYPE_META[spec.type].kind,
+      position,
+      // A primitive starts unconfigured on purpose: a title you can read on the
+      // canvas, and nothing else claimed on your behalf. The two exceptions are
+      // the control-flow nodes, which start with a BOUND and a DEFAULT ARM —
+      // PIVOT-PLAN §5.3 makes both mandatory at lint, and a node that drops onto
+      // the canvas already failing lint is a worse introduction than one that
+      // starts safe and asks to be edited.
+      data: {
+        title: TYPE_META[spec.type].label,
+        ...(spec.type === 'aiStep' || spec.type === 'agentTask' ? { role: 'custom' } : {}),
+        ...(spec.type === 'loop' ? { maxIterations: 3, box: ORCH_BOX_DEFAULT } : {}),
+        ...(spec.type === 'branch' ? { arms: [] } : {})
+      }
     };
   }
   if (spec?.kind === 'template' && typeof spec.templateId === 'string') {
@@ -180,7 +222,12 @@ function NodeCard({ id, data, vertical, noTarget, noSource }) {
             {data.turn != null && <span className="node-kind kind-turn" title={`Added by follow-up turn ${data.turn}`}>↩{data.turn}</span>}
             {data.activeSince != null && data.status === 'active' && <ElapsedTicker since={data.activeSince} />}
           </div>
-          <div className="node-sub">{data.sub}</div>
+          <div className="node-sub">
+            {data.sub}
+            {/* PIVOT-PLAN §6.1: cost, tokens and throughput accruing on the
+                card. Numbers tick; nothing spins (D9). */}
+            <NodeMetricBadge node={data.metrics} live={data.status === 'active'} />
+          </div>
         </div>
         <StatusGlyph status={data.status} />
         {/* Reader affordance (output-view phase 2): run-canvas cards only —
@@ -387,7 +434,7 @@ function ExpandedNodeCard({ id, data }) {
 // outputText/expanded are only attached to expanded cards, so the 250ms tick
 // re-renders exactly the one streaming reader, not the whole canvas.
 const cardEqual = (prev, next) =>
-  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'emptyHint', 'turn', 'feedbackPoint', 'stack', 'dropTarget', 'childCount', 'activeSince', 'expanded', 'outputText', 'expandable', 'hasOutput']
+  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'emptyHint', 'turn', 'feedbackPoint', 'stack', 'dropTarget', 'childCount', 'activeSince', 'expanded', 'outputText', 'expandable', 'hasOutput', 'metricsKey']
     .every(k => prev.data[k] === next.data[k]);
 
 const StageNode = React.memo(props => props.data.expanded
@@ -548,14 +595,14 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
   // back so they can never cover a free node.
   const buildNodes = useCallback((f, sel, dropTargetId) => {
     const dispById = new Map((resolvedRef.current ?? f).nodes.map(n => [n.id, n]));
-    const orchIds = new Set(f.nodes.filter(n => n.type === 'orchestrator').map(n => n.id));
+    const orchIds = new Set(f.nodes.filter(isContainer).map(n => n.id));
     const childCount = new Map();
     for (const n of f.nodes) {
       if (n.parentId) childCount.set(n.parentId, (childCount.get(n.parentId) ?? 0) + 1);
     }
     return arrangeForCanvas(f.nodes).map(raw => {
       const n = dispById.get(raw.id) ?? raw;
-      const isOrch = raw.type === 'orchestrator';
+      const isOrch = isContainer(raw);
       const kids = childCount.get(raw.id) ?? 0;
       return {
         id: raw.id,
@@ -1667,6 +1714,31 @@ function workerSub(kind, retro) {
 // the full list opens in a modal instead of drawing dozens of cards.
 const MAX_VISIBLE_CHILDREN = 8;
 
+// The metrics slice for one card, plus a scalar identity for the memo compare.
+//
+// The card data object is rebuilt on every snapshot push, so an object compared
+// by reference would re-render every card on every tick. `metricsKey` is the
+// only thing cardEqual looks at: it changes exactly when a displayed number
+// does. A node's calls may be filed under its own id (aiStep) or under the task
+// it spawned (agentTask) — both are checked, and the two are summed for a node
+// that did both.
+function nodeMetricsData(snapshot, nodeId, taskId = null) {
+  const m = snapshot.metrics;
+  if (!m) return {};
+  const own = m.nodes?.[nodeId] ?? null;
+  const task = taskId ? (m.tasks?.[taskId] ?? null) : null;
+  const metrics = own ?? task;
+  if (!metrics) return {};
+  return {
+    metrics,
+    metricsKey: [
+      metrics.calls, metrics.retries,
+      metrics.cost?.total ?? 'x', metrics.cost?.estimated ? 'e' : '',
+      metrics.usage?.totalTokens ?? 0, metrics.throughput?.p50 ?? ''
+    ].join('|')
+  };
+}
+
 function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
   const { flow, meta } = snapshot;
   const statusOf = id => meta.nodeStatus?.[id] ?? 'pending';
@@ -1674,7 +1746,7 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
   // Orchestrators whose swarm is too large to draw: their children are hidden
   // and the box shows a stack + count (modal lists them).
   const collapsed = new Set(flow.nodes
-    .filter(n => n.type === 'orchestrator' && childrenOf(n.id).length > MAX_VISIBLE_CHILDREN)
+    .filter(n => isContainer(n) && childrenOf(n.id).length > MAX_VISIBLE_CHILDREN)
     .map(n => n.id));
   const hidden = new Set(flow.nodes
     .filter(n => n.parentId && collapsed.has(n.parentId))
@@ -1689,13 +1761,15 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
   };
   const nodes = arrangeForCanvas(flow.nodes.filter(n => !hidden.has(n.id))).map(n => ({
     id: n.id,
-    type: n.type === 'orchestrator' ? 'orchestrator' : 'stage',
+    // PIVOT-PLAN §5.3: a loop is a container like an orchestrator — same box
+    // card, same containment rules — so it shares the renderer.
+    type: isContainer(n) ? 'orchestrator' : 'stage',
     position: n.position,
     // Orchestrator children live inside their container's box. arrangeForCanvas
     // guarantees parents precede children (React Flow drops the child
     // otherwise); a child whose box is missing or collapsed degrades to top
     // level instead of vanishing.
-    ...(n.parentId && !hidden.has(n.parentId) && flow.nodes.some(p => p.id === n.parentId && p.type === 'orchestrator')
+    ...(n.parentId && !hidden.has(n.parentId) && flow.nodes.some(p => p.id === n.parentId && isContainer(p))
       ? { parentId: n.parentId, extent: 'parent', draggable: false }
       : {}),
     data: {
@@ -1709,7 +1783,7 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
       ports: nodePorts(n),
       spawns: n.type !== 'orchestrator' && createsNodes(n),
       feedbackPoint: n.type !== 'input' && n.type !== 'output',
-      ...(n.type === 'orchestrator'
+      ...(isContainer(n)
         ? collapsed.has(n.id)
           // Collapsed: a compact box regardless of the swarm's laid-out size.
           ? { empty: false, box: { w: 380, h: 230 }, stack: stackFor(n.id), onOpenStack: () => onOpenStack?.(n.id) }
@@ -1717,7 +1791,9 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
         : {}),
       // Feeds the NodeMenu's Summarize item (D8: offered on any node WITH output).
       hasOutput: Boolean(nodeOutputText(snapshot, n.id)),
-      selected: selectedNode === n.id
+      selected: selectedNode === n.id,
+      // PIVOT-PLAN §6.1: what this node has cost and produced, accruing live.
+      ...nodeMetricsData(snapshot, n.id, n.data?.taskId)
     }
   }));
   const parentOf = new Map(flow.nodes.map(n => [n.id, n.parentId ?? null]));
@@ -1772,7 +1848,8 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
           status,
           ports: [],
           hasOutput: Boolean(snapshot.taskOutputs?.[task.id]),
-          selected: selectedNode === task.id
+          selected: selectedNode === task.id,
+          ...nodeMetricsData(snapshot, task.id, task.id)
         }
       });
       // An untraceable task is still shown, just without a line home.

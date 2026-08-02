@@ -4,6 +4,12 @@
 // state in memory — they read and write these files.
 import fs from 'node:fs';
 import path from 'node:path';
+import { runMetrics, RUN_RECORD_VERSION } from './runMetrics.js';
+
+// Re-exported from its natural home so `import { RUN_RECORD_VERSION } from
+// './state.js'` keeps reading the way it should: the version belongs to the run
+// record, the constant lives next to the code that interprets it.
+export { RUN_RECORD_VERSION, hasMetrics } from './runMetrics.js';
 
 export class RunStore {
   constructor(rootDir) {
@@ -11,11 +17,36 @@ export class RunStore {
     fs.mkdirSync(rootDir, { recursive: true });
   }
 
+  // The last millisecond this store minted an id at. Seeded lazily from disk on
+  // first use so a restart doesn't hand out a stamp it already used.
+  #lastStampMs = null;
+
+  // Creation stamps are strictly increasing, because run *order* is derived
+  // from them: two runs created inside the same millisecond used to produce
+  // equal `createdAt` values, and equal keys left `runSummaries()` sorting on
+  // whatever order readdir happened to return — i.e. on the random id suffix.
+  // "Newest first" was a coin flip for fast-succeeding runs (it flaked
+  // tests/runList.test.js roughly one run in five). Nudging the stamp forward
+  // by a millisecond keeps ids self-describing (`timeFromRunId` still parses
+  // them, still accurate to the millisecond) and makes ordering total.
+  #nextStampMs() {
+    if (this.#lastStampMs === null) {
+      // Newest id on disk: listRuns() is sorted ascending and ids are stamped,
+      // so the last entry carries the highest stamp this store has issued.
+      const ids = this.listRuns();
+      const newest = ids.length ? timeFromRunId(ids[ids.length - 1]) : null;
+      this.#lastStampMs = newest ? Date.parse(newest) : 0;
+    }
+    const ms = Math.max(Date.now(), this.#lastStampMs + 1);
+    this.#lastStampMs = ms;
+    return ms;
+  }
+
   createRun(prompt) {
     // One clock read for both: the id IS the creation instant (timeFromRunId
     // recovers it for runs whose meta predates createdAt), so a second read
     // would have them disagree by a millisecond for no reason.
-    const now = new Date();
+    const now = new Date(this.#nextStampMs());
     const runId = now.toISOString().replace(/[:.]/g, '-') + '-' +
       Math.random().toString(36).slice(2, 6);
     const dir = this.runDir(runId);
@@ -24,6 +55,10 @@ export class RunStore {
     fs.writeFileSync(path.join(dir, 'prompt.md'), prompt, 'utf8');
     this.writeMeta(runId, {
       runId,
+      // PIVOT-PLAN decision 15 (clean break): v2 runs carry a call ledger. A run
+      // without this stamp predates it, and every investigator surface must say
+      // "pre-metrics" rather than render zeros it cannot stand behind.
+      recordVersion: RUN_RECORD_VERSION,
       createdAt: now.toISOString(),
       stage: 'prompt',       // prompt | planning | awaiting_approval | awaiting_input | routing | execution | verification | done | failed | rejected | cancelled
       currentTaskId: null,
@@ -38,9 +73,18 @@ export class RunStore {
   listRuns() {
     if (!fs.existsSync(this.rootDir)) return [];
     return fs.readdirSync(this.rootDir)
+      // `_`-prefixed directories are the store's own, not runs. Today that is
+      // runs/_index/ (PIVOT-PLAN §4.5), which carries a meta.json of its own and
+      // would otherwise list as a run with no prompt and no stage. runIds are
+      // timestamp-prefixed, so the namespace can never collide.
+      .filter(d => !d.startsWith('_'))
       .filter(d => fs.existsSync(path.join(this.rootDir, d, 'meta.json')))
       .sort();
   }
+
+  // Where the derived cross-run index lives (PIVOT-PLAN §4.5). Derived and
+  // disposable: delete it and every number rebuilds identically.
+  indexDir() { return path.join(this.rootDir, '_index'); }
 
   // The index view of every run: enough for a list to name, group and sort runs
   // without opening any of them. There is no separate index file to drift —
@@ -68,7 +112,12 @@ export class RunStore {
           error: meta.error ?? null
         };
       })
-      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      // Newest first. The id is the tie-break so the order is total even for
+      // runs this store didn't stamp (imported, hand-made, or written by an
+      // older build that could collide on the millisecond): equal timestamps
+      // then order by id rather than by readdir's accident.
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))
+        || String(b.id).localeCompare(String(a.id)));
   }
 
   // Rename a run. A blank name clears the override rather than storing an empty
@@ -93,6 +142,7 @@ export class RunStore {
       throw new Error(`Not a run in this store: "${runId}"`);
     }
     fs.rmSync(dir, { recursive: true, force: true });
+    this.forgetCalls(runId);
   }
 
   #tryPrompt(runId) {
@@ -181,6 +231,132 @@ export class RunStore {
     const file = fs.readdirSync(dir).find(f => f.startsWith(`${seq}-`) && f.endsWith('.json'));
     if (!file) return null;
     try { return readJson(path.join(dir, file)); } catch { return null; }
+  }
+
+  // --- the call ledger: one record per model-call ATTEMPT (PIVOT-PLAN §4) ----
+  //
+  //   runs/<id>/calls/<seq>.json           the record
+  //   runs/<id>/calls/<seq>.request.json   wire: what was sent
+  //   runs/<id>/calls/<seq>.response.json  wire: what came back
+  //
+  // Immutable once written. Per ATTEMPT, not per node: a call that failed twice
+  // before succeeding leaves three records, so retries stop being invisible.
+  callsDir(runId) { return path.join(this.runDir(runId), 'calls'); }
+
+  // Claims the next free sequence number by CREATING the record file
+  // exclusively ('wx'), retrying on collision — the same rule writeToolResult
+  // uses, for the same reason: parallel agentTasks write here concurrently and
+  // a counter in memory is exactly the state a crash destroys.
+  //
+  // `wire` is { request, response } of already-redacted, already-bounded JSON
+  // TEXT (core/callLedger.js owns both); this method only decides where it
+  // lands. Returns the record as written, with its seq.
+  writeCallRecord(runId, record, wire = null) {
+    const dir = this.callsDir(runId);
+    fs.mkdirSync(dir, { recursive: true });
+    let seq = 1;
+    for (const f of fs.readdirSync(dir)) {
+      const n = Number((f.match(/^(\d+)\.json$/) ?? [])[1]);
+      if (Number.isInteger(n) && n >= seq) seq = n + 1;
+    }
+    for (;;) {
+      try {
+        // Claim the slot first, empty; the real content follows. A reader that
+        // catches the gap sees unparseable JSON, which readCalls() skips —
+        // strictly better than two attempts sharing a sequence number.
+        fs.writeFileSync(path.join(dir, `${seq}.json`), '', { encoding: 'utf8', flag: 'wx' });
+        break;
+      } catch (err) {
+        if (err.code !== 'EEXIST') throw err;
+        seq += 1;
+      }
+    }
+    const written = { seq, ...record };
+    if (wire?.request != null) {
+      fs.writeFileSync(path.join(dir, `${seq}.request.json`), wire.request, 'utf8');
+    }
+    if (wire?.response != null) {
+      fs.writeFileSync(path.join(dir, `${seq}.response.json`), wire.response, 'utf8');
+    }
+    // The wire pointer can only be written once the sequence number is claimed,
+    // which is here — so the record stays self-describing on disk without the
+    // ledger having to guess its own file name.
+    if (written.wire) {
+      written.wire = {
+        ...written.wire,
+        request: wire?.request != null ? `calls/${seq}.request.json` : null,
+        response: wire?.response != null ? `calls/${seq}.response.json` : null
+      };
+    }
+    writeJson(path.join(dir, `${seq}.json`), written);
+    return written;
+  }
+
+  // Records are immutable once written, so a record read once never needs
+  // reading again. The cache holds what has been seen; each call re-lists the
+  // directory (one syscall) and reads only the sequence numbers that are new.
+  // Without this, a live run's snapshot — pushed several times a second while
+  // text streams — re-read every call record it had ever written, every time.
+  #callCache = new Map(); // runId -> Map(seq -> record)
+
+  // Every call record for a run, oldest first. Unparseable files are skipped
+  // rather than fatal — a record half-written when the process died must not
+  // make the whole run unreadable — and are retried on the next read, because a
+  // record claimed but not yet filled in becomes readable a moment later.
+  readCalls(runId) {
+    const dir = this.callsDir(runId);
+    if (!fs.existsSync(dir)) return [];
+    let seen = this.#callCache.get(runId);
+    if (!seen) this.#callCache.set(runId, seen = new Map());
+    const seqs = fs.readdirSync(dir)
+      .map(f => Number((f.match(/^(\d+)\.json$/) ?? [])[1]))
+      .filter(Number.isInteger)
+      .sort((a, b) => a - b);
+    const out = [];
+    for (const seq of seqs) {
+      let rec = seen.get(seq);
+      if (!rec) {
+        try { rec = readJson(path.join(dir, `${seq}.json`)); } catch { rec = null; }
+        if (rec) seen.set(seq, rec);
+      }
+      if (rec) out.push(rec);
+    }
+    return out;
+  }
+
+  // Drop a run's cached records (deletion, branch, a test reusing a directory).
+  forgetCalls(runId) { this.#callCache.delete(runId); }
+
+  // One wire file's raw text. `which` is 'request' or 'response'. Null when the
+  // call captured no wire (a CLI-delegate call, or capture turned off).
+  readCallWire(runId, seq, which) {
+    if (!Number.isInteger(Number(seq)) || !['request', 'response'].includes(which)) return null;
+    const p = path.join(this.callsDir(runId), `${Number(seq)}.${which}.json`);
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+  }
+
+  // --- ask_human answers (TOOLS-PLAN §14.5) ---------------------------------
+  // What the user told an agent, kept per task. The call stack does not
+  // survive a crash; this does — so a task re-run after a restart recalls the
+  // answer instead of asking again, and the cap survives with it.
+  answersPath(runId, taskId) {
+    const safe = String(taskId ?? 'run').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return path.join(this.runDir(runId), 'answers', `${safe}.json`);
+  }
+  readAskAnswers(runId, taskId) {
+    const p = this.answersPath(runId, taskId);
+    if (!fs.existsSync(p)) return [];
+    try {
+      const doc = readJson(p);
+      return Array.isArray(doc?.answers) ? doc.answers : [];
+    } catch { return []; }
+  }
+  writeAskAnswer(runId, taskId, entry) {
+    const p = this.answersPath(runId, taskId);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    const answers = [...this.readAskAnswers(runId, taskId), { ...entry, at: new Date().toISOString() }];
+    writeJson(p, { task: taskId ?? null, answers });
+    return answers.length;
   }
 
   // Task spec markdown (written by the write_task_md tool): the agent's own
@@ -443,8 +619,12 @@ export class RunStore {
   // view* pointer; these records make pairings restorable across restarts.
   #comparisonsDir() { return path.join(path.dirname(this.rootDir), 'comparisons'); }
 
+  // Same monotonic clock as run ids, for the same reason: `listComparisons()`
+  // orders on createdAt, and two comparisons saved in one millisecond would
+  // otherwise tie. Sharing the counter means a comparison can push the next run
+  // id forward a millisecond — cheaper than a second counter that can disagree.
   newComparisonId() {
-    return 'cmp-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' +
+    return 'cmp-' + new Date(this.#nextStampMs()).toISOString().replace(/[:.]/g, '-') + '-' +
       Math.random().toString(36).slice(2, 6);
   }
 
@@ -473,7 +653,7 @@ export class RunStore {
     const record = {
       id: cid,
       runIds: [runIds[0], runIds[1]],
-      createdAt: prev?.createdAt ?? new Date().toISOString(),
+      createdAt: prev?.createdAt ?? new Date(this.#nextStampMs()).toISOString(),
       origin,
       verdict: prev?.verdict ?? null
     };
@@ -497,7 +677,9 @@ export class RunStore {
       .filter(f => f.endsWith('.json'))
       .map(f => { try { return readJson(path.join(dir, f)); } catch { return null; } })
       .filter(Boolean)
-      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      // Newest first, id as the tie-break — see runSummaries().
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))
+        || String(b.id).localeCompare(String(a.id)));
   }
 
   // P3: the judge's half of the record. Written after a run:judge call;
@@ -573,8 +755,19 @@ export class RunStore {
       // Summary nodes (D5): index entries joined with their Markdown text, so
       // the canvas derives summary cards + dashed edges with no extra reads.
       summaries: this.readSummaries(runId)
-        .map(e => ({ ...e, text: this.readSummaryText(runId, e.file) }))
+        .map(e => ({ ...e, text: this.readSummaryText(runId, e.file) })),
+      // The call ledger, folded (PIVOT-PLAN P3). Derived on read like every
+      // other view here — there is no metrics file to drift from the records.
+      metrics: this.runMetrics(runId)
     };
+  }
+
+  // Derived metrics for one run. Cheap enough for a live snapshot because
+  // readCalls() only reads records it has not seen (see #callCache).
+  runMetrics(runId) {
+    let meta = null;
+    try { meta = this.readMeta(runId); } catch { /* unreadable meta still yields metrics */ }
+    return runMetrics(this.readCalls(runId), meta);
   }
 
   // History across runs: prior retrospectives inform future planning.
@@ -599,6 +792,7 @@ function truncate(s, n = 200) { return s.length > n ? s.slice(0, n) + '…' : s;
 
 export const UNTITLED_RUN = 'Untitled run';
 const MAX_RUN_NAME = 80;
+
 
 // What a run is called when nobody has named it: the first meaningful line of
 // the prompt that started it, stripped of Markdown decoration and cut at a word

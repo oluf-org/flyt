@@ -11,7 +11,7 @@ import { parseFlow } from '../core/flowlang/parse.js';
 import { serializeFlow } from '../core/flowlang/serialize.js';
 import { lintText, lintFlow } from '../core/flowlang/lint.js';
 import { FlowStore } from '../core/flowstore.js';
-import { resolveFlow, diffOverrides, SEED_NODE_TEMPLATES } from '../src/flowTypes.js';
+import { resolveFlow, diffOverrides, PRESET_NODE_TEMPLATES } from '../src/flowTypes.js';
 import { makeFlow, node, edge } from './helpers.js';
 
 // --- P1: description / derivedFrom parse + serialize round-trip -------------
@@ -99,7 +99,7 @@ function configFlow() {
 }
 
 test('diffOverrides renders model, system and scalar changes as badges', () => {
-  const resolved = resolveFlow(configFlow(), SEED_NODE_TEMPLATES);
+  const resolved = resolveFlow(configFlow(), PRESET_NODE_TEMPLATES);
   const entries = diffOverrides(resolved, {
     work: { worker: { provider: 'openai', model: 'gpt-5' }, effort: 'high', system: 'Be strict.' },
     orch: { maxNodes: 10 }
@@ -115,14 +115,14 @@ test('diffOverrides renders model, system and scalar changes as badges', () => {
 });
 
 test('diffOverrides skips overrides that restate the default', () => {
-  const resolved = resolveFlow(configFlow(), SEED_NODE_TEMPLATES);
+  const resolved = resolveFlow(configFlow(), PRESET_NODE_TEMPLATES);
   assert.deepEqual(diffOverrides(resolved, { work: { effort: 'medium', category: 'Code general' } }), []);
   assert.deepEqual(diffOverrides(resolved, null), []);
   assert.deepEqual(diffOverrides(resolved, {}), []);
 });
 
 test('diffOverrides flags unknown nodes and non-overridable fields honestly', () => {
-  const resolved = resolveFlow(configFlow(), SEED_NODE_TEMPLATES);
+  const resolved = resolveFlow(configFlow(), PRESET_NODE_TEMPLATES);
   const entries = diffOverrides(resolved, {
     ghost: { effort: 'high' },   // deleted node
     input: { worker: { provider: 'x', model: 'y' } }, // structural: nothing overridable

@@ -1,0 +1,17 @@
+{
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false,
+  "id": "translation",
+  "name": "Translation",
+  "category": null,
+  "icon": "文",
+  "baseType": "aiStep",
+  "role": "translate",
+  "effort": "medium",
+  "language": "English",
+  "description": "Faithful translation preserving meaning, tone, register, and formatting. Set the target language on the node."
+}

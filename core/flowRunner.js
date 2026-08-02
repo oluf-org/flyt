@@ -28,6 +28,10 @@
 //   stitch    -> fixTasks[] routed through the existing create_task tool
 import { callModel, abortError, isAbortError } from './adapters/index.js';
 import { runAgent, toolProtocol } from './agent.js';
+import { makeCallLedger, DEFAULT_WIRE_MODE } from './callLedger.js';
+import { appendRun } from './metricsIndex.js';
+import { evalExpr } from './flowlang/expr.js';
+import { buildScope } from './conditionScope.js';
 import { makeRetrospective } from './retrospective.js';
 import { resolveCallTarget } from './modelSource.js';
 import { runExecutorTask } from './nodes/executor.js';
@@ -344,18 +348,21 @@ const SUMMARY_SOURCE_BUDGET = 3000;
 
 // Unified worker resolution for aiStep AND agentTask nodes:
 //   1. an explicit worker set on the node wins,
-//   2. otherwise the node's category picks from config.categoryWorkers
-//      (the plan-eval pattern: category drives model selection),
-//   3. otherwise the model-priority defaults (core/modelPriority.js): the
+//   2. otherwise the model-priority defaults (core/modelPriority.js): the
 //      node's task kind + effort level walk the general provider preference,
 //      restricted to providers with a saved key,
-//   4. otherwise the configured executor default.
+//   3. otherwise the configured executor default.
+//
+// PIVOT-PLAN §5.2 / decision 10 retired step 2 of the old list: a static
+// `config.categoryWorkers` map that silently routed by task type. The model is
+// now a GRAPH decision on every node — you pick it where you can see it, next
+// to the prompt it runs and the cost it produced last time — and an invisible
+// config-file mapping that could override a node's own choice is precisely the
+// kind of hidden routing the pivot exists to remove. A run made with the wrong
+// model should be traceable to a node, not to config.json.
 export function resolveWorker(node, config) {
   const w = node?.data?.worker;
   if (w?.provider && w?.model) return { provider: w.provider, model: w.model };
-  const cat = node?.data?.category;
-  const pref = cat ? config.categoryWorkers?.[cat] : null;
-  if (pref?.provider && pref?.model) return { provider: pref.provider, model: pref.model };
   const pick = pickDefaultWorker(node, config);
   if (pick) return pick;
   const d = config.workers.executor;
@@ -472,6 +479,52 @@ export class FlowRunner {
     // it's exactly what's lost in a crash, which is what makes an interrupted
     // run identifiable (see reconcileInterrupted).
     this.live = new Set();
+    // PIVOT-PLAN §4: one call ledger per run, made once and reused. The ledger
+    // itself is stateless (every record is a file), so this map is a cache of
+    // configuration, not of data — dropping it loses nothing.
+    this.ledgers = new Map();
+  }
+
+  // The run's call ledger, attributed to a node/task/role. Every model call the
+  // runner makes goes through one of these, which is what makes "you can see
+  // exactly what every model call cost, sent, and returned" true of the whole
+  // app rather than of the nodes somebody remembered to instrument.
+  ledgerFor(runId, meta = {}) {
+    let base = this.ledgers.get(runId);
+    if (!base) {
+      base = makeCallLedger(this.store, runId, {
+        wire: this.config.wireCapture ?? DEFAULT_WIRE_MODE,
+        prices: this.config.modelPrices ?? null,
+        // A finished record is a live metric: the canvas shows cost and tokens
+        // accruing, so the renderer has to hear about it the moment it lands.
+        onRecord: () => this.notify(runId)
+      });
+      this.ledgers.set(runId, base);
+    }
+    return Object.keys(meta).length ? base.for(meta) : base;
+  }
+
+  // The per-call timeout (PIVOT-PLAN §5.2). A node's own `limits.timeoutMs`
+  // wins; otherwise the configured default; 0/null means no timer, which is the
+  // pre-pivot behaviour and stays reachable on purpose for slow local models.
+  timeoutFor(node = null) {
+    const own = node?.data?.limits?.timeoutMs;
+    if (Number.isFinite(own)) return own > 0 ? own : null;
+    const dflt = this.config.timeoutMs;
+    return Number.isFinite(dflt) && dflt > 0 ? dflt : null;
+  }
+
+  // A node's retry policy: its own `limits`, falling back to the run config's.
+  retryFor(node = null) {
+    const lim = node?.data?.limits;
+    if (Number.isFinite(lim?.attempts) && lim.attempts > 0) {
+      return {
+        attempts: Math.min(Math.trunc(lim.attempts), 20),
+        baseMs: Number.isFinite(lim.backoffMs) && lim.backoffMs >= 0 ? lim.backoffMs : this.config.retry?.baseMs,
+        maxMs: this.config.retry?.maxMs
+      };
+    }
+    return this.config.retry;
   }
 
   notify(runId) { this.onUpdate(runId); }
@@ -531,10 +584,16 @@ export class FlowRunner {
   // One model call whose lifetime is registered against the run, so stop()
   // can abort it. The signal itself stays optional all the way down — every
   // other caller of callModel is untouched.
-  async trackedCallModel(runId, params) {
+  // `meta` attributes the call in the ledger ({ nodeId, taskId, role }); a
+  // caller that passes none still gets a record, filed against the run alone.
+  async trackedCallModel(runId, params, meta = {}) {
     const ctl = this.trackAbort(runId);
     try {
-      return await callModel({ ...params, signal: ctl.signal });
+      return await callModel({
+        ledger: this.ledgerFor(runId, meta),
+        ...params,
+        signal: ctl.signal
+      });
     } finally {
       this.untrackAbort(runId, ctl);
     }
@@ -545,16 +604,272 @@ export class FlowRunner {
   // plans better. Only read-effect tools may be granted here — the linter's
   // `readonly-tools` rule — and runAgent with an empty tool list IS
   // trackedCallModel, so every existing aiStep takes exactly its old path.
-  async trackedRunAgent(runId, nodeId, params, tools) {
-    if (!tools.length) return this.trackedCallModel(runId, params);
+  async trackedRunAgent(runId, nodeId, params, tools, meta = {}) {
+    if (!tools.length) return this.trackedCallModel(runId, params, { nodeId, ...meta });
     const ctl = this.trackAbort(runId);
     try {
       return await runAgent({
         ...params, tools, signal: ctl.signal,
+        // One ledger view for the whole loop: every turn records separately,
+        // all of them attributed to this node (§4.2).
+        ledger: this.ledgerFor(runId, { nodeId, ...meta }),
         ctx: { store: this.store, runId, nodeId, workspace: this.workspaceFor(runId) }
       });
     } finally {
       this.untrackAbort(runId, ctl);
+    }
+  }
+
+  // --- Control flow (PIVOT-PLAN §5.3) ----------------------------------------
+  //
+  // `branch` evaluates its arms top to bottom and activates EXACTLY ONE
+  // outgoing edge; every other downstream path is skipped for this run. The
+  // arms are conditions over core/conditionScope.js, which means they can read
+  // what upstream nodes produced AND what those nodes cost:
+  //
+  //     implement.cost.total > 0.50
+  //     implement.usage.outputTokens > 4000
+  //     review.text contains "APPROVED"
+  //
+  // That is the pivot closing its own loop — the investigator's data becomes an
+  // input to control flow, so a flow can cheapen or escalate itself based on
+  // what it just spent.
+  //
+  // A condition that cannot be evaluated is FALSE, not fatal: the branch falls
+  // through to its default arm. A branch that dies on a typo at 2am is a worse
+  // failure than one that takes the safe path and says so in the log.
+  async runBranch(runId, flow, node, opts) {
+    const arms = normalizeArms(node.data?.arms);
+    this.store.appendLog(runId, { event: 'node_start', node: node.id, type: 'branch', arms: arms.length });
+    const scope = buildScope(this.store, runId, flow, { loop: opts?.loop ?? null });
+
+    let taken = null;
+    const evaluated = [];
+    for (const arm of arms) {
+      if (!arm.when) {
+        taken = { ...arm, why: 'default arm' };
+        evaluated.push({ to: arm.to, when: null, value: true });
+        break;
+      }
+      const { value, error } = evalExpr(arm.when, scope);
+      evaluated.push({ to: arm.to, when: arm.when, value, ...(error ? { error } : {}) });
+      if (error) {
+        this.store.appendLog(runId, { event: 'branch_condition_error', node: node.id, when: arm.when, error });
+      }
+      if (value) { taken = { ...arm, why: arm.when }; break; }
+    }
+
+    // Every outgoing edge whose target is not the taken arm is skipped, along
+    // with everything downstream that nothing else reaches.
+    const outgoing = forwardEdges(flow.edges).filter(e => e.source === node.id);
+    const chosen = taken?.to ?? null;
+    const skippedRoots = outgoing.map(e => e.target).filter(t => t !== chosen);
+    const skipped = chosen ? this.reachableOnlyFrom(flow, skippedRoots, node.id, chosen) : [];
+    for (const id of skipped) this.setNodeStatus(runId, id, 'skipped');
+
+    const line = e =>
+      `- ${e.value ? '✓' : '·'} ${e.when ? e.when : '(default)'} -> ${e.to}`
+      + (e.error ? ` -- could not evaluate: ${e.error}` : '');
+    this.store.writeNodeOutput(runId, node.id, [
+      `# ${node.data?.title?.trim() || 'Branch'} — ${chosen ? `took ${chosen}` : 'no arm matched'}`,
+      '',
+      ...evaluated.map(line),
+      '',
+      skipped.length ? `Skipped: ${skipped.join(', ')}` : 'Nothing downstream was skipped.'
+    ].join('\n'));
+    this.store.appendLog(runId, {
+      event: 'branch_taken', node: node.id, arm: chosen, why: taken?.why ?? null, evaluated, skipped
+    });
+    // A branch with no matching arm and no default is a dead end, and lint
+    // refuses it — but a flow edited outside the app can still reach here, so
+    // it fails honestly rather than silently stalling the walk.
+    if (!chosen) {
+      this.setNodeStatus(runId, node.id, 'failed');
+      throw new Error(`Branch "${node.id}": no arm matched and there is no default arm.`);
+    }
+    this.setNodeStatus(runId, node.id, 'done');
+  }
+
+  // Nodes reachable from `roots` that are NOT also reachable from `keep` — the
+  // paths a branch's untaken arms own exclusively. A node both arms feed into
+  // (a join) must not be skipped, which is what makes a branch usable at all.
+  reachableOnlyFrom(flow, roots, branchId, keep) {
+    const edges = forwardEdges(flow.edges);
+    const walk = starts => {
+      const seen = new Set();
+      const queue = [...starts];
+      while (queue.length) {
+        const id = queue.shift();
+        if (seen.has(id) || id === branchId) continue;
+        seen.add(id);
+        for (const e of edges) if (e.source === id) queue.push(e.target);
+      }
+      return seen;
+    };
+    const kept = walk([keep]);
+    const dead = walk(roots);
+    return [...dead].filter(id => !kept.has(id));
+  }
+
+  // `loop` re-runs its body until a condition holds or a declared bound is hit.
+  //
+  // EVERY LOOP DECLARES A BOUND OR LINT FAILS (§5.3). `maxIterations` is
+  // required; `maxCost` and `maxTokens` are optional belts to that suspenders,
+  // checked against the run's own ledger — so a loop can stop because it has
+  // spent enough rather than only because it has counted enough. Unbounded
+  // iteration against a metered API is the one way this feature becomes a
+  // liability, which is why the bound is a lint error and not a warning.
+  async runLoop(runId, flow, node, opts) {
+    const children = flow.nodes.filter(n => n.parentId === node.id);
+    const maxIterations = Math.max(1, Math.min(100, Number(node.data?.maxIterations) || 1));
+    const until = typeof node.data?.until === 'string' && node.data.until.trim() ? node.data.until.trim() : null;
+    const maxCost = Number.isFinite(node.data?.maxCost) ? node.data.maxCost : null;
+    const maxTokens = Number.isFinite(node.data?.maxTokens) ? node.data.maxTokens : null;
+
+    this.store.appendLog(runId, {
+      event: 'node_start', node: node.id, type: 'loop',
+      maxIterations, until, maxCost, maxTokens, children: children.length
+    });
+    this.setNodeStatus(runId, node.id, 'active');
+
+    if (!children.length) {
+      this.store.writeNodeOutput(runId, node.id,
+        `# ${node.data?.title?.trim() || 'Loop'}\n\n(no nodes inside this loop)`);
+      this.setNodeStatus(runId, node.id, 'done');
+      return;
+    }
+
+    const history = [];
+    let stopped = null;
+    for (let iteration = 0; iteration < maxIterations; iteration++) {
+      if (this.stopRequests.has(runId)) throw abortError(`Loop ${node.id} stopped`);
+      // Each iteration starts from a clean body: stale output from the previous
+      // pass must never be read as this pass's result, and the child statuses
+      // have to go back to pending or the sub-walk sees them as already done.
+      if (iteration > 0) {
+        for (const c of children) {
+          this.store.deleteNodeOutputs(runId, c.id);
+          if (c.data?.taskId) this.store.deleteTaskOutput(runId, c.data.taskId);
+          this.setNodeStatus(runId, c.id, 'pending');
+        }
+      }
+      const loopState = { iteration: iteration + 1, iterations: maxIterations };
+      const before = this.store.runMetrics(runId).run;
+      await this.runChildren(runId, flow, node, children, { ...opts, loop: loopState },
+        { label: `Loop ${node.id}`, iteration: iteration + 1 });
+      const after = this.store.runMetrics(runId).run;
+      const spent = {
+        cost: (after.cost?.total ?? 0) - (before.cost?.total ?? 0),
+        tokens: (after.usage?.totalTokens ?? 0) - (before.usage?.totalTokens ?? 0)
+      };
+      history.push({ iteration: iteration + 1, ...spent });
+      this.store.appendLog(runId, { event: 'loop_iteration', node: node.id, ...spent, iteration: iteration + 1 });
+
+      // The exit condition is evaluated AFTER the body, so `until` reads what
+      // this iteration produced — the only reading that makes sense.
+      if (until) {
+        const { value, error } = evalExpr(until, buildScope(this.store, runId, flow, { loop: loopState }));
+        if (error) this.store.appendLog(runId, { event: 'loop_condition_error', node: node.id, until, error });
+        if (value) { stopped = 'condition'; break; }
+      }
+      // The budgets, checked after the body for the same reason: a loop stops
+      // when it HAS spent too much. Refusing to start a cheap final iteration
+      // on a guess would be worse than the guard is worth.
+      const run = this.store.runMetrics(runId).run;
+      if (maxCost != null && (run.cost?.total ?? 0) >= maxCost) { stopped = 'maxCost'; break; }
+      if (maxTokens != null && (run.usage?.totalTokens ?? 0) >= maxTokens) { stopped = 'maxTokens'; break; }
+    }
+    if (!stopped) stopped = 'maxIterations';
+
+    const sections = children.map(c => {
+      const label = c.data?.title?.trim() || c.id;
+      const content = c.type === 'agentTask'
+        ? this.store.readTaskOutput(runId, opts.taskIdByNode.get(c.id) ?? c.data?.taskId ?? '')
+        : this.store.readNodeOutput(runId, c.id);
+      return `--- ${label} (${c.id}) ---\n\n${content ?? '(no output)'}`;
+    });
+    const ran = history.length;
+    const why = {
+      condition: `the exit condition held (${until})`,
+      maxCost: `the cost budget was reached ($${node.data?.maxCost})`,
+      maxTokens: `the token budget was reached (${node.data?.maxTokens})`,
+      maxIterations: `the iteration bound was reached (${maxIterations})`
+    }[stopped];
+    const title = node.data?.title?.trim() || 'Loop';
+    this.store.writeNodeOutput(runId, node.id,
+      `# ${title} — ${ran} iteration${ran === 1 ? '' : 's'}\n\nStopped because ${why}.\n\n${sections.join('\n\n')}`);
+    this.store.writeNodeOutput(runId, `${node.id}.iterations`, [
+      `# ${title} — iterations`,
+      '',
+      ...history.map(h => `- iteration ${h.iteration}: ${h.tokens} tokens, $${(h.cost ?? 0).toFixed(4)}`),
+      '',
+      `Stopped because ${why}.`
+    ].join('\n'));
+    this.store.appendLog(runId, { event: 'loop_done', node: node.id, iterations: ran, stopped });
+    this.setNodeStatus(runId, node.id, 'done');
+  }
+
+  // The inline sub-walk: run a container's children with the same wave
+  // semantics as the outer scheduler, scoped to the box. Already-done children
+  // (a resume after a restart) are skipped.
+  //
+  // Extracted for PIVOT-PLAN §5.3's `loop`, which is implemented ON this rather
+  // than on back-edges. Back-edges would break the DAG lint the whole DSL rests
+  // on — every tool that reads a flow, from topoSort to the canvas, assumes
+  // acyclicity — whereas a container that re-runs its body is a bounded,
+  // legible thing the existing machinery already knows how to execute.
+  //
+  // `label` names the container in the log and in error messages.
+  async runChildren(runId, flow, node, children, opts, { label = null, iteration = null } = {}) {
+    const what = label ?? `Orchestrator ${node.id}`;
+    const childIds = new Set(children.map(c => c.id));
+    const done = new Set(children
+      .filter(c => this.store.readMeta(runId).nodeStatus?.[c.id] === 'done')
+      .map(c => c.id));
+    const maxParallel = Math.max(1, Number(this.config.maxParallel ?? 4));
+    for (;;) {
+      // RUN-CONTROL: a stop unwinds the box the same way it unwinds the outer
+      // walk — children already went back to 'pending' via their own catches.
+      if (this.stopRequests.has(runId)) throw abortError(`${what} stopped`);
+      const ready = children.filter(c => !done.has(c.id) &&
+        forwardEdges(flow.edges).every(e => e.target !== c.id || !childIds.has(e.source) || done.has(e.source)));
+      if (!ready.length) break;
+      // Children are never gated (the container runs autonomously), so both
+      // aiStep and agentTask children are wave-safe (V1 task 6).
+      const safe = ready.filter(c => c.type === 'aiStep' || c.type === 'agentTask');
+      const batch = safe.length > 1 ? safe.slice(0, maxParallel) : [ready[0]];
+
+      if (batch.length > 1) {
+        this.store.appendLog(runId, {
+          event: 'wave_start', container: node.id, nodes: batch.map(n => n.id),
+          ...(iteration != null ? { iteration } : {})
+        });
+        const results = await Promise.allSettled(batch.map(c => this.runNode(runId, flow, c, opts)));
+        batch.forEach((c, i) => { if (results[i].status === 'fulfilled') done.add(c.id); });
+        const rejected = results.find(r => r.status === 'rejected');
+        if (rejected) {
+          if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
+          throw rejected.reason;
+        }
+        if (batch.some(c => c.type === 'agentTask')
+          && !await this.runPendingTasks(runId, opts.taskIdByNode, flow)) {
+          if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
+          throw new Error(`${what}: a child task failed`);
+        }
+        continue;
+      }
+
+      const child = batch[0];
+      try {
+        await this.runNode(runId, flow, child, opts);
+        if (child.type === 'agentTask' && !await this.runPendingTasks(runId, opts.taskIdByNode, flow)) {
+          throw new Error(`${what}: child task ${child.id} failed`);
+        }
+      } catch (err) {
+        if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
+        throw err;
+      }
+      done.add(child.id);
     }
   }
 
@@ -623,6 +938,15 @@ export class FlowRunner {
         this.pauseRequests.delete(runId);
         this.abortControllers.delete(runId);
         this.inputGates.delete(runId);
+        // The ledger cache is configuration, not data: every record is already
+        // a file, so dropping it costs nothing and keeps a long-lived process
+        // from holding one entry per run it ever walked.
+        this.ledgers.delete(runId);
+        // PIVOT-PLAN §4.5: fold this run's calls into the cross-run index. It
+        // is derived and disposable, so this is an optimisation, not a
+        // commitment — appendRun never throws, and a missed append is repaired
+        // by the staleness check on the next launch.
+        appendRun(this.store, runId);
       });
   }
 
@@ -927,6 +1251,11 @@ export class FlowRunner {
       const worker = resolveCallTarget(resolveWorker({}, this.config), this.config);
       const result = await callModel({
         ...worker, apiKey: worker.apiKey,
+        // Flyt's own calls are ledgered too: an investigator that hides its own
+        // spend is not an investigator (§5.4 makes the same argument about the
+        // builder).
+        ledger: this.ledgerFor(runId, { nodeId, role: 'investigate' }),
+        timeoutMs: this.timeoutFor(),
         system: INVESTIGATE_SYSTEM,
         prompt: [
           `RUN: ${meta?.flowName ?? meta?.flowId ?? runId} (${runId}) — stage: ${meta?.stage ?? 'unknown'}`,
@@ -1030,6 +1359,8 @@ export class FlowRunner {
     try {
       const result = await callModel({
         ...worker, apiKey: worker.apiKey,
+        ledger: this.ledgerFor(runId, { nodeId: id, role: 'summarize' }),
+        timeoutMs: this.timeoutFor(),
         system: SUMMARIZE_SYSTEM,
         prompt,
         retry: this.config.retry,
@@ -1120,6 +1451,11 @@ export class FlowRunner {
     }
     const result = await callModel({
       ...worker, apiKey: worker.apiKey,
+      // The judge's own cost lands on run A's ledger — a judged comparison is
+      // more expensive than an unjudged one, and P9 puts that on the
+      // leaderboard alongside the verdict it bought.
+      ledger: this.ledgerFor(runIdA, { role: 'judge' }),
+      timeoutMs: this.timeoutFor(),
       system: JUDGE_SYSTEM,
       prompt: buildJudgePrompt({ prompt, alternatives: [{ label: 'A', text: a.text }, { label: 'B', text: b.text }] }),
       retry: this.config.retry,
@@ -1318,8 +1654,8 @@ export class FlowRunner {
       const result = await this.trackedCallModel(runId, {
         ...worker, apiKey,
         system: TRIAGE_SYSTEM, prompt: userMsg,
-        onRetry: this.retryLogger(runId, label), retry: this.config.retry
-      });
+        onRetry: this.retryLogger(runId, label), retry: this.config.retry, timeoutMs: this.timeoutFor()
+      }, { nodeId: label, role: 'triage' });
       outText = String(result.text ?? '').trim();
     } catch (err) {
       this.store.appendLog(runId, { event: 'followup_triage_failed', turn, error: String(err?.message ?? err) });
@@ -1569,12 +1905,15 @@ export class FlowRunner {
     // Pre-run gate (REFACTOR-PLAN §4): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
-    const gate = lintFlow(flow, { templates: this.nodeStore?.listFull() ?? null, rules: RUNTIME_RULES, library: toolLibraryForLint() });
+    // listResolvable(), not listFull(): the kernel is hidden from every list the
+    // user sees, but a flow that instantiates a system node still has to lint and
+    // run (PIVOT-PLAN §5.1). The AI-facing template lists below stay listFull().
+    const gate = lintFlow(flow, { templates: this.nodeStore?.listResolvable() ?? null, rules: RUNTIME_RULES, library: toolLibraryForLint() });
     if (!gate.ok) {
       throw new Error(`Flow "${flow.name ?? flow.id}" failed validation:\n`
         + gate.errors.map(e => `- [${e.rule}] ${e.message}`).join('\n'));
     }
-    const templates = this.nodeStore?.listFull() ?? [];
+    const templates = this.nodeStore?.listResolvable() ?? [];
     // Launch overrides (MODES-COMPARE T1): a chosen mode's saved override
     // bundle, then ad-hoc run inputs on top (run input > mode). Validate the
     // effective map against the resolved-without-overrides flow BEFORE applying
@@ -1651,7 +1990,8 @@ export class FlowRunner {
     const verdict = await checkToolCall(call, {
       resolve: safety?.resolveModelSource ?? null,
       model: safety?.model ?? null,
-      retry: this.config.retry
+      retry: this.config.retry,
+      ledger: this.ledgerFor(runId, { nodeId, role: 'safety' })
     });
     this.store.appendLog(runId, {
       event: 'tool_safety_check', node: nodeId, tool: call.tool,
@@ -1798,9 +2138,17 @@ export class FlowRunner {
       // Orchestrator children live inside their container's box (parentId):
       // materialized ones (managedBy) and authored ones alike are run by the
       // container's inline sub-walk — the outer scheduler never picks them up.
-      const ready = order.filter(n => !completed.has(n.id) && !n.data?.managedBy && !n.parentId &&
+      // PIVOT-PLAN §5.3: a branch marks the arms it did not take 'skipped'.
+      // Skipped nodes never run, and — this is the part that makes a branch
+      // usable — a skipped node SATISFIES its dependents. Otherwise the join
+      // both arms feed into would wait forever for the arm that never ran.
+      // Read from meta rather than tracked in memory, because the branch that
+      // wrote it is inside runNode and has no view of this walk's state.
+      const walkMeta = this.store.readMeta(runId);
+      const isSkipped = id => walkMeta?.nodeStatus?.[id] === 'skipped';
+      const ready = order.filter(n => !completed.has(n.id) && !isSkipped(n.id) && !n.data?.managedBy && !n.parentId &&
         forwardEdges(flow.edges).every(e =>
-          e.target !== n.id || completed.has(e.source) || !nodesById.has(e.source)));
+          e.target !== n.id || completed.has(e.source) || isSkipped(e.source) || !nodesById.has(e.source)));
       if (!ready.length) break;
 
       // Wave selection: independent nodes that neither rewrite the flow
@@ -1896,7 +2244,17 @@ export class FlowRunner {
       onRetry: this.retryLogger(runId, `executor:${task.id}`),
       retry: this.config.retry,
       signal: abortCtl.signal,
-      ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
+      // PIVOT-PLAN §4.2: one ledger view per task, so every agent turn this
+      // task takes records separately and is attributable to both the task and
+      // the flow node that spawned it. (`ledger` above is the WRITE ledger —
+      // core/writeLedger.js, a different thing that predates this one.)
+      callLedger: this.ledgerFor(runId, { nodeId: nodeId ?? null, taskId: task.id, role: 'agentTask' }),
+      timeoutMs: this.timeoutFor(nodeId ? flow?.nodes?.find(n => n.id === nodeId) : null),
+      ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {}),
+      // ask_human reaches the user through the SAME awaiting_input gate the
+      // refiner uses (TOOLS-PLAN §14.5) — one mechanism, one UI, one
+      // restart-recovery story.
+      askHuman: payload => this.askHumanGate(runId, nodeId ?? `executor:${task.id}`, task.id, payload)
     };
     ledger.begin(task.id);
     try {
@@ -2236,6 +2594,42 @@ export class FlowRunner {
     return { ok: true, requeue: [node.id] };
   }
 
+  // An agent asked the user a question (ask_human, TOOLS-PLAN §14.5). Parks the
+  // run at the same awaiting_input gate the refiner uses — `pendingGateKind:
+  // 'tool'` so the composer can word the prompt as a question from a running
+  // agent rather than a clarification round — and resolves with the answer.
+  //
+  // Restart is handled by the ANSWER being a file, not by keeping this promise
+  // alive: a crash here loses the call stack (as it always has), the task is
+  // rewound to pending, and the re-run recalls what was already answered.
+  async askHumanGate(runId, nodeId, taskId, payload) {
+    const questions = [payload.question];
+    this.store.writeNodeQuestions?.(runId, nodeId, questions);
+    if (nodeId && !nodeId.startsWith('executor:')) this.setNodeStatus(runId, nodeId, 'waiting');
+    this.store.setStage(runId, 'awaiting_input', {
+      pendingNodeId: nodeId, pendingGateKind: 'tool', pendingQuestions: questions,
+      pendingAsk: { task: taskId ?? null, ...payload }
+    });
+    this.store.appendLog(runId, {
+      event: 'ask_human', node: nodeId, task: taskId ?? null,
+      question: payload.question, ...(payload.options ? { options: payload.options } : {})
+    });
+    this.notify(runId);
+
+    const answer = await new Promise(resolve => this.inputGates.set(runId, resolve));
+    if (answer == null && this.stopRequests.has(runId)) return null;
+
+    const meta = this.store.readMeta(runId);
+    this.store.writeMeta(runId, {
+      ...meta, pendingNodeId: null, pendingGateKind: null, pendingQuestions: null, pendingAsk: null
+    });
+    this.store.setStage(runId, 'execution');
+    if (nodeId && !nodeId.startsWith('executor:')) this.setNodeStatus(runId, nodeId, 'active');
+    this.store.appendLog(runId, { event: 'ask_human_answered', node: nodeId, task: taskId ?? null, chars: String(answer ?? '').length });
+    this.notify(runId);
+    return answer;
+  }
+
   // Answer a run parked at the awaiting_input gate (MODES-COMPARE T6). Distinct
   // from run:followUp — this closes an in-flight question, it does not open a
   // new turn. Works whether the walk is still parked on the live promise or the
@@ -2435,6 +2829,12 @@ export class FlowRunner {
       return;
     }
 
+    // PIVOT-PLAN §5.3. Neither makes a model call, so neither appears in the
+    // ledger — they are decisions, and what they decided is recorded on the run
+    // as an artifact like everything else.
+    if (node.type === 'branch') return this.runBranch(runId, flow, node, opts);
+    if (node.type === 'loop') return this.runLoop(runId, flow, node, opts);
+
     if (node.type === 'agentTask') {
       // Resuming after a restart: the node already contributed a task on a
       // previous pass — reuse it instead of queueing a duplicate.
@@ -2476,6 +2876,10 @@ export class FlowRunner {
         title: node.data?.title || 'Task',
         goal: node.data?.goal || node.data?.title || '',
         inputs,
+        // PIVOT-PLAN §5.2: the node's own prompt rides on the task, because the
+        // executor runs from tasks.json alone and never sees the node — the
+        // same reason tools, skills and the ceiling ride along.
+        ...(node.data?.prompt?.trim() ? { prompt: node.data.prompt.trim() } : {}),
         constraints: node.data?.constraints ?? [],
         // Template/override instructions ride along as constraints so the
         // executor honors them without a schema change.
@@ -2567,6 +2971,15 @@ export class FlowRunner {
       // matching the classic pipeline's planner behavior.
       const history = (role === 'plan' || role === 'plan-start') ? this.store.historyDigest() : '';
       const userMsg = [
+        // PIVOT-PLAN §5.2: the node's own prompt, first and unwrapped.
+        //
+        // It leads because it IS the instruction — the run request below is what
+        // the user asked for on this run, and everything after is context. This
+        // is the retired principle inverted: the prompt is a real field the user
+        // owns and can read, not something the model conjures at run time. A
+        // node without one behaves exactly as it did before, so nothing that
+        // predates this field changes.
+        node.data?.prompt?.trim() ? node.data.prompt.trim() : '',
         `USER PROMPT:\n${this.store.readPrompt(runId)}`,
         node.data?.goal?.trim() ? `GOAL:\n${node.data.goal.trim()}` : '',
         node.data?.instructions?.trim() ? `EXTRA INSTRUCTIONS (from the node template / workflow):\n${node.data.instructions.trim()}` : '',
@@ -2586,8 +2999,9 @@ export class FlowRunner {
           ...worker, apiKey, system, prompt: userMsg, onText,
           // Effort level sets the response budget; medium keeps the default.
           ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
-          onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
-        }, stepTools);
+          onRetry: this.retryLogger(runId, node.id),
+          retry: this.retryFor(node), timeoutMs: this.timeoutFor(node)
+        }, stepTools, { role: 'aiStep' });
         // A call that comes back with nothing is not a success. Recording one as
         // success wrote a 0-byte artifact, marked the node done, and handed
         // emptiness to every downstream node — the run read as healthy the whole
@@ -2883,8 +3297,9 @@ export class FlowRunner {
         result = await this.trackedCallModel(runId, {
           ...worker, apiKey, system, prompt: userMsg, onText,
           ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
-          onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
-        });
+          onRetry: this.retryLogger(runId, node.id),
+          retry: this.retryFor(node), timeoutMs: this.timeoutFor(node)
+        }, { nodeId: node.id, role: 'orchestrate' });
       } catch (err) {
         // RUN-CONTROL stop: not a failure — back to pending, no failed retro.
         if (isAbortError(err) || this.stopRequests.has(runId)) {
@@ -2950,56 +3365,9 @@ export class FlowRunner {
     // The container stays visibly active while its children run.
     this.setNodeStatus(runId, node.id, 'active');
 
-    // Inline sub-walk over the container's children: same wave semantics as
-    // the outer scheduler, scoped to the box. Already-done children (resume
-    // after a restart) are skipped.
-    const childIds = new Set(children.map(c => c.id));
-    const done = new Set(children
-      .filter(c => this.store.readMeta(runId).nodeStatus?.[c.id] === 'done')
-      .map(c => c.id));
-    const maxParallel = Math.max(1, Number(this.config.maxParallel ?? 4));
-    for (;;) {
-      // RUN-CONTROL: a stop unwinds the box the same way it unwinds the outer
-      // walk — children already went back to 'pending' via their own catches.
-      if (this.stopRequests.has(runId)) throw abortError(`Orchestrator ${node.id} stopped`);
-      const ready = children.filter(c => !done.has(c.id) &&
-        forwardEdges(flow.edges).every(e => e.target !== c.id || !childIds.has(e.source) || done.has(e.source)));
-      if (!ready.length) break;
-      // Children are never gated (the container runs autonomously), so both
-      // aiStep and agentTask children are wave-safe (V1 task 6).
-      const safe = ready.filter(c => c.type === 'aiStep' || c.type === 'agentTask');
-      const batch = safe.length > 1 ? safe.slice(0, maxParallel) : [ready[0]];
-
-      if (batch.length > 1) {
-        this.store.appendLog(runId, { event: 'wave_start', container: node.id, nodes: batch.map(n => n.id) });
-        const results = await Promise.allSettled(batch.map(c => this.runNode(runId, flow, c, opts)));
-        batch.forEach((c, i) => { if (results[i].status === 'fulfilled') done.add(c.id); });
-        const rejected = results.find(r => r.status === 'rejected');
-        if (rejected) {
-          // Under a stop the container isn't failing — it's being cancelled.
-          if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
-          throw rejected.reason;
-        }
-        if (batch.some(c => c.type === 'agentTask')
-          && !await this.runPendingTasks(runId, opts.taskIdByNode, flow)) {
-          if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
-          throw new Error(`Orchestrator ${node.id}: a child task failed`);
-        }
-        continue;
-      }
-
-      const child = batch[0];
-      try {
-        await this.runNode(runId, flow, child, opts);
-        if (child.type === 'agentTask' && !await this.runPendingTasks(runId, opts.taskIdByNode, flow)) {
-          throw new Error(`Orchestrator ${node.id}: child task ${child.id} failed`);
-        }
-      } catch (err) {
-        if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
-        throw err;
-      }
-      done.add(child.id);
-    }
+    // Inline sub-walk over the container's children (PIVOT-PLAN §5.3 reuses it
+    // for `loop`, which is the whole reason it is a method rather than inline).
+    await this.runChildren(runId, flow, node, children, opts);
 
     // Aggregate every child's output into the primary "results" output.
     const sections = children.map(c => {
@@ -3038,7 +3406,8 @@ export class FlowRunner {
     ].join('\n\n');
     try {
       const result = await this.trackedCallModel(runId, { ...worker, apiKey, system, prompt,
-        onRetry: this.retryLogger(runId, node.id), retry: this.config.retry });
+        onRetry: this.retryLogger(runId, node.id), retry: this.config.retry, timeoutMs: this.timeoutFor() },
+      { nodeId: node.id, role: 'reask' });
       return String(result.text ?? '').trim();
     } catch (err) {
       // A stop must unwind the walk, not degrade into a graceful contract miss.
@@ -3303,4 +3672,19 @@ export class FlowRunner {
     this.notify(runId);
     return { ok: true, errors: [], created };
   }
+}
+
+// A branch's arms, normalized (PIVOT-PLAN §5.3). Evaluated top to bottom; the
+// first arm whose `when` holds is taken, and an arm with no `when` is the
+// default. Anything unusable is dropped rather than half-honoured, so a
+// malformed arm cannot silently become a default that swallows every case.
+export function normalizeArms(arms) {
+  if (!Array.isArray(arms)) return [];
+  return arms
+    .filter(a => a && typeof a === 'object' && typeof a.to === 'string' && a.to.trim())
+    .map(a => ({
+      to: a.to.trim(),
+      when: typeof a.when === 'string' && a.when.trim() ? a.when.trim() : null,
+      ...(typeof a.label === 'string' && a.label.trim() ? { label: a.label.trim() } : {})
+    }));
 }

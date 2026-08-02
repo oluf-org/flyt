@@ -41,6 +41,21 @@ const api = {
   deleteRun: (pid, runId) => ipcRenderer.invoke('run:delete', pid, runId),
   getSnapshot: (pid, runId) => ipcRenderer.invoke('run:snapshot', pid, runId),
   readRunLog: (pid, runId) => ipcRenderer.invoke('run:log', pid, runId),
+  // The call ledger (PIVOT-PLAN §6.1): the per-attempt list for a node, and one
+  // call's wire record. Folded metrics ride on the snapshot; these are opened on
+  // demand, because request bodies have no business on every live push.
+  readRunCalls: (pid, runId, nodeId = null, taskId = null) =>
+    ipcRenderer.invoke('run:calls', pid, runId, nodeId, taskId),
+  readCallWire: (pid, runId, seq) => ipcRenderer.invoke('run:callWire', pid, runId, seq),
+  // The Investigator page (PIVOT-PLAN §6.2): three folds of one index scan.
+  queryMetrics: (pid, filters = {}) => ipcRenderer.invoke('metrics:query', pid, filters),
+  // Presets (PIVOT-PLAN §5.1): the gallery behind *Create node / Create flow →
+  // Start from a preset*. Installing COPIES into the library — a preset is a
+  // template for a template, not a subscription to one.
+  listPresets: () => ipcRenderer.invoke('preset:list'),
+  installNodePreset: (presetId, asId = null) => ipcRenderer.invoke('preset:installNode', presetId, asId),
+  installFlowPreset: (presetId, asId = null) => ipcRenderer.invoke('preset:installFlow', presetId, asId),
+  rebuildMetrics: (pid) => ipcRenderer.invoke('metrics:rebuild', pid),
   openRunFolder: (pid, runId) => ipcRenderer.invoke('run:openFolder', pid, runId),
   openRunArtifact: (pid, runId, relPath) => ipcRenderer.invoke('run:openArtifact', pid, runId, relPath),
   pickWorkspace: () => ipcRenderer.invoke('workspace:pick'),
@@ -50,6 +65,7 @@ const api = {
   getConfig: () => ipcRenderer.invoke('config:get'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
+  markModelsSeen: (ids) => ipcRenderer.invoke('settings:markSeen', ids),
   listModels: (provider) => ipcRenderer.invoke('models:list', provider),
   testProvider: (provider) => ipcRenderer.invoke('provider:test', provider),
   listFlows: () => ipcRenderer.invoke('flow:list'),
@@ -75,9 +91,21 @@ const api = {
   saveNodeTemplate: (tpl) => ipcRenderer.invoke('node:save', tpl),
   newNodeTemplate: () => ipcRenderer.invoke('node:new'),
   deleteNodeTemplate: (id) => ipcRenderer.invoke('node:delete', id),
-  setTitleBarTheme: (mode) => ipcRenderer.invoke('titlebar:setTheme', mode),
   listTools: () => ipcRenderer.invoke('tool:list'),
   toolsFolder: () => ipcRenderer.invoke('tool:folder'),
+  // --- Tool Library page (TOOLS-PLAN §15) ---
+  // One call for the board's whole state; the rest are the writes it makes.
+  toolBoard: () => ipcRenderer.invoke('tool:board'),
+  saveTool: (def) => ipcRenderer.invoke('tool:save', def),
+  deleteTool: (id) => ipcRenderer.invoke('tool:delete', id),
+  setToolEnabled: (id, enabled) => ipcRenderer.invoke('tool:setEnabled', id, enabled),
+  setToolCategory: (id, categoryId) => ipcRenderer.invoke('tool:setCategory', id, categoryId),
+  saveToolCategory: (def) => ipcRenderer.invoke('tool:saveCategory', def),
+  deleteToolCategory: (id) => ipcRenderer.invoke('tool:deleteCategory', id),
+  reorderToolCategories: (ids) => ipcRenderer.invoke('tool:reorderCategories', ids),
+  draftTool: (req) => ipcRenderer.invoke('tool:draft', req),
+  preflightTool: (def) => ipcRenderer.invoke('tool:preflight', def),
+  setTitleBarTheme: (mode) => ipcRenderer.invoke('titlebar:setTheme', mode),
 
   // --- Project tabs (D22) ---
   listProjects: () => ipcRenderer.invoke('project:list'),
