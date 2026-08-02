@@ -7,9 +7,10 @@ import path from 'node:path';
 import { RunStore } from '../core/state.js';
 import { registerProvider } from '../core/adapters/index.js';
 
-export function makeStore() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-flow-test-'));
-  return new RunStore(dir);
+// A store over a fresh temp dir, or over `dir` when a test needs two stores to
+// share one directory (what a relaunch looks like from the store's side).
+export function makeStore(dir = null) {
+  return new RunStore(dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'llm-flow-test-')));
 }
 
 // 'script' provider: each test assigns a handler ({ system, prompt }) that

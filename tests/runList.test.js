@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { deriveRunName, UNTITLED_RUN } from '../core/state.js';
 import { groupRuns, runStatus, runTimeLabel } from '../src/runList.js';
@@ -53,6 +54,33 @@ test('summaries name every run and come back newest first', () => {
   assert.equal(list[0].stage, 'done');
   assert.equal(list[0].flowName, 'Default pipeline');
   assert.equal(list[0].named, false); // derived, not user-set
+});
+
+// Runs created inside one millisecond used to get equal `createdAt` values, and
+// equal sort keys left the order to readdir — i.e. to the random id suffix. The
+// assertion above passed about four times in five. Creation stamps are now
+// strictly increasing, so a tight burst has a defined order.
+test('runs created in the same millisecond still order by creation', () => {
+  const store = makeStore();
+  const ids = Array.from({ length: 25 }, (_, i) => store.createRun(`Request ${i}`));
+
+  assert.deepEqual([...new Set(ids)].length, ids.length, 'ids are unique');
+  const stamps = ids.map(id => Date.parse(id.slice(0, 24).replace(
+    /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, '$1T$2:$3:$4.$5Z')));
+  for (let i = 1; i < stamps.length; i++) {
+    assert.ok(stamps[i] > stamps[i - 1], `stamp ${i} did not advance`);
+  }
+  assert.deepEqual(store.runSummaries().map(r => r.id), [...ids].reverse());
+});
+
+test('a fresh store keeps stamping forward from the runs already on disk', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-runs-'));
+  const a = makeStore(dir).createRun('Before restart');
+  // A second store over the same directory is what a relaunch looks like: it
+  // must not reissue a millisecond the previous instance already used.
+  const b = makeStore(dir).createRun('After restart');
+  assert.ok(b > a, `${b} should sort after ${a}`);
+  assert.deepEqual(makeStore(dir).runSummaries().map(r => r.id), [b, a]);
 });
 
 test('renaming overrides the derived name; blanking it restores the derived one', () => {
