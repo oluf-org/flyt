@@ -584,7 +584,7 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 
 | Day | Build | Demo |
 |---|---|---|
-| 1 | **Per-call request timeout** (§11.5); `core/api.js` extraction; headless supervisor entry; CLI skeleton; HTTP + token + SSE | Start a run from a terminal with Electron closed, and kill a hung provider call |
+| 1 ✅ | **Per-call request timeout** (§11.5); `core/engine.js` + `core/api.js` extraction; `core/server.js`; `bin/flyt.js` | Start a run from a terminal with Electron closed, and kill a hung provider call |
 | 2 | Backlog files, atomic claim, `enqueue_task` routed through the supervisor, picker (deterministic + LLM tiebreak) | `flyt task add`, the loop picks it and runs it |
 | 3 | Worktree pool, gate runner, `diff-review` node, merge + push + canary + auto-revert, supervisor pin | A task lands on `main` with nobody watching |
 | 4 | Price table, ledger, three ceilings, tier ladder wired into step-eval escalation, subscription-first ordering | A task escalates cheap → frontier; a hard cap stops the loop cleanly |
@@ -595,6 +595,14 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 **Day 0, before any of it:** clone the reference repos (§16) and add the lint script. The loop
 cannot enforce a gate that does not exist, and the lint script is the smallest possible instance
 of the thing this whole plan is for.
+
+**Day 1 landed** (`6e59418`, `7b58d09`, `364c3e1`). `npm run flyt -- run <flow> --input "…"`
+starts a run with no Electron in the process, answers its gates with `--gates approve`, and
+exits non-zero if the run parks or fails; `npm run serve` puts the same commands on loopback
+HTTP with SSE. Two things the work itself taught, both now pinned by tests: a deadline must be
+unref'd or a headless command lingers for the longest deadline it ever armed, and the project
+registry's own "unknown project" throw had to become a typed 404 — over IPC it read fine, over
+HTTP it would have told a caller the server broke.
 
 The overseer (§11.6) is deliberately *after* day 7: the deterministic detectors in §11.3 catch
 most of what a model watcher would, cost nothing, and cannot themselves misbehave. Build the
