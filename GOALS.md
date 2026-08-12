@@ -125,6 +125,10 @@ Unchanged in spirit; ease of use added.
 
 Full general-purpose visual programming (loops, conditionals, sub-flows); true parallel execution; streaming token-by-token UI; automatic adaptive re-planning; large graphs, cost tracking, A/B testing, auto-layout; any non-file state store; production-grade sandboxing.
 
+> **Under revision:** `LOOP-PLAN.md` §9 reverses *cost tracking* — unattended runs need a
+> counted, capped budget, because spend with nobody watching has no upper bound. Draft D35;
+> this list is authoritative until that decision lands.
+
 ---
 
 ## How to Keep This Document Alive

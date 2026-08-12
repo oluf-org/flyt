@@ -1,0 +1,653 @@
+# LOOP-PLAN.md — the autonomous improvement loop
+
+**Status:** Draft 1 — 2026-08-12. Design settled in interview; unbuilt.
+**Extends:** `DESIGN-SPEC.md` §4 (routing), §5 (sub-agents/guards), §9 (safety) and §11.1's
+recorded weak joint. Draft decision **D35** lives in §20 and lands in `DECISIONS.md` when the
+last in-scope phase closes.
+**Read with:** `GOALS.md` (principles — and §19 below, which reverses one of its non-goals),
+`DECISIONS.md` (D8 depth cap, D12 routing, D13 retrospective scope, D15 project config, D16
+safety, D18 BYO-key, D23 subscription auth, D24 zero-dependency), `TOOLS-PLAN.md` (§9 the
+outbound MCP server, §12 trust tiers), `SUBSCRIPTION-AUTH-GUIDE.md` (the CLI delegation model).
+
+> **One-sentence goal:**
+> A supervisor that picks work off a backlog, runs it unattended on the cheapest model that
+> can do it, verifies it with commands rather than claims, lands it, and records what happened
+> — so that leaving for work and coming home to merged improvements is an ordinary Tuesday.
+
+**Attended Flyt is unchanged.** Everything below is additive: a second way to start work. The
+canvas, the run panel, the gates and the existing flows all behave exactly as they do today.
+
+---
+
+## 1. What this pivot actually is
+
+Today a run begins because a human pressed a button, and ends when a human reads the result.
+Every other capability in the app is already agentic — the runner spawns nodes, agents create
+tasks, models pick their own prompts — but the *outermost* loop is a person.
+
+The pivot replaces that outermost person with a **supervisor**: a headless process that owns
+the queue, the money, the isolation and the verification, and that treats Flyt's own runner as
+the thing it drives. The first workload is Flyt itself, because a harness that can improve its
+own harness compounds and one that improves a stranger's repo does not.
+
+Three properties make it a pivot rather than a feature:
+
+1. **The process hierarchy inverts.** Electron stops owning the runner and becomes a viewer.
+2. **Money becomes a first-class concept**, reversing a stated non-goal (§19).
+3. **Verification stops being advisory.** An agent's claim of success is no longer what closes
+   a task; a command's exit code is.
+
+---
+
+## 2. What already carries the weight
+
+This is much closer than the pivot sounds. The following exist and are load-bearing:
+
+- **One engine that already spawns its own work.** `core/flowRunner.js` does topological walks,
+  bounded-parallel waves, mid-run node materialization and the orchestrator container.
+  `core/tools/create_task.js` already lets an agent queue follow-up work.
+- **A verdict ladder.** step-eval returns `pass | retry | escalate` against a per-node retry
+  budget (`flowRunner.js` ~2128–2188). Today `escalate` means *stop and ask a human*. §8
+  re-points it at a stronger model tier first. That is a change of target, not new machinery.
+- **A routing table.** `core/modelPriority.js` is already `provider × kind × effort` with
+  per-provider rankings and a cross-provider order. It is the tier ladder's data model, missing
+  only a price axis.
+- **Cheap and expensive providers already wired.** `openrouter` (the route to DeepSeek and
+  most others), `kimi`, `openai`, `anthropic`, plus `claude-code` and `codex` CLI delegation
+  where the vendor's CLI holds the credential and a *subscription* pays instead of a meter
+  (D23, `core/adapters/cliDelegate.js` — already Windows-aware, including the npm `.cmd` shim
+  problem).
+- **Unattended mode is already a concept.** `approvalMode: 'always'` exists, with `smart` in
+  between backed by `core/safetyCheck.js`'s three-layer command screen.
+- **Restart resilience.** `reconcileInterrupted` rewinds mid-flight work and `execute(resume)`
+  continues from persisted file state without re-running completed nodes (D17). A supervisor
+  that dies at 2pm can be restarted at 2:01pm.
+- **Tools are files with effects, trust and two-tier grants** (TOOLS-PLAN P1–P3), and every
+  tool result is already an artifact with a handle. The audit trail the loop needs is written.
+- **569 tests, green in 11 seconds.** This is the single most important fact in the document.
+  A fast, trustworthy suite is what makes harness-run verification (§7) cheap enough to run on
+  every task, and what makes a benchmark (§12) possible at all.
+
+---
+
+## 3. The seven gaps
+
+1. **Nothing starts a run but a human.** Every entry point is `ipcMain.handle('flow:run', …)`.
+   There is no scheduler and no "when this run ends, start the next one."
+2. **The backlog is run-scoped.** `create_task` writes `runs/<id>/tasks.json` and dies with the
+   run. Nothing survives a run to be prioritized tomorrow.
+3. **There is no money in the system.** Token `usage` is captured per call; nothing converts it
+   to dollars and nothing enforces a ceiling. There is no price table anywhere in the codebase.
+4. **Escalation ends at a human, not at a bigger model** — backwards for an unattended day.
+5. **Verification is advisory.** `DESIGN-SPEC.md` §11.1 already names this the weakest joint:
+   `bash` returns a non-zero exit as *data*, so an agent can report success over a red suite.
+   Attended, you notice. Unattended, it compounds for eight hours and poisons the context of
+   every task that follows.
+6. **No machine interface.** `core/` is Electron-free by discipline, but every command is bound
+   to `ipcMain`. Neither a daemon nor an AI can drive the app.
+7. **A gate parks the entire run.** Unattended, one approval request wastes the rest of the day.
+
+---
+
+## 4. Architecture — the supervisor
+
+### 4.1 Process model
+
+```
+  flyt-supervisor (headless node)          Electron (viewer)
+  ├── backlog        (.flyt/backlog/)  ◄── HTTP + SSE on 127.0.0.1
+  ├── scheduler      (pick → claim)        (queue, burn-down, review pile)
+  ├── worktree pool  (N in flight)
+  ├── FlowRunner ×N  (existing engine)     CLI (`flyt …`)
+  ├── budget ledger  (.flyt/ledger/)   ◄── same HTTP surface, JSON out
+  ├── gate runner    (tests, lint)
+  └── overseer       (async watcher)       MCP (later, same seam)
+```
+
+The supervisor is a plain node process, not an Electron one. That is what lets the loop survive
+a closed window, what lets an AI drive it, and what makes the MCP server in `TOOLS-PLAN.md` §9
+fall out of the same seam rather than needing its own design.
+
+### 4.2 The `core/api.js` seam — the highest-leverage refactor in this plan
+
+`electron/main.js` is 1162 lines, most of it `ipcMain.handle('x', (_e, …args) => …)` wrappers
+whose *bodies* are already transport-agnostic (they call into `core/`). Lift those bodies into
+a command surface:
+
+```js
+// core/api.js — one map, no Electron, no HTTP.
+export function createApi({ registry, flows, tools, settings }) {
+  return {
+    'flow:run':      ({ projectId, flowId, userInput, workspaceDir, approvalMode, launch }) => …,
+    'run:snapshot':  ({ projectId, runId }) => …,
+    'loop:start':    ({ budget, parallelism }) => …,
+    …
+  };
+}
+```
+
+Then bind it twice, thinly:
+
+- `electron/main.js` — `for (const [name, fn] of Object.entries(api)) ipcMain.handle(name, …)`.
+  The renderer's `window.flyt` contract does not change; this is a mechanical lift with the
+  existing tests as the safety net.
+- `core/server.js` — an HTTP binding, `POST /api/<command>` with a JSON body, plus
+  `GET /api/events` as an SSE stream carrying the same snapshot diffs `core/snapshotDiff.js`
+  already produces for IPC. Loopback-only, bearer token required even on loopback (any local
+  process can reach 127.0.0.1 — the call `TOOLS-PLAN.md` §9.2 already made for the MCP server).
+
+One command surface, three consumers (Electron, CLI, AI), no duplicated logic, and the event
+stream is the *same* diff machinery rather than a second implementation.
+
+### 4.3 The loop
+
+```
+  pick → claim → isolate → run → verify → review → land → record → repeat
+                    │                        │        │       │
+                    │                        │        │       └─ ledger + archive (§12)
+                    │                        │        └───────── merge, push, canary (§6)
+                    │                        └────────────────── second model on the diff (§7)
+                    └─────────────────────────────────────────── worktree + branch (§6)
+```
+
+Each stage is a file transition, not a memory state — principle #1 holds. A supervisor killed
+between any two stages restarts by reading the backlog directory.
+
+---
+
+## 5. The backlog
+
+### 5.1 Shape
+
+`.flyt/backlog/<id>.task.md` — YAML frontmatter plus a markdown body:
+
+```markdown
+---
+id: t-0042
+title: Give the gate runner a per-task timeout
+status: queued            # queued|claimed|running|verifying|review|landed|failed|parked
+priority: 0.72            # computed (§5.3), not typed by hand
+tier: cheap               # starting tier hint (§8); the ladder may escalate
+createdBy: agent:t-0031   # or human
+createdAt: 2026-08-12T06:40:11Z
+dependsOn: [t-0038]
+blastRadius: [core/gates/, tests/gates.test.js]
+gates: [npm test, npm run lint]     # extra gates beyond the defaults
+budgetUsd: 1.50           # per-task ceiling (§9)
+attempts: 0
+---
+
+## Goal
+A hung `npm test` currently parks a worktree forever…
+
+## Done when
+- `runGates()` kills a gate after its timeout and reports `timeout` distinctly from `fail`
+- a test proves the kill path
+```
+
+Markdown-with-frontmatter rather than JSON because a human writes these at 7am on a phone, an
+agent writes them mid-run, and both need to read them. Same reasoning that made flows a DSL
+rather than JSON (D24, `FLOW_LANG.md`).
+
+### 5.2 Where it lives, and why that matters more than it looks
+
+The backlog lives in the **main checkout's** `.flyt/backlog/`, which is **gitignored** in this
+repo, and it is owned **solely by the supervisor**. Worktrees never write it.
+
+This is not incidental:
+
+- If the backlog were tracked, every parallel task's diff would carry bookkeeping churn and
+  **every pair of parallel tasks would conflict on the same files.** A queue inside the thing
+  being edited is a queue that fights itself.
+- Agents inside a worktree therefore do not edit backlog files. They call `enqueue_task`, and
+  the supervisor — which sits outside every worktree — applies it to the canonical directory.
+  That tool *is* the "prompt itself" primitive, and routing it through the supervisor is what
+  keeps a task from rewriting its own priority or deleting its own gates (§7.3).
+- Project-level rather than app-level, per D15's split: a backlog is about *this* repo, the way
+  skills are, while tools stay portable and app-level.
+
+### 5.3 Picking — cheap and deterministic first
+
+Same tiering as `safetyCheck.js` and the clerk in `TOOLS-PLAN.md` §7, for the same reason:
+
+1. **Deterministic score, free.** `priority = value × readiness / effort`, where readiness is 0
+   for anything with an unmet `dependsOn` or an unresolved `parked` reason, and a small bonus
+   accrues to tasks that unblock the most other tasks. Ties break toward the oldest.
+2. **LLM tiebreaker, only on ambiguity** (a cluster within a few percent, or an empty-ish
+   queue where the question is "what *should* we do next"). This is also where new tasks get
+   proposed — the picker is allowed to add to the backlog, which is how "it adds new tasks it
+   can see to be useful" (e.g. *build a tool for X*) happens without a separate mechanism.
+
+The picker is a node template like everything else, so its reasoning is an inspectable artifact.
+
+### 5.4 Claiming
+
+Atomic claim by rename (`t-0042.task.md` → `t-0042.claimed.md` via `fs.renameSync`, which is
+atomic on Windows and POSIX alike for same-directory renames) plus a `claimedBy`/`claimedAt`
+stamp. Two workers cannot claim the same task; a crashed worker's claim is reclaimable after a
+lease timeout, and the reclaim is logged rather than silent.
+
+---
+
+## 6. Isolation and landing — the YOLO path, made survivable
+
+**Decided:** worktrees for parallel tasks, commit and push, second-model review before merging
+into `main`, plus automated tests and linting.
+
+### 6.1 Worktrees
+
+One `git worktree` per in-flight task, on branch `flyt/t-0042-gate-timeout`, created from
+current `origin/main`. Default parallelism 2–3, bounded by budget and by how many `npm test`
+runs the machine tolerates at once.
+
+Worktrees live **outside the repo root** (default `<appData>/flyt/worktrees/<repo>/<taskId>`,
+configurable). A nested checkout inside the working tree confuses grep, test runners and the
+agent's own file tools. Outside, each worktree is simply *the run's workspace root*, so
+`core/tools/fileHost.js` confinement works unchanged and an agent physically cannot reach
+another task's tree.
+
+Cleanup is `git worktree remove` — a failed task is thrown away by deleting a directory, which
+is the property that makes YOLO tolerable.
+
+### 6.2 The landing sequence
+
+```
+  gates green in worktree
+      → reviewer model approves the diff            (§7.2)
+      → merge --no-ff into main, push
+      → CANARY: full suite on main after the merge
+          green → record landed
+          red   → git revert the merge commit, push, re-file the task with the evidence
+```
+
+The canary is the part most such systems omit. Two branches that each pass in isolation can
+fail together, and with 2–3 parallel tasks landing per hour that will happen. Reverting a
+`--no-ff` merge commit is a single clean operation, which is why the merge is never squashed.
+
+### 6.3 The self-modification hazard
+
+**The supervisor is running the code it is editing.** A merge that breaks the gate runner
+breaks the thing that would have reverted it, and the loop eats itself at 11am.
+
+Mitigation — **pin the supervisor**:
+
+- The supervisor process runs from a separate checkout at a known-good revision
+  (`<appData>/flyt/supervisor-pin/`), not from the working tree it edits.
+- After a green canary, the pin advances only if the *new* revision passes the full suite **and**
+  a supervisor self-test (start, claim a no-op task, land it, stop) in a scratch clone.
+- If the pin fails to advance, the loop keeps running on the old pin and files a task about it.
+  Improvements to the harness therefore reach the harness one verified step behind, never
+  mid-flight.
+
+This is the single most important safety property in the plan, and it is what separates "it
+improves itself" from "it bricks itself while you are at work."
+
+### 6.4 Push and review posture
+
+Pushing task branches is free and gives you something to look at from your phone. The merge to
+`main` is what the reviewer model gates. A `--dry-run` posture (push branches, do not merge) is
+a one-line config for the first few days, and I would run it that way for the first two nights
+before trusting auto-merge.
+
+---
+
+## 7. Verification — the definition of done
+
+**Decided: tests plus a second-model review.** Both, and the harness runs the first one.
+
+### 7.1 Gates are commands the supervisor runs
+
+Not `bash` calls the agent makes and interprets. `core/gates.js` runs each declared gate in the
+worktree with a timeout, captures bounded stdout/stderr as an artifact, and reports
+`pass | fail | timeout`. Defaults come from the project's `.flyt/config.json`
+(`npm test`, `npm run lint`); a task may *add* gates and may never remove them.
+
+A failed gate returns its bounded output to the agent as guidance for another attempt, capped
+by the existing retry budget — the pattern
+[prime-agent](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/long-running-agents.md)
+describes, and the one that closes `DESIGN-SPEC.md` §11.1's weakest joint.
+
+There is no linter today (`package.json` has no `lint` script). Adding one is task zero of the
+first backlog — it is exactly the kind of "improve your ability to improve" work that should
+come first, and the loop cannot enforce a gate that does not exist.
+
+### 7.2 The reviewer
+
+A node template (`diff-review`) seeing the task goal, the full diff, the gate output and the
+declared `blastRadius`. Verdict `approve | request-changes | reject` with reasons.
+`request-changes` feeds the existing step-eval retry loop with the reasons as guidance;
+`reject` parks the task for you.
+
+The reviewer runs **one tier above** the model that wrote the code (§8) — a cheap model
+reviewing its own cheap output is theatre — and never on the same model instance that produced
+the diff.
+
+### 7.3 Anti-gaming rules, enforced by the harness
+
+An agent optimizing for "gates green" has three cheap exits. Close them mechanically:
+
+- **Test count must not decrease.** Recorded per landing; a drop fails the task regardless of
+  the suite being green.
+- **A task may not edit its own gate configuration**, the supervisor pin, the gate runner, or
+  `.flyt/backlog/` — unless the task is *explicitly about* that file, in which case it is
+  marked `needs-human` and lands only with your approval. This is the reflexive-modification
+  hole, and it must be closed in code, not in a prompt.
+- **Diffs outside `blastRadius`** are surfaced to the reviewer as a specific question rather
+  than blocking, since blast radius declared up front is often wrong in a benign way.
+
+---
+
+## 8. The tier ladder
+
+### 8.1 Tiers
+
+| Tier | Intent | Candidates |
+|---|---|---|
+| **T0 sub** | Anything the subscription covers; costs time, not dollars | `claude-code`, `codex` CLI delegation (D23) |
+| **T1 cheap** | Mechanical work, high volume | DeepSeek, Kimi K2.7-code, small OpenAI/Anthropic tiers |
+| **T2 mid** | Real reasoning, bounded | Sonnet-class, GPT-5-class |
+| **T3 frontier** | Last resort before a human | Opus-class |
+
+Tier membership is data — an added axis on `core/modelPriority.js`, which already ranks
+`provider × kind × effort` — not a hardcoded list. That keeps it tunable from the ledger (§12),
+which is the retrospective loop D13 scoped and never closed.
+
+### 8.2 Escalation
+
+- Every task starts at the lowest tier its class allows (`tier:` hint, defaulted by task kind).
+- step-eval `retry` stays **same-tier**, with guidance — this is already built.
+- A second failure **escalates one tier** and re-runs with the accumulated guidance and the
+  gate output. This is the change: escalate means *bigger model*, not *wake the human*.
+- Failure at the top of the ladder, or exhausting the per-task budget, means `parked:
+  needs-human` — the task records what was tried at each tier, and the loop picks the next one.
+
+### 8.3 Ordering under a subscription
+
+Subscription-first inverts the usual ordering: T0 is tried before T1 even though T1 is
+"cheaper" in tokens, because T0 is already paid for. The constraint on T0 is *throughput and
+rate limits*, not money, so the ledger tracks T0 in **wall-clock and call counts** while
+tracking T1–T3 in dollars. A rate-limited T0 falls to T1 rather than blocking.
+
+---
+
+## 9. Budget — subscription first, soft cap, hard cap
+
+**Decided.** Three ceilings, one ledger.
+
+- **`core/budget.js`** holds a price table (`$ per Mtok in/out`, per provider+model, a plain
+  file so it is correctable without a release), an append-only ledger at
+  `.flyt/ledger/<date>.jsonl` (one line per model call: task, node, tier, provider, model,
+  tokens, dollars, duration), and the three ceilings.
+- **Per-task cap** — exceeded, the task parks with what it spent and where.
+- **Soft daily cap** — escalation stops. Everything runs at T0/T1 for the rest of the day. The
+  loop keeps working; it just stops reaching for the expensive answer.
+- **Hard daily cap** — the in-flight task is allowed to finish its current node, then lands or
+  reverts cleanly, the report is written, and the loop stops. Never a mid-write kill.
+- **Enforcement is a pre-flight check** in the `callModel` path: a refused call returns
+  `budget_exhausted` as a first-class outcome that the runner handles like any other node
+  failure. Never an exception, never a crash, always a logged line.
+
+Dollars are estimates derived from token counts and a local table; OpenRouter's reported cost is
+preferred when present. The ledger records both so the table can be corrected against reality.
+
+---
+
+## 10. Gates in an unattended run
+
+`approvalMode: 'always'` is the YOLO setting, and `smart` remains available for a more cautious
+night. But mode alone is not enough: an `ask_human` call or an escalation gate still *blocks*.
+
+In loop mode, **a gate parks the task and the supervisor picks the next one.** The question,
+its context, and the run id go into the review pile. Nothing waits on a person who is at work.
+
+The morning report (`flyt report`, and the Electron Loop view) is one page: what landed, what
+reverted and why, what is parked and what it wants from you, what it cost, and what the loop
+added to the backlog on its own.
+
+---
+
+## 11. The overseer
+
+Borrowed from [SICA](https://arxiv.org/pdf/2504.15228), which pairs its self-improvement loop
+with an asynchronous LLM overseer watching for pathological behaviour. A cheap model, running
+on events rather than tokens, reading `log.jsonl` across all in-flight runs and empowered to
+**pause the loop** (never to approve anything — it can only stop, which keeps it fail-safe):
+
+- the same failure three times with cosmetically different diffs
+- spend rate departing from its trailing average
+- test files shrinking, gates being edited, `.flyt/` being written from inside a worktree
+- work drifting off the task's stated goal
+- a worktree that has not produced a file event in N minutes
+
+Cheap to build once the ledger and `log.jsonl` exist, and the thing you will wish you had the
+first time you come home to forty commits.
+
+---
+
+## 12. Measurement — the benchmark and the archive
+
+Without this section, "improve yourself" degrades into churn that cannot be distinguished from
+progress. SICA's finding is that the loop needs a **score** and an **archive**, and that the
+best archived version is what proposes the next improvement.
+
+- **A benchmark suite**: a fixed set of scored tasks the harness can run unattended against a
+  *throwaway* clone (seeded from the `taskline` acceptance in `DESIGN-SPEC.md` §11.1 and from
+  past real runs). Score per task: verified pass, dollars, wall-clock, attempts, top tier
+  reached. A benchmark run is just a loop run with a fixed backlog and a fresh clone.
+- **The archive**: `.flyt/archive/<date>/` — the day's ledger, the benchmark scores, the
+  commits landed, the parked pile.
+- **The gradient**: the picker (§5.3) and the tier table (§8.1) read the archive. "Did this
+  make the loop better" becomes a number: same benchmark, fewer dollars, fewer attempts, fewer
+  escalations.
+
+The first benchmark run is the baseline, and it should happen on day 7 *before* the first real
+overnight, or there is nothing to compare against.
+
+---
+
+## 13. The machine interface
+
+Both surfaces bind the same `core/api.js` (§4.2).
+
+**CLI** — `flyt`, following the precedent `core/flowlang/cli.js` already set (an AI authors a
+flow, lints until `ok: true`, the app picks it up):
+
+```
+flyt loop start [--budget 20 --parallel 3 --until 17:00 --dry-run]
+flyt loop stop|status|pause|resume
+flyt task add "<goal>" [--priority --tier --gates] | list | show <id> | park <id>
+flyt run <flow> --input "…" [--workspace <dir>]
+flyt report [--since today]
+```
+
+Every command takes `--json` and writes machine-readable output to stdout, human text to
+stderr. That is the whole "interface easiest for an AI to access" requirement: an AI already
+knows how to run a CLI and read JSON.
+
+**HTTP** — `POST /api/<command>` + `GET /api/events` (SSE), loopback, bearer token. This is
+what Electron attaches to, and what a remote agent would use.
+
+**MCP** — later, and free: `TOOLS-PLAN.md` §9 already designed the outbound server (flows as
+tools, task handles, gates surfaced as `InputRequiredResult`). It becomes a third binding of
+the same command map rather than a new subsystem.
+
+---
+
+## 14. Electron becomes a viewer
+
+A new **Loop** surface, and nothing else changes:
+
+- the queue, with each task's priority, tier, attempts and spend
+- in-flight worktrees, live, using the existing canvas run view per task
+- budget burn-down against the soft and hard caps
+- landed / reverted / parked piles, with diffs and the reviewer's reasons
+- the benchmark trend across archived days
+
+The app connects to the supervisor over HTTP if one is running and falls back to owning its own
+runner if not, so attended use with no supervisor works exactly as today.
+
+---
+
+## 15. The week
+
+Each day is demoable, and days 6–7 can slip without killing the thing.
+
+| Day | Build | Demo |
+|---|---|---|
+| 1 | `core/api.js` extraction; headless supervisor entry; CLI skeleton; HTTP + token + SSE | Start a run from a terminal with Electron closed |
+| 2 | Backlog files, atomic claim, `enqueue_task` routed through the supervisor, picker (deterministic + LLM tiebreak) | `flyt task add`, the loop picks it and runs it |
+| 3 | Worktree pool, gate runner, `diff-review` node, merge + push + canary + auto-revert, supervisor pin | A task lands on `main` with nobody watching |
+| 4 | Price table, ledger, three ceilings, tier ladder wired into step-eval escalation, subscription-first ordering | A task escalates cheap → frontier; a hard cap stops the loop cleanly |
+| 5 | Park-don't-block gates, overseer, morning report | An 8-hour dry run on mock + cheap models |
+| 6 | Electron Loop view over HTTP/SSE | Watch the queue burn down |
+| 7 | Benchmark suite, archive, baseline run | The first real overnight, with a number to beat |
+
+**Day 0, before any of it:** add the lint script. The loop cannot enforce a gate that does not
+exist, and it is the smallest possible instance of the thing this whole plan is for.
+
+---
+
+## 16. What we take from the field, and what we do not
+
+**Patterns, not code.** D24 keeps the dependency footprint at zero on purpose and the DSL is
+hand-rolled on principle; opencode is a Bun/TypeScript stack whose value here is architectural,
+not importable. Concretely:
+
+- **[opencode](https://www.teamday.ai/harness/opencode)** — the server/client split is the
+  thing worth copying: `opencode serve` runs the harness headless over HTTP and every surface
+  (TUI, web, Electron, IDE) is a client of it, synchronized by an event stream. §4.1 and §4.2
+  are that idea applied to a codebase that already keeps `core/` Electron-free.
+- **[prime-agent](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/long-running-agents.md)**
+  — gate commands that must pass before a session may finish, with bounded failure output fed
+  back for another attempt (§7.1); explicit limits on continuations, turns, tokens and
+  wall-clock (§9); a supervisor that rehydrates sessions after restart (already D17 here).
+- **[SICA](https://arxiv.org/pdf/2504.15228)** — the archive of scored versions, the best of
+  which proposes the next improvement (§12), and the asynchronous overseer (§11). Its reported
+  17%→53% SWE-bench Verified movement came from scaffolding changes, which is precisely the
+  workload being aimed at here.
+- **[Loop taxonomy](https://www.requesty.ai/blog/loop-engineering-how-to-build-ai-agent-loops-that-run-themselves)**
+  — heartbeat / cron / hook / goal. This plan is a **goal loop bounded by a budget and a
+  clock**; the others are follow-on config, not v1.
+
+---
+
+## 17. Risks
+
+- **The loop lands forty commits of churn.** Mitigated by the benchmark (§12): unscored work
+  is indistinguishable from progress, so score it. Also by the reviewer having `reject`.
+- **A bad merge breaks the supervisor.** Mitigated by the pin (§6.3). This is the one that
+  ruins a day.
+- **Approval fatigue in reverse** — a morning review pile so large you ignore it. Cap the
+  parked pile; when it exceeds N, the loop stops taking new work and says so.
+- **Cheap models thrash.** Two failures at a tier escalate; a task that reaches the top tier
+  twice gets its `tier:` floor raised in the backlog permanently, so the loop learns rather
+  than repeats.
+- **The 8-hour context problem.** Not one long session — many short runs against a shared
+  file-based backlog. Each task is a fresh run with a scoped context, which is exactly what
+  this engine already does well and why the backlog is files rather than a conversation.
+- **Windows specifics.** Worktrees, `renameSync` claims and CLI spawning are all Windows-aware
+  already (`cliDelegate.js` solved the `.cmd` shim problem); path length and file locking
+  during parallel `npm test` are the ones to watch.
+
+---
+
+## 18. Non-goals for this pivot
+
+- Multi-machine or cloud execution. One Windows box.
+- Replacing attended mode. Everything additive.
+- A general scheduler (cron/heartbeat/hook loops). One goal loop, bounded.
+- Sandboxing beyond worktree isolation + the existing safety screen. The blast radius is a git
+  repo you can revert, and that is a deliberate acceptance, not an oversight.
+- Making the *models* better. This is harness work; the loop improves scaffolding.
+
+---
+
+## 19. What this changes in the existing docs
+
+- **`GOALS.md` non-goals** currently lists *cost tracking* alongside large graphs and A/B
+  testing. §9 reverses it: budget is now a hard requirement, because unattended spend without a
+  ceiling is the one failure mode with no upper bound. This needs D35, not a quiet edit.
+- **`DESIGN-SPEC.md` §4** (routing, PLANNED) is delivered in part by §8 — the tier ladder is
+  the matrix-first half of D12, with escalation as the policy instead of an LLM tiebreaker.
+- **`DESIGN-SPEC.md` §5** (spawn guards, PLANNED) gains its missing budget ceiling from §9.
+- **`DESIGN-SPEC.md` §9** (safety, PLANNED) gains the harness-run gate and the overseer.
+- **`DESIGN-SPEC.md` §11.1**'s "weakest joint" is closed by §7.
+- **`DECISIONS.md` D13** (retrospective loop scoped to model-ranking → routing) is finally
+  actionable via the ledger and archive (§12).
+- **`TOOLS-PLAN.md` §9** (MCP server) becomes cheaper — it binds `core/api.js` rather than
+  inventing a transport.
+
+---
+
+## 20. Draft D35 — for `DECISIONS.md` when the last phase closes
+
+> ### D35 — The outermost loop is a supervisor, not a person
+>
+> **Context.** Every capability in Flyt was agentic except the outermost loop, which was a human
+> pressing Run. Unattended operation needs four things the app did not have: work that survives
+> a run, money that is counted and capped, verification that is executed rather than claimed,
+> and a way in that is not Electron IPC.
+>
+> **Decision.**
+> 1. **A headless supervisor owns the loop**; Electron becomes a client. Both bind one
+>    transport-agnostic command surface (`core/api.js`), as does the CLI and, later, MCP.
+> 2. **The backlog is files, project-level, gitignored, and supervisor-owned.** Agents append to
+>    it only through `enqueue_task`, which the supervisor applies outside every worktree — a
+>    queue inside the thing being edited is a queue that conflicts with itself and can rewrite
+>    its own priorities.
+> 3. **Isolation is a git worktree per task, outside the repo root**, landing by `--no-ff` merge
+>    after gates and a reviewer model, with a post-merge canary that auto-reverts. The
+>    supervisor runs from a pinned known-good revision so it cannot break the process that would
+>    revert the change that broke it.
+> 4. **Done means a command said so.** The harness runs the gates; an agent's claim is not
+>    evidence. Test count may not decrease, and a task may not edit its own gates, the pin, or
+>    the backlog.
+> 5. **Escalation means a bigger model, then a human.** step-eval's existing `retry → escalate`
+>    ladder re-points at tiers; a human is the last rung, not the second.
+> 6. **Cost tracking becomes a requirement**, reversing a `GOALS.md` non-goal. Subscription
+>    first (metered in time), then dollars under a soft cap that stops escalation and a hard cap
+>    that stops the loop. A refused call is an outcome, not an exception.
+> 7. **A gate parks a task; it never blocks the loop.**
+> 8. **Improvement is scored or it did not happen.** A fixed benchmark against a throwaway
+>    clone, archived per day, feeds the picker and the tier table.
+> 9. **Patterns, not dependencies** (D24). opencode's server/client split, prime-agent's gate
+>    commands and limits, SICA's archive and overseer — read, not vendored.
+>
+> **Status.** Provisional until the phases in §15 land; §21 lists what is still open.
+
+---
+
+## 21. Open questions
+
+**Q-L1 — Provider access for the cheap tier.** DeepSeek direct or via OpenRouter, and what
+"Meta Muse contributor pricing" requires (an application? a key? an OpenAI-compatible
+endpoint?). The tier table is data, so any OpenAI-compatible endpoint slots into
+`core/adapters/http.js` with a config entry — but the *shape* of the auth decides whether that
+is an afternoon or a day.
+
+**Q-L2 — Dry-run duration.** How many nights of push-branches-but-do-not-merge before
+auto-merge is switched on. Proposed: two.
+
+**Q-L3 — Benchmark content.** Which tasks constitute the fixed suite, and against which
+throwaway repo. Proposed: seed from `taskline` plus three replayed real runs, growing as the
+loop encounters classes of task it handles badly.
+
+**Q-L4 — Parked-pile ceiling.** The N at which the loop stops taking new work because too much
+is waiting on you.
+
+**Q-L5 — Does the picker get its own budget?** An LLM tiebreak on every pick is a real cost at
+forty tasks a day. Probably a cheap model with a hard per-day call ceiling, but measure first.
+
+**Q-L6 — Windows process lifecycle.** Terminal window, background process, or a Task Scheduler
+entry that starts the supervisor at 08:00 and stops it at 17:00. Interacts with Q-L2.
+
+---
+
+## Sources
+
+- [opencode Harness — Run the Open-Source Agent Server-Side](https://www.teamday.ai/harness/opencode) — headless `serve`, server/client split, event stream to every surface
+- [prime-agent — long-running agents](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/long-running-agents.md) — gate commands, continuation/token/wall-clock limits, supervisor rehydration
+- [A Self-Improving Coding Agent (SICA)](https://arxiv.org/pdf/2504.15228) — archive of scored versions, best-archived-as-meta-agent, asynchronous overseer
+- [self_improving_coding_agent](https://github.com/MaximeRobeyns/self_improving_coding_agent) — reference implementation of the above
+- [Loop Engineering: AI Agent Loops That Run Themselves](https://www.requesty.ai/blog/loop-engineering-how-to-build-ai-agent-loops-that-run-themselves) — heartbeat / cron / hook / goal loop taxonomy
+- [Long-Running Coding Agents: The 2026 Guide](https://o-mega.ai/articles/long-running-coding-agents-the-2026-guide) — one long loop beats an unmanaged swarm
