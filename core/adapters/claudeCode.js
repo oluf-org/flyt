@@ -142,3 +142,9 @@ export async function claudeCodeAdapter({ model, system, prompt, onText, signal,
 // Same rule as the API adapter: this provider serves claude-* ids. Which of
 // the two actually takes a call is the priority walk's decision.
 claudeCodeAdapter.canServe = modelId => String(modelId).startsWith('claude-');
+
+// This adapter bounds itself (spawnCliCall's timeoutMs), and the CLI it spawns
+// can legitimately go quiet for minutes while a child process works — an idle
+// deadline over the top of that would kill healthy runs (LOOP-PLAN §11.5). A
+// stop, and any configured hard ceiling, still reach it through the signal.
+claudeCodeAdapter.selfTimed = true;

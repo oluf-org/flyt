@@ -84,6 +84,103 @@ const sleepAbortable = (ms, signal) => new Promise((resolve, reject) => {
   signal.addEventListener('abort', onAbort, { once: true });
 });
 
+// --- Per-call deadlines (LOOP-PLAN §11.5) -----------------------------------
+//
+// Cancellation already existed — RUN-CONTROL threads an AbortSignal into every
+// adapter — but nothing ever fired it on time. A provider that opens a
+// connection and then goes quiet never errors, so the retry budget never
+// engages and the node sits there: seen live at 347s on a node that normally
+// took 79-104s. Attended you notice and press stop. Unattended (LOOP-PLAN §11)
+// nobody does, and that task is wedged until someone comes home.
+//
+// The deadline is on PROGRESS, not on total duration. Every onText emission is
+// proof the connection is moving, so a legitimately long stream keeps resetting
+// its own deadline and only silence counts. A non-streaming call has no
+// progress signal, so for it the idle deadline is effectively the whole call —
+// which is why the default is generous rather than tight.
+//
+// A fired deadline is TRANSIENT: it becomes an ordinary retryable failure and
+// each attempt gets a fresh deadline. A deliberate stop() is not, and wins the
+// race for which of the two happened — see the catch in callModel.
+export const DEFAULT_TIMEOUT = { idleMs: 300_000, hardMs: null };
+
+function timeoutError(provider, kind, ms) {
+  const secs = Math.round(ms / 1000);
+  return Object.assign(
+    new Error(kind === 'idle'
+      ? `${provider} sent nothing for ${secs}s — the connection stalled (idle timeout)`
+      : `${provider} call exceeded its ${secs}s ceiling (hard timeout)`),
+    // Transient so the existing classifier retries it, the way it already
+    // retries a 408. `timedOut` lets callers tell a deadline from a 5xx.
+    { transient: true, timedOut: true, timeoutKind: kind }
+  );
+}
+
+// A deadline for one attempt. Two enforcement paths on purpose:
+//   - aborting `signal`, so the underlying request actually stops and the
+//     socket/child process is released rather than left running, and
+//   - rejecting `expired`, raced against the adapter, so an adapter that
+//     ignores its signal still cannot hold the call open forever. Adapters are
+//     pluggable (registerProvider), so "every adapter honors abort" is a
+//     property of today's code, not a guarantee to bet supervision on.
+function startDeadline({ provider, signal, idleMs, hardMs }) {
+  const ctl = new AbortController();
+  let idleTimer = null;
+  let hardTimer = null;
+  let fired = null;
+  let rejectExpired = null;
+  // Always consumed by the Promise.race below, so a rejection after the race
+  // has settled is observed (and ignored) rather than unhandled.
+  const expired = new Promise((_, reject) => { rejectExpired = reject; });
+
+  const clear = () => {
+    clearTimeout(idleTimer); clearTimeout(hardTimer);
+    idleTimer = hardTimer = null;
+  };
+  const fire = kind => {
+    if (fired) return;
+    fired = timeoutError(provider, kind, kind === 'idle' ? idleMs : hardMs);
+    clear();
+    ctl.abort();
+    rejectExpired(fired);
+  };
+  // The caller's own stop: abort downstream, but never as a timeout.
+  const onOuterAbort = () => { clear(); ctl.abort(); };
+
+  // Unref'd on purpose: a deadline must not be the reason a process stays
+  // alive. While a real call is in flight its socket or child process holds the
+  // loop open and the timer fires normally; once nothing else is pending there
+  // is nothing left to time out, and a headless `flyt` command should exit
+  // rather than linger for the length of the longest deadline it ever armed.
+  const arm = (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; };
+
+  const touch = () => {
+    if (fired || !idleMs) return;
+    clearTimeout(idleTimer);
+    idleTimer = arm(() => fire('idle'), idleMs);
+  };
+
+  if (signal) {
+    if (signal.aborted) ctl.abort();
+    else signal.addEventListener('abort', onOuterAbort, { once: true });
+  }
+  touch();
+  if (hardMs) hardTimer = arm(() => fire('hard'), hardMs);
+
+  return {
+    signal: ctl.signal,
+    expired,
+    touch,
+    get error() { return fired; },
+    get timedOut() { return Boolean(fired); },
+    // Timers hold the event loop open and a run's controller outlives hundreds
+    // of calls, so both are released on every settle — a listener per call left
+    // on a long-lived signal is a leak that only shows up on long runs, which
+    // is exactly the workload this is for.
+    dispose() { clear(); signal?.removeEventListener('abort', onOuterAbort); }
+  };
+}
+
 // Retry policy, overridable per call and from config.json (`retry`).
 //
 // Five attempts over ~15s of backoff, not three over ~3.3s: rate limits are
@@ -103,44 +200,72 @@ export const DEFAULT_RETRY = { attempts: 5, baseMs: 1000, maxMs: 30000 };
 // count, but a call that exhausts its budget just throws, so the attempts that
 // led there left no trace and "did backoff actually run?" could only be guessed
 // from wall-clock timing. Callers log it (V1 task 11).
-export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools, retry, onText, onRetry, signal, ...rest }) {
+// timeout: { idleMs, hardMs } — the per-attempt deadline above, overridable per
+// call and from config.json (`timeout`). Adapters that supervise their own
+// child process (the CLI-delegation providers) opt out of the idle half.
+export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools, retry, timeout, onText, onRetry, signal, ...rest }) {
   const adapter = providers[provider];
   if (!adapter) throw new Error(`Unknown provider "${provider}". Available: ${Object.keys(providers).join(', ')}`);
   const attempts = Math.max(1, retry?.attempts ?? DEFAULT_RETRY.attempts);
   const baseMs = retry?.baseMs ?? DEFAULT_RETRY.baseMs;
   const maxMs = retry?.maxMs ?? DEFAULT_RETRY.maxMs;
+  // A self-timed adapter spawns a CLI that can legitimately go quiet for
+  // minutes while a child process works (a long `bash` inside claude-code), so
+  // an idle deadline there would fail healthy work. It bounds itself
+  // (spawnCliCall's own timeoutMs) and still honors the signal, so a stop and
+  // any hard ceiling both still reach it.
+  const idleMs = adapter.selfTimed ? 0 : (timeout?.idleMs ?? DEFAULT_TIMEOUT.idleMs);
+  const hardMs = timeout?.hardMs ?? DEFAULT_TIMEOUT.hardMs;
   const started = Date.now();
   let lastErr;
   for (let attempt = 0; attempt < attempts; attempt++) {
     // RUN-CONTROL: a stop that landed between attempts (or before the first)
     // ends the call immediately — an abort is never retried below either.
     if (signal?.aborted) throw abortError();
+    const deadline = startDeadline({ provider, signal, idleMs, hardMs });
+    // Streaming keeps the deadline alive: each emission proves the connection
+    // is moving, so only silence is counted against it.
+    const watched = onText ? (text, opts) => { deadline.touch(); return onText(text, opts); } : undefined;
     try {
       // Extra fields (rest — e.g. kimi's keyKind, stamped by the main process)
       // pass straight through to the adapter; callers never handle them.
-      const result = await adapter({ model, system, prompt, maxTokens, apiKey, messages, tools, onText, signal, ...rest });
+      const result = await Promise.race([
+        adapter({ model, system, prompt, maxTokens, apiKey, messages, tools, onText: watched, signal: deadline.signal, ...rest }),
+        deadline.expired
+      ]);
       return {
         ...result, provider, model,
         durationMs: Date.now() - started,
         ...(attempt > 0 ? { retries: attempt } : {})
       };
     } catch (err) {
-      lastErr = err;
-      // An abort is a deliberate stop, not a transient failure: no retry.
-      if (isAbortError(err) || signal?.aborted) throw isAbortError(err) ? err : abortError();
-      if (attempt === attempts - 1 || !isTransientError(err)) throw err;
+      // Precedence matters. Aborting the adapter is HOW a deadline is enforced,
+      // so a fired deadline arrives here as an AbortError that must not be read
+      // as a deliberate stop — but the caller's own signal outranks both, since
+      // a stop landing during a timeout is still a stop.
+      if (signal?.aborted) throw isAbortError(err) ? err : abortError();
+      const failure = deadline.timedOut ? deadline.error : err;
+      lastErr = failure;
+      // An abort with nobody having asked for one: an adapter's own cancellation.
+      if (isAbortError(failure)) throw failure;
+      if (attempt === attempts - 1 || !isTransientError(failure)) throw failure;
       // The provider's own Retry-After wins whenever it asks for longer than we
       // guessed — it knows when its window reopens and we don't. Capped, so a
       // hostile or mistaken hint can't park the run indefinitely.
       const backoff = baseMs * 2 ** attempt * (1 + Math.random() * 0.25);
-      const hinted = err?.retryAfterMs ?? 0;
+      const hinted = failure?.retryAfterMs ?? 0;
       const delayMs = Math.round(Math.min(maxMs, Math.max(backoff, hinted)));
       onRetry?.({
         attempt: attempt + 1, attempts, delayMs,
-        retryAfterMs: err?.retryAfterMs ?? null,
-        error: String(err?.message ?? err).slice(0, 300)
+        retryAfterMs: failure?.retryAfterMs ?? null,
+        // A timeout is reported as one: "did it stall or did it 429?" is the
+        // first question asked of a run that took all morning.
+        ...(failure?.timedOut ? { timedOut: true, timeoutKind: failure.timeoutKind } : {}),
+        error: String(failure?.message ?? failure).slice(0, 300)
       });
       await sleepAbortable(delayMs, signal);
+    } finally {
+      deadline.dispose();
     }
   }
   throw lastErr; // unreachable, but keeps the control flow explicit

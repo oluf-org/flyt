@@ -534,7 +534,9 @@ export class FlowRunner {
   async trackedCallModel(runId, params) {
     const ctl = this.trackAbort(runId);
     try {
-      return await callModel({ ...params, signal: ctl.signal });
+      // The deadline default is the runner's, so a per-call timeout in params
+      // still wins (LOOP-PLAN §11.5).
+      return await callModel({ timeout: this.config.timeout, ...params, signal: ctl.signal });
     } finally {
       this.untrackAbort(runId, ctl);
     }
@@ -550,7 +552,7 @@ export class FlowRunner {
     const ctl = this.trackAbort(runId);
     try {
       return await runAgent({
-        ...params, tools, signal: ctl.signal,
+        timeout: this.config.timeout, ...params, tools, signal: ctl.signal,
         ctx: { store: this.store, runId, nodeId, workspace: this.workspaceFor(runId) }
       });
     } finally {
@@ -1895,6 +1897,7 @@ export class FlowRunner {
       onText: this.streamInto(runId, t => this.store.writeTaskOutput(runId, task.id, t)),
       onRetry: this.retryLogger(runId, `executor:${task.id}`),
       retry: this.config.retry,
+      timeout: this.config.timeout,
       signal: abortCtl.signal,
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };

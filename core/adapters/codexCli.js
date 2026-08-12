@@ -160,3 +160,6 @@ export async function codexAdapter({ model, system, prompt, onText, signal, cliH
 
 // ChatGPT-side ids: gpt-* chat models, o-series, and the codex-tuned models.
 codexAdapter.canServe = modelId => /^(gpt-|o\d|codex)/.test(String(modelId));
+
+// Self-bounded like the Claude CLI adapter — see the note there (LOOP-PLAN §11.5).
+codexAdapter.selfTimed = true;
