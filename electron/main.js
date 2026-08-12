@@ -3,15 +3,15 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createEngine } from '../core/engine.js';
-import { normalizeApprovalMode, APPROVAL_MODES } from '../core/flowRunner.js';
+import { createApi } from '../core/api.js';
+import { APPROVAL_MODES } from '../core/flowRunner.js';
 import { SAFETY_MODEL_CANDIDATES } from '../core/safetyCheck.js';
-import { Workspace } from '../core/workspace.js';
 import { DEFAULT_PROJECT_ID } from '../core/projects.js';
-import { lintFlow, lintText } from '../core/flowlang/lint.js';
+import { lintText } from '../core/flowlang/lint.js';
 import { resolveFlow, exposedFields, diffOverrides } from '../src/flowTypes.js';
 import { parseFlow } from '../core/flowlang/parse.js';
 import { serializeFlow } from '../core/flowlang/serialize.js';
-import { callModel, canServe } from '../core/adapters/index.js';
+import { callModel } from '../core/adapters/index.js';
 import {
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
   CURATED_MODELS, TEST_MODELS
@@ -211,39 +211,40 @@ function createWindow() {
 // passes through.
 const proj = projectId => registry.get(projectId);
 
+// --- The command surface (LOOP-PLAN §4.2) ---
+// Commands that don't need a window live in core/api.js so the CLI, the HTTP
+// server and this renderer all reach the same implementation. IPC is positional
+// and the map is keyword, so each binding below names its arguments once —
+// that table IS the adapter, and it is the only thing duplicated.
+const api = createApi(engine);
+const bindIpc = (name, toArgs = () => ({})) =>
+  ipcMain.handle(name, (_e, ...args) => api.invoke(name, toArgs(...args)));
+
+bindIpc('flow:list');
+bindIpc('flow:load', id => ({ id }));
+bindIpc('flow:lint', id => ({ id }));
+bindIpc('tool:list');
+bindIpc('config:get');
+bindIpc('flow:run', (projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) =>
+  ({ projectId, flowId, userInput, workspaceDir, approvalMode, launch }));
+bindIpc('run:list', projectId => ({ projectId }));
+bindIpc('run:log', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:snapshot', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:approve', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:reject', (projectId, runId, reason) => ({ projectId, runId, reason }));
+bindIpc('run:resume', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:stop', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:pause', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:restartNode', (projectId, runId, nodeId, guidance = '') => ({ projectId, runId, nodeId, guidance }));
+bindIpc('run:followUp', (projectId, runId, text) => ({ projectId, runId, text }));
+bindIpc('run:answerInput', (projectId, runId, text) => ({ projectId, runId, text }));
+
 // One engine, one entry point: pick a workflow, type a request, run it.
 // The user input becomes the flow's User Input node content for that run.
 // approvalMode rides in from the chatbox picker (APPROVAL-MODES §3): the mode
 // shown beside the Run button is the mode the run is captured under, so what
 // the user saw when they pressed Run is what governs it for its whole life.
 // Omitted (or unrecognized) falls back to the saved default.
-ipcMain.handle('flow:run', (_e, projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) => {
-  const entry = proj(projectId);
-  // Bind the target workspace at run time (D15): validate the folder, create
-  // its .flyt/ config dir, and pass the confined absolute root to the runner
-  // so it lands in meta.json. A bound tab IS the workspace — its runs always
-  // target the tab's folder (T19); only the unbound scratch tab still picks a
-  // workspace per run (or none — mock/no-file flows run without one).
-  let workspace = null;
-  if (entry.folder) workspace = new Workspace(entry.folder).ensure().root;
-  // An appdata project (L5) has its own managed workspace/ dir inside its
-  // appData home (Q-L5); runs there always bind to it, like a bound tab.
-  else if (entry.kind === 'appdata') workspace = new Workspace(entry.workspaceRoot).ensure().root;
-  else if (workspaceDir) workspace = new Workspace(workspaceDir).ensure().root;
-  // launch (MODES-COMPARE) carries the picked mode and any exposed run-input
-  // overrides: { modeId?, overrides? }. Absent = an ordinary default-mode run.
-  return entry.runner.start(flows.load(flowId), {
-    userInput: String(userInput ?? ''),
-    workspace,
-    approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : runtimeConfig.approvalMode,
-    modeId: launch?.modeId ?? null,
-    overrides: launch?.overrides ?? null,
-    // Compare launches (CONFIGS-COMPARE P2) stamp both runs with the shared
-    // group id + A/B label; the record itself lands via compare:save.
-    compareGroup: launch?.compareGroup ?? null
-  });
-});
-ipcMain.handle('run:approve', (_e, projectId, runId) => proj(projectId).runner.approvePlan(runId));
 // The chat run reports gate state so a parked workflow can find its user:
 // 'pending' while gated (notify + flash only when the window is unfocused —
 // a user already looking at the dialog needs no nudge), 'resolved' on settle.
@@ -268,23 +269,17 @@ ipcMain.handle('app:approvalGate', (_e, info = {}) => {
   });
   approvalNotice.show();
 });
-ipcMain.handle('run:reject', (_e, projectId, runId, reason) => proj(projectId).runner.rejectPlan(runId, reason));
 // Continue a run the app died in the middle of. Completed nodes are kept and
 // not re-executed (V1 task 7). RUN-CONTROL: also releases a soft-paused run —
 // the runner resolves the pause gate and the walk clears meta.paused itself.
-ipcMain.handle('run:resume', (_e, projectId, runId) => proj(projectId).runner.resume(runId));
 // Hard stop a live run (RUN-CONTROL): aborts in-flight model calls, settles
 // any pending approval/pause gate, marks the run 'cancelled' with cancelledAt,
 // and frees the live registry — which is what unblocks run:delete below.
-ipcMain.handle('run:stop', (_e, projectId, runId) => proj(projectId).runner.stop(runId));
 // Soft pause (RUN-CONTROL): the run holds at the next wave boundary — the wave
 // in flight always settles first. meta.paused flips true only once the hold
 // has actually landed; run:resume releases it.
-ipcMain.handle('run:pause', (_e, projectId, runId) => proj(projectId).runner.pause(runId));
 // Re-run one node and everything downstream of it (RUN-CONTROL), with optional
 // guidance injected into the retry prompt. Only on a non-live run.
-ipcMain.handle('run:restartNode', (_e, projectId, runId, nodeId, guidance = '') =>
-  proj(projectId).runner.restartNode(runId, nodeId, String(guidance ?? '')));
 // Fork a finished run at a node (RUN-CONTROL): upstream outputs are preserved
 // as context, downstream nodes re-run in the copy.
 ipcMain.handle('run:branch', (_e, projectId, runId, nodeId) => proj(projectId).runner.branch(runId, nodeId));
@@ -303,14 +298,11 @@ ipcMain.handle('run:moveSummary', (_e, projectId, runId, summaryId, position) =>
   proj(projectId).runner.moveSummary(runId, summaryId, position));
 // Reply to a finished run (FOLLOWUP-PLAN): the flow grows with a continuation
 // subgraph and the walk executes it; completed nodes are never re-run.
-ipcMain.handle('run:followUp', (_e, projectId, runId, text) => proj(projectId).runner.followUp(runId, String(text ?? '')));
 // Answer a run parked at the refiner's awaiting_input gate (MODES-COMPARE T6).
 // Distinct from run:followUp — this closes an in-flight question and re-runs
 // the refine node with the answer; it does not open a new follow-up turn.
-ipcMain.handle('run:answerInput', (_e, projectId, runId, text) => proj(projectId).runner.answerInput(runId, String(text ?? '')));
 // Summaries, not bare ids: the list names, groups and sorts runs, and reading
 // meta + prompt per run is a handful of small synchronous reads.
-ipcMain.handle('run:list', (_e, projectId) => proj(projectId).store.runSummaries());
 ipcMain.handle('run:rename', (_e, projectId, runId, name) => proj(projectId).store.setRunName(runId, name));
 // Deleting a run this process is still walking would pull the files out from
 // under the runner mid-step (it writes meta/log/outputs as it goes), so refuse
@@ -356,16 +348,7 @@ ipcMain.handle('run:judge', async (_e, projectId, runIdA, runIdB, comparisonId =
 // across a step-eval requeue) was then absent from the patch and never repaired,
 // leaving the canvas silently stale until an unrelated change happened to resend
 // the field.
-ipcMain.handle('run:snapshot', (_e, projectId, runId) => {
-  const entry = proj(projectId);
-  const chans = pushStateFor(entry.id).channels;
-  const snapshot = entry.store.snapshot(runId);
-  const rev = (chans.get(runId)?.rev ?? 0) + 1;
-  chans.set(runId, { snapshot, rev });
-  return { ...snapshot, rev };
-});
 ipcMain.handle('run:openFolder', (_e, projectId, runId) => shell.openPath(proj(projectId).store.runDir(runId)));
-ipcMain.handle('run:log', (_e, projectId, runId) => proj(projectId).store.readLog(runId));
 
 // --- Workspace binding (target project folder for a run) ---
 ipcMain.handle('workspace:pick', async () => {
@@ -510,11 +493,8 @@ ipcMain.handle('project:deckData', () => {
     return { ...tab, latestRun, topo };
   });
 });
-ipcMain.handle('config:get', () => ({ workers: publicSettings().workers }));
 
 // --- Flow definitions (editable workflow graphs) ---
-ipcMain.handle('flow:list', () => flows.list());
-ipcMain.handle('flow:load', (_e, id) => flows.load(id));
 ipcMain.handle('flow:save', (_e, flow) => flows.save(flow));
 ipcMain.handle('flow:new', () =>
   flows.create(nodeLibrary.get('work') ? 'work' : null));
@@ -526,8 +506,6 @@ ipcMain.handle('flow:delete', (_e, id) => flows.remove(id));
 ipcMain.handle('flow:folder', () => ({ dir: flows.rootDir, packaged: app.isPackaged }));
 ipcMain.handle('flow:openFolder', () => shell.openPath(flows.rootDir));
 // On-save validation for the canvas badge: full rule set, structured findings.
-ipcMain.handle('flow:lint', (_e, id) =>
-  lintFlow(flows.load(id), { templates: nodeLibrary.listFull(), library: toolLibrary.catalog() }));
 
 // --- Configs (CONFIGS-COMPARE P1): modes as first-class bundles ---
 // A config IS a mode in the flow's modes: block; these are thin passes into
@@ -600,7 +578,6 @@ ipcMain.handle('flow:saveFromYaml', (_e, id, yamlText) => {
 // Read-only over IPC in P1: the renderer uses it to validate grants against
 // what actually exists instead of a hardcoded array. Authoring arrives with
 // the Tools page (TOOLS-PLAN P8).
-ipcMain.handle('tool:list', () => toolLibrary.list());
 ipcMain.handle('tool:folder', () => ({ dir: toolLibrary.rootDir, packaged: app.isPackaged }));
 
   try {
