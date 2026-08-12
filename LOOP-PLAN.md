@@ -37,6 +37,13 @@ Three properties make it a pivot rather than a feature:
 3. **Verification stops being advisory.** An agent's claim of success is no longer what closes
    a task; a command's exit code is.
 
+**There is no clock.** The loop is bounded by the backlog and the budget, not by a workday: it
+runs until there is nothing ready to pick, a cap trips, or you stop it. A task is likewise
+allowed to take hours. What replaces the clock is **supervision** (§11) — continuous status,
+stall detection, and the authority to interrupt work that has stopped making headway. "Long
+running" is a design target here, not a tolerated accident; "long *stuck*" is the failure mode
+being engineered out.
+
 ---
 
 ## 2. What already carries the weight
@@ -101,7 +108,8 @@ This is much closer than the pivot sounds. The following exist and are load-bear
   ├── FlowRunner ×N  (existing engine)     CLI (`flyt …`)
   ├── budget ledger  (.flyt/ledger/)   ◄── same HTTP surface, JSON out
   ├── gate runner    (tests, lint)
-  └── overseer       (async watcher)       MCP (later, same seam)
+  ├── heartbeats     (status, stalls)      MCP (later, same seam)
+  └── references     (read-only clones)
 ```
 
 The supervisor is a plain node process, not an Electron one. That is what lets the loop survive
@@ -379,10 +387,14 @@ tracking T1–T3 in dollars. A rate-limited T0 falls to T1 rather than blocking.
   `.flyt/ledger/<date>.jsonl` (one line per model call: task, node, tier, provider, model,
   tokens, dollars, duration), and the three ceilings.
 - **Per-task cap** — exceeded, the task parks with what it spent and where.
-- **Soft daily cap** — escalation stops. Everything runs at T0/T1 for the rest of the day. The
-  loop keeps working; it just stops reaching for the expensive answer.
-- **Hard daily cap** — the in-flight task is allowed to finish its current node, then lands or
-  reverts cleanly, the report is written, and the loop stops. Never a mid-write kill.
+- **Soft cap** — escalation stops. Everything runs at T0/T1 until the window rolls. The loop
+  keeps working; it just stops reaching for the expensive answer.
+- **Hard cap** — the in-flight task is allowed to finish its current node, then lands or reverts
+  cleanly, the report is written, and the loop stops. Never a mid-write kill.
+
+The soft and hard ceilings are **rolling-window**, not calendar-daily, because the loop has no
+clock (§1): a run that starts at 22:00 should not get a fresh allowance at midnight. A 24-hour
+trailing window is the default; the window length is config.
 - **Enforcement is a pre-flight check** in the `callModel` path: a refused call returns
   `budget_exhausted` as a first-class outcome that the runner handles like any other node
   failure. Never an exception, never a crash, always a logged line.
@@ -406,21 +418,97 @@ added to the backlog on its own.
 
 ---
 
-## 11. The overseer
+## 11. Supervision — status, stalls, and interruption
 
-Borrowed from [SICA](https://arxiv.org/pdf/2504.15228), which pairs its self-improvement loop
-with an asynchronous LLM overseer watching for pathological behaviour. A cheap model, running
-on events rather than tokens, reading `log.jsonl` across all in-flight runs and empowered to
-**pause the loop** (never to approve anything — it can only stop, which keeps it fail-safe):
+With no clock bounding the day, this section carries the weight the clock used to. A task may
+legitimately run for hours; the supervisor's job is to know the difference between *working*
+and *stuck*, and to act on it without waiting for you.
 
-- the same failure three times with cosmetically different diffs
-- spend rate departing from its trailing average
-- test files shrinking, gates being edited, `.flyt/` being written from inside a worktree
-- work drifting off the task's stated goal
-- a worktree that has not produced a file event in N minutes
+### 11.1 Status is tracked, not inferred
 
-Cheap to build once the ledger and `log.jsonl` exist, and the thing you will wish you had the
-first time you come home to forty commits.
+Each in-flight task keeps a heartbeat record the supervisor owns (outside the worktree, so a
+wedged run cannot lie about itself):
+
+```
+  task, run, worktree, tier, phase (running|verifying|review|landing)
+  startedAt, lastNodeDone, lastFileEvent, lastModelCall, lastGateRun
+  tokensSinceProgress, usdSpent, attempts, currentNode, lastToolCall
+```
+
+Fed by what the app already emits — `log.jsonl` events, snapshot diffs (`core/snapshotDiff.js`),
+`node_start`/`tool_call`/`model_retry` — so this is aggregation, not new instrumentation. It is
+also exactly the payload the CLI's `flyt loop status` and the Electron Loop view render, so one
+record serves the machine and the human.
+
+### 11.2 What counts as headway
+
+Elapsed time is not a progress signal, and neither is token spend — a model can burn an hour
+producing confident nothing. Headway is any of:
+
+- a node completing, or a gate result whose **failure signature changes** (a different error is
+  progress; the identical error is not)
+- a **new** file event in the worktree — a write whose content hash differs from the last write
+  to that path
+- a tool result that is not byte-identical to a recent one from the same tool
+- an approval or human answer arriving
+
+Everything else is elapsed time. `tokensSinceProgress` is the counter that matters, and it is
+the one that catches a polite infinite loop.
+
+### 11.3 Stall detectors
+
+| Detector | Signal | Default |
+|---|---|---|
+| **Silent run** | no file, tool or model event | 10 min |
+| **Hung provider call** | one model call outstanding | 5 min (§11.5) |
+| **Spin** | identical diff hash across attempts | 2 repeats |
+| **Groundhog gate** | identical gate failure signature | 3 repeats |
+| **Burn without progress** | `tokensSinceProgress` over threshold | per-tier |
+| **Runaway spend** | rate departs from trailing average | 3× |
+| **Wall-clock outlier** | task exceeds its class's median | 4× |
+
+Thresholds are config, not constants, and every trip is logged with the evidence that tripped it
+— a silent stall detector is as bad as no stall detector.
+
+### 11.4 The interruption ladder
+
+Detection without authority is just a dashboard. The supervisor escalates:
+
+1. **Nudge** — inject the stall evidence as guidance and let the current node continue. Cheapest,
+   and often enough: "you have run the same failing test three times."
+2. **Restart the node** with accumulated guidance. `run:restartNode(runId, nodeId, guidance)`
+   already exists and does exactly this.
+3. **Escalate a tier** (§8) and restart, on the theory that the model is the bottleneck.
+4. **Park the task** — `stop()` the run, keep the worktree for forensics, file the evidence,
+   pick the next task.
+
+The machinery for step 4 is built: RUN-CONTROL threads an `AbortController` into every model
+call and registers it per run, so `stop()` aborts in-flight calls and unwinds cooperatively
+(`flowRunner.js` ~514–531, 749–758). Interruption is wiring, not invention.
+
+### 11.5 The one real gap — no request timeout
+
+`DESIGN-SPEC.md` §11.1 recorded it and it is still true: **no model call has a timeout.** A
+stalled connection never errors, so the retry budget never engages, and a node can sit
+indefinitely — seen live at 347s on a node that normally takes 79–104s. Attended, you notice
+and click stop. Unattended and clockless, that worktree is dead until you get home.
+
+The fix is now small because RUN-CONTROL already threads the signal end to end: compose the
+run's controller with a per-call deadline, and a timeout becomes an ordinary transient failure
+the existing retry classifier already handles. **This is day-1 work, not day-5** — it is the
+difference between "long running" and "hung since 09:20".
+
+### 11.6 The overseer
+
+Above the deterministic detectors sits the cheap LLM watcher
+[SICA](https://arxiv.org/pdf/2504.15228) pairs with its self-improvement loop — reading
+`log.jsonl` across all in-flight runs, on events rather than per token, looking for what a
+threshold cannot express: work drifting off the task's stated goal, cosmetically-different
+retries of the same failed idea, test files shrinking, gates or `.flyt/` being edited from
+inside a worktree.
+
+It is empowered to **pause and to park — never to approve**. A watcher that can only stop is
+fail-safe; one that can also bless is a second, unreviewed decision-maker.
 
 ---
 
@@ -453,11 +541,13 @@ Both surfaces bind the same `core/api.js` (§4.2).
 flow, lints until `ok: true`, the app picks it up):
 
 ```
-flyt loop start [--budget 20 --parallel 3 --until 17:00 --dry-run]
+flyt loop start [--budget 20 --parallel 3 --dry-run]     # runs until stopped or capped
 flyt loop stop|status|pause|resume
+flyt loop interrupt <task> [--nudge "…" | --restart | --escalate | --park]   # §11.4 by hand
 flyt task add "<goal>" [--priority --tier --gates] | list | show <id> | park <id>
 flyt run <flow> --input "…" [--workspace <dir>]
-flyt report [--since today]
+flyt report [--since 24h]
+flyt ref list | grep <pattern> [--repo opencode]         # the reference library (§16.1)
 ```
 
 Every command takes `--json` and writes machine-readable output to stdout, human text to
@@ -494,40 +584,92 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 
 | Day | Build | Demo |
 |---|---|---|
-| 1 | `core/api.js` extraction; headless supervisor entry; CLI skeleton; HTTP + token + SSE | Start a run from a terminal with Electron closed |
+| 1 | **Per-call request timeout** (§11.5); `core/api.js` extraction; headless supervisor entry; CLI skeleton; HTTP + token + SSE | Start a run from a terminal with Electron closed, and kill a hung provider call |
 | 2 | Backlog files, atomic claim, `enqueue_task` routed through the supervisor, picker (deterministic + LLM tiebreak) | `flyt task add`, the loop picks it and runs it |
 | 3 | Worktree pool, gate runner, `diff-review` node, merge + push + canary + auto-revert, supervisor pin | A task lands on `main` with nobody watching |
 | 4 | Price table, ledger, three ceilings, tier ladder wired into step-eval escalation, subscription-first ordering | A task escalates cheap → frontier; a hard cap stops the loop cleanly |
-| 5 | Park-don't-block gates, overseer, morning report | An 8-hour dry run on mock + cheap models |
-| 6 | Electron Loop view over HTTP/SSE | Watch the queue burn down |
+| 5 | Heartbeats, stall detectors, the interruption ladder, park-don't-block gates, the report | A deliberately wedged task gets nudged, restarted, then parked — unattended |
+| 6 | Electron Loop view over HTTP/SSE; reference library + read-only reference root | Watch the queue burn down; an agent greps opencode mid-task |
 | 7 | Benchmark suite, archive, baseline run | The first real overnight, with a number to beat |
 
-**Day 0, before any of it:** add the lint script. The loop cannot enforce a gate that does not
-exist, and it is the smallest possible instance of the thing this whole plan is for.
+**Day 0, before any of it:** clone the reference repos (§16) and add the lint script. The loop
+cannot enforce a gate that does not exist, and the lint script is the smallest possible instance
+of the thing this whole plan is for.
+
+The overseer (§11.6) is deliberately *after* day 7: the deterministic detectors in §11.3 catch
+most of what a model watcher would, cost nothing, and cannot themselves misbehave. Build the
+cheap layer first and measure what still gets through — the same tiering as `safetyCheck.js`.
 
 ---
 
-## 16. What we take from the field, and what we do not
+## 16. The reference library — recipes, not dependencies
 
-**Patterns, not code.** D24 keeps the dependency footprint at zero on purpose and the DSL is
-hand-rolled on principle; opencode is a Bun/TypeScript stack whose value here is architectural,
-not importable. Concretely:
+**Zero new dependencies (D24), and no vendored code.** These repos are read as *recipes*:
+proven answers to problems this harness is about to hit, written by people who hit them first.
+Nobody — human or model — should design a session event stream from first principles when a
+working one is sitting on disk to read.
 
-- **[opencode](https://www.teamday.ai/harness/opencode)** — the server/client split is the
-  thing worth copying: `opencode serve` runs the harness headless over HTTP and every surface
-  (TUI, web, Electron, IDE) is a client of it, synchronized by an event stream. §4.1 and §4.2
-  are that idea applied to a codebase that already keeps `core/` Electron-free.
+### 16.1 Reference repos as a first-class, readable resource
+
+The reference repos are **cloned locally and made readable to the agents**, not merely cited in
+a document an agent may or may not open:
+
+- Shallow clones under `<appData>/flyt/references/<name>/`, pinned to a commit, refreshed on
+  request — **outside every workspace and every worktree**, so nothing can accidentally be
+  edited into a task's diff.
+- A **read-only reference root** in `core/tools/fileHost.js`, alongside the workspace root:
+  `read_file` and `grep`/`glob` resolve against it under a `reference:` prefix; every write tool
+  refuses it. Read-effect only, so an `aiStep` may hold it (§7 of `DESIGN-SPEC.md` already
+  allows read tools on planners) and no grant widening is implied.
+- `references/index.md` per repo — a short, hand-written map of *what this repo is good for and
+  where that part lives* (a paragraph, not a summary of the codebase). Cheap to write, and it
+  is what makes the difference between an agent grepping blind and an agent reading the right
+  file. This index is itself a good early backlog task once the loop is running.
+
+The point is leverage at task time: a task that says *"give the supervisor an event stream the
+UI can attach to"* should begin by reading how opencode did it, and the harness should make
+that the path of least resistance.
+
+### 16.2 The repos, and what each is a recipe for
+
+- **[opencode](https://www.teamday.ai/harness/opencode)** — *the server/client split.*
+  `opencode serve` runs the harness headless over HTTP and every surface (TUI, web, Electron,
+  IDE) is a client synchronized by an event stream. §4.1/§4.2 are that idea applied to a
+  codebase that already keeps `core/` Electron-free. Also worth reading for session lifecycle
+  and how one live session fans out to multiple attached viewers.
+- **[self_improving_coding_agent](https://github.com/MaximeRobeyns/self_improving_coding_agent)
+  / [SICA](https://arxiv.org/pdf/2504.15228)** — *the self-improvement loop itself.* The archive
+  of scored versions with the best one promoted to propose the next improvement (§12), the
+  asynchronous overseer (§11.6), and the benchmark-driven evaluation cycle. Its reported
+  17%→53% SWE-bench Verified movement came from **scaffolding** changes — precisely this
+  workload. The closest thing to a reference implementation of what we are building, and the
+  first repo to clone.
 - **[prime-agent](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/long-running-agents.md)**
-  — gate commands that must pass before a session may finish, with bounded failure output fed
-  back for another attempt (§7.1); explicit limits on continuations, turns, tokens and
-  wall-clock (§9); a supervisor that rehydrates sessions after restart (already D17 here).
-- **[SICA](https://arxiv.org/pdf/2504.15228)** — the archive of scored versions, the best of
-  which proposes the next improvement (§12), and the asynchronous overseer (§11). Its reported
-  17%→53% SWE-bench Verified movement came from scaffolding changes, which is precisely the
-  workload being aimed at here.
+  — *long-running sessions.* Gate commands that must pass before a session may finish, with
+  bounded failure output fed back for another attempt (§7.1); explicit limits on continuations,
+  turns and tokens (§9); supervisor restart with session rehydration (already D17 here);
+  automatic compaction as context grows.
 - **[Loop taxonomy](https://www.requesty.ai/blog/loop-engineering-how-to-build-ai-agent-loops-that-run-themselves)**
   — heartbeat / cron / hook / goal. This plan is a **goal loop bounded by a budget and a
-  clock**; the others are follow-on config, not v1.
+  backlog**, with no clock; the other three are follow-on config, not v1.
+
+Adding a repo to the library is a config entry plus an `index.md`. Expect the list to grow —
+that is the point of it being a library rather than a bibliography.
+
+### 16.3 Long-running tasks, and why this codebase is already shaped for them
+
+The usual failure of a multi-hour agent task is context: one conversation grows until the model
+is reasoning over its own exhaust. prime-agent answers with automatic compaction. **Flyt answers
+structurally, and already does:** a long task is not one long conversation, it is a run with
+many nodes, each with its own scoped context assembled from `upstreamContext()` and its
+`contextSpec` — with the orchestrator node materializing more of them as the work reveals
+itself. Compaction is a summarize node; the shape is `FLOW_NODES.md`'s reflective planning
+pattern.
+
+So "design for long-running tasks" mostly means **not breaking that property**: keep node
+contexts scoped, keep the orchestrator's children narrow, and let a long task be many small
+scoped runs rather than one enormous one. The work is in §11's supervision, not in a context
+window.
 
 ---
 
@@ -542,9 +684,11 @@ not importable. Concretely:
 - **Cheap models thrash.** Two failures at a tier escalate; a task that reaches the top tier
   twice gets its `tier:` floor raised in the backlog permanently, so the loop learns rather
   than repeats.
-- **The 8-hour context problem.** Not one long session — many short runs against a shared
-  file-based backlog. Each task is a fresh run with a scoped context, which is exactly what
-  this engine already does well and why the backlog is files rather than a conversation.
+- **The long-session context problem.** Answered structurally rather than by compaction: many
+  scoped node contexts against a shared file-based backlog, never one growing conversation
+  (§16.3). The risk is regressing that property, not hitting it.
+- **A task that runs for six hours and produces nothing.** The direct cost of removing the
+  clock, and the entire justification for §11. Headway, not elapsed time, is the measure.
 - **Windows specifics.** Worktrees, `renameSync` claims and CLI spawning are all Windows-aware
   already (`cliDelegate.js` solved the `.cmd` shim problem); path length and file locking
   during parallel `npm test` are the ones to watch.
@@ -571,7 +715,9 @@ not importable. Concretely:
   the matrix-first half of D12, with escalation as the policy instead of an LLM tiebreaker.
 - **`DESIGN-SPEC.md` §5** (spawn guards, PLANNED) gains its missing budget ceiling from §9.
 - **`DESIGN-SPEC.md` §9** (safety, PLANNED) gains the harness-run gate and the overseer.
-- **`DESIGN-SPEC.md` §11.1**'s "weakest joint" is closed by §7.
+- **`DESIGN-SPEC.md` §11.1**'s "weakest joint" is closed by §7, and its recorded *no request
+  timeout* gap by §11.5 — which stops being a papercut and becomes a blocker the moment nobody
+  is watching.
 - **`DECISIONS.md` D13** (retrospective loop scoped to model-ranking → routing) is finally
   actionable via the ledger and archive (§12).
 - **`TOOLS-PLAN.md` §9** (MCP server) becomes cheaper — it binds `core/api.js` rather than
@@ -610,8 +756,14 @@ not importable. Concretely:
 > 7. **A gate parks a task; it never blocks the loop.**
 > 8. **Improvement is scored or it did not happen.** A fixed benchmark against a throwaway
 >    clone, archived per day, feeds the picker and the tier table.
-> 9. **Patterns, not dependencies** (D24). opencode's server/client split, prime-agent's gate
->    commands and limits, SICA's archive and overseer — read, not vendored.
+> 9. **The loop has no clock; it has supervision.** Long-running tasks are a design target, so
+>    the supervisor tracks per-task heartbeats, measures headway rather than elapsed time, and
+>    holds the authority to nudge, restart, escalate or park. Every model call gets a deadline —
+>    a call that cannot time out is a task that cannot be supervised.
+> 10. **Patterns, not dependencies** (D24), and the recipes are kept readable rather than
+>    remembered: reference repos — opencode, `self_improving_coding_agent`, prime-agent — are
+>    cloned to a read-only root the agents can grep at task time. Read, never vendored, never
+>    writable.
 >
 > **Status.** Provisional until the phases in §15 land; §21 lists what is still open.
 
@@ -619,11 +771,11 @@ not importable. Concretely:
 
 ## 21. Open questions
 
-**Q-L1 — Provider access for the cheap tier.** DeepSeek direct or via OpenRouter, and what
-"Meta Muse contributor pricing" requires (an application? a key? an OpenAI-compatible
-endpoint?). The tier table is data, so any OpenAI-compatible endpoint slots into
-`core/adapters/http.js` with a config entry — but the *shape* of the auth decides whether that
-is an afternoon or a day.
+**Q-L1 — Provider access for the cheap tier. [RESOLVED]** OpenRouter for everything in v1 —
+one key reaches DeepSeek and the rest, and the adapter is already built and validated live
+(`DESIGN-SPEC.md` §4.1). Additional providers (Meta Muse and any other contributor-priced
+endpoint) are a later key addition; because the tier table is data and `core/adapters/http.js`
+speaks OpenAI-compatible, adding one is a config entry unless its auth is unusual.
 
 **Q-L2 — Dry-run duration.** How many nights of push-branches-but-do-not-merge before
 auto-merge is switched on. Proposed: two.
@@ -638,8 +790,21 @@ is waiting on you.
 **Q-L5 — Does the picker get its own budget?** An LLM tiebreak on every pick is a real cost at
 forty tasks a day. Probably a cheap model with a hard per-day call ceiling, but measure first.
 
-**Q-L6 — Windows process lifecycle.** Terminal window, background process, or a Task Scheduler
-entry that starts the supervisor at 08:00 and stops it at 17:00. Interacts with Q-L2.
+**Q-L6 — Windows process lifecycle. [PARTLY RESOLVED]** No schedule — the supervisor is a
+long-running background process that outlives the UI and stops on a cap, an empty backlog, or
+your say-so. Still open: whether it survives a reboot (a Task Scheduler *at-logon* entry) and
+whether it should idle-poll an empty backlog or exit and be restarted by `flyt loop start`.
+Proposed: at-logon, idle-poll with a long interval, since a picker that can add its own tasks
+never truly runs out.
+
+**Q-L7 — Stall thresholds.** §11.3's defaults are guesses. A "silent run" limit that is too
+tight kills a legitimately slow provider call; too loose and a wedged worktree costs hours. They
+should be per-tier and calibrated from the ledger's own trailing distribution after a week of
+real data — which is itself a good early backlog task.
+
+**Q-L8 — Reference library scope.** How many repos before the index is noise, and whether the
+clerk (`TOOLS-PLAN.md` §7) should index reference repos alongside tools so an agent can *find*
+the right recipe rather than being told which one to read.
 
 ---
 
