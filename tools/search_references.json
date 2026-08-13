@@ -1,0 +1,72 @@
+{
+  "id": "search_references",
+  "title": "Search the reference library",
+  "description": "Search read-only clones of reference repositories for a pattern (a regular expression). Use this when you are about to design something non-trivial that another project has already solved — an event stream, a scheduler, a plugin protocol, a retry policy. Results give `reference:<repo>/<path>` and a line number; read that path with read_file to see the surrounding code. These repositories are READ-ONLY: you cannot edit them, and nothing you read there is part of this project until you write it yourself.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "read"
+  ],
+  "scope": "workspace",
+  "risk": "safe",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "pattern"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "pattern": {
+        "type": "string",
+        "description": "A JavaScript regular expression, e.g. \"createServer|serve\\\\(\" — case-insensitive by default."
+      },
+      "repo": {
+        "type": "string",
+        "description": "Limit to one reference repository by name. Omit to search all of them."
+      },
+      "context": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 20,
+        "description": "Lines of surrounding context to include per hit (default 0)."
+      },
+      "maxResults": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "description": "Cap on hits (default 40)."
+      },
+      "maxPerFile": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "description": "Cap on hits from any one file (default 3), so a noisy file cannot hide the one that answers the question."
+      }
+    }
+  },
+  "keywords": [
+    "reference",
+    "search",
+    "grep",
+    "example",
+    "prior art",
+    "how did",
+    "opencode"
+  ],
+  "examples": [
+    "search the references for how a session event stream is fanned out to clients",
+    "find prior art for pinning a supervisor to a known-good revision"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

@@ -663,7 +663,7 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 | 3 ✅ | Worktree pool, gate runner, `diff-review`, merge + push + canary + auto-revert, the pin | A task lands on `main` with nobody watching |
 | 4 ◐ | **Cheated**: OpenRouter Auto Router `cost_tier` as the ladder + escalation (§8). Ledger, price table and the three ceilings NOT built | A task escalates low → medium → high by itself; `max` parks for a human |
 | 5 ✅ | Heartbeats, stall detectors, the interruption ladder, gate policy, the ledger + three caps, the report | The loop works a backlog to `main` unattended; a wedged task is nudged, escalated, then parked |
-| 6 ✅ | Electron Loop view (queue, piles, burn-down, live log). Reference library still open | Watch the queue, see what needs you, see what it cost |
+| 6 ✅ | Electron Loop view (queue, piles, burn-down, live log); the reference library | Watch the queue; an agent greps opencode mid-task |
 | 7 | Benchmark suite, archive, baseline run | The first real overnight, with a number to beat |
 
 **Day 0, before any of it:** clone the reference repos (§16) and add the lint script. The loop
@@ -687,6 +687,19 @@ One bug the screenshot caught that the tests could not: the panel read spend fro
 supervisor's status, which is null when no loop is running, so it showed **$0.00 against a $4.00
 cap while the ledger held $2.28**. It reads the ledger now — the one number someone will check
 against a bank statement cannot be the one that goes blank when the process exits.
+
+**The reference library landed** (`references`, `search_references`). §16.1 built as designed:
+shallow clones pinned to a commit under `~/.flyt/references/`, outside every workspace and
+worktree; `search_references` is the entry point because "how did opencode do X" is a question
+about a place you do not know yet; `read_file` reaches it through a `reference:` prefix and
+reports `readOnly: true`. Read-only is a fact about the code rather than a flag — there is no
+write path to bypass, and a test asserts the class exposes none.
+
+Verified against the real repositories, not fixtures: all three clone, and a search for the
+server/client split lands on `opencode/packages/opencode/src/server/server.ts:101`. That first
+real search also showed the design flaw worth keeping: one noisy file (three benchmark probes
+matching `.observe(`) consumed the whole result budget and hid the answer, so hits are capped
+per file, and the tool's own description now tells a model to anchor short patterns with `\b`.
 
 **Day 5 landed** (`ledger`, `heartbeat`, `supervisor`). `flyt loop start` works the backlog:
 pick → worktree → run → gates → review → merge → canary → record, until the queue is empty, a

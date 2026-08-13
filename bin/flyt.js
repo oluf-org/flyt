@@ -44,6 +44,10 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt work verify <taskId>           run the gates in it (the harness runs them)
   flyt work land <taskId> [--dry-run|--push]  gates -> review -> merge -> canary
   flyt work discard <taskId>          throw the worktree away
+  flyt ref list                       the reference library (§16)
+  flyt ref update [<name>]            shallow-clone or refresh it
+  flyt ref grep <pattern> [--repo r]  search it
+  flyt ref show <reference:repo/path> read one file out of it
   flyt feedback stats                 what instances reported about the toolbox
   flyt feedback preview               the digest as it would read right now
   flyt feedback digest [--enqueue]    write the digest, archive what it covered
@@ -326,6 +330,39 @@ async function main() {
         }
         default:
           return die(`Unknown work subcommand "${sub}".`);
+      }
+    }
+
+    case 'ref': {
+      const sub = positional[1] ?? 'list';
+      switch (sub) {
+        case 'list': {
+          const list = await api.invoke('ref:list');
+          return out(asJson ? list : list.map(r =>
+            `${r.cloned ? '●' : '○'} ${r.name}\t${r.commit?.slice(0, 8) ?? '—'}\t${r.about ?? ''}`).join('\n'));
+        }
+        case 'update': {
+          say('cloning — this reaches the network');
+          const r = await api.invoke('ref:update', { name: positional[2] ?? null });
+          for (const f of r.failed) say(`! ${f.name}: ${f.error}`);
+          return out(asJson ? r : r.updated.map(u => `${u.name}\t${u.commit.slice(0, 8)}`).join('\n') || '(nothing updated)');
+        }
+        case 'grep': {
+          const r = await api.invoke('ref:search', {
+            pattern: positional.slice(2).join(' ') || String(flags.pattern ?? ''),
+            repo: typeof flags.repo === 'string' ? flags.repo : null,
+            context: Number(flags.context ?? 0)
+          });
+          if (asJson) return out(r);
+          return out(r.results.map(m => `${m.ref}:${m.line}\t${m.text}`).join('\n')
+            + (r.truncated ? '\n… (truncated)' : '') || '(no hits)');
+        }
+        case 'show':
+          return out(await api.invoke('ref:read', { ref: positional[2] }));
+        case 'index':
+          return out(await api.invoke('ref:index', { name: positional[2] }));
+        default:
+          return die(`Unknown ref subcommand "${sub}".`);
       }
     }
 

@@ -1,7 +1,7 @@
 {
   "id": "read_file",
   "title": "Read a file",
-  "description": "Read a text file from the workspace (the bound target project). Forward-slash relative path like \"src/app.js\"; confined to the workspace root. Returns the file contents (large files are truncated).",
+  "description": "Read a text file from the workspace (the bound target project). Forward-slash relative path like \"src/app.js\"; confined to the workspace root. Returns the file contents (large files are truncated). A path beginning \"reference:\" reads from the READ-ONLY reference library instead, e.g. \"reference:opencode/packages/opencode/src/server/server.ts\" — use search_references to find one.",
   "provider": "builtin",
   "enabled": true,
   "effects": [
@@ -25,7 +25,7 @@
     "properties": {
       "path": {
         "type": "string",
-        "description": "Relative path inside the workspace, e.g. \"src/app.js\"."
+        "description": "Relative path inside the workspace, e.g. \"src/app.js\" — or \"reference:<repo>/<path>\" for the read-only reference library."
       }
     }
   },

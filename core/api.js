@@ -380,6 +380,33 @@ export function createApi(engine) {
     'ledger:check': ({ projectId, taskId = null }) =>
       ledgerFor(projectId).check({ caps: runtimeConfig.loop?.caps ?? {}, taskId }),
 
+    // --- The reference library (LOOP-PLAN §16) ------------------------------
+    //
+    // Recipes, not dependencies: read-only clones an agent can grep at task
+    // time instead of designing from first principles. App-level, since prior
+    // art is portable in the way a backlog is not.
+    'ref:list': () => engine.references.list(),
+    'ref:update': async ({ name = null }) => {
+      const names = name ? [name] : engine.references.repos.map(r => r.name);
+      const done = [];
+      const failed = [];
+      for (const n of names) {
+        try { done.push(await engine.references.fetch(n, { onLog: msg => engine.emitLoop?.('*', msg) })); }
+        // One unreachable repo must not stop the others: a library with two of
+        // three repos is still a library.
+        catch (err) { failed.push({ name: n, error: String(err.message ?? err) }); }
+      }
+      return { updated: done, failed };
+    },
+    'ref:search': ({ pattern, repo = null, context = 0, maxResults = 40 }) =>
+      engine.references.search(pattern, { repo, contextLines: context, maxResults }),
+    'ref:read': ({ ref }) => {
+      const text = engine.references.read(ref);
+      if (text == null) throw new ApiError(`No reference "${ref}".`, { status: 404, code: 'no_reference' });
+      return text;
+    },
+    'ref:index': ({ name }) => engine.references.index(name),
+
     // --- Liveness ----------------------------------------------------------
     // What the supervisor's heartbeat reads (§11.1): which runs this process is
     // actually executing, as process state rather than file state — precisely

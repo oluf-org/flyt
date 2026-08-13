@@ -560,7 +560,8 @@ export class FlowRunner {
         timeout: this.config.timeout, ...params, tools, signal: ctl.signal,
         ctx: {
           store: this.store, runId, nodeId, workspace: this.workspaceFor(runId),
-          backlog: this.backlog ?? null, feedback: this.feedback ?? null
+          backlog: this.backlog ?? null, feedback: this.feedback ?? null,
+          references: this.references ?? null
         }
       });
     } finally {
@@ -1908,6 +1909,7 @@ export class FlowRunner {
       timeout: this.config.timeout,
       backlog: this.backlog ?? null,
       feedback: this.feedback ?? null,
+      references: this.references ?? null,
       signal: abortCtl.signal,
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };

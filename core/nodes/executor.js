@@ -17,7 +17,7 @@ import { resolveCallTarget } from '../modelSource.js';
 // AbortSignal the runner fires on stop(); the agent loop's model calls reject
 // with an AbortError, which lands in the catch below as a STOPPED task —
 // requeued to 'pending', never marked failed.
-export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, retry = null, timeout = null, backlog = null, feedback = null, signal = null } = {}) {
+export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, retry = null, timeout = null, backlog = null, feedback = null, references = null, signal = null } = {}) {
   const tasksDoc = store.readTasks(runId);
   const task = tasksDoc.tasks.find(t => t.id === taskId);
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
@@ -114,6 +114,9 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     // Where an instance's tool review lands (LOOP-PLAN §12), same canonical
     // location rule as the backlog: outside every worktree.
     feedback,
+    // The read-only reference library (LOOP-PLAN §16): prior art an agent can
+    // grep at task time instead of designing from first principles.
+    references,
     // Present only when the node opted into per-tool approval: the agent loop
     // calls it before each destructive tool call (V1 task 4).
     approveToolCall,

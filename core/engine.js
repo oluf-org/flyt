@@ -27,6 +27,7 @@ import { Backlog } from './backlog.js';
 import { FeedbackStore } from './feedback.js';
 import { WorktreePool } from './worktree.js';
 import { Ledger } from './ledger.js';
+import { ReferenceLibrary, DEFAULT_REFERENCES } from './references.js';
 import { configDirFor } from './workspace.js';
 import { setKnownTools } from '../src/flowTypes.js';
 import { diffSnapshot } from './snapshotDiff.js';
@@ -310,6 +311,13 @@ export function createEngine({
     };
   }
 
+  // The reference library (LOOP-PLAN §16): app-level, not per project, because
+  // prior art is portable in exactly the way a backlog is not — and read-only,
+  // so one copy shared by every project is correct rather than merely thrifty.
+  const references = new ReferenceLibrary(runtimeConfig.referenceRoot ?? null, {
+    repos: runtimeConfig.references ?? DEFAULT_REFERENCES
+  });
+
   // --- The loop's log (LOOP-PLAN §14) ---
   // One line per decision the supervisor makes, pushed live AND kept in a
   // bounded ring per project. The ring is what lets a viewer that attaches at
@@ -478,6 +486,7 @@ export function createEngine({
       // argument so every existing FlowRunner call site is untouched.
       Object.defineProperty(runner, 'backlog', { get: () => backlogFor(projectId), configurable: true });
       Object.defineProperty(runner, 'feedback', { get: () => feedbackFor(projectId), configurable: true });
+      runner.references = references;
       // Nothing is live when a project first opens in this process, so any run
       // still in a non-terminal stage was cut off by the app dying. Flag those
       // once so the run view can offer Resume (V1 task 7).
@@ -495,7 +504,7 @@ export function createEngine({
     // Paths
     projectRoot, dataRoot, userDataDir, settingsPath, dataDir, seedFromBundle,
     // Stores
-    flows, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor, poolFor, ledgerFor,
+    flows, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor, poolFor, ledgerFor, references,
     // Config + settings
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,
     // Providers
