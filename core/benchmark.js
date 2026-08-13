@@ -531,8 +531,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
  * second, shorter deadline here would make the benchmark measure a loop nobody
  * actually runs. Wall clock is SCORED, not bounded.
  */
-async function driveWithSupervisor({ api, projectId, cases, pollMs = 2000, log = () => {} }) {
-  await api.invoke('loop:start', { projectId, parallelism: 1, maxTasks: cases.length });
+async function driveWithSupervisor({ api, projectId, pollMs = 2000, log = () => {} }) {
+  // Unbounded on purpose. Capping it at one start per case looks tidy and
+  // quietly makes two of the scored axes unmeasurable: a case would get exactly
+  // one attempt, so `attempts` could never exceed 1 and the top rung reached
+  // would always be the one it started at. The loop is bounded by the backlog —
+  // every case ends landed or parked, because the ladder ends in parking.
+  await api.invoke('loop:start', { projectId, parallelism: 1 });
   for (;;) {
     await sleep(pollMs);
     const status = await api.invoke('loop:status', { projectId });
@@ -617,6 +622,12 @@ export async function runBenchmark({
     });
   } finally {
     if (projectId) {
+      // Stop the loop BEFORE the directory goes away. If the drive threw — a
+      // failed poll, a cap, a bug — the supervisor may still be working, and
+      // deleting a clone out from under a running one leaves it grinding
+      // against a repository that no longer exists.
+      try { await api?.invoke?.('loop:stop', { projectId, reason: 'benchmark finished' }); }
+      catch { /* no loop to stop */ }
       // The worktrees the loop made point INTO the clone's git dir; leaving them
       // behind when the clone is deleted leaves directories nobody can explain.
       try { await removeWorktrees(engine, projectId); } catch { /* best effort */ }

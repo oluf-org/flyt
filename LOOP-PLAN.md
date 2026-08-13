@@ -726,11 +726,31 @@ the day — ledger lines copied, scorecard, first-parent commits, the parked pil
 work decided; the one thing it corrected is that the **test-count check had never fired
 unattended**, because nothing was passing a baseline into it.
 
-Still owed on the score itself: **the first real baseline run.** Everything up to the model is
-verified — the clone, the setup, the baseline gates, the seeding, the probes, the scoring, the
-cleanup, and the honest refusal when no reviewer or OpenRouter key is configured — but a card
-produced by real models on real work is what day 7 is *for*, and it needs keys this checkout
-does not have. That run is the last step of day 7, not a new phase.
+The first real run of it — a whole clone, a real supervisor, mock models — found two bugs that
+709 green tests could not, and both are the same shape as day 5's five:
+
+- **The worktree cleanup undid the escalation it followed.** `work:discard` releases the task's
+  lease and was writing a status while doing it, so a failed landing escalated to the next band
+  and was parked a moment later. The ladder never climbed after a bad review, and an overnight
+  run would have ended with the entire backlog parked for reasons unrelated to the work. The
+  test that should have caught it passed, because the fake command surface **stubbed**
+  `work:discard` instead of modelling it — a fake that does less than the command it stands for
+  cannot catch a bug in what the command also does.
+- **The benchmark allowed one attempt per case.** Capping the loop at one start per case looks
+  tidy and quietly makes two of the five scored axes unmeasurable — `attempts` could never
+  exceed 1, and the top rung reached would always be the rung it started at. The suite is
+  bounded by the backlog instead, which terminates because the ladder ends in parking.
+
+Verified end to end on mock models, which is what surfaced both bugs above: a real clone, the
+real supervisor, one case driven from `queued` through five attempts and four escalations to
+`parked` at `max`, then probed, scored and cleaned up. Every scored axis moved. Nothing landed,
+because a mock reviewer's output is unparseable and an unparseable review is a request for
+changes (§7.2) — which is the fail-closed posture working, not a failure.
+
+Still owed on the score itself: **the first real baseline run.** A card produced by real models
+doing real work is what day 7 is *for*, and it needs an OpenRouter key and a configured
+`workers.reviewer` that this checkout does not have. That run is the last step of day 7, not a
+new phase — and until it happens there is still no number to beat.
 
 **Day 6 landed** (`LoopPage`, `loopViewData`). A fifth rail entry: the headline answers "is it
 stuck", the piles answer "does it need me" — *Waiting on you* first and keeping its heading even
