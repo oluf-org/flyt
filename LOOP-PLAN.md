@@ -662,13 +662,38 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 | 2 ✅ | Backlog files, atomic claim, `enqueue_task`, deterministic picker | `flyt task add`, `flyt task ready`, `flyt task take` — and an agent queueing work mid-run |
 | 3 ✅ | Worktree pool, gate runner, `diff-review`, merge + push + canary + auto-revert, the pin | A task lands on `main` with nobody watching |
 | 4 ◐ | **Cheated**: OpenRouter Auto Router `cost_tier` as the ladder + escalation (§8). Ledger, price table and the three ceilings NOT built | A task escalates low → medium → high by itself; `max` parks for a human |
-| 5 | Heartbeats, stall detectors, the interruption ladder, park-don't-block gates, the report | A deliberately wedged task gets nudged, restarted, then parked — unattended |
+| 5 ✅ | Heartbeats, stall detectors, the interruption ladder, gate policy, the ledger + three caps, the report | The loop works a backlog to `main` unattended; a wedged task is nudged, escalated, then parked |
 | 6 | Electron Loop view over HTTP/SSE; reference library + read-only reference root | Watch the queue burn down; an agent greps opencode mid-task |
 | 7 | Benchmark suite, archive, baseline run | The first real overnight, with a number to beat |
 
 **Day 0, before any of it:** clone the reference repos (§16) and add the lint script. The loop
 cannot enforce a gate that does not exist, and the lint script is the smallest possible instance
 of the thing this whole plan is for.
+
+**Day 5 landed** (`ledger`, `heartbeat`, `supervisor`). `flyt loop start` works the backlog:
+pick → worktree → run → gates → review → merge → canary → record, until the queue is empty, a
+cap trips, or it is stopped. Headway is *change in the work* — hashed outputs, node completions,
+a moved gate-failure signature — so a long task is fine and a spinning one is not. The ladder
+(nudge, restart, escalate, park) is climbed one rung per task.
+
+**The ledger closes §9** without the price table §8 declined to build: OpenRouter reports what
+it charged, so the ledger reads it, falls back to an optional local table (marked `estimated`),
+and records `null` rather than `0` when it cannot know. Three rolling caps: `taskUsd` parks a
+task, `softUsd` stops escalation, `hardUsd` finishes the in-flight node and stops the loop.
+
+Five things the first real runs taught, each now fixed and tested:
+- **A failed attempt never discarded its worktree**, so every later attempt hit "already exists"
+  and the task was wedged permanently — an overnight run would have ended with a backlog parked
+  for reasons unrelated to the work.
+- **Runs executed in the main checkout**: `flow:run` ignored `workspaceDir` for a bound project,
+  so the isolation was built and then bypassed. An explicit workspace now wins.
+- **The shipped default pipeline has a planning gate**, so park-don't-block parked *every* task.
+  Gate kinds now differ: a `pre` gate the loop may answer (the landing sequence judges the real
+  change afterwards), an `escalation` or `tool` gate it may not.
+- **Levels with no OpenRouter key** failed every task one at a time; `loop:start` now refuses
+  once, up front, naming the fix.
+- **A repeated poll failure span forever.** A task that cannot be observed is parked after N
+  consecutive errors, because observing it is the only way the loop could ever finish it.
 
 **Day 4 cheated, deliberately** (`levels`). The tier ladder is OpenRouter's Auto Router: a task
 carries a level, the request carries a `cost_tier`, and escalation walks the rungs. No price

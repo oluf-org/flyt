@@ -26,6 +26,7 @@ import { ProjectRegistry } from './projects.js';
 import { Backlog } from './backlog.js';
 import { FeedbackStore } from './feedback.js';
 import { WorktreePool } from './worktree.js';
+import { Ledger } from './ledger.js';
 import { configDirFor } from './workspace.js';
 import { setKnownTools } from '../src/flowTypes.js';
 import { diffSnapshot } from './snapshotDiff.js';
@@ -435,6 +436,19 @@ export function createEngine({
     return p;
   }
 
+  // The spend record (LOOP-PLAN §9), per project, beside the backlog.
+  const ledgers = new Map();
+  function ledgerFor(projectId) {
+    let l = ledgers.get(projectId);
+    if (l) return l;
+    const entry = registry.get(projectId);
+    const root = entry.folder ?? entry.appDir;
+    if (!root) return null;
+    ledgers.set(projectId, l = new Ledger(path.join(configDirFor(root), 'ledger'),
+      { prices: runtimeConfig.loop?.prices ?? {} }));
+    return l;
+  }
+
   const registry = new ProjectRegistry({
     defaultRunsDir: path.join(dataRoot, 'runs'),
     appDataDir: userDataDir,
@@ -463,7 +477,7 @@ export function createEngine({
     // Paths
     projectRoot, dataRoot, userDataDir, settingsPath, dataDir, seedFromBundle,
     // Stores
-    flows, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor, poolFor,
+    flows, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor, poolFor, ledgerFor,
     // Config + settings
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,
     // Providers

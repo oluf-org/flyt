@@ -15,6 +15,7 @@ import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
 import { pushRefs } from './worktree.js';
 import { workerForLevel, levelFor, LEVELS } from './levels.js';
+import { Supervisor, renderReport } from './supervisor.js';
 import { APPROVAL_MODES } from './flowRunner.js';
 import { lintFlow } from './flowlang/lint.js';
 
@@ -65,6 +66,13 @@ export function createApi(engine) {
     }
     return pool;
   };
+  const ledgerFor = projectId => {
+    proj(projectId);
+    const ledger = engine.ledgerFor(projectId);
+    if (!ledger) throw new ApiError('This project has no folder, so it has nowhere to keep a ledger.',
+      { status: 400, code: 'no_ledger' });
+    return ledger;
+  };
   const backlogFor = projectId => {
     proj(projectId); // resolve/validate the project first, for the honest 404
     const backlog = engine.backlogFor(projectId);
@@ -74,6 +82,9 @@ export function createApi(engine) {
     }
     return backlog;
   };
+
+  // One supervisor per project, for the life of the process.
+  const supervisors = new Map();
 
   const commands = {
     // --- Flows -------------------------------------------------------------
@@ -103,9 +114,13 @@ export function createApi(engine) {
     'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null, level = null }) => {
       const entry = proj(projectId);
       let workspace = null;
-      if (entry.folder) workspace = new Workspace(entry.folder).ensure().root;
+      // An explicit workspaceDir WINS, even for a bound project. That is how the
+      // supervisor points a run at the task's worktree instead of the main
+      // checkout — without it the isolation is built and then bypassed, and
+      // every task edits the repo the loop is merging into.
+      if (workspaceDir) workspace = new Workspace(workspaceDir).ensure().root;
+      else if (entry.folder) workspace = new Workspace(entry.folder).ensure().root;
       else if (entry.kind === 'appdata') workspace = new Workspace(entry.workspaceRoot).ensure().root;
-      else if (workspaceDir) workspace = new Workspace(workspaceDir).ensure().root;
       // launch (MODES-COMPARE) carries the picked mode and any exposed
       // run-input overrides: { modeId?, overrides? }.
       // An effort band for this run (§8): every node that has not pinned its own
@@ -245,7 +260,13 @@ export function createApi(engine) {
       const backlog = backlogFor(projectId);
       const task = backlog.get(taskId);
       if (!task) throw new ApiError(`No task "${taskId}".`, { status: 404, code: 'no_task' });
-      const wt = await poolFor(projectId).create(taskId, task.title);
+      const pool = poolFor(projectId);
+      // A leftover tree from a crashed attempt must not wedge the task forever.
+      // A failed attempt is thrown away by deleting a directory (§6.1), so
+      // finding one here means nobody got to throw it away — and the right
+      // answer is to start clean from the current base, not to refuse.
+      await pool.remove(taskId, { deleteBranch: true }).catch(() => {});
+      const wt = await pool.create(taskId, task.title);
       backlog.update(taskId, { status: 'running' });
       return wt;
     },
@@ -294,6 +315,69 @@ export function createApi(engine) {
       if (result.landed) await pool.remove(taskId, { deleteBranch: false });
       return result;
     },
+
+    // --- The loop (LOOP-PLAN §4.3, §9, §11) ---------------------------------
+    //
+    // One supervisor per project, held here for the life of the process: it is
+    // the thing that outlives a closed window, and starting a second one over
+    // the same backlog would have two pickers racing for the same tasks.
+    'loop:start': async ({ projectId, parallelism = 1, maxTasks = null, dryRun = false }) => {
+      proj(projectId);
+      // Fail once, here, rather than per task. Levels route through
+      // OpenRouter's Auto Router (§8), so without a key every task would fail
+      // at its first node with a provider error and the whole backlog would
+      // end the night parked for a reason that has nothing to do with the work.
+      const useLevels = runtimeConfig.loop?.levels !== false;
+      if (useLevels && !engine.hasKey('openrouter')) {
+        throw new ApiError(
+          'Effort levels route through OpenRouter, and no OpenRouter key is set. Add one in Settings, or set loop.levels to false to run on the configured workers instead.',
+          { status: 400, code: 'no_openrouter_key' });
+      }
+      // Nothing lands unattended without a reviewer (§7.2) — also worth saying
+      // before a night of work rather than after it.
+      if (!runtimeConfig.workers?.reviewer && !dryRun) {
+        throw new ApiError(
+          'No reviewer model is configured (workers.reviewer), so nothing could land. Configure one, or start the loop with dryRun to have it stop after review.',
+          { status: 400, code: 'no_reviewer' });
+      }
+      if (supervisors.get(projectId)?.running) {
+        throw new ApiError('A loop is already running for this project.', { status: 409, code: 'already_running' });
+      }
+      const sup = new Supervisor({
+        invoke, projectId,
+        backlog: backlogFor(projectId),
+        ledger: ledgerFor(projectId),
+        store: proj(projectId).store,
+        config: { ...runtimeConfig, loop: { ...runtimeConfig.loop, dryRun } },
+        parallelism,
+        log: msg => engine.emitLoop?.(projectId, msg)
+      });
+      supervisors.set(projectId, sup);
+      // Deliberately NOT awaited: the loop runs until it is stopped or capped,
+      // and the caller gets an acknowledgement rather than a connection held
+      // open for the length of a working day.
+      sup.run({ maxTasks: maxTasks ?? Infinity }).catch(err => engine.emitLoop?.(projectId, `loop failed: ${err.message}`));
+      return { started: true, parallelism };
+    },
+    'loop:stop': ({ projectId, reason = 'stopped by request' }) => {
+      const sup = supervisors.get(projectId);
+      if (!sup) return { stopped: false, reason: 'no loop running' };
+      sup.stop(reason);
+      return { stopped: true, reason };
+    },
+    'loop:status': ({ projectId }) => supervisors.get(projectId)?.status()
+      ?? { running: false, stopping: null, inFlight: [], parked: [], completed: 0, landed: 0 },
+    'loop:report': ({ projectId }) => renderReport({
+      status: supervisors.get(projectId)?.status() ?? { running: false, stopping: null, inFlight: [], landed: 0, completed: 0 },
+      backlog: backlogFor(projectId),
+      ledger: ledgerFor(projectId)
+    }),
+
+    // --- Spend (LOOP-PLAN §9) ----------------------------------------------
+    'ledger:totals': ({ projectId, sinceMs = null, taskId = null }) =>
+      ledgerFor(projectId).totals({ sinceMs, taskId }),
+    'ledger:check': ({ projectId, taskId = null }) =>
+      ledgerFor(projectId).check({ caps: runtimeConfig.loop?.caps ?? {}, taskId }),
 
     // --- Liveness ----------------------------------------------------------
     // What the supervisor's heartbeat reads (§11.1): which runs this process is

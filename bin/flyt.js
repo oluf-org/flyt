@@ -36,6 +36,10 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task ready                     what the picker would take, and what is stuck
   flyt task escalate <id>             one effort level up, back to the queue
   flyt task take                      claim the top-scoring ready task
+  flyt loop start [--parallel N]      work the backlog until empty, capped or stopped
+  flyt loop stop|status               stop it, or see what it is doing
+  flyt report                         what landed, what needs you, what it cost
+  flyt spend [--since 24h]            the ledger
   flyt work start <taskId>            worktree + branch for a task
   flyt work verify <taskId>           run the gates in it (the harness runs them)
   flyt work land <taskId> [--dry-run|--push]  gates -> review -> merge -> canary
@@ -253,6 +257,41 @@ async function main() {
         default:
           return die(`Unknown task subcommand "${sub}".`);
       }
+    }
+
+    case 'loop': {
+      const sub = positional[1] ?? 'status';
+      const projectId = openProject(api, engine);
+      if (sub === 'start') {
+        await api.invoke('loop:start', {
+          projectId,
+          parallelism: Number(flags.parallel ?? 1),
+          maxTasks: flags.tasks ? Number(flags.tasks) : null,
+          dryRun: Boolean(flags['dry-run'])
+        });
+        say('loop started — ctrl-c to detach, `flyt loop stop` to stop it');
+        // Held open on purpose: the loop lives in this process. Detaching it
+        // into a daemon is the next thing, and until then closing the terminal
+        // is what stops it.
+        for (;;) {
+          await sleep(5000);
+          const st = await api.invoke('loop:status', { projectId });
+          if (!st.running) { say(`loop stopped: ${st.stopping ?? 'done'}`); return out(st); }
+          say(`  ${st.inFlight.length} in flight, ${st.landed}/${st.completed} landed`
+            + (st.spend ? `, $${st.spend.usd.toFixed(2)}` : ''));
+        }
+      }
+      if (sub === 'stop') return out(await api.invoke('loop:stop', { projectId }));
+      return out(await api.invoke('loop:status', { projectId }));
+    }
+
+    case 'report':
+      return out(await api.invoke('loop:report', { projectId: openProject(api, engine) }));
+
+    case 'spend': {
+      const since = String(flags.since ?? '24h');
+      const ms = /^(\d+)h$/.test(since) ? Number(since.slice(0, -1)) * 3600_000 : null;
+      return out(await api.invoke('ledger:totals', { projectId: openProject(api, engine), sinceMs: ms }));
     }
 
     case 'work': {
