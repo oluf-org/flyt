@@ -238,6 +238,22 @@ bindIpc('run:pause', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:restartNode', (projectId, runId, nodeId, guidance = '') => ({ projectId, runId, nodeId, guidance }));
 bindIpc('run:followUp', (projectId, runId, text) => ({ projectId, runId, text }));
 bindIpc('run:answerInput', (projectId, runId, text) => ({ projectId, runId, text }));
+// The loop (LOOP-PLAN §14): the same commands the CLI and the HTTP server bind,
+// so the desktop view is a third front door onto one implementation rather than
+// a second implementation of the same panel.
+bindIpc('loop:start', (projectId, opts = {}) => ({ projectId, ...opts }));
+bindIpc('loop:stop', projectId => ({ projectId }));
+bindIpc('loop:status', projectId => ({ projectId }));
+bindIpc('loop:report', projectId => ({ projectId }));
+bindIpc('loop:log', projectId => ({ projectId }));
+bindIpc('ledger:totals', (projectId, opts = {}) => ({ projectId, ...opts }));
+bindIpc('ledger:check', (projectId, taskId = null) => ({ projectId, taskId }));
+bindIpc('task:list', (projectId, status = null) => ({ projectId, status }));
+bindIpc('task:add', (projectId, task = {}) => ({ projectId, ...task }));
+bindIpc('task:escalate', (projectId, id, reason = 'failed') => ({ projectId, id, reason }));
+bindIpc('task:release', (projectId, id, status = 'queued') => ({ projectId, id, status }));
+bindIpc('feedback:stats', projectId => ({ projectId }));
+bindIpc('feedback:digest', (projectId, enqueue = false) => ({ projectId, enqueue }));
 
 // One engine, one entry point: pick a workflow, type a request, run it.
 // The user input becomes the flow's User Input node content for that run.

@@ -1,0 +1,85 @@
+// The Loop view's projections (LOOP-PLAN §14).
+//
+// Pure functions, tested without a renderer, for the same reason
+// nodeFeedData.js and runDocument.js are: every interesting decision in that
+// panel is a projection, and a projection you can test is one you can trust.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { pilesOf, burndown, flightRow, headline, humanDuration, tailLines, PILE_ORDER } from '../src/loopViewData.js';
+
+test('the pile that needs a person comes first', () => {
+  // The only part of the screen that is ASKING for something. Landed is
+  // reassurance, the queue is future work; neither is a request.
+  assert.equal(PILE_ORDER[0], 'parked');
+});
+
+test('every status a human would read as "someone has it" lands in one pile', () => {
+  const piles = pilesOf([
+    { id: 't-1', status: 'queued' },
+    { id: 't-2', status: 'claimed' },
+    { id: 't-3', status: 'running' },
+    { id: 't-4', status: 'verifying' },
+    { id: 't-5', status: 'review' },
+    { id: 't-6', status: 'parked' },
+    { id: 't-7', status: 'landed' }
+  ]);
+  assert.deepEqual(piles.running.map(t => t.id), ['t-2', 't-3', 't-4', 't-5']);
+  assert.deepEqual(piles.queued.map(t => t.id), ['t-1']);
+  assert.deepEqual(piles.parked.map(t => t.id), ['t-6']);
+});
+
+test('no cap means no burn-down, because a bar with no ceiling implies a limit that does not exist', () => {
+  assert.equal(burndown({ usd: 5 }, {}), null);
+
+  const ok = burndown({ usd: 5, unknown: 2 }, { softUsd: 10, hardUsd: 20 });
+  assert.equal(ok.state, 'ok');
+  assert.equal(ok.pct, 25);
+  // The number someone will quote back at their bank statement has to say how
+  // much of itself is guesswork.
+  assert.equal(ok.unknown, 2);
+
+  assert.equal(burndown({ usd: 12 }, { softUsd: 10, hardUsd: 20 }).state, 'capped');
+  assert.equal(burndown({ usd: 20 }, { softUsd: 10, hardUsd: 20 }).state, 'stopped');
+  // Past the ceiling the bar stops at full rather than overflowing its box.
+  assert.equal(burndown({ usd: 99 }, { hardUsd: 20 }).pct, 100);
+});
+
+test('a flight row distinguishes long from stuck', () => {
+  // A long task is the design target; a stuck one is the failure. Showing a
+  // duration and leaving the reader to guess which is which defeats the panel.
+  const working = flightRow({ taskId: 't-1', ageMs: 90 * 60_000, idleMs: 30_000, stage: 'execution' });
+  assert.equal(working.health, 'working');
+  assert.equal(working.age, '1h 30m');
+
+  assert.equal(flightRow({ taskId: 't', idleMs: 6 * 60_000 }).health, 'quiet');
+  assert.equal(flightRow({ taskId: 't', idleMs: 11 * 60_000 }).health, 'stalled');
+  // Once the supervisor has acted, say so: a person watching should be able to
+  // see it is being handled rather than wonder whether to step in.
+  const handled = flightRow({ taskId: 't', idleMs: 11 * 60_000, interventions: ['nudge'] });
+  assert.equal(handled.health, 'intervened');
+  assert.deepEqual(handled.interventions, ['nudge']);
+});
+
+test('durations read the way a person would say them', () => {
+  assert.equal(humanDuration(4500), '5s');
+  assert.equal(humanDuration(90_000), '2m');
+  assert.equal(humanDuration(3 * 3600_000), '3h');
+  assert.equal(humanDuration(3.5 * 3600_000), '3h 30m');
+  assert.equal(humanDuration(-1), '—');
+});
+
+test('the headline answers the question someone would actually ask', () => {
+  assert.equal(headline({ status: { running: true, inFlight: [{}, {}] } }), 'Working 2 tasks');
+  assert.equal(headline({ status: { running: true, inFlight: [] } }), 'Waiting for something to pick up');
+  assert.match(headline({ status: { running: false, stopping: 'hard cap reached ($20.00)' } }), /Stopped — hard cap/);
+  assert.equal(headline({ status: {}, piles: { parked: [{}, {}, {}] } }), 'Idle — 3 waiting on you');
+  assert.equal(headline({ status: {}, piles: {} }), 'Idle');
+});
+
+test('the log tail is bounded and carries a readable clock', () => {
+  const entries = Array.from({ length: 300 }, (_, i) => ({ at: `2026-08-13T09:${String(i % 60).padStart(2, '0')}:00.000Z`, line: `line ${i}` }));
+  const tail = tailLines(entries, 50);
+  assert.equal(tail.length, 50);
+  assert.equal(tail.at(-1).line, 'line 299');
+  assert.match(tail[0].time, /^\d\d:\d\d:\d\d$/);
+});

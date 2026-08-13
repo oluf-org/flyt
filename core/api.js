@@ -365,6 +365,7 @@ export function createApi(engine) {
       sup.stop(reason);
       return { stopped: true, reason };
     },
+    'loop:log': ({ projectId }) => engine.loopLog(projectId),
     'loop:status': ({ projectId }) => supervisors.get(projectId)?.status()
       ?? { running: false, stopping: null, inFlight: [], parked: [], completed: 0, landed: 0 },
     'loop:report': ({ projectId }) => renderReport({

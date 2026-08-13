@@ -663,12 +663,30 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 | 3 ✅ | Worktree pool, gate runner, `diff-review`, merge + push + canary + auto-revert, the pin | A task lands on `main` with nobody watching |
 | 4 ◐ | **Cheated**: OpenRouter Auto Router `cost_tier` as the ladder + escalation (§8). Ledger, price table and the three ceilings NOT built | A task escalates low → medium → high by itself; `max` parks for a human |
 | 5 ✅ | Heartbeats, stall detectors, the interruption ladder, gate policy, the ledger + three caps, the report | The loop works a backlog to `main` unattended; a wedged task is nudged, escalated, then parked |
-| 6 | Electron Loop view over HTTP/SSE; reference library + read-only reference root | Watch the queue burn down; an agent greps opencode mid-task |
+| 6 ✅ | Electron Loop view (queue, piles, burn-down, live log). Reference library still open | Watch the queue, see what needs you, see what it cost |
 | 7 | Benchmark suite, archive, baseline run | The first real overnight, with a number to beat |
 
 **Day 0, before any of it:** clone the reference repos (§16) and add the lint script. The loop
 cannot enforce a gate that does not exist, and the lint script is the smallest possible instance
 of the thing this whole plan is for.
+
+**Day 6 landed** (`LoopPage`, `loopViewData`). A fifth rail entry: the headline answers "is it
+stuck", the piles answer "does it need me" — *Waiting on you* first and keeping its heading even
+when empty, since an absence is not an answer — and the burn-down answers "what is this
+costing". Verified by rendering it in a real Electron window against a seeded backlog, not by
+compiling it.
+
+The shaping lives in `src/loopViewData.js` as pure functions, tested without a renderer, the way
+`nodeFeedData.js` and `runDocument.js` already are. Two decisions worth keeping: no cap means
+**no burn-down bar**, because a bar with no ceiling implies a limit that does not exist; and an
+in-flight row leads with *health* rather than duration, because a long task is the design target
+and a stuck one is the failure — showing elapsed time and leaving the reader to guess defeats
+the panel.
+
+One bug the screenshot caught that the tests could not: the panel read spend from the
+supervisor's status, which is null when no loop is running, so it showed **$0.00 against a $4.00
+cap while the ledger held $2.28**. It reads the ledger now — the one number someone will check
+against a bank statement cannot be the one that goes blank when the process exits.
 
 **Day 5 landed** (`ledger`, `heartbeat`, `supervisor`). `flyt loop start` works the backlog:
 pick → worktree → run → gates → review → merge → canary → record, until the queue is empty, a

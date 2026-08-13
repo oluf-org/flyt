@@ -310,6 +310,24 @@ export function createEngine({
     };
   }
 
+  // --- The loop's log (LOOP-PLAN §14) ---
+  // One line per decision the supervisor makes, pushed live AND kept in a
+  // bounded ring per project. The ring is what lets a viewer that attaches at
+  // 18:00 see what happened at 09:00 — a live-only stream shows an empty panel
+  // to the one person who most needs the history.
+  const LOOP_LOG_MAX = 500;
+  const loopLogs = new Map();
+  function emitLoop(projectId, line) {
+    const entry = { projectId, at: new Date().toISOString(), line: String(line) };
+    let ring = loopLogs.get(projectId);
+    if (!ring) loopLogs.set(projectId, ring = []);
+    ring.push(entry);
+    if (ring.length > LOOP_LOG_MAX) ring.splice(0, ring.length - LOOP_LOG_MAX);
+    log(`[loop] ${line}`);
+    if (canEmit()) emit('loop:event', entry);
+  }
+  const loopLog = projectId => (loopLogs.get(projectId) ?? []).slice();
+
   // --- Push plumbing (per project) ---
   // Bursts of state changes (parallel waves, streaming chunks) coalesce into at
   // most one push per (project, run) per tick window: the snapshot is built from
@@ -483,7 +501,7 @@ export function createEngine({
     // Providers
     hasKey, subscriptionStatus, resolveModelSource, effectiveSafetyModel,
     // Push
-    pushStateFor, broadcastActivity, pushUpdateFor,
+    pushStateFor, broadcastActivity, pushUpdateFor, emitLoop, loopLog,
     // A project id that is gone for good (an appdata project adopted into a
     // real folder) takes its push channels with it.
     dropPushState: projectId => pushState.delete(projectId),

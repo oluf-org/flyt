@@ -95,6 +95,28 @@ const api = {
   pickProjectFolder: () => ipcRenderer.invoke('project:pickFolder'),
   deckData: () => ipcRenderer.invoke('project:deckData'),
 
+  // --- The loop (LOOP-PLAN §14) ---
+  loopStart: (pid, opts = {}) => ipcRenderer.invoke('loop:start', pid, opts),
+  loopStop: (pid) => ipcRenderer.invoke('loop:stop', pid),
+  loopStatus: (pid) => ipcRenderer.invoke('loop:status', pid),
+  loopReport: (pid) => ipcRenderer.invoke('loop:report', pid),
+  loopLog: (pid) => ipcRenderer.invoke('loop:log', pid),
+  ledgerTotals: (pid, opts = {}) => ipcRenderer.invoke('ledger:totals', pid, opts),
+  ledgerCheck: (pid, taskId = null) => ipcRenderer.invoke('ledger:check', pid, taskId),
+  listTasks: (pid, status = null) => ipcRenderer.invoke('task:list', pid, status),
+  addTask: (pid, task) => ipcRenderer.invoke('task:add', pid, task),
+  escalateTask: (pid, id, reason) => ipcRenderer.invoke('task:escalate', pid, id, reason),
+  releaseTask: (pid, id, status) => ipcRenderer.invoke('task:release', pid, id, status),
+  feedbackStats: (pid) => ipcRenderer.invoke('feedback:stats', pid),
+  feedbackDigest: (pid, enqueue = false) => ipcRenderer.invoke('feedback:digest', pid, enqueue),
+  // One line per supervisor decision, live. Returns an unsubscribe like the
+  // other listeners here.
+  onLoopEvent: (cb) => {
+    const handler = (_e, entry) => cb(entry);
+    ipcRenderer.on('loop:event', handler);
+    return () => ipcRenderer.removeListener('loop:event', handler);
+  },
+
   onRunUpdate: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('run:update', handler);
