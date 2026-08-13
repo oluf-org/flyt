@@ -25,6 +25,7 @@ import { pickSafetyModel, SAFETY_MODEL_CANDIDATES } from './safetyCheck.js';
 import { ProjectRegistry } from './projects.js';
 import { Backlog } from './backlog.js';
 import { FeedbackStore } from './feedback.js';
+import { WorktreePool } from './worktree.js';
 import { configDirFor } from './workspace.js';
 import { setKnownTools } from '../src/flowTypes.js';
 import { diffSnapshot } from './snapshotDiff.js';
@@ -413,6 +414,27 @@ export function createEngine({
     return f;
   }
 
+  // One worktree pool per project (LOOP-PLAN §6.1). The trees live OUTSIDE the
+  // repo root — a nested checkout inside the working tree confuses grep, test
+  // runners and the agent's own file tools — so they go under the data root,
+  // keyed by project.
+  const pools = new Map();
+  function poolFor(projectId) {
+    let p = pools.get(projectId);
+    if (p) return p;
+    const entry = registry.get(projectId);
+    const root = entry.folder;
+    if (!root) return null; // only a real repo can have worktrees
+    // Deliberately NOT under dataRoot: in development that is the checkout
+    // itself, which would put worktrees inside the repo (§6.1). `worktreeRoot`
+    // in config.json overrides; the default is under the user's home.
+    const base = runtimeConfig.worktreeRoot
+      ? path.join(runtimeConfig.worktreeRoot, path.basename(root))
+      : null;
+    pools.set(projectId, p = new WorktreePool(root, base));
+    return p;
+  }
+
   const registry = new ProjectRegistry({
     defaultRunsDir: path.join(dataRoot, 'runs'),
     appDataDir: userDataDir,
@@ -441,7 +463,7 @@ export function createEngine({
     // Paths
     projectRoot, dataRoot, userDataDir, settingsPath, dataDir, seedFromBundle,
     // Stores
-    flows, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor,
+    flows, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor, poolFor,
     // Config + settings
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,
     // Providers

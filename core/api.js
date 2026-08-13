@@ -12,6 +12,8 @@
 // they are how a human touches the app, not what the app does. A headless
 // caller asking for one gets an honest error rather than a silent no-op.
 import { Workspace } from './workspace.js';
+import { landTask, verifyTask } from './landing.js';
+import { pushRefs } from './worktree.js';
 import { APPROVAL_MODES } from './flowRunner.js';
 import { lintFlow } from './flowlang/lint.js';
 
@@ -52,6 +54,15 @@ export function createApi(engine) {
         { status: 400, code: 'no_feedback' });
     }
     return feedback;
+  };
+  const poolFor = projectId => {
+    proj(projectId);
+    const pool = engine.poolFor(projectId);
+    if (!pool) {
+      throw new ApiError('This project is not a git repository, so it cannot use worktrees.',
+        { status: 400, code: 'no_repo' });
+    }
+    return pool;
   };
   const backlogFor = projectId => {
     proj(projectId); // resolve/validate the project first, for the honest 404
@@ -210,6 +221,62 @@ export function createApi(engine) {
       const text = feedbackFor(projectId).readDigest(name);
       if (text == null) throw new ApiError(`No digest "${name}".`, { status: 404, code: 'no_digest' });
       return text;
+    },
+
+    // --- Isolation and landing (LOOP-PLAN §6, §7) ---------------------------
+    //
+    // The supervisor will drive these in sequence; exposing them as commands
+    // means the same steps are drivable by hand, by the CLI and (later) by the
+    // loop, without a second implementation of any of it.
+    'work:start': async ({ projectId, taskId }) => {
+      const backlog = backlogFor(projectId);
+      const task = backlog.get(taskId);
+      if (!task) throw new ApiError(`No task "${taskId}".`, { status: 404, code: 'no_task' });
+      const wt = await poolFor(projectId).create(taskId, task.title);
+      backlog.update(taskId, { status: 'running' });
+      return wt;
+    },
+    'work:verify': async ({ projectId, taskId }) => {
+      const task = backlogFor(projectId).get(taskId);
+      return verifyTask({ pool: poolFor(projectId), taskId, task: task ?? {} });
+    },
+    'work:diff': ({ projectId, taskId, base = null }) =>
+      poolFor(projectId).diff(taskId, { base: base ?? 'HEAD' }),
+    'work:discard': async ({ projectId, taskId, status = 'queued' }) => {
+      const removed = await poolFor(projectId).remove(taskId, { deleteBranch: true });
+      backlogFor(projectId).release(taskId, { status });
+      return { removed };
+    },
+    // The whole sequence: gates → mechanical checks → review → merge → canary.
+    // Every outcome that is not "landed" carries guidance, because a task that
+    // fails without telling the next attempt why is just re-rolling dice.
+    'work:land': async ({ projectId, taskId, dryRun = false, push = null, baselineOutput = null }) => {
+      const entry = proj(projectId);
+      const backlog = backlogFor(projectId);
+      const pool = poolFor(projectId);
+      const task = backlog.get(taskId);
+      if (!task) throw new ApiError(`No task "${taskId}".`, { status: 404, code: 'no_task' });
+      const base = await pool.defaultBranch();
+      await pool.commit(taskId, `${task.title}\n\nTask ${taskId}.`);
+      // Pushing is outward-facing and hard to take back, so it is opt-in:
+      // `loop.push` in config, or --push on the command. A repo with no origin
+      // is still a perfectly good local loop.
+      const wantPush = push ?? runtimeConfig.loop?.push === true;
+      const result = await landTask({
+        pool, repoRoot: entry.folder, taskId, task, base, dryRun, baselineOutput,
+        config: runtimeConfig,
+        push: wantPush ? (args => pushRefs({ ...args, log: () => {} })) : null,
+        // The canary: the gates again, on the merged result in the main
+        // checkout. Two branches that each pass alone can fail together.
+        verify: async () => verifyTask({ pool: { dirFor: () => entry.folder }, taskId, task })
+      });
+      backlog.update(taskId, {
+        status: result.landed ? 'landed' : (result.stage === 'review' ? 'review' : 'queued'),
+        attempts: (task.attempts ?? 0) + 1,
+        blockedReason: result.landed ? null : (result.guidance ?? result.stage)
+      });
+      if (result.landed) await pool.remove(taskId, { deleteBranch: false });
+      return result;
     },
 
     // --- Liveness ----------------------------------------------------------

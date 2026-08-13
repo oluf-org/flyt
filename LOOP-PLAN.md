@@ -648,7 +648,7 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 |---|---|---|
 | 1 ✅ | **Per-call request timeout** (§11.5); `core/engine.js` + `core/api.js` extraction; `core/server.js`; `bin/flyt.js` | Start a run from a terminal with Electron closed, and kill a hung provider call |
 | 2 ✅ | Backlog files, atomic claim, `enqueue_task`, deterministic picker | `flyt task add`, `flyt task ready`, `flyt task take` — and an agent queueing work mid-run |
-| 3 | Worktree pool, gate runner, `diff-review` node, merge + push + canary + auto-revert, supervisor pin | A task lands on `main` with nobody watching |
+| 3 ✅ | Worktree pool, gate runner, `diff-review`, merge + push + canary + auto-revert, the pin | A task lands on `main` with nobody watching |
 | 4 | Price table, ledger, three ceilings, tier ladder wired into step-eval escalation, subscription-first ordering | A task escalates cheap → frontier; a hard cap stops the loop cleanly |
 | 5 | Heartbeats, stall detectors, the interruption ladder, park-don't-block gates, the report | A deliberately wedged task gets nudged, restarted, then parked — unattended |
 | 6 | Electron Loop view over HTTP/SSE; reference library + read-only reference root | Watch the queue burn down; an agent greps opencode mid-task |
@@ -657,6 +657,26 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 **Day 0, before any of it:** clone the reference repos (§16) and add the lint script. The loop
 cannot enforce a gate that does not exist, and the lint script is the smallest possible instance
 of the thing this whole plan is for.
+
+**Day 3 landed** (`gates`, `worktree`, `diffReview`, `landing`). `flyt work start|verify|land`
+takes a task from a fresh worktree to a merge commit on the base branch: the harness runs the
+gates (§7.1), mechanical checks close the cheap exits (§7.3), a reviewer model reads the diff
+(§7.2), and the merge is followed by a canary that reverts itself if the base goes red (§6.2).
+`advancePin` (§6.3) refuses a revision that fails either the suite or a supervisor self-test.
+Verified against real git repositories in temp dirs, because a mocked git proves nothing about
+whether a commit ended up on a branch.
+
+Two corrections the work forced. **Worktrees must be enforced outside the repo, not merely
+documented as such**: the first real run put them under the app's data root, which in
+development IS the checkout — a worktree of the repo inside the repo, exactly what §6.1
+forbids. The rule is now a constructor guard with a test. And **removing a built-in orphans its
+seeded `tools/*.json`**, which then fails to load and warns on every single launch; the store
+prunes its own orphans now, since a warning nobody can fix is how a project teaches people to
+ignore warnings.
+
+Pushing is wired but **opt-in** (`loop.push`, or `--push`). It is outward-facing and hard to
+take back, so it does not turn itself on; a repo with no `origin` is still a perfectly good
+local loop. Likewise `workers.reviewer`: with none configured, **nothing lands unattended**.
 
 **Day 2 landed** (`backlog`, `enqueue_task`). `.flyt/backlog/*.task.md` with atomic
 lock-file claiming and leases (§5.4), the deterministic picker (§5.3), `task:*` on the command

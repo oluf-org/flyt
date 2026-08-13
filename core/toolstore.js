@@ -100,7 +100,30 @@ export class ToolStore {
       this.write(next);
       written.push(def.id);
     }
+    // Orphans go too, but the return stays "what was written" — callers and
+    // tests read it as a converged/not-converged signal.
+    this.pruneOrphanedBuiltins();
     return written;
+  }
+
+  /**
+   * Delete seeded files for built-ins this build no longer ships.
+   *
+   * A built-in's `run()` lives in source, so a definition left behind after the
+   * module is gone is a lie: the registry refuses to load it and warns on every
+   * single launch, which is how a project teaches its users to ignore warnings.
+   * Only `provider: 'builtin'` records are touched — a user's own tool, or one
+   * cloned from a built-in, is theirs and survives.
+   */
+  pruneOrphanedBuiltins() {
+    const shipped = new Set(builtinDefinitions().map(d => d.id));
+    const removed = [];
+    for (const tool of this.listFull()) {
+      if (tool.provider !== 'builtin' || shipped.has(tool.id)) continue;
+      try { fs.unlinkSync(this.toolPath(tool.id)); removed.push(tool.id); }
+      catch { /* already gone */ }
+    }
+    return removed;
   }
 
   toolPath(id) {

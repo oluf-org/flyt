@@ -35,6 +35,10 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task show <id>                 one task, in full
   flyt task ready                     what the picker would take, and what is stuck
   flyt task take                      claim the top-scoring ready task
+  flyt work start <taskId>            worktree + branch for a task
+  flyt work verify <taskId>           run the gates in it (the harness runs them)
+  flyt work land <taskId> [--dry-run|--push]  gates -> review -> merge -> canary
+  flyt work discard <taskId>          throw the worktree away
   flyt feedback stats                 what instances reported about the toolbox
   flyt feedback preview               the digest as it would read right now
   flyt feedback digest [--enqueue]    write the digest, archive what it covered
@@ -237,6 +241,41 @@ async function main() {
           return out(await api.invoke('task:stats', { projectId }));
         default:
           return die(`Unknown task subcommand "${sub}".`);
+      }
+    }
+
+    case 'work': {
+      const sub = positional[1];
+      const taskId = positional[2];
+      const projectId = openProject(api, engine);
+      switch (sub) {
+        case 'start': {
+          const wt = await api.invoke('work:start', { projectId, taskId });
+          say(`worktree ${wt.dir}`);
+          return out(asJson ? wt : `${wt.branch}\t${wt.dir}`);
+        }
+        case 'verify': {
+          const r = await api.invoke('work:verify', { projectId, taskId });
+          if (asJson) return out(r);
+          for (const g of r.results) say(`${g.status}\t${g.command}${g.code != null ? ` (exit ${g.code})` : ''}`);
+          if (!r.ok && r.failure) console.log(r.failure.output);
+          process.exitCode = r.ok ? 0 : 1;
+          return out(r.ok ? 'gates green' : `gates ${r.failure?.status ?? 'failed'}`);
+        }
+        case 'diff':
+          return out(await api.invoke('work:diff', { projectId, taskId }));
+        case 'discard':
+          return out(await api.invoke('work:discard', { projectId, taskId }));
+        case 'land': {
+          const r = await api.invoke('work:land', { projectId, taskId, dryRun: Boolean(flags['dry-run']), push: flags.push ? true : null });
+          if (asJson) return out(r);
+          for (const step of r.steps) say(`  ${step.step}: ${step.ok ?? step.verdict ?? step.landed ?? ''}`);
+          say(r.landed ? `landed as ${r.mergeSha?.slice(0, 8)}` : `did not land (${r.stage})`);
+          process.exitCode = r.landed ? 0 : 1;
+          return out(r.landed ? `landed ${r.mergeSha}` : `${r.stage}: ${r.guidance ?? ''}`);
+        }
+        default:
+          return die(`Unknown work subcommand "${sub}".`);
       }
     }
 
