@@ -246,10 +246,22 @@ export class Backlog {
     return { ...claimed, stolen };
   }
 
+  /**
+   * Drop the lease.
+   *
+   * `status: null` keeps whatever status the task already has, and that is not
+   * a nicety: the caller has often just decided the status — escalated the task
+   * back into the queue a rung up, or parked it — and a release that insists on
+   * writing one of its own silently undoes that decision. Seen for real: every
+   * failed landing escalated correctly and was then parked by the worktree
+   * cleanup that followed it, so the ladder never climbed after a bad review.
+   */
   release(id, { status = 'queued' } = {}) {
     const safe = this.#assertId(id);
     try { fs.unlinkSync(this.#lock(safe)); } catch { /* no lock to drop */ }
-    return this.get(safe) ? this.update(safe, { status, claimedBy: null, claimedAt: null }) : null;
+    const task = this.get(safe);
+    if (!task) return null;
+    return this.update(safe, { status: status ?? task.status, claimedBy: null, claimedAt: null });
   }
 
   /**

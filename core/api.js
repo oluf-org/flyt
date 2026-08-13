@@ -309,6 +309,10 @@ export function createApi(engine) {
     },
     'work:diff': ({ projectId, taskId, base = null }) =>
       poolFor(projectId).diff(taskId, { base: base ?? 'HEAD' }),
+    // Throw the worktree away and drop the lease. `status: null` leaves the
+    // task's status alone, which is what the supervisor wants — it has already
+    // decided (queued a rung up, or parked) and a status written here would
+    // overwrite that decision.
     'work:discard': async ({ projectId, taskId, status = 'queued' }) => {
       const removed = await poolFor(projectId).remove(taskId, { deleteBranch: true });
       backlogFor(projectId).release(taskId, { status });

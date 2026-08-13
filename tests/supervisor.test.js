@@ -201,7 +201,14 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', land = () =
       return result;
     }
     if (name === 'run:stop' || name === 'run:restartNode' || name === 'run:approve') return true;
-    if (name === 'work:discard') return { removed: true };
+    if (name === 'work:discard') {
+      // Modelled, not stubbed. A no-op here hid a real bug for a week: the
+      // command releases the lease, and passing a status into it overwrote the
+      // escalation that had just been decided, so every failed landing parked.
+      // A fake that does less than the command it stands for cannot catch that.
+      if (backlog) backlog.release(args.taskId, { status: args.status ?? null });
+      return { removed: true };
+    }
     throw new Error(`unexpected command ${name}`);
   };
   return { invoke, calls };

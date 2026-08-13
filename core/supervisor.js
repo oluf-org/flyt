@@ -352,8 +352,14 @@ export class Supervisor {
   // A worktree outlives only a LANDED task (work:land removes that one). Every
   // other ending throws it away, or the next attempt cannot even start — which
   // is how a task wedges permanently and an overnight run quietly stops working.
+  //
+  // `status: null` because the status has ALREADY been decided by whoever is
+  // discarding — escalate() put the task back in the queue a rung up, #park put
+  // it in the parked pile. This used to pass 'parked', which meant every
+  // escalation was immediately undone by the cleanup that followed it and the
+  // ladder never climbed after a failed landing.
   async #discard(taskId) {
-    try { await this.invoke('work:discard', { projectId: this.projectId, taskId, status: 'parked' }); }
+    try { await this.invoke('work:discard', { projectId: this.projectId, taskId, status: null }); }
     catch { /* nothing to discard */ }
   }
 

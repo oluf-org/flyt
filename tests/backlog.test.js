@@ -118,6 +118,25 @@ test('releasing drops the lock so the task can be taken again', () => {
   assert.ok(backlog.claim(task.id, 'worker-b'), 'reclaimable immediately, no lease wait');
 });
 
+test('releasing with no status keeps the one the caller just decided', () => {
+  // The supervisor escalates a failed task back into the queue a rung up and
+  // THEN throws its worktree away. A release that insists on writing a status
+  // of its own undoes that decision silently — which is exactly what happened:
+  // every failed landing escalated correctly and was parked a moment later, so
+  // the ladder never climbed.
+  const backlog = newBacklog();
+  const task = backlog.add({ title: 'fails once', goal: 'g', level: 'low' });
+  backlog.claim(task.id, 'worker-a');
+  const escalated = backlog.escalate(task.id, { reason: 'failed', note: 'review said no' });
+  assert.equal(escalated.status, 'queued');
+  assert.equal(escalated.level, 'medium');
+
+  const released = backlog.release(task.id, { status: null });
+  assert.equal(released.status, 'queued', 'the escalation survives the cleanup');
+  assert.equal(released.level, 'medium');
+  assert.equal(released.claimedBy, null);
+});
+
 // --- picking ---------------------------------------------------------------
 
 test('the picker prefers value over effort, and unblocking over both', () => {
