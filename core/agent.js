@@ -47,16 +47,16 @@ const NATIVE_TOOL_PROVIDERS = new Set(['openrouter', 'openai', 'kimi']);
 export const toolProtocol = worker =>
   (NATIVE_TOOL_PROVIDERS.has(worker?.provider) && worker?.supportsTools) ? 'native' : 'text';
 
-export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, retry, signal = null }) {
+export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, retry, timeout, signal = null }) {
   const started = Date.now();
   if (!tools.length) {
-    const r = await callModel({ ...worker, apiKey, system, prompt, onText, onRetry, retry, signal });
+    const r = await callModel({ ...worker, apiKey, system, prompt, onText, onRetry, retry, timeout, signal });
     return { text: r.text, toolCalls: [], usage: r.usage, durationMs: r.durationMs };
   }
   const native = toolProtocol(worker) === 'native';
   const out = native
-    ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal })
-    : await textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal });
+    ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal })
+    : await textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal });
   return { ...out, durationMs: Date.now() - started };
 }
 
@@ -80,7 +80,7 @@ function addUsage(total, usage) {
 }
 
 // --- NATIVE path: OpenAI function-tool format over the messages API ---
-async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal }) {
+async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal }) {
   const messages = [
     { role: 'system', content: system },
     { role: 'user', content: prompt }
@@ -99,7 +99,7 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
     // non-streaming response carries) — so this path stays silent until an
     // adapter can reassemble tool_calls from deltas. Honoring the contract here
     // means that becomes an adapter change alone.
-    const res = await callModel({ ...worker, apiKey, messages, tools: oaTools, onText, onRetry, retry, signal });
+    const res = await callModel({ ...worker, apiKey, messages, tools: oaTools, onText, onRetry, retry, timeout, signal });
     usage = addUsage(usage, res.usage);
     lastText = res.text || lastText;
     const calls = res.message?.tool_calls;
@@ -142,7 +142,7 @@ export function textProtocolInstructions(tools) {
   ].join('\n');
 }
 
-async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, signal }) {
+async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal }) {
   const fullSystem = system + '\n\n' + textProtocolInstructions(tools);
   const toolCalls = [];
   let usage = null;
@@ -150,7 +150,7 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
   let lastText = '';
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const res = await callModel({ ...worker, apiKey, system: fullSystem, prompt: transcript, onText, onRetry, retry, signal });
+    const res = await callModel({ ...worker, apiKey, system: fullSystem, prompt: transcript, onText, onRetry, retry, timeout, signal });
     usage = addUsage(usage, res.usage);
     lastText = res.text;
     const match = res.text.match(TOOL_BLOCK);

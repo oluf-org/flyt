@@ -1,0 +1,88 @@
+{
+  "id": "enqueue_task",
+  "title": "Add a task to the backlog",
+  "description": "Add a task to the PROJECT'S BACKLOG for a future run to pick up. Use this for work that is worth doing but is NOT part of the current task: a missing tool, a refactor a later change would need, a bug you noticed in passing, a test that should exist. It is queued, not executed — it will be prioritized against everything else and run later with its own context and budget. To add work that must happen inside THIS run, use create_task instead.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "write"
+  ],
+  "scope": "workspace",
+  "risk": "caution",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "title",
+      "goal"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "Short imperative title, e.g. \"Add a per-task timeout to the gate runner\"."
+      },
+      "goal": {
+        "type": "string",
+        "description": "What the task must achieve, self-contained. Assume the reader has NOT seen this run: state the problem, where it is, and why it matters."
+      },
+      "doneWhen": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Acceptance criteria — how a future run knows it is finished."
+      },
+      "value": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 5,
+        "description": "How valuable, 1-5 (default 3)."
+      },
+      "effort": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 5,
+        "description": "How much work, 1-5 (default 3)."
+      },
+      "dependsOn": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Backlog task ids that must land first, e.g. [\"t-0007\"]."
+      },
+      "blastRadius": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Paths the work is expected to touch, if you already know them."
+      }
+    }
+  },
+  "keywords": [
+    "backlog",
+    "todo",
+    "later",
+    "follow-up",
+    "queue",
+    "idea",
+    "improvement"
+  ],
+  "examples": [
+    "queue a task to add a lint script, since the gate runner needs one",
+    "note that the retry helper should be extracted before the next change here"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

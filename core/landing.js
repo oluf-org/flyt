@@ -1,0 +1,213 @@
+// The landing sequence (LOOP-PLAN §6.2, §7), and the pin that keeps it alive.
+//
+// Everything from "the agent says it is done" to "it is on main or it never
+// happened", in one place, so the supervisor's loop reads as the sequence it
+// actually is rather than as a pile of git calls.
+//
+//   verify   → the harness runs the gates in the worktree (§7.1)
+//   review   → a second model reads the diff (§7.2)
+//   land     → merge --no-ff, canary, revert on red (§6.2)
+//
+// Each stage returns rather than throws, and each records why. A task that does
+// not land must leave behind enough for the next attempt to be better than the
+// last, or the loop is just re-rolling dice.
+import fs from 'node:fs';
+import path from 'node:path';
+import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression } from './gates.js';
+import { WorktreePool, land as gitLand, git } from './worktree.js';
+import { reviewDiff, reviewWorker } from './diffReview.js';
+
+/**
+ * Run the gates against a task's worktree.
+ *
+ * The harness runs them; the agent's claim is not consulted. A failure returns
+ * its bounded output so it can be handed back as guidance for another attempt
+ * — a red suite the agent never sees teaches nothing.
+ */
+export async function verifyTask({ pool, taskId, task = {}, log = () => {} }) {
+  const dir = pool.dirFor(taskId);
+  if (!fs.existsSync(dir)) return { ok: false, reason: 'no-worktree', results: [] };
+  const projectConfig = readProjectGateConfig(dir);
+  const gates = gatesFor({ projectConfig, task });
+  log(`gates: ${gates.join(', ')}`);
+  const out = await runGates(gates, {
+    cwd: dir,
+    timeoutMs: projectConfig.gateTimeoutMs,
+    onResult: r => log(`  ${r.command} → ${r.status}${r.code != null ? ` (${r.code})` : ''} in ${r.ms}ms`)
+  });
+  return { ...out, gates };
+}
+
+/**
+ * Everything that must be true before a reviewer is even asked.
+ *
+ * These are the mechanical closures from §7.3 — the cheap exits an agent
+ * optimizing for "gates green" would otherwise take. They run BEFORE the review
+ * because they cost nothing and because a model should not be asked to
+ * adjudicate something a rule already settles.
+ */
+export function mechanicalChecks({ changedFiles, task = {}, baselineOutput = null, currentOutput = null }) {
+  const problems = [];
+
+  // A task may touch a protected path only when it is explicitly about it, in
+  // which case it lands with a human's approval, never unattended.
+  const violations = protectedViolations(changedFiles, { allow: task.blastRadius ?? [] });
+  if (violations.length) {
+    problems.push(`Touched protected path(s) no task may change on its own: ${violations.join(', ')}.`);
+  }
+
+  // Green with fewer tests is the most convincing way to fail.
+  const regression = testCountRegression(baselineOutput, currentOutput);
+  if (regression) problems.push(regression);
+
+  return { ok: problems.length === 0, problems };
+}
+
+/**
+ * The full sequence for one finished task.
+ *
+ * `dryRun` stops after the review and pushes nothing — the posture for the
+ * first nights (§6.4), where branches are pushed for a human to read and
+ * nothing merges itself.
+ */
+export async function landTask({
+  pool, repoRoot, taskId, task, base,
+  config = {}, apiKey = null,
+  verify = null,           // injected so the canary is testable without a suite
+  push = null,
+  dryRun = false,
+  baselineOutput = null,
+  log = () => {}
+}) {
+  const steps = [];
+  const record = (step, result) => { steps.push({ step, ...result }); return result; };
+
+  // 1. Gates, in the worktree.
+  const gateRun = record('gates', await verifyTask({ pool, taskId, task, log }));
+  if (!gateRun.ok) {
+    return { landed: false, stage: 'gates', steps, guidance: gateFailureGuidance(gateRun) };
+  }
+
+  // 2. Mechanical checks — free, and not a model's judgment call.
+  const changedFiles = await pool.changedFiles(taskId, { base });
+  const mech = record('checks', mechanicalChecks({
+    changedFiles, task,
+    baselineOutput,
+    currentOutput: gateRun.results.map(r => r.output).join('\n')
+  }));
+  if (!mech.ok) {
+    return { landed: false, stage: 'checks', steps, guidance: mech.problems.join(' ') };
+  }
+
+  // 3. The reviewer.
+  const diff = await pool.diff(taskId, { base });
+  const review = record('review', await reviewDiff({
+    worker: reviewWorker(config), apiKey, task, diff,
+    gates: gateRun.results, blastRadius: task.blastRadius ?? [], changedFiles,
+    retry: config.retry, timeout: config.timeout
+  }));
+  log(`review: ${review.verdict}${review.reason ? ` — ${review.reason}` : ''}`);
+  if (review.verdict !== 'approve') {
+    return {
+      landed: false, stage: 'review', steps, review,
+      guidance: [review.reason, ...review.changes].filter(Boolean).join(' ')
+    };
+  }
+
+  if (dryRun) {
+    log('dry run: approved, not merging');
+    return { landed: false, stage: 'dry-run', steps, review, approved: true };
+  }
+
+  // 4. Merge, canary, revert on red.
+  const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: pool.dirFor(taskId) });
+  const result = record('land', await gitLand({
+    repoRoot, branch, base,
+    message: `${task.title ?? taskId}\n\nTask ${taskId}. Landed by Flyt after gates and review.`,
+    verify, push, log
+  }));
+
+  if (!result.landed) {
+    return {
+      landed: false, stage: result.reason === 'conflict' ? 'merge' : 'canary', steps, review,
+      guidance: result.reason === 'conflict'
+        ? `The branch no longer merges cleanly into ${base}: ${result.error}. Rebase onto the current ${base} and re-run.`
+        : `The change passed its own gates but broke ${base} once merged; the merge was reverted. ${canaryGuidance(result.canary)}`
+    };
+  }
+  return {
+    landed: true, stage: 'landed', steps, review,
+    mergeSha: result.mergeSha, pushed: result.pushed,
+    // What the suite said on the merged base. The caller keeps it and hands it
+    // back as `baselineOutput` for the next task, which is what makes the
+    // test-count check (§7.3) fire at all in an unattended run: with nothing to
+    // compare against, `testCountRegression` skips, and "green with fewer
+    // tests" is the most convincing way to fail.
+    canaryOutput: (result.canary?.results ?? []).map(r => r.output).join('\n') || null
+  };
+}
+
+// What the next attempt is told. The failing gate's own output, bounded — not a
+// summary of it, because the exact error is the useful part.
+function gateFailureGuidance(gateRun) {
+  const f = gateRun.failure;
+  if (!f) return 'The gates did not pass.';
+  if (f.status === 'timeout') {
+    return `The gate \`${f.command}\` timed out after ${f.ms}ms. Something hangs — find it rather than raising the timeout.`;
+  }
+  return `The gate \`${f.command}\` failed (exit ${f.code}). Output:\n${f.output}`;
+}
+
+function canaryGuidance(canary) {
+  const f = canary?.failure;
+  return f ? `\`${f.command}\` failed on the merged result:\n${f.output}` : '';
+}
+
+// --- the supervisor pin (§6.3) ---------------------------------------------
+//
+// The supervisor is running the code it is editing. A merge that breaks the
+// gate runner breaks the thing that would have reverted it, and the loop eats
+// itself at 11am. So the supervisor runs from a SEPARATE checkout at a known-
+// good revision, and that pin only advances to a revision that has proven
+// itself twice: the full suite, and a supervisor self-test.
+//
+// The result is that improvements to the harness reach the harness one verified
+// step behind, never mid-flight. This is the single most important safety
+// property in the plan.
+
+export function readPin(pinDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(pinDir, 'pin.json'), 'utf8')); }
+  catch { return null; }
+}
+
+export function writePin(pinDir, pin) {
+  fs.mkdirSync(pinDir, { recursive: true });
+  fs.writeFileSync(path.join(pinDir, 'pin.json'), JSON.stringify(pin, null, 2));
+  return pin;
+}
+
+/**
+ * Should the pin advance to `revision`?
+ *
+ * `checks` is a list of async () => ({ ok, name, detail }) — the full suite and
+ * the supervisor self-test, injected so this module does not decide what
+ * "healthy" means for a given project.
+ *
+ * A pin that fails to advance is NOT an error: the loop keeps running on the
+ * old pin and files the problem. Refusing to adopt a bad revision is the
+ * mechanism working.
+ */
+export async function advancePin({ pinDir, revision, checks = [], log = () => {} }) {
+  const results = [];
+  for (const check of checks) {
+    const r = await check();
+    results.push(r);
+    log(`pin check ${r.name}: ${r.ok ? 'ok' : 'FAILED'}${r.detail ? ` — ${r.detail}` : ''}`);
+    if (!r.ok) {
+      return { advanced: false, revision, results, reason: `${r.name} failed${r.detail ? `: ${r.detail}` : ''}` };
+    }
+  }
+  const previous = readPin(pinDir);
+  writePin(pinDir, { revision, at: new Date().toISOString(), previous: previous?.revision ?? null });
+  return { advanced: true, revision, results, previous: previous?.revision ?? null };
+}

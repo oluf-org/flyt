@@ -279,6 +279,14 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | AI-helper workflow builder | PLANNED | Canvas is manual today; the view-mode half of D5 is done (§6.1) |
 | Subscription / capped-key backend | PLANNED | BYO key today |
 | Packaging / distribution | NOT STARTED | Explicitly not on radar |
+| **Headless command surface** (`core/api.js`, `core/server.js`, `bin/flyt.js`) | BUILT | D35 — one map, bound by Electron IPC, loopback HTTP+SSE and the CLI |
+| **The autonomous loop** (backlog, worktrees, gates, reviewer, canary, ledger, heartbeats) | BUILT | D35 — `LOOP-PLAN.md` §5–§11; a task goes from queue to `main` unattended |
+| **Harness-run verification** | BUILT | D35 — closes §11.1's weakest joint: the supervisor reads the exit code, not the agent's claim |
+| **Per-call request timeout** | BUILT | Progress-based idle deadline (`core/adapters/index.js`) — closes the §11.1 gap below |
+| **Retrospective second turn + tool-feedback digest** | BUILT | D35 — makes D13 actionable: what the toolbox lacked, aggregated |
+| **Benchmark + archive** (`benchmark/`, `.flyt/archive/`) | BUILT | D35 — a fixed suite against a throwaway clone, scored by independent probes |
+| **Reference library** (read-only clones, `search_references`) | BUILT | D35 — recipes, greppable at task time; never vendored (D24) |
+| Model overseer, picker LLM tiebreak | PLANNED | D35 — deliberately after the deterministic layer, bought with measurements |
 
 ---
 
@@ -297,10 +305,10 @@ The four bars:
 **Honest limits of the evidence:**
 - **The acceptance is not deterministic.** An earlier run reported `done` having implemented nothing and left the suite red — two causes, both fixed and regression-tested: a work template that couldn't write (`code-design-step` shipped read-only while the planner handed it implementation work), and the plan contract never checking that `category` and `template` agree though they are documented 1:1. The passing run happened to route correctly, so the *contract check* is proven by unit tests rather than live.
 - **The run was sequential**, correctly: plan-eval produced a real `implement → test → verify` chain. Parallelism is proven separately (four concurrent agentTasks, §2.1).
-- **An agent can still report success over a failing suite.** `bash` returns a non-zero exit as *data*, so `ok:true` means the tool ran, not that the command succeeded. Non-zero exits are now recorded as retrospective problems and drop the confidence, and `test-creation-step` is instructed never to finish on a red suite — but nothing *enforces* it. `final-eval` is an `aiStep`, so it holds no tools and verifies by reading its colleagues' prose rather than by running anything. **This is the weakest joint in the loop.**
+- **An agent can still report success over a failing suite** — *within a run*. `bash` returns a non-zero exit as *data*, so `ok:true` means the tool ran, not that the command succeeded; `final-eval` is an `aiStep` and verifies by reading its colleagues' prose rather than by running anything. **This was the weakest joint in the loop, and D35 closes it from outside**: unattended, nothing is closed by an agent's claim. The supervisor runs the gates itself and reads the exit code (`core/gates.js`), a second model reads the diff, a post-merge canary reverts a change that breaks the base, the test count may not fall, and an independent probe per benchmark case says whether the work actually works (`core/benchmark.js`). Attended, the joint is still soft: a human reading the run is the check.
 
 **Known gaps carried past V1:**
-- **No request timeout anywhere in the adapters** — no `AbortSignal`. A stalled provider connection hangs a node indefinitely: it never errors, so the retry budget never engages. Seen live (a node sat 347s and was killed; the same node took 79–104s on other runs). The empty-stream guard only fires when a stream *ends*.
+- ~~**No request timeout anywhere in the adapters**~~ — **closed** (D35). Every call now carries a *progress-based* deadline: `idleMs` is measured against emissions, so a long live stream is never cut and only silence counts, and a stalled call fails as a transient error and retries with a fresh deadline. It had been a papercut attended; unattended it is a task that cannot be supervised at all.
 - **Anthropic BYO-key is env-var only.** The adapter honors a caller-supplied key (V1 task 11), but `providerKeys` only ever carries `openrouter` and Settings offers no Anthropic field, so nothing can pass one. Its contract is pinned offline; it is unvalidated live.
 - **Native tool-calling is OpenRouter-only** (`toolProtocol()`); Anthropic always takes the text path.
 

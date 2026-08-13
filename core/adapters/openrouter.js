@@ -16,7 +16,23 @@ export const openrouterAdapter = openaiCompatible({
     'HTTP-Referer': 'https://github.com/olaaxe/flyt',
     'X-Title': APP_NAME
   },
-  keyHelp: 'Add it in Settings, or switch the worker to the "mock" provider.'
+  keyHelp: 'Add it in Settings, or switch the worker to the "mock" provider.',
+  // The Auto Router (LOOP-PLAN §8): `openrouter/auto` with a cost band, so a
+  // task asks for a LEVEL and OpenRouter picks a capable model inside it. That
+  // is the whole of what a per-model price table would have bought us, kept
+  // current by someone who updates it daily.
+  //
+  // Sent only when a caller asked for routing, so every existing call — a
+  // pinned model id, the agent loop, the retrospective turn — produces a byte
+  // -identical request to the one it produced before this existed.
+  extendBody(body, { routing }) {
+    if (!routing?.costTier) return;
+    body.plugins = [...(body.plugins ?? []), {
+      id: 'auto-router',
+      cost_tier: routing.costTier,
+      ...(routing.allowedModels?.length ? { allowed_models: routing.allowedModels } : {})
+    }];
+  }
 });
 
 // Which model ids this provider can serve (PROVIDERS-PLAN §2): OpenRouter ids

@@ -1,4 +1,6 @@
 // The structured retrospective every node must emit — v1 backbone.
+import { FeedbackStore } from './feedback.js';
+
 export function makeRetrospective({
   node,            // which node produced this
   status,          // 'success' | 'partial' | 'failed'
@@ -15,6 +17,15 @@ export function makeRetrospective({
     node, status, problems,
     resolution: resolution || (problems.length ? '' : 'none needed'),
     confidence, recommendation, model, usage, durationMs, toolCalls,
+    // What this instance did with its toolbox (LOOP-PLAN §12): per tool, how
+    // many calls, how many failed, how long they took.
+    //
+    // DERIVED, never asked for. The facts are already in the tool calls, so
+    // spending a model call — or a model's attention — on recounting them
+    // would buy a worse answer at a higher price. What a model is asked for is
+    // only the half it alone knows: whether the tool was any good, and what was
+    // missing. That arrives separately, through `tool_feedback`.
+    tools: FeedbackStore.usageFromToolCalls(toolCalls),
     at: new Date().toISOString()
   };
 }

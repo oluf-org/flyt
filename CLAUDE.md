@@ -16,6 +16,7 @@
 
 ## Active work
 
+- `LOOP-PLAN.md` — the autonomous improvement loop (headless supervisor, backlog, worktrees, budget/tiers, harness-run gates, benchmark + archive). Days 1–7 built; the decision landed as D35. §21 carries what is still open.
 - `OUTPUT-VIEW-PLAN.md` — the current implementation plan (markdown output view, canvas reader, summary nodes). Not started yet.
 - `CONFIGS-COMPARE-DESIGN.md` — P1–P3 shipped; P4 sweeps still open.
 

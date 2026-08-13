@@ -125,6 +125,13 @@ Unchanged in spirit; ease of use added.
 
 Full general-purpose visual programming (loops, conditionals, sub-flows); true parallel execution; streaming token-by-token UI; automatic adaptive re-planning; large graphs, cost tracking, A/B testing, auto-layout; any non-file state store; production-grade sandboxing.
 
+> **Two of these are no longer non-goals, per D35.** *Cost tracking* is reversed outright:
+> unattended runs need a counted, capped budget, because spend with nobody watching has no
+> upper bound (`core/ledger.js`, three rolling ceilings). *A/B testing* is reversed in the
+> narrow sense that the loop is scored — a fixed benchmark suite against a throwaway clone,
+> archived per day (`core/benchmark.js`), because "improve yourself" is otherwise
+> indistinguishable from churn. The rest of the list stands.
+
 ---
 
 ## How to Keep This Document Alive

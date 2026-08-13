@@ -4,6 +4,7 @@ import FlowCanvas, { FlowEditor, freshNodeId } from './FlowCanvas.jsx';
 import Inspector, { FlowInspector } from './Inspector.jsx';
 import Settings from './Settings.jsx';
 import NodesPage from './NodesPage.jsx';
+import LoopPage from './LoopPage.jsx';
 import NodePicker from './NodePicker.jsx';
 import FlowYamlEditor from './FlowYamlEditor.jsx';
 import LiveStream from './LiveStream.jsx';
@@ -168,13 +169,16 @@ const RailIcon = {
   )
 };
 
-// The three primary sections, in rail order. Each is a self-contained mode
-// with its own explorer list + remembered selection (Ctrl+1/2/3).
+// The primary sections, in rail order. Each is a self-contained mode with its
+// own explorer list + remembered selection (Ctrl+1..5).
 const NAV = [
   { key: 'home', label: 'Home', hint: 'Home  (Ctrl+1)' },
   { key: 'flows', label: 'Flows', hint: 'Flows  (Ctrl+2)' },
   { key: 'library', label: 'Library', hint: 'Node Library  (Ctrl+3)' },
-  { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+4)' }
+  { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+4)' },
+  // The unattended half (LOOP-PLAN §14): the backlog, what the supervisor is
+  // doing with it, and what it has spent.
+  { key: 'loop', label: 'Loop', hint: 'Loop  (Ctrl+5)' }
 ];
 
 // The run's plaintext mirror (flare 7): the same run as a typeset dossier you
@@ -1783,6 +1787,7 @@ export default function App() {
   const landerProjectName = projectless || !activeTabInfo || activeTabInfo.kind === 'default'
     ? null : activeTabInfo.name;
   const libraryView = activeActivity === 'library';
+  const loopView = activeActivity === 'loop';
   const selectedTemplate = templates.find(t => t.id === selectedTemplateId) ?? null;
 
   // Display copy of the edited flow with template defaults merged in.
@@ -1797,6 +1802,7 @@ export default function App() {
   const activeRunName = runs.find(r => r.id === activeRunId)?.name ?? activeRunId;
   const crumb =
     homeView ? ['Home'] :
+    loopView ? ['Loop'] :
     libraryView ? ['Library', selectedTemplate?.name].filter(Boolean) :
     activeActivity === 'runs' ? (activeRunId ? ['Runs', activeRunName] : ['Runs']) :
     flowView ? ['Flows', flow.name] : ['Flows'];
@@ -2195,7 +2201,9 @@ export default function App() {
               <button className="reject" onClick={() => window.flyt.rejectPlan(activeTab, activeRunId, 'Rejected by user')}>Reject</button>
             </div>
           )}
-          {libraryView
+          {loopView
+            ? <LoopPage projectId={activeTab} />
+            : libraryView
             ? <NodesPage
                 templates={templates}
                 selectedId={selectedTemplateId}

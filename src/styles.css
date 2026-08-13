@@ -3984,3 +3984,107 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
   /* Smooth scrolling is a nicety, not a necessity. */
   .chat-scroll { scroll-behavior: auto; }
 }
+
+/* --- The Loop view (LOOP-PLAN §14) ------------------------------------------
+   The human half of an unattended system. Its job is not to let you drive —
+   the loop drives itself — but to answer three questions at a glance: is it
+   stuck, does it need me, and what is this costing. The layout is ordered by
+   those, and "Waiting on you" keeps its heading even when empty so the answer
+   to "does it need me" is visible rather than inferred from an absence. */
+.loop-page {
+  display: flex; flex-direction: column; gap: 18px;
+  padding: 20px 24px 40px; overflow: auto; height: 100%;
+  background: var(--canvas); color: var(--tx);
+}
+.loop-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.loop-head h1 { font-size: 20px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+.loop-sub { margin: 4px 0 0; color: var(--dim); font-size: 12px; }
+.loop-actions { display: flex; gap: 8px; }
+.loop-error {
+  padding: 10px 12px; border-radius: 8px; font-size: 12px;
+  color: var(--err); background: var(--err-soft); border: 1px solid var(--border);
+}
+
+/* Spend, as a bar, but only when a ceiling exists — see burndown(). */
+.loop-burn { display: flex; flex-direction: column; gap: 6px; }
+.loop-burn-bar {
+  height: 6px; border-radius: 3px; overflow: hidden;
+  background: var(--border);
+}
+.loop-burn-bar span { display: block; height: 100%; background: var(--ok); transition: width 240ms ease; }
+.loop-burn-capped .loop-burn-bar span { background: var(--warn); }
+.loop-burn-stopped .loop-burn-bar span { background: var(--err); }
+.loop-burn-label { font-size: 12px; color: var(--dim); }
+.loop-burn-label strong { color: var(--tx); }
+.loop-burn-label em { font-style: normal; color: var(--faint); }
+
+/* In flight: a long task is fine, a stuck one is not, so health leads the row. */
+.loop-flight h2, .loop-pile h2, .loop-tail h2 {
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--dim); margin: 0 0 8px;
+}
+.loop-pile h2 .count { color: var(--faint); font-weight: 400; }
+.loop-flight-row {
+  display: flex; align-items: center; gap: 12px; padding: 8px 12px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  margin-bottom: 6px; font-size: 12px;
+}
+.loop-flight-row .glyph { color: var(--ok); }
+.loop-flight-row.health-quiet .glyph { color: var(--faint); }
+.loop-flight-row.health-stalled .glyph,
+.loop-flight-row.health-intervened .glyph { color: var(--warn); }
+.loop-flight-row .id { font-family: var(--mono, monospace); color: var(--tx); }
+.loop-flight-row .stage { color: var(--dim); }
+.loop-flight-row .level, .loop-flight-row .idle,
+.loop-flight-row .interventions { color: var(--faint); }
+.loop-flight-row .age { margin-left: auto; color: var(--dim); }
+
+.loop-piles { display: flex; flex-direction: column; gap: 18px; }
+.loop-task {
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 6px;
+}
+/* The pile that is asking for something reads differently from the ones that
+   are only reporting. */
+.loop-pile-parked .loop-task { border-left: 3px solid var(--warn); }
+.loop-task-head { display: flex; align-items: baseline; gap: 10px; font-size: 13px; }
+.loop-task-head .id { font-family: var(--mono, monospace); color: var(--faint); font-size: 11px; }
+.loop-task-head .title { color: var(--tx); }
+.loop-task-head .level, .loop-task-head .attempts {
+  margin-left: auto; color: var(--faint); font-size: 11px;
+}
+.loop-task .reason { margin: 6px 0 0; font-size: 12px; color: var(--dim); }
+.loop-task-actions { display: flex; gap: 8px; margin-top: 8px; }
+.loop-pile .empty, .loop-tail .empty { color: var(--faint); font-size: 12px; margin: 0; }
+
+/* The benchmark trend (§12.1): the one panel that answers "is it getting
+   better". A day nobody scored keeps its slot as an empty column — the gaps are
+   part of what the series says. */
+.loop-trend h2 {
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--dim); margin: 0 0 8px;
+}
+.loop-trend h2 .count { text-transform: none; letter-spacing: 0; color: var(--faint); font-weight: 400; }
+.loop-trend-bars {
+  display: flex; align-items: flex-end; gap: 4px; height: 84px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px 4px;
+}
+.loop-trend-bar {
+  flex: 1 1 0; min-width: 8px; height: 100%;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch;
+}
+.loop-trend-bar .fill { display: block; background: var(--ok); border-radius: 2px 2px 0 0; min-height: 2px; }
+.loop-trend-bar.unscored .fill { background: var(--border); height: 2px !important; }
+.loop-trend-bar .tick {
+  font-size: 9px; color: var(--faint); text-align: center; margin-top: 3px;
+  white-space: nowrap; overflow: hidden;
+}
+
+.loop-tail-lines {
+  max-height: 220px; overflow: auto; background: var(--card);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+}
+.loop-tail-line { display: flex; gap: 10px; font-size: 11px; font-family: var(--mono, monospace); }
+.loop-tail-line .time { color: var(--faint); flex: none; }
+.loop-tail-line .text { color: var(--dim); white-space: pre-wrap; }

@@ -1,7 +1,7 @@
 {
   "name": "flyt",
   "version": "0.1.3",
-  "description": "Flyt — AI-first orchestration: a flowchart canvas over a file-based multi-model pipeline",
+  "description": "Flyt \u2014 AI-first orchestration: a flowchart canvas over a file-based multi-model pipeline",
   "main": "electron/main.js",
   "type": "module",
   "scripts": {
@@ -10,6 +10,8 @@
     "start": "npm run build && electron .",
     "test": "node --test \"tests/**/*.test.js\"",
     "flow": "node core/flowlang/cli.js",
+    "flyt": "node bin/flyt.js",
+    "serve": "node bin/flyt.js serve",
     "icons": "node scripts/make-icons.mjs",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
@@ -33,5 +35,8 @@
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1"
+  },
+  "bin": {
+    "flyt": "bin/flyt.js"
   }
 }

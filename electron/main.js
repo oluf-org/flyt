@@ -2,28 +2,22 @@ import { app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification } from '
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { FlowStore } from '../core/flowstore.js';
-import { NodeStore } from '../core/nodestore.js';
-import { ToolStore } from '../core/toolstore.js';
-import { loadLibrary } from '../core/tools/index.js';
-import { FlowRunner, normalizeApprovalMode, APPROVAL_MODES } from '../core/flowRunner.js';
-import { pickSafetyModel, SAFETY_MODEL_CANDIDATES } from '../core/safetyCheck.js';
-import { Workspace } from '../core/workspace.js';
-import { ProjectRegistry, DEFAULT_PROJECT_ID } from '../core/projects.js';
-import { lintFlow, lintText } from '../core/flowlang/lint.js';
-import { resolveFlow, exposedFields, diffOverrides, setKnownTools } from '../src/flowTypes.js';
+import { createEngine } from '../core/engine.js';
+import { createApi } from '../core/api.js';
+import { APPROVAL_MODES } from '../core/flowRunner.js';
+import { SAFETY_MODEL_CANDIDATES } from '../core/safetyCheck.js';
+import { DEFAULT_PROJECT_ID } from '../core/projects.js';
+import { lintText } from '../core/flowlang/lint.js';
+import { resolveFlow, exposedFields, diffOverrides } from '../src/flowTypes.js';
 import { parseFlow } from '../core/flowlang/parse.js';
 import { serializeFlow } from '../core/flowlang/serialize.js';
-import { diffSnapshot } from '../core/snapshotDiff.js';
-import { callModel, canServe } from '../core/adapters/index.js';
+import { callModel } from '../core/adapters/index.js';
 import {
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
-  CURATED_MODELS, TEST_MODELS, migrateSettings, createResolver
+  CURATED_MODELS, TEST_MODELS
 } from '../core/modelSource.js';
 // Subscription (CLI-delegation) plumbing: sign-in detection + binary
 // resolution. Presence checks only — no token is ever read (SUBSCRIPTION-AUTH-GUIDE).
-import { claudeCredentialStatus, resolveClaudeCli } from '../core/adapters/claudeCode.js';
-import { codexCredentialStatus, resolveCodexCli } from '../core/adapters/codexCli.js';
 import { APP_NAME, LOG_TAG, LEGACY_APP_DIRS } from '../core/brand.js';
 import { migrateUserDataDir } from '../core/migrate.js';
 
@@ -51,42 +45,9 @@ migrateUserDataDir({
 
 // Where mutable state lives: the repo checkout in dev, userData when packaged.
 // flows/, nodes/ and runs/ are all read-write stores, so they must never be
-// resolved against projectRoot in a packaged build.
+// resolved against projectRoot in a packaged build. The engine does the
+// seeding and directory creation from these two roots.
 const dataRoot = app.isPackaged ? app.getPath('userData') : projectRoot;
-
-function dataDir(name) {
-  const dir = path.join(dataRoot, name);
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
-
-// Copy a bundled asset directory out of the (read-only) app bundle into the
-// writable data root. Flat directories only — deliberately shallow so it works
-// over the asar fs shim.
-//
-// Copying is per FILE, not per directory: a file is written only when it is
-// missing at the destination. That gives both halves of what we want — the
-// user's edits to a seeded flow are never clobbered by an update, and a NEW
-// default flow added in a later release still lands on existing installs
-// instead of being locked out by a one-shot first-run copy. A seed the user
-// deleted does come back, which matches how ensureDefaultPipeline() has always
-// behaved.
-function seedFromBundle(name) {
-  const dest = dataDir(name);
-  if (dataRoot === projectRoot) return dest; // dev: the bundle IS the data dir
-  const src = path.join(projectRoot, name);
-  try {
-    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      const to = path.join(dest, entry.name);
-      if (fs.existsSync(to)) continue;
-      fs.writeFileSync(to, fs.readFileSync(path.join(src, entry.name)));
-    }
-  } catch (err) {
-    console.warn(`${LOG_TAG} could not seed ${name} from the app bundle:`, err.message);
-  }
-  return dest;
-}
 
 // One instance per runs/ directory, claimed before anything reads or writes it.
 // runs/ is a shared mutable store and liveness is tracked in process memory
@@ -106,243 +67,31 @@ app.on('second-instance', () => {
   win.focus();
 });
 
-const baseConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'config.json'), 'utf8'));
-// Flows and Node Library templates stay global for v1 (D22 T2) — reusable
-// expertise shared across every project tab. Runs are per-project; their
-// stores live in the project registry below.
-const flows = new FlowStore(seedFromBundle('flows'));
-const nodeLibrary = new NodeStore(dataDir('nodes')); // seeds itself from code on first launch
-flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable workflow
-flows.ensureSeedPipelines();   // the tiered Low/Medium/High/Ultra pipelines (MODES-COMPARE T7)
-// The tool library is files too (TOOLS-PLAN §4.1): tools/<id>.json seeds from
-// the built-in modules, and the runtime registry is loaded FROM the files — so
-// what a run can call is what the library says, not what happens to be
-// imported. App-level like nodes/: capability is portable, expertise (skills,
-// D15) is not.
-const toolLibrary = new ToolStore(dataDir('tools'));
-const toolLoad = loadLibrary(toolLibrary.listFull());
-// Template grants are filtered against the real library, here as well as in
-// the renderer: normalizeTemplate() drops unknown tool ids, and without this
-// it would drop every tool the built-ins don't happen to include.
-setKnownTools(toolLoad.loaded);
-for (const { id, reason } of toolLoad.skipped) console.warn(`${LOG_TAG} tool "${id}" not loaded: ${reason}`);
-for (const { file, error } of toolLibrary.problems) console.warn(`${LOG_TAG} tools/${file}: ${error}`);
-
-// --- Settings & secrets ---
-// settings.json lives in userData (never the repo). Shape (PROVIDERS-PLAN §1):
-//   { providers: { anthropic|openai|kimi|openrouter: { apiKey, keyKind? } },
-//     providerPriority: [providerId, ...],              // auto-source walk order
-//     activeModels: [{ id, source: 'auto'|providerId, enabled }],
-//     workers: { executor: { provider, model } },
-//     projectStorage: 'workspace' | 'appdata',        // T2a — where per-project files live
-//     approvalMode: 'ask' | 'smart' | 'always',       // default tool-call gate for new runs
-//     safetyModel: 'auto' | modelId,                  // classifier for 'smart' mode
-//     projects: { open, active, recents, tabState } } // D22 — tab session (T17)
-const settingsPath = path.join(app.getPath('userData'), 'settings.json');
-
-function loadSettings() {
-  try { return migrateSettings(JSON.parse(fs.readFileSync(settingsPath, 'utf8'))); }
-  catch { return migrateSettings({}); }
-}
-function persistSettings() {
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-}
-
-let settings = loadSettings();
-persistSettings(); // seal the migration (legacy openrouterApiKey is gone after this)
-
-// A provider counts as connected when settings holds a key for it — or, for
-// anthropic/openai, when the shell environment provides one (the adapters
-// accept that fallback for CLI use). The mock provider is always connected.
-function hasKey(provider) {
-  if (provider === 'mock') return true;
-  // Subscription providers connect via the vendor CLI's own sign-in, but only
-  // once the user has explicitly opted in (the Settings card carries the
-  // usage warning — Claude plan limits and Anthropic's OAuth terms).
-  if (SUBSCRIPTION_PROVIDERS.includes(provider)) {
-    const sub = settings.subscriptions?.[provider];
-    if (!sub?.enabled) return false;
-    return subscriptionStatus(provider).signedIn;
-  }
-  if (settings.providers?.[provider]?.apiKey) return true;
-  if (provider === 'anthropic') return Boolean(process.env.ANTHROPIC_API_KEY);
-  if (provider === 'openai') return Boolean(process.env.OPENAI_API_KEY);
-  return false;
-}
-
-// Sign-in + CLI presence for one subscription provider (cheap fs checks).
-function subscriptionStatus(provider) {
-  const sub = settings.subscriptions?.[provider] ?? {};
-  const home = sub.home || null;
-  if (provider === 'claude-code') {
-    return { ...claudeCredentialStatus(home), cli: resolveClaudeCli(sub.cliPath || null) };
-  }
-  return { ...codexCredentialStatus(home), cli: resolveCodexCli(sub.cliPath || null) };
-}
-
-// The resolution rule (PROVIDERS-PLAN §2). Pinned source wins when it has a
-// key; 'auto' walks providerPriority, skipping disconnected providers and
-// providers that can't serve the id. Returns the fully-stamped call target —
-// { provider, model, apiKey, keyKind? } — ready to hand to callModel.
-const resolveSource = createResolver({ hasKey, canServe, priority: () => settings.providerPriority });
-function resolveModelSource(modelId, pinned = null) {
-  const entry = (settings.activeModels ?? []).find(m => m.id === modelId);
-  const source = pinned ?? entry?.source ?? 'auto';
-  const r = resolveSource(modelId, source);
-  const out = {
-    ...r,
-    apiKey: settings.providers?.[r.provider]?.apiKey ?? null,
-    ...(r.provider === 'kimi' ? { keyKind: settings.providers?.kimi?.keyKind ?? 'platform' } : {})
-  };
-  // Subscription targets carry their optional overrides to the adapter:
-  // cliHome selects the account (credential dir), cliPath the binary. No key.
-  if (SUBSCRIPTION_PROVIDERS.includes(r.provider)) {
-    const sub = settings.subscriptions?.[r.provider];
-    if (sub?.home) out.cliHome = sub.home;
-    if (sub?.cliPath) out.cliPath = sub.cliPath;
-  }
-  return out;
-}
-
-// Runtime config = config.json defaults merged with settings.json overrides,
-// with each worker's provider key injected. Rebuilt in place on every settings
-// save so the running Pipeline picks up changes without a restart (Pipeline
-// holds a reference to this object).
-const runtimeConfig = { ...baseConfig };
-
-function rebuildRuntimeConfig() {
-  const workers = {};
-  for (const [name, def] of Object.entries(baseConfig.workers)) {
-    const override = settings.workers?.[name];
-    let w = override?.provider && override?.model
-      ? { provider: override.provider, model: override.model }
-      : { provider: def.provider, model: def.model };
-    // A model the user activated is resolved through the providers map: its
-    // pinned source (or the priority walk for 'auto') decides who serves it,
-    // and the key rides along (PROVIDERS-PLAN §4). A model the registry doesn't
-    // know keeps the legacy behavior — worker's own provider + key injection.
-    const entry = (settings.activeModels ?? []).find(m => m.id === w.model);
-    if ((entry && entry.enabled !== false) || w.provider === 'auto') {
-      try {
-        const r = resolveModelSource(w.model, entry ? undefined : 'auto');
-        w = { provider: r.provider, model: r.model, apiKey: r.apiKey, ...(r.keyKind ? { keyKind: r.keyKind } : {}) };
-      } catch { /* unresolved: the call fails with the adapter's missing-key error */ }
-    }
-    if (!w.apiKey && settings.providers?.[w.provider]?.apiKey) {
-      w.apiKey = settings.providers[w.provider].apiKey;
-    }
-    if (w.provider === 'kimi' && !w.keyKind) w.keyKind = settings.providers?.kimi?.keyKind ?? 'platform';
-    // Native tool-calling capability, learned from model catalogs (persisted
-    // in settings.json). Unknown models fall back to the text tool protocol,
-    // which works everywhere.
-    if (w.provider !== 'mock' && w.provider !== 'anthropic') {
-      w.supportsTools = Boolean(settings.modelCapabilities?.[w.model]);
-    }
-    workers[name] = w;
-  }
-  runtimeConfig.workers = workers;
-  // Per-provider key lookup for task workers persisted in runs/tasks.json,
-  // which must never contain the key itself.
-  runtimeConfig.providerKeys = Object.fromEntries(
-    KEYED_PROVIDERS.filter(p => settings.providers?.[p]?.apiKey).map(p => [p, settings.providers[p].apiKey])
-  );
-  // Connected subscription providers join the map with a sentinel — the
-  // default-worker picker treats presence as "connected", and the adapters
-  // ignore apiKey by design (the CLI owns auth).
-  for (const p of SUBSCRIPTION_PROVIDERS) {
-    if (hasKey(p)) runtimeConfig.providerKeys[p] = 'subscription';
-  }
-  // Call-time resolution for 'auto' workers (active-models picks ride on nodes
-  // and tasks as { provider: 'auto', model }).
-  runtimeConfig.resolveModelSource = resolveModelSource;
-  // Which Kimi endpoint the saved key belongs to — the model-priority defaults
-  // (core/modelPriority.js) pick kimi-for-coding for a Kimi-Code key.
-  runtimeConfig.kimiKeyKind = settings.providers?.kimi?.keyKind ?? 'platform';
-  // Per-model tool support for task workers resolved at execution time.
-  runtimeConfig.modelCapabilities = settings.modelCapabilities ?? {};
-  // Category → worker mapping for advanced planning flows (FLOW_NODES.md)
-  runtimeConfig.categoryWorkers = baseConfig.categoryWorkers ?? {};
-  // Default tool-call approval mode for runs started without an explicit one.
-  // 'ask' is the shipped default: an agent with a shell should not run
-  // unattended because nobody got round to choosing.
-  runtimeConfig.approvalMode = normalizeApprovalMode(settings.approvalMode ?? 'ask');
-  // What 'smart' mode screens with. The runner gets a resolver, never a key —
-  // same contract as resolveModelSource above.
-  runtimeConfig.safety = {
-    model: effectiveSafetyModel(),
-    resolveModelSource
-  };
-}
-
-// The classifier 'smart' mode actually uses: the user's pin, or — for 'auto' —
-// the cheapest candidate whose provider has a key (core/safetyCheck.js keeps
-// the ranked list). Null when no provider is connected at all, which
-// checkToolCall reports as 'caution' and the gate turns into a normal ask.
-function effectiveSafetyModel() {
-  return pickSafetyModel(settings.safetyModel ?? 'auto', hasKey);
-}
-rebuildRuntimeConfig();
-
-// What the renderer is allowed to see: per-provider hasKey flags (never the
-// keys), the priority order, the active-model registry, worker assignments,
-// and a small connected/model-count summary for the overview UI.
-function publicSettings() {
-  const providers = Object.fromEntries(PROVIDER_IDS.map(p => {
-    const entry = {
-      hasKey: hasKey(p),
-      ...(p === 'kimi' ? { keyKind: settings.providers?.kimi?.keyKind ?? 'platform' } : {})
-    };
-    // Subscription card state: opted in? signed in? CLI found? Paths shown are
-    // locations, never contents — the renderer needs them to say "run
-    // `codex login`" vs "enable it" vs "install the CLI" precisely.
-    if (SUBSCRIPTION_PROVIDERS.includes(p)) {
-      const sub = settings.subscriptions?.[p] ?? {};
-      const st = subscriptionStatus(p);
-      entry.subscription = {
-        enabled: Boolean(sub.enabled),
-        signedIn: st.signedIn,
-        credentialPath: st.detail,
-        cliFound: Boolean(st.cli),
-        cliCommand: st.cli ? [st.cli.command, ...st.cli.args].join(' ') : null,
-        home: sub.home ?? '',
-        cliPath: sub.cliPath ?? ''
-      };
-    }
-    return [p, entry];
-  }));
-  const activeModels = settings.activeModels ?? [];
-  const connectable = [...KEYED_PROVIDERS, ...SUBSCRIPTION_PROVIDERS];
-  return {
-    providers,
-    // Legacy flag for the lander's no-key hint: any provider at all.
-    hasKey: connectable.some(hasKey),
-    // The lander's usage notice: runs may draw on the Claude subscription.
-    claudeSubscriptionActive: hasKey('claude-code'),
-    providerPriority: settings.providerPriority ?? [...DEFAULT_PRIORITY],
-    activeModels,
-    workers: Object.fromEntries(
-      Object.entries(runtimeConfig.workers).map(([name, w]) => [name, { provider: w.provider, model: w.model }])
-    ),
-    summary: {
-      connected: connectable.filter(hasKey).length,
-      activeModelCount: activeModels.filter(m => m.enabled !== false).length
-    },
-    // T2a: where per-project files are written ('workspace' = in-repo .flyt/,
-    // 'appdata' = under userData). Read at project-open time.
-    projectStorage: settings.projectStorage === 'appdata' ? 'appdata' : 'workspace',
-    // Tool-call approval (APPROVAL-MODES): the default new runs start under,
-    // the classifier 'smart' mode screens with, and enough about the candidate
-    // list for Settings to render pickers without duplicating the ranking.
-    approvalMode: normalizeApprovalMode(settings.approvalMode ?? 'ask'),
-    safetyModel: settings.safetyModel ?? 'auto',
-    resolvedSafetyModel: effectiveSafetyModel(),
-    // P3: the comparison judge's pinned model ('' = the default worker).
-    judgeModel: settings.judgeModel ?? '',
-    safetyCandidates: SAFETY_MODEL_CANDIDATES.map(c => ({
-      ...c, connected: [c.provider, ...(c.altProviders ?? [])].some(hasKey)
-    }))
-  };
-}
+// --- The engine (LOOP-PLAN §4.2) ---
+// Stores, settings, provider resolution, the project registry and the push
+// plumbing all live in core/engine.js now, so the headless supervisor and the
+// CLI can drive exactly the same app this window does. What stays here is what
+// only a desktop app has: windows, menus, dialogs, notifications, lifecycle.
+const engine = createEngine({
+  projectRoot,
+  dataRoot,
+  userDataDir: app.getPath('userData'),
+  // The renderer is the consumer: events go over IPC unchanged, so the preload
+  // contract and every existing listener are untouched.
+  emit: (type, payload) => win?.webContents.send(type, payload),
+  canEmit: () => Boolean(win) && !win.isDestroyed(),
+  // T7/T9: only the ACTIVE tab is worth diffing for. Background projects keep
+  // executing (the engine is main-process) and resync from files on activation.
+  shouldPush: projectId => projectId === registry.activeId,
+  log: msg => console.log(`${LOG_TAG} ${msg}`),
+  warn: msg => console.warn(`${LOG_TAG} ${msg}`)
+});
+const {
+  baseConfig, flows, nodeLibrary, toolLibrary, registry, runtimeConfig, settings,
+  persistSettings, rebuildRuntimeConfig, publicSettings,
+  hasKey, subscriptionStatus, resolveModelSource, effectiveSafetyModel,
+  broadcastActivity, pushStateFor, dropPushState
+} = engine;
 
 const isMac = process.platform === 'darwin';
 
@@ -370,105 +119,6 @@ function clearApprovalSignal() {
   if (win && !win.isDestroyed()) win.flashFrame(false);
 }
 
-
-// --- Projects (D22): one RunStore + FlowRunner per project tab ---
-// Push plumbing is per project. Bursts of state changes (parallel waves,
-// streaming chunks) coalesce into at most one push per (project, run) per tick
-// window: the snapshot is built from file state when the timer fires, so the
-// last write always wins.
-//
-// Incremental IPC (V1 task 5): we keep the last snapshot sent per run plus a
-// monotonic rev, and push only the diff. The renderer applies patches on top of
-// the full snapshot it fetched via run:snapshot; the rev/base pair lets it
-// detect a missed update and resync. Session-scoped, bounded by runs touched.
-//
-// Scoping (T7/T9): diffed run:update pushes carry their projectId and are sent
-// only while that project is the ACTIVE tab — background projects keep
-// executing (the engine is main-process) and the renderer resyncs from files on
-// activation. A separate featherweight project:activity push (live run ids
-// only) always goes out, so every tab's live-run indicator stays honest.
-const PUSH_COALESCE_MS = 80;
-const pushState = new Map(); // projectId -> { pending, channels, lastActivity, activityTimer }
-const pushStateFor = projectId => {
-  let s = pushState.get(projectId);
-  if (!s) pushState.set(projectId, s = {
-    pending: new Map(),   // runId -> timer
-    channels: new Map(),  // runId -> { snapshot, rev }
-    lastActivity: null,   // last live-set signature broadcast
-    activityTimer: null
-  });
-  return s;
-};
-
-// Tell the strip which projects have live runs. The trailing re-check catches
-// the final write of a run (whose coalesce timer can fire before the runner
-// removes it from `live`), so the indicator can't stick on.
-function broadcastActivity(projectId, { recheck = true } = {}) {
-  if (!win || win.isDestroyed()) return;
-  const s = pushStateFor(projectId);
-  const live = [...(registry.get(projectId).runner?.live ?? [])];
-  const sig = live.join('\n');
-  if (sig !== s.lastActivity) {
-    s.lastActivity = sig;
-    win.webContents.send('project:activity', { projectId, live });
-  }
-  if (recheck && live.length && !s.activityTimer) {
-    s.activityTimer = setTimeout(() => {
-      s.activityTimer = null;
-      broadcastActivity(projectId, { recheck: false });
-    }, 600);
-  }
-}
-
-const pushUpdateFor = projectId => runId => {
-  const s = pushStateFor(projectId);
-  if (s.pending.has(runId)) return;
-  s.pending.set(runId, setTimeout(() => {
-    s.pending.delete(runId);
-    if (!win || win.isDestroyed()) return;
-    broadcastActivity(projectId);
-    // Background project: skip the snapshot/diff work entirely. Its channel
-    // baseline goes stale, but activation refetches via run:snapshot, which
-    // re-baselines the channel from the same instant (see run:snapshot).
-    if (projectId !== registry.activeId) return;
-    const entry = registry.get(projectId);
-    const next = entry.store.snapshot(runId);
-    const chan = s.channels.get(runId);
-    // No baseline yet: send the full snapshot so the renderer has something to
-    // patch against.
-    if (!chan) {
-      const rev = 1;
-      s.channels.set(runId, { snapshot: next, rev });
-      win.webContents.send('run:update', { projectId, runId, rev, base: null, full: next });
-      return;
-    }
-    const patch = diffSnapshot(chan.snapshot, next);
-    if (!patch) return; // nothing actually changed — skip the wake-up
-    const rev = chan.rev + 1;
-    s.channels.set(runId, { snapshot: next, rev });
-    win.webContents.send('run:update', { projectId, runId, rev, base: chan.rev, patch });
-  }, PUSH_COALESCE_MS));
-};
-
-const registry = new ProjectRegistry({
-  defaultRunsDir: path.join(dataRoot, 'runs'),
-  appDataDir: app.getPath('userData'),
-  // T2a: the storage location is a Settings choice, read at project-open time.
-  getStorage: () => (settings.projectStorage === 'appdata' ? 'appdata' : 'workspace'),
-  createRunner: (store, projectId) => {
-    const runner = new FlowRunner(store, runtimeConfig, pushUpdateFor(projectId), nodeLibrary);
-    // Nothing is live when a project first opens in this process, so any run
-    // still in a non-terminal stage was cut off by the app dying. Flag those
-    // once so the run view can offer Resume (V1 task 7).
-    const interrupted = runner.reconcileInterrupted();
-    if (interrupted.length) console.log(`${LOG_TAG} ${projectId}: ${interrupted.length} interrupted run(s) marked resumable`);
-    return runner;
-  },
-  onPersist: () => {
-    settings.projects = registry.serialize();
-    persistSettings();
-  }
-});
 // Browser-style session restore (T17). Tabs whose folder disappeared are
 // dropped (recents entry stays); the renderer surfaces them once via
 // project:list.
@@ -561,39 +211,59 @@ function createWindow() {
 // passes through.
 const proj = projectId => registry.get(projectId);
 
+// --- The command surface (LOOP-PLAN §4.2) ---
+// Commands that don't need a window live in core/api.js so the CLI, the HTTP
+// server and this renderer all reach the same implementation. IPC is positional
+// and the map is keyword, so each binding below names its arguments once —
+// that table IS the adapter, and it is the only thing duplicated.
+const api = createApi(engine);
+const bindIpc = (name, toArgs = () => ({})) =>
+  ipcMain.handle(name, (_e, ...args) => api.invoke(name, toArgs(...args)));
+
+bindIpc('flow:list');
+bindIpc('flow:load', id => ({ id }));
+bindIpc('flow:lint', id => ({ id }));
+bindIpc('tool:list');
+bindIpc('config:get');
+bindIpc('flow:run', (projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) =>
+  ({ projectId, flowId, userInput, workspaceDir, approvalMode, launch }));
+bindIpc('run:list', projectId => ({ projectId }));
+bindIpc('run:log', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:snapshot', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:approve', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:reject', (projectId, runId, reason) => ({ projectId, runId, reason }));
+bindIpc('run:resume', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:stop', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:pause', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:restartNode', (projectId, runId, nodeId, guidance = '') => ({ projectId, runId, nodeId, guidance }));
+bindIpc('run:followUp', (projectId, runId, text) => ({ projectId, runId, text }));
+bindIpc('run:answerInput', (projectId, runId, text) => ({ projectId, runId, text }));
+// The loop (LOOP-PLAN §14): the same commands the CLI and the HTTP server bind,
+// so the desktop view is a third front door onto one implementation rather than
+// a second implementation of the same panel.
+bindIpc('loop:start', (projectId, opts = {}) => ({ projectId, ...opts }));
+bindIpc('loop:stop', projectId => ({ projectId }));
+bindIpc('loop:status', projectId => ({ projectId }));
+bindIpc('loop:report', projectId => ({ projectId }));
+bindIpc('loop:log', projectId => ({ projectId }));
+bindIpc('ledger:totals', (projectId, opts = {}) => ({ projectId, ...opts }));
+bindIpc('ledger:check', (projectId, taskId = null) => ({ projectId, taskId }));
+bindIpc('task:list', (projectId, status = null) => ({ projectId, status }));
+bindIpc('task:add', (projectId, task = {}) => ({ projectId, ...task }));
+bindIpc('task:escalate', (projectId, id, reason = 'failed') => ({ projectId, id, reason }));
+bindIpc('task:release', (projectId, id, status = 'queued') => ({ projectId, id, status }));
+bindIpc('feedback:stats', projectId => ({ projectId }));
+bindIpc('feedback:digest', (projectId, enqueue = false) => ({ projectId, enqueue }));
+// The benchmark trend (§12.1) — the only number on the Loop view that answers
+// "is this getting better" rather than "what is it doing right now".
+bindIpc('archive:trend', (projectId, limit = 30) => ({ projectId, limit }));
+
 // One engine, one entry point: pick a workflow, type a request, run it.
 // The user input becomes the flow's User Input node content for that run.
 // approvalMode rides in from the chatbox picker (APPROVAL-MODES §3): the mode
 // shown beside the Run button is the mode the run is captured under, so what
 // the user saw when they pressed Run is what governs it for its whole life.
 // Omitted (or unrecognized) falls back to the saved default.
-ipcMain.handle('flow:run', (_e, projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) => {
-  const entry = proj(projectId);
-  // Bind the target workspace at run time (D15): validate the folder, create
-  // its .flyt/ config dir, and pass the confined absolute root to the runner
-  // so it lands in meta.json. A bound tab IS the workspace — its runs always
-  // target the tab's folder (T19); only the unbound scratch tab still picks a
-  // workspace per run (or none — mock/no-file flows run without one).
-  let workspace = null;
-  if (entry.folder) workspace = new Workspace(entry.folder).ensure().root;
-  // An appdata project (L5) has its own managed workspace/ dir inside its
-  // appData home (Q-L5); runs there always bind to it, like a bound tab.
-  else if (entry.kind === 'appdata') workspace = new Workspace(entry.workspaceRoot).ensure().root;
-  else if (workspaceDir) workspace = new Workspace(workspaceDir).ensure().root;
-  // launch (MODES-COMPARE) carries the picked mode and any exposed run-input
-  // overrides: { modeId?, overrides? }. Absent = an ordinary default-mode run.
-  return entry.runner.start(flows.load(flowId), {
-    userInput: String(userInput ?? ''),
-    workspace,
-    approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : runtimeConfig.approvalMode,
-    modeId: launch?.modeId ?? null,
-    overrides: launch?.overrides ?? null,
-    // Compare launches (CONFIGS-COMPARE P2) stamp both runs with the shared
-    // group id + A/B label; the record itself lands via compare:save.
-    compareGroup: launch?.compareGroup ?? null
-  });
-});
-ipcMain.handle('run:approve', (_e, projectId, runId) => proj(projectId).runner.approvePlan(runId));
 // The chat run reports gate state so a parked workflow can find its user:
 // 'pending' while gated (notify + flash only when the window is unfocused —
 // a user already looking at the dialog needs no nudge), 'resolved' on settle.
@@ -618,23 +288,17 @@ ipcMain.handle('app:approvalGate', (_e, info = {}) => {
   });
   approvalNotice.show();
 });
-ipcMain.handle('run:reject', (_e, projectId, runId, reason) => proj(projectId).runner.rejectPlan(runId, reason));
 // Continue a run the app died in the middle of. Completed nodes are kept and
 // not re-executed (V1 task 7). RUN-CONTROL: also releases a soft-paused run —
 // the runner resolves the pause gate and the walk clears meta.paused itself.
-ipcMain.handle('run:resume', (_e, projectId, runId) => proj(projectId).runner.resume(runId));
 // Hard stop a live run (RUN-CONTROL): aborts in-flight model calls, settles
 // any pending approval/pause gate, marks the run 'cancelled' with cancelledAt,
 // and frees the live registry — which is what unblocks run:delete below.
-ipcMain.handle('run:stop', (_e, projectId, runId) => proj(projectId).runner.stop(runId));
 // Soft pause (RUN-CONTROL): the run holds at the next wave boundary — the wave
 // in flight always settles first. meta.paused flips true only once the hold
 // has actually landed; run:resume releases it.
-ipcMain.handle('run:pause', (_e, projectId, runId) => proj(projectId).runner.pause(runId));
 // Re-run one node and everything downstream of it (RUN-CONTROL), with optional
 // guidance injected into the retry prompt. Only on a non-live run.
-ipcMain.handle('run:restartNode', (_e, projectId, runId, nodeId, guidance = '') =>
-  proj(projectId).runner.restartNode(runId, nodeId, String(guidance ?? '')));
 // Fork a finished run at a node (RUN-CONTROL): upstream outputs are preserved
 // as context, downstream nodes re-run in the copy.
 ipcMain.handle('run:branch', (_e, projectId, runId, nodeId) => proj(projectId).runner.branch(runId, nodeId));
@@ -653,14 +317,11 @@ ipcMain.handle('run:moveSummary', (_e, projectId, runId, summaryId, position) =>
   proj(projectId).runner.moveSummary(runId, summaryId, position));
 // Reply to a finished run (FOLLOWUP-PLAN): the flow grows with a continuation
 // subgraph and the walk executes it; completed nodes are never re-run.
-ipcMain.handle('run:followUp', (_e, projectId, runId, text) => proj(projectId).runner.followUp(runId, String(text ?? '')));
 // Answer a run parked at the refiner's awaiting_input gate (MODES-COMPARE T6).
 // Distinct from run:followUp — this closes an in-flight question and re-runs
 // the refine node with the answer; it does not open a new follow-up turn.
-ipcMain.handle('run:answerInput', (_e, projectId, runId, text) => proj(projectId).runner.answerInput(runId, String(text ?? '')));
 // Summaries, not bare ids: the list names, groups and sorts runs, and reading
 // meta + prompt per run is a handful of small synchronous reads.
-ipcMain.handle('run:list', (_e, projectId) => proj(projectId).store.runSummaries());
 ipcMain.handle('run:rename', (_e, projectId, runId, name) => proj(projectId).store.setRunName(runId, name));
 // Deleting a run this process is still walking would pull the files out from
 // under the runner mid-step (it writes meta/log/outputs as it goes), so refuse
@@ -706,16 +367,7 @@ ipcMain.handle('run:judge', async (_e, projectId, runIdA, runIdB, comparisonId =
 // across a step-eval requeue) was then absent from the patch and never repaired,
 // leaving the canvas silently stale until an unrelated change happened to resend
 // the field.
-ipcMain.handle('run:snapshot', (_e, projectId, runId) => {
-  const entry = proj(projectId);
-  const chans = pushStateFor(entry.id).channels;
-  const snapshot = entry.store.snapshot(runId);
-  const rev = (chans.get(runId)?.rev ?? 0) + 1;
-  chans.set(runId, { snapshot, rev });
-  return { ...snapshot, rev };
-});
 ipcMain.handle('run:openFolder', (_e, projectId, runId) => shell.openPath(proj(projectId).store.runDir(runId)));
-ipcMain.handle('run:log', (_e, projectId, runId) => proj(projectId).store.readLog(runId));
 
 // --- Workspace binding (target project folder for a run) ---
 ipcMain.handle('workspace:pick', async () => {
@@ -775,7 +427,7 @@ ipcMain.handle('project:rename', (_e, projectId, name) => {
 // so the renderer can re-key its per-tab bundles.
 ipcMain.handle('project:adopt', (_e, projectId, folder) => {
   const { oldId, newId } = registry.adoptAppdata(projectId, folder);
-  pushState.delete(oldId); // the old id is gone for good — drop its push channels
+  dropPushState(oldId); // the old id is gone for good — drop its push channels
   updateWindowTitle();
   return { ...projectListPayload(), oldId, opened: newId };
 });
@@ -860,11 +512,8 @@ ipcMain.handle('project:deckData', () => {
     return { ...tab, latestRun, topo };
   });
 });
-ipcMain.handle('config:get', () => ({ workers: publicSettings().workers }));
 
 // --- Flow definitions (editable workflow graphs) ---
-ipcMain.handle('flow:list', () => flows.list());
-ipcMain.handle('flow:load', (_e, id) => flows.load(id));
 ipcMain.handle('flow:save', (_e, flow) => flows.save(flow));
 ipcMain.handle('flow:new', () =>
   flows.create(nodeLibrary.get('work') ? 'work' : null));
@@ -876,8 +525,6 @@ ipcMain.handle('flow:delete', (_e, id) => flows.remove(id));
 ipcMain.handle('flow:folder', () => ({ dir: flows.rootDir, packaged: app.isPackaged }));
 ipcMain.handle('flow:openFolder', () => shell.openPath(flows.rootDir));
 // On-save validation for the canvas badge: full rule set, structured findings.
-ipcMain.handle('flow:lint', (_e, id) =>
-  lintFlow(flows.load(id), { templates: nodeLibrary.listFull(), library: toolLibrary.catalog() }));
 
 // --- Configs (CONFIGS-COMPARE P1): modes as first-class bundles ---
 // A config IS a mode in the flow's modes: block; these are thin passes into
@@ -950,7 +597,6 @@ ipcMain.handle('flow:saveFromYaml', (_e, id, yamlText) => {
 // Read-only over IPC in P1: the renderer uses it to validate grants against
 // what actually exists instead of a hardcoded array. Authoring arrives with
 // the Tools page (TOOLS-PLAN P8).
-ipcMain.handle('tool:list', () => toolLibrary.list());
 ipcMain.handle('tool:folder', () => ({ dir: toolLibrary.rootDir, packaged: app.isPackaged }));
 
   try {

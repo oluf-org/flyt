@@ -29,6 +29,7 @@
 import { callModel, abortError, isAbortError } from './adapters/index.js';
 import { runAgent, toolProtocol } from './agent.js';
 import { makeRetrospective } from './retrospective.js';
+import { recordToolUsage } from './feedback.js';
 import { resolveCallTarget } from './modelSource.js';
 import { runExecutorTask } from './nodes/executor.js';
 import { Workspace } from './workspace.js';
@@ -353,6 +354,10 @@ const SUMMARY_SOURCE_BUDGET = 3000;
 export function resolveWorker(node, config) {
   const w = node?.data?.worker;
   if (w?.provider && w?.model) return { provider: w.provider, model: w.model };
+  // A run started at an effort LEVEL (LOOP-PLAN §8) routes every unpinned node
+  // through it. Below an explicitly authored worker on purpose: a flow that
+  // names its model meant it, and a band is a default, not an override.
+  if (config.levelWorker?.provider && config.levelWorker?.model) return { ...config.levelWorker };
   const cat = node?.data?.category;
   const pref = cat ? config.categoryWorkers?.[cat] : null;
   if (pref?.provider && pref?.model) return { provider: pref.provider, model: pref.model };
@@ -534,7 +539,9 @@ export class FlowRunner {
   async trackedCallModel(runId, params) {
     const ctl = this.trackAbort(runId);
     try {
-      return await callModel({ ...params, signal: ctl.signal });
+      // The deadline default is the runner's, so a per-call timeout in params
+      // still wins (LOOP-PLAN §11.5).
+      return await callModel({ timeout: this.config.timeout, ...params, signal: ctl.signal });
     } finally {
       this.untrackAbort(runId, ctl);
     }
@@ -550,8 +557,12 @@ export class FlowRunner {
     const ctl = this.trackAbort(runId);
     try {
       return await runAgent({
-        ...params, tools, signal: ctl.signal,
-        ctx: { store: this.store, runId, nodeId, workspace: this.workspaceFor(runId) }
+        timeout: this.config.timeout, ...params, tools, signal: ctl.signal,
+        ctx: {
+          store: this.store, runId, nodeId, workspace: this.workspaceFor(runId),
+          backlog: this.backlog ?? null, feedback: this.feedback ?? null,
+          references: this.references ?? null
+        }
       });
     } finally {
       this.untrackAbort(runId, ctl);
@@ -1895,6 +1906,10 @@ export class FlowRunner {
       onText: this.streamInto(runId, t => this.store.writeTaskOutput(runId, task.id, t)),
       onRetry: this.retryLogger(runId, `executor:${task.id}`),
       retry: this.config.retry,
+      timeout: this.config.timeout,
+      backlog: this.backlog ?? null,
+      feedback: this.feedback ?? null,
+      references: this.references ?? null,
       signal: abortCtl.signal,
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };
@@ -2771,9 +2786,15 @@ export class FlowRunner {
           + (outcome.fixTasks ? ` Created ${outcome.fixTasks.length} fix task(s).` : ''),
         model: { provider: worker.provider, model: worker.model },
         usage: result.usage,
-        durationMs: result.durationMs
+        durationMs: result.durationMs,
+        // A granted aiStep runs through the agent loop and can call tools
+        // (TOOLS-PLAN §6.4), so its retrospective carries them like any other.
+        toolCalls: result.toolCalls ?? []
       });
       this.store.writeRetrospective(runId, node.id, retro);
+      recordToolUsage(this.feedback, {
+        runId, nodeId: node.id, model: { provider: worker.provider, model: worker.model }, retro
+      });
       this.setNodeStatus(runId, node.id, 'done');
       return outcome;
     }

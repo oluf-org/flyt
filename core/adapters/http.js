@@ -85,8 +85,12 @@ export async function* sseEvents(readable) {
 //                               OpenAI function-tool definitions. The raw
 //                               assistant message comes back so the loop can
 //                               echo tool_calls and read finish_reason.
-export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'Add it in Settings.', envKey = null }) {
-  return async function openaiCompatibleAdapter({ model, system, prompt, messages, tools, maxTokens, apiKey, onText, signal }) {
+// - extendBody(body, params): a hook for provider-specific request fields, so
+//   an extension one provider offers (OpenRouter's routing plugins) lives in
+//   that provider's file instead of leaking into the shared factory every
+//   provider uses.
+export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'Add it in Settings.', envKey = null, extendBody = null }) {
+  return async function openaiCompatibleAdapter({ model, system, prompt, messages, tools, maxTokens, apiKey, onText, signal, ...rest }) {
     const key = apiKey || (envKey ? process.env[envKey] : null);
     if (!key) throw new Error(`${provider} API key is not set. ${keyHelp}`);
 
@@ -109,6 +113,8 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       // without this every streamed call reported null usage.
       body.stream_options = { include_usage: true };
     }
+
+    extendBody?.(body, { model, ...rest });
 
     const res = await fetch(baseUrl, {
       method: 'POST',

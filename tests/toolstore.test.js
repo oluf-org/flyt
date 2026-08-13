@@ -135,3 +135,27 @@ test('normalizeTool defaults, clamps and refuses to let an untrusted tool promot
   assert.deepEqual(t.result, { preview: 'json', maxPreviewChars: 2000, artifact: true });
   assert.throws(() => normalizeTool({ id: 'Bad Id' }), /Invalid tool id/);
 });
+
+test('a built-in removed from a release takes its seeded file with it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-tools-orphan-'));
+  const store = new ToolStore(dir);
+
+  // A definition left behind after its module is gone is a lie: the run() lives
+  // in source, so the registry refuses to load it and warns on every launch —
+  // which is how a project teaches its users to ignore warnings.
+  fs.writeFileSync(path.join(dir, 'tool_feedback.json'), JSON.stringify({
+    id: 'tool_feedback', title: 'Gone', description: 'A built-in from a previous release.',
+    provider: 'builtin', effects: ['write'], scope: 'workspace',
+    parameters: { type: 'object', properties: {} }
+  }));
+  // ...while a user's own tool of the same shape is theirs and survives.
+  fs.writeFileSync(path.join(dir, 'my_own_tool.json'), JSON.stringify({
+    id: 'my_own_tool', title: 'Mine', description: 'User authored.',
+    provider: 'http', parameters: { type: 'object', properties: {} }
+  }));
+
+  new ToolStore(dir); // a relaunch is what prunes
+  assert.ok(!fs.existsSync(path.join(dir, 'tool_feedback.json')), 'the orphan is gone');
+  assert.ok(fs.existsSync(path.join(dir, 'my_own_tool.json')), 'a user tool is never touched');
+  assert.deepEqual(store.problems ?? [], []);
+});
