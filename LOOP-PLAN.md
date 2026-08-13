@@ -352,38 +352,50 @@ An agent optimizing for "gates green" has three cheap exits. Close them mechanic
 
 ---
 
-## 8. The tier ladder
+## 8. The effort ladder — [BUILT, as a cheat]
 
-### 8.1 Tiers
+### 8.1 A level is a band we ask for, not a model we picked
 
-| Tier | Intent | Candidates |
-|---|---|---|
-| **T0 sub** | Anything the subscription covers; costs time, not dollars | `claude-code`, `codex` CLI delegation (D23) |
-| **T1 cheap** | Mechanical work, high volume | DeepSeek, Kimi K2.7-code, small OpenAI/Anthropic tiers |
-| **T2 mid** | Real reasoning, bounded | Sonnet-class, GPT-5-class |
-| **T3 frontier** | Last resort before a human | Opus-class |
+The draft wanted a price table (`$/Mtok` per provider+model), a `tier` axis on `modelPriority.js`
+and a routing policy. That is real work, and it is stale the week after it ships: every model
+release is a table edit, and a table edit nobody makes is a loop routing to last quarter's
+prices.
 
-Tier membership is data — an added axis on `core/modelPriority.js`, which already ranks
-`provider × kind × effort` — not a hardcoded list. That keeps it tunable from the ledger (§12),
-which is the retrospective loop D13 scoped and never closed.
+OpenRouter already sells exactly that. Its **Auto Router** takes a `cost_tier` — `low | medium |
+high | xhigh | max` — picks a capable model inside that band, honors the account's own
+restrictions, and charges the standard rate for whatever it picks. So a task carries a **level**,
+and the request carries a plugin:
 
-### 8.2 Escalation
+```json
+{ "model": "openrouter/auto",
+  "plugins": [{ "id": "auto-router", "cost_tier": "high", "allowed_models": ["anthropic/*"] }] }
+```
 
-- Every task starts at the lowest tier its class allows (`tier:` hint, defaulted by task kind).
-- step-eval `retry` stays **same-tier**, with guidance — this is already built.
-- A second failure **escalates one tier** and re-runs with the accumulated guidance and the
-  gate output. This is the change: escalate means *bigger model*, not *wake the human*.
-- Failure at the top of the ladder, or exhausting the per-task budget, means `parked:
-  needs-human` — the task records what was tried at each tier, and the loop picks the next one.
+`loop.allowedModels` narrows what the router may choose, which is how a project pins itself to
+providers it trusts without going back to naming individual models. `loop.minLevel` is a floor
+under every task, so a repo can refuse the cheapest band without editing anything.
 
-### 8.3 Ordering under a subscription
+**What this cheat costs, stated plainly:** spend is bounded by *band*, not by dollars. §9's caps
+still need real numbers before an overnight run can promise a ceiling. A band is a policy, not a
+budget — and the ledger, the price table and the three ceilings remain unbuilt.
 
-Subscription-first inverts the usual ordering: T0 is tried before T1 even though T1 is
-"cheaper" in tokens, because T0 is already paid for. The constraint on T0 is *throughput and
-rate limits*, not money, so the ledger tracks T0 in **wall-clock and call counts** while
-tracking T1–T3 in dollars. A rate-limited T0 falls to T1 rather than blocking.
+### 8.2 Escalation — [BUILT]
 
----
+Because the ladder has real rungs, escalation is one function (`core/levels.js`), and the two
+triggers belong to the supervisor:
+
+- **A failed attempt** goes back to the queue **one rung up**. Retrying at the same band is
+  retrying the same capability, which mostly reproduces the same answer.
+- **A stalled task** (§11.2 — no headway, not merely slow) also moves up a rung: more capability
+  is the cheapest thing to try before parking something that is going nowhere.
+
+At `max` there is no rung left, and that is a *distinct outcome*: the task **parks for a human**
+rather than re-running the most expensive band forever. This is the plan's "escalate means a
+bigger model, then a person" with the model selection delegated to someone who updates it daily.
+
+A level never quietly goes down — a task escalated to `high` stays there for its remaining
+attempts, because the reason it was escalated has not gone away. Escalating also releases the
+task's lease; a task queued while still holding its lock could never be picked up again.
 
 ## 9. Budget — subscription first, soft cap, hard cap
 
@@ -649,7 +661,7 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 | 1 ✅ | **Per-call request timeout** (§11.5); `core/engine.js` + `core/api.js` extraction; `core/server.js`; `bin/flyt.js` | Start a run from a terminal with Electron closed, and kill a hung provider call |
 | 2 ✅ | Backlog files, atomic claim, `enqueue_task`, deterministic picker | `flyt task add`, `flyt task ready`, `flyt task take` — and an agent queueing work mid-run |
 | 3 ✅ | Worktree pool, gate runner, `diff-review`, merge + push + canary + auto-revert, the pin | A task lands on `main` with nobody watching |
-| 4 | Price table, ledger, three ceilings, tier ladder wired into step-eval escalation, subscription-first ordering | A task escalates cheap → frontier; a hard cap stops the loop cleanly |
+| 4 ◐ | **Cheated**: OpenRouter Auto Router `cost_tier` as the ladder + escalation (§8). Ledger, price table and the three ceilings NOT built | A task escalates low → medium → high by itself; `max` parks for a human |
 | 5 | Heartbeats, stall detectors, the interruption ladder, park-don't-block gates, the report | A deliberately wedged task gets nudged, restarted, then parked — unattended |
 | 6 | Electron Loop view over HTTP/SSE; reference library + read-only reference root | Watch the queue burn down; an agent greps opencode mid-task |
 | 7 | Benchmark suite, archive, baseline run | The first real overnight, with a number to beat |
@@ -657,6 +669,15 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 **Day 0, before any of it:** clone the reference repos (§16) and add the lint script. The loop
 cannot enforce a gate that does not exist, and the lint script is the smallest possible instance
 of the thing this whole plan is for.
+
+**Day 4 cheated, deliberately** (`levels`). The tier ladder is OpenRouter's Auto Router: a task
+carries a level, the request carries a `cost_tier`, and escalation walks the rungs. No price
+table to go stale. `flyt task escalate` and the landing failure path both use it, and the
+adapter change is opt-in — a call with no level produces a byte-identical request to the one it
+produced before this existed, which the tests pin.
+
+**Still owed from §9:** the ledger, the dollar caps and subscription-first ordering. A band
+bounds *quality*, not *spend*, so an overnight run cannot yet promise a ceiling.
 
 **Day 3 landed** (`gates`, `worktree`, `diffReview`, `landing`). `flyt work start|verify|land`
 takes a task from a fresh worktree to a merge commit on the base branch: the harness runs the

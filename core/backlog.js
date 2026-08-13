@@ -21,6 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseYaml, formatInline } from './flowlang/yaml.js';
+import { normalizeLevel, escalate as escalateLevel, DEFAULT_LEVEL } from './levels.js';
 
 export const TASK_STATUSES = [
   'queued',     // ready to be picked
@@ -44,7 +45,7 @@ const DEFAULTS = () => ({
   status: 'queued',
   value: 3,          // 1-5, what it is worth
   effort: 3,         // 1-5, what it costs
-  tier: null,        // starting tier hint (§8); null = let the ladder decide
+  level: null,       // effort band (§8): low|medium|high|xhigh|max. null = the project default
   dependsOn: [],
   gates: [],         // extra gate commands beyond the project defaults
   blastRadius: [],   // paths this task expects to touch
@@ -157,6 +158,10 @@ export class Backlog {
       updatedAt: now
     };
     fields.status = TASK_STATUSES.includes(fields.status) ? fields.status : 'queued';
+    // `tier` was this field's name for one commit; read it so a file written
+    // then still means what it said.
+    if (fields.level == null && input.tier) fields.level = input.tier;
+    if (fields.level != null) fields.level = normalizeLevel(fields.level);
     fields.title = String(fields.title || input.goal || 'untitled').trim().slice(0, 120);
     const body = input.body ?? buildBody(input);
 
@@ -224,6 +229,36 @@ export class Backlog {
     const safe = this.#assertId(id);
     try { fs.unlinkSync(this.#lock(safe)); } catch { /* no lock to drop */ }
     return this.get(safe) ? this.update(safe, { status, claimedBy: null, claimedAt: null }) : null;
+  }
+
+  /**
+   * Move a task up a rung and hand it back to the queue (§8.2).
+   *
+   * The supervisor calls this when an attempt fails or a task stops making
+   * headway. At the top of the ladder there is nothing left to escalate TO, so
+   * the task parks for a human rather than re-running `max` forever at the most
+   * expensive band there is — "escalate means a bigger model, then a person",
+   * and this is where the "then a person" happens.
+   */
+  escalate(id, { reason = 'failed', note = '' } = {}) {
+    const task = this.get(id);
+    if (!task) throw new Error(`No task "${id}".`);
+    const attempts = (task.attempts ?? 0) + 1;
+    const result = escalateLevel({ level: task.level ?? DEFAULT_LEVEL, reason, attempts });
+    const blockedReason = [result.reason, note].filter(Boolean).join(' ');
+    if (!result.escalated) {
+      return { ...this.update(id, { status: 'parked', attempts, blockedReason }), escalation: result };
+    }
+    // The lease goes with it: an escalated task is queued again, and a task
+    // that is queued while still holding a lock can never be picked up.
+    try { fs.unlinkSync(this.#lock(task.id)); } catch { /* no lock held */ }
+    return {
+      ...this.update(id, {
+        status: 'queued', attempts, level: result.level, blockedReason,
+        claimedBy: null, claimedAt: null
+      }),
+      escalation: result
+    };
   }
 
   // --- picking (§5.3) ------------------------------------------------------

@@ -14,6 +14,7 @@
 import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
 import { pushRefs } from './worktree.js';
+import { workerForLevel, levelFor, LEVELS } from './levels.js';
 import { APPROVAL_MODES } from './flowRunner.js';
 import { lintFlow } from './flowlang/lint.js';
 
@@ -99,7 +100,7 @@ export function createApi(engine) {
     // The workspace is bound at run time (D15) — a bound tab IS its workspace
     // (T19), an appdata project has its own managed one (L5), and only an
     // unbound project picks one per run (or none, for mock/no-file flows).
-    'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null }) => {
+    'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null, level = null }) => {
       const entry = proj(projectId);
       let workspace = null;
       if (entry.folder) workspace = new Workspace(entry.folder).ensure().root;
@@ -107,6 +108,13 @@ export function createApi(engine) {
       else if (workspaceDir) workspace = new Workspace(workspaceDir).ensure().root;
       // launch (MODES-COMPARE) carries the picked mode and any exposed
       // run-input overrides: { modeId?, overrides? }.
+      // An effort band for this run (§8): every node that has not pinned its own
+      // worker routes through OpenRouter's Auto Router at that cost tier. Set on
+      // the runner's config rather than baked into the flow, because the level
+      // belongs to the ATTEMPT — a retry runs the same flow one rung up.
+      entry.runner.config.levelWorker = level
+        ? workerForLevel(level, { allowedModels: runtimeConfig.loop?.allowedModels ?? null })
+        : null;
       return entry.runner.start(flows.load(flowId), {
         userInput: String(userInput ?? ''),
         workspace,
@@ -175,6 +183,11 @@ export function createApi(engine) {
     // finished loop looks like.
     'task:take': ({ projectId, by = 'supervisor' }) => backlogFor(projectId).take(by),
     'task:release': ({ projectId, id, status = 'queued' }) => backlogFor(projectId).release(id, { status }),
+    // One rung up and back in the queue — or parked, when the ladder is spent.
+    // The supervisor calls this on a failed attempt and on a stalled one (§11.4).
+    'task:escalate': ({ projectId, id, reason = 'failed', note = '' }) =>
+      backlogFor(projectId).escalate(id, { reason, note }),
+    'task:levels': () => ({ levels: LEVELS }),
 
     // --- Tool feedback (LOOP-PLAN §12) -------------------------------------
     //
@@ -270,11 +283,14 @@ export function createApi(engine) {
         // checkout. Two branches that each pass alone can fail together.
         verify: async () => verifyTask({ pool: { dirFor: () => entry.folder }, taskId, task })
       });
-      backlog.update(taskId, {
-        status: result.landed ? 'landed' : (result.stage === 'review' ? 'review' : 'queued'),
-        attempts: (task.attempts ?? 0) + 1,
-        blockedReason: result.landed ? null : (result.guidance ?? result.stage)
-      });
+      if (result.landed) {
+        backlog.update(taskId, { status: 'landed', attempts: (task.attempts ?? 0) + 1, blockedReason: null });
+      } else {
+        // A failed attempt goes back up a rung rather than back at the same
+        // band: retrying the same capability mostly reproduces the same answer.
+        // At the top of the ladder the task parks for a human instead.
+        backlog.escalate(taskId, { reason: 'failed', note: result.guidance ?? result.stage });
+      }
       if (result.landed) await pool.remove(taskId, { deleteBranch: false });
       return result;
     },

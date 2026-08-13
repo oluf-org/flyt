@@ -17,8 +17,8 @@
     "retrospective": { "provider": "openrouter", "model": "some/cheap-model" }
   },
 
-  "loopComment": "The autonomous loop (LOOP-PLAN). push: after a task's gates pass, a reviewer approves and the post-merge canary is green, push the base branch and the task branch to origin. OFF by default because pushing is outward-facing and hard to take back — a repo with no origin is still a perfectly good local loop. workers.reviewer is what reads the diff before anything merges: with none configured NOTHING lands unattended, which is the correct default for an unconfigured repo. worktreeRoot overrides where worktrees live; they are always outside the repository.",
-  "loop": { "push": false },
+  "loopComment": "The autonomous loop (LOOP-PLAN). push: after a task's gates pass, a reviewer approves and the post-merge canary is green, push the base branch and the task branch to origin. OFF by default because pushing is outward-facing and hard to take back — a repo with no origin is still a perfectly good local loop. workers.reviewer is what reads the diff before anything merges: with none configured NOTHING lands unattended, which is the correct default for an unconfigured repo. worktreeRoot overrides where worktrees live; they are always outside the repository. minLevel is the floor under every task's effort band (LOOP-PLAN 8): a repo can refuse to run its work on the cheapest tier without editing every task. allowedModels narrows what OpenRouter's Auto Router may pick, e.g. [\"anthropic/*\"] — empty means no restriction.",
+  "loop": { "push": false, "minLevel": "low", "allowedModels": [] },
 
   "loopWorkersExample": {
     "reviewer": { "provider": "anthropic", "model": "claude-sonnet-5" }

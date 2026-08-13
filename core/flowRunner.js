@@ -354,6 +354,10 @@ const SUMMARY_SOURCE_BUDGET = 3000;
 export function resolveWorker(node, config) {
   const w = node?.data?.worker;
   if (w?.provider && w?.model) return { provider: w.provider, model: w.model };
+  // A run started at an effort LEVEL (LOOP-PLAN §8) routes every unpinned node
+  // through it. Below an explicitly authored worker on purpose: a flow that
+  // names its model meant it, and a band is a default, not an override.
+  if (config.levelWorker?.provider && config.levelWorker?.model) return { ...config.levelWorker };
   const cat = node?.data?.category;
   const pref = cat ? config.categoryWorkers?.[cat] : null;
   if (pref?.provider && pref?.model) return { provider: pref.provider, model: pref.model };

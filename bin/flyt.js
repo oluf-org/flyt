@@ -34,6 +34,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task list [--status queued]    the backlog
   flyt task show <id>                 one task, in full
   flyt task ready                     what the picker would take, and what is stuck
+  flyt task escalate <id>             one effort level up, back to the queue
   flyt task take                      claim the top-scoring ready task
   flyt work start <taskId>            worktree + branch for a task
   flyt work verify <taskId>           run the gates in it (the harness runs them)
@@ -55,6 +56,7 @@ Options
   --timeout <sec>   how long to wait for a run to settle (default 1800)
   --goal <text>     what a queued task must achieve
   --value/--effort  1-5, feeding the picker's score (default 3 each)
+  --level <l>       low|medium|high|xhigh|max — the OpenRouter cost band
 `;
 
 // --- argv ------------------------------------------------------------------
@@ -202,7 +204,7 @@ async function main() {
             goal: String(flags.goal ?? title),
             value: flags.value ? Number(flags.value) : undefined,
             effort: flags.effort ? Number(flags.effort) : undefined,
-            tier: typeof flags.tier === 'string' ? flags.tier : undefined,
+            level: typeof flags.level === 'string' ? flags.level : undefined,
             dependsOn: flags.dependsOn ? String(flags.dependsOn).split(',') : undefined
           });
           say(`queued ${task.id}`);
@@ -214,7 +216,7 @@ async function main() {
           });
           for (const p of problems) say(`! ${p.id}: ${p.error}`);
           return out(asJson ? { tasks, problems }
-            : (tasks.map(t => `${t.id}\t${t.status}\t${t.title}`).join('\n') || '(backlog empty)'));
+            : (tasks.map(t => `${t.id}\t${t.status}\t${t.level ?? '-'}\t${t.title}`).join('\n') || '(backlog empty)'));
         }
         case 'show': {
           const task = await api.invoke('task:get', { projectId, id: positional[2] });
@@ -232,6 +234,15 @@ async function main() {
           if (!task) { say('nothing ready to take'); return out(asJson ? null : '(nothing ready)'); }
           if (task.stolen) say(`note: reclaimed an expired lease from ${task.claimedBy}`);
           return out(asJson ? task : `${task.id}\t${task.title}`);
+        }
+        case 'escalate': {
+          const r = await api.invoke('task:escalate', {
+            projectId, id: positional[2],
+            reason: String(flags.reason ?? 'failed'),
+            note: String(flags.note ?? '')
+          });
+          say(r.escalation.reason);
+          return out(asJson ? r : `${r.id}\t${r.status}\t${r.level ?? '-'}`);
         }
         case 'release':
           return out(await api.invoke('task:release', {
@@ -341,7 +352,8 @@ async function main() {
         projectId,
         flowId,
         userInput: String(flags.input ?? positional.slice(2).join(' ') ?? ''),
-        approvalMode: typeof flags.approval === 'string' ? flags.approval : null
+        approvalMode: typeof flags.approval === 'string' ? flags.approval : null,
+        level: typeof flags.level === 'string' ? flags.level : null
       });
       say(`run ${runId} started`);
       const { stage, snapshot } = await waitForRun(api, projectId, runId, {
