@@ -5,7 +5,7 @@
 // panel is a projection, and a projection you can test is one you can trust.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pilesOf, burndown, flightRow, headline, humanDuration, tailLines, PILE_ORDER } from '../src/loopViewData.js';
+import { pilesOf, burndown, flightRow, headline, humanDuration, tailLines, trendBars, PILE_ORDER } from '../src/loopViewData.js';
 
 test('the pile that needs a person comes first', () => {
   // The only part of the screen that is ASKING for something. Landed is
@@ -82,4 +82,37 @@ test('the log tail is bounded and carries a readable clock', () => {
   assert.equal(tail.length, 50);
   assert.equal(tail.at(-1).line, 'line 299');
   assert.match(tail[0].time, /^\d\d:\d\d:\d\d$/);
+});
+
+test('the trend refuses to call a direction from one point', () => {
+  const series = { points: [{ date: '2026-08-12', score: 0.5, verified: 1, cases: 2, benchUsd: 3 }], scored: 1, latest: null, direction: null };
+  const one = trendBars(series);
+  assert.equal(one.direction, null);
+  // Nothing scored yet reads as an invitation rather than as a failure: the
+  // first night has nothing to compare against and that is not a problem.
+  assert.match(one.summary, /run the benchmark/);
+
+  const two = trendBars({
+    points: [
+      { date: '2026-08-10', score: 0.5, verified: 1, cases: 2, benchUsd: 3 },
+      { date: '2026-08-11', score: null },
+      { date: '2026-08-12', score: 1, verified: 2, cases: 2, benchUsd: 2 }
+    ],
+    scored: 2,
+    latest: { date: '2026-08-12', score: 1, verified: 2, cases: 2 },
+    direction: 'improving'
+  });
+  assert.equal(two.bars.length, 3);
+  assert.equal(two.bars[0].pct, 50);
+  assert.equal(two.bars[0].label, '08-10');
+  // A day nobody scored keeps its slot: a run of unscored days is itself the
+  // answer to why the number has not moved.
+  assert.equal(two.bars[1].scored, false);
+  assert.equal(two.bars[1].pct, null);
+  assert.match(two.summary, /100% on 2026-08-12 \(2\/2 cases\) · improving/);
+
+  assert.match(trendBars({ points: [] }).summary, /Nothing archived yet/);
+  // Bounded for rendering, newest kept.
+  const many = trendBars({ points: Array.from({ length: 40 }, (_, i) => ({ date: `2026-08-${String(i % 28 + 1).padStart(2, '0')}`, score: 1 })) }, { limit: 5 });
+  assert.equal(many.bars.length, 5);
 });

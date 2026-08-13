@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  pilesOf, burndown, flightRow, headline, tailLines, PILE_ORDER, PILE_LABELS
+  pilesOf, burndown, flightRow, headline, tailLines, trendBars, PILE_ORDER, PILE_LABELS
 } from './loopViewData.js';
 
 // The Loop view (LOOP-PLAN §14): what the supervisor is doing, what it wants
@@ -22,6 +22,7 @@ export default function LoopPage({ projectId }) {
   const [caps, setCaps] = useState({});
   const [spend, setSpend] = useState(null);
   const [lines, setLines] = useState([]);
+  const [series, setSeries] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const tailRef = useRef(null);
@@ -29,14 +30,18 @@ export default function LoopPage({ projectId }) {
   const refresh = useCallback(async () => {
     if (!projectId || !window.flyt?.loopStatus) return;
     try {
-      const [st, list, spendCheck] = await Promise.all([
+      const [st, list, spendCheck, trend] = await Promise.all([
         window.flyt.loopStatus(projectId),
         window.flyt.listTasks(projectId),
-        window.flyt.ledgerCheck(projectId).catch(() => null)
+        window.flyt.ledgerCheck(projectId).catch(() => null),
+        // A project with no archive yet is the normal first-day state, not an
+        // error worth colouring the whole panel red.
+        window.flyt.archiveTrend?.(projectId).catch(() => null) ?? null
       ]);
       setStatus(st);
       setTasks(list?.tasks ?? []);
       setCaps(spendCheck?.caps ?? {});
+      setSeries(trend);
       // The LEDGER is the source of truth for spend, not the supervisor's copy
       // of it: with no loop running the supervisor reports nothing, and a panel
       // that then shows $0.00 against a $4.00 cap is lying about the one number
@@ -75,6 +80,7 @@ export default function LoopPage({ projectId }) {
 
   const piles = pilesOf(tasks);
   const burn = burndown(spend, caps);
+  const trend = series ? trendBars(series) : null;
   const running = Boolean(status?.running);
 
   const act = async fn => {
@@ -182,6 +188,24 @@ export default function LoopPage({ projectId }) {
           );
         })}
       </div>
+
+      {/* The benchmark trend (§12.1): the only thing on this page that answers
+          "is it getting better" rather than "what is it doing". Rendered even
+          with nothing scored yet, because the absence is the prompt to run it. */}
+      {trend && trend.bars.length > 0 && (
+        <section className="loop-trend">
+          <h2>Benchmark <span className="count">{trend.summary}</span></h2>
+          <div className="loop-trend-bars">
+            {trend.bars.map(b => (
+              <div key={b.date} className={`loop-trend-bar${b.scored ? '' : ' unscored'}`}
+                title={b.scored ? `${b.date}: ${b.verified}/${b.cases} verified${b.usd != null ? `, $${b.usd.toFixed(2)}` : ''}` : `${b.date}: not scored`}>
+                <span className="fill" style={{ height: `${b.pct ?? 0}%` }} />
+                <span className="tick">{b.label}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="loop-tail">
         <h2>What it did</h2>

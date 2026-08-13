@@ -109,6 +109,7 @@ const api = {
   releaseTask: (pid, id, status) => ipcRenderer.invoke('task:release', pid, id, status),
   feedbackStats: (pid) => ipcRenderer.invoke('feedback:stats', pid),
   feedbackDigest: (pid, enqueue = false) => ipcRenderer.invoke('feedback:digest', pid, enqueue),
+  archiveTrend: (pid, limit = 30) => ipcRenderer.invoke('archive:trend', pid, limit),
   // One line per supervisor decision, live. Returns an unsubscribe like the
   // other listeners here.
   onLoopEvent: (cb) => {

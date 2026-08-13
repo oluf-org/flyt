@@ -101,6 +101,15 @@ test('protected paths are the reflexive-modification hole, and are closed by rul
   assert.deepEqual(protectedViolations(files), ['.flyt/config.json', '.flyt/backlog/t-0001.task.md']);
   // ...unless the task is explicitly about them, which lands with a human.
   assert.deepEqual(protectedViolations(files, { allow: ['.flyt/config.json'] }), ['.flyt/backlog/t-0001.task.md']);
+
+  // The benchmark is the exam (§12.1). A task that can edit the suite or the
+  // scores it is measured by is not being measured.
+  assert.deepEqual(
+    protectedViolations(['benchmark/pure-function.bench.md', '.flyt/scores/x.json', '.flyt/archive/2026-08-13/day.json']),
+    ['benchmark/pure-function.bench.md', '.flyt/scores/x.json', '.flyt/archive/2026-08-13/day.json']);
+  // A task whose whole job IS adding a case says so up front and lands with a
+  // human's approval, exactly like one that widens the gates.
+  assert.deepEqual(protectedViolations(['benchmark/new-case.bench.md'], { allow: ['benchmark/'] }), []);
 });
 
 // --- worktrees -------------------------------------------------------------
@@ -200,6 +209,11 @@ test('a task lands on main by itself when the gates and the reviewer agree', asy
   const log = await git(['log', '--oneline', '-1', 'main'], { cwd: root });
   assert.match(log, /Add a feature/);
   assert.equal((await git(['rev-list', '--parents', '-n', '1', 'HEAD'], { cwd: root })).split(' ').length, 3, 'a real merge commit');
+  // The green canary comes back with the landing. It is the only trustworthy
+  // "before" for the NEXT task's test-count check (§7.3), and it has just been
+  // run — asking for it again would be a second full suite for a number we
+  // already have.
+  assert.match(result.canaryOutput, /# tests 2/);
 });
 
 test('a change that passes alone but breaks main is reverted, not left behind', async () => {

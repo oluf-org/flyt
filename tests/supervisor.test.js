@@ -371,3 +371,51 @@ test('a task that cannot be observed is parked rather than spun on forever', asy
   assert.match(backlog.get('t-0001').blockedReason, /Could not be observed: snapshot exploded/);
   assert.equal(status.inFlight.length, 0);
 });
+
+test('a task records when work began, and a retry does not reset it', async () => {
+  // Wall clock per task is a scored axis of the benchmark (§12.1), and the only
+  // honest place to read it from is the file the supervisor wrote — process
+  // memory does not survive the night.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'takes two goes', goal: 'g', value: 5, effort: 1 });
+  let tries = 0;
+  let firstStart = null;
+  const engine = fakeEngine({
+    backlog,
+    land: () => {
+      firstStart ??= backlog.get('t-0001').startedAt;
+      return ++tries === 1
+        ? { landed: false, stage: 'gates', guidance: 'red' }
+        : { landed: true, stage: 'landed', mergeSha: 'abc12345' };
+    }
+  });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+  await sup.run();
+
+  const task = backlog.get('t-0001');
+  assert.equal(task.status, 'landed');
+  assert.equal(engine.calls.filter(c => c.name === 'work:start').length, 2, 'both attempts really ran');
+  assert.ok(firstStart, 'the first attempt stamped it');
+  // The question is how long the TASK took, not the last try at it, so the
+  // second attempt must not move the stamp.
+  assert.equal(task.startedAt, firstStart);
+  assert.ok(Date.parse(task.updatedAt) >= Date.parse(task.startedAt));
+});
+
+test('the last green canary becomes the next task\'s test-count baseline', async () => {
+  // Without this, `testCountRegression` has no "before" and silently skips —
+  // and deleting tests to go green is the cheapest exit an agent has (§7.3).
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g', value: 5, effort: 1 });
+  backlog.add({ title: 'second', goal: 'g', value: 4, effort: 1 });
+  const engine = fakeEngine({
+    backlog,
+    land: () => ({ landed: true, stage: 'landed', mergeSha: 'abc12345', canaryOutput: '# tests 42' })
+  });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+  await sup.run();
+
+  const lands = engine.calls.filter(c => c.name === 'work:land');
+  assert.equal(lands[0].args.baselineOutput, null, 'the first task has nothing to compare against, honestly');
+  assert.equal(lands[1].args.baselineOutput, '# tests 42');
+});

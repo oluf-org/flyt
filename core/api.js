@@ -11,6 +11,8 @@
 // native file picker or `shell.openPath`. Those stay bound to Electron because
 // they are how a human touches the app, not what the app does. A headless
 // caller asking for one gets an honest error rather than a silent no-op.
+import fs from 'node:fs';
+import path from 'node:path';
 import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
 import { pushRefs } from './worktree.js';
@@ -18,6 +20,11 @@ import { workerForLevel, levelFor, LEVELS } from './levels.js';
 import { Supervisor, renderReport } from './supervisor.js';
 import { APPROVAL_MODES } from './flowRunner.js';
 import { lintFlow } from './flowlang/lint.js';
+import {
+  loadSuite, runBenchmark, saveCard, listCards, readCard, recentCards,
+  compareCards, renderScorecard, renderComparison, DEFAULT_SUITE_DIR
+} from './benchmark.js';
+import { writeArchive, listArchive, readArchive, trend, dateStamp } from './archive.js';
 
 export class ApiError extends Error {
   constructor(message, { status = 400, code = 'bad_request' } = {}) {
@@ -85,6 +92,32 @@ export function createApi(engine) {
 
   // One supervisor per project, for the life of the process.
   const supervisors = new Map();
+  // One in-flight benchmark per project. Same reason: two benchmark runs over
+  // one project would write two cards claiming to describe the same revision.
+  const benchmarks = new Map();
+
+  // A repository, because a benchmark clones one and an archive reads its
+  // history. An appdata project has files but no git, and saying so beats a
+  // git error from four calls deeper.
+  const repoFor = projectId => {
+    const entry = proj(projectId);
+    // Checked, not assumed. A benchmark clones and an archive reads history, so
+    // "there is a folder" is not the question — and the alternative is a git
+    // error from four calls deeper, inside a background promise, at the end of
+    // a working day. (`.git` is a file in a worktree and a directory in a
+    // checkout; both count.)
+    if (!entry.folder || !fs.existsSync(path.join(entry.folder, '.git'))) {
+      throw new ApiError('This project is not a git repository, so it has nothing to clone or archive.',
+        { status: 400, code: 'no_repo' });
+    }
+    return entry;
+  };
+  const stateDir = (projectId, name) => {
+    const dir = engine.configDirOf(projectId);
+    if (!dir) throw new ApiError(`This project has no folder, so it has nowhere to keep ${name}.`,
+      { status: 400, code: 'no_folder' });
+    return path.join(dir, name);
+  };
 
   const commands = {
     // --- Flows -------------------------------------------------------------
@@ -373,6 +406,136 @@ export function createApi(engine) {
       backlog: backlogFor(projectId),
       ledger: ledgerFor(projectId)
     }),
+
+    // --- The benchmark and the archive (LOOP-PLAN §12.1) --------------------
+    //
+    // The score exists so that "improve yourself" can be distinguished from
+    // churn. It is a loop run like any other — same supervisor, same gates,
+    // same reviewer — against a throwaway clone, with an independent probe per
+    // case deciding whether the work actually works.
+    'bench:list': ({ projectId }) => {
+      const entry = repoFor(projectId);
+      const { dir, cases, problems } = loadSuite(path.join(entry.folder, DEFAULT_SUITE_DIR));
+      return {
+        dir,
+        problems,
+        cases: cases.map(c => ({
+          id: c.id, title: c.title, level: c.level, weight: c.weight,
+          probe: c.probe, setup: c.setup, gates: c.gates
+        }))
+      };
+    },
+    'bench:run': ({ projectId, only = null, suite = 'default', keep = false, revision = 'HEAD' }) => {
+      const entry = repoFor(projectId);
+      if (benchmarks.get(projectId)?.running) {
+        throw new ApiError('A benchmark is already running for this project.',
+          { status: 409, code: 'already_running' });
+      }
+      const state = {
+        running: true, suite, startedAt: new Date().toISOString(),
+        finishedAt: null, card: null, error: null, file: null
+      };
+      benchmarks.set(projectId, state);
+      // Not awaited, for the reason `loop:start` is not: a benchmark is a
+      // working session, and an HTTP caller should not hold a connection open
+      // for the length of one.
+      runBenchmark({
+        engine, api: { invoke }, repoRoot: entry.folder,
+        only: Array.isArray(only) ? only : (only ? String(only).split(',') : null),
+        suite, keep, revision,
+        cloneRoot: runtimeConfig.benchmarkRoot ?? null,
+        log: msg => engine.emitLoop?.(projectId, `[bench] ${msg}`)
+      }).then(card => {
+        state.card = card;
+        state.file = saveCard(stateDir(projectId, 'scores'), card).file;
+        engine.emitLoop?.(projectId,
+          `[bench] ${card.totals.verified}/${card.totals.cases} verified (${(card.score * 100).toFixed(0)}%)`);
+      }).catch(err => {
+        state.error = String(err.message ?? err);
+        engine.emitLoop?.(projectId, `[bench] failed: ${state.error}`);
+      }).finally(() => {
+        state.running = false;
+        state.finishedAt = new Date().toISOString();
+      });
+      return { started: true, suite };
+    },
+    'bench:status': ({ projectId }) => benchmarks.get(projectId)
+      ?? { running: false, suite: null, startedAt: null, finishedAt: null, card: null, error: null, file: null },
+    'bench:cards': ({ projectId, suite = null, limit = 20 }) => {
+      const dir = stateDir(projectId, 'scores');
+      return {
+        dir,
+        cards: recentCards(dir, { suite, limit }).map(({ name, card }) => ({
+          name, suite: card.suite, at: card.at, revision: card.revision,
+          score: card.score, totals: card.totals
+        }))
+      };
+    },
+    'bench:card': ({ projectId, name }) => {
+      const card = readCard(stateDir(projectId, 'scores'), name);
+      if (!card) throw new ApiError(`No scorecard "${name}".`, { status: 404, code: 'no_card' });
+      return card;
+    },
+    'bench:report': ({ projectId, name = null }) => {
+      const dir = stateDir(projectId, 'scores');
+      const card = name ? readCard(dir, name) : recentCards(dir, { limit: 1 })[0]?.card;
+      if (!card) throw new ApiError('No scorecard to report on.', { status: 404, code: 'no_card' });
+      return renderScorecard(card);
+    },
+    // The gradient. With no names it compares the two most recent cards of a
+    // suite, which is the question anyone actually asks: is it better than last
+    // time.
+    'bench:compare': ({ projectId, a = null, b = null, suite = null }) => {
+      const dir = stateDir(projectId, 'scores');
+      let prev = a ? readCard(dir, a) : null;
+      let next = b ? readCard(dir, b) : null;
+      if (!prev || !next) {
+        const recent = recentCards(dir, { suite, limit: 2 });
+        if (recent.length < 2) {
+          throw new ApiError('Two scorecards are needed to compare; run the benchmark again.',
+            { status: 400, code: 'not_enough_cards' });
+        }
+        next ??= recent[0].card;
+        prev ??= recent[1].card;
+      }
+      const comparison = compareCards(prev, next);
+      return { comparison, text: renderComparison(comparison) };
+    },
+
+    'archive:write': async ({ projectId, date = null, card = null, windowMs = null }) => {
+      const entry = repoFor(projectId);
+      const backlog = backlogFor(projectId);
+      const ledger = ledgerFor(projectId);
+      const scores = stateDir(projectId, 'scores');
+      const day = date ?? dateStamp();
+      // The day's card by default: an archive of a day that ran a benchmark and
+      // did not record it is missing the one number the trend needs.
+      const chosen = card ? readCard(scores, card)
+        : (recentCards(scores, { limit: 1 })[0]?.card ?? null);
+      const useCard = chosen && String(chosen.at).slice(0, 10) === day ? chosen : null;
+      const pool = engine.poolFor(projectId);
+      return writeArchive({
+        root: stateDir(projectId, 'archive'),
+        date: day,
+        backlog, ledger, card: useCard,
+        repoRoot: entry.folder,
+        base: pool ? await pool.defaultBranch() : 'HEAD',
+        windowMs: windowMs ?? runtimeConfig.loop?.windowMs ?? 24 * 60 * 60 * 1000,
+        report: renderReport({
+          status: supervisors.get(projectId)?.status()
+            ?? { running: false, stopping: null, inFlight: [], landed: 0, completed: 0 },
+          backlog, ledger
+        }),
+        log: msg => engine.emitLoop?.(projectId, msg)
+      });
+    },
+    'archive:list': ({ projectId }) => listArchive(stateDir(projectId, 'archive')),
+    'archive:read': ({ projectId, date }) => {
+      const found = readArchive(stateDir(projectId, 'archive'), date);
+      if (!found) throw new ApiError(`Nothing archived for ${date}.`, { status: 404, code: 'no_archive' });
+      return found;
+    },
+    'archive:trend': ({ projectId, limit = 30 }) => trend(stateDir(projectId, 'archive'), { limit }),
 
     // --- Spend (LOOP-PLAN §9) ----------------------------------------------
     'ledger:totals': ({ projectId, sinceMs = null, taskId = null }) =>

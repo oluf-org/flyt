@@ -462,6 +462,17 @@ export function createEngine({
     return p;
   }
 
+  // Where a project keeps the state the loop owns — the backlog, the ledger,
+  // the feedback pile, the scorecards, the archive. Always the MAIN checkout's
+  // config dir, never a worktree's and never a benchmark clone's (§5.2).
+  // Null for the legacy unbound scratch project, which has nowhere to put any
+  // of it.
+  function configDirOf(projectId) {
+    const entry = registry.get(projectId);
+    const root = entry.folder ?? entry.appDir;
+    return root ? configDirFor(root) : null;
+  }
+
   // The spend record (LOOP-PLAN §9), per project, beside the backlog.
   const ledgers = new Map();
   function ledgerFor(projectId) {
@@ -505,6 +516,7 @@ export function createEngine({
     projectRoot, dataRoot, userDataDir, settingsPath, dataDir, seedFromBundle,
     // Stores
     flows, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor, poolFor, ledgerFor, references,
+    configDirOf,
     // Config + settings
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,
     // Providers

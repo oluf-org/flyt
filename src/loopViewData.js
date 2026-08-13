@@ -110,6 +110,40 @@ export function headline({ status = {}, piles = {} }) {
   return waiting ? `Idle — ${waiting} waiting on you` : 'Idle';
 }
 
+/**
+ * The benchmark trend across archived days (§14, §12.1).
+ *
+ * The panel's job is one sentence — "is this getting better" — so the shaping
+ * refuses to answer it from a single point: one score is a measurement, and a
+ * direction needs two. A day with no benchmark keeps its slot with a null bar
+ * rather than being dropped, because a run of days where nobody scored anything
+ * is itself the answer to why the number has not moved.
+ */
+export function trendBars(series, { limit = 14 } = {}) {
+  const points = (series?.points ?? []).slice(-limit);
+  const bars = points.map(p => ({
+    date: p.date,
+    label: String(p.date ?? '').slice(5), // MM-DD: the year is the same all day
+    score: p.score,
+    pct: p.score == null ? null : Math.round(p.score * 100),
+    verified: p.verified,
+    cases: p.cases,
+    usd: p.benchUsd ?? null,
+    scored: p.score != null
+  }));
+  const latest = series?.latest ?? null;
+  return {
+    bars,
+    direction: series?.direction ?? null,
+    latest,
+    summary: !bars.length ? 'Nothing archived yet.'
+      : !latest ? 'No day has been scored yet — run the benchmark to get a number to beat.'
+        : `${(latest.score * 100).toFixed(0)}% on ${latest.date}`
+          + (latest.cases ? ` (${latest.verified}/${latest.cases} cases)` : '')
+          + (series.direction ? ` · ${series.direction}` : '')
+  };
+}
+
 // Ring-buffer lines for the log tail, newest last, bounded for rendering.
 export function tailLines(entries = [], limit = 200) {
   return entries.slice(-limit).map(e => ({

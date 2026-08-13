@@ -257,8 +257,9 @@ export async function land({
   const mergeSha = await git(['rev-parse', 'HEAD'], { cwd: repoRoot });
   log(`merged ${branch} as ${mergeSha.slice(0, 8)}`);
 
+  let canary = null;
   if (verify) {
-    const canary = await verify({ repoRoot, mergeSha });
+    canary = await verify({ repoRoot, mergeSha });
     if (!canary.ok) {
       // Revert rather than reset: the merge may already have been pushed, and
       // rewriting published history is a worse problem than an extra commit.
@@ -278,8 +279,12 @@ export async function land({
       // The merge is real and verified locally; a failed push is a delivery
       // problem, reported as such rather than by undoing good work.
       log(`push failed: ${err.message}`);
-      return { landed: true, pushed: false, mergeSha, pushError: String(err.message ?? err) };
+      return { landed: true, pushed: false, mergeSha, canary, pushError: String(err.message ?? err) };
     }
   }
-  return { landed: true, pushed: Boolean(push), mergeSha };
+  // The canary rides along on success too. A green suite on the merged base is
+  // the only trustworthy "before" for the next task's test-count check (§7.3),
+  // and it has just been run — asking for it again would be a second full suite
+  // for a number we already have.
+  return { landed: true, pushed: Boolean(push), mergeSha, canary };
 }

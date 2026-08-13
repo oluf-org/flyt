@@ -4057,6 +4057,30 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 .loop-task-actions { display: flex; gap: 8px; margin-top: 8px; }
 .loop-pile .empty, .loop-tail .empty { color: var(--faint); font-size: 12px; margin: 0; }
 
+/* The benchmark trend (§12.1): the one panel that answers "is it getting
+   better". A day nobody scored keeps its slot as an empty column — the gaps are
+   part of what the series says. */
+.loop-trend h2 {
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--dim); margin: 0 0 8px;
+}
+.loop-trend h2 .count { text-transform: none; letter-spacing: 0; color: var(--faint); font-weight: 400; }
+.loop-trend-bars {
+  display: flex; align-items: flex-end; gap: 4px; height: 84px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px 4px;
+}
+.loop-trend-bar {
+  flex: 1 1 0; min-width: 8px; height: 100%;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch;
+}
+.loop-trend-bar .fill { display: block; background: var(--ok); border-radius: 2px 2px 0 0; min-height: 2px; }
+.loop-trend-bar.unscored .fill { background: var(--border); height: 2px !important; }
+.loop-trend-bar .tick {
+  font-size: 9px; color: var(--faint); text-align: center; margin-top: 3px;
+  white-space: nowrap; overflow: hidden;
+}
+
 .loop-tail-lines {
   max-height: 220px; overflow: auto; background: var(--card);
   border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;

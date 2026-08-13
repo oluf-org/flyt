@@ -193,6 +193,28 @@ App icons are the one place `currentColor` cannot apply. `scripts/make-icons.mjs
 
 ---
 
+### D35 — The outermost loop is a supervisor, not a person
+
+**Context.** Every capability in Flyt was agentic except the outermost loop, which was a human pressing Run. Unattended operation needs four things the app did not have: work that survives a run, money that is counted and capped, verification that is executed rather than claimed, and a way in that is not Electron IPC.
+
+**Decision.**
+1. **A headless supervisor owns the loop**; Electron becomes a client. Both bind one transport-agnostic command surface (`core/api.js`), as does the CLI and, later, MCP.
+2. **The backlog is files, project-level, gitignored, and supervisor-owned.** Agents append to it only through `enqueue_task`, which resolves the canonical directory outside every worktree — a queue inside the thing being edited is a queue that conflicts with itself and can rewrite its own priorities.
+3. **Isolation is a git worktree per task, outside the repo root**, landing by `--no-ff` merge after gates and a reviewer model, with a post-merge canary that auto-reverts. The pin (`advancePin`) only advances to a revision that passes both the suite and a supervisor self-test, so the loop cannot break the process that would revert the change that broke it.
+4. **Done means a command said so.** The harness runs the gates and reads the exit code itself; an agent's claim is not evidence. Test count may not decrease, and a task may not edit its own gates, the pin, the backlog, or the benchmark.
+5. **Escalation means a bigger model, then a human.** A task carries an effort band, the request carries OpenRouter's `cost_tier`, and a failed or stalled attempt walks one rung up. At the top of the ladder it parks for a person rather than re-running `max` forever.
+6. **Cost tracking is a requirement**, reversing a `GOALS.md` non-goal. What the provider reported, an optional local table marked `estimated`, then `null` — never a silent zero. Three rolling ceilings: per task (park it), soft (stop escalating), hard (finish the node and stop).
+7. **A gate parks a task; it never blocks the loop.** Unattended, one approval request would otherwise cost the rest of the day. Which *kind* of gate decides whether the loop may answer it: a pre-node plan gate yes, because the landing sequence judges the real change afterwards; an escalation or tool gate never, because those are the decisions the loop exists to defer.
+8. **Improvement is scored or it did not happen.** A fixed suite (`benchmark/*.bench.md`) against a throwaway clone, each case carrying an independent probe, archived per day. `landed` and `verified` are separate numbers on purpose.
+9. **The loop has no clock; it has supervision.** Long-running tasks are the design target, so the supervisor tracks per-task heartbeats, measures *headway* — change in the work — rather than elapsed time, and holds the authority to nudge, restart, escalate or park. Every model call gets a progress-based deadline: a call that cannot time out is a task that cannot be supervised.
+10. **Patterns, not dependencies** (D24), kept readable rather than remembered: reference repos are cloned to a read-only root agents can grep at task time. Read, never vendored, never writable — there is no write path in `ReferenceLibrary` to bypass.
+
+**What this changes elsewhere.** `GOALS.md`'s "no cost tracking" non-goal is reversed (6). `DESIGN-SPEC.md` §11.1's "weakest joint" — an agent reporting success over a red suite — is closed by (4), not by better prompting. `TOOLS-PLAN.md` §9's MCP server becomes a third binding of the command surface rather than a new subsystem.
+
+**Status.** Decided & implemented (`core/engine.js`, `core/api.js`, `core/server.js`, `bin/flyt.js`, `core/backlog.js`, `core/worktree.js`, `core/gates.js`, `core/landing.js`, `core/diffReview.js`, `core/levels.js`, `core/ledger.js`, `core/heartbeat.js`, `core/supervisor.js`, `core/retroTurn.js`, `core/feedback.js`, `core/references.js`, `core/benchmark.js`, `core/archive.js`, `src/LoopPage.jsx`). Deliberately not built: the model overseer (§11.6) — the deterministic detectors cost nothing and cannot themselves misbehave, so measure what still gets through first — and the LLM tiebreak in the picker, which would be a model call bought on speculation. `LOOP-PLAN.md` §21 carries what is still open; the plan retires to git history once Q-L2 (dry-run nights) and the first archived baseline are settled.
+
+---
+
 ## Open questions (consolidated)
 
 **Product (from `PRODUCT-SPEC.md` §10):**

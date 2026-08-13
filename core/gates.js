@@ -105,14 +105,19 @@ export function gatesFor({ projectConfig = {}, task = {} } = {}) {
 // closed mechanically rather than by asking it not to.
 
 // Paths no task may touch unless it is explicitly ABOUT them: the gate
-// definitions, the supervisor's pinned checkout, and the queue itself.
-// Otherwise a task can widen its own definition of done, or re-prioritize
-// itself, which is the reflexive-modification hole.
+// definitions, the supervisor's pinned checkout, the queue itself — and the
+// benchmark, which is the only outside opinion of whether any of this is
+// getting better (§12.1). Otherwise a task can widen its own definition of
+// done, re-prioritize itself, or edit the exam it is sitting, which is the
+// reflexive-modification hole.
 export const PROTECTED = [
   '.flyt/config.json',
   '.flyt/backlog/',
   '.flyt/feedback/',
-  '.flyt/ledger/'
+  '.flyt/ledger/',
+  '.flyt/scores/',
+  '.flyt/archive/',
+  'benchmark/'
 ];
 
 export function protectedViolations(files, { allow = [] } = {}) {

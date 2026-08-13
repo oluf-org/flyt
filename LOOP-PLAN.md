@@ -1,9 +1,9 @@
 # LOOP-PLAN.md — the autonomous improvement loop
 
-**Status:** Draft 1 — 2026-08-12. Design settled in interview; unbuilt.
+**Status:** Built — days 1–7 landed (§15). The decision is **D35 in `DECISIONS.md`**; what is
+still open is §21, and this plan retires to git history when it empties.
 **Extends:** `DESIGN-SPEC.md` §4 (routing), §5 (sub-agents/guards), §9 (safety) and §11.1's
-recorded weak joint. Draft decision **D35** lives in §20 and lands in `DECISIONS.md` when the
-last in-scope phase closes.
+recorded weak joint — which §7 closes.
 **Read with:** `GOALS.md` (principles — and §19 below, which reverses one of its non-goals),
 `DECISIONS.md` (D8 depth cap, D12 routing, D13 retrospective scope, D15 project config, D16
 safety, D18 BYO-key, D23 subscription auth, D24 zero-dependency), `TOOLS-PLAN.md` (§9 the
@@ -586,7 +586,7 @@ missing tool should become one considered piece of work with a hundred contexts 
 hundred duplicates to de-duplicate by hand. `--enqueue` adds a single task pointing at the
 digest, and is off by default: the pile becomes work when someone decides it does.
 
-### 12.1 The benchmark and the archive
+### 12.1 The benchmark and the archive — [BUILT]
 
 Without this section, "improve yourself" degrades into churn that cannot be distinguished from
 progress. SICA's finding is that the loop needs a **score** and an **archive**, and that the
@@ -605,6 +605,51 @@ best archived version is what proposes the next improvement.
 The first benchmark run is the baseline, and it should happen on day 7 *before* the first real
 overnight, or there is nothing to compare against.
 
+**What landed** (`core/benchmark.js`, `core/archive.js`, `benchmark/`). Three cases —
+`pure-function` (the `taskline` acceptance replayed in this repo's house style), `fix-duration`
+(a seeded defect the existing tests do not cover), `cli-flag` (extend a subsystem in place, the
+harness work that is most of what this loop does). `flyt bench run` clones, applies each case's
+`setup`, seeds the clone's backlog, hands it to the ordinary supervisor, then probes and scores.
+
+Four decisions worth keeping:
+
+- **A case with no `probe` is refused at load.** The gates already answer "is the suite green",
+  but the suite is part of the repo the loop is editing and a task may *add* gates — so gates
+  measure the loop's own idea of done. The probe is the outside opinion, and `landed` and
+  `verified` are therefore separate numbers. `unverifiedLandings` is the one to stare at: the
+  gates and the reviewer both said yes and an independent command disagreed.
+- **The clone is a commit.** `git clone` carries committed state only, which is exactly right —
+  "did this change make the loop better" is a question about a revision, and a score of a dirty
+  checkout is a score nobody can reproduce. `--no-hardlinks`, because the entire value of a
+  throwaway is that deleting it cannot reach the thing it came from.
+- **Cases share one clone, and the contamination is measured rather than assumed away.** One
+  clone worked in sequence is what an overnight run actually looks like, so a benchmark run
+  stays a *loop* run; the cost is that a `setup` which reddens the suite fails every other
+  case's gates. The runner therefore records a baseline gate run before the loop starts, and a
+  card with a red baseline says on its face that nothing below it should be believed. A clone
+  per case would buy isolation and give up measuring the system that actually runs.
+- **A comparison across different suites refuses to produce a number.** Nine cases against ten
+  is not a delta. `flyt bench compare` reports `incomparable` and names what moved, and exits
+  non-zero only on `worse` — so a script can branch on "did that make it worse" without parsing
+  anything.
+
+The archive **copies**; it never references. Every source it reads from keeps moving — the
+ledger appends, the backlog is rewritten in place, git grows — so a record that points at them
+is not a record of Tuesday, it is a second name for today. `day.json` is the small flat index
+the trend reads, and a day nobody scored keeps its slot with a null score, because a run of
+unscored days is itself the answer to why the number has not moved. Two scored days or the
+trend declines to call a direction.
+
+Building it closed one hole that was open the whole time: **the test-count check never fired
+unattended.** `mechanicalChecks` compares the suite's "before" and "after" counts, and the
+supervisor never passed a "before", so `testCountRegression` silently skipped — green with
+fewer tests, the most convincing way to fail, was going unchecked. The landing sequence now
+returns its canary's output and the supervisor hands it to the next task as the baseline: the
+number was already being computed, nobody was keeping it.
+
+The benchmark suite and the scores join `PROTECTED` (§7.3). A task that can edit the exam is
+not being examined.
+
 ---
 
 ## 13. The machine interface
@@ -622,6 +667,8 @@ flyt task add "<goal>" [--priority --tier --gates] | list | show <id> | park <id
 flyt run <flow> --input "…" [--workspace <dir>]
 flyt report [--since 24h]
 flyt ref list | grep <pattern> [--repo opencode]         # the reference library (§16.1)
+flyt bench list | run [--only a,b --keep] | compare      # the score (§12.1)
+flyt archive write | list | trend                        # the day, frozen
 ```
 
 Every command takes `--json` and writes machine-readable output to stdout, human text to
@@ -645,7 +692,8 @@ A new **Loop** surface, and nothing else changes:
 - in-flight worktrees, live, using the existing canvas run view per task
 - budget burn-down against the soft and hard caps
 - landed / reverted / parked piles, with diffs and the reviewer's reasons
-- the benchmark trend across archived days
+- the benchmark trend across archived days — the only panel that answers "is this getting
+  better" rather than "what is it doing"; a day nobody scored keeps its column, empty
 
 The app connects to the supervisor over HTTP if one is running and falls back to owning its own
 runner if not, so attended use with no supervisor works exactly as today.
@@ -664,11 +712,25 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 | 4 ◐ | **Cheated**: OpenRouter Auto Router `cost_tier` as the ladder + escalation (§8). Ledger, price table and the three ceilings NOT built | A task escalates low → medium → high by itself; `max` parks for a human |
 | 5 ✅ | Heartbeats, stall detectors, the interruption ladder, gate policy, the ledger + three caps, the report | The loop works a backlog to `main` unattended; a wedged task is nudged, escalated, then parked |
 | 6 ✅ | Electron Loop view (queue, piles, burn-down, live log); the reference library | Watch the queue; an agent greps opencode mid-task |
-| 7 | Benchmark suite, archive, baseline run | The first real overnight, with a number to beat |
+| 7 ✅ | Benchmark suite, archive, the gradient, the trend panel | `flyt bench run` scores a throwaway clone; `flyt archive write` freezes the day |
 
 **Day 0, before any of it:** clone the reference repos (§16) and add the lint script. The loop
 cannot enforce a gate that does not exist, and the lint script is the smallest possible instance
 of the thing this whole plan is for.
+
+**Day 7 landed** (`benchmark`, `archive`, `benchmark/`). `flyt bench run` clones the repo at a
+commit, seeds the suite into the clone's backlog, hands it to the ordinary supervisor, and then
+asks an independent probe per case whether the work actually works. `flyt archive write` freezes
+the day — ledger lines copied, scorecard, first-parent commits, the parked pile — and
+`flyt bench compare` / `flyt archive trend` turn that into the gradient. §12.1 carries what the
+work decided; the one thing it corrected is that the **test-count check had never fired
+unattended**, because nothing was passing a baseline into it.
+
+Still owed on the score itself: **the first real baseline run.** Everything up to the model is
+verified — the clone, the setup, the baseline gates, the seeding, the probes, the scoring, the
+cleanup, and the honest refusal when no reviewer or OpenRouter key is configured — but a card
+produced by real models on real work is what day 7 is *for*, and it needs keys this checkout
+does not have. That run is the last step of day 7, not a new phase.
 
 **Day 6 landed** (`LoopPage`, `loopViewData`). A fifth rail entry: the headline answers "is it
 stuck", the piles answer "does it need me" — *Waiting on you* first and keeping its heading even
@@ -903,47 +965,18 @@ window.
 
 ---
 
-## 20. Draft D35 — for `DECISIONS.md` when the last phase closes
+## 20. D35 — landed in `DECISIONS.md`
 
-> ### D35 — The outermost loop is a supervisor, not a person
->
-> **Context.** Every capability in Flyt was agentic except the outermost loop, which was a human
-> pressing Run. Unattended operation needs four things the app did not have: work that survives
-> a run, money that is counted and capped, verification that is executed rather than claimed,
-> and a way in that is not Electron IPC.
->
-> **Decision.**
-> 1. **A headless supervisor owns the loop**; Electron becomes a client. Both bind one
->    transport-agnostic command surface (`core/api.js`), as does the CLI and, later, MCP.
-> 2. **The backlog is files, project-level, gitignored, and supervisor-owned.** Agents append to
->    it only through `enqueue_task`, which the supervisor applies outside every worktree — a
->    queue inside the thing being edited is a queue that conflicts with itself and can rewrite
->    its own priorities.
-> 3. **Isolation is a git worktree per task, outside the repo root**, landing by `--no-ff` merge
->    after gates and a reviewer model, with a post-merge canary that auto-reverts. The
->    supervisor runs from a pinned known-good revision so it cannot break the process that would
->    revert the change that broke it.
-> 4. **Done means a command said so.** The harness runs the gates; an agent's claim is not
->    evidence. Test count may not decrease, and a task may not edit its own gates, the pin, or
->    the backlog.
-> 5. **Escalation means a bigger model, then a human.** step-eval's existing `retry → escalate`
->    ladder re-points at tiers; a human is the last rung, not the second.
-> 6. **Cost tracking becomes a requirement**, reversing a `GOALS.md` non-goal. Subscription
->    first (metered in time), then dollars under a soft cap that stops escalation and a hard cap
->    that stops the loop. A refused call is an outcome, not an exception.
-> 7. **A gate parks a task; it never blocks the loop.**
-> 8. **Improvement is scored or it did not happen.** A fixed benchmark against a throwaway
->    clone, archived per day, feeds the picker and the tier table.
-> 9. **The loop has no clock; it has supervision.** Long-running tasks are a design target, so
->    the supervisor tracks per-task heartbeats, measures headway rather than elapsed time, and
->    holds the authority to nudge, restart, escalate or park. Every model call gets a deadline —
->    a call that cannot time out is a task that cannot be supervised.
-> 10. **Patterns, not dependencies** (D24), and the recipes are kept readable rather than
->    remembered: reference repos — opencode, `self_improving_coding_agent`, prime-agent — are
->    cloned to a read-only root the agents can grep at task time. Read, never vendored, never
->    writable.
->
-> **Status.** Provisional until the phases in §15 land; §21 lists what is still open.
+The draft that lived here is now **D35 in `DECISIONS.md`**, written up from what was actually
+built rather than from what was planned. Six of its ten clauses changed wording in the process,
+and two changed substance: gate handling gained the *kind* distinction (a plan gate the loop may
+answer, an escalation gate it may not) that the first real runs forced, and the tier ladder
+became OpenRouter's Auto Router instead of a price table this project would have had to keep
+current.
+
+Still open there, and deliberately: the model overseer (§11.6) and the picker's LLM tiebreak
+(§5.3). Both are second layers over deterministic ones that already work, and both should be
+bought with measurements rather than on speculation — the same tiering `safetyCheck.js` uses.
 
 ---
 
@@ -958,9 +991,13 @@ speaks OpenAI-compatible, adding one is a config entry unless its auth is unusua
 **Q-L2 — Dry-run duration.** How many nights of push-branches-but-do-not-merge before
 auto-merge is switched on. Proposed: two.
 
-**Q-L3 — Benchmark content.** Which tasks constitute the fixed suite, and against which
-throwaway repo. Proposed: seed from `taskline` plus three replayed real runs, growing as the
-loop encounters classes of task it handles badly.
+**Q-L3 — Benchmark content. [PARTLY RESOLVED]** The throwaway repo is *this* repo, cloned at a
+commit — the loop's first workload is Flyt, so the suite that scores it has to be Flyt-shaped.
+Three cases shipped (§12.1): a pure module with tests, a seeded defect the existing suite does
+not cover, and a CLI extension. Still open: how many cases before a run costs more than the
+information it buys, and whether a case that the loop has passed ten nights running should be
+retired or kept as a regression guard. Grow it when the loop meets a class of task it handles
+badly — that is what a case is for.
 
 **Q-L4 — Parked-pile ceiling.** The N at which the loop stops taking new work because too much
 is waiting on you.

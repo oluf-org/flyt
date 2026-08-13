@@ -254,6 +254,9 @@ bindIpc('task:escalate', (projectId, id, reason = 'failed') => ({ projectId, id,
 bindIpc('task:release', (projectId, id, status = 'queued') => ({ projectId, id, status }));
 bindIpc('feedback:stats', projectId => ({ projectId }));
 bindIpc('feedback:digest', (projectId, enqueue = false) => ({ projectId, enqueue }));
+// The benchmark trend (§12.1) — the only number on the Loop view that answers
+// "is this getting better" rather than "what is it doing right now".
+bindIpc('archive:trend', (projectId, limit = 30) => ({ projectId, limit }));
 
 // One engine, one entry point: pick a workflow, type a request, run it.
 // The user input becomes the flow's User Input node content for that run.

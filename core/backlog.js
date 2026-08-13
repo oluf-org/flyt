@@ -54,6 +54,11 @@ const DEFAULTS = () => ({
   createdBy: 'human',
   createdAt: null,
   updatedAt: null,
+  // When a supervisor actually began work, as distinct from when the task was
+  // written. Wall clock per task is a scored axis of the benchmark (§12.1), and
+  // the only honest place to read it from is the file the supervisor wrote —
+  // process memory does not survive the night.
+  startedAt: null,
   claimedBy: null,
   claimedAt: null,
   blockedReason: null,
@@ -164,6 +169,22 @@ export class Backlog {
     if (fields.level != null) fields.level = normalizeLevel(fields.level);
     fields.title = String(fields.title || input.goal || 'untitled').trim().slice(0, 120);
     const body = input.body ?? buildBody(input);
+
+    // A caller that owns its own naming may supply the id — the benchmark does,
+    // so every number on a scorecard traces back to a case file a person can
+    // read. A collision is still an error rather than an overwrite: the queue
+    // silently losing an entry is the one outcome worse than refusing to add.
+    if (input.id) {
+      const id = this.#assertId(input.id);
+      const task = { id, ...fields, body };
+      try {
+        fs.writeFileSync(this.#file(id), serializeTask(stripId(task)), { flag: 'wx' });
+        return task;
+      } catch (err) {
+        if (err?.code === 'EEXIST') throw new Error(`Task "${id}" already exists.`);
+        throw err;
+      }
+    }
 
     // Exclusive create, retried on collision: two agents enqueueing at the same
     // instant must not land on the same id, and 'wx' is the only way to find

@@ -40,6 +40,12 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt loop stop|status               stop it, or see what it is doing
   flyt report                         what landed, what needs you, what it cost
   flyt spend [--since 24h]            the ledger
+  flyt bench list                     the benchmark suite and its probes
+  flyt bench run [--only a,b] [--keep] clone, work the suite, score it
+  flyt bench status|cards|show        the in-flight run, past cards, one card
+  flyt bench compare [<a> <b>]        the gradient: better, cheaper, or worse
+  flyt archive write [--date d]       freeze today: ledger, scores, commits, piles
+  flyt archive list|trend             the archived days, and the direction
   flyt work start <taskId>            worktree + branch for a task
   flyt work verify <taskId>           run the gates in it (the harness runs them)
   flyt work land <taskId> [--dry-run|--push]  gates -> review -> merge -> canary
@@ -296,6 +302,99 @@ async function main() {
       const since = String(flags.since ?? '24h');
       const ms = /^(\d+)h$/.test(since) ? Number(since.slice(0, -1)) * 3600_000 : null;
       return out(await api.invoke('ledger:totals', { projectId: openProject(api, engine), sinceMs: ms }));
+    }
+
+    case 'bench': {
+      const sub = positional[1] ?? 'list';
+      const projectId = openProject(api, engine);
+      switch (sub) {
+        case 'list': {
+          const r = await api.invoke('bench:list', { projectId });
+          for (const p of r.problems) say(`! ${p.id ?? '?'}: ${p.error}`);
+          return out(asJson ? r
+            : (r.cases.map(c => `${c.id}\t${c.level ?? '-'}\t${c.title}\n\tprobe: ${c.probe}`).join('\n')
+              || `(no cases in ${r.dir})`));
+        }
+        case 'run': {
+          await api.invoke('bench:run', {
+            projectId,
+            only: typeof flags.only === 'string' ? flags.only : null,
+            suite: String(flags.suite ?? 'default'),
+            keep: Boolean(flags.keep),
+            revision: String(flags.revision ?? 'HEAD')
+          });
+          say('benchmark started — this clones the repo and works the suite');
+          // Held open like `loop start`: the run lives in this process.
+          for (;;) {
+            await sleep(5000);
+            const st = await api.invoke('bench:status', { projectId });
+            if (st.running) { say('  …'); continue; }
+            if (st.error) return die(st.error);
+            say(`scored ${st.card.totals.verified}/${st.card.totals.cases} → ${st.file}`);
+            process.exitCode = st.card.totals.verified === st.card.totals.cases ? 0 : 1;
+            const { renderScorecard } = await import('../core/benchmark.js');
+            return out(asJson ? st.card : renderScorecard(st.card));
+          }
+        }
+        case 'status':
+          return out(await api.invoke('bench:status', { projectId }));
+        case 'cards': {
+          const r = await api.invoke('bench:cards', { projectId });
+          return out(asJson ? r : (r.cards.map(c =>
+            `${c.name}\t${(c.score * 100).toFixed(0)}%\t${c.totals.verified}/${c.totals.cases}`).join('\n')
+            || '(no scorecards yet)'));
+        }
+        case 'show':
+          return out(await api.invoke(asJson ? 'bench:card' : 'bench:report',
+            { projectId, name: positional[2] ?? null }));
+        case 'compare': {
+          const r = await api.invoke('bench:compare', {
+            projectId, a: positional[2] ?? null, b: positional[3] ?? null,
+            suite: typeof flags.suite === 'string' ? flags.suite : null
+          });
+          // A regression is a non-zero exit, so a script or an agent can branch
+          // on "did the last change make it worse" without parsing anything.
+          process.exitCode = r.comparison.verdict === 'worse' ? 1 : 0;
+          return out(asJson ? r : r.text);
+        }
+        default:
+          return die(`Unknown bench subcommand "${sub}".`);
+      }
+    }
+
+    case 'archive': {
+      const sub = positional[1] ?? 'list';
+      const projectId = openProject(api, engine);
+      switch (sub) {
+        case 'write': {
+          const r = await api.invoke('archive:write', {
+            projectId,
+            date: typeof flags.date === 'string' ? flags.date : null,
+            card: typeof flags.card === 'string' ? flags.card : null
+          });
+          say(`archived ${r.date} → ${r.dir}`);
+          return out(asJson ? r : `${r.dir}\n${r.files.join('\n')}`);
+        }
+        case 'list': {
+          const days = await api.invoke('archive:list', { projectId });
+          return out(asJson ? days : (days.map(d =>
+            `${d.date}\t${d.benchmark ? `${(d.benchmark.score * 100).toFixed(0)}%` : '—'}`
+            + `\t${d.spend?.usd != null ? `$${d.spend.usd.toFixed(2)}` : '—'}`
+            + `\t${d.landed ?? 0} landed, ${d.parked ?? 0} parked`).join('\n') || '(nothing archived yet)'));
+        }
+        case 'show':
+          return out(await api.invoke('archive:read', { projectId, date: positional[2] }));
+        case 'trend': {
+          const series = await api.invoke('archive:trend', {
+            projectId, limit: Number(flags.limit ?? 30)
+          });
+          if (asJson) return out(series);
+          const { renderTrend } = await import('../core/archive.js');
+          return out(renderTrend(series));
+        }
+        default:
+          return die(`Unknown archive subcommand "${sub}".`);
+      }
     }
 
     case 'work': {

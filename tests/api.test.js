@@ -14,6 +14,9 @@ import { createEngine } from '../core/engine.js';
 import { createApi, ApiError } from '../core/api.js';
 import { createServer } from '../core/server.js';
 import { waitFor } from './helpers.js';
+import { git } from '../core/worktree.js';
+import { scoreSuite, saveCard } from '../core/benchmark.js';
+import { dateStamp } from '../core/archive.js';
 
 const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-api-'));
@@ -161,4 +164,58 @@ test('the event stream carries engine events to an attached client', async () =>
     ctl.abort();
     await pump;
   });
+});
+
+// --- the benchmark and the archive (LOOP-PLAN §12.1) -----------------------
+
+test('the score and the archive are reachable from the same map', async () => {
+  const { api, engine, dataRoot } = makeApi();
+  const repo = path.join(dataRoot, 'repo');
+  fs.mkdirSync(repo, { recursive: true });
+  await git(['init', '-b', 'main'], { cwd: repo });
+  await git(['config', 'user.email', 't@localhost'], { cwd: repo });
+  await git(['config', 'user.name', 'T'], { cwd: repo });
+  fs.writeFileSync(path.join(repo, 'a.txt'), '1');
+  await git(['add', '-A'], { cwd: repo });
+  await git(['commit', '-m', 'initial'], { cwd: repo });
+  const { id: projectId } = await api.invoke('project:open', { folder: repo });
+
+  // A repo with no suite says so rather than reporting a perfect score.
+  const empty = await api.invoke('bench:list', { projectId });
+  assert.deepEqual(empty.cases, []);
+  assert.match(empty.problems[0].error, /No suite directory/);
+  await assert.rejects(() => api.invoke('bench:compare', { projectId }), err =>
+    err instanceof ApiError && err.code === 'not_enough_cards');
+
+  // Two cards, saved the way a run saves them, then compared.
+  const scores = path.join(repo, '.flyt', 'scores');
+  const card = (at, verified) => scoreSuite({
+    suite: 'default', at,
+    cases: [{ id: 'a', title: 'a', weight: 1, verified, landed: true, usd: 1, ms: 1000, attempts: 1, escalations: 0, probe: { status: verified ? 'pass' : 'fail' } }]
+  });
+  saveCard(scores, card('2026-08-12T09:00:00.000Z', false));
+  saveCard(scores, card(`${dateStamp()}T09:00:00.000Z`, true));
+
+  const listed = await api.invoke('bench:cards', { projectId });
+  assert.equal(listed.cards.length, 2);
+  const { comparison } = await api.invoke('bench:compare', { projectId });
+  assert.equal(comparison.verdict, 'better');
+  assert.match(await api.invoke('bench:report', { projectId }), /# Benchmark/);
+
+  // The archive picks up TODAY's card, never yesterday's, so a day that did not
+  // score anything does not inherit a number from the last one that did.
+  const written = await api.invoke('archive:write', { projectId });
+  assert.equal(written.day.benchmark.score, 1);
+  assert.equal((await api.invoke('archive:list', { projectId })).length, 1);
+  assert.equal((await api.invoke('archive:trend', { projectId })).direction, null);
+  await assert.rejects(() => api.invoke('archive:read', { projectId, date: '2020-01-01' }), err =>
+    err instanceof ApiError && err.code === 'no_archive');
+
+  // Nothing about the benchmark is reachable for a project that is not a repo.
+  const plain = path.join(dataRoot, 'plain');
+  fs.mkdirSync(plain, { recursive: true });
+  const { id: plainId } = await api.invoke('project:open', { folder: plain });
+  await assert.rejects(() => api.invoke('bench:run', { projectId: plainId }), err =>
+    err instanceof ApiError && err.code === 'no_repo');
+  assert.equal(engine.registry.listOpen().length, 2);
 });

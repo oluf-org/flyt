@@ -201,6 +201,32 @@ export class ProjectRegistry {
   // Open a folder as a tab (null = the legacy scratch entry — no longer surfaced
   // in the UI, but kept openable for migration). Same folder twice focuses the
   // existing tab instead of opening a second one (T5).
+  /**
+   * A project this process can DRIVE but that is not a tab.
+   *
+   * The benchmark (LOOP-PLAN §12.1) works a throwaway clone: it needs a store,
+   * a runner, a backlog and a ledger for that directory, and every command in
+   * `core/api.js` resolves those through this registry. What it must not do is
+   * join the user's session — a tab for a directory that will be deleted in
+   * twenty minutes, stealing focus and sitting in recents afterwards, is a
+   * benchmark run leaking into the thing it was supposed to observe.
+   *
+   * Nothing is persisted, and nothing becomes active.
+   */
+  attach(folder) {
+    if (folder == null) throw new Error('attach() needs a folder.');
+    return this.#entryFor(folder);
+  }
+
+  /**
+   * Forget an attached project. Refuses an open tab, whose runner is permanent
+   * for the process by design (T13) — a closed tab keeps executing.
+   */
+  detach(id) {
+    if (this.openIds.includes(id)) throw new Error(`"${id}" is an open tab; close it instead.`);
+    return this.entries.delete(id);
+  }
+
   open(folder = null) {
     const entry = this.#entryFor(folder);
     const already = this.openIds.includes(entry.id);

@@ -54,6 +54,9 @@ export class Supervisor {
     this.history = [];         // finished attempts, for the report
     this.parked = [];          // things waiting on a person
     this.noEscalate = false;   // set when the soft cap trips
+    // The last green canary's output — the base branch's own test count, handed
+    // to the next task as its "before" (§7.3).
+    this.lastCanaryOutput = null;
   }
 
   status() {
@@ -136,7 +139,13 @@ export class Supervisor {
   async #begin(task) {
     const level = levelFor(task, this.config);
     this.log(`▶ ${task.id} "${task.title}" at ${level}`);
-    this.backlog.update(task.id, { status: 'running', level });
+    // startedAt, so "how long did this take" survives the process that knew.
+    // The first attempt sets it and a retry does not, because the question the
+    // benchmark asks is how long the TASK took, not the last try at it.
+    this.backlog.update(task.id, {
+      status: 'running', level,
+      startedAt: task.startedAt ?? new Date(this.now()).toISOString()
+    });
 
     try {
       const wt = await this.invoke('work:start', { projectId: this.projectId, taskId: task.id });
@@ -318,7 +327,16 @@ export class Supervisor {
 
     // Gates → checks → review → merge → canary. work:land already updates the
     // backlog (landed, or escalated one rung with the guidance attached).
-    const landed = await this.invoke('work:land', { projectId: this.projectId, taskId });
+    //
+    // The previous landing's canary output goes in as the baseline: it is the
+    // last time the suite ran green on the base branch, which is exactly the
+    // "before" the test-count check needs (§7.3). Without it that check never
+    // fires unattended, and deleting tests to go green is the cheapest exit
+    // there is.
+    const landed = await this.invoke('work:land', {
+      projectId: this.projectId, taskId, baselineOutput: this.lastCanaryOutput ?? null
+    });
+    if (landed.canaryOutput) this.lastCanaryOutput = landed.canaryOutput;
     this.history.push({ taskId, landed: landed.landed, stage: landed.stage, guidance: landed.guidance ?? null });
     this.log(landed.landed
       ? `✔ ${taskId} landed ${landed.mergeSha?.slice(0, 8)}`

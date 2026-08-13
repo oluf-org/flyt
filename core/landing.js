@@ -135,7 +135,16 @@ export async function landTask({
         : `The change passed its own gates but broke ${base} once merged; the merge was reverted. ${canaryGuidance(result.canary)}`
     };
   }
-  return { landed: true, stage: 'landed', steps, review, mergeSha: result.mergeSha, pushed: result.pushed };
+  return {
+    landed: true, stage: 'landed', steps, review,
+    mergeSha: result.mergeSha, pushed: result.pushed,
+    // What the suite said on the merged base. The caller keeps it and hands it
+    // back as `baselineOutput` for the next task, which is what makes the
+    // test-count check (§7.3) fire at all in an unattended run: with nothing to
+    // compare against, `testCountRegression` skips, and "green with fewer
+    // tests" is the most convincing way to fail.
+    canaryOutput: (result.canary?.results ?? []).map(r => r.output).join('\n') || null
+  };
 }
 
 // What the next attempt is told. The failing gate's own output, bounded — not a
