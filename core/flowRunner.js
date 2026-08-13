@@ -553,7 +553,7 @@ export class FlowRunner {
     try {
       return await runAgent({
         timeout: this.config.timeout, ...params, tools, signal: ctl.signal,
-        ctx: { store: this.store, runId, nodeId, workspace: this.workspaceFor(runId) }
+        ctx: { store: this.store, runId, nodeId, workspace: this.workspaceFor(runId), backlog: this.backlog ?? null }
       });
     } finally {
       this.untrackAbort(runId, ctl);
@@ -1898,6 +1898,7 @@ export class FlowRunner {
       onRetry: this.retryLogger(runId, `executor:${task.id}`),
       retry: this.config.retry,
       timeout: this.config.timeout,
+      backlog: this.backlog ?? null,
       signal: abortCtl.signal,
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };

@@ -44,6 +44,15 @@ export function createApi(engine) {
     throw new ApiError(`No open project "${projectId}".`, { status: 404, code: 'no_project' });
   };
   const runnerFor = projectId => proj(projectId).runner;
+  const backlogFor = projectId => {
+    proj(projectId); // resolve/validate the project first, for the honest 404
+    const backlog = engine.backlogFor(projectId);
+    if (!backlog) {
+      throw new ApiError('This project has no folder, so it has nowhere to keep a backlog.',
+        { status: 400, code: 'no_backlog' });
+    }
+    return backlog;
+  };
 
   const commands = {
     // --- Flows -------------------------------------------------------------
@@ -114,6 +123,38 @@ export function createApi(engine) {
       runnerFor(projectId).restartNode(runId, nodeId, String(guidance ?? '')),
     'run:followUp': ({ projectId, runId, text }) => runnerFor(projectId).followUp(runId, String(text ?? '')),
     'run:answerInput': ({ projectId, runId, text }) => runnerFor(projectId).answerInput(runId, String(text ?? '')),
+
+    // --- Backlog (LOOP-PLAN §5) --------------------------------------------
+    //
+    // The supervisor owns these files, so every caller — CLI, HTTP, an agent's
+    // enqueue_task — goes through one door. Nothing writes the directory
+    // directly, which is what keeps the queue outside every worktree (§5.2).
+    'task:add': ({ projectId, ...task }) => backlogFor(projectId).add(task),
+    'task:list': ({ projectId, status = null }) => {
+      const backlog = backlogFor(projectId);
+      const tasks = backlog.list({ status });
+      // Malformed files are reported rather than thrown past: one bad task must
+      // not stop the loop working the other forty.
+      return { tasks, problems: backlog.problems ?? [] };
+    },
+    'task:get': ({ projectId, id }) => {
+      const task = backlogFor(projectId).get(id);
+      if (!task) throw new ApiError(`No task "${id}".`, { status: 404, code: 'no_task' });
+      return task;
+    },
+    'task:update': ({ projectId, id, ...patch }) => backlogFor(projectId).update(id, patch),
+    // What the picker would choose, and what is stuck and why — the answer to
+    // "why is nothing being picked up", which is otherwise invisible.
+    'task:ready': ({ projectId }) => ({
+      ready: backlogFor(projectId).ready(),
+      blocked: backlogFor(projectId).blocked()
+    }),
+    'task:stats': ({ projectId }) => backlogFor(projectId).stats(),
+    // Pick-and-claim in one step. Returns null when there is nothing ready,
+    // which is a legitimate answer and not an error: an empty queue is what a
+    // finished loop looks like.
+    'task:take': ({ projectId, by = 'supervisor' }) => backlogFor(projectId).take(by),
+    'task:release': ({ projectId, id, status = 'queued' }) => backlogFor(projectId).release(id, { status }),
 
     // --- Liveness ----------------------------------------------------------
     // What the supervisor's heartbeat reads (§11.1): which runs this process is

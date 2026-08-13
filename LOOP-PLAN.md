@@ -228,12 +228,19 @@ Same tiering as `safetyCheck.js` and the clerk in `TOOLS-PLAN.md` §7, for the s
 
 The picker is a node template like everything else, so its reasoning is an inspectable artifact.
 
-### 5.4 Claiming
+### 5.4 Claiming — [BUILT]
 
-Atomic claim by rename (`t-0042.task.md` → `t-0042.claimed.md` via `fs.renameSync`, which is
-atomic on Windows and POSIX alike for same-directory renames) plus a `claimedBy`/`claimedAt`
-stamp. Two workers cannot claim the same task; a crashed worker's claim is reclaimable after a
-lease timeout, and the reclaim is logged rather than silent.
+A sibling **lock file created exclusively** (`fs.writeFileSync(lock, …, { flag: 'wx' })`, which
+fails with `EEXIST` if another worker got there first) plus a `claimedBy`/`claimedAt` stamp. Two
+workers cannot claim the same task; a crashed worker's lease expires and is reclaimable, and the
+reclaim returns `stolen: true` so it is logged rather than silent — a quiet steal is how two
+workers end up in one worktree.
+
+*Changed from the draft's rename sketch.* Renaming `t-0042.task.md` → `t-0042.claimed.md` is
+equally atomic, but it moves the task's own path around as its status changes, which puts status
+in two places at once and breaks every link to the file. The lock file keeps one stable path per
+task, keeps status solely in the frontmatter, and is what makes a lease expressible at all
+(the lock's mtime is the lease clock).
 
 ---
 
@@ -585,7 +592,7 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 | Day | Build | Demo |
 |---|---|---|
 | 1 ✅ | **Per-call request timeout** (§11.5); `core/engine.js` + `core/api.js` extraction; `core/server.js`; `bin/flyt.js` | Start a run from a terminal with Electron closed, and kill a hung provider call |
-| 2 | Backlog files, atomic claim, `enqueue_task` routed through the supervisor, picker (deterministic + LLM tiebreak) | `flyt task add`, the loop picks it and runs it |
+| 2 ✅ | Backlog files, atomic claim, `enqueue_task`, deterministic picker | `flyt task add`, `flyt task ready`, `flyt task take` — and an agent queueing work mid-run |
 | 3 | Worktree pool, gate runner, `diff-review` node, merge + push + canary + auto-revert, supervisor pin | A task lands on `main` with nobody watching |
 | 4 | Price table, ledger, three ceilings, tier ladder wired into step-eval escalation, subscription-first ordering | A task escalates cheap → frontier; a hard cap stops the loop cleanly |
 | 5 | Heartbeats, stall detectors, the interruption ladder, park-don't-block gates, the report | A deliberately wedged task gets nudged, restarted, then parked — unattended |
@@ -595,6 +602,17 @@ Each day is demoable, and days 6–7 can slip without killing the thing.
 **Day 0, before any of it:** clone the reference repos (§16) and add the lint script. The loop
 cannot enforce a gate that does not exist, and the lint script is the smallest possible instance
 of the thing this whole plan is for.
+
+**Day 2 landed** (`backlog`, `enqueue_task`). `.flyt/backlog/*.task.md` with atomic
+lock-file claiming and leases (§5.4), the deterministic picker (§5.3), `task:*` on the command
+surface, and `flyt task add|list|show|ready|take|release|stats`. **`enqueue_task` is the
+automated-task-creation half**: an agent mid-run records work it noticed — a missing tool, a
+refactor a later change needs — into the backlog instead of doing it inline (blowing the
+current task's scope) or forgetting it. A test drives a real agent loop end to end to prove it.
+
+The LLM tiebreak (§5.3 layer 2) is deliberately **not** built yet: the deterministic score
+handles an unambiguous queue for free, and until there is a real backlog to watch it rank
+badly, an LLM tiebreak would be a model call bought on speculation.
 
 **Day 1 landed** (`6e59418`, `7b58d09`, `364c3e1`). `npm run flyt -- run <flow> --input "…"`
 starts a run with no Electron in the process, answers its gates with `--gates approve`, and

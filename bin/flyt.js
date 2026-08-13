@@ -30,6 +30,11 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt snapshot <runId>               the run's current state
   flyt log <runId>                    the run's event log
   flyt approve|reject|stop <runId>    answer a gate or stop a run
+  flyt task add "<title>" --goal "<what>"   queue a task for a later run
+  flyt task list [--status queued]    the backlog
+  flyt task show <id>                 one task, in full
+  flyt task ready                     what the picker would take, and what is stuck
+  flyt task take                      claim the top-scoring ready task
   flyt serve [--port 7867]            run the HTTP API + event stream
   flyt call <command> [--arg k=v]     invoke any command directly
   flyt commands                       list every command
@@ -41,6 +46,8 @@ Options
   --approval <m>    ask | smart | always   (default: the saved setting)
   --gates approve   auto-approve node gates while waiting (unattended)
   --timeout <sec>   how long to wait for a run to settle (default 1800)
+  --goal <text>     what a queued task must achieve
+  --value/--effort  1-5, feeding the picker's score (default 3 each)
 `;
 
 // --- argv ------------------------------------------------------------------
@@ -173,6 +180,61 @@ async function main() {
       }
       if (!args.projectId && name.includes(':')) args.projectId ??= openProject(api, engine);
       return out(await api.invoke(name, args));
+    }
+
+    case 'task': {
+      const sub = positional[1] ?? 'list';
+      const projectId = openProject(api, engine);
+      switch (sub) {
+        case 'add': {
+          const title = positional.slice(2).join(' ') || String(flags.title ?? '');
+          if (!title) return die('flyt task add "<title>" --goal "<what it must achieve>"');
+          const task = await api.invoke('task:add', {
+            projectId,
+            title,
+            goal: String(flags.goal ?? title),
+            value: flags.value ? Number(flags.value) : undefined,
+            effort: flags.effort ? Number(flags.effort) : undefined,
+            tier: typeof flags.tier === 'string' ? flags.tier : undefined,
+            dependsOn: flags.dependsOn ? String(flags.dependsOn).split(',') : undefined
+          });
+          say(`queued ${task.id}`);
+          return out(asJson ? task : `${task.id}\t${task.title}`);
+        }
+        case 'list': {
+          const { tasks, problems } = await api.invoke('task:list', {
+            projectId, status: typeof flags.status === 'string' ? flags.status : null
+          });
+          for (const p of problems) say(`! ${p.id}: ${p.error}`);
+          return out(asJson ? { tasks, problems }
+            : (tasks.map(t => `${t.id}\t${t.status}\t${t.title}`).join('\n') || '(backlog empty)'));
+        }
+        case 'show': {
+          const task = await api.invoke('task:get', { projectId, id: positional[2] });
+          return out(asJson ? task : `${task.id}  ${task.status}  value ${task.value}/effort ${task.effort}\n${task.title}\n\n${task.body}`);
+        }
+        case 'ready': {
+          const { ready, blocked } = await api.invoke('task:ready', { projectId });
+          if (asJson) return out({ ready, blocked });
+          const lines = ready.map(t => `${t.score.toFixed(2)}\t${t.id}\t${t.title}`);
+          for (const b of blocked) lines.push(`--\t${b.id}\t${b.title}  (${b.reason})`);
+          return out(lines.join('\n') || '(nothing ready)');
+        }
+        case 'take': {
+          const task = await api.invoke('task:take', { projectId, by: String(flags.by ?? 'cli') });
+          if (!task) { say('nothing ready to take'); return out(asJson ? null : '(nothing ready)'); }
+          if (task.stolen) say(`note: reclaimed an expired lease from ${task.claimedBy}`);
+          return out(asJson ? task : `${task.id}\t${task.title}`);
+        }
+        case 'release':
+          return out(await api.invoke('task:release', {
+            projectId, id: positional[2], status: String(flags.status ?? 'queued')
+          }));
+        case 'stats':
+          return out(await api.invoke('task:stats', { projectId }));
+        default:
+          return die(`Unknown task subcommand "${sub}".`);
+      }
     }
 
     case 'runs': {

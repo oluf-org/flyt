@@ -1,0 +1,263 @@
+// The backlog: work that survives a run (LOOP-PLAN §5), and the tool that lets
+// an agent add to it mid-run.
+//
+// Two things are load-bearing here and get the most attention: claiming has to
+// be genuinely atomic (two workers in one worktree is the failure that ruins a
+// night), and enqueue_task has to write to the canonical backlog rather than
+// wherever the run happens to be standing.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Backlog, parseTask, serializeTask, TASK_STATUSES } from '../core/backlog.js';
+import { executeTool, getTools } from '../core/tools/index.js';
+import { runAgent } from '../core/agent.js';
+import { Workspace } from '../core/workspace.js';
+import { makeStore, setScript } from './helpers.js';
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-backlog-'));
+const newBacklog = () => new Backlog(path.join(tmp(), '.flyt', 'backlog'));
+
+// --- the store -------------------------------------------------------------
+
+test('a task round-trips through its file, prose and all', () => {
+  const backlog = newBacklog();
+  const task = backlog.add({
+    title: 'Add a per-task timeout to the gate runner',
+    goal: 'A hung `npm test` parks a worktree forever.',
+    doneWhen: ['runGates() kills a gate after its timeout', 'a test proves the kill path'],
+    value: 4, effort: 2, dependsOn: ['t-0001'], blastRadius: ['core/gates.js']
+  });
+
+  const reread = backlog.get(task.id);
+  assert.equal(reread.title, task.title);
+  assert.equal(reread.value, 4);
+  assert.deepEqual(reread.dependsOn, ['t-0001']);
+  assert.deepEqual(reread.blastRadius, ['core/gates.js']);
+  assert.match(reread.body, /## Goal/);
+  assert.match(reread.body, /## Done when/);
+  assert.match(reread.body, /- a test proves the kill path/);
+  // Markdown with frontmatter, because a human writes these and an agent writes
+  // these and both have to read them.
+  const raw = fs.readFileSync(path.join(backlog.rootDir, `${task.id}.task.md`), 'utf8');
+  assert.ok(raw.startsWith('---\n'));
+  assert.match(raw, /status: queued/);
+});
+
+test('a field a later phase adds is preserved, not erased on write', () => {
+  const backlog = newBacklog();
+  const task = backlog.add({ title: 'x', goal: 'y' });
+  const file = path.join(backlog.rootDir, `${task.id}.task.md`);
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('status: queued', 'status: queued\nledgerUsd: 1.25'));
+  const updated = backlog.update(task.id, { status: 'running' });
+  assert.equal(updated.ledgerUsd, 1.25);
+  assert.equal(backlog.get(task.id).ledgerUsd, 1.25, 'an older reader must not clobber a newer field');
+});
+
+test('ids do not collide, even when two callers add at the same instant', () => {
+  const backlog = newBacklog();
+  const made = Array.from({ length: 25 }, (_, i) => backlog.add({ title: `t${i}`, goal: 'g' }));
+  assert.equal(new Set(made.map(t => t.id)).size, 25);
+  assert.equal(backlog.ids().length, 25);
+});
+
+test('a task id can never name a file outside the backlog', () => {
+  const backlog = newBacklog();
+  // Ids arrive from a CLI, an HTTP body and a model's tool call.
+  for (const bad of ['../../etc/passwd', 'a/b', '.', '', 'x.task']) {
+    assert.throws(() => backlog.get(bad), /Invalid task id/);
+  }
+});
+
+test('a malformed task is reported, not thrown past', () => {
+  const backlog = newBacklog();
+  backlog.add({ title: 'fine', goal: 'g' });
+  fs.writeFileSync(path.join(backlog.rootDir, 't-0099.task.md'), 'no frontmatter here');
+  const tasks = backlog.list();
+  assert.equal(tasks.length, 1, 'the good one still comes back');
+  assert.equal(backlog.problems.length, 1);
+  assert.match(backlog.problems[0].error, /frontmatter/);
+});
+
+// --- claiming --------------------------------------------------------------
+
+test('only one worker can claim a task', () => {
+  const backlog = newBacklog();
+  const task = backlog.add({ title: 'contended', goal: 'g' });
+  const first = backlog.claim(task.id, 'worker-a');
+  const second = backlog.claim(task.id, 'worker-b');
+  assert.ok(first, 'the first claim wins');
+  assert.equal(first.claimedBy, 'worker-a');
+  assert.equal(second, null, 'the second gets nothing rather than a shared task');
+  assert.equal(backlog.get(task.id).status, 'claimed');
+});
+
+test('an expired lease can be reclaimed, and says so', () => {
+  const backlog = newBacklog();
+  const task = backlog.add({ title: 'abandoned', goal: 'g' });
+  backlog.claim(task.id, 'worker-that-died');
+  backlog.update(task.id, { status: 'queued' }); // as a crash recovery would find it
+
+  const tooSoon = backlog.claim(task.id, 'worker-b', { leaseMs: 60_000 });
+  assert.equal(tooSoon, null, 'a live lease is respected');
+
+  const later = backlog.claim(task.id, 'worker-b', { leaseMs: 60_000, now: Date.now() + 120_000 });
+  assert.ok(later);
+  assert.equal(later.stolen, true, 'a silent steal is how two workers end up in one worktree');
+  assert.equal(later.claimedBy, 'worker-b');
+});
+
+test('releasing drops the lock so the task can be taken again', () => {
+  const backlog = newBacklog();
+  const task = backlog.add({ title: 'released', goal: 'g' });
+  backlog.claim(task.id, 'worker-a');
+  backlog.release(task.id);
+  assert.equal(backlog.get(task.id).status, 'queued');
+  assert.equal(backlog.get(task.id).claimedBy, null);
+  assert.ok(backlog.claim(task.id, 'worker-b'), 'reclaimable immediately, no lease wait');
+});
+
+// --- picking ---------------------------------------------------------------
+
+test('the picker prefers value over effort, and unblocking over both', () => {
+  const backlog = newBacklog();
+  const cheapBig = backlog.add({ title: 'cheap and valuable', goal: 'g', value: 5, effort: 1 });
+  const dearSmall = backlog.add({ title: 'dear and marginal', goal: 'g', value: 2, effort: 5 });
+  const middling = backlog.add({ title: 'middling', goal: 'g', value: 3, effort: 3 });
+  backlog.add({ title: 'waits on the middling one', goal: 'g', dependsOn: [middling.id] });
+
+  const ready = backlog.ready();
+  assert.equal(ready[0].id, cheapBig.id);
+  assert.ok(ready.find(t => t.id === middling.id).score > 1, 'unblocking others counts for something');
+  assert.equal(ready.at(-1).id, dearSmall.id);
+  // The dependent task is not offered until its dependency lands.
+  assert.ok(!ready.some(t => t.dependsOn.length), 'nothing with an unmet dependency is ready');
+});
+
+test('a dependency that landed unblocks; one that failed shows up as blocked, with the reason', () => {
+  const backlog = newBacklog();
+  const first = backlog.add({ title: 'first', goal: 'g' });
+  const second = backlog.add({ title: 'second', goal: 'g', dependsOn: [first.id] });
+
+  assert.deepEqual(backlog.ready().map(t => t.id), [first.id]);
+  assert.equal(backlog.blocked()[0].id, second.id);
+  assert.match(backlog.blocked()[0].reason, new RegExp(`${first.id} \\(queued\\)`));
+
+  backlog.update(first.id, { status: 'landed' });
+  assert.deepEqual(backlog.ready().map(t => t.id), [second.id]);
+
+  backlog.update(first.id, { status: 'failed' });
+  assert.equal(backlog.ready().length, 0);
+  // Why the queue stopped moving must be visible rather than silently skipped.
+  assert.match(backlog.blocked()[0].reason, /failed/);
+});
+
+test('take() claims the best ready task and skips one another worker just took', () => {
+  const backlog = newBacklog();
+  const best = backlog.add({ title: 'best', goal: 'g', value: 5, effort: 1 });
+  const next = backlog.add({ title: 'next', goal: 'g', value: 4, effort: 1 });
+  backlog.claim(best.id, 'worker-a');           // taken out from under us
+  backlog.update(best.id, { status: 'queued' }); // ...but still reading as queued
+  const taken = backlog.take('worker-b');
+  assert.equal(taken.id, next.id, 'walked past the contended one instead of giving up');
+  assert.equal(backlog.take('worker-c'), null, 'nothing left ready is null, not an error');
+});
+
+test('serializeTask/parseTask survive quoting hazards', () => {
+  const round = parseTask(serializeTask({
+    title: 'colons: and #hashes, and "quotes"',
+    status: 'queued',
+    dependsOn: ['t-0001', 't-0002'],
+    body: '## Goal\n\nsomething'
+  }), 't-0003');
+  assert.equal(round.title, 'colons: and #hashes, and "quotes"');
+  assert.deepEqual(round.dependsOn, ['t-0001', 't-0002']);
+  assert.ok(TASK_STATUSES.includes(round.status));
+});
+
+// --- the tool --------------------------------------------------------------
+
+function toolCtx() {
+  const store = makeStore();
+  const runId = store.createRun('enqueue test');
+  const workspace = new Workspace(tmp()).ensure();
+  store.writeMeta(runId, { ...store.readMeta(runId), workspace: workspace.root });
+  return { store, runId, nodeId: 'work-1', workspace, backlog: newBacklog() };
+}
+
+test('enqueue_task writes to the backlog and logs what it queued', async () => {
+  const ctx = toolCtx();
+  const rec = await executeTool('enqueue_task', {
+    title: 'Add a lint script',
+    goal: 'The gate runner cannot enforce a gate that does not exist.',
+    value: 5, effort: 1
+  }, ctx);
+
+  assert.equal(rec.ok, true);
+  const queued = ctx.backlog.list();
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].title, 'Add a lint script');
+  assert.equal(queued[0].value, 5);
+  // Provenance: a burst of near-identical tasks from one node is exactly the
+  // pathology the overseer watches for, so the source has to be on the record.
+  assert.equal(queued[0].createdBy, `agent:${ctx.runId}:work-1`);
+  assert.ok(ctx.store.readLog(ctx.runId).some(e => e.event === 'task_enqueued' && e.task === queued[0].id));
+});
+
+test('a run with no backlog bound gets an honest error, not a stray file', async () => {
+  const ctx = toolCtx();
+  ctx.backlog = null;
+  const rec = await executeTool('enqueue_task', { title: 't', goal: 'g' }, ctx);
+  // The CALL fails — not a successful call carrying a failure object, which is
+  // the ambiguity that makes bash's exit codes untrustworthy (DESIGN-SPEC §11.1).
+  assert.equal(rec.ok, false);
+  // ...and it points at the right alternative rather than just refusing.
+  assert.match(rec.error, /create_task/);
+});
+
+test('enqueue_task gates like any other write outside the run', async () => {
+  const { isDestructive } = await import('../core/tools/index.js');
+  assert.equal(isDestructive('enqueue_task'), true, 'attended, adding to the backlog is worth one glance');
+  assert.equal(isDestructive('create_task'), false, 'run-scoped work stays ungated');
+});
+
+test('an agent queues follow-up work mid-run, through the real tool loop', async () => {
+  // The end-to-end shape of "automated task creation during tasks": the model
+  // emits a tool call, the loop runs it, and the task outlives the run.
+  const ctx = toolCtx();
+  let turn = 0;
+  setScript(() => {
+    turn += 1;
+    if (turn === 1) {
+      return [
+        'While doing this I noticed the repo has no lint script.',
+        '```tool',
+        JSON.stringify({
+          tool: 'enqueue_task',
+          args: { title: 'Add a lint script', goal: 'The gate runner needs one to enforce.', value: 5, effort: 1 }
+        }),
+        '```'
+      ].join('\n');
+    }
+    return 'Done — the change is made and I queued the lint script separately.';
+  });
+
+  const out = await runAgent({
+    worker: { provider: 'script', model: 'test-model' },
+    system: 'SYS', prompt: 'Do the work',
+    tools: getTools(['enqueue_task']),
+    ctx
+  });
+
+  assert.equal(out.toolCalls.length, 1);
+  assert.equal(out.toolCalls[0].tool, 'enqueue_task');
+  assert.equal(out.toolCalls[0].ok, true);
+  assert.match(out.text, /queued the lint script/);
+
+  const queued = ctx.backlog.list();
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].title, 'Add a lint script');
+  assert.equal(queued[0].status, 'queued', 'and it is ready for a future run to pick up');
+  assert.equal(ctx.backlog.ready()[0].id, queued[0].id);
+});

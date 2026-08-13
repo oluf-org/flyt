@@ -23,6 +23,8 @@ import { loadLibrary } from './tools/index.js';
 import { FlowRunner, normalizeApprovalMode } from './flowRunner.js';
 import { pickSafetyModel, SAFETY_MODEL_CANDIDATES } from './safetyCheck.js';
 import { ProjectRegistry } from './projects.js';
+import { Backlog } from './backlog.js';
+import { configDirFor } from './workspace.js';
 import { setKnownTools } from '../src/flowTypes.js';
 import { diffSnapshot } from './snapshotDiff.js';
 import { canServe } from './adapters/index.js';
@@ -376,6 +378,27 @@ export function createEngine({
     }, PUSH_COALESCE_MS));
   };
 
+  // --- The backlog, one per project (LOOP-PLAN §5) ---
+  //
+  // Rooted at the project's CANONICAL config dir — the main checkout's
+  // `.flyt/backlog/`, never a worktree's. That is the whole invariant of §5.2:
+  // the queue must sit outside the thing being edited, or parallel tasks
+  // conflict on it and a task can rewrite its own priority.
+  //
+  // Resolved lazily and memoized, because createRunner runs while the registry
+  // entry is still being built — asking the registry for the entry from inside
+  // its own constructor would recurse.
+  const backlogs = new Map();
+  function backlogFor(projectId) {
+    let b = backlogs.get(projectId);
+    if (b) return b;
+    const entry = registry.get(projectId);
+    const root = entry.folder ?? entry.appDir;
+    if (!root) return null; // the legacy unbound scratch project has nowhere to put one
+    backlogs.set(projectId, b = new Backlog(path.join(configDirFor(root), 'backlog')));
+    return b;
+  }
+
   const registry = new ProjectRegistry({
     defaultRunsDir: path.join(dataRoot, 'runs'),
     appDataDir: userDataDir,
@@ -383,6 +406,9 @@ export function createEngine({
     getStorage: () => (settings.projectStorage === 'appdata' ? 'appdata' : 'workspace'),
     createRunner: (store, projectId) => {
       const runner = new FlowRunner(store, runtimeConfig, pushUpdateFor(projectId), nodeLibrary);
+      // Lazy for the reason above, and a property rather than a constructor
+      // argument so every existing FlowRunner call site is untouched.
+      Object.defineProperty(runner, 'backlog', { get: () => backlogFor(projectId), configurable: true });
       // Nothing is live when a project first opens in this process, so any run
       // still in a non-terminal stage was cut off by the app dying. Flag those
       // once so the run view can offer Resume (V1 task 7).
@@ -400,7 +426,7 @@ export function createEngine({
     // Paths
     projectRoot, dataRoot, userDataDir, settingsPath, dataDir, seedFromBundle,
     // Stores
-    flows, nodeLibrary, toolLibrary, registry,
+    flows, nodeLibrary, toolLibrary, registry, backlogFor,
     // Config + settings
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,
     // Providers
