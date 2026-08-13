@@ -5,6 +5,7 @@ import { runAgent, toolProtocol } from '../agent.js';
 import { resolveTools } from '../tools/index.js';
 import { makeRetrospective } from '../retrospective.js';
 import { recordToolUsage } from '../feedback.js';
+import { runRetrospectiveTurn, retroWorker, retroEnabled } from '../retroTurn.js';
 import { Workspace } from '../workspace.js';
 import { loadSkills, withSkillsSection } from '../skills.js';
 import { resolveCallTarget } from '../modelSource.js';
@@ -199,6 +200,54 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
       durationMs: result.durationMs,
       toolCalls: result.toolCalls
     });
+
+    // --- The retrospective turn (LOOP-PLAN §12.0) ---
+    // The instance is prompted once more, with its own completion handed back,
+    // and asked how the toolbox was and what was missing. It runs AFTER the
+    // deliverable is written and the status is set, so nothing about the task's
+    // outcome depends on it: a retrospective that fails is simply absent.
+    if (retroEnabled(config)) {
+      // A configured retrospective worker resolves its own call target — key,
+      // provider walk and all — exactly like the task's worker did above. It is
+      // usually a cheaper model than the one that did the work (§8), so it is a
+      // different provider as often as not.
+      const configured = retroWorker(config, null);
+      const retroTarget = configured ? resolveCallTarget(configured, config) : null;
+      const answer = await runRetrospectiveTurn({
+        worker: retroTarget
+          ? { ...configured, provider: retroTarget.provider, model: retroTarget.model, ...(retroTarget.keyKind ? { keyKind: retroTarget.keyKind } : {}) }
+          : worker,
+        apiKey: retroTarget ? retroTarget.apiKey : apiKey,
+        goal: userMsg,
+        availableTools: tools,
+        toolCalls: result.toolCalls,
+        output: result.text,
+        retry: retry ?? config.retry,
+        timeout: timeout ?? config.timeout,
+        signal,
+        onRetry,
+        onProblem: reason => store.appendLog(runId, { event: 'retrospective_skipped', node: `executor:${taskId}`, reason })
+      });
+      if (answer) {
+        retro.review = answer.used;
+        retro.missing = answer.missing;
+        feedback?.record({
+          runId,
+          nodeId: `executor:${taskId}`,
+          task: taskId,
+          model: task.worker,
+          review: answer.used,
+          missing: answer.missing
+        });
+        store.appendLog(runId, {
+          event: 'retrospective',
+          node: `executor:${taskId}`,
+          reviewed: answer.used.map(u => `${u.tool}:${u.rating}`),
+          requested: answer.missing.map(m => m.want),
+          by: answer.model
+        });
+      }
+    }
   } catch (err) {
     // RUN-CONTROL stop: an aborted model call is not a task failure. The task
     // goes back to 'pending' so a later resume/restart re-runs it, and the
@@ -239,7 +288,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   task.status = status; // keep the in-memory copy consistent for callers
   store.writeRetrospective(runId, `executor-${taskId}`, retro);
   // The instance's tool use joins the project's feedback pile (LOOP-PLAN §12).
-  // Facts only — the judgment half arrives separately, if the agent had any.
+  // Facts only, derived from the calls it made.
   recordToolUsage(feedback, { runId, nodeId: `executor:${taskId}`, task: taskId, model: task.worker, retro });
   return retro;
 }

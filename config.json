@@ -10,6 +10,13 @@
   "timeoutComment": "Per-attempt deadline for every model call (LOOP-PLAN 11.5). idleMs is measured against PROGRESS, not total duration: a streaming call resets it on every emission, so a long but live stream is never cut and only silence counts. A stalled call then fails as a transient error and gets retried with a fresh deadline, instead of hanging a node forever — which attended costs a click and unattended costs the rest of the day. A non-streaming call has no progress signal, so for it this is the whole call: keep it generous. hardMs is an absolute per-attempt ceiling, null (off) by default because it would cut healthy long agent turns. The CLI-delegation providers bound their own child process and opt out of idleMs.",
   "timeout": { "idleMs": 300000, "hardMs": null },
 
+  "retrospectiveComment": "The retrospective turn (LOOP-PLAN 12.0). After an instance finishes, its completion is handed back and it is prompted ONCE more: how were the tools you had, and what was missing? A second turn rather than a tool the agent may call, because a voluntary report is a sample biased toward the models that follow instructions best, and the value here is the aggregate. It holds no tools, its output is capped, it runs after the deliverable is written, and a failure is logged and dropped — it can never fail a completed task. OFF by default: it is one extra model call per instance, and an attended user who did not ask for it should not pay for it. The loop turns it on. Point workers.retrospective at a cheap model to keep it cheap; without one it uses whichever worker did the work.",
+  "retrospective": { "enabled": false },
+
+  "retrospectiveWorkerExample": {
+    "retrospective": { "provider": "openrouter", "model": "some/cheap-model" }
+  },
+
   "categoryWorkersComment": "Optional per-category model routing: a node declaring a category resolves here before falling back to workers.executor (FLOW_NODES.md). EMPTY on purpose. This map is read from this file only and is NOT overridable from Settings, so whatever it names is pinned: it shipped mapping every category to 'mock', which silently forced each categorised work node onto the mock provider no matter what key the user saved — a real run just produced '(mock output)'. Empty means categories follow the executor worker, so one Settings change points the whole app at a real model. See categoryWorkersExample to pin one deliberately.",
   "categoryWorkers": {},
 

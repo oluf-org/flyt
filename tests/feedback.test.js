@@ -10,13 +10,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { FeedbackStore, requestKey, recordToolUsage, clusterRequests, similarity, requestWords } from '../core/feedback.js';
+import { buildRetroPrompt, parseRetro, runRetrospectiveTurn, retroWorker, retroEnabled } from '../core/retroTurn.js';
+import { callModel } from '../core/adapters/index.js';
 import { makeRetrospective } from '../core/retrospective.js';
 import { executeTool, getTools } from '../core/tools/index.js';
 import { runAgent } from '../core/agent.js';
 import { Workspace } from '../core/workspace.js';
-import { makeStore, setScript } from './helpers.js';
+import { makeStore, setScript, testConfig } from './helpers.js';
+import { runExecutorTask } from '../core/nodes/executor.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-feedback-'));
+const callScript = async prompt =>
+  (await callModel({ provider: 'script', model: 'test-model', system: 'SYS', prompt, retry: { attempts: 1, baseMs: 1 } })).text;
 const newStore = () => new FeedbackStore(path.join(tmp(), '.flyt', 'feedback'));
 
 // --- the mechanical half ---------------------------------------------------
@@ -61,32 +66,78 @@ function toolCtx(feedback = newStore()) {
   return { store, runId, nodeId: 'work-1', workspace, feedback };
 }
 
-test('tool_feedback records a review and a missing capability', async () => {
-  const ctx = toolCtx();
-  const rec = await executeTool('tool_feedback', {
-    used: [{ tool: 'read_file', rating: 'awkward', note: 'No line range, so whole files had to be read.', improvement: 'a line-range argument' }],
-    missing: [{ want: 'search file contents by regex across the repo', why: 'looking for every caller of resolveWorker', workaround: 'six bash calls with grep' }]
-  }, ctx);
-
-  assert.equal(rec.ok, true);
-  const [entry] = ctx.feedback.pending();
-  assert.equal(entry.review[0].rating, 'awkward');
-  assert.equal(entry.missing[0].want, 'search file contents by regex across the repo');
-  assert.equal(entry.nodeId, 'work-1');
-  assert.ok(ctx.store.readLog(ctx.runId).some(e => e.event === 'tool_feedback'));
+test('the retrospective turn asks the instance what it had and what was missing', () => {
+  // The available-tools list is load-bearing: without it a model reports
+  // missing capabilities it was in fact granted, which is noise that looks
+  // like signal in the digest.
+  const prompt = buildRetroPrompt({
+    goal: 'Add tag filtering to the store',
+    availableTools: [
+      { name: 'read_file', description: 'Read a file from the workspace.' },
+      { name: 'bash', description: 'Run a shell command.' }
+    ],
+    toolCalls: [{ tool: 'bash', ok: false, ms: 5, error: 'rg: not found' }, { tool: 'bash', ok: true, ms: 9 }],
+    output: 'Added filterByTag and its tests.'
+  });
+  assert.match(prompt, /YOUR TASK WAS:[\s\S]*Add tag filtering/);
+  assert.match(prompt, /TOOLS YOU HAD[\s\S]*read_file[\s\S]*bash/);
+  assert.match(prompt, /anything not here, you did not have/);
+  assert.match(prompt, /WHAT YOU CALLED:[\s\S]*bash: 2 call\(s\), 1 failure\(s\)/);
+  assert.match(prompt, /WHAT YOU PRODUCED:[\s\S]*filterByTag/);
 });
 
-test('reporting gates honestly, and an empty report is refused', async () => {
-  const { isDestructive } = await import('../core/tools/index.js');
-  // It writes project state that outlives the run, so it gates like any other
-  // out-of-run write — free under the loop's `always` mode, one prompt when
-  // attended. Scoping it 'run' to dodge that would be a lie in the one field
-  // the safety model reads (Q-L9).
-  assert.equal(isDestructive('tool_feedback'), true);
+test('a retrospective is parsed leniently, but cannot invent a tool it never had', () => {
+  const available = [{ name: 'bash', description: '' }, { name: 'read_file', description: '' }];
+  const parsed = parseRetro(`Here you go.
+\`\`\`json
+{"used":[{"tool":"bash","rating":"awkward","note":"six calls","improvement":"a search tool"},
+         {"tool":"read_file","rating":"nonsense-rating"},
+         {"tool":"web_search","rating":"good","note":"never had this"}],
+ "missing":[{"want":"regex search across the repo","why":"finding callers"},{"why":"no want, so dropped"}]}
+\`\`\``, { availableTools: available });
 
-  const ctx = toolCtx();
-  const empty = await executeTool('tool_feedback', {}, ctx);
-  assert.equal(empty.ok, false, 'a call with nothing in it is a failed call, not a silent no-op');
+  assert.equal(parsed.used.length, 2, 'a review of a tool it never had is a hallucination, not evidence');
+  assert.equal(parsed.used[0].rating, 'awkward');
+  assert.equal(parsed.used[1].rating, 'adequate', 'an invented rating degrades rather than rejecting the lot');
+  assert.equal(parsed.missing.length, 1, 'a request with no `want` says nothing');
+  assert.equal(parsed.missing[0].want, 'regex search across the repo');
+
+  // No block at all is "no retrospective", which callers treat as ordinary.
+  assert.equal(parseRetro('I have no opinions.', { availableTools: available }), null);
+});
+
+test('the retrospective turn never fails the task it followed', async () => {
+  setScript(() => { throw new Error('provider exploded'); });
+  const problems = [];
+  const answer = await runRetrospectiveTurn({
+    worker: { provider: 'script', model: 'test-model' },
+    goal: 'g', availableTools: [{ name: 'bash' }], output: 'done',
+    retry: { attempts: 1, baseMs: 1 },
+    onProblem: p => problems.push(p)
+  });
+  // The work is already written by the time this runs. A retrospective that
+  // errors is absent, never an exception the caller has to survive.
+  assert.equal(answer, null);
+  assert.match(problems[0], /retrospective turn failed/);
+
+  setScript(() => 'no json here at all');
+  assert.equal(await runRetrospectiveTurn({
+    worker: { provider: 'script', model: 'test-model' },
+    goal: 'g', availableTools: [], output: 'done', retry: { attempts: 1, baseMs: 1 },
+    onProblem: p => problems.push(p)
+  }), null);
+  assert.match(problems[1], /no parsable/);
+});
+
+test('the judgment can run on a different, cheaper worker than the work did', () => {
+  const cheap = { provider: 'openrouter', model: 'cheap/model' };
+  assert.deepEqual(retroWorker({ workers: { retrospective: cheap } }, { provider: 'anthropic', model: 'expensive' }), cheap);
+  // Unconfigured, it falls back to whoever did the work — correct, not thrifty.
+  assert.deepEqual(retroWorker({}, { provider: 'anthropic', model: 'expensive' }), { provider: 'anthropic', model: 'expensive' });
+  // And it is off unless asked for: an attended user should not pay for a
+  // second call per node they never requested.
+  assert.equal(retroEnabled({}), false);
+  assert.equal(retroEnabled({ retrospective: { enabled: true } }), true);
 });
 
 test('a long task may report more than once; reviews accumulate, facts overwrite', () => {
@@ -178,48 +229,47 @@ test('an unreadable entry is reported in the digest, not thrown past', () => {
 
 // --- end to end ------------------------------------------------------------
 
-test('an agent reviews its tools mid-run, and the reviewer folds it in later', async () => {
-  const ctx = toolCtx();
-  let turn = 0;
-  setScript(() => {
-    turn += 1;
-    if (turn === 1) {
-      return [
-        'I could not search the repo, so I shelled out repeatedly.',
-        '```tool',
-        JSON.stringify({
-          tool: 'tool_feedback',
-          args: {
-            used: [{ tool: 'bash', rating: 'awkward', note: 'Six calls to imitate grep.', improvement: 'a first-class search tool' }],
-            missing: [{ want: 'search file contents by regex across the repo', why: 'finding every caller', workaround: 'bash + grep, six calls' }]
-          }
-        }),
-        '```'
-      ].join('\n');
-    }
-    return 'Done. The change is made.';
+test('an instance is prompted again after finishing, and the reviewer folds it in', async () => {
+  // The shape the user described: prompt -> completion -> prompted once more,
+  // with the completion handed back, to produce the retrospective.
+  const feedback = newStore();
+  const seen = [];
+  setScript(({ system, prompt }) => {
+    seen.push({ system, prompt });
+    if (!/ROLE: retrospective/.test(system)) return 'Done — filterByTag added.';
+    return ['```json', JSON.stringify({
+      used: [{ tool: 'bash', rating: 'awkward', note: 'Six calls to imitate a search.', improvement: 'a first-class search tool' }],
+      missing: [{ want: 'search file contents by regex across the repo', why: 'finding callers', workaround: 'bash + grep' }]
+    }), '```'].join('\n');
   });
 
-  const out = await runAgent({
+  const work = await callScript('Do the work');
+  assert.equal(work, 'Done — filterByTag added.');
+
+  const answer = await runRetrospectiveTurn({
     worker: { provider: 'script', model: 'test-model' },
-    system: 'SYS', prompt: 'Do the work',
-    tools: getTools(['tool_feedback']),
-    ctx
+    goal: 'Add tag filtering',
+    availableTools: [{ name: 'bash', description: 'Run a shell command.' }],
+    toolCalls: [{ tool: 'bash', ok: false, ms: 4, error: 'rg: not found' }],
+    output: work,
+    retry: { attempts: 1, baseMs: 1 }
   });
-  assert.equal(out.toolCalls[0].tool, 'tool_feedback');
-  assert.equal(out.toolCalls[0].ok, true);
 
-  // The mechanical half joins it from the retrospective, without a model.
-  const retro = makeRetrospective({
-    node: 'work-1', status: 'success', confidence: 0.75, toolCalls: out.toolCalls
+  // The instance saw its own completion in the second prompt.
+  assert.match(seen[1].prompt, /Done — filterByTag added\./);
+  assert.equal(answer.used[0].rating, 'awkward');
+
+  feedback.record({
+    runId: 'r1', nodeId: 'work-1',
+    usage: FeedbackStore.usageFromToolCalls([{ tool: 'bash', ok: false, ms: 4, error: 'rg: not found' }]),
+    review: answer.used,
+    missing: answer.missing
   });
-  recordToolUsage(ctx.feedback, { runId: ctx.runId, nodeId: 'work-1', retro });
 
-  const digest = ctx.feedback.digest();
+  const digest = feedback.digest();
   assert.equal(digest.instances, 1);
-  assert.ok(digest.tools.find(t => t.tool === 'bash')?.notes.length, 'the opinion is there');
-  assert.ok(digest.tools.find(t => t.tool === 'tool_feedback')?.calls, 'and the facts are too');
-  assert.equal(digest.missing[0].requests[0].workaround, 'bash + grep, six calls');
+  assert.equal(digest.tools.find(t => t.tool === 'bash').notes[0].rating, 'awkward');
+  assert.equal(digest.missing[0].requests[0].workaround, 'bash + grep');
 });
 
 test('requests that mean the same thing in different words are one group', () => {
@@ -240,4 +290,72 @@ test('requests that mean the same thing in different words are one group', () =>
   // ...and genuinely different requests are NOT swept together.
   assert.ok(grouped.some(g => /patch or diff/.test(g.want) && g.requests.length === 1));
   assert.ok(similarity(requestWords('run the test suite'), requestWords('regex search over file contents')) < 0.5);
+});
+
+test('a real executor task produces a retrospective without being asked for one', async () => {
+  // The full shape, through runExecutorTask: the instance gets its scoped
+  // prompt and tools, finishes, and is then prompted again with its own
+  // completion. Nothing volunteers anything — the turn simply happens.
+  const store = makeStore();
+  const runId = store.createRun('retro turn');
+  const workspace = new Workspace(tmp()).ensure();
+  store.writeMeta(runId, { ...store.readMeta(runId), workspace: workspace.root });
+  store.writeTasks(runId, {
+    tasks: [{
+      id: 'task-1', title: 'Add tag filtering', goal: 'Add filterByTag and tests.',
+      inputs: ['prompt.md'], constraints: [], status: 'pending',
+      worker: { provider: 'script', model: 'test-model' }, tools: ['read_file']
+    }]
+  });
+
+  const prompts = [];
+  setScript(({ system, prompt }) => {
+    prompts.push({ system, prompt });
+    if (/ROLE: retrospective/.test(system)) {
+      return ['```json', JSON.stringify({
+        used: [{ tool: 'read_file', rating: 'awkward', note: 'No line range.', improvement: 'a line-range argument' }],
+        missing: [{ want: 'regex search across the repo', why: 'finding callers', workaround: 'read whole files' }]
+      }), '```'].join('\n');
+    }
+    return 'Added filterByTag and its tests.';
+  });
+
+  const feedback = newStore();
+  const retro = await runExecutorTask(store, runId, 'task-1',
+    testConfig({ retrospective: { enabled: true } }),
+    { retry: { attempts: 1, baseMs: 1 }, feedback });
+
+  assert.equal(retro.status, 'success');
+  // The second prompt is the retrospective, and it carried the completion back.
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1].system, /ROLE: retrospective/);
+  assert.match(prompts[1].prompt, /Added filterByTag and its tests\./);
+  assert.match(prompts[1].prompt, /TOOLS YOU HAD/);
+
+  // It rides on the retrospective AND lands in the project's feedback pile.
+  assert.equal(retro.review[0].improvement, 'a line-range argument');
+  assert.equal(retro.missing[0].want, 'regex search across the repo');
+  const [entry] = feedback.pending();
+  assert.equal(entry.review[0].tool, 'read_file');
+  assert.equal(entry.missing[0].want, 'regex search across the repo');
+  assert.ok(store.readLog(runId).some(e => e.event === 'retrospective'));
+});
+
+test('with the turn off, a task costs exactly one call', async () => {
+  const store = makeStore();
+  const runId = store.createRun('no retro');
+  const workspace = new Workspace(tmp()).ensure();
+  store.writeMeta(runId, { ...store.readMeta(runId), workspace: workspace.root });
+  store.writeTasks(runId, {
+    tasks: [{
+      id: 'task-1', title: 'T', goal: 'G', inputs: ['prompt.md'], constraints: [], status: 'pending',
+      worker: { provider: 'script', model: 'test-model' }, tools: []
+    }]
+  });
+  let calls = 0;
+  setScript(() => { calls += 1; return 'done'; });
+  await runExecutorTask(store, runId, 'task-1', testConfig(), { retry: { attempts: 1, baseMs: 1 } });
+  // Off by default: an attended user does not pay for a second call per node
+  // they never asked for.
+  assert.equal(calls, 1);
 });

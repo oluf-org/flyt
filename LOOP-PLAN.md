@@ -533,11 +533,28 @@ failures, time, sample errors — computed from the run's own tool calls. It cos
 cannot be misremembered. Asking a model to recount what it just did would buy a worse answer at
 a higher price.
 
-**The judgment, offered.** What the log cannot know is whether a tool was *awkward* — three
-calls where one should do, a whole file read to see twenty lines — and **what was missing**.
-That arrives through `tool_feedback`, a tool rather than an extra model call per node, because
-the loop cannot afford to double its call count to ask every instance how it felt. An agent
-with nothing to say never calls it and pays nothing.
+**The judgment, asked for.** What the log cannot know is whether a tool was *awkward* — three
+calls where one should do, a whole file read to see twenty lines — and **what was missing**. So
+after an instance finishes, its completion is handed back to it and it is prompted **once more**
+for exactly that (`core/retroTurn.js`). It answers with one strict `json` block, the same
+contract shape `step-eval` uses.
+
+A second turn rather than a tool the agent may call, and the difference matters: a tool is
+voluntary, and the value here is the *aggregate* — twelve instances reporting the same missing
+capability is the argument for building it. An aggregate assembled from whoever volunteered is
+not an aggregate, it is a sample biased toward the models that follow instructions best.
+
+The cost is one extra call per instance, bounded deliberately: the turn holds **no tools** so it
+cannot loop, its output is capped, and `workers.retrospective` lets the judgment run on a cheap
+model no matter which tier did the work (§8) — asking a frontier model how it felt about
+`read_file` is not where the money goes. It runs **after** the deliverable is written, so a
+retrospective that errors, times out or returns nonsense is logged and dropped; it can never
+fail a completed task. Off by default, because an attended user who did not ask for a second
+call per node should not pay for one. The loop turns it on.
+
+The prompt names **every tool the instance had**, which is load-bearing: without that list a
+model reports missing capabilities it was in fact granted, and the parser drops any review of a
+tool that was never available — a hallucination sitting in the digest looks like evidence.
 
 **Collected, not acted on.** Both land in `.flyt/feedback/pending/`, one entry per instance
 (run + node), in the main checkout and never inside a worktree — the same canonical-location
