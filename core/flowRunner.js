@@ -29,6 +29,7 @@
 import { callModel, abortError, isAbortError } from './adapters/index.js';
 import { runAgent, toolProtocol } from './agent.js';
 import { makeRetrospective } from './retrospective.js';
+import { recordToolUsage } from './feedback.js';
 import { resolveCallTarget } from './modelSource.js';
 import { runExecutorTask } from './nodes/executor.js';
 import { Workspace } from './workspace.js';
@@ -553,7 +554,10 @@ export class FlowRunner {
     try {
       return await runAgent({
         timeout: this.config.timeout, ...params, tools, signal: ctl.signal,
-        ctx: { store: this.store, runId, nodeId, workspace: this.workspaceFor(runId), backlog: this.backlog ?? null }
+        ctx: {
+          store: this.store, runId, nodeId, workspace: this.workspaceFor(runId),
+          backlog: this.backlog ?? null, feedback: this.feedback ?? null
+        }
       });
     } finally {
       this.untrackAbort(runId, ctl);
@@ -1899,6 +1903,7 @@ export class FlowRunner {
       retry: this.config.retry,
       timeout: this.config.timeout,
       backlog: this.backlog ?? null,
+      feedback: this.feedback ?? null,
       signal: abortCtl.signal,
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };
@@ -2775,9 +2780,15 @@ export class FlowRunner {
           + (outcome.fixTasks ? ` Created ${outcome.fixTasks.length} fix task(s).` : ''),
         model: { provider: worker.provider, model: worker.model },
         usage: result.usage,
-        durationMs: result.durationMs
+        durationMs: result.durationMs,
+        // A granted aiStep runs through the agent loop and can call tools
+        // (TOOLS-PLAN §6.4), so its retrospective carries them like any other.
+        toolCalls: result.toolCalls ?? []
       });
       this.store.writeRetrospective(runId, node.id, retro);
+      recordToolUsage(this.feedback, {
+        runId, nodeId: node.id, model: { provider: worker.provider, model: worker.model }, retro
+      });
       this.setNodeStatus(runId, node.id, 'done');
       return outcome;
     }

@@ -39,7 +39,7 @@ test('selectors resolve by what a tool IS, not by a list someone maintains', () 
   // "reaches nothing beyond the network". Using the subset test here would
   // sweep in every read-only tool.
   assert.deepEqual([...expandRefs('uses:write', ctx).ids].sort(),
-    ['create_file', 'create_task', 'enqueue_task', 'write_file', 'write_task_md']);
+    ['create_file', 'create_task', 'enqueue_task', 'tool_feedback', 'write_file', 'write_task_md']);
   assert.deepEqual([...expandRefs('uses:network', ctx).ids], [], 'no network tools until P4');
   assert.deepEqual([...expandRefs('web', ctx).ids], [], 'the web set is empty, not "everything that only reads"');
 

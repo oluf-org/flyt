@@ -35,6 +35,9 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task show <id>                 one task, in full
   flyt task ready                     what the picker would take, and what is stuck
   flyt task take                      claim the top-scoring ready task
+  flyt feedback stats                 what instances reported about the toolbox
+  flyt feedback preview               the digest as it would read right now
+  flyt feedback digest [--enqueue]    write the digest, archive what it covered
   flyt serve [--port 7867]            run the HTTP API + event stream
   flyt call <command> [--arg k=v]     invoke any command directly
   flyt commands                       list every command
@@ -234,6 +237,37 @@ async function main() {
           return out(await api.invoke('task:stats', { projectId }));
         default:
           return die(`Unknown task subcommand "${sub}".`);
+      }
+    }
+
+    case 'feedback': {
+      const sub = positional[1] ?? 'stats';
+      const projectId = openProject(api, engine);
+      switch (sub) {
+        case 'stats':
+          return out(await api.invoke('feedback:stats', { projectId }));
+        case 'pending':
+          return out(await api.invoke('feedback:pending', { projectId }));
+        case 'preview': {
+          const d = await api.invoke('feedback:preview', { projectId });
+          if (asJson) return out(d);
+          const { FeedbackStore } = await import('../core/feedback.js');
+          return out(FeedbackStore.renderDigest(d));
+        }
+        case 'digest': {
+          const res = await api.invoke('feedback:digest', { projectId, enqueue: Boolean(flags.enqueue) });
+          if (!res.file) { say('nothing pending to digest'); return out(asJson ? res : '(nothing pending)'); }
+          say(`digested ${res.digest.instances} instance(s) → ${res.file}`);
+          say(`archived ${res.archived.length} entr(ies)`);
+          if (res.task) say(`queued ${res.task.id} to act on it`);
+          return out(asJson ? res : res.file);
+        }
+        case 'list':
+          return out(await api.invoke('feedback:digests', { projectId }));
+        case 'show':
+          return out(await api.invoke('feedback:readDigest', { projectId, name: positional[2] }));
+        default:
+          return die(`Unknown feedback subcommand "${sub}".`);
       }
     }
 

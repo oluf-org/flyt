@@ -519,7 +519,45 @@ fail-safe; one that can also bless is a second, unreviewed decision-maker.
 
 ---
 
-## 12. Measurement — the benchmark and the archive
+## 12. Measurement — tool feedback, the benchmark, and the archive
+
+### 12.0 What each instance leaves behind — [BUILT]
+
+The loop's job is to improve its ability to improve, and the **toolbox** is where that bites
+first: an agent that needed `grep` and didn't have it burns six `bash` calls and a lot of
+context reinventing it. The run still *succeeds* — slowly, expensively, invisibly — and nothing
+learns. So every LLM instance leaves two things behind.
+
+**The facts, derived.** Every retrospective now carries a `tools` summary — per tool: calls,
+failures, time, sample errors — computed from the run's own tool calls. It costs nothing and
+cannot be misremembered. Asking a model to recount what it just did would buy a worse answer at
+a higher price.
+
+**The judgment, offered.** What the log cannot know is whether a tool was *awkward* — three
+calls where one should do, a whole file read to see twenty lines — and **what was missing**.
+That arrives through `tool_feedback`, a tool rather than an extra model call per node, because
+the loop cannot afford to double its call count to ask every instance how it felt. An agent
+with nothing to say never calls it and pays nothing.
+
+**Collected, not acted on.** Both land in `.flyt/feedback/pending/`, one entry per instance
+(run + node), in the main checkout and never inside a worktree — the same canonical-location
+rule as the backlog (§5.2). Facts overwrite; opinions accumulate, since a long task may report
+more than once as it learns.
+
+**The reviewer folds, then archives.** `feedback:digest` groups every entry into ONE document:
+per tool (how heavily used, how often failed, what people said) and per *missing capability*,
+with near-duplicate phrasings clustered by word overlap — "search file contents by regex across
+the repo" and "regex search over file contents" are one request written twice, and the count of
+who asked IS the argument for building it. Every group keeps the run, node and task it came
+from, so the context is already assembled. The digest then archives exactly the entries it
+covered, scoped by id, so an instance reporting mid-write is not swept away unread.
+
+It deliberately does **not** enqueue a task per request. A hundred nodes asking for the same
+missing tool should become one considered piece of work with a hundred contexts attached, not a
+hundred duplicates to de-duplicate by hand. `--enqueue` adds a single task pointing at the
+digest, and is off by default: the pile becomes work when someone decides it does.
+
+### 12.1 The benchmark and the archive
 
 Without this section, "improve yourself" degrades into churn that cannot be distinguished from
 progress. SICA's finding is that the loop needs a **score** and an **archive**, and that the
@@ -827,6 +865,15 @@ never truly runs out.
 tight kills a legitimately slow provider call; too loose and a wedged worktree costs hours. They
 should be per-tier and calibrated from the ledger's own trailing distribution after a week of
 real data — which is itself a good early backlog task.
+
+**Q-L9 — Should `.flyt/`-confined metadata writes gate?** `enqueue_task` and `tool_feedback`
+both write project state that outlives the run, so both gate under `ask`/`smart` like any other
+out-of-run write. That is honest — the gate derives from what a tool *does*, and scoping them
+`run` to dodge the prompt would be a lie in the one field the safety model reads — but an
+approval prompt teaches an agent that *reporting is expensive*, which is precisely the wrong
+lesson. Under the loop's `always` mode both are free, so this only bites attended. Options: a
+third scope for app-managed metadata, an ungated-write allowlist confined to `.flyt/`, or leave
+it. Do not decide this from inside a tool that happens to want it.
 
 **Q-L8 — Reference library scope.** How many repos before the index is noise, and whether the
 clerk (`TOOLS-PLAN.md` §7) should index reference repos alongside tools so an agent can *find*

@@ -13,10 +13,11 @@ import readFile from './read_file.js';
 import bash from './bash.js';
 import createTask from './create_task.js';
 import enqueueTask from './enqueue_task.js';
+import toolFeedback from './tool_feedback.js';
 import writeTaskMd from './write_task_md.js';
 import readToolResult from './read_tool_result.js';
 
-export const BUILTIN_MODULES = [readFile, createFile, writeFile, bash, createTask, enqueueTask, writeTaskMd, readToolResult];
+export const BUILTIN_MODULES = [readFile, createFile, writeFile, bash, createTask, enqueueTask, toolFeedback, writeTaskMd, readToolResult];
 
 export const builtinModule = id => BUILTIN_MODULES.find(t => t.name === id) ?? null;
 

@@ -44,6 +44,15 @@ export function createApi(engine) {
     throw new ApiError(`No open project "${projectId}".`, { status: 404, code: 'no_project' });
   };
   const runnerFor = projectId => proj(projectId).runner;
+  const feedbackFor = projectId => {
+    proj(projectId);
+    const feedback = engine.feedbackFor(projectId);
+    if (!feedback) {
+      throw new ApiError('This project has no folder, so it has nowhere to keep tool feedback.',
+        { status: 400, code: 'no_feedback' });
+    }
+    return feedback;
+  };
   const backlogFor = projectId => {
     proj(projectId); // resolve/validate the project first, for the honest 404
     const backlog = engine.backlogFor(projectId);
@@ -155,6 +164,53 @@ export function createApi(engine) {
     // finished loop looks like.
     'task:take': ({ projectId, by = 'supervisor' }) => backlogFor(projectId).take(by),
     'task:release': ({ projectId, id, status = 'queued' }) => backlogFor(projectId).release(id, { status }),
+
+    // --- Tool feedback (LOOP-PLAN §12) -------------------------------------
+    //
+    // What every instance left behind about the toolbox, and the reviewer that
+    // folds it into one document. Digesting is deliberately separate from
+    // enqueueing: a hundred nodes asking for the same missing tool should
+    // become one considered piece of work with a hundred contexts attached,
+    // not a hundred backlog entries to de-duplicate by hand.
+    'feedback:pending': ({ projectId }) => {
+      const feedback = feedbackFor(projectId);
+      const entries = feedback.pending();
+      return { entries, problems: feedback.problems ?? [] };
+    },
+    'feedback:stats': ({ projectId }) => feedbackFor(projectId).stats(),
+    // Preview without consuming: what the digest WOULD say right now.
+    'feedback:preview': ({ projectId }) => feedbackFor(projectId).digest(),
+    // Write the digest and archive exactly the entries it covered — scoped by
+    // id, so an instance that reported mid-write is not swept away unread.
+    'feedback:digest': ({ projectId, enqueue = false }) => {
+      const feedback = feedbackFor(projectId);
+      const digest = feedback.digest();
+      if (!digest.instances) return { digest, file: null, archived: [], task: null };
+      const written = feedback.writeDigest(digest);
+      // Optional, and off by default: ONE task pointing at the digest, never
+      // one per request. The user decides when the pile becomes work.
+      let task = null;
+      if (enqueue) {
+        task = backlogFor(projectId).add({
+          title: `Act on the tool feedback digest (${digest.missing.length} request(s), ${digest.tools.length} tool(s))`,
+          goal: [
+            `Read the digest at .flyt/feedback/digests/${digest.id}.md and decide what to do about it.`,
+            'It groups every instance\'s tool review and every missing-capability request,',
+            'each with the run, node and task it came from, so the context is already assembled.',
+            'Propose concrete changes; do not treat each request as its own task.'
+          ].join(' '),
+          value: 4,
+          createdBy: 'feedback-review'
+        });
+      }
+      return { ...written, task };
+    },
+    'feedback:digests': ({ projectId }) => feedbackFor(projectId).digests(),
+    'feedback:readDigest': ({ projectId, name }) => {
+      const text = feedbackFor(projectId).readDigest(name);
+      if (text == null) throw new ApiError(`No digest "${name}".`, { status: 404, code: 'no_digest' });
+      return text;
+    },
 
     // --- Liveness ----------------------------------------------------------
     // What the supervisor's heartbeat reads (§11.1): which runs this process is

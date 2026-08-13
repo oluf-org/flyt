@@ -26,7 +26,7 @@ export const namedFlow = flow => (flow.name?.trim() ? flow : { ...flow, name: UN
 // (tools/<id>.json, core/toolstore.js), so this array is the BUILT-IN
 // fallback: what every build ships and what a host without a library — the
 // test suite, a renderer before its first IPC round trip — validates against.
-export const AGENT_TOOLS = ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'enqueue_task', 'write_task_md', 'read_tool_result'];
+export const AGENT_TOOLS = ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'enqueue_task', 'tool_feedback', 'write_task_md', 'read_tool_result'];
 
 // The live snapshot, installed by the renderer from the main process's
 // ToolStore (`tool:list`). Grants are filtered against this, so a template can

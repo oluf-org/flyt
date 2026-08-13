@@ -24,6 +24,7 @@ import { FlowRunner, normalizeApprovalMode } from './flowRunner.js';
 import { pickSafetyModel, SAFETY_MODEL_CANDIDATES } from './safetyCheck.js';
 import { ProjectRegistry } from './projects.js';
 import { Backlog } from './backlog.js';
+import { FeedbackStore } from './feedback.js';
 import { configDirFor } from './workspace.js';
 import { setKnownTools } from '../src/flowTypes.js';
 import { diffSnapshot } from './snapshotDiff.js';
@@ -399,6 +400,19 @@ export function createEngine({
     return b;
   }
 
+  // Tool feedback (LOOP-PLAN §12), same canonical-location rule as the backlog:
+  // one pile per project, in the main checkout, never inside a worktree.
+  const feedbackStores = new Map();
+  function feedbackFor(projectId) {
+    let f = feedbackStores.get(projectId);
+    if (f) return f;
+    const entry = registry.get(projectId);
+    const root = entry.folder ?? entry.appDir;
+    if (!root) return null;
+    feedbackStores.set(projectId, f = new FeedbackStore(path.join(configDirFor(root), 'feedback')));
+    return f;
+  }
+
   const registry = new ProjectRegistry({
     defaultRunsDir: path.join(dataRoot, 'runs'),
     appDataDir: userDataDir,
@@ -409,6 +423,7 @@ export function createEngine({
       // Lazy for the reason above, and a property rather than a constructor
       // argument so every existing FlowRunner call site is untouched.
       Object.defineProperty(runner, 'backlog', { get: () => backlogFor(projectId), configurable: true });
+      Object.defineProperty(runner, 'feedback', { get: () => feedbackFor(projectId), configurable: true });
       // Nothing is live when a project first opens in this process, so any run
       // still in a non-terminal stage was cut off by the app dying. Flag those
       // once so the run view can offer Resume (V1 task 7).
@@ -426,7 +441,7 @@ export function createEngine({
     // Paths
     projectRoot, dataRoot, userDataDir, settingsPath, dataDir, seedFromBundle,
     // Stores
-    flows, nodeLibrary, toolLibrary, registry, backlogFor,
+    flows, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor,
     // Config + settings
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,
     // Providers
