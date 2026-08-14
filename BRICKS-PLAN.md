@@ -157,6 +157,19 @@ as a scoped subgraph" logic out of `runOrchestrator` into `core/nodes/expand.js`
 parity with the existing tests before adding a second consumer. This is the load-bearing
 refactor of the whole plan; do it under its own commit with the suite green.
 
+> **Shipped** (2026-08-14). `core/nodes/expand.js` exports `runContainer(runner, runId, flow,
+> node, children, opts)` — the extra leading `runner` is deliberate: it makes the dependency
+> visible (store, setNodeStatus, runNode, runPendingTasks, stopRequests, config.maxParallel,
+> and nothing else) rather than hiding it in a class. Alongside it: `readyChildren`,
+> `containerWave`, `ensureChildStatuses`, `aggregateChildren`. `opts` carries the per-consumer
+> parts — `kind` (how the box names itself in its own error messages), `title`,
+> `aggregateLabel`, and `label` (how a child is titled in the aggregate, which is where a
+> fan-out will put its lane names). `runOrchestrator` keeps everything above "the children now
+> exist" — planning, the bounded re-ask, materialization, the summary port — because that is
+> the only part that genuinely differs per consumer. Parity: the suite is identical either
+> side of the change (720/723; the 3 failures are pre-existing Windows path issues in
+> `benchmark`/`references`), plus `tests/expand.test.js` pins the seam directly.
+
 | Item | Detail |
 |---|---|
 | **P2.1 `fanout` node type** | `type: fanout` with `lanes: [...]` (B5), a `goal`, and an optional `template:` naming which library template each lane instantiates (default `general-analysis`). |
