@@ -293,14 +293,24 @@ export function formatScalar(v) {
   return isPlainSafe(s) ? s : JSON.stringify(s);
 }
 
+// Inside a flow collection (`[a, b]`, `{ k: v }`) the delimiters are syntax, so
+// a scalar containing one has to be quoted even though it would be perfectly
+// safe on a line of its own. Without this, a description with a comma in it
+// serialized to `{ description: Any git URL, or a path }` and no longer parsed.
+const FLOW_UNSAFE = /[,{}[\]]/;
+const formatFlowScalar = v => {
+  if (typeof v === 'string' && FLOW_UNSAFE.test(v)) return JSON.stringify(v);
+  return formatScalar(v);
+};
+
 // Deterministic single-line rendering of any value (maps/arrays inline).
 export function formatInline(v) {
   if (Array.isArray(v)) return v.length ? `[${v.map(formatInline).join(', ')}]` : '[]';
   if (v && typeof v === 'object') {
     const entries = Object.entries(v).filter(([, val]) => val !== undefined);
     return entries.length
-      ? `{ ${entries.map(([k, val]) => `${formatScalar(k)}: ${formatInline(val)}`).join(', ')} }`
+      ? `{ ${entries.map(([k, val]) => `${formatFlowScalar(k)}: ${formatInline(val)}`).join(', ')} }`
       : '{}';
   }
-  return formatScalar(v);
+  return formatFlowScalar(v);
 }

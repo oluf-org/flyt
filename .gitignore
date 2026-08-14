@@ -3,6 +3,9 @@ dist/
 runs/
 .env
 settings.json
+# Runtime flow store. The four tiered pipelines are built from code
+# (core/flowstore.js ensureSeedPipelines), and anything else here is the user's
+# own. A flow the app SHIPS is tracked explicitly: `git add -f flows/<id>.flow.yaml`.
 flows/
 .flyt/
 # Pre-D29 name; kept so a stale directory in an old checkout stays ignored.

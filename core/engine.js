@@ -38,6 +38,7 @@ import {
 } from './modelSource.js';
 import { claudeCredentialStatus, resolveClaudeCli } from './adapters/claudeCode.js';
 import { codexCredentialStatus, resolveCodexCli } from './adapters/codexCli.js';
+import { supportsToolsFor } from './agent.js';
 
 const PUSH_COALESCE_MS = 80;
 
@@ -234,7 +235,9 @@ export function createEngine({
       // Native tool-calling capability, learned from model catalogs (persisted
       // in settings.json). Unknown models fall back to the text tool protocol.
       if (w.provider !== 'mock' && w.provider !== 'anthropic') {
-        w.supportsTools = Boolean(settings.modelCapabilities?.[w.model]);
+        w.supportsTools = supportsToolsFor(w, {
+          modelCapabilities: settings.modelCapabilities, modelFacts: settings.modelFacts
+        });
       }
       workers[name] = w;
     }
@@ -253,6 +256,9 @@ export function createEngine({
     runtimeConfig.resolveModelSource = resolveModelSource;
     runtimeConfig.kimiKeyKind = settings.providers?.kimi?.keyKind ?? 'platform';
     runtimeConfig.modelCapabilities = settings.modelCapabilities ?? {};
+    // Catalogue facts double as capability data when modelCapabilities is empty
+    // — which it is everywhere except after a Settings catalogue fetch.
+    runtimeConfig.modelFacts = settings.modelFacts ?? {};
     // A fan-out node pointed at a model set mints one lane per member (D36
     // P2.4), and drops members that are no longer active rather than minting a
     // lane that cannot run — so the runner needs both lists.

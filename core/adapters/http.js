@@ -137,6 +137,10 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       let text = '';
       let usage = null;
       let finishReason = null;
+      // Which model actually answered. With the Auto Router the requested id is
+      // `openrouter/auto`, so without this every retrospective, log line and
+      // ledger entry would say "auto" and nobody could tell what ran.
+      let resolvedModel = null;
       const frags = new Map(); // tool_call index -> the call being assembled
 
       for await (const event of sseEvents(res.body)) {
@@ -170,6 +174,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
         if (moved) onText(renderTurn(text, frags));
         if (choice?.finish_reason) finishReason = choice.finish_reason;
         if (chunk.usage) usage = chunk.usage;
+        if (chunk.model) resolvedModel = chunk.model;
       }
 
       // The turn is fully assembled: emit it unthrottled, so its last and most
@@ -189,7 +194,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
         );
       }
       return {
-        text, usage, finishReason,
+        text, usage, finishReason, resolvedModel,
         message: {
           role: 'assistant',
           content: text || null,
@@ -205,6 +210,9 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       text: choice.message.content ?? '',
       usage: data.usage ?? null,
       finishReason: choice.finish_reason ?? null,
+      // See the streaming branch: the Auto Router answers as a different model
+      // than the one requested, and that is the only place it says which.
+      resolvedModel: data.model ?? null,
       message: choice.message
     };
   };

@@ -15,6 +15,17 @@ export const APP_SLUG = 'flyt';              // npm name, storage prefix, tmp di
 // Log prefix used by the main process and the adapters: `[flyt] ...`.
 export const LOG_TAG = `[${APP_SLUG}]`;
 
+// Where settings.json lives, matching Electron's app.getPath('userData') for
+// this app name. The desktop app gets it from Electron; every other front door
+// — the CLI, the HTTP server — has to compute it, and MUST agree, or the key
+// you typed into Settings is invisible to the loop you start from a terminal.
+export function defaultUserDataDir({ platform = process.platform, env = process.env, home = null } = {}) {
+  const dir = home ?? env.HOME ?? env.USERPROFILE ?? '.';
+  if (platform === 'win32') return `${env.APPDATA ?? `${dir}/AppData/Roaming`}/${APP_SLUG}`;
+  if (platform === 'darwin') return `${dir}/Library/Application Support/${APP_SLUG}`;
+  return `${env.XDG_CONFIG_HOME ?? `${dir}/.config`}/${APP_SLUG}`;
+}
+
 // The per-project config directory written into the user's own repo, next to
 // .git (D15/D22). Renamed from `.llmflow/` in D29; the legacy directory is
 // still read (and adopted on first write) so existing projects keep working.
