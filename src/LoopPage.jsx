@@ -16,7 +16,7 @@ import {
 
 const HEALTH_GLYPH = { working: '◆', quiet: '◇', stalled: '▲', intervened: '⟳' };
 
-export default function LoopPage({ projectId }) {
+export default function LoopPage({ projectId, onOpenRun = null }) {
   const [status, setStatus] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [caps, setCaps] = useState({});
@@ -168,6 +168,18 @@ export default function LoopPage({ projectId }) {
                     <span className="title">{t.title}</span>
                     {t.level && <span className="level">{t.level}</span>}
                     {t.attempts > 0 && <span className="attempts">{t.attempts} attempt(s)</span>}
+                    {/* Where this task came from (D36 P4.5). A task a flow
+                        queued is otherwise indistinguishable from one a human
+                        typed, and "why is this here" is the first question the
+                        parked pile provokes. */}
+                    {t.sourceRunId && (
+                      <button
+                        type="button"
+                        className="link mono source-run"
+                        title={`Queued by the "${t.sourceNodeId ?? 'loop'}" node of run ${t.sourceRunId}`}
+                        onClick={() => onOpenRun?.(t.sourceRunId)}
+                      >← {t.sourceNodeId ?? 'flow'}</button>
+                    )}
                   </div>
                   {/* The reason is the point of the parked pile: a task that
                       needs you without saying why is a task you cannot act on. */}

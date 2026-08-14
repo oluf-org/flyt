@@ -21,7 +21,7 @@ const fieldRank = k => {
   return i === -1 ? FIELD_ORDER.length : i;
 };
 
-const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai', fanout: 'ai', subflow: 'ai' };
+const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai', fanout: 'ai', subflow: 'ai', loop: 'ai' };
 
 function emitValue(lines, key, v, indent) {
   const pad = ' '.repeat(indent);

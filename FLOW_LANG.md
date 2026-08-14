@@ -119,6 +119,44 @@ sharing them would collapse the divergence the node exists to produce.
 Ports: `results` (primary, one labelled section per lane) and `lanes` (the
 roster: label, id, model, intent).
 
+### The loop node (`type: loop`)
+
+The doorway from a flow into the autonomous improvement loop (D35). It adds no
+autonomy: it enqueues the tasks a `backlog-plan` node produced, starts — or
+JOINS — the project's supervisor, and stays running until they settle.
+
+```yaml
+nodes:
+  plan:
+    use: backlog-plan          # strict JSON contract, output port `tasks`
+  work:
+    type: loop
+    waitFor: all               # all | any | none. Default all.
+    budgetUsd: 5               # per enqueued task
+    parallelism: 2
+    maxTasks: 10
+flow:
+  - input -> plan
+  - plan.tasks -> work -> output
+```
+
+`waitFor: none` is fire-and-forget: the tasks are queued and the run moves on.
+A **parked** task does not fail the node and does not end the wait — D35 rule 7
+says a gate parks a task and never blocks the loop, so the node surfaces the
+park (its card shows `Waiting on you`, and the node reads as a gate on the
+canvas) and keeps waiting. A **failed** task is reported, not fatal: "three
+landed, one failed" is a result, and failing the node would throw away the
+three that worked.
+
+The state is files. `runs/<id>/loop/<nodeId>.json` records which task ids this
+node queued and under what policy; everything else is re-derived from the
+backlog on every poll. A run that waits three days across an app restart
+reattaches by reading that file and the backlog — nothing is re-enqueued and
+nothing is re-run.
+
+Each queued task carries `sourceRunId` and `sourceNodeId` in its frontmatter,
+so the Loop page can link a task back to the run that queued it.
+
 ### Sub-flows (`flow:`)
 
 The third node shape, beside `use:` (a template) and `type:` (a raw node): a

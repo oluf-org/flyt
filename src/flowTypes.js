@@ -15,6 +15,10 @@ export const TYPE_META = {
   // Sub-flow (D36 B1): a flow used as a node. Its children are spliced in from
   // another flow file at run start — composition, not programming (§0.2).
   subflow:      { icon: '⧉', kind: 'ai',   label: 'Sub-flow',     sub: 'container · another flow, inline' },
+  // The doorway into the loop (D36 B10): enqueues the tasks a backlog-plan
+  // node produced and stays running until the supervisor lands them. NOT a
+  // container — the work happens in the loop engine, not inside this box.
+  loop:         { icon: '↻', kind: 'ai',   label: 'Loop',         sub: 'hand-off · queue it and wait' },
   output:       { icon: '◎', kind: 'user', label: 'Output',       sub: 'result · collects upstream' }
 };
 
@@ -114,6 +118,9 @@ export const ROLE_PORTS = {
   analyze: [
     { id: 'report', label: 'analysis', description: 'The structured analysis report.' }
   ],
+  'plan-backlog': [
+    { id: 'tasks', label: 'tasks', description: 'Backlog task records (strict JSON) a loop node can enqueue.' }
+  ],
   compare: [
     { id: 'report', label: 'comparison', description: 'Differences, per-alternative strengths/weaknesses, and a keep-the-best recommendation.' }
   ],
@@ -203,6 +210,9 @@ export const AI_ROLES = [
   // Combined-node meta role ('evaluation' resolves to plan-eval / step-eval /
   // final-eval via evalType) and the standalone roles added in the node rework.
   'evaluation', 'combine', 'split', 'analyze', 'translate', 'compare',
+  // The flow -> backlog contract (D36 B9): turns a plan into work the
+  // supervisor can claim. Strict JSON, like plan-eval.
+  'plan-backlog',
   // The prompt refiner (MODES-COMPARE T5): rewrites the run request into a
   // precise brief, and may park the run with clarifying questions.
   'refine'
@@ -816,6 +826,11 @@ export function overridableFields(node) {
   // A sub-flow call site is parameterised by which saved config of the inner
   // flow it runs, and by ad-hoc per-inner-node tweaks (D36 B4).
   if (type === 'subflow') { fields.add('flowMode'); fields.add('flowOverrides'); }
+  // A loop node's knobs are all about how much autonomy to hand over and for
+  // how long — exactly the things worth changing per config (D36 B11–B12).
+  if (type === 'loop') {
+    for (const f of ['waitFor', 'budgetUsd', 'parallelism', 'maxTasks']) fields.add(f);
+  }
   // A work node carries a category; the Evaluation meta-role carries evalType;
   // translate carries a language. Resolved nodes surface these on data.
   if (d.category != null || d.role === 'execute') fields.add('category');

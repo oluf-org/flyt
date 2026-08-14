@@ -2236,7 +2236,7 @@ export default function App() {
             </div>
           )}
           {loopView
-            ? <LoopPage projectId={activeTab} />
+            ? <LoopPage projectId={activeTab} onOpenRun={id => { setActiveActivity('runs'); openRun(id); }} />
             : libraryView
             ? <NodesPage
                 templates={templates}
