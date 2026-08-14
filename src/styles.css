@@ -2074,6 +2074,34 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
 }
 .model-row select { flex: none; max-width: 190px; }
 
+/* ---------- repositories (BRICKS P1) ----------
+   Two modes, two buttons: read it (a pinned read-only clone) or work on it
+   (a full clone opened as a project). */
+.repo-actions { gap: 8px; }
+.repo-row {
+  padding: 10px 2px; border-bottom: 1px solid var(--border);
+}
+.repo-row:last-child { border-bottom: none; }
+.repo-row.off { opacity: .6; }
+.repo-row-main { display: flex; align-items: center; gap: 8px; }
+.repo-name { font-size: 12.5px; font-weight: 600; color: var(--tx); }
+.repo-commit { font-size: 10px; color: var(--faint); }
+.repo-about {
+  margin: 4px 0 0; font-size: 11px; line-height: 1.5; color: var(--dim);
+}
+.repo-row-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.repo-url {
+  flex: 1; min-width: 0; font-size: 10px; color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.settings-note {
+  margin-top: 10px; padding: 9px 11px;
+  font-size: 11.5px; line-height: 1.5;
+  color: var(--tx); background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 9px;
+}
+
 /* A backlog task's link back to the run that queued it (BRICKS P4.5). */
 .loop-task-head .source-run {
   margin-left: auto; flex: none;

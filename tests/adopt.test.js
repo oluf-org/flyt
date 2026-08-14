@@ -1,128 +1,146 @@
-// Adopt (D28): promoting a flow designed in the installed app into a shipped
-// default. The invariants that matter are the id rewrite, the layout sidecar
-// following the rename, and the "will this actually ship?" check — the last is
-// what keeps a promoted flow from being silently excluded by electron-builder.
-import { test } from 'node:test';
+// Adopting a repository at run time (BRICKS P1.4). The library shipped with a
+// fixed list; this makes it general purpose — any URL, from the app, from a
+// flow, or from a task that points at one.
+//
+// The clone half runs against a real local git repository rather than the
+// network: the thing worth testing is that a URL becomes a pinned, named,
+// read-only directory the rest of the app can find.
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseFlow } from '../core/flowlang/parse.js';
-import {
-  adoptFlow, listFlows, reidFlowText, slugFlowId, willShip, installedFlowsDir, PRODUCT_NAME
-} from '../core/flowlang/adopt.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { ReferenceLibrary, assertRepoUrl, nameFromRepoUrl } from '../core/references.js';
 
-const FLOW = `version: 1
-id: flow-mrkhw5q9-eaxv
-name: Deep Research v2
-description: A hand-built flow.
+const run = promisify(execFile);
+const tmp = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
-nodes:
-  research:
-    use: work
-
-flow:
-  - input -> research
-  - research -> output
-`;
-
-function tmp() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adopt-'));
-  const from = path.join(dir, 'installed');
-  const to = path.join(dir, 'repo-flows');
-  fs.mkdirSync(from, { recursive: true });
-  fs.mkdirSync(to, { recursive: true });
-  return { dir, from, to };
+// A throwaway git repository, so the clone path is exercised for real.
+async function makeRepo(name = 'demo') {
+  const dir = path.join(tmp('flyt-src-'), name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'README.md'), '# demo\n\nthe needle is here\n');
+  const git = args => run('git', args, { cwd: dir });
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'test@example.com']);
+  await git(['config', 'user.name', 'Test']);
+  await git(['add', '-A']);
+  await git(['commit', '-qm', 'first']);
+  return dir;
 }
 
-function seed(from, id = 'flow-mrkhw5q9-eaxv', { layout = true } = {}) {
-  fs.writeFileSync(path.join(from, `${id}.flow.yaml`), FLOW.replace('flow-mrkhw5q9-eaxv', id));
-  if (layout) fs.writeFileSync(path.join(from, `${id}.layout.json`), JSON.stringify({ research: { x: 10, y: 20 } }));
-}
+// --- the URL guard ----------------------------------------------------------
 
-test('adopt: slugs the flow name into a stable, shippable id', () => {
-  assert.equal(slugFlowId('Deep Research v2'), 'deep-research-v2');
-  assert.equal(slugFlowId('  GPT-5 · strict!  '), 'gpt-5-strict');
-  assert.equal(slugFlowId('///'), null);
+test('a URL that could run a command is refused before it reaches git', () => {
+  // git's ext:: transport executes an arbitrary command, and an argument
+  // starting with "-" is read as an option. Both arrive here from a paste OR
+  // from a model's tool call, so neither is trusted.
+  assert.throws(() => assertRepoUrl('ext::sh -c whoami'), /ext::/);
+  assert.throws(() => assertRepoUrl('--upload-pack=evil'), /cannot begin with/);
+  assert.throws(() => assertRepoUrl('not a url'), /not a repository URL/);
+  assert.throws(() => assertRepoUrl(''), /required/);
 });
 
-test('adopt: scratch ids are exactly the ones electron-builder excludes', () => {
-  assert.equal(willShip('deep-research-v2'), true);
-  assert.equal(willShip('flow-mrkhw5q9-eaxv'), false);
-  assert.equal(willShip('flow-test'), false); // a name like "Flow test" is the trap
-  assert.equal(willShip('bad id'), false);
+test('the ordinary shapes are accepted, whatever the host', () => {
+  // General purpose: which forge someone reads from is their business, and a
+  // repository already on this machine is as legitimate a source as any.
+  for (const u of [
+    '/home/me/projects/thing',
+    'C:\\Users\\me\\projects\\thing',
+    'https://github.com/owner/repo',
+    'https://git.example.internal/team/thing.git',
+    'ssh://git@example.com:22/owner/repo',
+    'git@github.com:owner/repo.git',
+    'git://example.com/repo'
+  ]) assert.equal(assertRepoUrl(u), u);
 });
 
-test('adopt: re-id rewrites only the id line and re-parses', () => {
-  const out = reidFlowText(FLOW, 'deep-research-v2');
-  assert.equal(parseFlow(out).id, 'deep-research-v2');
-  assert.equal(parseFlow(out).name, 'Deep Research v2');
-  assert.match(out, /description: A hand-built flow\./);
-  assert.equal(out.includes('flow-mrkhw5q9-eaxv'), false);
-  assert.throws(() => reidFlowText(FLOW, 'not a slug'), /Invalid flow id/);
-  assert.throws(() => reidFlowText('version: 1\nname: x\n', 'ok'), /no top-level "id:"/);
+test('a name is derived from the URL, and the owner is kept for collisions', () => {
+  assert.deepEqual(nameFromRepoUrl('https://github.com/MaximeRobeyns/self_improving_coding_agent.git'),
+    { name: 'self_improving_coding_agent', owner: 'maximerobeyns' });
+  assert.deepEqual(nameFromRepoUrl('git@github.com:sst/opencode.git'), { name: 'opencode', owner: 'sst' });
+  // Always something usable as a directory name, whatever the URL looks like.
+  assert.match(nameFromRepoUrl('https://example.com/').name, /^[a-z0-9][a-z0-9._-]*$/);
+  assert.equal(nameFromRepoUrl('').name, 'repository');
 });
 
-test('adopt: copies flow + layout under the new id', () => {
-  const { from, to } = tmp();
-  seed(from);
-  const r = adoptFlow({ from, to, id: 'flow-mrkhw5q9-eaxv' });
+// --- adopting ---------------------------------------------------------------
 
-  assert.equal(r.id, 'deep-research-v2');
-  assert.equal(r.ships, true);
-  assert.equal(r.layout, true);
-  assert.equal(parseFlow(fs.readFileSync(r.file, 'utf8')).id, 'deep-research-v2');
-  // The sidecar is keyed by NODE id — the rename must not disturb its contents.
-  const layout = JSON.parse(fs.readFileSync(path.join(to, 'deep-research-v2.layout.json'), 'utf8'));
-  assert.deepEqual(layout, { research: { x: 10, y: 20 } });
-  // The source is left alone: adopting is a copy, not a move.
-  assert.ok(fs.existsSync(path.join(from, 'flow-mrkhw5q9-eaxv.flow.yaml')));
+test('adopting clones, pins, names, and makes the repo readable', async () => {
+  const src = await makeRepo('needle-repo');
+  const lib = new ReferenceLibrary(tmp('flyt-lib-'), { repos: [] });
+
+  const r = await lib.adopt(src);
+  assert.equal(r.adopted, true);
+  assert.equal(r.name, 'needle-repo', 'named from the URL');
+  assert.match(r.commit, /^[0-9a-f]{7,40}$/, 'pinned to a commit');
+
+  // It is in the library, and the rest of the app can find it by name.
+  const listed = lib.list().find(x => x.name === 'needle-repo');
+  assert.equal(listed.cloned, true);
+  assert.equal(listed.adopted, true, 'distinguishable from a shipped entry');
+  assert.match(lib.read('needle-repo/README.md'), /the needle is here/);
+  assert.ok(lib.search('needle').results.length > 0, 'greppable at task time');
+  assert.ok(lib.catalog().some(c => c.name === 'needle-repo'), 'and an agent is told it exists');
 });
 
-test('adopt: --as overrides the slug; a missing layout is not fatal', () => {
-  const { from, to } = tmp();
-  seed(from, 'flow-abc', { layout: false });
-  const r = adoptFlow({ from, to, id: 'flow-abc', as: 'house-style' });
-  assert.equal(r.id, 'house-style');
-  assert.equal(r.layout, false);
-  assert.ok(fs.existsSync(path.join(to, 'house-style.flow.yaml')));
+test('adopting the same URL twice refreshes rather than failing', async () => {
+  const src = await makeRepo('twice');
+  const lib = new ReferenceLibrary(tmp('flyt-lib-'), { repos: [] });
+  await lib.adopt(src);
+  const again = await lib.adopt(src);
+  assert.equal(again.refreshed, true);
+  assert.equal(again.adopted, false);
+  assert.equal(lib.list().length, 1, 'a flow that runs twice must not fail the second time');
 });
 
-test('adopt: refuses to clobber an existing default unless forced', () => {
-  const { from, to } = tmp();
-  seed(from);
-  adoptFlow({ from, to, id: 'flow-mrkhw5q9-eaxv' });
-  assert.throws(() => adoptFlow({ from, to, id: 'flow-mrkhw5q9-eaxv' }), /already exists/);
-  assert.doesNotThrow(() => adoptFlow({ from, to, id: 'flow-mrkhw5q9-eaxv', overwrite: true }));
+test('a name collision is suffixed with the owner, never silently shared', async () => {
+  const a = await makeRepo('same');
+  const b = await makeRepo('same');
+  const lib = new ReferenceLibrary(tmp('flyt-lib-'), { repos: [] });
+  const first = await lib.adopt(a);
+  const second = await lib.adopt(b);
+  assert.equal(first.name, 'same');
+  assert.notEqual(second.name, 'same');
+  assert.equal(lib.list().length, 2);
+  // Two repositories sharing a directory is the one outcome worse than an ugly name.
+  assert.notEqual(lib.dirFor(first.name), lib.dirFor(second.name));
 });
 
-test('adopt: unknown flow id fails loudly', () => {
-  const { from, to } = tmp();
-  assert.throws(() => adoptFlow({ from, to, id: 'nope' }), /no flow "nope"/);
+test('a clone that fails leaves nothing half-registered', async () => {
+  const lib = new ReferenceLibrary(tmp('flyt-lib-'), { repos: [] });
+  await assert.rejects(() => lib.adopt('https://example.invalid/nope/nope.git'));
+  assert.deepEqual(lib.list(), [], 'the next attempt is a clean first attempt');
 });
 
-test('adopt: lists installed flows, newest first, skipping unparseable files', () => {
-  const { from } = tmp();
-  seed(from, 'flow-old');
-  seed(from, 'flow-new');
-  fs.utimesSync(path.join(from, 'flow-new.flow.yaml'), new Date(), new Date(Date.now() + 10_000));
-  fs.writeFileSync(path.join(from, 'junk.flow.yaml'), 'not: a flow\n');
-
-  const list = listFlows(from);
-  assert.deepEqual(list.map(f => f.id), ['flow-new', 'flow-old']);
-  assert.equal(list[0].ships, false);
-  assert.deepEqual(listFlows(path.join(from, 'does-not-exist')), []);
+test('adopted repos survive a new library instance over the same root', async () => {
+  const src = await makeRepo('persisted');
+  const root = tmp('flyt-lib-');
+  await new ReferenceLibrary(root, { repos: [] }).adopt(src);
+  // A different process, same disk: the manifest is the memory. Searching has
+  // to see it too — the constructor never saw this entry.
+  const reopened = new ReferenceLibrary(root, { repos: [] });
+  assert.equal(reopened.list().length, 1);
+  assert.equal(reopened.list()[0].name, 'persisted');
+  assert.ok(reopened.search('needle').results.length > 0, 'and it is searchable after a restart');
 });
 
-// PRODUCT_NAME (= core/brand.js APP_NAME) is the directory Electron derives
-// userData from, so this asserts against the constant rather than a literal:
-// hard-coding the name here would make a rename fail in the CLI at the same
-// moment the test claimed it was fine.
-test('adopt: resolves the installed data dir per platform', () => {
-  const win = installedFlowsDir({ platform: 'win32', env: { APPDATA: 'C:\\Users\\x\\AppData\\Roaming' } });
-  assert.match(win, new RegExp(`${PRODUCT_NAME}.flows$`));
-  const mac = installedFlowsDir({ platform: 'darwin', env: {}, home: '/Users/x' });
-  assert.equal(mac, path.join('/Users/x', 'Library', 'Application Support', PRODUCT_NAME, 'flows'));
-  const linux = installedFlowsDir({ platform: 'linux', env: { XDG_CONFIG_HOME: '/home/x/.config' } });
-  assert.equal(linux, path.join('/home/x/.config', PRODUCT_NAME, 'flows'));
+test('the configured list still wins, and removing an adopted repo forgets it', async () => {
+  const src = await makeRepo('mine');
+  const root = tmp('flyt-lib-');
+  const lib = new ReferenceLibrary(root, { repos: [{ name: 'shipped', url: 'https://example.com/a', about: 'ships' }] });
+  await lib.adopt(src);
+  assert.deepEqual(lib.list().map(r => r.name), ['shipped', 'mine'], 'configured first');
+  assert.equal(lib.list().find(r => r.name === 'shipped').adopted, false);
+
+  const removed = lib.remove('mine');
+  assert.equal(removed.removed, true);
+  assert.deepEqual(lib.list().map(r => r.name), ['shipped']);
+
+  // A CONFIGURED repo is only un-cloned — its entry is the user's file to edit.
+  const stillThere = lib.remove('shipped');
+  assert.equal(stillThere.removed, false);
+  assert.deepEqual(lib.list().map(r => r.name), ['shipped']);
 });

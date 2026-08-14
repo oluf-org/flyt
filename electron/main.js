@@ -248,6 +248,20 @@ bindIpc('loop:status', projectId => ({ projectId }));
 bindIpc('loop:report', projectId => ({ projectId }));
 bindIpc('loop:log', projectId => ({ projectId }));
 bindIpc('ledger:totals', (projectId, opts = {}) => ({ projectId, ...opts }));
+
+// The reference library (D36 P1.6). These existed only on the headless server,
+// so from the desktop app the library was invisible AND unreachable - you could
+// not list what was cloned, let alone add a repository. Same commands, third
+// front door.
+bindIpc('ref:list', () => ({}));
+bindIpc('ref:add', (opts = {}) => ({ ...opts }));
+bindIpc('ref:remove', name => ({ name }));
+bindIpc('ref:update', (name = null) => ({ name }));
+bindIpc('ref:search', (opts = {}) => ({ ...opts }));
+bindIpc('ref:read', ref => ({ ref }));
+// Clone a repository into a folder and open it as a project - the other half
+// of "point this app at someone else's code": read it, or work on it.
+bindIpc('repo:clone', (opts = {}) => ({ ...opts }));
 bindIpc('ledger:check', (projectId, taskId = null) => ({ projectId, taskId }));
 bindIpc('task:list', (projectId, status = null) => ({ projectId, status }));
 bindIpc('task:add', (projectId, task = {}) => ({ projectId, ...task }));

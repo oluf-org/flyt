@@ -588,8 +588,17 @@ export class FlowRunner {
     if (!tools.length) return this.trackedCallModel(runId, params);
     const ctl = this.trackAbort(runId);
     try {
+      // runAgent takes the worker NESTED (`{ worker, apiKey, system, ... }`),
+      // the way core/nodes/executor.js has always passed it. Spreading it flat
+      // here left `worker` undefined inside the agent loop, so every model call
+      // it made resolved to provider `undefined` — which meant a read-only tool
+      // grant on an aiStep (TOOLS-PLAN §6.4) failed the node the moment it was
+      // used. Nothing in the suite exercised it until fan-out lanes started
+      // inheriting a grant (D36 P2), which is how it surfaced.
+      const { apiKey, system, prompt, onText, onRetry, retry, ...worker } = params;
       return await runAgent({
-        timeout: this.config.timeout, ...params, tools, signal: ctl.signal,
+        worker, apiKey, system, prompt, onText, onRetry, retry,
+        timeout: this.config.timeout, tools, signal: ctl.signal,
         ctx: {
           store: this.store, runId, nodeId, workspace: this.workspaceFor(runId),
           backlog: this.backlog ?? null, feedback: this.feedback ?? null,
@@ -3120,7 +3129,12 @@ export class FlowRunner {
           goal,
           instructions: laneBrief(lane, lanes, { goal }),
           ...(lane.worker ? { worker: lane.worker } : node.data?.worker ? { worker: node.data.worker } : {}),
-          ...(lane.tools ? { tools: lane.tools } : {})
+          // A lane with no grant of its own inherits the fan-out's, the same
+          // way it inherits its template. Without this an aiStep lane gets NO
+          // tools at all (aiStepTools returns [] without an explicit array),
+          // so five lanes pointed at a repository would produce five confident
+          // analyses of nothing.
+          ...(lane.tools ? { tools: lane.tools } : Array.isArray(node.data?.tools) && node.data.tools.length ? { tools: node.data.tools } : {})
         });
         // A lane inherits the fan-out's ceiling exactly as a generated child
         // inherits an orchestrator's (§6.3) — a node that decides what other
@@ -3144,8 +3158,27 @@ export class FlowRunner {
       if (!created.length) throw failNode('no lane could be materialized', errors.length ? errors : ['every lane collided with an existing node id']);
 
       // Lanes are independent by construction — that is the entire point — so
-      // there are no edges between them, only the container's wire to each.
-      const edges = created.map(c => ({ id: `gen-e-${node.id}-${c.id}`, source: node.id, target: c.id, generatedBy: node.id }));
+      // there are no edges BETWEEN them. Each gets the container's wire (which
+      // marks ownership) plus a wire from whatever feeds the fan-out.
+      //
+      // That second set is load-bearing: a lane's context would otherwise come
+      // from `nodes/<fan>.md`, which does not exist until every lane has
+      // finished. Without it a fan-out only works when the whole brief fits in
+      // `goal` — which is exactly not the case when the upstream node is the
+      // one that says which repo to read. The orchestrator escapes this by
+      // writing a `.plan` sidecar its children read; a fan-out has no plan, so
+      // it forwards its own inputs instead (the same thing a sub-flow splice
+      // does for the inner input node).
+      const inbound = forwardEdges(flow.edges).filter(e => e.target === node.id);
+      const edges = created.flatMap(c => [
+        { id: `gen-e-${node.id}-${c.id}`, source: node.id, target: c.id, generatedBy: node.id },
+        ...inbound.map(e => ({
+          id: `gen-e-${e.source}-${c.id}` + (e.sourceHandle ? `-${e.sourceHandle}` : ''),
+          source: e.source, target: c.id,
+          ...(e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}),
+          generatedBy: node.id
+        }))
+      ]);
       commitChildren(this, runId, flow, node, created, edges, {
         parentId: node.id,
         place: placeInContainer(node, created, containerLayout)

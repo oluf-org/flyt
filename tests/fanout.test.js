@@ -243,3 +243,107 @@ test('a lane may name its own template; otherwise the node\'s, otherwise the def
   assert.equal(roles.get('B'), 'analyze', 'a lane\'s own template wins');
   assert.equal(DEFAULT_LANE_TEMPLATE, 'general-analysis');
 });
+
+// --- what a lane can actually see and do -----------------------------------
+
+test("a lane receives the fan-out's upstream output, not just its goal", async () => {
+  // Without this a fan-out only works when the whole brief fits in `goal`.
+  // The moment the node UPSTREAM is the one that says what to read — which
+  // repo, which document — a lane that cannot see it is analysing nothing.
+  const store = makeStore();
+  const prompts = [];
+  setScript(({ prompt }) => { prompts.push(prompt); return 'UPSTREAM-PAYLOAD-42'; });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('prep', 'aiStep', { role: 'execute', title: 'Prep', goal: 'prepare' }),
+     node('fan', 'fanout', { title: 'Read it', goal: 'Read it.', lanes: ['standard', 'wildcard'] }),
+     node('out', 'output')],
+    [edge('in', 'prep'), edge('prep', 'fan'), edge('fan', 'out')]);
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(flow, { userInput: 'brief' });
+  await waitForStage(store, runId, ['done', 'failed']);
+  assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
+
+  const lanePrompts = prompts.filter(p => p.includes('YOUR LANE'));
+  assert.equal(lanePrompts.length, 2);
+  for (const p of lanePrompts) {
+    assert.match(p, /UPSTREAM-PAYLOAD-42/, 'every lane sees what fed the fan-out');
+    assert.match(p, /--- Prep \(prep\) ---/, 'labelled by the node it came from');
+  }
+});
+
+test('an edge into a fan-out keeps its port when it reaches the lanes', async () => {
+  const store = makeStore();
+  const prompts = [];
+  setScript(({ system, prompt }) => {
+    prompts.push(prompt);
+    if (roleOf(system) === 'step-eval') {
+      return 'The long report nobody wants.\n```json\n{ "verdict": "pass", "reason": "ok", "guidance": "" }\n```';
+    }
+    return 'work done';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'aiStep', { role: 'execute', title: 'Work' }),
+     node('ev', 'aiStep', { role: 'step-eval', title: 'Eval' }),
+     node('fan', 'fanout', { title: 'React', goal: 'React to the verdict.', lanes: ['standard'] }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'ev'),
+     { id: 'e-ev-fan-verdict', source: 'ev', target: 'fan', sourceHandle: 'verdict' },
+     edge('fan', 'out')]);
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(flow, { userInput: 'brief' });
+  await waitForStage(store, runId, ['done', 'failed']);
+  assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
+
+  const lane = prompts.find(p => p.includes('YOUR LANE'));
+  assert.match(lane, /"verdict": "pass"/, 'the chosen port reaches the lane');
+  assert.ok(!lane.includes('The long report nobody wants'), 'and replaces the full output, as anywhere else');
+});
+
+test("lanes inherit the fan-out's tool grant when they declare none", async () => {
+  const store = makeStore();
+  setScript(() => 'ok');
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('fan', 'fanout', {
+       title: 'Read it', goal: 'Read it.', tools: ['read_file'],
+       lanes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B', tools: ['search_references'] }]
+     }),
+     node('out', 'output')],
+    [edge('in', 'fan'), edge('fan', 'out')]);
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(flow, { userInput: 'brief' });
+  await waitForStage(store, runId, ['done', 'failed']);
+  assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
+
+  const f = store.readFlow(runId);
+  // An aiStep gets NO tools without an explicit grant, so a lane that inherits
+  // nothing cannot read the thing it was pointed at.
+  assert.deepEqual(f.nodes.find(n => n.id === 'fan-a').data.tools, ['read_file'], 'inherited');
+  assert.deepEqual(f.nodes.find(n => n.id === 'fan-b').data.tools, ['search_references'], 'its own wins');
+});
+
+test('a granted aiStep actually reaches its tools', async () => {
+  // Regression: trackedRunAgent spread the worker flat while runAgent expects
+  // it nested, so an aiStep with a read-only grant (TOOLS-PLAN 6.4) called
+  // provider `undefined` and failed the node. Nothing exercised it until
+  // fan-out lanes began inheriting a grant.
+  const store = makeStore();
+  let sawTools = null;
+  setScript(({ system }) => {
+    // The text tool protocol advertises the grant in the system prompt.
+    sawTools = /read_file/.test(String(system));
+    return 'done, no tool needed';
+  });
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('step', 'aiStep', { role: 'analyze', title: 'Read', tools: ['read_file'] }),
+     node('out', 'output')],
+    [edge('in', 'step'), edge('step', 'out')]);
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(flow, { userInput: 'brief' });
+  await waitForStage(store, runId, ['done', 'failed']);
+  assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
+  assert.equal(sawTools, true, 'the grant reached the model call');
+});

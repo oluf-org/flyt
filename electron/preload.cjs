@@ -77,6 +77,18 @@ const api = {
   deleteNodeTemplate: (id) => ipcRenderer.invoke('node:delete', id),
   setTitleBarTheme: (mode) => ipcRenderer.invoke('titlebar:setTheme', mode),
   listTools: () => ipcRenderer.invoke('tool:list'),
+
+  // --- The reference library (D36 P1) ---
+  // Read-only, pinned, shallow clones of any repository you want the app to be
+  // able to read. `cloneRepo` is the other mode: a full working clone opened as
+  // a project, for when you mean to change it rather than learn from it.
+  listReferences: () => ipcRenderer.invoke('ref:list'),
+  addReference: (opts) => ipcRenderer.invoke('ref:add', opts),
+  removeReference: (name) => ipcRenderer.invoke('ref:remove', name),
+  updateReference: (name = null) => ipcRenderer.invoke('ref:update', name),
+  searchReferences: (opts) => ipcRenderer.invoke('ref:search', opts),
+  readReference: (ref) => ipcRenderer.invoke('ref:read', ref),
+  cloneRepo: (opts) => ipcRenderer.invoke('repo:clone', opts),
   toolsFolder: () => ipcRenderer.invoke('tool:folder'),
 
   // --- Project tabs (D22) ---

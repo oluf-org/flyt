@@ -64,10 +64,147 @@ export function defaultReferenceRoot({ home = os.homedir() } = {}) {
   return path.join(home, '.flyt', 'references');
 }
 
+// A repository URL is about to be handed to `git clone`, and it arrives from a
+// paste OR from a model's tool call. git's own transports include `ext::`,
+// which runs an arbitrary command, and a URL beginning with `-` is read as an
+// option rather than an argument. So the shape is checked rather than trusted:
+// http(s), ssh (scp-style or ssh://), and git:// only.
+//
+// Deliberately permissive about the HOST — this app is general purpose, and
+// which forge someone reads from is their business, not ours.
+const URL_SHAPES = [
+  /^https?:\/\/[^\s]+$/i,
+  /^ssh:\/\/[^\s]+$/i,
+  /^git:\/\/[^\s]+$/i,
+  /^file:\/\/[^\s]+$/i,
+  /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^\s]+$/,  // git@host:owner/repo.git
+  // A repository already on this machine. "Read the one I have here" is an
+  // ordinary thing to want and needs no network; git clone of a local path
+  // executes nothing. Absolute only - a relative path would resolve against
+  // whatever directory the caller happened to be in.
+  /^\/[^\s]*$/,                               // POSIX
+  /^[A-Za-z]:[\\/][^\s]*$/                    // Windows
+];
+
+export function assertRepoUrl(url) {
+  const s = String(url ?? '').trim();
+  if (!s) throw new Error('A repository URL is required.');
+  if (s.startsWith('-')) throw new Error(`Refusing "${s}": a URL cannot begin with "-".`);
+  if (/ext::/i.test(s)) {
+    throw new Error('Refusing an "ext::" URL - that git transport runs an arbitrary command.');
+  }
+  if (!URL_SHAPES.some(re => re.test(s))) {
+    throw new Error(`"${s}" is not a repository URL or path. Use https://..., ssh://..., git@host:owner/repo, or an absolute path to a repository on this machine.`);
+  }
+  return s;
+}
+
+// A readable directory name from a URL: the repository's own name, lowercased
+// and stripped of `.git`. Falls back to owner-repo when that is taken.
+export function nameFromRepoUrl(url) {
+  // Backslash is a separator too: a Windows path is a legitimate source, and
+  // splitting it on "/" alone turns C:\a\b\repo into one enormous name.
+  const s = String(url ?? '').trim().replace(/\.git$/i, '').replace(/[/\\]+$/, '');
+  const parts = s.split(/[/:\\]/).filter(Boolean);
+  const repo = parts[parts.length - 1] ?? '';
+  const owner = parts[parts.length - 2] ?? '';
+  const clean = t => String(t).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return { name: clean(repo) || 'repository', owner: clean(owner) };
+}
+
 export class ReferenceLibrary {
   constructor(rootDir = null, { repos = DEFAULT_REFERENCES } = {}) {
     this.rootDir = path.resolve(rootDir ?? defaultReferenceRoot());
+    this.configured = repos;
     this.repos = repos;
+  }
+
+  // --- adopted repositories (D36 P1.4) --------------------------------------
+  //
+  // The configured list is the user's file. A repository adopted at run time -
+  // pasted into the app, or picked up from a task that pointed at one - is the
+  // app's own bookkeeping, so it lives in a manifest beside the clones. The two
+  // are merged everywhere `repos` was read before, which is what makes the
+  // library general purpose rather than "the three repos we shipped".
+
+  #manifestPath() { return path.join(this.rootDir, 'adopted.json'); }
+
+  #adopted() {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.#manifestPath(), 'utf8'));
+      return Array.isArray(raw) ? raw.filter(r => r && typeof r.name === 'string' && typeof r.url === 'string') : [];
+    } catch { return []; }
+  }
+
+  #writeAdopted(list) {
+    fs.mkdirSync(this.rootDir, { recursive: true });
+    fs.writeFileSync(this.#manifestPath(), JSON.stringify(list, null, 2), 'utf8');
+  }
+
+  // Configured first, then adopted - a configured entry wins a name collision,
+  // because that one is the user's explicit choice.
+  allRepos() {
+    const seen = new Set(this.configured.map(r => r.name));
+    return [...this.configured, ...this.#adopted().filter(a => !seen.has(a.name))];
+  }
+
+  /**
+   * Adopt a repository by URL: register it, then shallow-clone and pin it.
+   *
+   * `name` is derived from the URL unless given. A collision is suffixed with
+   * the owner, then a number - never silently reused, because two repositories
+   * sharing a directory is the one outcome worse than an ugly name.
+   */
+  async adopt(url, { name = null, about = null, ref = null, onLog = () => {} } = {}) {
+    const clean = assertRepoUrl(url);
+    const existing = this.allRepos().find(r => r.url === clean);
+    if (existing) {
+      // Adopting something already here is a refresh, not an error: a flow that
+      // runs twice against one repository must not fail the second time.
+      onLog(`${existing.name} is already in the library - refreshing`);
+      const meta = await this.fetch(existing.name, { onLog });
+      return { ...existing, ...meta, adopted: false, refreshed: true };
+    }
+    const derived = nameFromRepoUrl(clean);
+    let chosen = name ? this.#assertName(name) : derived.name;
+    if (this.allRepos().some(r => r.name === chosen)) {
+      const withOwner = derived.owner ? `${derived.owner}-${derived.name}` : chosen;
+      chosen = withOwner;
+      for (let n = 2; this.allRepos().some(r => r.name === chosen); n += 1) chosen = `${withOwner}-${n}`;
+    }
+    this.#assertName(chosen);
+    const entry = {
+      name: chosen,
+      url: clean,
+      ...(ref ? { ref: String(ref) } : {}),
+      about: about ? String(about).trim() : `Adopted from ${clean}.`,
+      adoptedAt: new Date().toISOString()
+    };
+    this.#writeAdopted([...this.#adopted(), entry]);
+    this.repos = this.allRepos();
+    try {
+      const meta = await this.fetch(chosen, { onLog });
+      return { ...entry, ...meta, adopted: true, refreshed: false };
+    } catch (err) {
+      // A clone that fails leaves no half-registered entry behind: the next
+      // attempt should be a clean first attempt.
+      this.#writeAdopted(this.#adopted().filter(r => r.name !== chosen));
+      this.repos = this.allRepos();
+      throw err;
+    }
+  }
+
+  // Forget an adopted repository and delete its clone. A CONFIGURED repo is
+  // only un-cloned - removing it from config is the user's file to edit.
+  remove(name) {
+    const id = this.#assertName(name);
+    const wasAdopted = this.#adopted().some(r => r.name === id);
+    if (wasAdopted) {
+      this.#writeAdopted(this.#adopted().filter(r => r.name !== id));
+      this.repos = this.allRepos();
+    }
+    if (this.has(id)) fs.rmSync(this.dirFor(id), { recursive: true, force: true });
+    return { name: id, removed: wasAdopted, uncloned: true };
   }
 
   // A repo name is used to build a path and comes from config, a CLI argument
@@ -106,13 +243,14 @@ export class ReferenceLibrary {
   }
 
   list() {
-    return this.repos.map(repo => {
+    return this.allRepos().map(repo => {
       const meta = this.meta(repo.name);
       return {
         ...repo,
         cloned: this.has(repo.name),
         commit: meta?.commit ?? null,
         clonedAt: meta?.clonedAt ?? null,
+        adopted: !this.configured.some(c => c.name === repo.name),
         dir: this.has(repo.name) ? this.dirFor(repo.name) : null
       };
     });
@@ -126,7 +264,7 @@ export class ReferenceLibrary {
    * nothing.
    */
   async fetch(name, { onLog = () => {} } = {}) {
-    const repo = this.repos.find(r => r.name === name);
+    const repo = this.allRepos().find(r => r.name === name);
     if (!repo) throw new Error(`No reference named "${name}".`);
     const dir = this.dirFor(name);
     fs.mkdirSync(this.rootDir, { recursive: true });
@@ -192,7 +330,9 @@ export class ReferenceLibrary {
     try { re = new RegExp(pattern, flags.includes('g') ? flags : `${flags}`); }
     catch (err) { throw new Error(`Invalid search pattern: ${err.message}`); }
 
-    const names = repo ? [this.#assertName(repo)] : this.repos.map(r => r.name).filter(n => this.has(n));
+    // allRepos(), not this.repos: a library reopened over an existing root has
+    // adopted entries on disk that the constructor never saw.
+    const names = repo ? [this.#assertName(repo)] : this.allRepos().map(r => r.name).filter(n => this.has(n));
     const results = [];
     let scanned = 0;
 
@@ -241,7 +381,7 @@ export class ReferenceLibrary {
   index(name) {
     const written = this.read(`${name}/references-index.md`) ?? this.read(`${name}/.flyt-index.md`);
     if (written) return written;
-    const repo = this.repos.find(r => r.name === name);
+    const repo = this.allRepos().find(r => r.name === name);
     return repo?.about ?? null;
   }
 

@@ -2534,7 +2534,7 @@ export default function App() {
         )}
       </div>
 
-      {showSettings && <Settings onClose={() => { setShowSettings(false); refreshSettings(); }} />}
+      {showSettings && <Settings onOpenProject={openProjectTab} onClose={() => { setShowSettings(false); refreshSettings(); }} />}
       {rematch && (
         <RematchPicker
           run={rematch}
