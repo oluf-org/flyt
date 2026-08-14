@@ -125,6 +125,9 @@ export function createEngine({
   //   { providers: { anthropic|openai|kimi|openrouter: { apiKey, keyKind? } },
   //     providerPriority: [providerId, ...],              // auto-source walk order
   //     activeModels: [{ id, source: 'auto'|providerId, enabled }],
+  //     modelFacts:   { id: { name?, contextLength?, supportsTools?,
+  //                           inUsdPerM?, outUsdPerM? } },   // D36 P0.2
+  //     modelSets:    { setId: { name, models: [id, ...] } },  // D36 B13
   //     workers: { executor: { provider, model } },
   //     projectStorage: 'workspace' | 'appdata',        // T2a
   //     approvalMode: 'ask' | 'smart' | 'always',
@@ -293,6 +296,11 @@ export function createEngine({
       claudeSubscriptionActive: hasKey('claude-code'),
       providerPriority: settings.providerPriority ?? [...DEFAULT_PRIORITY],
       activeModels,
+      // BRICKS P0.2–P0.3: what each model costs and can read, and the named
+      // sets built out of them. Facts are catalog data, not secrets — every
+      // picker in the app renders them.
+      modelFacts: settings.modelFacts ?? {},
+      modelSets: settings.modelSets ?? {},
       workers: Object.fromEntries(
         Object.entries(runtimeConfig.workers).map(([name, w]) => [name, { provider: w.provider, model: w.model }])
       ),

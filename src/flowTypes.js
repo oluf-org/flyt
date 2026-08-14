@@ -488,28 +488,32 @@ export function nodeLabel(node) {
   return byTemplate || TYPE_META[node.type]?.label || node.type;
 }
 
-export function nodeSub(node) {
+// The card's second line. `worker: false` drops the model from the text — the
+// flow editor renders it as a clickable badge instead (D36 P0.4), and the same
+// id twice on one card is noise. The run canvas keeps the full string.
+export function nodeSub(node, { worker: showWorker = true } = {}) {
   const d = node.data || {};
   const w = d.worker;
   // 'auto' = an active-models pick, resolved per provider priority at call time.
   const workerText = w?.provider === 'auto' ? w.model : w?.provider ? `${w.provider}/${w.model}` : 'default worker';
+  const suffix = showWorker ? ` · ${workerText}` : '';
   const cat = d.category ? `${d.category} · ` : '';
   // Non-default effort is worth a glance on the card; medium stays quiet.
   const eff = d.effort && d.effort !== DEFAULT_EFFORT ? ` · ${d.effort} effort` : '';
 
   // Library template instances: show template name + effective worker.
-  if (d.templateId) return `${cat}${d.templateName ?? d.templateId} · ${workerText}${eff}`;
+  if (d.templateId) return `${cat}${d.templateName ?? d.templateId}${suffix}${eff}`;
 
   // Legacy catalog nodes (generated nodes carry data.template)
   const tmpl = d.template ? NODE_TEMPLATES[d.template] : null;
   if (tmpl) {
-    return `${cat}${tmpl.label} · ${workerText}`;
+    return `${cat}${tmpl.label}${suffix}`;
   }
   if (node.type === 'aiStep') {
     const role = d.role ?? 'custom';
-    return `${cat}${role} · ${workerText}`;
+    return `${cat}${role}${suffix}`;
   }
-  if (node.type === 'agentTask') return `task · ${workerText}`;
+  if (node.type === 'agentTask') return `task${suffix}`;
   return TYPE_META[node.type]?.sub ?? '';
 }
 

@@ -17,6 +17,7 @@ import { formatElapsed, isTerminal } from './runProgress.js';
 import { computeDisplacement, rectsOverlap } from './displace.js';
 import MarkdownView from './MarkdownView.jsx';
 import { statusPill } from './Inspector.jsx';
+import { ModelBadge } from './ModelPicker.jsx';
 import FlowEdge from './FlowEdge.jsx';
 import NodeMenu from './NodeMenu.jsx';
 import Tip from './Tip.jsx';
@@ -181,6 +182,18 @@ function NodeCard({ id, data, vertical, noTarget, noSource }) {
             {data.activeSince != null && data.status === 'active' && <ElapsedTicker since={data.activeSince} />}
           </div>
           <div className="node-sub">{data.sub}</div>
+          {/* The model, where the decision is (D36 P0.4/B14). Editor cards
+              only — the run canvas never sets onPickModel, and a finished
+              run's model is a fact, not a control. */}
+          {data.onPickModel && (
+            <div className="node-model-row">
+              <ModelBadge
+                worker={data.worker}
+                activeModels={data.activeModels}
+                onChange={w => data.onPickModel(id, w)}
+              />
+            </div>
+          )}
         </div>
         <StatusGlyph status={data.status} />
         {/* Reader affordance (output-view phase 2): run-canvas cards only —
@@ -387,7 +400,7 @@ function ExpandedNodeCard({ id, data }) {
 // outputText/expanded are only attached to expanded cards, so the 250ms tick
 // re-renders exactly the one streaming reader, not the whole canvas.
 const cardEqual = (prev, next) =>
-  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'emptyHint', 'turn', 'feedbackPoint', 'stack', 'dropTarget', 'childCount', 'activeSince', 'expanded', 'outputText', 'expandable', 'hasOutput']
+  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'emptyHint', 'turn', 'feedbackPoint', 'stack', 'dropTarget', 'childCount', 'activeSince', 'expanded', 'outputText', 'expandable', 'hasOutput', 'workerKey', 'activeModels']
     .every(k => prev.data[k] === next.data[k]);
 
 const StageNode = React.memo(props => props.data.expanded
@@ -530,7 +543,7 @@ export function FlowEditor(props) {
   );
 }
 
-function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow, readOnly }) {
+function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow, readOnly, activeModels, onSetWorker }) {
   const rf = useReactFlow();
   // Latest-value mirrors for callbacks that must see current props without
   // re-binding (drag handlers fire outside React's render cycle).
@@ -557,6 +570,13 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
       const n = dispById.get(raw.id) ?? raw;
       const isOrch = raw.type === 'orchestrator';
       const kids = childCount.get(raw.id) ?? 0;
+      // Only the node types that actually call a model get a model badge. The
+      // type has to come from the RESOLVED copy: a template instance carries
+      // only its templateId in the flow file, and resolution is what turns
+      // that into an aiStep.
+      const type = n.type ?? raw.type;
+      const picksModel = !readOnly && Boolean(onSetWorker) && (type === 'aiStep' || type === 'agentTask');
+      const w = n.data?.worker ?? null;
       return {
         id: raw.id,
         type: isOrch ? 'orchestrator' : 'editable',
@@ -574,7 +594,7 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
         deletable: !readOnly && raw.type !== 'input' && raw.type !== 'output',
         data: {
           label: nodeLabel(n),
-          sub: nodeSub(n),
+          sub: nodeSub(n, { worker: !picksModel }),
           icon: n.data?.icon ?? TYPE_META[raw.type]?.icon ?? '▢',
           kind: n.kind,
           nodeType: raw.type,
@@ -582,6 +602,14 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
           ports: nodePorts(n),
           spawns: !isOrch && createsNodes(n),
           feedbackPoint: raw.type !== 'input' && raw.type !== 'output',
+          ...(picksModel ? {
+            worker: w,
+            // A primitive the memo comparator can actually compare — `worker`
+            // is a fresh object on every flow write.
+            workerKey: w ? `${w.provider}/${w.model}` : '',
+            activeModels,
+            onPickModel: onSetWorker
+          } : {}),
           ...(isOrch ? {
             empty: kids === 0,
             childCount: kids,
@@ -593,7 +621,7 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
         }
       };
     });
-  }, [readOnly]);
+  }, [readOnly, activeModels, onSetWorker]);
 
   const buildEdges = useCallback(f => f.edges.map(e => ({
     ...e,

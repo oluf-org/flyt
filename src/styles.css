@@ -1822,9 +1822,8 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .node-editor input:disabled, .node-editor textarea:disabled, .node-editor select:disabled { opacity: .55; }
-.worker-picker { display: flex; gap: 8px; }
-.worker-picker select { width: auto; flex: none; }
-.worker-picker input { flex: 1; min-width: 0; }
+/* One trigger button; the menu it opens is portalled out (see .model-popover). */
+.worker-picker { display: flex; gap: 8px; min-width: 0; }
 .check-row {
   display: flex; align-items: center; gap: 9px;
   font-size: 12.5px; color: var(--tx); cursor: pointer;
@@ -2074,6 +2073,146 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .model-row select { flex: none; max-width: 190px; }
+
+/* ---------- model facts, sets, and the picker (BRICKS P0) ----------
+   Catalog facts (price / context / tools) travel with a model wherever it is
+   shown, because choosing one is a cost decision. Chips are deliberately
+   quiet: they are reference, not decoration. */
+
+.model-facts { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.model-fact {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9.5px; letter-spacing: .01em;
+  padding: 1px 5px; border-radius: 4px;
+  color: var(--chip-tx); background: var(--chip);
+  white-space: nowrap;
+}
+.model-fact.warn { color: var(--err); background: var(--err-soft); }
+
+/* The starter set (P0.1): onboarding, so it leads with the accent and then
+   gets out of the way for good. */
+.starter-set { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 11px; padding: 14px; }
+.starter-list { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 12px; }
+.starter-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 2px; border-bottom: 1px solid var(--border);
+}
+.starter-row:last-child { border-bottom: none; }
+.starter-role { flex: none; width: 116px; font-size: 12px; font-weight: 600; color: var(--tx); }
+.starter-row .model-id { font-size: 11.5px; color: var(--tx); }
+.starter-hint { flex: 1; min-width: 0; font-size: 11px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Catalog search results (P0.2) — replaces a <datalist>, which could render
+   the facts but not keep them. */
+.catalog-results { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.catalog-result {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 6px 8px; border: 1px solid transparent; border-radius: 8px;
+  background: none; color: var(--tx); text-align: left; cursor: pointer;
+}
+.catalog-result:hover { background: var(--chip); border-color: var(--border); }
+.catalog-result .model-id { flex: 1; min-width: 0; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.catalog-result-provider { flex: none; font-size: 10.5px; color: var(--faint); }
+
+/* Model sets (P0.3 / B13). */
+.model-set { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.model-set-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.model-set-name { font-size: 12.5px; font-weight: 600; color: var(--tx); }
+.model-set-head .mono { font-size: 10px; }
+.model-set-head .link { margin-left: auto; }
+.model-set-members { display: flex; flex-wrap: wrap; gap: 6px; }
+.model-set-member {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border: 1px solid var(--border); border-radius: 20px;
+  font-size: 11px; color: var(--dim); cursor: pointer;
+}
+.model-set-member.on { color: var(--tx); border-color: var(--accent); background: var(--accent-soft); }
+.model-set-member input { accent-color: var(--accent); }
+
+/* The picker trigger: a field-shaped button that shows the current model and
+   what it costs, and opens the menu. */
+.model-trigger {
+  display: inline-flex; align-items: center; gap: 7px;
+  width: 100%; min-width: 0;
+  padding: 7px 10px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--tx); font-size: 12px; text-align: left; cursor: pointer;
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.model-trigger:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.model-trigger:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.model-trigger.unrouted { border-color: var(--err); }
+.model-trigger-id { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model-trigger-caret { flex: none; color: var(--faint); font-size: 9px; }
+
+/* The floating menu. Portalled to <body>, so it sits above the canvas and
+   escapes React Flow's transformed viewport. */
+.model-popover {
+  position: fixed; z-index: 60;
+  width: 340px; max-width: calc(100vw - 16px);
+  display: flex; flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--border); border-radius: 11px;
+  box-shadow: 0 14px 34px -10px light-dark(rgb(0 0 0 / .24), rgb(0 0 0 / .6));
+  overflow: hidden;
+  animation: picker-rise .12s var(--spring) both;
+}
+@media (prefers-reduced-motion: reduce) { .model-popover { animation: none; } }
+
+.model-menu { display: flex; flex-direction: column; min-height: 0; }
+.model-menu-search { padding: 9px 10px 7px; border-bottom: 1px solid var(--border); }
+.model-menu-search input { width: 100%; }
+.model-menu-sets {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+}
+.model-set-chip {
+  padding: 3px 9px; border-radius: 20px;
+  border: 1px solid var(--border); background: none;
+  font-size: 10.5px; color: var(--dim); cursor: pointer;
+}
+.model-set-chip.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.model-menu-list { max-height: 300px; overflow-y: auto; padding: 5px; }
+.model-menu-head {
+  padding: 8px 7px 4px;
+  font-size: 9px; letter-spacing: .09em; text-transform: uppercase; color: var(--faint);
+}
+.model-menu-empty { padding: 12px 8px; font-size: 11.5px; line-height: 1.5; }
+.model-option {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 6px 8px; border: 1px solid transparent; border-radius: 7px;
+  background: none; color: var(--tx); text-align: left; cursor: pointer;
+}
+.model-option:hover { background: var(--chip); }
+.model-option.on { border-color: var(--accent); background: var(--accent-soft); }
+.model-option-id { flex: 1; min-width: 0; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model-option-route { flex: none; font-size: 9.5px; color: var(--faint); }
+.model-menu-custom {
+  display: flex; gap: 6px; padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+.model-menu-custom input { flex: 1; min-width: 0; }
+.model-menu-warn {
+  padding: 8px 10px; font-size: 10.5px; line-height: 1.5;
+  color: var(--err); background: var(--err-soft);
+}
+
+/* The badge on a node card (P0.4 / B14): the model, on the node, one click
+   from being changed. Sized to sit under the sub line without growing the card. */
+.node-model-row { display: flex; margin-top: 4px; }
+.node-model-badge {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+  padding: 1px 6px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--chip);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 9px; color: var(--chip-tx); cursor: pointer;
+  transition: color .12s ease, border-color .12s ease, background .12s ease;
+}
+.node-model-badge:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.node-model-badge.unrouted { color: var(--err); border-color: var(--err); background: var(--err-soft); }
+.node-model-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-model-price { flex: none; opacity: .75; }
+.node-model-warn { flex: none; font-weight: 700; }
 
 .settings-error {
   margin-top: 16px; padding: 10px 12px;

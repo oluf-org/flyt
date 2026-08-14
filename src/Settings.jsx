@@ -1,6 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { APPROVAL_MODE_OPTIONS } from './ApprovalModePicker.jsx';
 import { APP_NAME, CONFIG_DIR } from '../core/brand.js';
+import { canServe, MOCK_MODELS, PROVIDER_ORDER } from './providerMirror.js';
+import { FactChips } from './ModelPicker.jsx';
+import { proposeStarterSet, modelSetId, MODEL_SET_MAX } from '../core/modelSource.js';
 
 // Settings page (PROVIDERS-PLAN §5): two tabs behind a slim rail.
 //   Providers — five compact cards (keys, test, Kimi key-kind), overview-first:
@@ -10,7 +13,6 @@ import { APP_NAME, CONFIG_DIR } from '../core/brand.js';
 // The renderer never sees a stored key — only per-provider hasKey flags come
 // back over IPC, and saving sends a key one way into the main process.
 
-const PROVIDER_ORDER = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'];
 // Providers whose "connection" is the vendor CLI's own sign-in, not a key.
 const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'];
 const PROVIDER_META = {
@@ -47,20 +49,9 @@ const PROVIDER_META = {
   mock: { name: 'Mock', blurb: 'Built-in fake provider for dry runs — no key, no cost' }
 };
 
-// Mirrors the adapters' canServe rules (presentational only — the main process
-// stays the authority for actual resolution).
-const SERVE = {
-  anthropic: id => id.startsWith('claude-'),
-  'claude-code': id => id.startsWith('claude-'),
-  openai: id => /^(gpt-|o\d)/.test(id),
-  codex: id => /^(gpt-|o\d|codex)/.test(id),
-  kimi: id => /^(kimi-|moonshot-)/.test(id),
-  openrouter: id => id.includes('/'),
-  mock: id => id.startsWith('mock-')
-};
-const canServe = (provider, id) => SERVE[provider]?.(id) ?? false;
-
-const MOCK_MODELS = ['mock-large', 'mock-small'];
+// canServe / PROVIDER_ORDER / MOCK_MODELS now live in providerMirror.js — the
+// model pickers need the same answers, and two copies of a rule that must
+// agree is one too many.
 const CATALOG_PROVIDERS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi']; // curated lists; openrouter fetches live
 
 export default function Settings({ onClose }) {
@@ -108,7 +99,7 @@ export default function Settings({ onClose }) {
 
         <div className="settings-body">
           {!s && !error && <div className="muted">Loading…</div>}
-          {s && tab === 'providers' && <ProvidersTab s={s} save={save} />}
+          {s && tab === 'providers' && <ProvidersTab s={s} save={save} onKeySaved={() => setTab('models')} />}
           {s && tab === 'models' && <ModelsTab s={s} save={save} />}
           {s && tab === 'safety' && <SafetyTab s={s} save={save} />}
           {error && <div className="settings-error mono">{error}</div>}
@@ -146,7 +137,7 @@ function FlowFilesSection() {
   );
 }
 
-function ProvidersTab({ s, save }) {
+function ProvidersTab({ s, save, onKeySaved }) {
   const [expanded, setExpanded] = useState(null);
   const [keyInputs, setKeyInputs] = useState({});
   const [savedTick, setSavedTick] = useState(null);
@@ -161,6 +152,9 @@ function ProvidersTab({ s, save }) {
     setKeyInputs(k => ({ ...k, [p]: '' }));
     setSavedTick(p);
     setTimeout(() => setSavedTick(t => (t === p ? null : t)), 2000);
+    // P0.1: the first key is the moment the app can start being useful. Don't
+    // make the user find the Models tab and a Fetch button to discover that.
+    if ((s.activeModels ?? []).length === 0) onKeySaved?.(p);
   };
 
   const test = async p => {
@@ -495,7 +489,7 @@ function SafetyTab({ s, save }) {
 // --- Models tab -------------------------------------------------------------
 
 function ModelsTab({ s, save }) {
-  const [catalog, setCatalog] = useState([]); // [{ id, name, provider, contextLength?, supportsTools? }]
+  const [catalog, setCatalog] = useState([]); // [{ id, name, provider, contextLength?, supportsTools?, inUsdPerM? }]
   const [fetching, setFetching] = useState(false);
   const [catalogError, setCatalogError] = useState('');
   const [search, setSearch] = useState('');
@@ -503,6 +497,9 @@ function ModelsTab({ s, save }) {
   const active = s.activeModels ?? [];
   const priority = s.providerPriority ?? PROVIDER_ORDER;
   const connected = p => Boolean(s.providers[p]?.hasKey);
+  // What the catalogs told us each model costs and can read (D36 P0.2). Kept
+  // main-side at fetch time so it survives a restart without re-fetching.
+  const facts = s.modelFacts ?? {};
 
   // Catalogs for the add-a-model search: curated lists always, the openrouter
   // live catalog only after an explicit fetch (it's huge and key-gated).
@@ -515,9 +512,14 @@ function ModelsTab({ s, save }) {
     )).then(lists => {
       if (!alive) return;
       // The subscription catalogs repeat their API sibling's ids — keep the
-      // first occurrence so the datalist offers each id once.
-      const seen = new Set();
-      setCatalog(lists.flat().filter(m => !seen.has(m.id) && seen.add(m.id)));
+      // first occurrence so each id is offered once. Merge rather than
+      // replace: the openrouter fetch below now starts at mount too, and
+      // whichever lands second must not wipe the other.
+      setCatalog(prev => {
+        const seen = new Set();
+        const curated = lists.flat().filter(m => !seen.has(m.id) && seen.add(m.id));
+        return [...curated, ...prev.filter(m => m.provider === 'openrouter' && !seen.has(m.id))];
+      });
     });
     return () => { alive = false; };
   }, []);
@@ -534,6 +536,18 @@ function ModelsTab({ s, save }) {
       setFetching(false);
     }
   };
+
+  // P0.1: a saved key is the whole trigger. The old path was Settings →
+  // Providers → key → Models → Fetch → add ids one at a time; six steps before
+  // the app does anything. Now the fetch fires itself the moment a key exists.
+  // Once per mount — the button beside the search is the way to refetch.
+  const autoFetched = useRef(false);
+  const orConnected = connected('openrouter');
+  useEffect(() => {
+    if (autoFetched.current || !orConnected) return;
+    autoFetched.current = true;
+    fetchOpenRouter();
+  }, [orConnected]);
 
   const filteredCatalog = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -582,6 +596,19 @@ function ModelsTab({ s, save }) {
 
   return (
     <>
+      <StarterSetSection
+        catalog={catalog}
+        active={active}
+        fetching={fetching}
+        anyProvider={PROVIDER_ORDER.some(p => p !== 'mock' && connected(p))}
+        onActivate={ids => save({
+          activeModels: [
+            ...active,
+            ...ids.filter(id => !active.some(m => m.id === id)).map(id => ({ id, source: 'auto', enabled: true }))
+          ]
+        })}
+      />
+
       <section>
         <div className="settings-section-head">
           <span className="section-label">Provider priority</span>
@@ -621,6 +648,9 @@ function ModelsTab({ s, save }) {
                 title={m.enabled !== false ? 'Active' : 'Inactive'}
               />
               <span className="model-id mono" title={m.id}>{m.id}</span>
+              {/* P0.2: price, context and tool support, on the row where the
+                  model is kept — picking one is a cost decision. */}
+              <FactChips facts={facts[m.id]} />
               {m.enabled !== false && !r && (
                 <span className="status-pill pill-err" title="No connected provider can serve this model">unrouted</span>
               )}
@@ -649,7 +679,6 @@ function ModelsTab({ s, save }) {
         </div>
         <div className="settings-row">
           <input
-            list="settings-catalog"
             type="search"
             placeholder="Search the catalogs, or type any model id…"
             value={search}
@@ -661,19 +690,41 @@ function ModelsTab({ s, save }) {
           </button>
           {connected('openrouter') && (
             <button onClick={fetchOpenRouter} disabled={fetching} title="Fetch the full OpenRouter catalog">
-              {fetching ? 'Fetching…' : 'Fetch OpenRouter'}
+              {fetching ? 'Fetching…' : 'Refetch OpenRouter'}
             </button>
           )}
         </div>
-        <datalist id="settings-catalog">
-          {filteredCatalog.map(m => (
-            <option key={`${m.provider}:${m.id}`} value={m.id}>
-              {m.name}{m.provider ? ` · ${PROVIDER_META[m.provider]?.name ?? m.provider}` : ''}{m.contextLength ? ` · ${Math.round(m.contextLength / 1000)}k ctx` : ''}{m.supportsTools ? ' · tools' : ''}
-            </option>
-          ))}
-        </datalist>
+        {/* A <datalist> rendered these facts and then threw them away — it
+            cannot show a price column. P0.2: a real list, so the number is
+            visible at the moment of choosing. */}
+        {search.trim() && (
+          <div className="catalog-results">
+            {filteredCatalog.length === 0
+              ? <div className="muted">Nothing in the catalogs matches — “Add” still takes any id you type.</div>
+              : filteredCatalog.slice(0, 12).map(m => (
+                <button
+                  key={`${m.provider}:${m.id}`}
+                  type="button"
+                  className="catalog-result"
+                  onClick={() => addModel(m.id)}
+                  title={`Add ${m.id}`}
+                >
+                  <span className="model-id mono">{m.id}</span>
+                  <FactChips facts={facts[m.id] ?? m} />
+                  <span className="catalog-result-provider">{PROVIDER_META[m.provider]?.name ?? m.provider}</span>
+                </button>
+              ))}
+          </div>
+        )}
         {catalogError && <div className="settings-error mono">{catalogError}</div>}
       </section>
+
+      <ModelSetsSection
+        sets={s.modelSets ?? {}}
+        active={active}
+        facts={facts}
+        save={save}
+      />
 
       <section>
         <div className="settings-section-head">
@@ -705,6 +756,147 @@ function ModelsTab({ s, save }) {
 
       <JudgeModelSection s={s} save={save} active={active} />
     </>
+  );
+}
+
+// --- Starter set (BRICKS P0.1) ----------------------------------------------
+// A key on its own does nothing. This proposes four models covering the four
+// roles the app actually needs — cheap, strong, long-context, wildcard — and
+// activates them in one click. It disappears once anything is active; it is
+// onboarding, not a permanent panel.
+function StarterSetSection({ catalog, active, fetching, anyProvider, onActivate }) {
+  const proposal = useMemo(() => proposeStarterSet(catalog), [catalog]);
+  const [dismissed, setDismissed] = useState(false);
+
+  if (dismissed || active.length > 0) return null;
+  if (!anyProvider) return null;
+  if (fetching && !proposal.length) {
+    return (
+      <section className="starter-set">
+        <div className="settings-section-head"><span className="section-label">Starter set</span></div>
+        <p className="settings-hint">Reading the catalog…</p>
+      </section>
+    );
+  }
+  if (!proposal.length) return null;
+
+  return (
+    <section className="starter-set">
+      <div className="settings-section-head">
+        <span className="section-label">Starter set</span>
+        <span className="status-pill pill-accent">suggested</span>
+      </div>
+      <p className="settings-hint">
+        Four models covering the four jobs this app gives a model. Activate them and every picker
+        in the app has something sensible to offer — you can change any of them afterwards.
+      </p>
+      <div className="starter-list">
+        {proposal.map(p => (
+          <div className="starter-row" key={p.role}>
+            <span className="starter-role">{p.label}</span>
+            <span className="model-id mono" title={p.id}>{p.id}</span>
+            <FactChips facts={p.facts} />
+            <span className="starter-hint muted">{p.hint}</span>
+          </div>
+        ))}
+      </div>
+      <div className="settings-row">
+        <button className="primary" onClick={() => onActivate(proposal.map(p => p.id))}>
+          Activate these {proposal.length}
+        </button>
+        <button className="ghost" onClick={() => setDismissed(true)}>Not now</button>
+      </div>
+    </section>
+  );
+}
+
+// --- Model sets (BRICKS P0.3 / D36 B13) -------------------------------------
+// A named list of active models: one thing to pick in a fan-out, a mode, or a
+// comparison, instead of N pickers. Prerequisite for lanes (P2) being pleasant
+// to author, and useful on its own as a filter in every model picker.
+function ModelSetsSection({ sets, active, facts, save }) {
+  const [newName, setNewName] = useState('');
+  const entries = Object.entries(sets);
+  const usable = active.filter(m => m.enabled !== false);
+
+  const write = next => save({ modelSets: next });
+  const createSet = () => {
+    const name = newName.trim();
+    const id = modelSetId(name);
+    if (!id || sets[id]) return;
+    write({ ...sets, [id]: { name, models: [] } });
+    setNewName('');
+  };
+  const toggle = (id, modelId) => {
+    const set = sets[id];
+    if (!set) return;
+    const has = set.models.includes(modelId);
+    if (!has && set.models.length >= MODEL_SET_MAX) return;
+    write({
+      ...sets,
+      [id]: { ...set, models: has ? set.models.filter(m => m !== modelId) : [...set.models, modelId] }
+    });
+  };
+  const remove = id => {
+    const { [id]: _gone, ...rest } = sets;
+    write(rest);
+  };
+
+  return (
+    <section>
+      <div className="settings-section-head">
+        <span className="section-label">Model sets</span>
+        {entries.length > 0 && <span className="status-pill pill-neutral">{entries.length}</span>}
+      </div>
+      <p className="settings-hint">
+        Name a group of models once — “analysts”, “cheap”, “the ones good at Rust” — then pick the
+        group instead of the models. Sets filter every model picker, and a fan-out node will mint
+        one lane per member.
+      </p>
+      {entries.length === 0 && <div className="muted">No sets yet.</div>}
+      {entries.map(([id, set]) => (
+        <div className="model-set" key={id}>
+          <div className="model-set-head">
+            <span className="model-set-name">{set.name}</span>
+            <span className="mono muted">{id}</span>
+            <span className="status-pill pill-neutral">{set.models.length} model{set.models.length === 1 ? '' : 's'}</span>
+            <button className="link" onClick={() => remove(id)} aria-label={`Delete set ${set.name}`} title="Delete this set">✕</button>
+          </div>
+          {usable.length === 0
+            ? <div className="muted">Activate some models first.</div>
+            : (
+              <div className="model-set-members">
+                {usable.map(m => (
+                  <label key={m.id} className={'model-set-member' + (set.models.includes(m.id) ? ' on' : '')}>
+                    <input
+                      type="checkbox"
+                      checked={set.models.includes(m.id)}
+                      onChange={() => toggle(id, m.id)}
+                    />
+                    <span className="mono">{m.id}</span>
+                    <FactChips facts={facts[m.id]} />
+                  </label>
+                ))}
+              </div>
+            )}
+        </div>
+      ))}
+      <div className="settings-row">
+        <input
+          type="text"
+          value={newName}
+          placeholder="New set name — e.g. analysts"
+          onChange={e => setNewName(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') createSet(); }}
+          aria-label="New model set name"
+        />
+        <button
+          onClick={createSet}
+          disabled={!newName.trim() || Boolean(sets[modelSetId(newName)])}
+          title={sets[modelSetId(newName)] ? 'A set with that name already exists' : 'Create this set'}
+        >Create set</button>
+      </div>
+    </section>
   );
 }
 

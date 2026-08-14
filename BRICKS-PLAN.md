@@ -102,7 +102,7 @@ Each phase ships independently and leaves the app better than it found it. P0–
 engine code. The learn-flow becomes *authorable* at the end of P2 and *chainable* at the end
 of P4.
 
-### P0 — Models you can actually pick (UI only)
+### P0 — Models you can actually pick (UI only) — **shipped**
 
 *The complaint that started this: "the model pickers have to be easier to use."*
 
@@ -116,6 +116,20 @@ of P4.
 
 **Done when:** a new user with only an OpenRouter key reaches a runnable flow with three
 distinct models assigned in under two minutes, and no picker requires typing a model id.
+
+**Shipped** (2026-08-14). Saving a key switches to the Models tab, fetches the catalog, and
+proposes four models from four different labs, priced; one click activates them. Facts
+(price/1M in+out, context, tool support) are persisted at fetch time as `settings.modelFacts`
+and render on active-model rows, catalog search results, every picker option, and the node
+badge. `settings.modelSets` holds named groups, which filter every picker. `WorkerPicker` is
+now one popover control (`src/ModelPicker.jsx`) used by the Inspector, the node library, the
+launch composer, and a new badge on every AI node card — portalled to `<body>`, because React
+Flow's transformed viewport eats a `position: fixed` child. `canServe` moved to
+`src/providerMirror.js` so the unrouted warning and Settings share one rule.
+
+Two things learned that P2+ should not relearn: a template instance carries **no `type`** in
+the flow file (resolution supplies it — gate on the resolved node), and Settings' catalog
+effects both wrote the whole `catalog` array, so whichever landed second wiped the other.
 
 ---
 
