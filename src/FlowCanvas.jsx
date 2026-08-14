@@ -6,7 +6,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
   TYPE_META, nodeLabel, nodeSub, nodePorts, createsNodes,
-  FEEDBACK_HANDLE, isFeedbackEdge, isStructuralNode, forwardEdges
+  FEEDBACK_HANDLE, isFeedbackEdge, isStructuralNode, isContainerType, forwardEdges
 } from './flowTypes.js';
 import {
   wouldCreateCycle, arrangeForCanvas, absolutePosition,
@@ -17,7 +17,8 @@ import { formatElapsed, isTerminal } from './runProgress.js';
 import { computeDisplacement, rectsOverlap } from './displace.js';
 import MarkdownView from './MarkdownView.jsx';
 import { statusPill } from './Inspector.jsx';
-import { ModelBadge } from './ModelPicker.jsx';
+import { ModelBadge, useModelMeta } from './ModelPicker.jsx';
+import { resolveLanes } from '../core/nodes/fanout.js';
 import FlowEdge from './FlowEdge.jsx';
 import NodeMenu from './NodeMenu.jsx';
 import Tip from './Tip.jsx';
@@ -61,6 +62,7 @@ export function freshNodeId(prefix) {
 // The drag-and-drop payload the node picker puts on the dataTransfer.
 export const DND_MIME = `application/x-${APP_SLUG}-node`;
 export const dndOrchestrator = () => ({ kind: 'orchestrator' });
+export const dndFanout = () => ({ kind: 'fanout' });
 export const dndTemplate = templateId => ({ kind: 'template', templateId });
 
 // A fresh flow node from a picker spec at a canvas position: either the
@@ -71,6 +73,15 @@ function nodeFromSpec(spec, position) {
     return {
       id: freshNodeId('orchestrator'), type: 'orchestrator', kind: 'ai',
       position, data: { title: 'Orchestrator' }
+    };
+  }
+  if (spec?.kind === 'fanout') {
+    // Ships with the four preset lanes rather than an empty box: a fan-out
+    // with no lanes cannot run at all (the linter says so), and these four are
+    // the shapes the node was designed around (D36 P2.2).
+    return {
+      id: freshNodeId('fanout'), type: 'fanout', kind: 'ai',
+      position, data: { title: 'Fan-out', lanes: ['standard', 'wildcard', 'adversarial', 'contrarian'] }
     };
   }
   if (spec?.kind === 'template' && typeof spec.templateId === 'string') {
@@ -229,15 +240,17 @@ function NodeCard({ id, data, vertical, noTarget, noSource }) {
   );
 }
 
-// The Orchestrator container: a large box that fills with task nodes — dropped
-// in by hand while authoring, or AI-created at run time. Children are separate
-// React Flow nodes with parentId = this node, rendered inside; the animated
-// purple gradient border marks the box while it plans and runs its children.
+// A container box: a large box that fills with child nodes — dropped in by
+// hand while authoring, planned by a model at run time (orchestrator), or
+// minted one-per-lane from a lane list (fan-out, D36 P2.6). Children are
+// separate React Flow nodes with parentId = this node, rendered inside; the
+// animated gradient border marks the box while it runs them.
 function OrchestratorCard({ data }) {
   const box = data.box ?? ORCH_BOX_DEFAULT;
+  const isFanout = data.nodeType === 'fanout';
   return (
     <div
-      className={`orch-node status-${data.status}` + (data.selected ? ' selected' : '') + (data.dropTarget ? ' drop-target' : '')}
+      className={`orch-node status-${data.status}` + (isFanout ? ' orch-fanout' : '') + (data.selected ? ' selected' : '') + (data.dropTarget ? ' drop-target' : '')}
       style={{ width: box.w, height: box.h }}
     >
       <Handle type="target" position={Position.Top} />
@@ -247,10 +260,17 @@ function OrchestratorCard({ data }) {
           <div className="node-title-row">
             <div className="node-title">{data.label}</div>
             <span className="node-kind kind-ai">ai</span>
-            <span className="node-kind kind-spawn" title="Creates other nodes at run time">＋nodes</span>
+            <span className="node-kind kind-spawn" title={isFanout ? 'Creates one node per lane at run time' : 'Creates other nodes at run time'}>＋nodes</span>
+            {/* A fan-out knows its width before it runs — the lane list is
+                authored, not planned — so the count is shown while empty too. */}
+            {isFanout && data.laneCount > 0 && data.childCount === 0 && (
+              <span className="node-kind kind-inside" title="Lanes this fan-out will run">
+                ⋔ {data.laneCount} lanes
+              </span>
+            )}
             {data.childCount > 0 && (
-              <span className="node-kind kind-inside" title={`${data.childCount} node(s) placed inside this box`}>
-                ▣ {data.childCount}
+              <span className="node-kind kind-inside" title={`${data.childCount} ${isFanout ? 'lane' : 'node'}(s) inside this box`}>
+                {isFanout ? '⋔' : '▣'} {data.childCount}{data.doneCount != null ? ` · ${data.doneCount} done` : ''}
               </span>
             )}
           </div>
@@ -400,7 +420,7 @@ function ExpandedNodeCard({ id, data }) {
 // outputText/expanded are only attached to expanded cards, so the 250ms tick
 // re-renders exactly the one streaming reader, not the whole canvas.
 const cardEqual = (prev, next) =>
-  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'emptyHint', 'turn', 'feedbackPoint', 'stack', 'dropTarget', 'childCount', 'activeSince', 'expanded', 'outputText', 'expandable', 'hasOutput', 'workerKey', 'activeModels']
+  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'emptyHint', 'turn', 'feedbackPoint', 'stack', 'dropTarget', 'childCount', 'activeSince', 'expanded', 'outputText', 'expandable', 'hasOutput', 'workerKey', 'activeModels', 'laneCount', 'doneCount']
     .every(k => prev.data[k] === next.data[k]);
 
 const StageNode = React.memo(props => props.data.expanded
@@ -506,7 +526,7 @@ const summaryEqual = (prev, next) =>
     .every(k => prev.data[k] === next.data[k]);
 const SummaryNodeMemo = React.memo(SummaryNode, summaryEqual);
 
-const nodeTypes = { stage: StageNode, task: StageNode, orchestrator: OrchNode, summary: SummaryNodeMemo };
+const nodeTypes = { stage: StageNode, task: StageNode, orchestrator: OrchNode, fanout: OrchNode, summary: SummaryNodeMemo };
 
 // Editor node: same neutral card, handles depend on the node type
 // (input has no target, output has no source).
@@ -519,7 +539,8 @@ const editorNodeTypes = {
       noSource={props.data.nodeType === 'output'}
     />
   ), cardEqual),
-  orchestrator: OrchNode
+  orchestrator: OrchNode,
+  fanout: OrchNode
 };
 
 // Editable canvas over a flow DEFINITION (not run state). The raw flow object
@@ -545,6 +566,12 @@ export function FlowEditor(props) {
 
 function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow, readOnly, activeModels, onSetWorker }) {
   const rf = useReactFlow();
+  // Lanes may come from a named model set (D36 P2.4), so drawing "how wide is
+  // this fan-out" needs the sets — which the model pickers already carry.
+  const { modelSets } = useModelMeta();
+  const laneCountOf = useCallback(
+    n => resolveLanes(n, { modelSets, activeModels }).length,
+    [modelSets, activeModels]);
   // Latest-value mirrors for callbacks that must see current props without
   // re-binding (drag handlers fire outside React's render cycle).
   const flowRef = useRef(flow);
@@ -561,14 +588,14 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
   // back so they can never cover a free node.
   const buildNodes = useCallback((f, sel, dropTargetId) => {
     const dispById = new Map((resolvedRef.current ?? f).nodes.map(n => [n.id, n]));
-    const orchIds = new Set(f.nodes.filter(n => n.type === 'orchestrator').map(n => n.id));
+    const orchIds = new Set(f.nodes.filter(n => isContainerType(n.type)).map(n => n.id));
     const childCount = new Map();
     for (const n of f.nodes) {
       if (n.parentId) childCount.set(n.parentId, (childCount.get(n.parentId) ?? 0) + 1);
     }
     return arrangeForCanvas(f.nodes).map(raw => {
       const n = dispById.get(raw.id) ?? raw;
-      const isOrch = raw.type === 'orchestrator';
+      const isOrch = isContainerType(raw.type);
       const kids = childCount.get(raw.id) ?? 0;
       // Only the node types that actually call a model get a model badge. The
       // type has to come from the RESOLVED copy: a template instance carries
@@ -579,7 +606,7 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
       const w = n.data?.worker ?? null;
       return {
         id: raw.id,
-        type: isOrch ? 'orchestrator' : 'editable',
+        type: isOrch ? raw.type : 'editable',
         position: raw.position,
         // Containment: only honored when the parent box actually exists —
         // an orphaned parentId (hand-edited YAML) degrades to top level
@@ -615,13 +642,20 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
             childCount: kids,
             box: raw.data?.box,
             dropTarget: dropTargetId === raw.id,
-            emptyHint: 'Drag nodes in to run them inside this box — or let it plan for itself at run time.'
+            // A fan-out's width is authored, so it can say what it will do
+            // before it does it; an orchestrator's is decided at run time.
+            ...(raw.type === 'fanout' ? { laneCount: laneCountOf(raw) } : {}),
+            emptyHint: raw.type === 'fanout'
+              ? (laneCountOf(raw)
+                  ? `Runs ${laneCountOf(raw)} lane(s) on one brief at run time — one node per lane, in here.`
+                  : 'No lanes yet — add lanes (or point this at a model set) in the Inspector.')
+              : 'Drag nodes in to run them inside this box — or let it plan for itself at run time.'
           } : {}),
           selected: raw.id === sel
         }
       };
     });
-  }, [readOnly, activeModels, onSetWorker]);
+  }, [readOnly, activeModels, onSetWorker, laneCountOf]);
 
   const buildEdges = useCallback(f => f.edges.map(e => ({
     ...e,
@@ -681,7 +715,7 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
   // Orchestrator boxes as absolute canvas rects (editor boxes are always
   // top-level — nesting is refused by the editor and flagged by the linter).
   const orchRects = useCallback(f => f.nodes
-    .filter(n => n.type === 'orchestrator' && !n.parentId)
+    .filter(n => isContainerType(n.type) && !n.parentId)
     .map(n => {
       const box = n.data?.box ?? ORCH_BOX_DEFAULT;
       return { id: n.id, x: n.position?.x ?? 0, y: n.position?.y ?? 0, w: box.w, h: box.h };
@@ -700,7 +734,7 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
   // themselves never can).
   const containmentCandidates = useCallback(dragged => (dragged ?? []).filter(d => {
     const raw = flowRef.current.nodes.find(n => n.id === d.id);
-    return raw && raw.type !== 'input' && raw.type !== 'output' && raw.type !== 'orchestrator';
+    return raw && raw.type !== 'input' && raw.type !== 'output' && !isContainerType(raw.type);
   }), []);
 
   const inRect = (c, r) => c.x >= r.x && c.x <= r.x + r.w && c.y >= r.y && c.y <= r.y + r.h;
@@ -934,7 +968,7 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
     if (!node) return;
     writeStructure(f => {
       const rects = orchRects(f);
-      const r = spec.kind === 'orchestrator' ? null : rects.find(r => inRect(point, r));
+      const r = isContainerType(spec.kind) ? null : rects.find(r => inRect(point, r));
       if (r) {
         node.parentId = r.id;
         node.position = {
@@ -1288,7 +1322,7 @@ function FlowCanvasInner({ snapshot, selectedNode, onSelect, live = false, pause
     const view = litNodes.map(n => {
       const ex = expanded[n.id];
       const o = posOverrides[n.id];
-      const expandable = n.type !== 'orchestrator' && n.type !== 'summary' && !n.parentId;
+      const expandable = !isContainerType(n.type) && n.type !== 'summary' && !n.parentId;
       if (!ex && !o && !displacing.has(n.id) && !expandable && n.type !== 'summary') return n;
       let cls = n.className ?? '';
       if (displacing.has(n.id)) cls += ' displacing';
@@ -1333,7 +1367,7 @@ function FlowCanvasInner({ snapshot, selectedNode, onSelect, live = false, pause
   // Double-click does what the ⤢ button does (expand only — collapse is the
   // ⤡ button, so double-clicking text inside a reader never collapses it).
   const onNodeDoubleClick = useCallback((_e, node) => {
-    if (node.type === 'orchestrator' || node.type === 'summary' || node.parentId) return;
+    if (isContainerType(node.type) || node.type === 'summary' || node.parentId) return;
     if (!expandedRef.current[node.id]) expandNode(node.id);
   }, [expandNode]);
 
@@ -1348,7 +1382,7 @@ function FlowCanvasInner({ snapshot, selectedNode, onSelect, live = false, pause
       if (t?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
       if (menu || stackOpenFor || focusOpen) return;
       const node = selectedNode ? baseNodesRef.current.find(n => n.id === selectedNode) : null;
-      if (!node || node.type === 'orchestrator' || node.type === 'summary' || node.parentId) return;
+      if (!node || isContainerType(node.type) || node.type === 'summary' || node.parentId) return;
       if (e.key === 'Enter' && !expandedRef.current[node.id]) { e.preventDefault(); expandNode(node.id); }
       else if (e.key === 'Escape' && expandedRef.current[node.id]) collapseNode(node.id);
     };
@@ -1702,7 +1736,7 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
   // Orchestrators whose swarm is too large to draw: their children are hidden
   // and the box shows a stack + count (modal lists them).
   const collapsed = new Set(flow.nodes
-    .filter(n => n.type === 'orchestrator' && childrenOf(n.id).length > MAX_VISIBLE_CHILDREN)
+    .filter(n => isContainerType(n.type) && childrenOf(n.id).length > MAX_VISIBLE_CHILDREN)
     .map(n => n.id));
   const hidden = new Set(flow.nodes
     .filter(n => n.parentId && collapsed.has(n.parentId))
@@ -1717,13 +1751,13 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
   };
   const nodes = arrangeForCanvas(flow.nodes.filter(n => !hidden.has(n.id))).map(n => ({
     id: n.id,
-    type: n.type === 'orchestrator' ? 'orchestrator' : 'stage',
+    type: isContainerType(n.type) ? 'orchestrator' : 'stage',
     position: n.position,
     // Orchestrator children live inside their container's box. arrangeForCanvas
     // guarantees parents precede children (React Flow drops the child
     // otherwise); a child whose box is missing or collapsed degrades to top
     // level instead of vanishing.
-    ...(n.parentId && !hidden.has(n.parentId) && flow.nodes.some(p => p.id === n.parentId && p.type === 'orchestrator')
+    ...(n.parentId && !hidden.has(n.parentId) && flow.nodes.some(p => p.id === n.parentId && isContainerType(p.type))
       ? { parentId: n.parentId, extent: 'parent', draggable: false }
       : {}),
     data: {
@@ -1735,14 +1769,23 @@ function buildFlowRunGraph(snapshot, selectedNode, onOpenStack) {
       // Follow-up provenance (FU5): badge the node with its turn number.
       ...(n.data?.origin === 'followup' ? { turn: n.data.turn } : {}),
       ports: nodePorts(n),
-      spawns: n.type !== 'orchestrator' && createsNodes(n),
+      spawns: !isContainerType(n.type) && createsNodes(n),
       feedbackPoint: n.type !== 'input' && n.type !== 'output',
-      ...(n.type === 'orchestrator'
+      ...(isContainerType(n.type)
         ? collapsed.has(n.id)
           // Collapsed: a compact box regardless of the swarm's laid-out size.
           ? { empty: false, box: { w: 380, h: 230 }, stack: stackFor(n.id), onOpenStack: () => onOpenStack?.(n.id) }
-          : { empty: childrenOf(n.id).length === 0, box: n.data?.box }
+          : {
+              empty: childrenOf(n.id).length === 0,
+              box: n.data?.box,
+              // "N lanes · M done" on the box itself (D36 P2.6): with lanes
+              // running in parallel, how far along the box is cannot be read
+              // off any single child.
+              childCount: childrenOf(n.id).length,
+              doneCount: childrenOf(n.id).filter(c => statusOf(c.id) === 'done').length
+            }
         : {}),
+      nodeType: n.type,
       // Feeds the NodeMenu's Summarize item (D8: offered on any node WITH output).
       hasOutput: Boolean(nodeOutputText(snapshot, n.id)),
       selected: selectedNode === n.id

@@ -32,7 +32,10 @@ import { makeRetrospective } from './retrospective.js';
 import { recordToolUsage } from './feedback.js';
 import { resolveCallTarget } from './modelSource.js';
 import { runExecutorTask } from './nodes/executor.js';
-import { runContainer, ensureChildStatuses } from './nodes/expand.js';
+import {
+  runContainer, ensureChildStatuses, commitChildren, placeInContainer, placeByLayout
+} from './nodes/expand.js';
+import { resolveLanes, laneBrief, laneInventory, DEFAULT_LANE_TEMPLATE } from './nodes/fanout.js';
 import { Workspace } from './workspace.js';
 import { loadSkills, withSkillsSection } from './skills.js';
 import { createWriteLedger } from './writeLedger.js';
@@ -1581,7 +1584,16 @@ export class FlowRunner {
     // Pre-run gate (REFACTOR-PLAN §4): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
-    const gate = lintFlow(flow, { templates: this.nodeStore?.listFull() ?? null, rules: RUNTIME_RULES, library: toolLibraryForLint() });
+    const gate = lintFlow(flow, {
+      templates: this.nodeStore?.listFull() ?? null,
+      rules: RUNTIME_RULES,
+      library: toolLibraryForLint(),
+      // A fan-out's lanes may come entirely from a model set, so the gate has
+      // to be able to resolve one — otherwise a perfectly good flow reads as
+      // laneless (D36 P2.4/P2.5).
+      modelSets: this.config.modelSets ?? null,
+      activeModels: this.config.activeModels ?? null
+    });
     if (!gate.ok) {
       throw new Error(`Flow "${flow.name ?? flow.id}" failed validation:\n`
         + gate.errors.map(e => `- [${e.rule}] ${e.message}`).join('\n'));
@@ -2804,6 +2816,10 @@ export class FlowRunner {
       return this.runOrchestrator(runId, flow, node, opts);
     }
 
+    if (node.type === 'fanout') {
+      return this.runFanout(runId, flow, node, opts);
+    }
+
     if (node.type === 'output') {
       this.store.appendLog(runId, { event: 'node_start', node: node.id, type: 'output' });
       const parts = this.upstreamContext(runId, flow, node, taskIdByNode);
@@ -2982,6 +2998,131 @@ export class FlowRunner {
     return {};
   }
 
+  // The Fan-out container (BRICKS P2 / D36 B5–B6): N deliberately diverged
+  // takes on ONE brief. Where the orchestrator asks a model which children to
+  // create, a fan-out already knows — the author wrote a lane list, or pointed
+  // at a model set. So there is no planning call, no contract to violate, and
+  // nothing to re-ask: the node mints one child per lane and runs them through
+  // the same scoped sub-walk every container uses (core/nodes/expand.js).
+  //
+  // Every lane is told who its siblings are and asked for at least one finding
+  // none of them can reach. No lane ever sees another's OUTPUT — that would
+  // collapse the divergence the whole node exists to produce (B6).
+  async runFanout(runId, flow, node, opts) {
+    this.store.appendLog(runId, { event: 'node_start', node: node.id, type: 'fanout' });
+
+    const failNode = (msg, problems = [msg]) => {
+      this.store.writeRetrospective(runId, node.id, makeRetrospective({
+        node: node.id,
+        status: 'failed',
+        problems,
+        resolution: 'Fan-out failed; run stopped and escalated to human.',
+        confidence: 0,
+        recommendation: `Fan-out "${node.data?.title || node.id}" failed. ${msg}`
+      }));
+      this.setNodeStatus(runId, node.id, 'failed');
+      return new Error(`Fan-out ${node.id} failed: ${msg}`);
+    };
+
+    const lanes = resolveLanes(node, {
+      modelSets: this.config.modelSets ?? {},
+      activeModels: this.config.activeModels ?? null
+    });
+    if (!lanes.length) {
+      throw failNode('no lanes — declare "lanes:", or point "modelSet:" at a set with active members');
+    }
+
+    // Resume: children materialized on a previous pass are reused, matched
+    // back to their lanes by the laneId stamped on them.
+    let children = flow.nodes.filter(n => n.data?.managedBy === node.id);
+    const laneOf = new Map();
+
+    if (children.length) {
+      for (const c of children) {
+        const lane = lanes.find(l => l.id === c.data?.laneId);
+        if (lane) laneOf.set(c.id, lane);
+      }
+      ensureChildStatuses(this.store, runId, children);
+      this.store.appendLog(runId, { event: 'node_resume', node: node.id, type: 'fanout', children: children.length });
+    } else {
+      const goal = node.data?.goal?.trim() ?? '';
+      const created = [];
+      const errors = [];
+      for (const lane of lanes) {
+        const templateId = lane.template ?? node.data?.template ?? DEFAULT_LANE_TEMPLATE;
+        const childId = `${node.id}-${lane.id}`;
+        if (flow.nodes.some(n => n.id === childId)) {
+          errors.push(`lane "${lane.id}": node id "${childId}" already exists in the flow`);
+          continue;
+        }
+        // The lane's brief IS its instructions: the shared goal, its own
+        // slant, and the roster of everyone else on the same question.
+        const child = this.templateNode(templateId, childId, {
+          title: lane.label,
+          goal,
+          instructions: laneBrief(lane, lanes, { goal }),
+          ...(lane.worker ? { worker: lane.worker } : node.data?.worker ? { worker: node.data.worker } : {}),
+          ...(lane.tools ? { tools: lane.tools } : {})
+        });
+        // A lane inherits the fan-out's ceiling exactly as a generated child
+        // inherits an orchestrator's (§6.3) — a node that decides what other
+        // nodes may do must not be able to decide they may do more than it may.
+        const ceiling = node.data?.toolCeiling
+          ? narrowCeiling(node.data.toolCeiling, child.data?.toolCeiling ?? null, grantContext())
+          : child.data?.toolCeiling ?? null;
+        child.data = {
+          ...child.data,
+          laneId: lane.id,
+          generatedBy: node.id,
+          managedBy: node.id,
+          requiresApproval: false,
+          ...(ceiling ? { toolCeiling: ceiling } : {})
+        };
+        child.parentId = node.id;
+        child.extent = 'parent';
+        created.push(child);
+        laneOf.set(child.id, lane);
+      }
+      if (!created.length) throw failNode('no lane could be materialized', errors.length ? errors : ['every lane collided with an existing node id']);
+
+      // Lanes are independent by construction — that is the entire point — so
+      // there are no edges between them, only the container's wire to each.
+      const edges = created.map(c => ({ id: `gen-e-${node.id}-${c.id}`, source: node.id, target: c.id, generatedBy: node.id }));
+      commitChildren(this, runId, flow, node, created, edges, {
+        parentId: node.id,
+        place: placeInContainer(node, created, containerLayout)
+      });
+      children = created;
+      this.store.appendLog(runId, {
+        event: 'fanout_lanes', node: node.id,
+        lanes: lanes.map(l => ({ id: l.id, model: l.worker?.model ?? null, preset: l.preset ?? null }))
+      });
+    }
+
+    // The auxiliary "lanes" port: who ran, on what, and why they were separate.
+    this.store.writeNodeOutput(runId, `${node.id}.lanes`, laneInventory(lanes));
+
+    const title = node.data?.title?.trim() || 'Fan-out';
+    await runContainer(this, runId, flow, node, children, {
+      ...opts,
+      kind: 'Fan-out',
+      title,
+      aggregateLabel: `${children.length} lane(s)`,
+      label: c => laneOf.get(c.id)?.label ?? c.data?.title?.trim() ?? c.id
+    });
+
+    this.store.writeRetrospective(runId, node.id, makeRetrospective({
+      node: node.id,
+      status: 'success',
+      problems: [],
+      confidence: 0.75,
+      recommendation: `Fan-out "${title}" ran ${children.length} lane(s) on one brief: `
+        + lanes.map(l => `${l.label}${l.worker ? ` (${l.worker.model})` : ''}`).join(', ') + '.'
+    }));
+    this.setNodeStatus(runId, node.id, 'done');
+    return {};
+  }
+
   // One bounded retry for structured-output roles: re-ask the SAME worker with
   // its rejected output and the concrete validation errors. Returns the new
   // output text, or null when the retry call itself failed (the caller then
@@ -3051,7 +3192,14 @@ export class FlowRunner {
       }
     }
     if (lib) return resolveInstance({ id, templateId, position: { x: 0, y: 0 }, overrides: effOverrides }, lib);
-    const { title, goal, category, contextSpec, requiresApproval, effort, evalType, language } = overrides;
+    const {
+      title, goal, category, contextSpec, requiresApproval, effort, evalType, language,
+      // The library path passes the whole override map through resolveInstance;
+      // this fallback used to forward a fixed subset, which quietly dropped
+      // exactly the three fields a fan-out lane is made of (D36 P2.1). Both
+      // paths now carry the same set.
+      instructions, worker, tools
+    } = overrides;
     return createNodeFromTemplate(templateId, {
       id,
       position: { x: 0, y: 0 },
@@ -3063,6 +3211,9 @@ export class FlowRunner {
         ...(effort ? { effort } : {}),
         ...(evalType ? { evalType } : {}),
         ...(language ? { language } : {}),
+        ...(instructions ? { instructions } : {}),
+        ...(worker ? { worker } : {}),
+        ...(tools ? { tools } : {}),
         ...(requiresApproval != null ? { requiresApproval } : {})
       }
     });
@@ -3231,34 +3382,18 @@ export class FlowRunner {
       }
     }
 
-    flow.nodes.push(...created);
-    flow.edges.push(...edges);
-    if (parentId) {
-      // Grid the children inside the container and size its box to fit.
-      const { positions, box } = containerLayout(created, flow.edges);
-      for (const n of created) n.position = positions.get(n.id) ?? n.position;
-      ownerNode.data = { ...ownerNode.data, box };
-    } else {
-      // Re-layout the run's display copy so generated nodes slot into clean
-      // dependency layers instead of overlapping the authored ones. This only
-      // touches flow.json inside the run dir — never the saved flow definition.
-      const pos = layoutPositions(flow);
-      for (const n of flow.nodes) n.position = pos.get(n.id) ?? n.position;
-    }
-    this.store.writeFlow(runId, flow);
-    const meta = this.store.readMeta(runId);
-    this.store.writeMeta(runId, {
-      ...meta,
-      nodeStatus: { ...meta.nodeStatus, ...Object.fromEntries(created.map(n => [n.id, 'pending'])) }
+    // Placement + persistence are shared with every other container (BRICKS
+    // P2.0): inside a box the children are gridded and the box sized to fit;
+    // outside one the run's display copy is re-laid-out so generated nodes
+    // slot into clean dependency layers instead of overlapping the authored
+    // ones. Either way only flow.json inside the run dir moves — never the
+    // saved flow definition.
+    commitChildren(this, runId, flow, ownerNode, created, edges, {
+      parentId,
+      place: parentId
+        ? placeInContainer(ownerNode, created, containerLayout)
+        : placeByLayout(layoutPositions)
     });
-    this.store.appendLog(runId, {
-      event: 'materialized_nodes',
-      fromNode: ownerNode.id,
-      ...(parentId ? { container: parentId } : {}),
-      nodes: created.map(n => ({ id: n.id, template: n.data.template ?? n.data.templateId ?? null, category: n.data.category ?? null })),
-      edges: edges.length
-    });
-    this.notify(runId);
     return { ok: true, errors: [], created };
   }
 }

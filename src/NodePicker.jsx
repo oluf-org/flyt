@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { DND_MIME, dndOrchestrator, dndTemplate } from './FlowCanvas.jsx';
+import { DND_MIME, dndOrchestrator, dndFanout, dndTemplate } from './FlowCanvas.jsx';
 
 // The node picker: the familiar "add node" panel of node editors (n8n,
 // Node-RED, Blueprints). Search-first, grouped, every row both click-to-add
 // and drag-onto-canvas. Rendered as an overlay inside the canvas area; the
 // parent owns open/close and the actual add.
 //
-// Groups: the built-in Orchestrator under "Structural", then Node Library
+// Groups: the built-in containers (Orchestrator, Fan-out) under "Structural",
+// then Node Library
 // templates grouped by their category (uncategorized templates land in
 // "General"). Filtering matches name, description, and category.
 
@@ -16,6 +17,16 @@ const ORCH_ITEM = {
   name: 'Orchestrator',
   description: 'AI container — plans autonomously and runs the nodes inside its box',
   spec: () => dndOrchestrator()
+};
+
+// The other container (D36 B5): same box, but the children come from a lane
+// list you wrote rather than from a model's plan.
+const FANOUT_ITEM = {
+  key: 'fanout',
+  icon: '⋔',
+  name: 'Fan-out',
+  description: 'One brief, N deliberately different takes — one lane per model, run in parallel',
+  spec: () => dndFanout()
 };
 
 function groupTemplates(templates) {
@@ -51,7 +62,7 @@ export default function NodePicker({ templates, onAdd, onClose }) {
       || it.name.toLowerCase().includes(q)
       || it.description.toLowerCase().includes(q);
     const out = [];
-    const structural = [ORCH_ITEM].filter(match);
+    const structural = [ORCH_ITEM, FANOUT_ITEM].filter(match);
     if (structural.length) out.push({ label: 'Structural', items: structural });
     for (const g of groupTemplates(templates)) {
       const items = g.items.filter(match);

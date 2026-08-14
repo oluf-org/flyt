@@ -12,7 +12,7 @@ export const DSL_VERSION = 1;
 const REF_RE = /^([A-Za-z0-9_-]+)(?:\.([A-Za-z0-9_-]+))?$/;
 
 // baseType → kind, mirroring src/flowTypes.js TYPE_META.
-const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai' };
+const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai', fanout: 'ai' };
 export const STRUCTURAL_TYPES = Object.keys(KIND_OF);
 
 export class FlowParseError extends Error {

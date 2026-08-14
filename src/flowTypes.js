@@ -8,8 +8,19 @@ export const TYPE_META = {
   agentTask:    { icon: '☑', kind: 'user', label: 'Agent task',   sub: 'task · for the executor' },
   aiStep:       { icon: '✦', kind: 'ai',   label: 'AI step',      sub: 'llm · model call' },
   orchestrator: { icon: '▦', kind: 'ai',   label: 'Orchestrator', sub: 'container · creates & runs task nodes' },
+  // Fan-out (D36 B5): N deliberately diverged takes on ONE brief, run inside
+  // its own box. Like the orchestrator it is a container — but its children
+  // come from a lane list the author wrote, not from a model's plan.
+  fanout:       { icon: '⋔', kind: 'ai',   label: 'Fan-out',      sub: 'container · one lane per model' },
   output:       { icon: '◎', kind: 'user', label: 'Output',       sub: 'result · collects upstream' }
 };
+
+// Node types that hold other nodes inside a box on the canvas and run them as
+// a scoped subgraph (core/nodes/expand.js). Containment, layout, the linter's
+// `parent` rule and the run canvas all key off this rather than naming the
+// orchestrator specifically.
+export const CONTAINER_TYPES = ['orchestrator', 'fanout'];
+export const isContainerType = type => CONTAINER_TYPES.includes(type);
 
 // The name a flow carries until the user gives it one. Also what the editor
 // falls back to when the name field is left blank: the DSL requires a name, so
@@ -138,6 +149,10 @@ export const TYPE_PORTS = {
     { id: 'results', label: 'results', description: 'Aggregated outputs of every node this orchestrator created and ran.' },
     { id: 'summary', label: 'summary', description: 'The orchestration plan summary + node inventory.' }
   ],
+  fanout: [
+    { id: 'results', label: 'results', description: 'Every lane\'s output, one labelled section per lane.' },
+    { id: 'lanes', label: 'lanes', description: 'The lane roster: label, id, model and intent for each lane that ran.' }
+  ],
   output: []
 };
 
@@ -161,7 +176,7 @@ export function primaryPort(node) {
 
 // True for nodes whose contract lets them create other nodes at run time.
 export function createsNodes(node) {
-  if (node?.type === 'orchestrator') return true;
+  if (isContainerType(node?.type)) return true;
   const role = node?.data?.role;
   return role === 'plan-eval' || role === 'stitch' || role === 'combine';
 }
@@ -787,6 +802,10 @@ export function overridableFields(node) {
   const fields = new Set(LAUNCH_OVERRIDE_COMMON);
   const d = node?.data ?? {};
   if (type === 'orchestrator') { fields.add('minNodes'); fields.add('maxNodes'); }
+  // A fan-out's shape IS its lanes, so they are the thing worth overriding per
+  // config: swap the model set, retarget the template, restate the goal (D36
+  // B5 / P2.4). `goal` is already common to every AI node below.
+  if (type === 'fanout') { fields.add('lanes'); fields.add('modelSet'); fields.add('template'); }
   // A work node carries a category; the Evaluation meta-role carries evalType;
   // translate carries a language. Resolved nodes surface these on data.
   if (d.category != null || d.role === 'execute') fields.add('category');
@@ -798,7 +817,7 @@ export function overridableFields(node) {
   if (type === 'agentTask' || type === 'aiStep') fields.add('tools');
   // `toolCeiling` is the hard limit the grant lives inside. On an orchestrator
   // it is the envelope its generated children inherit (§6.3).
-  if (type === 'agentTask' || type === 'aiStep' || type === 'orchestrator') fields.add('toolCeiling');
+  if (type === 'agentTask' || type === 'aiStep' || isContainerType(type)) fields.add('toolCeiling');
   return fields;
 }
 

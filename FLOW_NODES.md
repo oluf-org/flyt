@@ -307,6 +307,47 @@ planning output), `nodes/<id>.summary.md`, `nodes/<id>.md` (aggregate).
 
 ---
 
+### 7b. Fan-out Node (lanes on one brief)
+
+**type:** `fanout` (built-in structural node, kind `ai` — added from the
+＋ Add node picker, like the Orchestrator)
+
+**Input:** the brief + upstream context.
+
+**Output ports:**
+- `results` (primary) — every lane's output, one labelled section per lane
+- `lanes` — the roster: label, id, model and intent for each lane that ran
+
+**Behavior:** the sibling of the Orchestrator, and its opposite in one respect.
+An orchestrator asks a model *which children to create*; a fan-out already
+knows, because the author wrote a lane list (or pointed the node at a model
+set, which mints one lane per member). So there is **no planning call**, no
+strict contract and no re-ask — the node mints one child per lane and runs them
+through the same scoped sub-walk every container uses
+(`core/nodes/expand.js`). Lanes are independent by construction: no edges
+between them, all of them in one wave up to `maxParallel`.
+
+**Divergence is the point (D36 B6).** Each lane's assembled prompt carries the
+shared goal, its own lane instructions, and the **labels + one-line intents of
+its siblings**, plus the instruction to surface at least one finding no other
+lane is positioned to reach. "Find something the others will not" is only
+meaningful if a lane knows who the others are. Lane **outputs** never cross —
+sharing them would make every lane converge on whatever the first one said.
+
+**Lane presets** (`core/nodes/fanout.js`): `standard` (the brief, done well),
+`wildcard` (only the odd, hidden, undocumented, surprising), `adversarial`
+(only what is fragile or wrong), `contrarian` (the case against the obvious
+reading). These are `instructions` presets on a lane — not new node types and
+not new roles — and a lane may take a preset, its own text, or both.
+
+Lanes inherit the fan-out's `toolCeiling` exactly as generated children inherit
+an orchestrator's (§6.3), never pause at approval gates, and are stamped with
+`laneId` so a resumed run matches children back to their lanes.
+
+Artifacts: `nodes/<id>.lanes.md` (the roster), `nodes/<id>.md` (the aggregate).
+
+---
+
 ### 8. Compare Node
 
 **role:** `compare` · **template:** `compare` · icon `⇄`

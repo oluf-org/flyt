@@ -188,21 +188,28 @@ test('lint: machine-readable finding shape', () => {
   assert.equal(f.nodeId, 'a');
 });
 
-test('lint: parent must be an existing orchestrator; structural/box nodes cannot be contained', () => {
+test('lint: parent must be an existing container; structural/container nodes cannot be contained', () => {
+  // "Container" is any node type that holds a scoped subgraph — orchestrator
+  // and, since D36 P2, fanout. A lane living inside a fan-out is as valid as
+  // an authored node inside an orchestrator.
   const base = {
     id: 'p', name: 'P',
     nodes: [
       { id: 'input', type: 'input', kind: 'user', data: {} },
       { id: 'orch', type: 'orchestrator', kind: 'ai', data: {} },
+      { id: 'fan', type: 'fanout', kind: 'ai', data: { lanes: ['standard', 'wildcard'] } },
       { id: 'step', type: 'aiStep', kind: 'ai', data: {}, parentId: 'orch' },
+      { id: 'lane', type: 'aiStep', kind: 'ai', data: {}, parentId: 'fan' },
       { id: 'lost', type: 'aiStep', kind: 'ai', data: {}, parentId: 'ghost' },
       { id: 'bad', type: 'aiStep', kind: 'ai', data: {}, parentId: 'step' },
       { id: 'nested', type: 'orchestrator', kind: 'ai', data: {}, parentId: 'orch' },
+      { id: 'nestedFan', type: 'fanout', kind: 'ai', data: { lanes: ['standard'] }, parentId: 'orch' },
       { id: 'output', type: 'output', kind: 'user', data: {} }
     ],
     edges: [
       { id: 'e-input-orch', source: 'input', target: 'orch' },
       { id: 'e-orch-step', source: 'orch', target: 'step' },
+      { id: 'e-fan-lane', source: 'fan', target: 'lane' },
       { id: 'e-orch-lost', source: 'orch', target: 'lost' },
       { id: 'e-orch-bad', source: 'orch', target: 'bad' },
       { id: 'e-orch-output', source: 'orch', target: 'output' }
@@ -211,8 +218,111 @@ test('lint: parent must be an existing orchestrator; structural/box nodes cannot
   const { errors } = lintFlow(base, { templates: null });
   const parentErrors = errors.filter(e => e.rule === 'parent');
   assert.ok(parentErrors.some(e => e.message.includes('parent "ghost" does not exist')));
-  assert.ok(parentErrors.some(e => e.message.includes('parent "step" is not an orchestrator')));
-  assert.ok(parentErrors.some(e => e.message.includes('"nested": orchestrator nodes cannot live inside an orchestrator')));
+  assert.ok(parentErrors.some(e => e.message.includes('parent "step" is not a container')));
+  assert.ok(parentErrors.some(e => e.message.includes('"nested": orchestrator nodes cannot live inside a container')));
+  assert.ok(parentErrors.some(e => e.message.includes('"nestedFan": fanout nodes cannot live inside a container')),
+    'a fan-out is a container too — one level deep, like the orchestrator');
   assert.ok(!parentErrors.some(e => e.nodeId === 'step'), 'a valid child passes');
+  assert.ok(!parentErrors.some(e => e.nodeId === 'lane'), 'a node inside a fan-out\'s box is valid');
   assert.ok(RUNTIME_RULES.includes('parent'), 'a broken parent blocks the pre-run gate');
+});
+
+// --- fan-out lanes (BRICKS P2.5) --------------------------------------------
+
+const TEMPLATES = SEED_NODE_TEMPLATES.map(normalizeTemplate);
+const SETS = { analysts: { name: 'Analysts', models: ['a/one', 'b/two'] } };
+
+const fanFlow = data => ({
+  id: 'f', name: 'F',
+  nodes: [
+    { id: 'input', type: 'input', kind: 'user', data: {} },
+    { id: 'fan', type: 'fanout', kind: 'ai', data },
+    { id: 'output', type: 'output', kind: 'user', data: {} }
+  ],
+  edges: [
+    { id: 'e-input-fan', source: 'input', target: 'fan' },
+    { id: 'e-fan-output', source: 'fan', target: 'output' }
+  ]
+});
+
+test('lint: a fan-out with no lanes is an error, and blocks the pre-run gate', () => {
+  const { errors } = lintFlow(fanFlow({ goal: 'g' }), { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(errors.some(e => e.rule === 'fanout-lanes' && /at least one lane/.test(e.message)));
+  assert.ok(RUNTIME_RULES.includes('fanout-lanes'),
+    'a container that cannot produce one child wedges the run rather than degrading it');
+});
+
+test('lint: lanes from a model set count — and an unknown set is named', () => {
+  const ok = lintFlow(fanFlow({ goal: 'g', modelSet: 'analysts' }), { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(!ok.errors.some(e => e.rule === 'fanout-lanes'), 'a set with members IS a lane list');
+
+  const bad = lintFlow(fanFlow({ goal: 'g', modelSet: 'ghosts' }), { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(bad.errors.some(e => e.rule === 'fanout-lanes' && /"ghosts" does not exist/.test(e.message)));
+});
+
+test('lint: without the model sets, a set-driven fan-out is skipped rather than failed', () => {
+  // The contract every data-dependent rule follows: skip rather than guess.
+  // Guessing here would refuse to start a flow that is perfectly fine.
+  const { errors } = lintFlow(fanFlow({ goal: 'g', modelSet: 'analysts' }), { templates: TEMPLATES });
+  assert.ok(!errors.some(e => e.rule === 'fanout-lanes'));
+});
+
+test('lint: duplicate lane ids warn, because the second is not the lane you wrote', () => {
+  const { findings } = lintFlow(fanFlow({ goal: 'g', lanes: [{ id: 'a' }, { id: 'a' }] }), { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(findings.some(f => f.rule === 'fanout-lanes' && f.severity === 'warning' && /runs as "a-2"/.test(f.message)));
+});
+
+test('lint: a fan-out where no lane names a model warns — that is N copies, not a fan-out', () => {
+  const same = lintFlow(fanFlow({ goal: 'g', lanes: ['standard', 'wildcard'] }), { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(same.findings.some(f => f.rule === 'fanout-worker' && /same default worker/.test(f.message)));
+
+  const varied = lintFlow(fanFlow({ goal: 'g', lanes: [{ id: 'a', worker: 'a/one' }, { id: 'b', worker: 'b/two' }] }),
+    { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(!varied.findings.some(f => f.rule === 'fanout-worker'));
+});
+
+test('lint: a lane on a model that is not active warns at author time', () => {
+  const { findings } = lintFlow(fanFlow({ goal: 'g', lanes: [{ id: 'a', worker: 'a/one' }, { id: 'b', worker: 'nobody/x' }] }),
+    { templates: TEMPLATES, modelSets: SETS, activeModels: [{ id: 'a/one', enabled: true }] });
+  const warns = findings.filter(f => f.rule === 'fanout-worker');
+  assert.equal(warns.length, 1);
+  assert.match(warns[0].message, /lane "b" runs on "nobody\/x"/);
+});
+
+test('lint: a fan-out template that does not exist is an error, on the node or on a lane', () => {
+  const onNode = lintFlow(fanFlow({ goal: 'g', template: 'nope', lanes: ['standard'] }), { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(onNode.errors.some(e => e.rule === 'fanout-template' && /"nope" does not exist/.test(e.message)));
+
+  const onLane = lintFlow(fanFlow({ goal: 'g', lanes: [{ id: 'a', template: 'nope' }] }), { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(onLane.errors.some(e => e.rule === 'fanout-template'));
+
+  const fine = lintFlow(fanFlow({ goal: 'g', lanes: [{ id: 'a', worker: 'a/one' }, { id: 'b', worker: 'b/two' }] }),
+    { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(!fine.errors.some(e => e.rule === 'fanout-template'), 'the default template ships in the library');
+});
+
+test('lint: a fan-out written in the DSL parses and passes', () => {
+  const text = [
+    'version: 1',
+    'id: fan-demo',
+    'name: Fan demo',
+    'nodes:',
+    '  look:',
+    '    type: fanout',
+    '    title: Look at it',
+    '    goal: Read this repo and say what matters.',
+    '    lanes:',
+    '      - standard',
+    '      - id: wild',
+    '        preset: wildcard',
+    '        worker: a/one',
+    '      - id: attack',
+    '        preset: adversarial',
+    '        worker: { provider: openrouter, model: b/two }',
+    'flow:',
+    '  - input -> look -> output',
+    ''
+  ].join('\n');
+  const { ok, errors } = lintText(text, { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(ok, 'errors: ' + JSON.stringify(errors));
 });

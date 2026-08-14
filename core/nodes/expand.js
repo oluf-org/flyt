@@ -31,6 +31,53 @@ export function ensureChildStatuses(store, runId, children) {
   store.writeMeta(runId, { ...meta, nodeStatus: { ...(meta.nodeStatus ?? {}), ...missing } });
 }
 
+// Commit freshly built children into the run's flow: place them in the box,
+// size the box around them, seed their statuses, persist, log, notify.
+//
+// The CALLER builds `created` and `edges` — the orchestrator from a model's
+// plan (with a dependsOn graph between children), a fan-out from its lane list
+// (no internal edges at all, every lane independent by construction). What
+// they share is everything that happens afterwards, which is here so the two
+// cannot drift into placing children differently.
+export function commitChildren(runner, runId, flow, ownerNode, created, edges, { parentId = null, place }) {
+  flow.nodes.push(...created);
+  flow.edges.push(...edges);
+  place(flow);
+
+  runner.store.writeFlow(runId, flow);
+  const meta = runner.store.readMeta(runId);
+  runner.store.writeMeta(runId, {
+    ...meta,
+    nodeStatus: { ...meta.nodeStatus, ...Object.fromEntries(created.map(n => [n.id, 'pending'])) }
+  });
+  runner.store.appendLog(runId, {
+    event: 'materialized_nodes',
+    fromNode: ownerNode.id,
+    ...(parentId ? { container: parentId } : {}),
+    nodes: created.map(n => ({ id: n.id, template: n.data.template ?? n.data.templateId ?? null, category: n.data.category ?? null })),
+    edges: edges.length
+  });
+  runner.notify(runId);
+}
+
+// The two placements callers hand to commitChildren. Curried so the caller
+// reads as a choice between two named strategies rather than two inline
+// closures over half the surrounding scope.
+export function placeInContainer(ownerNode, created, containerLayout) {
+  return flow => {
+    const { positions, box } = containerLayout(created, flow.edges);
+    for (const n of created) n.position = positions.get(n.id) ?? n.position;
+    ownerNode.data = { ...ownerNode.data, box };
+  };
+}
+
+export function placeByLayout(layoutPositions) {
+  return flow => {
+    const pos = layoutPositions(flow);
+    for (const n of flow.nodes) n.position = pos.get(n.id) ?? n.position;
+  };
+}
+
 // Which children can run right now. Dependencies are scoped to the box: an
 // edge from outside it is the container's own inbound wiring and says nothing
 // about the order of the children.
