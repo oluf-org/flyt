@@ -499,6 +499,12 @@ export function createEngine({
     return l;
   }
 
+  // Filled in by core/api.js, which owns the per-project Supervisor map. The
+  // engine holds the slot so a FlowRunner can reach the loop without either
+  // module importing the other.
+  const loopDriver = { start: null, status: null };
+  const setLoopDriver = d => Object.assign(loopDriver, d);
+
   const registry = new ProjectRegistry({
     defaultRunsDir: path.join(dataRoot, 'runs'),
     appDataDir: userDataDir,
@@ -509,6 +515,21 @@ export function createEngine({
       // Lazy for the reason above, and a property rather than a constructor
       // argument so every existing FlowRunner call site is untouched.
       Object.defineProperty(runner, 'backlog', { get: () => backlogFor(projectId), configurable: true });
+      Object.defineProperty(runner, 'ledger', { get: () => ledgerFor(projectId), configurable: true });
+      // A flow's `loop` node hands its tasks to the SAME supervisor the Loop
+      // page drives — one queue, one picker, one process (D36 P4.2). api.js
+      // owns the supervisor map, so it registers the driver; this is only the
+      // slot it registers into.
+      Object.defineProperty(runner, 'loopHost', {
+        get: () => ({
+          projectId,
+          backlog: backlogFor(projectId),
+          ledger: ledgerFor(projectId),
+          start: opts => loopDriver.start?.({ projectId, ...opts }),
+          status: () => loopDriver.status?.(projectId) ?? null
+        }),
+        configurable: true
+      });
       Object.defineProperty(runner, 'feedback', { get: () => feedbackFor(projectId), configurable: true });
       runner.references = references;
       // Nothing is live when a project first opens in this process, so any run
@@ -532,6 +553,7 @@ export function createEngine({
     configDirOf,
     // Config + settings
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,
+    setLoopDriver,
     // Providers
     hasKey, subscriptionStatus, resolveModelSource, effectiveSafetyModel,
     // Push

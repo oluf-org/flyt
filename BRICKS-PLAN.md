@@ -258,6 +258,26 @@ because the three phases above make it small.
 **Done when:** a flow run reaches `done` **because the supervisor landed the last task it
 queued**, and the canvas shows which.
 
+> **Shipped** (2026-08-14). `core/nodes/backlogPlan.js` (the contract), `core/nodes/loopNode.js`
+> (enqueue, wait, report, spend) and `runLoop` in the runner. The `backlog-plan` template ships
+> gated — handing a machine a night of work is exactly the decision a human should see first.
+> `nodes/backlog-plan.json`, role `plan-backlog`, port `tasks`.
+>
+> The engine grew one seam: `runner.loopHost`, filled by `core/api.js`, which owns the
+> Supervisor map. A flow's loop node therefore drives the SAME supervisor the Loop page does —
+> two over one backlog would have two pickers racing for the same tasks.
+>
+> **Q-B4 answered: one ledger is enough.** A loop node's `budgetUsd` rides on the tasks it
+> enqueues, so the three ceilings D35 already has — per task, rolling window, project — apply
+> unchanged and a node cannot spend more than the project allows. A separate worktree budget
+> would be a fourth ceiling that agrees with the other three right up until the day it does not.
+>
+> **P4.4 is partial and deliberately so.** A parked task sets the node to `awaiting_approval`
+> (the status the canvas already draws as a gate) and the node's live report names the task and
+> its reason. The *answering* still happens on the Loop page, where the task's own context is:
+> a canvas button that pretended to answer a park would be a button that lies. The other half
+> of P4.4 — approve/answer routed through the run canvas's gate UI — is not built.
+
 ---
 
 ### P5 — Learn from a repo (the payload)
@@ -328,8 +348,11 @@ P0 and P1 are independent and can run in parallel. P2.0 gates everything after i
 - **Q-B3.** How do lane outputs reach the combiner without blowing context on a large repo?
   Per-lane output budgets, or a summarisation step per lane (`OUTPUT-VIEW-PLAN.md`'s summary
   node is nearly this already).
-- **Q-B4.** Does the loop node deserve its own worktree budget separate from the project's
-  rolling ceilings, or is one ledger enough?
+- ~~**Q-B4.** Does the loop node deserve its own worktree budget separate from the project's
+  rolling ceilings, or is one ledger enough?~~ **Resolved in P4: one ledger.** A loop node's
+  `budgetUsd` is written onto the tasks it enqueues, so the existing per-task, rolling-window
+  and project ceilings already bound it. A fourth ceiling would agree with the other three
+  until the day it disagreed, and then nobody would know which one was right.
 - **Q-B5.** Sub-flow pinning (P3.7) — if "edit the brick, change every caller" bites, what is
   the smallest honest pin? A content hash recorded per run is already there for forensics; a
   *pinned* reference is a bigger idea.

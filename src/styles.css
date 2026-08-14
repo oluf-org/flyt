@@ -2074,6 +2074,13 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
 }
 .model-row select { flex: none; max-width: 190px; }
 
+/* A backlog task's link back to the run that queued it (BRICKS P4.5). */
+.loop-task-head .source-run {
+  margin-left: auto; flex: none;
+  font-size: 10px; color: var(--faint);
+}
+.loop-task-head .source-run:hover { color: var(--accent); }
+
 /* ---------- fan-out lanes (BRICKS P2) ----------
    A fan-out's lanes ARE its shape, so the lane list is the node's main
    Inspector field rather than a detail tucked below the fold. */

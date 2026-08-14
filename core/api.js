@@ -607,5 +607,18 @@ export function createApi(engine) {
     return await fn(args ?? {});
   }
 
+  // A flow's `loop` node drives the SAME supervisor as the Loop page (D36
+  // P4.2): starting a second one over one backlog would have two pickers
+  // racing for the same tasks. The engine holds the slot; this fills it, so
+  // neither module has to import the other.
+  engine.setLoopDriver?.({
+    start: async ({ projectId, parallelism = 1, maxTasks = null }) => {
+      if (supervisors.get(projectId)?.running) return { started: false, joined: true };
+      await commands['loop:start']({ projectId, parallelism, maxTasks });
+      return { started: true, joined: false };
+    },
+    status: projectId => supervisors.get(projectId)?.status() ?? null
+  });
+
   return { commands, invoke, names: () => Object.keys(commands) };
 }

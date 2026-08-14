@@ -396,6 +396,64 @@ built; revisit if it bites.
 
 ---
 
+### 7d. Backlog Plan Node (flow → backlog contract)
+
+**role:** `plan-backlog` · **template:** `backlog-plan` · icon `≡`
+
+**Output ports:** `tasks` — a strict fenced JSON array of backlog task records.
+
+**Behavior:** turns analysis into QUEUED WORK. Prose rationale first, then ONE
+```json block matching `core/backlog.js` field-for-field:
+
+```json
+[{ "title": "...", "goal": "...", "doneWhen": ["..."], "value": 1-5,
+   "effort": 1-5, "level": "low|medium|high|xhigh|max", "gates": ["npm test"],
+   "blastRadius": ["src/x.js"], "dependsOn": ["title of another task here"] }]
+```
+
+Validated by `core/nodes/backlogPlan.js`. A task with no `goal`, or with no
+checkable `doneWhen`, is rejected — **a task nobody can verify is not a task**,
+and a backlog full of those is worse than an empty one. `dependsOn` names
+another task in the same plan by title; ids do not exist until `Backlog.add()`
+allocates them, so the reference is resolved after enqueue. Fields outside the
+contract are dropped rather than written into the frontmatter forever, which is
+also why a plan cannot declare its own work already `landed`.
+
+Ships gated (`requiresApproval: true`): handing a machine a night of work is
+exactly the decision a human should see first.
+
+---
+
+### 7e. Loop Node (enqueue, then wait for terminal)
+
+**type:** `loop` · icon `↻`
+
+**Output ports:** `report` — what landed, what failed, what is waiting on you.
+
+**Behavior:** the doorway into the loop D35 already built. It adds **no**
+autonomy — every decision, edit and merge belongs to the supervisor, with its
+budget ceilings, gates, heartbeats and canary. This node enqueues via
+`Backlog.add` (never by writing files — §5.2's rule about the canonical
+directory outside every worktree), starts or JOINS the project's supervisor
+(one queue, one picker: two over one backlog would race), and waits.
+
+`waitFor`: `all` (default) | `any` | `none`. A **parked** task keeps the node
+waiting and marks it as a gate; a **failed** task is reported, not fatal.
+
+The report is rewritten on every change, not only at the end, so a run that
+waits three days says what it is waiting for the whole time.
+
+**State is files (B12).** `runs/<id>/loop/<nodeId>.json` holds the queued ids
+and the policy; the rest is re-derived from the backlog. After an app restart
+the run reattaches by reading them — nothing is re-enqueued, nothing re-run.
+
+**Budget (P4.6, Q-B4 answered):** one ledger is enough. `budgetUsd` rides on
+the tasks this node enqueues, so the existing three ceilings — per task,
+rolling window, project — apply unchanged. A separate worktree budget would be
+a fourth ceiling that agrees with the other three until the day it does not.
+
+---
+
 ### 8. Compare Node
 
 **role:** `compare` · **template:** `compare` · icon `⇄`

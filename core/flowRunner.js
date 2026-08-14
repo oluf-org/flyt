@@ -37,6 +37,11 @@ import {
 } from './nodes/expand.js';
 import { resolveLanes, laneBrief, laneInventory, DEFAULT_LANE_TEMPLATE } from './nodes/fanout.js';
 import { spliceAllSubflows, SubflowError } from './nodes/subflow.js';
+import { parseBacklogPlan } from './nodes/backlogPlan.js';
+import {
+  WAIT_POLICIES, DEFAULT_POLL_MS, enqueuePlan, tallyTasks, isSettled,
+  readLoopState, writeLoopState, renderLoopReport, spendFor
+} from './nodes/loopNode.js';
 import { Workspace } from './workspace.js';
 import { loadSkills, withSkillsSection } from './skills.js';
 import { createWriteLedger } from './writeLedger.js';
@@ -193,6 +198,24 @@ const DEFAULT_SYSTEM = {
     '\n\n## Gaps, risks & inconsistencies\n\n## Recommendations',
     'Ground every observation in the text (quote or reference the location).',
     'Match the depth to your effort level; never pad. State uncertainty honestly.'
+  ].join('\n'),
+  'plan-backlog': [
+    'ROLE: plan-backlog',
+    'You turn analysis into QUEUED WORK. Read the brief and upstream context and',
+    'decide what should actually be done about it, as a backlog a supervisor can',
+    'pick from without asking you anything.',
+    'Write your reasoning in prose first — what you are proposing and why, what',
+    'you deliberately left out — then emit exactly ONE fenced ```json block:',
+    '[{ "title": "short imperative title", "goal": "what must be true when this',
+    'is done", "doneWhen": ["a checkable criterion"], "value": 1-5, "effort": 1-5,',
+    '"level": "low|medium|high|xhigh|max", "gates": ["npm test"], "blastRadius":',
+    '["src/thing.js"], "dependsOn": ["title of another task in this list"] }]',
+    'Rules that matter more than coverage:',
+    '- Every task must be claimable ALONE. No "see above", no shared context.',
+    '- Every task needs at least one "done when" someone else could check.',
+    '- Prefer few real tasks to many plausible ones. A task nobody can verify is',
+    '  not a task, and a backlog full of those is worse than an empty one.',
+    '- dependsOn names another task by its exact title in this same list.'
   ].join('\n'),
   translate: [
     'ROLE: translate',
@@ -2851,6 +2874,10 @@ export class FlowRunner {
       return this.runSubflow(runId, flow, node, opts);
     }
 
+    if (node.type === 'loop') {
+      return this.runLoop(runId, flow, node, opts);
+    }
+
     if (node.type === 'output') {
       this.store.appendLog(runId, { event: 'node_start', node: node.id, type: 'output' });
       const parts = this.upstreamContext(runId, flow, node, taskIdByNode);
@@ -3218,6 +3245,152 @@ export class FlowRunner {
       confidence: 0.75,
       recommendation: `Sub-flow "${title}" ran flow "${flowId}" (${children.length} node(s))`
         + (node.data?.flowMode ? ` in mode "${node.data.flowMode}"` : '') + '.'
+    }));
+    this.setNodeStatus(runId, node.id, 'done');
+    return {};
+  }
+
+  // The Loop node (BRICKS P4.2 / D36 B10–B12): enqueue, then wait for terminal.
+  //
+  // This adds no autonomy. Everything that actually decides, edits and merges
+  // is the loop D35 already built — budget ceilings, gates, heartbeats, the
+  // canary. What this node contributes is a doorway: the tasks a `backlog-plan`
+  // node produced go into the same queue the Loop page shows, the same
+  // supervisor picks them, and the flow run stays open until they settle.
+  //
+  // The state is FILES (B12). A run that waits three days is legal and
+  // expected, so nothing lives in memory: the truth is the backlog's own
+  // status, re-derived on every poll and on reattach after a restart.
+  async runLoop(runId, flow, node, opts) {
+    const host = this.loopHost;
+    const title = node.data?.title?.trim() || 'Loop';
+    const waitFor = WAIT_POLICIES.includes(node.data?.waitFor) ? node.data.waitFor : 'all';
+    this.store.appendLog(runId, { event: 'node_start', node: node.id, type: 'loop', waitFor });
+
+    const failNode = (msg, problems = [msg]) => {
+      this.store.writeRetrospective(runId, node.id, makeRetrospective({
+        node: node.id, status: 'failed', problems,
+        resolution: 'Loop hand-off failed; run stopped and escalated to human.',
+        confidence: 0,
+        recommendation: `Loop node "${title}" could not hand work over. ${msg}`
+      }));
+      this.setNodeStatus(runId, node.id, 'failed');
+      return new Error(`Loop ${node.id} failed: ${msg}`);
+    };
+
+    if (!host?.backlog) throw failNode('this runner has no backlog to enqueue into');
+
+    const runDir = this.store.runDir(runId);
+    // Reattach (P4.3): a restart finds the ids we queued last time and picks
+    // the wait back up. Nothing is re-enqueued and nothing is re-run — the
+    // supervisor owns the work, this node only watches for it to settle.
+    let state = readLoopState(runDir, node.id);
+    if (state?.taskIds?.length) {
+      this.store.appendLog(runId, {
+        event: 'loop_node_reattach', node: node.id, tasks: state.taskIds.length
+      });
+    } else {
+      const parts = this.upstreamContext(runId, flow, node, opts.taskIdByNode);
+      const parsed = parseBacklogPlan(parts.join('\n\n'));
+      if (!parsed.ok) {
+        this.store.writeNodeOutput(runId, `${node.id}.errors`, [
+          '# Backlog contract violations', '',
+          'The upstream plan did not satisfy the backlog task contract; nothing was enqueued.', '',
+          ...parsed.errors.map(e => `- ${e}`)
+        ].join('\n'));
+        throw failNode('the upstream plan violated the backlog task contract', parsed.errors);
+      }
+      const maxTasks = Number(node.data?.maxTasks) > 0 ? Math.floor(Number(node.data.maxTasks)) : null;
+      const tasks = maxTasks ? parsed.tasks.slice(0, maxTasks) : parsed.tasks;
+      const taskIds = enqueuePlan(host.backlog, tasks, {
+        runId, nodeId: node.id,
+        budgetUsd: Number.isFinite(Number(node.data?.budgetUsd)) ? Number(node.data.budgetUsd) : null
+      });
+      state = writeLoopState(runDir, node.id, {
+        nodeId: node.id, runId, taskIds, waitFor,
+        startedAt: new Date().toISOString(),
+        ...(maxTasks && parsed.tasks.length > maxTasks ? { dropped: parsed.tasks.length - maxTasks } : {})
+      });
+      this.store.appendLog(runId, { event: 'loop_node_enqueued', node: node.id, tasks: taskIds });
+    }
+
+    // Start the supervisor, or join the one already running. One queue, one
+    // picker: two over the same backlog would race for the same tasks.
+    if (waitFor !== 'none' && host.start) {
+      try {
+        const r = await host.start({
+          parallelism: Number(node.data?.parallelism) > 0 ? Math.floor(Number(node.data.parallelism)) : 1,
+          maxTasks: null
+        });
+        this.store.appendLog(runId, { event: 'loop_node_supervisor', node: node.id, ...r });
+      } catch (err) {
+        // A supervisor that will not start is a real failure — the tasks are
+        // queued and nothing will pick them up.
+        throw failNode(`the supervisor could not be started: ${String(err?.message ?? err)}`);
+      }
+    }
+
+    this.setNodeStatus(runId, node.id, 'active');
+    const snapshot = () => state.taskIds.map(id => ({ id, task: host.backlog.get(id) }));
+    // The report is written on every change, not just at the end: a run that
+    // waits three days should say what it is waiting for the whole time, and
+    // the canvas card is the reader (D11).
+    const publish = t => this.store.writeNodeOutput(runId, node.id, renderLoopReport({
+      nodeTitle: title, taskIds: state.taskIds, tasks: snapshot(), tally: t, waitFor,
+      spend: spendFor(host.ledger, state.taskIds)
+    }));
+
+    let tally = tallyTasks(snapshot());
+    let seen = '';
+    publish(tally);
+    while (!isSettled(tally, waitFor)) {
+      if (this.stopRequests.has(runId)) {
+        // A stop leaves the tasks queued: they are the supervisor's now, and
+        // this node picks the wait back up on resume.
+        this.setNodeStatus(runId, node.id, 'pending');
+        throw abortError(`Loop ${node.id} stopped`);
+      }
+      const key = JSON.stringify(tally);
+      if (key !== seen) {
+        seen = key;
+        publish(tally);
+        // A parked task surfaces ON THIS NODE (P4.4) and does NOT end the
+        // wait: D35 rule 7 says a gate parks a task and never blocks the
+        // loop, so the flow-level equivalent is to keep waiting and say so
+        // out loud. `awaiting_approval` is the node status the canvas already
+        // draws as a gate — the answering itself happens on the Loop page,
+        // which is where the task's own context lives.
+        if (tally.parked.length) {
+          this.store.appendLog(runId, { event: 'loop_node_parked', node: node.id, tasks: tally.parked });
+          this.setNodeStatus(runId, node.id, 'awaiting_approval');
+        } else {
+          this.setNodeStatus(runId, node.id, 'active');
+        }
+        this.notify(runId);
+      }
+      await new Promise(r => setTimeout(r, this.config.loop?.pollMs ?? DEFAULT_POLL_MS));
+      tally = tallyTasks(snapshot());
+    }
+
+    const tasks = snapshot();
+    const spend = spendFor(host.ledger, state.taskIds);
+    const report = renderLoopReport({ nodeTitle: title, taskIds: state.taskIds, tasks, tally, waitFor, spend });
+    this.store.writeNodeOutput(runId, node.id, report);
+    this.store.appendLog(runId, {
+      event: 'loop_node_settled', node: node.id,
+      landed: tally.landed.length, failed: tally.failed.length, parked: tally.parked.length
+    });
+
+    // Failed tasks do not fail the node: "three landed, one failed" is a
+    // result, and the report says which. A node that failed here would throw
+    // away the three that worked.
+    this.store.writeRetrospective(runId, node.id, makeRetrospective({
+      node: node.id,
+      status: tally.failed.length ? 'partial' : 'success',
+      problems: tally.failed.map(id => `task ${id} failed`),
+      confidence: tally.failed.length ? 0.5 : 0.8,
+      recommendation: `Loop node "${title}" queued ${state.taskIds.length} task(s): `
+        + `${tally.landed.length} landed, ${tally.failed.length} failed, ${tally.parked.length} waiting on a human.`
     }));
     this.setNodeStatus(runId, node.id, 'done');
     return {};
