@@ -210,6 +210,9 @@ export function createApi(engine) {
         approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : runtimeConfig.approvalMode,
         modeId: launch?.modeId ?? null,
         overrides: launch?.overrides ?? null,
+        // Typed run inputs (D36 P1). Without this the composer collects them
+        // and the runner never sees them.
+        inputs: launch?.inputs ?? null,
         compareGroup: launch?.compareGroup ?? null
       });
     },

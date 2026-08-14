@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { createEngine } from '../core/engine.js';
 import { createApi, ApiError } from '../core/api.js';
 import { createServer } from '../core/server.js';
+import { defaultUserDataDir } from '../core/brand.js';
 
 const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -26,6 +27,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
 
   flyt flows                          list workflows
   flyt run <flow> --input "<text>"    start a run and wait for it to settle
+  flyt run <flow> --in repo=<url>     supply a typed run input (repeatable)
   flyt runs                           list runs in the current project
   flyt snapshot <runId>               the run's current state
   flyt log <runId>                    the run's event log
@@ -77,13 +79,20 @@ Options
 function parseArgs(argv) {
   const positional = [];
   const flags = {};
+  // A REPEATED flag accumulates into an array. `--arg k=v` has always been
+  // documented as repeatable and never was — the second one overwrote the
+  // first — and `--in name=value` needs the same thing.
+  const set = (k, v) => {
+    if (!(k in flags)) { flags[k] = v; return; }
+    flags[k] = Array.isArray(flags[k]) ? [...flags[k], v] : [flags[k], v];
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
-      if (eq > 0) flags[a.slice(2, eq)] = a.slice(eq + 1);
-      else if (argv[i + 1] && !argv[i + 1].startsWith('--')) flags[a.slice(2)] = argv[++i];
-      else flags[a.slice(2)] = true;
+      if (eq > 0) set(a.slice(2, eq), a.slice(eq + 1));
+      else if (argv[i + 1] && !argv[i + 1].startsWith('--')) set(a.slice(2), argv[++i]);
+      else set(a.slice(2), true);
     } else positional.push(a);
   }
   return { positional, flags };
@@ -114,7 +123,11 @@ function boot({ emit = () => {}, canEmit = () => false } = {}) {
   const engine = createEngine({
     projectRoot,
     dataRoot: projectRoot,
-    userDataDir: projectRoot,
+    // The SAME settings.json the desktop app writes (core/engine.js: "never the
+    // repo"). This used to be projectRoot, so a key typed into Settings was
+    // invisible to `flyt run` and `flyt loop start` — the two front doors were
+    // documented as one implementation and did not share a profile.
+    userDataDir: defaultUserDataDir(),
     emit,
     canEmit,
     log: msg => say(msg),
@@ -521,14 +534,24 @@ async function main() {
 
     case 'run': {
       const flowId = positional[1];
-      if (!flowId) return die('flyt run <flow> --input "<text>"');
+      if (!flowId) return die('flyt run <flow> --input "<text>" [--in name=value ...]');
+      const runInputs = {};
+      for (const pair of [].concat(flags.in ?? [])) {
+        const at = String(pair).indexOf('=');
+        if (at < 0) return die(`--in expects name=value, got "${pair}"`);
+        runInputs[String(pair).slice(0, at).trim()] = String(pair).slice(at + 1);
+      }
       const projectId = openProject(api, engine);
       const runId = await api.invoke('flow:run', {
         projectId,
         flowId,
         userInput: String(flags.input ?? positional.slice(2).join(' ') ?? ''),
         approvalMode: typeof flags.approval === 'string' ? flags.approval : null,
-        level: typeof flags.level === 'string' ? flags.level : null
+        level: typeof flags.level === 'string' ? flags.level : null,
+        // Typed run inputs (D36 P1): --in name=value, repeatable. A flow that
+        // declares inputs cannot be started without them, so the headless front
+        // door needs a way to supply them.
+        ...(Object.keys(runInputs).length ? { launch: { inputs: runInputs } } : {})
       });
       say(`run ${runId} started`);
       const { stage, snapshot } = await waitForRun(api, projectId, runId, {

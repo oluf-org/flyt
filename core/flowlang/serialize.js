@@ -50,7 +50,10 @@ function emitValue(lines, key, v, indent) {
       return;
     }
   }
-  lines.push(`${pad}${key}: ${formatInline(v)}`);
+  // A scalar on its own LINE is block context: a comma is data there, not
+  // syntax, so it must not be quoted (formatInline's stricter rule applies
+  // only inside `[...]` and `{...}`).
+  lines.push(`${pad}${key}: ${v && typeof v === 'object' ? formatInline(v) : formatScalar(v)}`);
 }
 
 function emitNode(lines, node) {
@@ -130,7 +133,29 @@ export function serializeFlow(flow) {
     emitValue(lines, 'description', flow.description, 0);
   }
   lines.push('');
-  const declared = (flow.nodes ?? []).filter(n => !isImplicit(n));
+
+  // Typed run inputs (D36 B7) go back out as the `inputs:` block they came in
+  // as. The parser SYNTHESISES a node from that block, so without reversing it
+  // here a flow with declared inputs would be rewritten on first save as a raw
+  // `type: inputs` node — and stop being the file its author wrote.
+  const inputsNode = (flow.nodes ?? []).find(n => n.type === 'inputs');
+  const specs = inputsNode?.data?.declared ?? [];
+  if (specs.length) {
+    lines.push('inputs:');
+    for (const spec of specs) {
+      lines.push(`  ${formatScalar(spec.name)}:`);
+      for (const [key, value] of Object.entries(spec)) {
+        // `name` is the map key; `required: false` is the default and adding it
+        // back would make the file noisier than the one that was written.
+        if (key === 'name' || value === undefined) continue;
+        if (key === 'required' && value === false) continue;
+        emitValue(lines, key, value, 4);
+      }
+    }
+    lines.push('');
+  }
+
+  const declared = (flow.nodes ?? []).filter(n => !isImplicit(n) && n.type !== 'inputs');
   if (declared.length) {
     lines.push('nodes:');
     for (const n of declared) emitNode(lines, n);

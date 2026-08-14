@@ -427,9 +427,14 @@ export function lintFlow(flow, { templates = null, rules = null, library = null,
   }
 
   // no-input / no-output / unreachable / dead-end
-  const inputs = (flow.nodes ?? []).filter(n => n.type === 'input');
+  //
+  // A flow that DECLARES typed inputs (D36 B7) has an entry point: its `inputs`
+  // node is where the run's content arrives, exactly as the free-text `input`
+  // node is for a flow without one. Either satisfies no-input, and both count
+  // as reachability roots.
+  const inputs = (flow.nodes ?? []).filter(n => n.type === 'input' || n.type === 'inputs');
   const outputs = (flow.nodes ?? []).filter(n => n.type === 'output');
-  if (!inputs.length && on('no-input')) out.push(finding('no-input', 'error', 'flow has no input node (add "input -> ..." to flow)'));
+  if (!inputs.length && on('no-input')) out.push(finding('no-input', 'error', 'flow has no entry point (add "input -> ..." to flow, or declare an "inputs:" block)'));
   if (!outputs.length && on('no-output')) out.push(finding('no-output', 'error', 'flow has no output node (add "... -> output" to flow)'));
 
   const reach = (starts, next) => {

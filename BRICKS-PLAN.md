@@ -310,12 +310,47 @@ queued**, and the canvas shows which.
 
 | Item | Detail |
 |---|---|
-| **P5.1 `flows/learn-from-repo.flow.yaml`** | `inputs.repo` (repo) + `inputs.goal` (text) → adopt → **fanout** with lanes {architecture, testing/verification, wildcard, adversarial, contrarian} → **compare** → **combine** → **backlog-plan** (gated) → **loop** → output. Ships as a seeded flow with a stable slug id so it survives packaging (D28's `flow-*` exclusion rule). |
+| **P5.1 `flows/learn-from-repo.flow.yaml`** — **shipped** | `inputs.repo` (repo) + `inputs.goal` (text) → adopt → **fanout** with lanes {architecture, testing/verification, wildcard, adversarial, contrarian} → **compare** → **combine** → **backlog-plan** (gated) → **loop** → output. Ships as a seeded flow with a stable slug id so it survives packaging (D28's `flow-*` exclusion rule). |
 | **P5.2 A `.flyt/skills/` companion** | The lanes need to know what *this* project is, or "what can we learn" has no anchor. A `learn-target.md` skill in the bound project supplies the current architecture and open problems — exactly the split GOALS.md describes (template names the expertise, project supplies it). |
 | **P5.3 Run it against `self_improving_coding_agent`** | Already in `DEFAULT_REFERENCES`, so P1.4 is exercised by a repo whose behaviour is known. Target imitations: the scored archive, best-archived-as-meta-agent, and the asynchronous overseer that D35 deliberately deferred (§11.6) — the loop was always going to want it; this is how it gets designed from prior art rather than from scratch. |
 | **P5.4 A benchmark case** | Add a `benchmark/*.bench.md` case for the chain with an independent probe: given a fixed small repo, does the flow produce ≥3 well-formed backlog tasks that a supervisor can claim? Per Q-L3, a case earns its place by covering a class the loop handles badly — "did the handoff produce work the loop can actually take" is precisely that class. |
 
 ---
+
+> **P5.1 shipped and RUN** (2026-08-14). `flows/learn-from-repo.flow.yaml`: `inputs.repo` +
+> `inputs.goal` -> a four-lane fan-out (architecture / wildcard / adversarial / contrarian, on
+> Gemini 2.5 Flash, DeepSeek V4 Flash, Kimi K2.6 and GLM 4.7) -> `combine` -> `backlog-plan`
+> (gated) -> `loop`. It runs end to end against a real repository for about **$0.09**.
+>
+> Deviation from the plan's sketch: no separate `compare` node. The fan-out already aggregates
+> its lanes, and `combine` merges them; `compare` is for picking a winner among alternatives,
+> which is not what four deliberately different readings of one repository are.
+>
+> Five defects surfaced only by running it, all fixed:
+> - `bin/flyt.js` passed `userDataDir: projectRoot`, so the headless CLI never read the same
+>   settings.json as the desktop app — the key you type into Settings was invisible to
+>   `flyt run` and `flyt loop start`. LOOP-PLAN §13 calls the CLI "the same command map the
+>   renderer uses"; it was not the same profile. `defaultUserDataDir()` now lives in
+>   `core/brand.js` and both front doors agree.
+> - `flow:run` dropped `launch.inputs`, so the composer could collect typed inputs and the
+>   runner would never see them. The CLI grew `--in name=value` (and repeated flags now
+>   accumulate — `--arg` was documented as repeatable and never was).
+> - `no-input` did not know about the `inputs` node, so a flow whose entry point is its
+>   declared inputs failed lint.
+> - The serializer emitted the `inputs:` block as a raw `type: inputs` node, so a flow with
+>   typed inputs would be rewritten on first save into something its author did not write. And
+>   `formatInline` did not quote scalars containing a comma, which broke any inline map with
+>   prose in it.
+> - `supportsTools` was only ever populated by the desktop Settings catalogue fetch, so
+>   headless EVERY model got the text tool protocol. Kimi K2.6 emitted its own
+>   `<|tool_calls_section_begin|>` syntax as prose and that leaked syntax became the node's
+>   output. Unknown-on-OpenRouter now means "probably yes", since OpenRouter normalises tool
+>   calling across what it serves.
+>
+> One tuning change with it: the agent loop's last round is now answer-only — the tools are
+> withdrawn and the model is told why, so a capped run writes the best answer it has instead of
+> returning "Let me read the files in sections". Eight rounds is not enough to search a
+> repository and then write about it, so the cap is configurable (`maxToolIterations`).
 
 ### P6 — Connectedness pass
 

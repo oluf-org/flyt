@@ -27,7 +27,7 @@
 //                retry-for-<node>.md guidance) | escalate (human gate)
 //   stitch    -> fixTasks[] routed through the existing create_task tool
 import { callModel, abortError, isAbortError } from './adapters/index.js';
-import { runAgent, toolProtocol } from './agent.js';
+import { runAgent, toolProtocol, supportsToolsFor } from './agent.js';
 import { makeRetrospective } from './retrospective.js';
 import { recordToolUsage } from './feedback.js';
 import { resolveCallTarget } from './modelSource.js';
@@ -602,6 +602,9 @@ export class FlowRunner {
       return await runAgent({
         worker, apiKey, system, prompt, onText, onRetry, retry,
         timeout: this.config.timeout, tools, signal: ctl.signal,
+        // A node that searches a repository needs more rounds than one that
+        // checks the time (core/agent.js MAX_ITERATIONS).
+        maxIterations: this.config.maxToolIterations ?? null,
         ctx: {
           store: this.store, runId, nodeId, workspace: this.workspaceFor(runId),
           backlog: this.backlog ?? null, feedback: this.feedback ?? null,
@@ -2696,7 +2699,7 @@ export class FlowRunner {
       // agentTask's does — the gap the `protocol` field exists to close.
       const stepTools = this.aiStepTools(runId, node);
       if (stepTools.length && worker.provider !== 'mock' && worker.provider !== 'anthropic') {
-        worker.supportsTools = Boolean(this.config.modelCapabilities?.[worker.model]);
+        worker.supportsTools = supportsToolsFor(worker, this.config);
       }
       this.store.appendLog(runId, {
         event: 'node_start', node: node.id, type: 'aiStep', role,
@@ -2942,7 +2945,12 @@ export class FlowRunner {
           + (outcome.materializedCount ? ` Materialized ${outcome.materializedCount} generated node(s).` : '')
           + (outcome.stepEval ? ` Verdict: ${outcome.stepEval.verdict}.` : '')
           + (outcome.fixTasks ? ` Created ${outcome.fixTasks.length} fix task(s).` : ''),
-        model: { provider: worker.provider, model: worker.model },
+        // The Auto Router answers as a different model than the one asked for
+        // (`openrouter/auto`), and result.resolvedModel is the only place that
+        // says which. Recording the request id here would make every ledger
+        // entry and every retrospective say "auto".
+        model: { provider: worker.provider, model: result.resolvedModel ?? worker.model,
+          ...(result.resolvedModel && result.resolvedModel !== worker.model ? { requested: worker.model } : {}) },
         usage: result.usage,
         durationMs: result.durationMs,
         // A granted aiStep runs through the agent loop and can call tools

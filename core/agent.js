@@ -10,7 +10,24 @@
 import { callModel } from './adapters/index.js';
 import { executeTool, isDestructive } from './tools/index.js';
 
+// How many tool-calling rounds a node gets before it must answer. Eight is
+// plenty for "check the time, then write"; it is not enough for "search a
+// repository, read four files, then write", which is exactly what a fan-out
+// lane over a reference does — observed capping out with nothing but its own
+// preamble as the node's output. Raisable per host via config.maxToolIterations.
 const MAX_ITERATIONS = 8;
+
+// What the model is told when its last round is up. Without this a capped run
+// returns whatever partial text happened to exist — usually "Let me read the
+// files in sections", which is not an answer. With it, the model spends its
+// final turn writing the best answer it can from what it already read.
+const LAST_ROUND_NOTICE = [
+  'You have no tool calls left. Do not request another one — any further tool',
+  'call will be discarded.',
+  'Write your complete final answer now, in full, using only what you have',
+  'already read. Where you did not get far enough to be sure, say so plainly',
+  'rather than guessing or promising further work.'
+].join(' ');
 
 // Per-tool-call approval gate (V1 task 4). When the run supplies ctx.approveToolCall
 // (an agentTask node flagged approveToolCalls), pause before every DESTRUCTIVE
@@ -47,7 +64,28 @@ const NATIVE_TOOL_PROVIDERS = new Set(['openrouter', 'openai', 'kimi']);
 export const toolProtocol = worker =>
   (NATIVE_TOOL_PROVIDERS.has(worker?.provider) && worker?.supportsTools) ? 'native' : 'text';
 
-export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, retry, timeout, signal = null }) {
+/**
+ * Does this model call tools natively?
+ *
+ * Learned from a provider catalogue when one has been fetched, and that is the
+ * whole problem: nothing outside the desktop app's Settings page ever fetches
+ * one, so `flyt run` and the loop treated EVERY model as text-protocol.
+ * Observed for real: kimi-k2.6 emitted its own `<|tool_calls_section_begin|>`
+ * syntax as prose, the text loop did not recognise it, and the node's output
+ * was that leaked syntax instead of an analysis.
+ *
+ * OpenRouter normalises OpenAI-style tool calling across the models it serves,
+ * so UNKNOWN there means "probably yes" rather than "no". A catalogue that
+ * explicitly says false is still believed.
+ */
+export function supportsToolsFor(worker, config = {}) {
+  const model = worker?.model;
+  const known = config.modelCapabilities?.[model] ?? config.modelFacts?.[model]?.supportsTools;
+  if (typeof known === 'boolean') return known;
+  return worker?.provider === 'openrouter';
+}
+
+export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, retry, timeout, signal = null, maxIterations = null }) {
   const started = Date.now();
   if (!tools.length) {
     const r = await callModel({ ...worker, apiKey, system, prompt, onText, onRetry, retry, timeout, signal });
@@ -55,8 +93,8 @@ export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx
   }
   const native = toolProtocol(worker) === 'native';
   const out = native
-    ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal })
-    : await textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal });
+    ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal, maxIterations })
+    : await textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal, maxIterations });
   return { ...out, durationMs: Date.now() - started };
 }
 
@@ -80,7 +118,7 @@ function addUsage(total, usage) {
 }
 
 // --- NATIVE path: OpenAI function-tool format over the messages API ---
-async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal }) {
+async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal, maxIterations = null }) {
   const messages = [
     { role: 'system', content: system },
     { role: 'user', content: prompt }
@@ -93,17 +131,22 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
   let usage = null;
   let lastText = '';
 
-  for (let i = 0; i < MAX_ITERATIONS; i++) {
+  const rounds = Math.max(1, Number(maxIterations ?? MAX_ITERATIONS));
+  for (let i = 0; i < rounds; i++) {
+    // The final round is answer-only: the tools are withdrawn AND the model is
+    // told why, so it writes instead of asking for another search it cannot get.
+    const last = i === rounds - 1;
+    if (last) messages.push({ role: 'user', content: LAST_ROUND_NOTICE });
     // onText rides along, but today's adapters decline to stream a tool-enabled
     // call (the loop needs the raw tool_calls message back, which only the
     // non-streaming response carries) — so this path stays silent until an
     // adapter can reassemble tool_calls from deltas. Honoring the contract here
     // means that becomes an adapter change alone.
-    const res = await callModel({ ...worker, apiKey, messages, tools: oaTools, onText, onRetry, retry, timeout, signal });
+    const res = await callModel({ ...worker, apiKey, messages, ...(last ? {} : { tools: oaTools }), onText, onRetry, retry, timeout, signal });
     usage = addUsage(usage, res.usage);
     lastText = res.text || lastText;
     const calls = res.message?.tool_calls;
-    if (!calls?.length) return { text: res.text, toolCalls, usage };
+    if (!calls?.length || last) return { text: res.text || lastText, toolCalls, usage, ...(last ? { capped: true } : {}) };
 
     // Echo the assistant turn back verbatim, then answer each call with a
     // role:'tool' message (result on success, the error on failure so the
@@ -142,7 +185,7 @@ export function textProtocolInstructions(tools) {
   ].join('\n');
 }
 
-async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal }) {
+async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal, maxIterations = null }) {
   const fullSystem = system + '\n\n' + textProtocolInstructions(tools);
   const toolCalls = [];
   let usage = null;

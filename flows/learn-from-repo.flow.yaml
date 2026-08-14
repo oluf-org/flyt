@@ -1,0 +1,65 @@
+version: 1
+id: learn-from-repo
+name: Learn from a repo
+description: |
+  Point it at any repository and a question. Four models read it in parallel,
+  each told to look somewhere the others will not, their findings are merged,
+  and the result becomes queued work the loop can pick up.
+
+inputs:
+  repo:
+    type: repo
+    label: Repository
+    required: true
+    description: Any git URL or a path to a repository on this machine. Cloned read-only and pinned.
+  goal:
+    type: text
+    label: "What do you want to learn from it?"
+    placeholder: e.g. how it recovers from a failed task, and what we should copy
+
+nodes:
+  read:
+    type: fanout
+    title: Read it four ways
+    goal: |
+      Read the repository you have been given and answer the question in the
+      brief. Ground every claim in a file and a line you actually opened:
+      search first, then read the specific place. Say plainly what you could
+      not determine rather than filling the gap.
+    tools: [search_references, read_file]
+    lanes:
+      - { id: architecture, label: Architecture, intent: "how the thing is put together, and why", preset: standard, worker: google/gemini-2.5-flash }
+      - { id: wildcard, preset: wildcard, worker: deepseek/deepseek-v4-flash }
+      - { id: adversarial, preset: adversarial, worker: moonshotai/kimi-k2.6 }
+      - { id: contrarian, preset: contrarian, worker: z-ai/glm-4.7 }
+    template: general-analysis
+  synthesise:
+    use: combine
+    title: Merge the four reads
+    instructions: |
+      Four independent readings of one repository follow, each with a different
+      slant. Merge them into one account: what is agreed, what only one lane
+      saw, and what they contradict each other about. Keep the citations. Where
+      two lanes disagree, say so rather than picking a winner silently.
+    worker: { provider: openrouter, model: openai/gpt-5-mini }
+  plan:
+    use: backlog-plan
+    title: What we should actually do
+    instructions: |
+      Propose only work that this project should genuinely do as a result of
+      what was read. Prefer three real tasks to ten plausible ones. Every task
+      must be claimable on its own by someone who has not read the analysis.
+    worker: { provider: openrouter, model: openai/gpt-5-mini }
+  work:
+    type: loop
+    title: Queue it
+    maxTasks: 6
+    waitFor: none
+
+flow:
+  - inputs.repo -> read
+  - inputs.goal -> read
+  - read -> synthesise
+  - synthesise -> plan
+  - plan.tasks -> work
+  - work -> output
