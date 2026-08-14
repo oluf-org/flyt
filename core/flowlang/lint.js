@@ -19,6 +19,7 @@ import {
   FEEDBACK_HANDLE, isStructuralType, isContainerType, resolveInstance, overridableFields
 } from '../../src/flowTypes.js';
 import { resolveLanes, normalizeLane, DEFAULT_LANE_TEMPLATE } from '../nodes/fanout.js';
+import { findFlowCycle, flowDepth, subflowPorts, MAX_SUBFLOW_DEPTH } from '../nodes/subflow.js';
 import { makeContext, expandRefs, resolveGrant, WILDCARD } from '../../src/toolGrants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -59,7 +60,11 @@ const finding = (rule, severity, message, extra = {}) => ({ rule, severity, mess
 // when the caller has them (the app does, the CLI may not). Both default to
 // null, and the rules that need them skip rather than guess — the same
 // contract the template- and library-dependent rules follow.
-export function lintFlow(flow, { templates = null, rules = null, library = null, modelSets = null, activeModels = null } = {}) {
+// `flows`: every flow the app knows (FlowStore.list() shape, with nodes+edges),
+// or null. The sub-flow rules need it to resolve a reference, walk the
+// reference graph and measure depth; without it they skip, like every other
+// data-dependent rule.
+export function lintFlow(flow, { templates = null, rules = null, library = null, modelSets = null, activeModels = null, flows = null } = {}) {
   const out = [];
   const on = rule => !rules || rules.includes(rule);
   const byId = new Map((flow.nodes ?? []).map(n => [n.id, n]));
@@ -220,6 +225,67 @@ export function lintFlow(flow, { templates = null, rules = null, library = null,
       }
       if (isStructuralType(n.type) || isContainerType(n.type)) {
         out.push(finding('parent', 'error', `node "${n.id}": ${n.type} nodes cannot live inside a container`, { nodeId: n.id }));
+      }
+    }
+  }
+
+  // --- sub-flows (BRICKS P3.4) ----------------------------------------------
+  // A flow reference is resolved at RUN START, not pinned (P3.7), so these are
+  // the only guards between "edit the brick" and "recurse the engine".
+  if (flows) {
+    const flowsById = new Map(flows.map(f => [f.id, f]));
+    // The flow being linted may not be in the catalog yet (an unsaved edit), so
+    // it is added under its own id for the graph walk.
+    if (flow.id) flowsById.set(flow.id, flow);
+    for (const n of flow.nodes ?? []) {
+      if (n.type !== 'subflow') continue;
+      const refId = n.data?.flowId ? String(n.data.flowId) : null;
+      if (!refId) {
+        if (on('unknown-flow')) {
+          out.push(finding('unknown-flow', 'error', `node "${n.id}": no flow referenced — set "flow: <flowId>"`, { nodeId: n.id }));
+        }
+        continue;
+      }
+      const ref = flowsById.get(refId);
+      if (!ref) {
+        if (on('unknown-flow')) {
+          out.push(finding('unknown-flow', 'error', `node "${n.id}": flow "${refId}" does not exist`, { nodeId: n.id }));
+        }
+        continue;
+      }
+      if (on('flow-cycle')) {
+        const cycle = findFlowCycle(refId, flowsById);
+        // Self-reference shows up as a cycle through this flow's own id too.
+        const selfCycle = refId === flow.id ? [flow.id, flow.id] : null;
+        const hit = selfCycle ?? cycle;
+        if (hit) {
+          out.push(finding('flow-cycle', 'error',
+            `node "${n.id}": flow reference cycle ${hit.join(' → ')} — a flow cannot contain itself, directly or through another flow`,
+            { nodeId: n.id }));
+          continue; // depth is meaningless on a cyclic graph
+        }
+      }
+      if (on('flow-depth')) {
+        const depth = 1 + flowDepth(refId, flowsById);
+        if (depth > MAX_SUBFLOW_DEPTH) {
+          out.push(finding('flow-depth', 'error',
+            `node "${n.id}": calling "${refId}" nests containers ${depth} deep; the cap is ${MAX_SUBFLOW_DEPTH}`,
+            { nodeId: n.id }));
+        }
+      }
+      // unknown-port resolved THROUGH the reference (P3.3): the call site's
+      // ports are the inner flow's, which the node graph alone cannot know.
+      if (on('unknown-port')) {
+        const ports = subflowPorts(ref).map(p => p.id);
+        for (const e of flow.edges ?? []) {
+          if (e.source !== n.id || !e.sourceHandle || isFeedbackEdge(e)) continue;
+          if (!ports.includes(e.sourceHandle)) {
+            const label = `${e.source}.${e.sourceHandle} -> ${e.target}`;
+            out.push(finding('unknown-port', 'error',
+              `edge "${label}": sub-flow "${refId}" declares no output "${e.sourceHandle}" (has: ${ports.join(', ') || 'none'})`,
+              { edge: label, nodeId: n.id }));
+          }
+        }
       }
     }
   }
@@ -466,7 +532,7 @@ export function lintFlow(flow, { templates = null, rules = null, library = null,
 }
 
 // --- Layer 1 + 2: lint DSL text ---------------------------------------------
-export function lintText(text, { templates = null, library = null, modelSets = null, activeModels = null } = {}) {
+export function lintText(text, { templates = null, library = null, modelSets = null, activeModels = null, flows = null } = {}) {
   let doc;
   try { doc = parseYaml(text); }
   catch (err) {
@@ -498,7 +564,7 @@ export function lintText(text, { templates = null, library = null, modelSets = n
     } catch { /* parseFlow above would have thrown */ }
   }
 
-  const semantic = lintFlow(flow, { templates, library, modelSets, activeModels });
+  const semantic = lintFlow(flow, { templates, library, modelSets, activeModels, flows });
   return result([...out, ...semantic.findings]);
 }
 
@@ -523,5 +589,9 @@ export const RUNTIME_RULES = [
   // A fan-out with no lanes, or one pointing at a template that does not
   // exist, cannot produce a single child — that wedges the run rather than
   // degrading it, so it is caught at the gate (D36 P2.5).
-  'fanout-lanes', 'fanout-template'
+  'fanout-lanes', 'fanout-template',
+  // A sub-flow reference is resolved at run start, so a missing flow, a
+  // reference cycle or an over-deep nest all wedge the run rather than
+  // degrading it (D36 P3.4).
+  'unknown-flow', 'flow-cycle', 'flow-depth'
 ];

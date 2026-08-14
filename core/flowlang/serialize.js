@@ -21,7 +21,7 @@ const fieldRank = k => {
   return i === -1 ? FIELD_ORDER.length : i;
 };
 
-const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai', fanout: 'ai' };
+const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai', fanout: 'ai', subflow: 'ai' };
 
 function emitValue(lines, key, v, indent) {
   const pad = ' '.repeat(indent);
@@ -56,6 +56,16 @@ function emitValue(lines, key, v, indent) {
 function emitNode(lines, node) {
   const fields = node.templateId
     ? { use: node.templateId, ...(node.parentId ? { parent: node.parentId } : {}), ...(node.expose ? { expose: node.expose } : {}), ...(node.overrides ?? {}) }
+    // The third node shape (D36 P3.1). Round-trips back to `flow:` rather than
+    // `type: subflow`, so what you wrote is what gets written back.
+    : node.type === 'subflow'
+    ? {
+        flow: node.data?.flowId,
+        ...(node.parentId ? { parent: node.parentId } : {}),
+        ...(node.expose ? { expose: node.expose } : {}),
+        ...(node.data?.flowMode ? { mode: node.data.flowMode } : {}),
+        ...(node.data?.flowOverrides ? { overrides: node.data.flowOverrides } : {})
+      }
     : {
         type: node.type,
         // kind is derivable from type; only persist a deviation

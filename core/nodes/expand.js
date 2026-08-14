@@ -168,7 +168,12 @@ export async function runContainer(runner, runId, flow, node, children, opts = {
   }
 
   const title = opts.title ?? (node.data?.title?.trim() || node.id);
-  const sections = aggregateChildren(runner, runId, node, children, opts);
+  // Which children the container REPORTS. Every lane of a fan-out and every
+  // node an orchestrator created is a result; a sub-flow reports only what fed
+  // its inner output node, because that is what a caller means by "what the
+  // sub-flow produced" (P3.3). The rest are still on the canvas.
+  const reported = opts.aggregateOver ? opts.aggregateOver(children) : children;
+  const sections = aggregateChildren(runner, runId, node, reported, opts);
   runner.store.writeNodeOutput(runId, node.id,
     `# ${title} — ${opts.aggregateLabel ?? 'aggregated results'}\n\n${sections.join('\n\n')}`);
 }

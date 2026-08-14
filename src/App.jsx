@@ -2331,7 +2331,7 @@ export default function App() {
           {flowView && flowViewMode !== 'yaml' && pickerOpen && (
             <>
               <div className="picker-backdrop" onClick={() => setPickerOpen(false)} />
-              <NodePicker templates={templates} onAdd={addFromPicker} onClose={() => setPickerOpen(false)} />
+              <NodePicker templates={templates} flows={flowsList.filter(f => f.id !== flow?.id)} onAdd={addFromPicker} onClose={() => setPickerOpen(false)} />
             </>
           )}
 
@@ -2488,6 +2488,8 @@ export default function App() {
                 models={models}
                 activeModels={activeModels}
                 templates={templates}
+                flows={flowsList}
+                onOpenFlow={openFlow}
                 onChangeData={changeNodeData}
                 onChangeOverrides={changeNodeOverrides}
                 onDeleteNode={deleteNode}

@@ -505,7 +505,7 @@ export function createEngine({
     // T2a: the storage location is a Settings choice, read at project-open time.
     getStorage: () => (settings.projectStorage === 'appdata' ? 'appdata' : 'workspace'),
     createRunner: (store, projectId) => {
-      const runner = new FlowRunner(store, runtimeConfig, pushUpdateFor(projectId), nodeLibrary);
+      const runner = new FlowRunner(store, runtimeConfig, pushUpdateFor(projectId), nodeLibrary, flows);
       // Lazy for the reason above, and a property rather than a constructor
       // argument so every existing FlowRunner call site is untouched.
       Object.defineProperty(runner, 'backlog', { get: () => backlogFor(projectId), configurable: true });

@@ -36,6 +36,7 @@ import {
   runContainer, ensureChildStatuses, commitChildren, placeInContainer, placeByLayout
 } from './nodes/expand.js';
 import { resolveLanes, laneBrief, laneInventory, DEFAULT_LANE_TEMPLATE } from './nodes/fanout.js';
+import { spliceAllSubflows, SubflowError } from './nodes/subflow.js';
 import { Workspace } from './workspace.js';
 import { loadSkills, withSkillsSection } from './skills.js';
 import { createWriteLedger } from './writeLedger.js';
@@ -457,11 +458,15 @@ export const normalizeApprovalMode = m =>
   (m == null ? 'node' : APPROVAL_MODES.includes(m) ? m : 'ask');
 
 export class FlowRunner {
-  constructor(store, config, onUpdate = () => {}, nodeStore = null) {
+  constructor(store, config, onUpdate = () => {}, nodeStore = null, flowStore = null) {
     this.store = store;
     this.config = config;
     this.onUpdate = onUpdate;
     this.nodeStore = nodeStore; // Node Library (template defaults for instances)
+    // Flow store (D36 P3): resolves `flow: <id>` call sites at run start. Null
+    // in contexts that have no flow library — a sub-flow call then fails at
+    // start with a clear error rather than silently running an empty box.
+    this.flowStore = flowStore;
     this.gates = new Map(); // runId -> resolve(bool) for a pending approval
     // MODES-COMPARE T6: runId -> resolve(answersText) for a refine node parked
     // at the awaiting_input gate. A separate map from `gates` because the
@@ -1620,6 +1625,27 @@ export class FlowRunner {
     }
     const resolved = resolveFlow(flow, templates, hasLaunch ? launchOverrides : null);
     const flowCopy = JSON.parse(JSON.stringify({ ...resolved, builtin: undefined }));
+    // Sub-flows are spliced HERE (D36 B1/P3.7): the run's flow.json is the
+    // spliced graph, so the snapshot always shows what actually ran, and every
+    // downstream part of the engine — scheduler, canvas, resume, gates — sees
+    // an ordinary graph and needs to know nothing about sub-flows.
+    if (flowCopy.nodes.some(n => n.type === 'subflow')) {
+      if (!this.flowStore) {
+        throw new Error(`Flow "${flow.name ?? flow.id}" calls a sub-flow, but this runner has no flow library to resolve it.`);
+      }
+      try {
+        spliceAllSubflows(flowCopy, {
+          loadFlow: id => { try { return this.flowStore.load(id); } catch { return null; } },
+          templates
+        });
+      } catch (err) {
+        if (err instanceof SubflowError) {
+          throw new Error(`Flow "${flow.name ?? flow.id}" could not be assembled:
+- ${err.message}`);
+        }
+        throw err;
+      }
+    }
     const input = flowCopy.nodes.find(n => n.type === 'input');
     if (input && userInput.trim()) input.data = { ...input.data, text: userInput.trim() };
     const brief = input?.data?.text?.trim() || `Flow: ${flow.name}`;
@@ -1642,7 +1668,8 @@ export class FlowRunner {
       ...(compareGroup?.id
         ? { compareGroup: { id: String(compareGroup.id), label: compareGroup.label === 'B' ? 'B' : 'A' } }
         : {}),
-      nodeStatus: Object.fromEntries(flow.nodes.map(n => [n.id, 'pending']))
+      // From the SPLICED graph: sub-flow children are real nodes in this run.
+      nodeStatus: Object.fromEntries(flowCopy.nodes.map(n => [n.id, 'pending']))
     });
     this.store.appendLog(runId, {
       event: 'flow_run_created', flowId: flow.id, workspace: workspace ?? null,
@@ -1650,7 +1677,7 @@ export class FlowRunner {
       ...(modeId ? { modeId } : {}),
       ...(hasLaunch ? { overrideNodes: Object.keys(launchOverrides) } : {}),
       ...(compareGroup?.id ? { compareGroup: String(compareGroup.id) } : {}),
-      nodes: flow.nodes.length, edges: flow.edges.length
+      nodes: flowCopy.nodes.length, edges: flowCopy.edges.length
     });
     this.notify(runId);
     this.launch(runId, flowCopy);
@@ -2820,6 +2847,10 @@ export class FlowRunner {
       return this.runFanout(runId, flow, node, opts);
     }
 
+    if (node.type === 'subflow') {
+      return this.runSubflow(runId, flow, node, opts);
+    }
+
     if (node.type === 'output') {
       this.store.appendLog(runId, { event: 'node_start', node: node.id, type: 'output' });
       const parts = this.upstreamContext(runId, flow, node, taskIdByNode);
@@ -3118,6 +3149,75 @@ export class FlowRunner {
       confidence: 0.75,
       recommendation: `Fan-out "${title}" ran ${children.length} lane(s) on one brief: `
         + lanes.map(l => `${l.label}${l.worker ? ` (${l.worker.model})` : ''}`).join(', ') + '.'
+    }));
+    this.setNodeStatus(runId, node.id, 'done');
+    return {};
+  }
+
+  // The Sub-flow call site (BRICKS P3 / D36 B1): a flow used as a node.
+  //
+  // By the time this runs there is nothing to resolve — start() spliced the
+  // referenced flow's nodes into the run graph as this node's children, so
+  // this is the third consumer of the same container walk, and the thinnest.
+  // What it adds over runContainer: the call site reports the inner flow's
+  // RESULT (whatever fed its output node), not every inner node, and writes
+  // one sidecar per declared port so `<call>.<port>` edges resolve (P3.3).
+  async runSubflow(runId, flow, node, opts) {
+    const flowId = node.data?.flowId ?? '(unknown)';
+    this.store.appendLog(runId, { event: 'node_start', node: node.id, type: 'subflow', flowId });
+
+    const children = flow.nodes.filter(n => n.data?.managedBy === node.id);
+    if (!children.length) {
+      // Only reachable if the splice produced nothing — an inner flow that is
+      // entirely input + output. Honest failure beats an empty box.
+      this.store.writeRetrospective(runId, node.id, makeRetrospective({
+        node: node.id, status: 'failed',
+        problems: [`flow "${flowId}" contributed no runnable nodes`],
+        resolution: 'Sub-flow failed; run stopped and escalated to human.',
+        confidence: 0,
+        recommendation: `Sub-flow "${node.data?.title || node.id}" referenced "${flowId}", which has nothing to run between its input and output.`
+      }));
+      this.setNodeStatus(runId, node.id, 'failed');
+      throw new Error(`Sub-flow ${node.id} failed: flow "${flowId}" contributed no runnable nodes`);
+    }
+    ensureChildStatuses(this.store, runId, children);
+
+    // The declared ports, stamped onto the node at splice time. Each names an
+    // inner node whose output backs it.
+    const ports = (node.data?.outputs ?? []).map(p => ({
+      ...p, childId: `${node.id}__${p.id}`
+    }));
+    const resultIds = new Set(ports.map(p => p.childId));
+
+    const title = node.data?.title?.trim() || flowId;
+    await runContainer(this, runId, flow, node, children, {
+      ...opts,
+      kind: 'Sub-flow',
+      title,
+      aggregateLabel: `result of ${flowId}`,
+      // A caller means "what the sub-flow produced", not "everything that
+      // happened inside it" — the inner nodes are all on the canvas anyway.
+      aggregateOver: cs => {
+        const results = cs.filter(c => resultIds.has(c.id));
+        return results.length ? results : cs;
+      },
+      label: c => c.data?.title?.trim() || c.data?.subflowNodeId || c.id
+    });
+
+    // Port sidecars: nodes/<call>.<port>.md, so an edge `call.x -> next` picks
+    // one inner result the same way it picks any other node's named output.
+    for (const p of ports) {
+      const text = this.store.readNodeOutput(runId, p.childId);
+      if (text != null) this.store.writeNodeOutput(runId, `${node.id}.${p.id}`, text);
+    }
+
+    this.store.writeRetrospective(runId, node.id, makeRetrospective({
+      node: node.id,
+      status: 'success',
+      problems: [],
+      confidence: 0.75,
+      recommendation: `Sub-flow "${title}" ran flow "${flowId}" (${children.length} node(s))`
+        + (node.data?.flowMode ? ` in mode "${node.data.flowMode}"` : '') + '.'
     }));
     this.setNodeStatus(runId, node.id, 'done');
     return {};

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { DND_MIME, dndOrchestrator, dndFanout, dndTemplate } from './FlowCanvas.jsx';
+import { DND_MIME, dndOrchestrator, dndFanout, dndSubflow, dndTemplate } from './FlowCanvas.jsx';
 
 // The node picker: the familiar "add node" panel of node editors (n8n,
 // Node-RED, Blueprints). Search-first, grouped, every row both click-to-add
@@ -48,7 +48,20 @@ function groupTemplates(templates) {
     .map(([label, items]) => ({ label, items }));
 }
 
-export default function NodePicker({ templates, onAdd, onClose }) {
+// Every saved flow is offered as a brick you can drop into this one (D36 B1).
+// The flow being edited is filtered out by the caller — a flow containing
+// itself is the cycle the linter rejects, refused one step earlier.
+function subflowItems(flows) {
+  return (flows ?? []).map(f => ({
+    key: `flow:${f.id}`,
+    icon: '⧉',
+    name: f.name,
+    description: `Run the "${f.id}" flow as one node`,
+    spec: () => dndSubflow(f.id)
+  }));
+}
+
+export default function NodePicker({ templates, flows = [], onAdd, onClose }) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const searchRef = useRef(null);
@@ -63,13 +76,15 @@ export default function NodePicker({ templates, onAdd, onClose }) {
       || it.description.toLowerCase().includes(q);
     const out = [];
     const structural = [ORCH_ITEM, FANOUT_ITEM].filter(match);
+    const bricks = subflowItems(flows).filter(match);
     if (structural.length) out.push({ label: 'Structural', items: structural });
+    if (bricks.length) out.push({ label: 'Flows', items: bricks });
     for (const g of groupTemplates(templates)) {
       const items = g.items.filter(match);
       if (items.length) out.push({ label: g.label, items });
     }
     return out;
-  }, [templates, query]);
+  }, [templates, flows, query]);
 
   // Flat list for keyboard navigation.
   const flat = useMemo(() => sections.flatMap(s => s.items), [sections]);

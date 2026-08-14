@@ -63,6 +63,7 @@ export function freshNodeId(prefix) {
 export const DND_MIME = `application/x-${APP_SLUG}-node`;
 export const dndOrchestrator = () => ({ kind: 'orchestrator' });
 export const dndFanout = () => ({ kind: 'fanout' });
+export const dndSubflow = flowId => ({ kind: 'subflow', flowId });
 export const dndTemplate = templateId => ({ kind: 'template', templateId });
 
 // A fresh flow node from a picker spec at a canvas position: either the
@@ -82,6 +83,12 @@ function nodeFromSpec(spec, position) {
     return {
       id: freshNodeId('fanout'), type: 'fanout', kind: 'ai',
       position, data: { title: 'Fan-out', lanes: ['standard', 'wildcard', 'adversarial', 'contrarian'] }
+    };
+  }
+  if (spec?.kind === 'subflow' && typeof spec.flowId === 'string') {
+    return {
+      id: freshNodeId('subflow'), type: 'subflow', kind: 'ai',
+      position, data: { title: spec.flowId, flowId: spec.flowId }
     };
   }
   if (spec?.kind === 'template' && typeof spec.templateId === 'string') {
@@ -268,6 +275,13 @@ function OrchestratorCard({ data }) {
                 ⋔ {data.laneCount} lanes
               </span>
             )}
+            {/* A sub-flow names the brick it runs — the one thing you need to
+                know about it without opening the Inspector (D36 B2). */}
+            {data.subflowId && (
+              <span className="node-kind kind-inside mono" title={`Runs the "${data.subflowId}" flow`}>
+                ⧉ {data.subflowId}
+              </span>
+            )}
             {data.childCount > 0 && (
               <span className="node-kind kind-inside" title={`${data.childCount} ${isFanout ? 'lane' : 'node'}(s) inside this box`}>
                 {isFanout ? '⋔' : '▣'} {data.childCount}{data.doneCount != null ? ` · ${data.doneCount} done` : ''}
@@ -420,7 +434,7 @@ function ExpandedNodeCard({ id, data }) {
 // outputText/expanded are only attached to expanded cards, so the 250ms tick
 // re-renders exactly the one streaming reader, not the whole canvas.
 const cardEqual = (prev, next) =>
-  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'emptyHint', 'turn', 'feedbackPoint', 'stack', 'dropTarget', 'childCount', 'activeSince', 'expanded', 'outputText', 'expandable', 'hasOutput', 'workerKey', 'activeModels', 'laneCount', 'doneCount']
+  ['label', 'sub', 'icon', 'kind', 'status', 'selected', 'nodeType', 'ports', 'spawns', 'box', 'empty', 'emptyHint', 'turn', 'feedbackPoint', 'stack', 'dropTarget', 'childCount', 'activeSince', 'expanded', 'outputText', 'expandable', 'hasOutput', 'workerKey', 'activeModels', 'laneCount', 'doneCount', 'subflowId']
     .every(k => prev.data[k] === next.data[k]);
 
 const StageNode = React.memo(props => props.data.expanded
@@ -526,7 +540,7 @@ const summaryEqual = (prev, next) =>
     .every(k => prev.data[k] === next.data[k]);
 const SummaryNodeMemo = React.memo(SummaryNode, summaryEqual);
 
-const nodeTypes = { stage: StageNode, task: StageNode, orchestrator: OrchNode, fanout: OrchNode, summary: SummaryNodeMemo };
+const nodeTypes = { stage: StageNode, task: StageNode, orchestrator: OrchNode, fanout: OrchNode, subflow: OrchNode, summary: SummaryNodeMemo };
 
 // Editor node: same neutral card, handles depend on the node type
 // (input has no target, output has no source).
@@ -540,7 +554,8 @@ const editorNodeTypes = {
     />
   ), cardEqual),
   orchestrator: OrchNode,
-  fanout: OrchNode
+  fanout: OrchNode,
+  subflow: OrchNode
 };
 
 // Editable canvas over a flow DEFINITION (not run state). The raw flow object
@@ -645,10 +660,15 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
             // A fan-out's width is authored, so it can say what it will do
             // before it does it; an orchestrator's is decided at run time.
             ...(raw.type === 'fanout' ? { laneCount: laneCountOf(raw) } : {}),
+            ...(raw.type === 'subflow' ? { subflowId: n.data?.flowId ?? null } : {}),
             emptyHint: raw.type === 'fanout'
               ? (laneCountOf(raw)
                   ? `Runs ${laneCountOf(raw)} lane(s) on one brief at run time — one node per lane, in here.`
                   : 'No lanes yet — add lanes (or point this at a model set) in the Inspector.')
+              : raw.type === 'subflow'
+              ? (n.data?.flowId
+                  ? `Runs the "${n.data.flowId}" flow in here at run start — its nodes become nodes of this run.`
+                  : 'No flow chosen yet — pick one in the Inspector.')
               : 'Drag nodes in to run them inside this box — or let it plan for itself at run time.'
           } : {}),
           selected: raw.id === sel
@@ -715,7 +735,7 @@ function FlowEditorCanvas({ flow, resolved, selectedNode, onSelect, onChangeFlow
   // Orchestrator boxes as absolute canvas rects (editor boxes are always
   // top-level — nesting is refused by the editor and flagged by the linter).
   const orchRects = useCallback(f => f.nodes
-    .filter(n => isContainerType(n.type) && !n.parentId)
+    .filter(n => isContainerType(n.type) && n.type !== 'subflow' && !n.parentId)
     .map(n => {
       const box = n.data?.box ?? ORCH_BOX_DEFAULT;
       return { id: n.id, x: n.position?.x ?? 0, y: n.position?.y ?? 0, w: box.w, h: box.h };
