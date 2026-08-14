@@ -5,7 +5,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   migrateSettings, createResolver, resolveCallTarget,
-  DEFAULT_PRIORITY, CURATED_MODELS
+  DEFAULT_PRIORITY, CURATED_MODELS,
+  usdPerMillion, catalogFromOpenRouter, factsFromCatalog, normalizeModelFacts,
+  normalizeModelSets, modelSetId, resolveModelSet, MODEL_SET_MAX,
+  proposeStarterSet, STARTER_ROLES
 } from '../core/modelSource.js';
 import { canServe, callModel } from '../core/adapters/index.js';
 
@@ -50,6 +53,156 @@ test('migration normalizes priority and active-model entries', () => {
     { id: 'claude-sonnet-5', source: 'anthropic', enabled: true },
     { id: 'gpt-5.2', source: 'auto', enabled: true }
   ]);
+});
+
+// --- model facts (BRICKS P0.2) ---------------------------------------------
+
+test('per-token catalog prices become per-million; junk becomes null', () => {
+  assert.equal(usdPerMillion('0.000003'), 3);
+  assert.equal(usdPerMillion('0.000000015'), 0.015);
+  assert.equal(usdPerMillion(0), 0, 'free is a price, not an absence');
+  assert.equal(usdPerMillion('-1'), null);
+  assert.equal(usdPerMillion(''), null);
+  assert.equal(usdPerMillion(undefined), null);
+  assert.equal(usdPerMillion('not a number'), null);
+});
+
+test('the OpenRouter payload keeps the facts the pickers show', () => {
+  const list = catalogFromOpenRouter({
+    data: [
+      {
+        id: 'anthropic/claude-sonnet-5', name: 'Claude Sonnet 5',
+        context_length: 200000, supported_parameters: ['tools', 'temperature'],
+        pricing: { prompt: '0.000003', completion: '0.000015' }
+      },
+      { id: 'tiny/model', pricing: {} },
+      { id: '   ' },
+      null
+    ]
+  });
+  assert.equal(list.length, 2, 'entries without a usable id are dropped');
+  assert.deepEqual(list[0], {
+    id: 'anthropic/claude-sonnet-5', name: 'Claude Sonnet 5',
+    contextLength: 200000, supportsTools: true, inUsdPerM: 3, outUsdPerM: 15
+  });
+  assert.equal(list[1].name, 'tiny/model', 'a missing name falls back to the id');
+  assert.equal(list[1].supportsTools, false);
+  assert.equal(list[1].inUsdPerM, null);
+});
+
+test('facts omit what the catalog did not say — unknown must not read as free', () => {
+  const facts = factsFromCatalog([{ id: 'a/b', name: 'a/b', contextLength: null, supportsTools: true, inUsdPerM: null }]);
+  assert.deepEqual(facts['a/b'], { supportsTools: true });
+  assert.ok(!('inUsdPerM' in facts['a/b']));
+  assert.ok(!('name' in facts['a/b']), 'a name identical to the id is not a fact');
+});
+
+test('a later fetch updates the ids it covers and leaves the rest alone', () => {
+  const first = factsFromCatalog([{ id: 'a/b', inUsdPerM: 1 }, { id: 'c/d', inUsdPerM: 2 }]);
+  const second = factsFromCatalog([{ id: 'a/b', inUsdPerM: 9 }], first);
+  assert.equal(second['a/b'].inUsdPerM, 9);
+  assert.equal(second['c/d'].inUsdPerM, 2, 'fetching one catalog must not blank another');
+});
+
+test('migration normalizes stored facts and drops empty ones', () => {
+  const s = migrateSettings({ modelFacts: { 'a/b': { inUsdPerM: 3, junk: true }, 'c/d': {}, '': { inUsdPerM: 1 } } });
+  assert.deepEqual(s.modelFacts, { 'a/b': { inUsdPerM: 3 } });
+  assert.deepEqual(normalizeModelFacts(null), {});
+});
+
+// --- model sets (BRICKS P0.3 / D36 B13) ------------------------------------
+
+test('set ids are slugs; names survive', () => {
+  assert.equal(modelSetId('The Analysts!'), 'the-analysts');
+  assert.equal(modelSetId('  --  '), '');
+  const sets = normalizeModelSets({ 'The Analysts': { name: 'The Analysts', models: ['a/b', 'a/b', 'c/d'] } });
+  assert.deepEqual(sets, { 'the-analysts': { name: 'The Analysts', models: ['a/b', 'c/d'] } });
+});
+
+test('a bare array is accepted as shorthand, and an empty set is legal', () => {
+  const sets = normalizeModelSets({ cheap: ['a/b'], empty: { name: 'Empty', models: [] }, bad: 'nope' });
+  assert.deepEqual(sets.cheap, { name: 'cheap', models: ['a/b'] });
+  assert.deepEqual(sets.empty, { name: 'Empty', models: [] }, 'you create a set, then fill it');
+  assert.ok(!('bad' in sets));
+});
+
+test('sets are capped so one cannot become the whole catalog', () => {
+  const many = Array.from({ length: MODEL_SET_MAX + 10 }, (_, i) => `v/m${i}`);
+  assert.equal(normalizeModelSets({ big: many }).big.models.length, MODEL_SET_MAX);
+});
+
+test('resolving a set drops members that are no longer active models', () => {
+  const sets = { analysts: { name: 'Analysts', models: ['a/b', 'c/d', 'gone/x'] } };
+  const active = [{ id: 'a/b', enabled: true }, { id: 'c/d', enabled: false }];
+  assert.deepEqual(resolveModelSet(sets, 'analysts', active), ['a/b'],
+    'a disabled or removed member shrinks the set rather than resolving to something unrunnable');
+  assert.deepEqual(resolveModelSet(sets, 'nope', active), []);
+});
+
+test('migration keeps model sets and defaults them to empty', () => {
+  assert.deepEqual(migrateSettings({}).modelSets, {});
+  assert.deepEqual(migrateSettings({ modelSets: { A: ['x/y'] } }).modelSets, { a: { name: 'a', models: ['x/y'] } });
+});
+
+// --- the starter set (BRICKS P0.1) -----------------------------------------
+
+const CATALOG = [
+  { id: 'anthropic/claude-haiku-4.5', contextLength: 200000, supportsTools: true, inUsdPerM: 1 },
+  { id: 'anthropic/claude-opus-4.5', contextLength: 200000, supportsTools: true, inUsdPerM: 5 },
+  { id: 'openai/gpt-5.2', contextLength: 400000, supportsTools: true, inUsdPerM: 1.25 },
+  { id: 'google/gemini-2.5-pro', contextLength: 1000000, supportsTools: true, inUsdPerM: 1.25 },
+  { id: 'x-ai/grok-4', contextLength: 256000, supportsTools: true, inUsdPerM: 3 },
+  { id: 'someone/enormous', contextLength: 200000, supportsTools: true, inUsdPerM: 75 },
+  { id: 'noteool/model', contextLength: 200000, supportsTools: false, inUsdPerM: 0.01 }
+];
+
+test('the starter set fills every role, from four different labs', () => {
+  const picks = proposeStarterSet(CATALOG);
+  assert.equal(picks.length, STARTER_ROLES.length);
+  assert.deepEqual(picks.map(p => p.role), STARTER_ROLES.map(r => r.id));
+  const vendors = picks.map(p => p.id.split('/')[0]);
+  assert.equal(new Set(vendors).size, vendors.length, 'a wildcard from the same lab is not a wildcard');
+});
+
+test('the starter set refuses models the agent loop cannot give tools to, and the price outlier', () => {
+  const picks = proposeStarterSet(CATALOG);
+  const ids = picks.map(p => p.id);
+  assert.ok(!ids.includes('notool/model'));
+  assert.ok(!ids.includes('someone/enormous'), 'nobody with a ninety-second-old key gets a $75/M default');
+});
+
+test('the starter set is deterministic and survives a catalog with none of the preferred ids', () => {
+  assert.deepEqual(proposeStarterSet(CATALOG), proposeStarterSet(CATALOG));
+  const unknown = [
+    { id: 'lab-a/cheap', contextLength: 128000, supportsTools: true, inUsdPerM: 0.2 },
+    { id: 'lab-b/big', contextLength: 900000, supportsTools: true, inUsdPerM: 2 },
+    { id: 'lab-c/strong', contextLength: 200000, supportsTools: true, inUsdPerM: 8 },
+    { id: 'lab-d/other', contextLength: 150000, supportsTools: true, inUsdPerM: 1 }
+  ];
+  const picks = proposeStarterSet(unknown);
+  assert.equal(picks.length, 4);
+  assert.equal(picks.find(p => p.role === 'fast').id, 'lab-a/cheap');
+  assert.equal(picks.find(p => p.role === 'reasoner').id, 'lab-c/strong');
+  assert.equal(picks.find(p => p.role === 'reader').id, 'lab-b/big');
+});
+
+test('an empty or tool-less catalog proposes nothing rather than guessing', () => {
+  assert.deepEqual(proposeStarterSet([]), []);
+  assert.deepEqual(proposeStarterSet([{ id: 'a/b', supportsTools: false }]), []);
+});
+
+test('a catalog with no pricing at all still fills every role', () => {
+  // The curated per-provider lists carry names and tool support but no prices
+  // — a user with only an Anthropic key must still get a proposal.
+  const curated = [
+    { id: 'claude-sonnet-5', supportsTools: true },
+    { id: 'claude-haiku-4-5', supportsTools: true },
+    { id: 'gpt-5.2', supportsTools: true },
+    { id: 'kimi-k2.6', supportsTools: true }
+  ];
+  const picks = proposeStarterSet(curated);
+  assert.equal(picks.length, STARTER_ROLES.length, 'an unknown price is not a price over the ceiling');
+  assert.equal(new Set(picks.map(p => p.id)).size, 4, 'and no model is proposed twice');
 });
 
 // --- canServe rules ---------------------------------------------------------

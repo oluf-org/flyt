@@ -1,4 +1,5 @@
 import React from 'react';
+import { ModelPicker } from './ModelPicker.jsx';
 import {
   // grantableTools(type) reads the live tool library (tools/<id>.json) snapshot
   // App installs at boot, before any inspector panel renders, and returns what
@@ -177,72 +178,15 @@ export default function Inspector({ snapshot, selectedNode, onOpenArtifact = nul
 // Same aside, but the sections are editable fields writing through to the
 // flow definition via onChangeData. Worker pickers mirror the Settings page.
 
-const MOCK_MODELS = ['mock-large', 'mock-small'];
-
+// The worker field, everywhere it appears. Since D36 P0.4 this is one popover
+// picker (search, catalog facts, model sets, free-text id, unrouted warning)
+// rather than a bare <select> here and a second implementation on the node
+// card. The signature is unchanged so every existing call site still works;
+// `models` (the fetched openrouter catalog) now reaches the menu through
+// ModelMetaProvider, which is why it is no longer read here.
 export function WorkerPicker({ worker, models, activeModels, onChange, idPrefix }) {
-  const actives = (activeModels ?? []).filter(m => m.enabled !== false);
   const w = worker?.provider ? worker : { provider: 'mock', model: 'mock-large' };
-
-  // Curated mode (PROVIDERS-PLAN §1): once the user has activated models, the
-  // picker offers ONLY those (plus mock) — thousands of catalog models exist,
-  // the picker shows the handful you chose. An active pick is stored as
-  // { provider: 'auto', model } and resolved per priority at call time.
-  if (actives.length) {
-    const value = w.provider === 'mock'
-      ? (MOCK_MODELS.includes(w.model) ? `mock:${w.model}` : `mock:${MOCK_MODELS[0]}`)
-      : actives.some(m => m.id === w.model) ? `active:${w.model}` : 'unset';
-    return (
-      <div className="worker-picker">
-        <select
-          value={value}
-          onChange={e => {
-            const v = e.target.value;
-            if (v.startsWith('mock:')) onChange({ provider: 'mock', model: v.slice(5) });
-            else if (v.startsWith('active:')) onChange({ provider: 'auto', model: v.slice(7) });
-          }}
-          aria-label="model"
-        >
-          {value === 'unset' && (
-            <option value="unset" disabled>{w.provider}/{w.model} — not in active models</option>
-          )}
-          {actives.map(m => <option key={m.id} value={`active:${m.id}`}>{m.id}</option>)}
-          {MOCK_MODELS.map(m => <option key={m} value={`mock:${m}`}>{m} (mock)</option>)}
-        </select>
-      </div>
-    );
-  }
-
-  // Legacy mode: nothing activated yet — mock + openrouter free text, as before.
-  const setProvider = provider => {
-    if (provider === 'mock') onChange({ provider, model: MOCK_MODELS.includes(w.model) ? w.model : MOCK_MODELS[0] });
-    else onChange({ provider, model: MOCK_MODELS.includes(w.model) ? (models[0]?.id ?? '') : w.model });
-  };
-  return (
-    <div className="worker-picker">
-      <select value={w.provider} onChange={e => setProvider(e.target.value)} aria-label="provider">
-        <option value="mock">mock</option>
-        <option value="openrouter">openrouter</option>
-      </select>
-      {w.provider === 'mock' ? (
-        <select value={w.model} onChange={e => onChange({ ...w, model: e.target.value })} aria-label="model">
-          {MOCK_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
-        </select>
-      ) : (
-        <>
-          <input
-            list={`${idPrefix}-models`}
-            value={w.model}
-            placeholder={models.length ? 'Pick or type a model id' : 'e.g. openai/gpt-4o-mini'}
-            onChange={e => onChange({ ...w, model: e.target.value })}
-            aria-label="model"
-          />
-          <datalist id={`${idPrefix}-models`}>
-            {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </datalist>
-        </>
-      )}
-    </div>
-  );
+  return <ModelPicker worker={w} activeModels={activeModels} onChange={onChange} idPrefix={idPrefix} />;
 }
 
 // Edit-target toggle (CONFIGS-COMPARE P1): at the top of the Inspector, switch

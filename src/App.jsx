@@ -13,7 +13,7 @@ import RunResult from './RunResult.jsx';
 import RunsList from './RunsList.jsx';
 import NodeFocus from './NodeFocus.jsx';
 import { isTerminal } from './runProgress.js';
-import { resolveFlow, namedFlow, UNTITLED_FLOW, isStructuralNode, setKnownTools, setToolCatalog } from './flowTypes.js';
+import { resolveFlow, namedFlow, UNTITLED_FLOW, isInstance, isStructuralNode, setKnownTools, setToolCatalog } from './flowTypes.js';
 import { comparePair } from './compareRun.js';
 import { layoutPositions, shrinkOrchBox } from './flowLayout.js';
 import { mergeSnapshot } from '../core/snapshotDiff.js';
@@ -28,6 +28,7 @@ import CompareRun from './CompareRun.jsx';
 import ApprovalModePicker from './ApprovalModePicker.jsx';
 import LaunchInputs from './LaunchInputs.jsx';
 import ConfigsPanel, { slugConfigId } from './ConfigsPanel.jsx';
+import { ModelMetaProvider } from './ModelPicker.jsx';
 import RematchPicker from './RematchPicker.jsx';
 import Logo from './Logo.jsx';
 import { LEGACY_STORAGE_PREFIX } from '../core/brand.js';
@@ -457,6 +458,11 @@ export default function App() {
   // draw on the user's Claude plan, the lander says so next to the composer.
   const [claudeSubActive, setClaudeSubActive] = useState(false);
   const [activeModels, setActiveModels] = useState([]);
+  // BRICKS P0.2–P0.3: what the catalogs said each model costs and can read,
+  // the named sets built from them, and which providers are connected. Every
+  // model picker in the app reads these through ModelMetaProvider rather than
+  // taking four more props at six call sites.
+  const [modelMeta, setModelMeta] = useState({ modelFacts: {}, modelSets: {}, providers: {}, providerPriority: null, catalog: [] });
   // Tool-call approval (APPROVAL-MODES §3). The saved default seeds the chip;
   // changing it in the chatbox saves it back, so the picker beside Run and the
   // Settings control are two views of one value — with the per-run capture
@@ -470,9 +476,20 @@ export default function App() {
       setActiveModels(s.activeModels ?? []);
       setApprovalMode(s.approvalMode ?? 'ask');
       setSafetyModel(s.resolvedSafetyModel ?? null);
-      // The openrouter live catalog only feeds the legacy free-text fallback
-      // in worker pickers; the curated active-models list is the primary offer.
-      if (s.providers?.openrouter?.hasKey) window.flyt.listModels('openrouter').then(setModels).catch(() => setModels([]));
+      setModelMeta(prev => ({
+        ...prev,
+        modelFacts: s.modelFacts ?? {},
+        modelSets: s.modelSets ?? {},
+        providers: s.providers ?? {},
+        providerPriority: s.providerPriority ?? null
+      }));
+      // The openrouter live catalog backs the picker's search when nothing is
+      // activated yet; the curated active-models list is the primary offer.
+      if (s.providers?.openrouter?.hasKey) {
+        window.flyt.listModels('openrouter')
+          .then(list => { setModels(list); setModelMeta(prev => ({ ...prev, catalog: list })); })
+          .catch(() => setModels([]));
+      }
     });
   }, []);
   useEffect(() => { refreshSettings(); }, [refreshSettings]);
@@ -1189,6 +1206,22 @@ export default function App() {
     }));
   };
 
+  // The node card's model badge (D36 P0.4). One entry point for both node
+  // shapes: a template instance keeps its model as an override — that is what
+  // an instance is (D27) — and a raw node keeps it in data, exactly as the two
+  // Inspector editors already write it.
+  const setNodeWorker = useCallback((nodeId, worker) => {
+    changeFlow(f => ({
+      ...f,
+      nodes: f.nodes.map(n => {
+        if (n.id !== nodeId) return n;
+        return isInstance(n)
+          ? { ...n, overrides: { ...n.overrides, worker } }
+          : { ...n, data: { ...n.data, worker } };
+      })
+    }));
+  }, [changeFlow]);
+
   const deleteNode = nodeId => {
     changeFlow(f => {
       // The pinned structural nodes (input/output) never leave the canvas.
@@ -1808,6 +1841,7 @@ export default function App() {
     flowView ? ['Flows', flow.name] : ['Flows'];
 
   return (
+    <ModelMetaProvider value={modelMeta}>
     <div className="app">
       <div className="titlebar">
         <div className="brand">
@@ -2229,6 +2263,8 @@ export default function App() {
                             selectedNode={selectedNode}
                             onSelect={setSelectedNode}
                             onChangeFlow={changeFlow}
+                            activeModels={activeModels}
+                            onSetWorker={setNodeWorker}
                           />
                         </div>
                         <div className="split-gutter" aria-hidden />
@@ -2247,6 +2283,8 @@ export default function App() {
                         selectedNode={selectedNode}
                         onSelect={setSelectedNode}
                         onChangeFlow={changeFlow}
+                        activeModels={activeModels}
+                        onSetWorker={setNodeWorker}
                       />)
               : runView && snapshot
                 ? (runView2 === 'document'
@@ -2530,5 +2568,6 @@ export default function App() {
         />
       )}
     </div>
+    </ModelMetaProvider>
   );
 }

@@ -14,7 +14,8 @@ import { serializeFlow } from '../core/flowlang/serialize.js';
 import { callModel } from '../core/adapters/index.js';
 import {
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
-  CURATED_MODELS, TEST_MODELS
+  CURATED_MODELS, TEST_MODELS,
+  catalogFromOpenRouter, factsFromCatalog, normalizeModelSets
 } from '../core/modelSource.js';
 // Subscription (CLI-delegation) plumbing: sign-in detection + binary
 // resolution. Presence checks only — no token is ever read (SUBSCRIPTION-AUTH-GUIDE).
@@ -674,6 +675,11 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
         enabled: m.enabled !== false
       }));
   }
+  // Named model sets (D36 B13). Sent whole rather than patched per set, so
+  // deleting one is just its absence — the same shape activeModels uses.
+  if (patch.modelSets && typeof patch.modelSets === 'object') {
+    settings.modelSets = normalizeModelSets(patch.modelSets);
+  }
   if (patch.workers && typeof patch.workers === 'object') {
     settings.workers = { ...settings.workers };
     for (const [name, w] of Object.entries(patch.workers)) {
@@ -727,17 +733,15 @@ ipcMain.handle('models:list', async (_e, provider = 'openrouter') => {
     throw new Error(`OpenRouter models ${res.status}: ${body.slice(0, 300)}`);
   }
   const data = await res.json();
-  const models = (data.data ?? []).map(m => ({
-    id: m.id,
-    name: m.name ?? m.id,
-    contextLength: m.context_length ?? null,
-    supportsTools: (m.supported_parameters || []).includes('tools')
-  }));
+  const models = catalogFromOpenRouter(data);
   // Remember which models can call tools natively so the agent loop can pick
   // the native path per worker (survives restarts via settings.json).
   settings.modelCapabilities = Object.fromEntries(
     models.filter(m => m.supportsTools).map(m => [m.id, true])
   );
+  // BRICKS P0.2: keep the context/price/tools facts too. They were fetched
+  // anyway, and a picker that shows what a model costs is the whole point.
+  settings.modelFacts = factsFromCatalog(models, settings.modelFacts);
   persistSettings();
   rebuildRuntimeConfig();
   return models;

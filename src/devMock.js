@@ -3,6 +3,7 @@
 // installed only when the preload bridge is missing.
 import { SEED_NODE_TEMPLATES, normalizeTemplate, AGENT_TOOLS } from './flowTypes.js';
 import { slugFromPrompt, dedupeSlug } from '../core/projectName.js';
+import { factsFromCatalog } from '../core/modelSource.js';
 
 const snapshots = {
   // A finished flow run with one follow-up turn: previews the thread view +
@@ -197,6 +198,8 @@ const mockSettings = {
   claudeSubscriptionActive: false,
   providerPriority: ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'],
   activeModels: [],
+  modelFacts: {},
+  modelSets: {},
   workers: {
     executor: { provider: 'mock', model: 'mock-large' }
   },
@@ -243,10 +246,14 @@ const mockCurated = {
     { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex (subscription)', supportsTools: true }
   ]
 };
+// Prices are per-million USD, as the real catalog fetch now returns them
+// (D36 P0.2) — the dev harness has to exercise the fact chips too.
 const mockModels = [
-  { id: 'openai/gpt-4o-mini', name: 'OpenAI: GPT-4o-mini', contextLength: 128000, supportsTools: true },
-  { id: 'anthropic/claude-sonnet-5', name: 'Anthropic: Claude Sonnet 5', contextLength: 200000, supportsTools: true },
-  { id: 'meta-llama/llama-3.1-8b-instruct', name: 'Meta: Llama 3.1 8B Instruct', contextLength: 131072, supportsTools: false }
+  { id: 'openai/gpt-4o-mini', name: 'OpenAI: GPT-4o-mini', contextLength: 128000, supportsTools: true, inUsdPerM: 0.15, outUsdPerM: 0.6 },
+  { id: 'anthropic/claude-sonnet-5', name: 'Anthropic: Claude Sonnet 5', contextLength: 200000, supportsTools: true, inUsdPerM: 3, outUsdPerM: 15 },
+  { id: 'google/gemini-2.5-pro', name: 'Google: Gemini 2.5 Pro', contextLength: 1048576, supportsTools: true, inUsdPerM: 1.25, outUsdPerM: 10 },
+  { id: 'x-ai/grok-4', name: 'xAI: Grok 4', contextLength: 256000, supportsTools: true, inUsdPerM: 3, outUsdPerM: 15 },
+  { id: 'meta-llama/llama-3.1-8b-instruct', name: 'Meta: Llama 3.1 8B Instruct', contextLength: 131072, supportsTools: false, inUsdPerM: 0.02, outUsdPerM: 0.03 }
 ];
 
 // In-memory Node Library mirroring core/nodestore.js (seed catalog).
@@ -486,6 +493,7 @@ export function installDevMock() {
       }
       if (Array.isArray(patch.providerPriority)) mockSettings.providerPriority = [...patch.providerPriority];
       if (Array.isArray(patch.activeModels)) mockSettings.activeModels = structuredClone(patch.activeModels);
+      if (patch.modelSets && typeof patch.modelSets === 'object') mockSettings.modelSets = structuredClone(patch.modelSets);
       if (patch.workers) Object.assign(mockSettings.workers, structuredClone(patch.workers));
       if (patch.projectStorage) mockSettings.projectStorage = patch.projectStorage;
       if (patch.approvalMode) mockSettings.approvalMode = patch.approvalMode;
@@ -499,6 +507,9 @@ export function installDevMock() {
     listModels: async (provider = 'openrouter') => {
       if (provider === 'openrouter') {
         if (!mockSettings.providers.openrouter.hasKey) throw new Error('No OpenRouter API key saved. Add one in Settings first.');
+        // The real handler stows the catalog facts in settings on the way past
+        // (D36 P0.2); mirror that so pickers show prices in the dev harness.
+        mockSettings.modelFacts = factsFromCatalog(mockModels, mockSettings.modelFacts);
         return mockModels;
       }
       return mockCurated[provider] ?? [];
