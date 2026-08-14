@@ -3,6 +3,7 @@ import { ModelPicker, useModelMeta } from './ModelPicker.jsx';
 import {
   resolveLanes, normalizeLane, LANE_PRESETS, LANE_PRESET_IDS, DEFAULT_LANE_TEMPLATE
 } from '../core/nodes/fanout.js';
+import { subflowPorts } from '../core/nodes/subflow.js';
 import {
   // grantableTools(type) reads the live tool library (tools/<id>.json) snapshot
   // App installs at boot, before any inspector panel renders, and returns what
@@ -325,6 +326,94 @@ function FanoutEditor({ node, d, set, models, activeModels }) {
   );
 }
 
+
+// The sub-flow call site (D36 P3.6). A brick you drop into another flow: pick
+// which flow, pick one of its saved configs, and see what is inside without
+// leaving this one.
+function SubflowEditor({ node, d, set, flow, flows, templates, onOpenFlow }) {
+  const flowId = d.flowId ?? '';
+  // Never offer this flow to itself — that is the cycle the linter would
+  // reject, refused one step earlier where it reads as an obvious rule.
+  const choices = (flows ?? []).filter(f => f.id !== flow.id);
+  const target = choices.find(f => f.id === flowId) ?? null;
+  // The flow LIST is id + name only; showing what is inside the brick needs
+  // the whole thing, so it is loaded on demand rather than fattening the list
+  // every other surface uses.
+  const [inner, setInner] = React.useState(null);
+  React.useEffect(() => {
+    let alive = true;
+    if (!flowId) { setInner(null); return; }
+    window.flyt.loadFlow(flowId).then(f => { if (alive) setInner(f); }).catch(() => { if (alive) setInner(null); });
+    return () => { alive = false; };
+  }, [flowId]);
+  const modes = inner?.modes ?? {};
+  const modeIds = Object.keys(modes);
+  const overrides = d.flowOverrides ?? {};
+  // Resolved, so template instances show their real names and ports — the same
+  // view the splice will produce at run start.
+  const resolvedInner = inner ? resolveFlow(inner, templates ?? []) : null;
+  const ports = resolvedInner ? subflowPorts(resolvedInner) : [];
+  const innerNodes = resolvedInner ? resolvedInner.nodes.filter(n => n.type !== 'input' && n.type !== 'output') : [];
+
+  return (
+    <>
+      <section>
+        <h3>Sub-flow</h3>
+        <pre>{'Runs another flow as one node. Its nodes are spliced into this run at start — one run folder, one canvas, the same gates. Referenced by id and resolved at run start: improve the referenced flow and every caller improves with it.'}</pre>
+      </section>
+      <section>
+        <h3>Title</h3>
+        <input value={d.title ?? ''} placeholder={flowId || 'Sub-flow'} onChange={e => set({ title: e.target.value })} />
+      </section>
+      <section>
+        <h3>Flow</h3>
+        <select value={flowId} onChange={e => set({ flowId: e.target.value || undefined, flowMode: undefined, flowOverrides: undefined })}>
+          <option value="">(pick a flow)</option>
+          {choices.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+        </select>
+        {flowId && !target && (
+          <div className="settings-hint err">Flow &ldquo;{flowId}&rdquo; is not in the library — the run will refuse to start.</div>
+        )}
+        {target && onOpenFlow && (
+          <div className="settings-row">
+            <button className="ghost mini" onClick={() => onOpenFlow(target.id)}>Open the source flow</button>
+          </div>
+        )}
+      </section>
+
+      {modeIds.length > 0 && (
+        <section>
+          <h3>Config</h3>
+          <select value={d.flowMode ?? ''} onChange={e => set({ flowMode: e.target.value || undefined })}>
+            <option value="">(the flow&rsquo;s own defaults)</option>
+            {modeIds.map(id => <option key={id} value={id}>{modes[id]?.name ?? id}</option>)}
+          </select>
+          <div className="settings-hint">
+            Which saved config of &ldquo;{target?.name ?? flowId}&rdquo; this call site runs. Ad-hoc tweaks apply on top.
+          </div>
+        </section>
+      )}
+
+      {inner && (
+        <section>
+          <h3>Inside — {innerNodes.length} node{innerNodes.length === 1 ? '' : 's'}</h3>
+          <pre>{innerNodes.map(n => {
+            const tags = Object.keys(overrides[n.id] ?? {});
+            return `${nodeLabel(n)} (${n.id})${tags.length ? `  ← overridden: ${tags.join(', ')}` : ''}`;
+          }).join('\n') || '(nothing between its input and output — this call would fail)'}</pre>
+        </section>
+      )}
+
+      {ports.length > 0 && (
+        <section>
+          <h3>Creates</h3>
+          <pre>{ports.map(p => `${p.label} — ${p.description}`).join('\n')}</pre>
+        </section>
+      )}
+    </>
+  );
+}
+
 // Edit-target toggle (CONFIGS-COMPARE P1): at the top of the Inspector, switch
 // between Flow (stored node overrides — today's behavior) and Config: <name>
 // (that config's override map). Same fields, same override tags, same
@@ -354,7 +443,7 @@ function EditTargetBar({ modes, editModeId, onEditMode }) {
   );
 }
 
-export function FlowInspector({ flow, selectedNode, models, activeModels, templates, onChangeData, onChangeOverrides, onDeleteNode, onDetachNode, editModeId = null, onEditMode, onChangeConfigOverrides }) {
+export function FlowInspector({ flow, selectedNode, models, activeModels, templates, flows = [], onChangeData, onChangeOverrides, onDeleteNode, onDetachNode, editModeId = null, onEditMode, onChangeConfigOverrides, onOpenFlow = null }) {
   const node = flow.nodes.find(n => n.id === selectedNode);
   const modes = flow.modes ?? {};
   const editMode = editModeId && modes[editModeId] ? { id: editModeId, ...modes[editModeId] } : null;
@@ -716,6 +805,10 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
 
         {node.type === 'fanout' && (
           <FanoutEditor node={node} d={d} set={set} models={models} activeModels={activeModels} />
+        )}
+
+        {node.type === 'subflow' && (
+          <SubflowEditor node={node} d={d} set={set} flow={flow} flows={flows} templates={templates} onOpenFlow={onOpenFlow} />
         )}
 
         {node.type === 'output' && (

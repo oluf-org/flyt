@@ -217,6 +217,28 @@ the UI without touching YAML.
 **Done when:** `learn-from-repo` can be dropped into another flow as a single node, run, and
 inspected — and a flow that references itself fails `npm run flow -- lint`.
 
+> **Shipped** (2026-08-14). `core/nodes/subflow.js` holds the splice; the call site is the
+> third consumer of `runContainer` and the thinnest — by the time `runSubflow` runs there is
+> nothing left to resolve, because the splice happens in `start()` and the run's flow.json IS
+> the spliced graph (P3.7). The scheduler, canvas, gates and resume needed no changes at all.
+>
+> **One deviation from B1: the id separator is `__`, not `/`.** RunStore's `nodeOutputPath()`
+> maps every character outside `[a-zA-Z0-9_-]` to `_`, and `readNodeOutputs()` turns filenames
+> back into node ids — a `/` would write `learn/analyse` to `learn_analyse.md` and then never
+> find it again, making every spliced node's output unreadable on the canvas. `tests/subflow.test.js`
+> pins the round-trip so this cannot regress.
+>
+> Two smaller shape decisions the plan left open: the inner `input` node is **not** spliced (its
+> consumers are re-sourced to the call site's own sources, so upstream context arrives the
+> ordinary way instead of through a placeholder with no output), and the call site's primary
+> output is the inner flow's **result** — what fed its output node — rather than every inner
+> node, which is what a caller means by "what did this produce". `runContainer` grew one
+> option, `aggregateOver`, for exactly that.
+>
+> Also fixed: `nodeLabel()` claimed to be total but returned `undefined` for an unresolved
+> template instance (`{ id, templateId, overrides }` straight off a `.flow.yaml`), which is
+> what the Inspector's "what's inside this brick" list is made of.
+
 ---
 
 ### P4 — The chain: flow → backlog → loop → done
@@ -291,9 +313,15 @@ P0 and P1 are independent and can run in parallel. P2.0 gates everything after i
 
 ## 5. Open questions
 
-- **Q-B1.** Does a sub-flow's inner gate pause the *parent* run, or park like a loop task?
-  (Attended: pause is right. Unattended: D35 rule 7 says park. It may have to depend on who
-  is watching, which the runner does not currently know.)
+- ~~**Q-B1.** Does a sub-flow's inner gate pause the *parent* run, or park like a loop task?~~
+  **Resolved in P3: it pauses the run.** The inline splice (B1) settles it — there is exactly
+  one run, so "pause the parent" and "pause the run" are the same act and there is nothing
+  separate to park *into*. D35's park semantics exist because the supervisor is unattended and
+  a backlog task is a schedulable unit that can be set aside; a flow run is not, and setting
+  one aside is what `stop` already does. The "who is watching" half was a false problem: the
+  runner does know, via the run's captured `approvalMode` (`always` never pauses at all).
+  Consequence: spliced children keep their `requiresApproval`, unlike orchestrator and fan-out
+  children, which are forced autonomous because a *model* invented them.
 - **Q-B2.** Should model sets be global or per-project? Templates and flows are global (D22
   T2); sets probably follow, but a project-specific "the models that are good at Rust" is an
   obvious want.

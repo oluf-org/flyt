@@ -610,7 +610,11 @@ ipcMain.handle('tool:folder', () => ({ dir: toolLibrary.rootDir, packaged: app.i
   return flows.save({ ...parsed, nodes });
 });
 ipcMain.handle('flow:lintYaml', (_e, yamlText) =>
-  lintText(yamlText, { templates: nodeLibrary.listFull(), library: toolLibrary.catalog() }));
+  lintText(yamlText, {
+    templates: nodeLibrary.listFull(), library: toolLibrary.catalog(),
+    // Sub-flow rules resolve references against the whole library (D36 P3.4).
+    flows: flows.list().map(f => { try { return flows.load(f.id); } catch { return null; } }).filter(Boolean)
+  }));
 
 // Exact on-disk source (the committed *.flow.yaml). Useful to see what was
 // last persisted vs the live in-memory model.

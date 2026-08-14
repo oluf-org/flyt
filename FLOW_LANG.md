@@ -119,6 +119,49 @@ sharing them would collapse the divergence the node exists to produce.
 Ports: `results` (primary, one labelled section per lane) and `lanes` (the
 roster: label, id, model, intent).
 
+### Sub-flows (`flow:`)
+
+The third node shape, beside `use:` (a template) and `type:` (a raw node): a
+flow used as a single node.
+
+```yaml
+nodes:
+  learn:
+    flow: learn-from-repo     # the flow id to run here
+    mode: deep                # optional: one of that flow's saved configs
+    overrides:                # optional: ad-hoc tweaks to its inner nodes
+      analyse: { effort: high }
+flow:
+  - input -> learn
+  - learn.combine -> report   # `<call>.<port>` picks one of its outputs
+```
+
+At **run start** the referenced flow's nodes are spliced into the run graph as
+children of the call site, with ids `<callId>__<innerId>`. One run folder, one
+snapshot, one canvas — gates, resume and the run canvas need to know nothing
+about sub-flows. The inner `input` node is not spliced: its consumers are
+re-sourced to whatever feeds the call site, so upstream context reaches them
+the ordinary way. The inner `output` node is the call site itself.
+
+A sub-flow's **ports** are the nodes feeding its output node, addressable from
+the parent as `<call>.<inner-node-id>`. The call site's primary output is the
+sub-flow's result — not everything that happened inside it, though every inner
+node is on the canvas and readable.
+
+Precedence for a spliced node's fields: **run input > call-site `overrides` >
+call-site `mode` > the inner node's own override > template**.
+
+Rules: the referenced flow must exist (`unknown-flow`); a flow may not contain
+itself directly or through another flow (`flow-cycle`); containment may not
+nest more than 3 deep, counting orchestrators and fan-outs too (`flow-depth`).
+All three are checked at lint time and again at run start — a flow edited after
+linting must not be able to recurse the engine.
+
+A reference is **by id, resolved at run start**: improve the referenced flow
+and every caller improves with it. That is the intended behaviour and a real
+hazard, so the run snapshot records the spliced graph verbatim — a finished run
+always shows exactly what ran.
+
 ### Containment (`parent` + `box`)
 
 Any non-structural node may live **inside** a container's box — an
@@ -180,7 +223,7 @@ the same whitelist the runner enforces at launch: `worker`, `effort`,
 `instructions`, `system`, `requiresApproval`, `approveToolCalls` on any AI
 node, plus `category` (work nodes), `evalType` (evaluation), `language`
 (translate), `minNodes`/`maxNodes` (orchestrator), `lanes`/`modelSet`/`template`
-(fanout), and `tools` (agentTask).
+(fanout), `flowMode`/`flowOverrides` (subflow), and `tools` (agentTask).
 Precedence at run time is **run input > mode > node override > template**.
 
 ### Run inputs (`expose`)
@@ -231,6 +274,9 @@ scalars, or multi-document files — the linter reports these as parse errors.
 | `fanout-lanes` | error/warning | a fan-out with no lanes or an unknown `modelSet` (error); duplicate lane ids (warning) |
 | `fanout-worker` | warning | no lane names a model (N copies, not a fan-out), or a lane names a model that is not active |
 | `fanout-template` | error | a lane or node `template:` that is not in the Node Library |
+| `unknown-flow` | error | `flow:` references a flow that does not exist |
+| `flow-cycle` | error | a flow contains itself, directly or through another flow |
+| `flow-depth` | error | containment nests deeper than 3 (sub-flows, orchestrators and fan-outs all count) |
 | `mode` | error/warning | mode override field the node can't accept (error), override of a node not in the flow (warning), or a `derivedFrom` pointing at a non-existent mode (warning) |
 | `expose` | error | a node exposes a field it cannot accept as a run input |
 

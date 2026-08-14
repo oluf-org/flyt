@@ -177,9 +177,28 @@
         "approveToolCalls": { "type": "boolean" }
       }
     },
+    "subflowNode": {
+      "description": "A flow used as a node (D36 B1). Its nodes are spliced into the run graph as children of this call site at run start.",
+      "type": "object",
+      "required": ["flow"],
+      "additionalProperties": false,
+      "properties": {
+        "flow": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+        "mode": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "description": "Which saved config of the referenced flow this call site runs." },
+        "overrides": {
+          "type": "object",
+          "description": "Ad-hoc per-inner-node overrides, applied on top of the chosen mode.",
+          "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
+          "additionalProperties": { "type": "object" }
+        },
+        "parent": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+        "expose": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "node": {
       "oneOf": [
         { "$ref": "#/$defs/templateNode" },
+        { "$ref": "#/$defs/subflowNode" },
         { "$ref": "#/$defs/rawNode" }
       ]
     }

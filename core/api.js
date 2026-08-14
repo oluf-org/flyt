@@ -119,12 +119,24 @@ export function createApi(engine) {
     return path.join(dir, name);
   };
 
+  // Every flow, loaded. The list() shape is id + name only; the sub-flow lint
+  // rules need nodes and edges to resolve a reference, find a cycle, or
+  // measure depth. Flows are small YAML files and lint is user-triggered.
+  const allFlows = () => flows.list()
+    .map(f => { try { return flows.load(f.id); } catch { return null; } })
+    .filter(Boolean);
+
   const commands = {
     // --- Flows -------------------------------------------------------------
     'flow:list': () => flows.list(),
     'flow:load': ({ id }) => flows.load(id),
     'flow:lint': ({ id }) =>
-      lintFlow(flows.load(id), { templates: nodeLibrary.listFull(), library: toolLibrary.catalog() }),
+      lintFlow(flows.load(id), {
+        templates: nodeLibrary.listFull(), library: toolLibrary.catalog(),
+        // The sub-flow rules walk the flow-REFERENCE graph, so they need every
+        // flow's nodes, not just its name (D36 P3.4).
+        flows: allFlows()
+      }),
 
     // --- Tools & config ----------------------------------------------------
     'tool:list': () => toolLibrary.list(),

@@ -12,7 +12,7 @@ export const DSL_VERSION = 1;
 const REF_RE = /^([A-Za-z0-9_-]+)(?:\.([A-Za-z0-9_-]+))?$/;
 
 // baseType → kind, mirroring src/flowTypes.js TYPE_META.
-const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai', fanout: 'ai' };
+const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai', fanout: 'ai', subflow: 'ai' };
 export const STRUCTURAL_TYPES = Object.keys(KIND_OF);
 
 export class FlowParseError extends Error {
@@ -52,13 +52,39 @@ function parseNodeEntry(id, entry) {
   // `expose: [worker, effort]` (MODES-COMPARE T9) declares which of the node's
   // fields the flow author surfaces as ad-hoc run inputs in the composer — a
   // first-class node field, not an override value.
-  const { use, type, kind, parent, expose, ...rest } = entry;
+  const { use, type, kind, parent, expose, flow: flowRef, mode, overrides, ...rest } = entry;
   const parentId = parent == null ? null : String(parent);
   if (expose != null && (!Array.isArray(expose) || expose.some(f => typeof f !== 'string'))) {
     throw new FlowParseError(`node "${id}" expose must be a list of field names`);
   }
   const exposeField = Array.isArray(expose) ? { expose: expose.map(String) } : {};
-  if (use && type) throw new FlowParseError(`node "${id}" has both "use" and "type" — pick one`);
+  const shapes = [use && 'use', type && 'type', flowRef && 'flow'].filter(Boolean);
+  if (shapes.length > 1) {
+    const quoted = shapes.map(s => `"${s}"`);
+    const list = quoted.length === 2
+      ? `both ${quoted.join(' and ')}`
+      : `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`;
+    throw new FlowParseError(`node "${id}" has ${list} — pick one`);
+  }
+  // The third node shape (D36 P3.1), beside `use:` (template) and `type:`
+  // (raw): `flow: <flowId>` calls another flow as a single node.
+  if (flowRef) {
+    if (Object.keys(rest).length) {
+      throw new FlowParseError(`node "${id}": a "flow:" node takes only mode/overrides/parent/expose, got ${Object.keys(rest).join(', ')}`);
+    }
+    if (overrides != null && (typeof overrides !== 'object' || Array.isArray(overrides))) {
+      throw new FlowParseError(`node "${id}" overrides must be a map of inner node id -> fields`);
+    }
+    return {
+      id, type: 'subflow', kind: kind ?? 'ai',
+      data: {
+        flowId: String(flowRef),
+        ...(mode != null ? { flowMode: String(mode) } : {}),
+        ...(overrides != null ? { flowOverrides: overrides } : {})
+      },
+      ...(parentId ? { parentId } : {}), ...exposeField
+    };
+  }
   if (use) {
     return { id, templateId: String(use), overrides: rest, ...(parentId ? { parentId } : {}), ...exposeField };
   }

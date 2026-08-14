@@ -348,6 +348,54 @@ Artifacts: `nodes/<id>.lanes.md` (the roster), `nodes/<id>.md` (the aggregate).
 
 ---
 
+### 7c. Sub-flow Node (a flow as a brick)
+
+**shape:** `flow: <flowId>` (the third node shape, beside `use:` and `type:`;
+canonically `type: subflow`) · icon `⧉`
+
+**Input:** whatever feeds the call site.
+
+**Output ports:** one per node feeding the referenced flow's `output` node,
+addressable as `<call>.<inner-node-id>`. The primary output is the sub-flow's
+result.
+
+**Behavior:** an **inline splice**, not a nested run (D36 B1). At run start the
+referenced flow is resolved and its nodes are spliced into the run graph as
+children of the call site, ids namespaced `<callId>__<innerId>`. There is one
+run folder, one snapshot and one canvas; gates, resume, the scheduler and the
+run canvas all see an ordinary graph. A nested FlowRunner would fragment run
+state across run folders and break the live canvas — the transparency window
+the whole product rests on (D1, D4).
+
+The inner `input` node is not spliced: its consumers are re-sourced to the call
+site's own sources, so upstream context reaches them normally rather than
+through a placeholder with no output. The inner `output` node IS the call site.
+
+**Gates inside a sub-flow pause the run** (Q-B1, resolved). An orchestrator or
+fan-out forces its children autonomous because a MODEL invented them; a
+sub-flow's nodes were authored by a human who put that gate there on purpose,
+so `requiresApproval` survives the splice. With an inline splice there is one
+run, so there is nothing separate to park into — and the runner already knows
+whether anyone is watching, via the run's `approvalMode`.
+
+**Parameterisation (B4):** `mode:` picks one of the referenced flow's saved
+configs, `overrides:` tweaks its inner nodes ad hoc. No new concept — a mode is
+already "a per-node override map applied at a point in time" (D27), and a call
+site is just another such point.
+
+**Guards:** `unknown-flow`, `flow-cycle` and `flow-depth` (cap 3, counting
+every container) run at lint time and again at run start. A run whose splice
+would exceed 400 nodes fails at start with a clear error rather than degrading
+the canvas silently.
+
+**Versioning honesty (P3.7):** a sub-flow is referenced by id and resolved at
+run start — editing the inner flow changes every caller. That is intended (a
+brick you improve improves everywhere) and a real hazard, so the run snapshot
+records the spliced graph verbatim. Pinning by version is deliberately not
+built; revisit if it bites.
+
+---
+
 ### 8. Compare Node
 
 **role:** `compare` · **template:** `compare` · icon `⇄`

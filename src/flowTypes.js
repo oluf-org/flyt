@@ -12,6 +12,9 @@ export const TYPE_META = {
   // its own box. Like the orchestrator it is a container — but its children
   // come from a lane list the author wrote, not from a model's plan.
   fanout:       { icon: '⋔', kind: 'ai',   label: 'Fan-out',      sub: 'container · one lane per model' },
+  // Sub-flow (D36 B1): a flow used as a node. Its children are spliced in from
+  // another flow file at run start — composition, not programming (§0.2).
+  subflow:      { icon: '⧉', kind: 'ai',   label: 'Sub-flow',     sub: 'container · another flow, inline' },
   output:       { icon: '◎', kind: 'user', label: 'Output',       sub: 'result · collects upstream' }
 };
 
@@ -19,7 +22,7 @@ export const TYPE_META = {
 // a scoped subgraph (core/nodes/expand.js). Containment, layout, the linter's
 // `parent` rule and the run canvas all key off this rather than naming the
 // orchestrator specifically.
-export const CONTAINER_TYPES = ['orchestrator', 'fanout'];
+export const CONTAINER_TYPES = ['orchestrator', 'fanout', 'subflow'];
 export const isContainerType = type => CONTAINER_TYPES.includes(type);
 
 // The name a flow carries until the user gives it one. Also what the editor
@@ -500,7 +503,11 @@ export function nodeLabel(node) {
   if (node.data?.title?.trim()) return node.data.title.trim();
   if (node.data?.templateName) return node.data.templateName;
   const byTemplate = node.data?.template && NODE_TEMPLATES[node.data.template]?.label;
-  return byTemplate || TYPE_META[node.type]?.label || node.type;
+  // An UNRESOLVED template instance has neither a type nor a templateName —
+  // it is just { id, templateId, overrides } straight off a .flow.yaml. This
+  // function claims to be total, so it falls back to the template id and then
+  // the node id rather than returning undefined.
+  return byTemplate || TYPE_META[node.type]?.label || node.type || node.templateId || node.id;
 }
 
 // The card's second line. `worker: false` drops the model from the text — the
@@ -806,6 +813,9 @@ export function overridableFields(node) {
   // config: swap the model set, retarget the template, restate the goal (D36
   // B5 / P2.4). `goal` is already common to every AI node below.
   if (type === 'fanout') { fields.add('lanes'); fields.add('modelSet'); fields.add('template'); }
+  // A sub-flow call site is parameterised by which saved config of the inner
+  // flow it runs, and by ad-hoc per-inner-node tweaks (D36 B4).
+  if (type === 'subflow') { fields.add('flowMode'); fields.add('flowOverrides'); }
   // A work node carries a category; the Evaluation meta-role carries evalType;
   // translate carries a language. Resolved nodes surface these on data.
   if (d.category != null || d.role === 'execute') fields.add('category');

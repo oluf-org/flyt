@@ -79,10 +79,24 @@ function templateInfo(t) {
   };
 }
 
+// Every *.flow.yaml sitting beside the file being linted. The sub-flow rules
+// resolve `flow:` references against the whole directory — a cycle or a
+// missing brick is only visible from the outside (D36 P3.4).
+function siblingFlows(file) {
+  const dir = path.dirname(path.resolve(file));
+  let names = [];
+  try { names = fs.readdirSync(dir).filter(f => f.endsWith('.flow.yaml')); } catch { return []; }
+  const out = [];
+  for (const n of names) {
+    try { out.push(parseFlow(fs.readFileSync(path.join(dir, n), 'utf8'))); } catch { /* its own lint reports it */ }
+  }
+  return out;
+}
+
 function cmdLint() {
   if (!target) fail('usage: flow lint <file.flow.yaml> [--json]');
   const text = fs.readFileSync(target, 'utf8');
-  const r = lintText(text, { templates: loadTemplates(), library: toolLibrary.catalog() });
+  const r = lintText(text, { templates: loadTemplates(), library: toolLibrary.catalog(), flows: siblingFlows(target) });
   if (json) {
     out({ ok: r.ok, errors: r.errors, warnings: r.warnings });
   } else {
