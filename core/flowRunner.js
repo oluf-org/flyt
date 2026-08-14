@@ -32,6 +32,7 @@ import { makeRetrospective } from './retrospective.js';
 import { recordToolUsage } from './feedback.js';
 import { resolveCallTarget } from './modelSource.js';
 import { runExecutorTask } from './nodes/executor.js';
+import { runContainer, ensureChildStatuses } from './nodes/expand.js';
 import { Workspace } from './workspace.js';
 import { loadSkills, withSkillsSection } from './skills.js';
 import { createWriteLedger } from './writeLedger.js';
@@ -2863,13 +2864,7 @@ export class FlowRunner {
       : [];
     if (authored.length) {
       children = authored;
-      const meta = this.store.readMeta(runId);
-      const missing = Object.fromEntries(authored
-        .filter(c => !meta.nodeStatus?.[c.id])
-        .map(c => [c.id, 'pending']));
-      if (Object.keys(missing).length) {
-        this.store.writeMeta(runId, { ...meta, nodeStatus: { ...(meta.nodeStatus ?? {}), ...missing } });
-      }
+      ensureChildStatuses(this.store, runId, authored);
       // The auxiliary "summary" port: the node inventory (no plan exists —
       // the canvas placement was the plan).
       this.store.writeNodeOutput(runId, `${node.id}.summary`, [
@@ -2968,70 +2963,12 @@ export class FlowRunner {
       this.store.appendLog(runId, { event: 'node_resume', node: node.id, type: 'orchestrator', children: children.length });
     }
 
-    // The container stays visibly active while its children run.
-    this.setNodeStatus(runId, node.id, 'active');
-
-    // Inline sub-walk over the container's children: same wave semantics as
-    // the outer scheduler, scoped to the box. Already-done children (resume
-    // after a restart) are skipped.
-    const childIds = new Set(children.map(c => c.id));
-    const done = new Set(children
-      .filter(c => this.store.readMeta(runId).nodeStatus?.[c.id] === 'done')
-      .map(c => c.id));
-    const maxParallel = Math.max(1, Number(this.config.maxParallel ?? 4));
-    for (;;) {
-      // RUN-CONTROL: a stop unwinds the box the same way it unwinds the outer
-      // walk — children already went back to 'pending' via their own catches.
-      if (this.stopRequests.has(runId)) throw abortError(`Orchestrator ${node.id} stopped`);
-      const ready = children.filter(c => !done.has(c.id) &&
-        forwardEdges(flow.edges).every(e => e.target !== c.id || !childIds.has(e.source) || done.has(e.source)));
-      if (!ready.length) break;
-      // Children are never gated (the container runs autonomously), so both
-      // aiStep and agentTask children are wave-safe (V1 task 6).
-      const safe = ready.filter(c => c.type === 'aiStep' || c.type === 'agentTask');
-      const batch = safe.length > 1 ? safe.slice(0, maxParallel) : [ready[0]];
-
-      if (batch.length > 1) {
-        this.store.appendLog(runId, { event: 'wave_start', container: node.id, nodes: batch.map(n => n.id) });
-        const results = await Promise.allSettled(batch.map(c => this.runNode(runId, flow, c, opts)));
-        batch.forEach((c, i) => { if (results[i].status === 'fulfilled') done.add(c.id); });
-        const rejected = results.find(r => r.status === 'rejected');
-        if (rejected) {
-          // Under a stop the container isn't failing — it's being cancelled.
-          if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
-          throw rejected.reason;
-        }
-        if (batch.some(c => c.type === 'agentTask')
-          && !await this.runPendingTasks(runId, opts.taskIdByNode, flow)) {
-          if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
-          throw new Error(`Orchestrator ${node.id}: a child task failed`);
-        }
-        continue;
-      }
-
-      const child = batch[0];
-      try {
-        await this.runNode(runId, flow, child, opts);
-        if (child.type === 'agentTask' && !await this.runPendingTasks(runId, opts.taskIdByNode, flow)) {
-          throw new Error(`Orchestrator ${node.id}: child task ${child.id} failed`);
-        }
-      } catch (err) {
-        if (!this.stopRequests.has(runId)) this.setNodeStatus(runId, node.id, 'failed');
-        throw err;
-      }
-      done.add(child.id);
-    }
-
-    // Aggregate every child's output into the primary "results" output.
-    const sections = children.map(c => {
-      const label = c.data?.title?.trim() || c.id;
-      const content = c.type === 'agentTask'
-        ? this.store.readTaskOutput(runId, opts.taskIdByNode.get(c.id) ?? c.data?.taskId ?? '')
-        : this.store.readNodeOutput(runId, c.id);
-      return `--- ${label} (${c.id}) ---\n\n${content ?? '(no output)'}`;
-    });
+    // The scoped sub-walk + aggregation live in core/nodes/expand.js (BRICKS
+    // P2.0): same wave semantics as the outer scheduler, bounded to the box.
+    // Deciding WHICH children exist — everything above — is the part that is
+    // actually the orchestrator's; running them is not.
     const title = node.data?.title?.trim() || 'Orchestrator';
-    this.store.writeNodeOutput(runId, node.id, `# ${title} — aggregated results\n\n${sections.join('\n\n')}`);
+    await runContainer(this, runId, flow, node, children, { ...opts, kind: 'Orchestrator', title });
 
     this.store.writeRetrospective(runId, node.id, makeRetrospective({
       node: node.id,
