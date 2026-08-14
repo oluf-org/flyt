@@ -16,8 +16,9 @@ import { parseFlow, parseEdgeExpr, FlowParseError } from './parse.js';
 import { validate } from './validate.js';
 import {
   ROLE_PORTS, knownTools, nodePorts, effectiveRole, isFeedbackEdge, forwardEdges,
-  FEEDBACK_HANDLE, isStructuralType, resolveInstance, overridableFields
+  FEEDBACK_HANDLE, isStructuralType, isContainerType, resolveInstance, overridableFields
 } from '../../src/flowTypes.js';
+import { resolveLanes, normalizeLane, DEFAULT_LANE_TEMPLATE } from '../nodes/fanout.js';
 import { makeContext, expandRefs, resolveGrant, WILDCARD } from '../../src/toolGrants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,7 +55,11 @@ const finding = (rule, severity, message, extra = {}) => ({ rule, severity, mess
 // `templates`: normalized Node Library templates (NodeStore.listFull()), or
 // null when the library is unavailable — template-dependent rules then skip
 // rather than guess. `rules`: optional allowlist (the runner's gate uses it).
-export function lintFlow(flow, { templates = null, rules = null, library = null } = {}) {
+// `modelSets` / `activeModels`: the fan-out rules judge lanes against them
+// when the caller has them (the app does, the CLI may not). Both default to
+// null, and the rules that need them skip rather than guess — the same
+// contract the template- and library-dependent rules follow.
+export function lintFlow(flow, { templates = null, rules = null, library = null, modelSets = null, activeModels = null } = {}) {
   const out = [];
   const on = rule => !rules || rules.includes(rule);
   const byId = new Map((flow.nodes ?? []).map(n => [n.id, n]));
@@ -201,20 +206,93 @@ export function lintFlow(flow, { templates = null, rules = null, library = null 
     }
   }
 
-  // parent — containment: a node may only live inside an orchestrator that
-  // exists; structural (input/output) and orchestrator nodes can never be
-  // contained (one level deep, mirroring the engine's spawn guard).
+  // parent — containment: a node may only live inside a container that exists;
+  // structural (input/output) and container nodes can never be contained (one
+  // level deep, mirroring the engine's spawn guard).
   if (on('parent')) {
     for (const n of flow.nodes ?? []) {
       if (!n.parentId) continue;
       const parent = byId.get(n.parentId);
       if (!parent) {
         out.push(finding('parent', 'error', `node "${n.id}": parent "${n.parentId}" does not exist`, { nodeId: n.id }));
-      } else if (parent.type !== 'orchestrator') {
-        out.push(finding('parent', 'error', `node "${n.id}": parent "${n.parentId}" is not an orchestrator — nodes can only live inside an orchestrator's box`, { nodeId: n.id }));
+      } else if (!isContainerType(parent.type)) {
+        out.push(finding('parent', 'error', `node "${n.id}": parent "${n.parentId}" is not a container — nodes can only live inside an orchestrator's or fan-out's box`, { nodeId: n.id }));
       }
-      if (isStructuralType(n.type) || n.type === 'orchestrator') {
-        out.push(finding('parent', 'error', `node "${n.id}": ${n.type} nodes cannot live inside an orchestrator`, { nodeId: n.id }));
+      if (isStructuralType(n.type) || isContainerType(n.type)) {
+        out.push(finding('parent', 'error', `node "${n.id}": ${n.type} nodes cannot live inside a container`, { nodeId: n.id }));
+      }
+    }
+  }
+
+  // --- fan-out lanes (BRICKS P2.5) ------------------------------------------
+  // A fan-out's lanes are its entire shape, so a lane list that cannot produce
+  // a runnable node is an author-time error, not a run-time surprise.
+  for (const n of flow.nodes ?? []) {
+    if (n.type !== 'fanout') continue;
+    const d = n.data ?? {};
+    const lanes = resolveLanes(n, { modelSets });
+
+    if (on('fanout-lanes')) {
+      // A node whose lanes come from a set cannot be judged without the sets.
+      // Skip rather than guess — the same contract the template- and
+      // library-dependent rules follow, and the difference between a helpful
+      // error and refusing to start a flow that is fine.
+      const laneCountKnown = !d.modelSet || modelSets;
+      if (!lanes.length && laneCountKnown) {
+        out.push(finding('fanout-lanes', 'error',
+          `node "${n.id}": a fan-out needs at least one lane — declare "lanes:", or point "modelSet:" at a set that has members`,
+          { nodeId: n.id }));
+      }
+      // resolveLanes suffixes collisions rather than dropping them, so a
+      // duplicate id is survivable — but it is nearly always a typo, and the
+      // suffixed lane is not the lane the author thought they wrote.
+      const rawIds = (Array.isArray(d.lanes) ? d.lanes : []).map((l, i) => normalizeLane(l, i).id);
+      const dupes = rawIds.filter((id, i) => rawIds.indexOf(id) !== i);
+      for (const id of new Set(dupes)) {
+        out.push(finding('fanout-lanes', 'warning',
+          `node "${n.id}": two lanes share the id "${id}" — the second runs as "${id}-2"`, { nodeId: n.id }));
+      }
+      // A model set that resolves to nothing is silent otherwise: the node
+      // just runs fewer lanes than the author believes it does.
+      if (d.modelSet && modelSets && !modelSets[String(d.modelSet).toLowerCase()]) {
+        out.push(finding('fanout-lanes', 'error',
+          `node "${n.id}": model set "${d.modelSet}" does not exist (Settings → Models → Model sets)`, { nodeId: n.id }));
+      }
+    }
+
+    if (on('fanout-worker')) {
+      // Lanes without a model are legal — they fall back to the node's worker,
+      // then the app default — but a fan-out where NO lane names a model is
+      // N copies of one model, which is not a fan-out.
+      if (lanes.length > 1 && !d.worker && lanes.every(l => !l.worker)) {
+        out.push(finding('fanout-worker', 'warning',
+          `node "${n.id}": no lane names a model, so every lane runs on the same default worker — give the lanes different models, or point the node at a model set`,
+          { nodeId: n.id }));
+      }
+      if (activeModels) {
+        const known = new Set(activeModels.filter(m => m && m.enabled !== false).map(m => m.id));
+        for (const l of lanes) {
+          if (!l.worker || l.worker.provider === 'mock' || known.has(l.worker.model)) continue;
+          out.push(finding('fanout-worker', 'warning',
+            `node "${n.id}": lane "${l.id}" runs on "${l.worker.model}", which is not an active model — it will resolve at run time or fail there`,
+            { nodeId: n.id }));
+        }
+      }
+    }
+
+    if (on('fanout-template') && tplById) {
+      for (const id of new Set([d.template, ...lanes.map(l => l.template)].filter(Boolean))) {
+        if (!tplById.has(id)) {
+          out.push(finding('fanout-template', 'error',
+            `node "${n.id}": template "${id}" does not exist in the Node Library`, { nodeId: n.id }));
+        }
+      }
+      // The default is only a problem when it is the one actually in play.
+      const needsDefault = lanes.some(l => !l.template) && !d.template;
+      if (needsDefault && !tplById.has(DEFAULT_LANE_TEMPLATE)) {
+        out.push(finding('fanout-template', 'error',
+          `node "${n.id}": lanes fall back to the "${DEFAULT_LANE_TEMPLATE}" template, which is not in the Node Library — name a template on the node or on each lane`,
+          { nodeId: n.id }));
       }
     }
   }
@@ -388,7 +466,7 @@ export function lintFlow(flow, { templates = null, rules = null, library = null 
 }
 
 // --- Layer 1 + 2: lint DSL text ---------------------------------------------
-export function lintText(text, { templates = null, library = null } = {}) {
+export function lintText(text, { templates = null, library = null, modelSets = null, activeModels = null } = {}) {
   let doc;
   try { doc = parseYaml(text); }
   catch (err) {
@@ -420,7 +498,7 @@ export function lintText(text, { templates = null, library = null } = {}) {
     } catch { /* parseFlow above would have thrown */ }
   }
 
-  const semantic = lintFlow(flow, { templates, library });
+  const semantic = lintFlow(flow, { templates, library, modelSets, activeModels });
   return result([...out, ...semantic.findings]);
 }
 
@@ -441,5 +519,9 @@ function result(findings) {
 // message beats starting one whose nodes quietly lose their tools.
 export const RUNTIME_RULES = [
   'unknown-template', 'unknown-node', 'unknown-port', 'cycle', 'unknown-tool', 'invalid-override', 'parent',
-  'unknown-toolset', 'grant-exceeds-ceiling', 'child-exceeds-parent', 'readonly-tools'
+  'unknown-toolset', 'grant-exceeds-ceiling', 'child-exceeds-parent', 'readonly-tools',
+  // A fan-out with no lanes, or one pointing at a template that does not
+  // exist, cannot produce a single child — that wedges the run rather than
+  // degrading it, so it is caught at the gate (D36 P2.5).
+  'fanout-lanes', 'fanout-template'
 ];

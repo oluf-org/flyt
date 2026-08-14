@@ -74,6 +74,31 @@
         "model": { "type": "string" }
       }
     },
+    "lane": {
+      "description": "One take on the fan-out's shared brief (D36 B5). A bare string is shorthand for a preset lane. `worker` accepts a plain model id as well as the {provider, model} object.",
+      "oneOf": [
+        { "enum": ["standard", "wildcard", "adversarial", "contrarian"] },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+            "label": { "type": "string" },
+            "intent": { "type": "string", "description": "One line, shown to the OTHER lanes so each knows who else is on the brief." },
+            "preset": { "enum": ["standard", "wildcard", "adversarial", "contrarian"] },
+            "instructions": { "type": "string" },
+            "template": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+            "tools": { "type": "array", "items": { "type": "string" } },
+            "worker": {
+              "oneOf": [
+                { "type": "string", "minLength": 1 },
+                { "$ref": "#/$defs/worker" }
+              ]
+            }
+          }
+        }
+      ]
+    },
     "templateNode": {
       "type": "object",
       "required": ["use"],
@@ -89,6 +114,7 @@
         "effort": { "enum": ["low", "medium", "high"] },
         "evalType": { "enum": ["plan", "step", "final"] },
         "language": { "type": "string" },
+        "system": { "type": "string" },
         "contextSpec": { "$ref": "#/$defs/contextSpec" },
         "worker": { "$ref": "#/$defs/worker" },
         "tools": { "type": "array", "items": { "type": "string" } },
@@ -102,7 +128,7 @@
       "type": "object",
       "required": ["type"],
       "properties": {
-        "type": { "enum": ["input", "output", "aiStep", "agentTask", "orchestrator"] },
+        "type": { "enum": ["input", "output", "aiStep", "agentTask", "orchestrator", "fanout"] },
         "kind": { "enum": ["user", "ai"] },
         "parent": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
         "expose": { "type": "array", "items": { "type": "string" } },
@@ -117,6 +143,10 @@
         "language": { "type": "string" },
         "minNodes": { "type": "integer", "minimum": 1 },
         "maxNodes": { "type": "integer", "minimum": 1 },
+        "lanes": { "type": "array", "items": { "$ref": "#/$defs/lane" } },
+        "modelSet": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+        "modelSetPreset": { "enum": ["standard", "wildcard", "adversarial", "contrarian"] },
+        "template": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
         "contextSpec": { "$ref": "#/$defs/contextSpec" },
         "worker": { "$ref": "#/$defs/worker" },
         "tools": { "type": "array", "items": { "type": "string" } },

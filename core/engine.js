@@ -253,6 +253,11 @@ export function createEngine({
     runtimeConfig.resolveModelSource = resolveModelSource;
     runtimeConfig.kimiKeyKind = settings.providers?.kimi?.keyKind ?? 'platform';
     runtimeConfig.modelCapabilities = settings.modelCapabilities ?? {};
+    // A fan-out node pointed at a model set mints one lane per member (D36
+    // P2.4), and drops members that are no longer active rather than minting a
+    // lane that cannot run — so the runner needs both lists.
+    runtimeConfig.modelSets = settings.modelSets ?? {};
+    runtimeConfig.activeModels = settings.activeModels ?? [];
     runtimeConfig.categoryWorkers = baseConfig.categoryWorkers ?? {};
     // 'ask' is the shipped default: an agent with a shell should not run
     // unattended because nobody got round to choosing.

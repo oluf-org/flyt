@@ -1,6 +1,7 @@
 // Graph helpers shared by the flow editor (App/FlowCanvas) and the runner:
 // a layered auto-layout and edge validation. Plain JS, no React/DOM, so the
 // main process can import it too (like flowTypes.js).
+import { isContainerType } from './flowTypes.js';
 
 // True when adding source -> target would close a cycle (i.e. target already
 // reaches source), or when the edge is a self-loop.
@@ -118,19 +119,22 @@ export function containerLayout(children, edges, {
   };
 }
 
-// --- Orchestrator containment (editor + run view) ---------------------------
+// --- Container containment (editor + run view) ------------------------------
+// "Container" is any node type that holds a scoped subgraph in a box on the
+// canvas: the orchestrator, and since D36 P2 the fan-out. Everything below
+// keys off the type list rather than naming one of them.
 
 // The empty orchestrator box, and the padding its children live inside:
 // padTop clears the header, padBottom clears the "creates" ports row.
 export const ORCH_BOX_DEFAULT = { w: 360, h: 200 };
 export const ORCH_PAD = { x: 22, top: 58, bottom: 62, cardW: 230, cardH: 76 };
 
-// True when a node may live inside an orchestrator's box: the pinned
-// structural nodes stay top-level, and boxes never nest (one level deep,
-// mirroring the engine's spawn guard).
+// True when a node may live inside a container's box: the pinned structural
+// nodes stay top-level, and boxes never nest (one level deep, mirroring the
+// engine's spawn guard).
 export function isContainable(node) {
   return Boolean(node) && !node.parentId
-    && node.type !== 'input' && node.type !== 'output' && node.type !== 'orchestrator';
+    && node.type !== 'input' && node.type !== 'output' && !isContainerType(node.type);
 }
 
 // The box that fits all children (their positions are box-relative), never
@@ -163,7 +167,7 @@ export function shrinkOrchBox(children) {
 // canvas never visually swallows a free node. Stable: relative order within
 // each group is preserved.
 export function arrangeForCanvas(nodes) {
-  const orchs = nodes.filter(n => n.type === 'orchestrator' && !n.parentId);
+  const orchs = nodes.filter(n => isContainerType(n.type) && !n.parentId);
   const orchIds = new Set(orchs.map(o => o.id));
   const childrenOf = new Map(orchs.map(o => [o.id, []]));
   const rest = [];

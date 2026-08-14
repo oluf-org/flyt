@@ -1,5 +1,8 @@
 import React from 'react';
-import { ModelPicker } from './ModelPicker.jsx';
+import { ModelPicker, useModelMeta } from './ModelPicker.jsx';
+import {
+  resolveLanes, normalizeLane, LANE_PRESETS, LANE_PRESET_IDS, DEFAULT_LANE_TEMPLATE
+} from '../core/nodes/fanout.js';
 import {
   // grantableTools(type) reads the live tool library (tools/<id>.json) snapshot
   // App installs at boot, before any inspector panel renders, and returns what
@@ -7,7 +10,7 @@ import {
   // is no library to read.
   TYPE_META, AI_ROLES, NODE_CATEGORIES, NODE_TEMPLATES, grantableTools,
   EFFORT_LEVELS, DEFAULT_EFFORT, EVAL_TYPES, WORK_CATEGORIES,
-  nodeLabel, isInstance, resolveInstance, nodePorts, isStructuralNode,
+  nodeLabel, isInstance, resolveInstance, nodePorts, isStructuralNode, isContainerType,
   overridableFields, resolveFlow, diffOverrides
 } from './flowTypes.js';
 
@@ -80,12 +83,16 @@ export default function Inspector({ snapshot, selectedNode, onOpenArtifact = nul
         outputHint,
         retroSection(retrospectives?.[flowNode.id])
       ];
-    } else if (flowNode.type === 'orchestrator') {
+    } else if (isContainerType(flowNode.type)) {
+      const isFanout = flowNode.type === 'fanout';
       const children = flow.nodes.filter(n => n.data?.managedBy === flowNode.id);
+      const label = isFanout ? 'Lanes' : 'Created nodes';
       sections = [
         children.length
-          ? ['Created nodes', children.map(n => `${n.id} [${meta.nodeStatus?.[n.id] ?? 'pending'}] — ${n.data?.title ?? n.id}`).join('\n')]
-          : ['Created nodes', '(none yet — nodes appear inside the box once planning completes)'],
+          ? [label, children.map(n => `${n.id} [${meta.nodeStatus?.[n.id] ?? 'pending'}] — ${n.data?.title ?? n.id}`).join('\n')]
+          : [label, isFanout
+              ? '(none yet — one node per lane appears inside the box when the fan-out starts)'
+              : '(none yet — nodes appear inside the box once planning completes)'],
         outputHint,
         retroSection(retrospectives?.[flowNode.id])
       ];
@@ -187,6 +194,135 @@ export default function Inspector({ snapshot, selectedNode, onOpenArtifact = nul
 export function WorkerPicker({ worker, models, activeModels, onChange, idPrefix }) {
   const w = worker?.provider ? worker : { provider: 'mock', model: 'mock-large' };
   return <ModelPicker worker={w} activeModels={activeModels} onChange={onChange} idPrefix={idPrefix} />;
+}
+
+// The fan-out's lane editor (D36 P2.1–P2.4). A fan-out's shape IS its lanes,
+// so this is the node's main field, not a detail: add a preset in one click,
+// give each lane a model, or point the whole node at a model set and let it
+// mint one lane per member.
+function FanoutEditor({ node, d, set, models, activeModels }) {
+  const { modelSets } = useModelMeta();
+  const lanes = Array.isArray(d.lanes) ? d.lanes : [];
+  const resolved = resolveLanes(node, { modelSets, activeModels });
+  const sets = Object.entries(modelSets ?? {});
+
+  // Patch the RAW lane, not its normalized form. Normalizing on write would
+  // freeze the preset's current wording into the flow file, so a later
+  // improvement to LANE_PRESETS would never reach a lane anyone had touched —
+  // and presets are meant to be a living library (P2.2). A string lane widens
+  // to { preset } and nothing more; only authored fields are ever stored.
+  const patchLane = (i, patch) => set({
+    lanes: lanes.map((l, j) => {
+      if (j !== i) return l;
+      const raw = typeof l === 'string' ? { preset: l } : { ...l };
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === undefined || v === null || v === '') delete raw[k];
+        else raw[k] = v;
+      }
+      return raw;
+    })
+  });
+  const addLane = preset => set({ lanes: [...lanes, preset ? { preset } : { id: `lane-${lanes.length + 1}` }] });
+  const removeLane = i => set({ lanes: lanes.filter((_, j) => j !== i) });
+
+  return (
+    <>
+      <section>
+        <h3>Fan-out</h3>
+        <pre>{'One brief, N deliberately different takes. Each lane becomes a node inside this box, running in parallel on its own model. Every lane is told who the other lanes are and asked for at least one finding none of them can reach — but no lane ever sees another\'s output.'}</pre>
+      </section>
+      <section>
+        <h3>Title</h3>
+        <input value={d.title ?? ''} placeholder="Fan-out" onChange={e => set({ title: e.target.value })} />
+      </section>
+      <section>
+        <h3>Shared goal — the one brief every lane answers</h3>
+        <textarea rows={3} placeholder="e.g. Read this repository and say what matters."
+          value={d.goal ?? ''} onChange={e => set({ goal: e.target.value || undefined })} />
+      </section>
+
+      <section>
+        <h3>Model set — one lane per member</h3>
+        <select value={d.modelSet ?? ''} onChange={e => set({ modelSet: e.target.value || undefined })}>
+          <option value="">(none — use the lanes below)</option>
+          {sets.map(([id, s]) => (
+            <option key={id} value={id}>{s.name} — {s.models.length} model{s.models.length === 1 ? '' : 's'}</option>
+          ))}
+        </select>
+        <div className="settings-hint">
+          {sets.length
+            ? 'The ten-second path to “five models on one question”. Members that are no longer active are skipped.'
+            : 'No model sets yet — create one in Settings → Models.'}
+        </div>
+      </section>
+
+      <section>
+        <h3>Lanes <span className="status-pill pill-neutral">{resolved.length} total</span></h3>
+        {lanes.length === 0 && <pre className="muted">No authored lanes{d.modelSet ? ' — the model set above supplies them.' : '.'}</pre>}
+        {lanes.map((raw, i) => {
+          const lane = normalizeLane(raw, i);
+          return (
+            <div className="lane-row" key={i}>
+              <div className="lane-row-head">
+                <input
+                  className="lane-label"
+                  value={lane.label}
+                  aria-label={`Lane ${i + 1} label`}
+                  onChange={e => patchLane(i, { label: e.target.value })}
+                />
+                <button className="link" title="Remove this lane" aria-label={`Remove lane ${lane.label}`} onClick={() => removeLane(i)}>✕</button>
+              </div>
+              <select
+                value={lane.preset ?? ''}
+                aria-label={`Lane ${i + 1} preset`}
+                onChange={e => patchLane(i, { preset: e.target.value || undefined })}
+              >
+                <option value="">(no preset — write your own instructions)</option>
+                {LANE_PRESET_IDS.map(p => <option key={p} value={p}>{LANE_PRESETS[p].label} — {LANE_PRESETS[p].intent}</option>)}
+              </select>
+              <WorkerPicker
+                worker={lane.worker}
+                models={models}
+                activeModels={activeModels}
+                idPrefix={`lane-${node.id}-${i}`}
+                onChange={worker => patchLane(i, { worker })}
+              />
+              <textarea
+                rows={2}
+                placeholder="Extra instructions for this lane only (appended after the preset)"
+                value={typeof raw === 'string' ? '' : (raw.instructions ?? '')}
+                onChange={e => patchLane(i, { instructions: e.target.value || undefined })}
+              />
+            </div>
+          );
+        })}
+        <div className="lane-add">
+          {LANE_PRESET_IDS.map(p => (
+            <button key={p} className="ghost mini" onClick={() => addLane(p)} title={LANE_PRESETS[p].instructions}>
+              ＋ {LANE_PRESETS[p].label}
+            </button>
+          ))}
+          <button className="ghost mini" onClick={() => addLane(null)}>＋ Blank</button>
+        </div>
+      </section>
+
+      <section>
+        <h3>Lane template</h3>
+        <input
+          value={d.template ?? ''}
+          placeholder={DEFAULT_LANE_TEMPLATE}
+          onChange={e => set({ template: e.target.value || undefined })}
+        />
+        <div className="settings-hint">
+          Which Node Library template each lane instantiates. A lane may name its own instead.
+        </div>
+      </section>
+      <section>
+        <h3>Creates</h3>
+        <pre>{nodePorts(node).map(p => `${p.label} — ${p.description}`).join('\n')}</pre>
+      </section>
+    </>
+  );
 }
 
 // Edit-target toggle (CONFIGS-COMPARE P1): at the top of the Inspector, switch
@@ -578,6 +714,10 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
           </section>
         </>}
 
+        {node.type === 'fanout' && (
+          <FanoutEditor node={node} d={d} set={set} models={models} activeModels={activeModels} />
+        )}
+
         {node.type === 'output' && (
           <section>
             <h3>Output</h3>
@@ -585,7 +725,7 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
           </section>
         )}
 
-        {(node.type === 'agentTask' || node.type === 'aiStep' || node.type === 'orchestrator') && !readOnly && (
+        {(node.type === 'agentTask' || node.type === 'aiStep' || isContainerType(node.type)) && !readOnly && (
           <section>
             <label className="check-row">
               <input type="checkbox" checked={Boolean(d.requiresApproval)}

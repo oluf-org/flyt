@@ -182,6 +182,24 @@ refactor of the whole plan; do it under its own commit with the suite green.
 **Done when:** one node, five lanes, five models, five outputs into a `combine` — authored in
 the UI without touching YAML.
 
+> **Shipped** (2026-08-14). `type: fanout` with lanes as data on one node
+> (`core/nodes/fanout.js` — normalization, the four presets, the cross-lane brief, the
+> roster). A lane's `worker` accepts a plain model id as well as the `{provider, model}`
+> object; a bare string lane is shorthand for that preset; `modelSet:` mints one lane per
+> active member. `runFanout` mints children and hands them to `runContainer` — no planning
+> call, no contract, no re-ask. Lint rules `fanout-lanes` / `fanout-worker` /
+> `fanout-template`, the first and last on the runtime gate. Canvas: the container box is now
+> keyed off `CONTAINER_TYPES` rather than the orchestrator by name, and shows `⋔ N lanes`
+> before it runs and `N · M done` while it does. The Inspector's lane editor patches the RAW
+> lane, never the normalized one — normalizing on write would freeze a preset's wording into
+> the flow file and cut the lane off from later improvements to the preset library.
+>
+> Two things fixed on the way, both pre-existing: `templateNode`'s no-library fallback
+> silently dropped `instructions`, `worker` and `tools` (the library path passed the whole
+> override map through, so the two paths disagreed about what a template node can carry), and
+> the runner's pre-run gate could not resolve a model set, so a set-driven fan-out read as
+> laneless and refused to start.
+
 ---
 
 ### P3 — Sub-flows: a flow is a brick

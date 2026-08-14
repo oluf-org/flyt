@@ -71,17 +71,59 @@ so the same flow adapts to whichever project it runs against. See
 `DESIGN-SPEC.md` §6.2.
 
 Raw nodes (`type:`) are the structural/legacy shape: `input`, `output`,
-`aiStep`, `agentTask`, `orchestrator`, with their data fields flattened
+`aiStep`, `agentTask`, `orchestrator`, `fanout`, with their data fields flattened
 (`role`, `system`, `text`, `goal`, `worker`, ...). Prefer templates; raw
 nodes exist mainly so older flows keep loading.
 
 `input` / `output` are implicit: referencing them in `flow` declares them.
 Declare an input explicitly only to attach default `text:` to it.
 
+### Fan-out lanes (`type: fanout`)
+
+A fan-out runs **N deliberately different takes on ONE brief**, each in its own
+node inside the box. Its children come from a lane list you wrote — not from a
+model's plan — so it needs no planning call and has no contract to violate.
+
+```yaml
+nodes:
+  look:
+    type: fanout
+    title: Five reads
+    goal: Read this repository and say what matters.
+    template: general-analysis      # which template each lane instantiates
+    lanes:
+      - standard                    # a bare string is shorthand for that preset
+      - id: wild
+        preset: wildcard
+        worker: anthropic/claude-sonnet-5   # a plain model id, or { provider, model }
+      - id: attack
+        preset: adversarial
+        instructions: Focus on the auth module.   # appended after the preset
+```
+
+Lane fields: `id`, `label`, `intent` (one line, shown to the OTHER lanes),
+`preset` (`standard` | `wildcard` | `adversarial` | `contrarian`),
+`instructions`, `worker`, `template`, `tools`. Everything is optional — an id
+is derived from the label, then the preset, then the position.
+
+Instead of (or as well as) `lanes:`, point the node at a named model set with
+`modelSet: <setId>` (Settings → Models → Model sets) and it mints **one lane
+per member**, optionally shaped by `modelSetPreset:`. Members that are no
+longer active models are skipped rather than minted as lanes that cannot run.
+
+Each lane's prompt carries the shared `goal`, its own instructions, and the
+labels + intents of its siblings, with the instruction to surface at least one
+finding no other lane is positioned to reach. **Lane outputs never cross** —
+sharing them would collapse the divergence the node exists to produce.
+
+Ports: `results` (primary, one labelled section per lane) and `lanes` (the
+roster: label, id, model, intent).
+
 ### Containment (`parent` + `box`)
 
-Any non-structural node may live **inside** an orchestrator's box: set
-`parent: <orchestrator-id>` on the node (both `use:` and `type:` shapes).
+Any non-structural node may live **inside** a container's box — an
+orchestrator's or a fan-out's: set `parent: <container-id>` on the node (both
+`use:` and `type:` shapes).
 A child keeps its normal fields; its canvas position (stored in the
 `*.layout.json` sidecar) is relative to the box's top-left corner.
 
@@ -95,9 +137,9 @@ nodes:
     parent: orch              # runs inside orch's box
 ```
 
-Rules: the parent must exist and be an orchestrator; `input`, `output` and
-orchestrator nodes themselves can never be contained (one level deep).
-Deleting an orchestrator deletes its children. At run time authored children
+Rules: the parent must exist and be a container (`orchestrator` or `fanout`);
+`input`, `output` and container nodes themselves can never be contained (one
+level deep). Deleting a container deletes its children. At run time authored children
 **replace** autonomous planning — the orchestrator runs exactly the nodes in
 its box instead of materializing a swarm. The editor manages all of this by
 dragging (drop a node onto a box to attach, drag it out to detach); hand-edit
@@ -137,7 +179,8 @@ Each override is keyed by node id and may set only fields that node accepts —
 the same whitelist the runner enforces at launch: `worker`, `effort`,
 `instructions`, `system`, `requiresApproval`, `approveToolCalls` on any AI
 node, plus `category` (work nodes), `evalType` (evaluation), `language`
-(translate), `minNodes`/`maxNodes` (orchestrator), and `tools` (agentTask).
+(translate), `minNodes`/`maxNodes` (orchestrator), `lanes`/`modelSet`/`template`
+(fanout), and `tools` (agentTask).
 Precedence at run time is **run input > mode > node override > template**.
 
 ### Run inputs (`expose`)
@@ -184,7 +227,10 @@ scalars, or multi-document files — the linter reports these as parse errors.
 | `dead-end` | warning | node output never reaches an output node |
 | `duplicate-edge` | warning | same edge stated twice |
 | `orphan-approval` | warning | `requiresApproval` on an input/output node |
-| `parent` | error | `parent:` missing, not an orchestrator, or a structural/orchestrator node is contained |
+| `parent` | error | `parent:` missing, not a container, or a structural/container node is contained |
+| `fanout-lanes` | error/warning | a fan-out with no lanes or an unknown `modelSet` (error); duplicate lane ids (warning) |
+| `fanout-worker` | warning | no lane names a model (N copies, not a fan-out), or a lane names a model that is not active |
+| `fanout-template` | error | a lane or node `template:` that is not in the Node Library |
 | `mode` | error/warning | mode override field the node can't accept (error), override of a node not in the flow (warning), or a `derivedFrom` pointing at a non-existent mode (warning) |
 | `expose` | error | a node exposes a field it cannot accept as a run input |
 
