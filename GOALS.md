@@ -131,6 +131,13 @@ Full general-purpose visual programming (loops, conditionals, sub-flows); true p
 > narrow sense that the loop is scored — a fixed benchmark suite against a throwaway clone,
 > archived per day (`core/benchmark.js`), because "improve yourself" is otherwise
 > indistinguishable from churn. The rest of the list stands.
+>
+> **Two more are reversed narrowly, per D36.** *Sub-flows* are reversed outright: a static,
+> lint-resolved, depth-capped reference to a named flow is composition, not programming.
+> *Loops* are reversed only as **handoff** — the `loop` node hands a task list to the
+> supervisor and waits for terminal status; it does not iterate a subgraph. **Conditionals
+> remain a non-goal**, as does expression syntax of any kind in the DSL. The line is drawn in
+> `BRICKS-PLAN.md` §0.2; point at it when refusing the next proposal.
 
 ---
 

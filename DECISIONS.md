@@ -215,6 +215,77 @@ App icons are the one place `currentColor` cannot apply. `scripts/make-icons.mjs
 
 ---
 
+### D36 — Flows compose: sub-flows, lanes, and a doorway into the loop
+
+**Context.** Every capability in Flyt is reusable except the flow itself. Node templates are
+bricks, tools are bricks, skills are bricks, references are bricks — a flow is a one-off graph
+that can only be duplicated, never contained. The concrete workload that exposed this: analyse
+a public repository with several models in parallel (each told to find what the others will
+not, plus a wildcard lane and an adversarial lane), combine the findings into a plan, and hand
+that plan to the loop as work. Of the eight things that flow needs, five do not exist, and four
+of the five are the same missing primitive.
+
+**Decision.**
+1. **Fan-out, sub-flows and the orchestrator are one mechanism** — a node that materializes
+   children into its own box and walks them as a scoped subgraph. `runOrchestrator` already
+   does this; it is extracted once (`runContainer`) and gains two more consumers rather than
+   two more walkers.
+2. **A sub-flow is spliced, not nested.** Inner nodes join the run graph as children of the
+   call site with namespaced ids. One run folder, one snapshot, one canvas — a nested
+   `FlowRunner` would fragment run state and break the transparency window the product rests
+   on (D1, D4).
+3. **A call site is another point where an override map applies** (D27), so `mode:` and
+   `overrides:` parameterise a sub-flow with no new concept. Precedence extends to
+   *run input > call-site override > call-site mode > inner node override > template*.
+4. **Lanes know about each other, and only that.** A fan-out lane's prompt names its siblings'
+   labels and intents so "find something the others will not" means something; lane *outputs*
+   never cross, because sharing them collapses the diversity the fan-out exists to produce.
+5. **A typed run input is a node**, not a template variable. `inputs:` declares them, each
+   materialises an input node, and they are wired with ordinary edges. No `{{ }}`, nothing
+   hidden — an input you cannot see on the canvas is state outside the file model (principle 1).
+6. **A repo URL is adopted into the reference library** rather than fetched into the run. The
+   library is already outside every workspace, pinned, and read-only by having no write path;
+   a run-time clone inherits all three properties for free instead of inventing a fourth
+   sandbox.
+7. **The flow→loop handoff goes through a contract, not a parser.** A `backlog-plan` node emits
+   a strict fenced JSON block matching `core/backlog.js`'s task fields; the `loop` node consumes
+   that port. Making the loop node read a combiner's prose would put a parser where `plan-eval`
+   already proved a contract belongs.
+8. **A `loop` node enqueues and waits.** It stays `running` until every task it queued is
+   terminal, its truth re-derived from backlog file status on every poll and on reattach —
+   never held in memory, so a run may legitimately wait for days and survive a restart (D17).
+   A **parked** task does not fail the node: D35 rule 7 says a gate parks a task and never
+   blocks the loop, and the flow-level equivalent is that the park surfaces as a gate on the
+   loop node while the wait continues.
+9. **A sub-flow resolves by id at run start**, so improving a brick improves every caller. The
+   hazard is real and is answered by forensics rather than by pinning: the run snapshot records
+   the resolved inner flow verbatim, so a completed run always shows what actually ran.
+
+**Two `GOALS.md` non-goals are reversed, narrowly.** The non-goals list bans *"full
+general-purpose visual programming (loops, conditionals, sub-flows)"*. **Sub-flows** are
+reversed outright — a static, lint-resolved, depth-capped reference to a named artifact is
+composition, not programming. **Loops** are reversed only as *handoff*: the `loop` node does
+not iterate a subgraph, it hands work to the engine that already iterates, with the budget
+ceilings, gates, heartbeats and canary D35 built. **Conditionals remain a non-goal**, and
+nothing in this decision branches on a value. The justification is the same one D35 used to
+reverse cost tracking: the loop makes the old answer wrong. An unattended system that cannot
+compose its own workflows can only run the workflows a human wired by hand, which caps
+self-improvement at the rate a person draws boxes.
+
+**What this changes elsewhere.** `GOALS.md`'s non-goals list needs the same footnote treatment
+D35 got. `FLOW_LANG.md` gains three node shapes (`flow:`, `fanout`, `loop`), an `inputs:` block,
+and six lint rules. `FLOW_NODES.md` gains the `backlog-plan` contract beside the plan contract
+it mirrors. D5's "AI helper as builder" gets its precondition — an AI cannot assemble workflows
+from bricks until bricks exist.
+
+**Status.** Decided; **not implemented**. Phased build in `BRICKS-PLAN.md` (P0 model UX,
+P1 typed inputs + repo adoption, P2 the expansion spine + fan-out, P3 sub-flows, P4 the loop
+handoff, P5 the learn-from-a-repo flow run against `self_improving_coding_agent`, P6
+connectedness). Acceptance: a flow run reaches `done` because the supervisor landed the last
+task it queued. Open items Q-B1–Q-B5 in that plan's §5.
+
+---
+
 ## Open questions (consolidated)
 
 **Product (from `PRODUCT-SPEC.md` §10):**

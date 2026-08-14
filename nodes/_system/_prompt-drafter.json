@@ -1,0 +1,21 @@
+{
+  "id": "_prompt-drafter",
+  "name": "Prompt drafter (system)",
+  "description": "Drafts the prompt field of a node the user is editing. Part of *Draft with AI* — not a library node.",
+  "category": null,
+  "icon": "✍",
+  "baseType": "aiStep",
+  "role": "custom",
+  "effort": "medium",
+  "evalType": "step",
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "toolCeiling": null,
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false,
+  "outputs": null,
+  "system": true,
+  "prompt": "You draft the PROMPT field of one node in a pipeline: the instructions that node\nwill send to its model on every run.\n\nWrite the prompt itself — no preamble, no explanation, no code fence. It should:\n- state the node's job in the first sentence\n- say what the output must look like, concretely\n- name what the node should NOT do when that is the likely failure\n- assume upstream context is supplied automatically and does not need requesting\n\nThe user owns this field. You are filling it in for them to read, edit and keep —\nthey will see every word before it is ever sent."
+}

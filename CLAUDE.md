@@ -17,6 +17,7 @@
 ## Active work
 
 - `LOOP-PLAN.md` — the autonomous improvement loop (headless supervisor, backlog, worktrees, budget/tiers, harness-run gates, benchmark + archive). Days 1–7 built; the decision landed as D35. §21 carries what is still open.
+- `BRICKS-PLAN.md` — composition and chaining (fan-out lanes, sub-flows, typed run inputs, the flow→backlog→loop handoff). Decided as D36, not started. §0.2 records which `GOALS.md` non-goals it reverses and which it does not — read that before proposing any DSL change.
 - `OUTPUT-VIEW-PLAN.md` — the current implementation plan (markdown output view, canvas reader, summary nodes). Not started yet.
 - `CONFIGS-COMPARE-DESIGN.md` — P1–P3 shipped; P4 sweeps still open.
 
