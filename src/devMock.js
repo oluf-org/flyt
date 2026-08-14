@@ -256,6 +256,23 @@ const mockModels = [
   { id: 'meta-llama/llama-3.1-8b-instruct', name: 'Meta: Llama 3.1 8B Instruct', contextLength: 131072, supportsTools: false, inUsdPerM: 0.02, outUsdPerM: 0.03 }
 ];
 
+// The reference library, as the real one ships it (core/references.js).
+const mockRefs = [
+  {
+    name: 'self_improving_coding_agent',
+    url: 'https://github.com/MaximeRobeyns/self_improving_coding_agent',
+    about: 'An archive of scored agent versions, the best of which proposes the next improvement.',
+    cloned: false, adopted: false, commit: null, clonedAt: null
+  },
+  {
+    name: 'opencode',
+    url: 'https://github.com/sst/opencode',
+    about: 'The server/client split: a headless harness over HTTP with every surface as a client.',
+    cloned: true, adopted: false, commit: 'a1b2c3d4e5f600000000000000000000000000aa',
+    clonedAt: new Date().toISOString()
+  }
+];
+
 // In-memory Node Library mirroring core/nodestore.js (seed catalog).
 const mockTemplates = new Map(SEED_NODE_TEMPLATES.map(t => [t.id, structuredClone(t)]));
 
@@ -519,6 +536,36 @@ export function installDevMock() {
         ? { ok: true }
         : { ok: false, error: `No API key saved for ${provider} yet.` }
     ),
+    // The reference library (D36 P1). Enough shape for the Repositories panel
+    // to be exercised without git.
+    listReferences: async () => structuredClone(mockRefs),
+    addReference: async ({ url }) => {
+      if (!/^(https?|ssh|git):\/\/|^[\w.-]+@[\w.-]+:/.test(String(url ?? '').trim())) {
+        throw new Error(`"${url}" is not a repository URL.`);
+      }
+      const name = String(url).replace(/\.git$/, '').split(/[/:]/).filter(Boolean).pop().toLowerCase();
+      const existing = mockRefs.find(r => r.url === url);
+      if (existing) { existing.commit = 'refreshed' + Date.now().toString(16).slice(-4); return { ...existing, refreshed: true }; }
+      const entry = {
+        name, url, about: `Adopted from ${url}.`, cloned: true, adopted: true,
+        commit: Date.now().toString(16).padStart(40, '0'), clonedAt: new Date().toISOString()
+      };
+      mockRefs.push(entry);
+      return { ...entry, adopted: true, refreshed: false };
+    },
+    removeReference: async name => {
+      const i = mockRefs.findIndex(r => r.name === name);
+      if (i >= 0) mockRefs.splice(i, 1);
+      return { name, removed: true, uncloned: true };
+    },
+    updateReference: async name => {
+      const r = mockRefs.find(x => x.name === name);
+      if (r) { r.cloned = true; r.commit = Date.now().toString(16).padStart(40, '0'); }
+      return r ?? null;
+    },
+    cloneRepo: async ({ url, parentDir }) => ({
+      folder: `${parentDir}/${String(url).split('/').pop()}`, opened: true, id: 'cloned', name: 'cloned', kind: 'folder'
+    }),
     listFlows: async () => Object.values(mockFlows).map(f => ({
       id: f.id, name: f.name,
       ...(f.modes && Object.keys(f.modes).length

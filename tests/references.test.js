@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ReferenceLibrary, defaultReferenceRoot, DEFAULT_REFERENCES } from '../core/references.js';
-import { executeTool } from '../core/tools/index.js';
+import { executeTool, toolNames } from '../core/tools/index.js';
 import { makeStore } from './helpers.js';
 import { Workspace } from '../core/workspace.js';
 
@@ -74,12 +74,35 @@ test('it reads, and a missing file is an answer rather than an error', () => {
   assert.equal(lib.read('reference:opencode/src'), null);
 });
 
-test('there is no write path — read-only is a fact about the code, not a flag', () => {
+test('there is no write path into a clone — read-only is a fact about the code, not a flag', () => {
   const lib = seeded();
-  // The property that makes this safe to hand a model: nothing to bypass.
-  for (const method of ['write', 'writeText', 'save', 'edit', 'remove', 'delete']) {
+  // The property that makes this safe to hand a model: nothing to bypass. No
+  // method modifies the CONTENTS of a reference, so no prompt can make one.
+  for (const method of ['write', 'writeText', 'save', 'edit', 'delete', 'patch']) {
     assert.equal(typeof lib[method], 'undefined', `ReferenceLibrary must not expose ${method}()`);
   }
+});
+
+test('managing the library is a user act, and no tool can reach it', () => {
+  // D36 P1.4 added adopt()/remove(): a general-purpose app has to be able to
+  // point at any repository, and to forget one. That is MANAGEMENT, not content
+  // mutation — but it is still a write, so the boundary moved from "the object
+  // has no write method" to "nothing an agent can hold reaches those methods".
+  //
+  // The plan proposed an `add_reference` TOOL. That is deliberately not built:
+  // a model that can make the harness clone an arbitrary URL is a different
+  // security question from one that can read what a human already cloned, and
+  // the flow's own repo input covers the case the plan wanted it for.
+  const lib = seeded();
+  assert.equal(typeof lib.adopt, 'function', 'the app can adopt a repository');
+  assert.equal(typeof lib.remove, 'function', 'and forget one');
+
+  const mutators = ['add_reference', 'adopt_reference', 'remove_reference', 'clone_repo', 'update_reference'];
+  for (const id of mutators) {
+    assert.ok(!toolNames().includes(id), `no tool may manage the reference library (found "${id}")`);
+  }
+  // What an agent DOES get: search and read, both read-only.
+  assert.ok(toolNames().includes('search_references'));
 });
 
 test('search finds prior art, skips generated noise, and caps one loud file', () => {

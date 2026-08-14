@@ -4,6 +4,7 @@ import { APP_NAME, CONFIG_DIR } from '../core/brand.js';
 import { canServe, MOCK_MODELS, PROVIDER_ORDER } from './providerMirror.js';
 import { FactChips } from './ModelPicker.jsx';
 import { proposeStarterSet, modelSetId, MODEL_SET_MAX } from '../core/modelSource.js';
+import ReposPanel from './ReposPanel.jsx';
 
 // Settings page (PROVIDERS-PLAN §5): two tabs behind a slim rail.
 //   Providers — five compact cards (keys, test, Kimi key-kind), overview-first:
@@ -54,7 +55,7 @@ const PROVIDER_META = {
 // agree is one too many.
 const CATALOG_PROVIDERS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi']; // curated lists; openrouter fetches live
 
-export default function Settings({ onClose }) {
+export default function Settings({ onClose, onOpenProject = null }) {
   const [tab, setTab] = useState('providers');
   const [s, setS] = useState(null); // the public settings payload
   const [error, setError] = useState('');
@@ -88,7 +89,7 @@ export default function Settings({ onClose }) {
         </div>
 
         <div className="settings-tabs" role="tablist" aria-label="Settings sections">
-          {[['providers', 'Providers'], ['models', 'Models'], ['safety', 'Safety']].map(([id, label]) => (
+          {[['providers', 'Providers'], ['models', 'Models'], ['repos', 'Repositories'], ['safety', 'Safety']].map(([id, label]) => (
             <button
               key={id} role="tab" aria-selected={tab === id}
               className={'settings-tab' + (tab === id ? ' active' : '')}
@@ -101,6 +102,7 @@ export default function Settings({ onClose }) {
           {!s && !error && <div className="muted">Loading…</div>}
           {s && tab === 'providers' && <ProvidersTab s={s} save={save} onKeySaved={() => setTab('models')} />}
           {s && tab === 'models' && <ModelsTab s={s} save={save} />}
+          {s && tab === 'repos' && <ReposPanel onOpenProject={onOpenProject} />}
           {s && tab === 'safety' && <SafetyTab s={s} save={save} />}
           {error && <div className="settings-error mono">{error}</div>}
         </div>

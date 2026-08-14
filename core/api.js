@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
-import { pushRefs } from './worktree.js';
+import { pushRefs, git } from './worktree.js';
 import { workerForLevel, levelFor, LEVELS } from './levels.js';
 import { Supervisor, renderReport } from './supervisor.js';
 import { APPROVAL_MODES } from './flowRunner.js';
@@ -25,6 +25,7 @@ import {
   compareCards, renderScorecard, renderComparison, DEFAULT_SUITE_DIR
 } from './benchmark.js';
 import { writeArchive, listArchive, readArchive, trend, dateStamp } from './archive.js';
+import { assertRepoUrl, nameFromRepoUrl } from './references.js';
 
 export class ApiError extends Error {
   constructor(message, { status = 400, code = 'bad_request' } = {}) {
@@ -148,6 +149,34 @@ export function createApi(engine) {
     'project:open': ({ folder = null }) => {
       const { project } = registry.open(folder);
       return { id: project.id, name: project.name, kind: project.kind, folder: project.folder ?? null };
+    },
+
+    // Clone a repository and open it as a project (D36 P1, generalised).
+    //
+    // The two things you might want to do with someone else's repository are
+    // different enough to be different commands: `ref:add` takes a read-only,
+    // pinned, shallow copy you can grep and cite but never edit, and this takes
+    // a full working clone you can be pointed at and told to change. Reading is
+    // the safe default; this one is the deliberate act.
+    'repo:clone': async ({ url, parentDir, name = null, open = true }) => {
+      const clean = assertRepoUrl(url);
+      if (!parentDir) throw new ApiError('A folder to clone into is required.', { status: 400, code: 'no_parent_dir' });
+      const derived = nameFromRepoUrl(clean);
+      const dirName = String(name || derived.name).replace(/[^a-zA-Z0-9._-]+/g, '-');
+      const target = path.join(path.resolve(parentDir), dirName);
+      if (fs.existsSync(target)) {
+        throw new ApiError(`"${target}" already exists. Open it as a project, or clone somewhere else.`,
+          { status: 409, code: 'target_exists' });
+      }
+      // A FULL clone, unlike a reference: you are going to work in this one,
+      // and a shallow checkout makes branching and merging quietly worse.
+      await git(['clone', clean, target], { cwd: path.resolve(parentDir), timeoutMs: 20 * 60 * 1000 });
+      if (!open) return { folder: target, opened: false };
+      const { project } = registry.open(target);
+      return {
+        folder: target, opened: true,
+        id: project.id, name: project.name, kind: project.kind
+      };
     },
 
     // --- Running -----------------------------------------------------------
@@ -565,8 +594,13 @@ export function createApi(engine) {
     // time instead of designing from first principles. App-level, since prior
     // art is portable in the way a backlog is not.
     'ref:list': () => engine.references.list(),
+    // Adopt any repository by URL (D36 P1.4). General purpose on purpose: the
+    // shipped list is a starting point, not the library.
+    'ref:add': ({ url, name = null, about = null, ref = null }) =>
+      engine.references.adopt(url, { name, about, ref }),
+    'ref:remove': ({ name }) => engine.references.remove(name),
     'ref:update': async ({ name = null }) => {
-      const names = name ? [name] : engine.references.repos.map(r => r.name);
+      const names = name ? [name] : engine.references.allRepos().map(r => r.name);
       const done = [];
       const failed = [];
       for (const n of names) {
