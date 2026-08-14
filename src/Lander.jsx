@@ -28,6 +28,7 @@ import Logo from './Logo.jsx';
 import ConfigModal from './ConfigModal.jsx';
 import { sigil } from './sigil.js';
 import { runStatus, runTimeLabel } from './runList.js';
+import LaunchInputs from './LaunchInputs.jsx';
 
 // One workflow chip + its listbox popover. Owns only its open/close and roving
 // focus; the selection and the pick handler come from the parent, so a slot and
@@ -169,7 +170,9 @@ export default function Lander({
   runs = [], onOpenRun,
   flows = [], flowId, modeId = null, onSelect, configs = {},
   compareOn = false, onToggleCompare, slotB = null, onSelectB,
-  launchInputs = [], launchValues, onLaunchInput, models = [], activeModels = [],
+  launchInputs = [], launchValues, onLaunchInput,
+  declaredInputs = [], declaredValues, onDeclaredInput,
+  models = [], activeModels = [],
   hasKey = true, claudeSubActive = false, onOpenSettings,
   busy, inputRef, onSubmit, onOpenProject, onOpenFolder
 }) {
@@ -228,6 +231,20 @@ export default function Lander({
               : 'What should we build?'}
           </h1>
         </div>
+
+        {/* What this flow DECLARED it needs (D36 P1.3) sits ON the composer, not
+            behind the config modal: a run that cannot start without a
+            repository URL must not hide the field that supplies it. */}
+        {declaredInputs.length > 0 && (
+          <LaunchInputs
+            inputs={[]}
+            declared={declaredInputs}
+            inputValues={declaredValues}
+            onInputChange={onDeclaredInput}
+            models={models}
+            activeModels={activeModels}
+          />
+        )}
 
         <div className="lander-composer">
           <textarea

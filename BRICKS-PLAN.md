@@ -147,6 +147,32 @@ effects both wrote the whole `catalog` array, so whichever landed second wiped t
 **Done when:** a flow declares a repo input, the composer shows a URL field, and running it
 leaves a pinned read-only clone that `search_references` finds.
 
+> **Shipped** (2026-08-14), after P2-P4 rather than before them - which was a mistake worth
+> recording: P1 is the phase the learn-flow actually needed, and skipping it meant P2's fan-out
+> was built against a brief that could never arrive.
+>
+> `core/nodes/runInputs.js` holds the spec model. The syntax `inputs.repo -> x` from B7 works
+> with NO parser change, because declared inputs become one node whose output ports are the
+> inputs - `inputs.repo` already means "the repo port of the node called inputs". Ports,
+> edges, context assembly and the canvas needed nothing. The primary port is the node's main
+> output, as everywhere else (getting this wrong silently handed `inputs.repo -> x` a bullet
+> list of every input).
+>
+> A `repo` input adopts before the walk starts and hands downstream `reference:<name>`, and
+> nodes fed by a repo port are granted `search_references` + `read_file` (P1.5) - without that
+> the node receives a name and no way to open it.
+>
+> **P1.4's `add_reference` TOOL is deliberately not built.** A model that can make the harness
+> clone an arbitrary URL is a different security question from one that can read what a human
+> already cloned, and the repo input covers the case the plan wanted it for.
+> `tests/references.test.js` pins the decision.
+>
+> **P1.6 went further than planned**: the `ref:*` commands existed only on the headless
+> server, so from the desktop app the library was invisible AND unreachable. They are bound
+> over IPC now, and the Repositories tab offers both modes - "Read it" (pinned read-only
+> clone) and "Work on it..." (full clone opened as a project), because reading someone's code
+> and changing it are different enough to be different buttons.
+
 ---
 
 ### P2 — Fan-out lanes (and the expansion spine)

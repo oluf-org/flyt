@@ -39,6 +39,9 @@ import { resolveLanes, laneBrief, laneInventory, DEFAULT_LANE_TEMPLATE } from '.
 import { spliceAllSubflows, SubflowError } from './nodes/subflow.js';
 import { parseBacklogPlan } from './nodes/backlogPlan.js';
 import {
+  INPUTS_NODE_ID, validateInputValues, renderInputValue
+} from './nodes/runInputs.js';
+import {
   WAIT_POLICIES, DEFAULT_POLL_MS, enqueuePlan, tallyTasks, isSettled,
   readLoopState, writeLoopState, renderLoopReport, spendFor
 } from './nodes/loopNode.js';
@@ -1617,7 +1620,7 @@ export class FlowRunner {
   //   'ask'    — pause before every destructive tool call.
   //   'smart'  — screen each call (core/safetyCheck.js); pause only on risk.
   //   'always' — never pause. The dangerous one.
-  start(flow, { userInput = '', workspace = null, approvalMode = null, modeId = null, overrides = null, compareGroup = null } = {}) {
+  start(flow, { userInput = '', workspace = null, approvalMode = null, modeId = null, overrides = null, compareGroup = null, inputs = null } = {}) {
     // Pre-run gate (REFACTOR-PLAN §4): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
@@ -1678,6 +1681,18 @@ export class FlowRunner {
         throw err;
       }
     }
+    // Typed run inputs (D36 P1). Checked BEFORE a run folder exists, so a
+    // missing required value is a refused start rather than a failed run.
+    const inputsNode = flowCopy.nodes.find(n => n.type === 'inputs');
+    let inputValues = null;
+    if (inputsNode) {
+      const { values, errors } = validateInputValues(inputsNode.data?.declared ?? [], inputs ?? {});
+      if (errors.length) {
+        throw new Error(`Flow "${flow.name ?? flow.id}" is missing run inputs:\n`
+          + errors.map(e => `- ${e}`).join('\n'));
+      }
+      inputValues = values;
+    }
     const input = flowCopy.nodes.find(n => n.type === 'input');
     if (input && userInput.trim()) input.data = { ...input.data, text: userInput.trim() };
     const brief = input?.data?.text?.trim() || `Flow: ${flow.name}`;
@@ -1701,6 +1716,7 @@ export class FlowRunner {
         ? { compareGroup: { id: String(compareGroup.id), label: compareGroup.label === 'B' ? 'B' : 'A' } }
         : {}),
       // From the SPLICED graph: sub-flow children are real nodes in this run.
+      ...(inputValues ? { runInputs: inputValues } : {}),
       nodeStatus: Object.fromEntries(flowCopy.nodes.map(n => [n.id, 'pending']))
     });
     this.store.appendLog(runId, {
@@ -1712,8 +1728,78 @@ export class FlowRunner {
       nodes: flowCopy.nodes.length, edges: flowCopy.edges.length
     });
     this.notify(runId);
-    this.launch(runId, flowCopy);
+    // A `repo` input clones before the walk starts, so the launch is async from
+    // here; everything else is already on disk.
+    if (inputsNode) {
+      this.materializeInputs(runId, flowCopy, inputsNode, inputValues)
+        .then(() => this.launch(runId, flowCopy))
+        .catch(err => this.fail(runId, err));
+    } else {
+      this.launch(runId, flowCopy);
+    }
     return runId;
+  }
+
+  // Write each declared input to its own port artifact (nodes/inputs.<name>.md),
+  // which is what makes `inputs.repo -> x` an ordinary ported edge: context
+  // assembly reads it the same way it reads any other node's named output.
+  //
+  // A `repo` input is the one with a side effect: the URL is adopted into the
+  // read-only reference library first, and what downstream nodes receive is the
+  // REFERENCE, because a name they can search beats a URL they cannot fetch.
+  async materializeInputs(runId, flow, node, values) {
+    const specs = node.data?.declared ?? [];
+    this.setNodeStatus(runId, node.id, 'active');
+    const repoTargets = new Set();
+    for (const spec of specs) {
+      const value = values?.[spec.name];
+      if (value === undefined) continue;
+      let reference = null;
+      if (spec.type === 'repo') {
+        if (!this.references) throw new Error(`Run input "${spec.label}": this runner has no reference library to clone into.`);
+        this.store.appendLog(runId, { event: 'run_input_adopt', input: spec.name, url: value });
+        reference = await this.references.adopt(value, {
+          about: `Adopted for run ${runId} (input "${spec.name}").`,
+          onLog: msg => this.store.appendLog(runId, { event: 'run_input_clone', input: spec.name, message: msg })
+        });
+        this.store.appendLog(runId, {
+          event: 'run_input_adopted', input: spec.name, reference: reference.name, commit: reference.commit
+        });
+        for (const e of forwardEdges(flow.edges)) {
+          if (e.source === node.id && e.sourceHandle === spec.name) repoTargets.add(e.target);
+        }
+      }
+      this.store.writeNodeOutput(runId, `${node.id}.${spec.name}`, renderInputValue(spec, value, { reference }));
+    }
+    // P1.5: a node handed a repository needs to be able to read it. Both tools
+    // are read-effect, which is all an aiStep may hold anyway (§6.4) — without
+    // this the node receives a reference name and no way to open it.
+    for (const id of repoTargets) {
+      const target = flow.nodes.find(n => n.id === id);
+      if (!target) continue;
+      const have = Array.isArray(target.data?.tools) ? target.data.tools : [];
+      const granted = [...new Set([...have, 'search_references', 'read_file'])];
+      if (granted.length !== have.length) {
+        target.data = { ...target.data, tools: granted };
+        this.store.appendLog(runId, {
+          event: 'run_input_granted', node: id, tools: ['search_references', 'read_file'], reason: 'fed by a repo input'
+        });
+      }
+    }
+    // The node's MAIN output is its PRIMARY port's value, because that is what a
+    // primary port means everywhere else in the DSL — upstreamContext only
+    // reads a `<id>.<port>` sidecar for a NON-primary port. Writing a summary
+    // here instead silently hands `inputs.repo -> x` a bullet list.
+    const primary = specs[0];
+    const primaryText = primary && values?.[primary.name] !== undefined
+      ? this.store.readNodeOutput(runId, `${node.id}.${primary.name}`)
+      : null;
+    this.store.writeNodeOutput(runId, node.id, primaryText ?? (specs
+      .map(sp => `- **${sp.label}** (${sp.type}): ${values?.[sp.name] ?? '(not given)'}`)
+      .join('\n') || '(no inputs)'));
+    this.store.writeFlow(runId, flow);
+    this.setNodeStatus(runId, node.id, 'done');
+    this.notify(runId);
   }
 
   // The run's captured approval mode. Falls back to the host default, then to
@@ -2885,6 +2971,15 @@ export class FlowRunner {
 
     if (node.type === 'loop') {
       return this.runLoop(runId, flow, node, opts);
+    }
+
+    if (node.type === 'inputs') {
+      // Materialized before the walk began (materializeInputs), because a repo
+      // input has to finish cloning before anything downstream can read it.
+      // By the time the scheduler reaches this node its port artifacts are
+      // already on disk, so there is nothing left to do.
+      this.setNodeStatus(runId, node.id, 'done');
+      return;
     }
 
     if (node.type === 'output') {

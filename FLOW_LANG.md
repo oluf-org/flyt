@@ -119,6 +119,49 @@ sharing them would collapse the divergence the node exists to produce.
 Ports: `results` (primary, one labelled section per lane) and `lanes` (the
 roster: label, id, model, intent).
 
+### Typed run inputs (`inputs:`)
+
+A flow could always take ONE free-text prompt. That is enough for "write me a
+thing" and useless for "read THIS repository, looking for THAT" — a link pasted
+into prose is just prose, and nothing downstream can act on it.
+
+```yaml
+inputs:
+  repo:
+    type: repo
+    label: Repository
+    required: true
+    description: Cloned read-only before the run starts.
+  depth:
+    type: choice
+    options: [quick, thorough]
+    default: quick
+flow:
+  - inputs.repo -> look
+  - inputs.depth -> look
+```
+
+Types: `text`, `url`, `repo`, `choice`, `file`, `model`, `modelSet`. Each gets a
+control in the composer; a required one with no value **refuses the start**, so
+there is no run folder and no wasted call.
+
+Declared inputs become **one node** whose output ports are the inputs, so
+`inputs.repo` is an ordinary ported edge — no templating, no `{{ }}`, no hidden
+binding. Edges, ports, context assembly and the canvas all work on it without
+knowing run inputs exist. As everywhere else, the PRIMARY (first-declared) port
+is also the node's main output.
+
+A **`repo`** input is the only one with a side effect: the URL is adopted into
+the read-only reference library before the walk starts, and what downstream
+nodes receive is `reference:<name>` rather than the URL — a name they can search
+beats a URL they cannot fetch. Nodes fed directly by a repo port are granted
+`search_references` and `read_file` (both read-effect, which is all an aiStep
+may hold anyway), because a node handed a repository and no way to open it is
+just a node holding a string.
+
+A flow with no `inputs:` block is unchanged in every respect; the implicit
+`input` node stays exactly as it is.
+
 ### The loop node (`type: loop`)
 
 The doorway from a flow into the autonomous improvement loop (D35). It adds no
@@ -315,6 +358,11 @@ scalars, or multi-document files — the linter reports these as parse errors.
 | `unknown-flow` | error | `flow:` references a flow that does not exist |
 | `flow-cycle` | error | a flow contains itself, directly or through another flow |
 | `flow-depth` | error | containment nests deeper than 3 (sub-flows, orchestrators and fan-outs all count) |
+
+Malformed `inputs:` (an unknown type, a `choice` with no options, a default
+outside its options, a node id colliding with `inputs`) is a **parse** error —
+the flow does not load at all, because a run input that silently becomes text
+is worse than a file that refuses.
 | `mode` | error/warning | mode override field the node can't accept (error), override of a node not in the flow (warning), or a `derivedFrom` pointing at a non-existent mode (warning) |
 | `expose` | error | a node exposes a field it cannot accept as a run input |
 

@@ -23,9 +23,29 @@
       "type": "object",
       "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
       "additionalProperties": { "$ref": "#/$defs/mode" }
+    },
+    "inputs": {
+      "description": "Typed run inputs (D36 B7). Each becomes an output port of a node called `inputs`, addressable as `inputs.<name>`.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
+      "additionalProperties": { "$ref": "#/$defs/runInput" }
     }
   },
   "$defs": {
+    "runInput": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["text", "url", "repo", "choice", "file", "model", "modelSet"] },
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "placeholder": { "type": "string" },
+        "required": { "type": "boolean" },
+        "default": {},
+        "options": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "mode": {
       "type": "object",
       "additionalProperties": false,
@@ -192,7 +212,21 @@
       "additionalProperties": false,
       "properties": {
         "flow": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
-        "mode": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "description": "Which saved config of the referenced flow this call site runs." },
+        "runInput": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["text", "url", "repo", "choice", "file", "model", "modelSet"] },
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "placeholder": { "type": "string" },
+        "required": { "type": "boolean" },
+        "default": {},
+        "options": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "mode": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "description": "Which saved config of the referenced flow this call site runs." },
         "overrides": {
           "type": "object",
           "description": "Ad-hoc per-inner-node overrides, applied on top of the chosen mode.",

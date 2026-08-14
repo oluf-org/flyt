@@ -3,6 +3,7 @@
 // minus positions, which are presentation and live in <id>.layout.json
 // (see core/flowstore.js). Deterministic, no side effects. See FLOW_LANG.md.
 import { parseYaml, YamlError } from './yaml.js';
+import { normalizeInputs, inputsNode, INPUTS_NODE_ID, InputError } from '../nodes/runInputs.js';
 
 export const DSL_VERSION = 1;
 
@@ -12,7 +13,7 @@ export const DSL_VERSION = 1;
 const REF_RE = /^([A-Za-z0-9_-]+)(?:\.([A-Za-z0-9_-]+))?$/;
 
 // baseType → kind, mirroring src/flowTypes.js TYPE_META.
-const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai', fanout: 'ai', subflow: 'ai', loop: 'ai' };
+const KIND_OF = { input: 'user', agentTask: 'user', output: 'user', aiStep: 'ai', orchestrator: 'ai', fanout: 'ai', subflow: 'ai', loop: 'ai', inputs: 'user' };
 export const STRUCTURAL_TYPES = Object.keys(KIND_OF);
 
 export class FlowParseError extends Error {
@@ -123,12 +124,29 @@ export function parseFlow(text) {
     throw new FlowParseError('"modes" must be a map of mode id -> definition');
   }
 
+  // Typed run inputs (D36 B7). They become ONE node whose output ports are the
+  // declared inputs, so `inputs.repo -> clone` is an ordinary ported edge and
+  // nothing downstream needs to know run inputs exist.
+  let declaredInputs = [];
+  try { declaredInputs = normalizeInputs(doc.inputs); }
+  catch (err) {
+    if (err instanceof InputError) throw new FlowParseError(err.message);
+    throw err;
+  }
+
   const nodes = [];
   const declared = new Set();
   for (const [id, entry] of Object.entries(doc.nodes ?? {})) {
     if (!REF_RE.exec(id) || id.includes('.')) throw new FlowParseError(`invalid node id "${id}"`);
+    if (id === INPUTS_NODE_ID && declaredInputs.length) {
+      throw new FlowParseError(`node "${INPUTS_NODE_ID}" collides with this flow's declared inputs — rename the node`);
+    }
     nodes.push(parseNodeEntry(id, entry));
     declared.add(id);
+  }
+  if (declaredInputs.length) {
+    nodes.unshift(inputsNode(declaredInputs));
+    declared.add(INPUTS_NODE_ID);
   }
 
   const edges = [];
