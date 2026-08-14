@@ -289,6 +289,8 @@ export default function App() {
   const [runInputs, setRunInputs] = useState({});
   // The exposed-input spec of the selected flow (fetched, not persisted).
   const [launchInputSpec, setLaunchInputSpec] = useState([]);
+  const [declaredInputs, setDeclaredInputs] = useState([]);
+  const [declaredValues, setDeclaredValues] = useState({});
   const [runInput, setRunInput] = useState('');
   const [workspaceDir, setWorkspaceDir] = useState(''); // bound target project folder (optional)
   const [busy, setBusy] = useState(false);
@@ -1410,9 +1412,25 @@ export default function App() {
     let live = true;
     if (!runFlowId) { setLaunchInputSpec([]); return; }
     window.flyt.flowLaunchInputs?.(runFlowId)
-      .then(spec => { if (live) setLaunchInputSpec(spec ?? []); })
-      .catch(() => { if (live) setLaunchInputSpec([]); });
+      .then(spec => {
+        if (!live) return;
+        // Overrides and declared inputs are two different lists (D36 P1.3).
+        setLaunchInputSpec(spec?.fields ?? []);
+        setDeclaredInputs(spec?.declared ?? []);
+      })
+      .catch(() => { if (live) { setLaunchInputSpec([]); setDeclaredInputs([]); } });
     return () => { live = false; };
+  }, [runFlowId]);
+
+  // What this flow DECLARED it needs (D36 P1), and what the user has filled in.
+  // Kept per flow so switching away and back does not lose a pasted URL.
+  const setDeclaredInputValue = useCallback((name, value) => {
+    setDeclaredValues(prev => {
+      const bucket = { ...(prev[runFlowId] ?? {}) };
+      if (value == null || value === '') delete bucket[name];
+      else bucket[name] = value;
+      return { ...prev, [runFlowId]: bucket };
+    });
   }, [runFlowId]);
 
   // Set one exposed run-input value into the current flow's bucket. A null value
@@ -1440,7 +1458,15 @@ export default function App() {
       ...(hasOverrides ? { overrides } : {})
     };
   };
-  const launchFor = () => launchForSelection(runModeId, runInputs[runFlowId] ?? {});
+  const launchFor = () => {
+    const base = launchForSelection(runModeId, runInputs[runFlowId] ?? {});
+    const values = declaredValues[runFlowId] ?? {};
+    if (!declaredInputs.length) return base;
+    // Declared inputs always travel, even untouched: the runner applies their
+    // defaults and refuses the start if a required one is missing, which is a
+    // better error than a run that begins and then cannot do anything.
+    return { ...(base ?? {}), inputs: values };
+  };
 
   // Toggle the composer's Compare mode. Turning it on seeds slot B with a
   // distinct config — a different mode of the same flow if one exists, else the
@@ -1987,6 +2013,9 @@ export default function App() {
             launchInputs={launchInputSpec}
             launchValues={runInputs[runFlowId]}
             onLaunchInput={setRunInputValue}
+            declaredInputs={declaredInputs}
+            declaredValues={declaredValues[runFlowId]}
+            onDeclaredInput={setDeclaredInputValue}
             models={models}
             activeModels={activeModels}
             hasKey={hasKey}

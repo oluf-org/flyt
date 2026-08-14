@@ -593,8 +593,13 @@ ipcMain.handle('flow:launchInputs', (_e, id) => {
         out.push({ nodeId: n.id, title: n.data?.title ?? n.id, field, current: n.data?.[field] ?? null });
       }
     }
-    return out;
-  } catch { return []; }
+    // Two different things, deliberately kept apart (D36 P1.3): an OVERRIDE is
+    // a knob on a node the author chose to surface; an INPUT is content the
+    // flow declared it needs. They travel as two fields — an array with an
+    // extra property does not survive structuredClone over IPC.
+    const declared = resolved.nodes.find(n => n.type === 'inputs')?.data?.declared ?? [];
+    return { fields: out, declared };
+  } catch { return { fields: [], declared: [] }; }
 });
 
 // Raw YAML source for the code viewer/editor. Allows users (and AIs) to inspect

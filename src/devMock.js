@@ -592,10 +592,19 @@ export function installDevMock() {
     deleteFlow: async id => { delete mockFlows[id]; },
     // Exposed run inputs (MODES-COMPARE T10): a canned spec for the mock
     // quick-fix flow so the composer controls render in the browser preview.
+    // Two lists: exposed override fields, and typed run inputs (D36 P1.3).
     flowLaunchInputs: async id => id === 'quick-fix'
-      ? [{ nodeId: 'fix', title: 'Fix', field: 'worker', current: null },
-         { nodeId: 'fix', title: 'Fix', field: 'effort', current: 'medium' }]
-      : [],
+      ? {
+          fields: [{ nodeId: 'fix', title: 'Fix', field: 'worker', current: null },
+                   { nodeId: 'fix', title: 'Fix', field: 'effort', current: 'medium' }],
+          declared: [
+            { name: 'repo', type: 'repo', label: 'Repository', required: true,
+              description: 'Cloned read-only before the run starts.' },
+            { name: 'goal', type: 'text', label: 'What to look for', required: false },
+            { name: 'depth', type: 'choice', label: 'Depth', options: ['quick', 'thorough'], default: 'quick' }
+          ]
+        }
+      : { fields: [], declared: [] },
     // Rotate over the fixture runs so a Compare launch (T11) — two runFlow
     // calls from one prompt — yields two DISTINCT panes to preview. The first
     // call still returns the newest (the gate run) for the single-run chat.

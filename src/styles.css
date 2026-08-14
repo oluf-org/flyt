@@ -2074,6 +2074,13 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
 }
 .model-row select { flex: none; max-width: 190px; }
 
+.launch-input.wide { grid-column: 1 / -1; }
+.launch-input .required { color: var(--err); }
+.launch-input-hint {
+  font-size: 10px; line-height: 1.4; color: var(--faint); margin-top: 3px;
+}
+.launch-input textarea { width: 100%; resize: vertical; }
+
 /* ---------- repositories (BRICKS P1) ----------
    Two modes, two buttons: read it (a pinned read-only clone) or work on it
    (a full clone opened as a project). */

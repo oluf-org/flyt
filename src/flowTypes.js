@@ -19,6 +19,9 @@ export const TYPE_META = {
   // node produced and stays running until the supervisor lands them. NOT a
   // container — the work happens in the loop engine, not inside this box.
   loop:         { icon: '↻', kind: 'ai',   label: 'Loop',         sub: 'hand-off · queue it and wait' },
+  // Typed run inputs (D36 B7): one node whose output ports are the values this
+  // run was given. An input is a node you can see and wire, not hidden binding.
+  inputs:       { icon: '⌸', kind: 'user', label: 'Run inputs',   sub: 'typed · filled in the composer' },
   output:       { icon: '◎', kind: 'user', label: 'Output',       sub: 'result · collects upstream' }
 };
 
@@ -284,7 +287,9 @@ export const forwardEdges = edges => (edges ?? []).filter(e => !isFeedbackEdge(e
 // Every flow always carries a User Input and an Output node: they are created
 // automatically, cannot be deleted on the canvas, and removing them from the
 // YAML fails the save. True for the pinned structural types.
-export const isStructuralType = t => t === 'input' || t === 'output';
+// Pinned nodes the author does not build or delete: the two ends of a flow,
+// and the run-inputs node, which exists only because the flow declared inputs.
+export const isStructuralType = t => t === 'input' || t === 'output' || t === 'inputs';
 export const isStructuralNode = n => Boolean(n) && !n.templateId && isStructuralType(n.type);
 
 // Append any missing input/output node so a loaded flow always has both
@@ -815,7 +820,7 @@ export const LAUNCH_OVERRIDE_COMMON = ['worker', 'effort', 'instructions', 'syst
 // `expose:` linter (T9), so both agree on what a given node exposes.
 export function overridableFields(node) {
   const type = node?.type;
-  if (type === 'input' || type === 'output') return new Set();
+  if (isStructuralType(type)) return new Set();
   const fields = new Set(LAUNCH_OVERRIDE_COMMON);
   const d = node?.data ?? {};
   if (type === 'orchestrator') { fields.add('minNodes'); fields.add('maxNodes'); }
