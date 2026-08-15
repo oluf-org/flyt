@@ -391,6 +391,30 @@ lanes and never re-plans. The peek's grant is the *intersection* of the node's
 own read-only tools with `read_file` / `search_references` / `glob`, capped at
 six tool calls — it establishes shape, not content.
 
+**Addressing the subject (D38).** When a `repo` run input feeds the fan-out, the
+lanes hold two roots at once: the read-only clone they were sent to read, and
+this project's own workspace, reachable from the same two tools with only a path
+prefix between them. A lane that calls `read_file("src/index.js")` gets OUR code
+and reports on it as if it were the subject. Three things close that:
+
+- the shared preamble carries an **addressing block** naming the reference, the
+  scoping rule, and — the line that does the work — what a bare path actually
+  returns and why it is not evidence;
+- every file tool result opens with the root it came from
+  (`[from reference:<name> — a read-only clone, NOT this project]`);
+- `search_references` defaults its `repo:` to the subject, because the library is
+  shared and an unscoped search returns other people's repositories. `repo: "*"`
+  opts out, deliberately.
+
+A bare workspace read is **logged, not blocked** (`tool_target_unexpected`): a
+lane comparing subject to home is legitimate, so this is visibility rather than a
+wall. A node that reads the workspace by design (`orient`) is exempt.
+
+**Where the mission comes from.** With an upstream `orient` node (§7f), the
+planner inherits `mission`, `focus` and `ignore` from a step that has actually
+read both repositories, and its job narrows to choosing a roster. Without one it
+derives them from the prompt, as before.
+
 Artifacts: `nodes/<id>.lanes.md` (the roster), `nodes/<id>.brief.md` (why these
 lanes), `nodes/<id>.peek.md` (the look), `nodes/<id>.md` (the aggregate).
 
@@ -470,6 +494,13 @@ also why a plan cannot declare its own work already `landed`.
 Ships gated (`requiresApproval: true`): handing a machine a night of work is
 exactly the decision a human should see first.
 
+**It can read this project** (`tools: ["glob", "read_file"]`, D38). `blastRadius`
+and `gates` describe the workspace, and this node used to hold no tools at all —
+so every path and every command in them was invented, and the loop was what
+found out. With a read grant they are checkable claims: confirm a path before
+naming it, take gates from the commands the project actually has, and where the
+relation is `empty`, name the files the task will CREATE and say so.
+
 ---
 
 ### 7e. Loop Node (enqueue, then wait for terminal)
@@ -499,6 +530,70 @@ the run reattaches by reading them — nothing is re-enqueued, nothing re-run.
 the tasks this node enqueues, so the existing three ceilings — per task,
 rolling window, project — apply unchanged. A separate worktree budget would be
 a fourth ceiling that agrees with the other three until the day it does not.
+
+---
+
+### 7f. Orient Node (what is this workspace, and how does it relate?)
+
+**role:** `orient` · **template:** `orient` · icon `⌖`
+
+**Output ports:**
+- `context` (primary) — the context file: what this project is, and its
+  relationship to the subject
+- `summary` — the same in ≤120 words, **capped in code**, safe to hand to every
+  lane of a fan-out
+- `stance` — the structured stance (JSON)
+- `questions` — clarifying questions, present only when it had to ask
+
+**Behavior (D38).** A flow that reads a foreign repository produces work for
+**the workspace the user is standing in**, and nothing else in the flow ever
+establishes what that workspace is. "What should we learn from this repo" has no
+answer until you know whether we are empty, building the same thing, or building
+something unrelated — the same repository read against those three situations
+should produce three different rosters and three different backlogs.
+
+It runs first, cheaply, and everything after it is aimed by its answer. It gets a
+deterministic **seed** (`core/homeSeed.js`: manifest and its scripts, a depth-2
+tree, the instruction files, `.flyt/config.json`, the `DECISIONS.md` titles, and
+any existing context file) plus read-only tools, so it starts from the obvious
+facts and spends its calls on the judgement instead.
+
+**The four stances**, and what each one makes the rest of the flow do:
+
+| `relation` | The reading is for | The backlog is |
+|---|---|---|
+| `empty` | what is worth adopting wholesale, and in what order | tasks that create files, scaffolding first |
+| `similar` | where they solved what we solved worse | tasks that change existing files; "we already have X" is a finding |
+| `adjacent` | the transferable mechanism, not the feature | adaptations, not ports |
+| `unrelated` | say so early; read narrowly against the goal | few tasks, or an honest "nothing here transfers" |
+
+**`unrelated` is a first-class outcome.** A flow that cannot conclude "this
+repository has nothing for us" will manufacture six tasks to avoid saying it, and
+those tasks reach the loop and spend real money. Orientation is the right place
+to say it because it is the cheapest step in the flow — one call, before N lane
+reads.
+
+**It may ask.** Same gate as the refiner (`awaiting_input`), same one-round cap,
+same discipline: resolve ordinary ambiguity yourself as a stated assumption, ask
+only about a fork you cannot responsibly pick. The case that earns a question is
+an empty workspace whose prompt does not say what is being built. **Unattended
+runs never park** (`approvalMode: always`): the questions are recorded as
+`ASSUMED:` assumptions and logged as `orientation_assumed`, so a human reading
+the run afterwards sees which forks were taken blind. A flow that can park
+forever is not usable from the loop, and the loop is where these flows end up.
+
+**`.flyt/context.md`.** On an attended run the context file is also written to
+the project — per-project, version-controllable, hand-editable. The next run
+seeds from it and becomes a confirm-or-revise rather than a full survey. It
+carries a stamp (commit, date, subject, body hash) and is re-surveyed when HEAD
+moves, when it ages past 30 days, or when it was written about a **different**
+subject repository. A file edited by hand is **never** overwritten — the run
+writes what it would have said to `<id>.divergence` and leaves yours alone.
+
+Degrades all the way down (§6 of the plan): no workspace → `relation: empty`,
+confidence low; unparseable stance after one re-ask → the prose stands as the
+context and the stance defaults to `adjacent`, which assumes least; `.flyt/` not
+writable → the run-folder copy only.
 
 ---
 

@@ -277,7 +277,7 @@ export function laneBrief(lane, lanes, { goal = '' } = {}) {
 //
 // `laneBrief()` is untouched by this: the shared goal and the sibling roster
 // stay in the USER message where D36 put them.
-export function sharedPreamble({ mission, subject, count, focus = [], ignore = [] }) {
+export function sharedPreamble({ mission, subject, count, focus = [], ignore = [], subjectRepo = '' }) {
   const parts = [
     `You are one of ${count} agents reading ${subject} in parallel. `
     + `Your shared goal is to ${mission}`,
@@ -291,6 +291,7 @@ export function sharedPreamble({ mission, subject, count, focus = [], ignore = [
     + `then read the specific place. Say plainly what you could not determine `
     + `rather than filling the gap.`
   ];
+  if (subjectRepo) parts.push(addressingBlock(subjectRepo));
   if (focus.length) parts.push(`TREAT AS CENTRAL:\n${focus.map(f => `- ${f}`).join('\n')}`);
   // `ignore` is ADVISORY and nothing more (§1.2). "Don't focus on X" is a
   // statement about attention, not about relevance: a user who says "ignore
@@ -303,6 +304,28 @@ export function sharedPreamble({ mission, subject, count, focus = [], ignore = [
     + `effort here unless it is load-bearing for something they did ask for:\n`
     + ignore.map(i => `- ${i}`).join('\n'));
   return parts.join('\n\n');
+}
+
+// How to address the SUBJECT rather than the project this flow is running in
+// (HOME-CONTEXT P1.1). Both roots are reachable from the same two tools and
+// only the path prefix distinguishes them, so a lane that slips reads our code
+// and reports on it as if it were the subject — confidently, and with nothing
+// in the log to tell the two apart.
+//
+// The last line does more work than the first three: a model that has been told
+// the failure mode catches its own slip, where one given only the correct usage
+// has no reason to re-examine a call that returned a perfectly good file.
+export function addressingBlock(repo) {
+  return [
+    `THE SUBJECT IS NOT THIS PROJECT. You are reading \`reference:${repo}\`, a read-only clone.`,
+    `- \`search_references\` searches it. It defaults to repo: "${repo}" for you; passing`,
+    `  repo: "*" searches every reference in a shared library, and hits from other`,
+    '  repositories are not findings about this one.',
+    `- \`read_file\` on "reference:${repo}/<path>" reads it.`,
+    '- `read_file` on a bare path like "src/index.js" reads THIS PROJECT, not the subject.',
+    '  Every tool result says which root it came from. If you do that by accident, the file',
+    '  you get back is not evidence for anything you were asked.'
+  ].join('\n');
 }
 
 // Prepend one preamble to every lane's role prompt. A lane with no role prompt
@@ -391,7 +414,10 @@ export function renderBrief(plan, { fallback = false, reason = '' } = {}) {
     '# Why these lanes',
     '',
     `**Mission** — ${plan.mission}`,
-    `**Subject** — ${plan.subject}`
+    `**Subject** — ${plan.subject}`,
+    // Present when an upstream orientation settled the stance (D38): the single
+    // most useful line for understanding why THIS roster and not another.
+    ...(plan.relation ? [`**Relation to this project** — ${plan.relation}`] : [])
   ];
   if (plan.focus?.length) parts.push('', '## Treated as central', ...plan.focus.map(f => `- ${f}`));
   if (plan.ignore?.length) {

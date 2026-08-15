@@ -47,7 +47,7 @@ export const namedFlow = flow => (flow.name?.trim() ? flow : { ...flow, name: UN
 // (tools/<id>.json, core/toolstore.js), so this array is the BUILT-IN
 // fallback: what every build ships and what a host without a library — the
 // test suite, a renderer before its first IPC round trip — validates against.
-export const AGENT_TOOLS = ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'enqueue_task', 'search_references', 'write_task_md', 'read_tool_result'];
+export const AGENT_TOOLS = ['read_file', 'glob', 'create_file', 'write_file', 'bash', 'create_task', 'enqueue_task', 'search_references', 'write_task_md', 'read_tool_result'];
 
 // The live snapshot, installed by the renderer from the main process's
 // ToolStore (`tool:list`). Grants are filtered against this, so a template can
@@ -133,6 +133,15 @@ export const ROLE_PORTS = {
   refine: [
     { id: 'prompt', label: 'refined prompt', description: 'The user request rewritten into a precise, self-contained brief.' },
     { id: 'questions', label: 'questions', description: 'Clarifying questions (JSON) — present only when an ambiguity would materially change the work.' }
+  ],
+  // The orientation node (D38). `summary` is capped in code, not by
+  // instruction: it reaches every lane of a fan-out, and a detailed shared
+  // prior collapses the divergence a fan-out exists to produce (D36 point 4).
+  orient: [
+    { id: 'context', label: 'context', description: 'What this project is, and its relationship to the subject being read. The full context file.' },
+    { id: 'summary', label: 'summary', description: 'The same orientation in ≤120 words — safe to hand to every lane of a fan-out.' },
+    { id: 'stance', label: 'stance', description: 'The structured stance (JSON): relation, confidence, mission, focus, ignore, assumptions.' },
+    { id: 'questions', label: 'questions', description: 'Clarifying questions (JSON) — present only when an ambiguity would materially change what the flow is for.' }
   ],
   'final-eval': [
     { id: 'report', label: 'final-eval.md', description: 'Completeness verdict + documented differences from the plan.' }
@@ -223,7 +232,11 @@ export const AI_ROLES = [
   'plan-backlog',
   // The prompt refiner (MODES-COMPARE T5): rewrites the run request into a
   // precise brief, and may park the run with clarifying questions.
-  'refine'
+  'refine',
+  // Orientation (D38): what THIS workspace is and how it relates to the subject
+  // a flow is about to read. Holds read-only tools and, like refine, may park
+  // the run with clarifying questions.
+  'orient'
 ];
 
 // The four (minimum) categories used by plan-eval nodes to drive model selection
@@ -598,6 +611,15 @@ export const SEED_NODE_TEMPLATES = [
     id: 'prompt-refiner', name: 'Prompt refiner', category: null, icon: '✍',
     baseType: 'aiStep', role: 'refine', effort: 'medium',
     description: 'Rewrites the run request into a precise, self-contained brief (goal, constraints, deliverable, acceptance). Asks clarifying questions only when an ambiguity would materially change the work.'
+  },
+  {
+    // D38. Deliberately cheap — medium effort, read-only tools — because it
+    // exists so the expensive steps after it are aimed. `glob` is what lets it
+    // see a project rather than guess at one.
+    id: 'orient', name: 'Orient', category: null, icon: '⌖',
+    baseType: 'aiStep', role: 'orient', effort: 'medium',
+    tools: ['glob', 'read_file', 'search_references'],
+    description: 'Surveys the workspace this run is standing in and says what it is, and what relationship it has to the subject the flow is about to read. Everything downstream is aimed by its answer.'
   },
   {
     id: 'plan-start', name: 'Plan', category: null, icon: '▶',

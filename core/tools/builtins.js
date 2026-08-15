@@ -16,8 +16,9 @@ import enqueueTask from './enqueue_task.js';
 import searchReferences from './search_references.js';
 import writeTaskMd from './write_task_md.js';
 import readToolResult from './read_tool_result.js';
+import glob from './glob.js';
 
-export const BUILTIN_MODULES = [readFile, createFile, writeFile, bash, createTask, enqueueTask, searchReferences, writeTaskMd, readToolResult];
+export const BUILTIN_MODULES = [readFile, glob, createFile, writeFile, bash, createTask, enqueueTask, searchReferences, writeTaskMd, readToolResult];
 
 export const builtinModule = id => BUILTIN_MODULES.find(t => t.name === id) ?? null;
 

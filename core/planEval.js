@@ -280,19 +280,37 @@ export function parseTriage(text, extraTemplateIds = []) {
 export function parseRefineQuestions(text) {
   const obj = extractJson(text);
   if (!obj || typeof obj !== 'object' || !Array.isArray(obj.questions)) return null;
-  const questions = [];
-  for (const [i, q] of obj.questions.entries()) {
-    if (questions.length >= 3) break;
+  const questions = normalizeQuestions(obj.questions);
+  return questions.length ? { questions } : null;
+}
+
+// The question shape, shared by every role that may park the run at the input
+// gate (HOME-CONTEXT §4 — `orient` asks the same way `refine` does, and the cap
+// is the same three, because every question costs the user a round-trip).
+// `text` accepts the synonym `question`; invalid entries are dropped rather
+// than failing the whole block.
+export const MAX_QUESTIONS = 3;
+export function normalizeQuestions(raw) {
+  const out = [];
+  for (const [i, q] of (Array.isArray(raw) ? raw : []).entries()) {
+    if (out.length >= MAX_QUESTIONS) break;
     if (!q || typeof q !== 'object') continue;
     const qText = isStr(q.text) ? q.text.trim() : (isStr(q.question) ? q.question.trim() : '');
     if (!qText) continue;
-    questions.push({
+    out.push({
       id: isStr(q.id) && ID_RE.test(q.id.trim()) ? q.id.trim() : `q${i + 1}`,
       text: qText,
       ...(isStr(q.why) ? { why: q.why.trim() } : {})
     });
   }
-  return questions.length ? { questions } : null;
+  return out;
+}
+
+// Prose without its trailing contract block — the `orient` twin of
+// stripRefineQuestions (D38 §3.3). The context file a person reads should not
+// end in the JSON the machine reads.
+export function stripJsonBlock(text) {
+  return String(text ?? '').replace(/\n*```(?:json)?\s*\{[\s\S]*?```\s*$/i, '').trimEnd();
 }
 
 // The refined brief WITHOUT its trailing questions fence — what downstream
@@ -385,6 +403,62 @@ export function parseLanePlan(text, { presetIds = [], minLanes = 2, maxLanes = 6
 
   if (errors.length) return { ok: false, errors };
   return { ok: true, errors: [], plan: { mission, subject, focus, ignore, lanes } };
+}
+
+// The orientation contract (HOME-CONTEXT §3.2 / D38): what the workspace we are
+// standing in IS, and what relationship it has to the repository we are about
+// to read. Prose first, then exactly one fenced JSON block.
+//
+// Total, and deliberately forgiving about everything except `relation`: the
+// prose IS the deliverable (it becomes the context file), so a missing `focus`
+// list costs the flow very little, while a missing or invented stance changes
+// what every downstream node is for.
+export const RELATIONS = ['empty', 'similar', 'adjacent', 'unrelated'];
+const CONFIDENCES = ['high', 'medium', 'low'];
+export function parseOrientation(text) {
+  const obj = extractJson(text);
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    return { ok: false, errors: ['no JSON object found in the orientation (expected a ```json block after the prose)'] };
+  }
+  const errors = [];
+  const relation = isStr(obj.relation) ? obj.relation.trim().toLowerCase() : '';
+  if (!RELATIONS.includes(relation)) {
+    errors.push(`relation: required, one of: ${RELATIONS.join(', ')}`);
+  }
+  const mission = isStr(obj.mission) ? obj.mission.trim() : '';
+  // `unrelated` is the one stance that legitimately has no mission: there is
+  // nothing here to go and learn.
+  if (!mission && relation !== 'unrelated') {
+    errors.push('mission: required non-empty string completing "your shared goal is to …"');
+  } else if (mission && /[.!?]\s+\S/.test(mission)) {
+    errors.push('mission: exactly one sentence');
+  }
+  const strList = (v, at) => {
+    if (v == null) return [];
+    if (!Array.isArray(v) || v.some(x => !isStr(x))) { errors.push(`${at}: must be an array of non-empty strings`); return []; }
+    return v.map(x => x.trim());
+  };
+  const focus = strList(obj.focus, 'focus');
+  const ignore = strList(obj.ignore, 'ignore');
+  const assumptions = strList(obj.assumptions, 'assumptions');
+  // Questions reuse the refiner's shape and its cap, because they park the run
+  // at the same gate (§4).
+  const questions = normalizeQuestions(obj.questions);
+
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    errors: [],
+    orientation: {
+      relation,
+      confidence: CONFIDENCES.includes(String(obj.confidence).trim?.().toLowerCase?.()) ? obj.confidence.trim().toLowerCase() : 'medium',
+      mission,
+      focus,
+      ignore,
+      assumptions,
+      questions
+    }
+  };
 }
 
 // feedback-review verdict (FOLLOWUP-PLAN FU6): closes every follow-up turn.

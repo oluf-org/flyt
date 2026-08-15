@@ -1,0 +1,64 @@
+{
+  "id": "glob",
+  "title": "List files",
+  "description": "List files in the workspace (the bound project) matching a glob pattern like \"src/**/*.js\", \"*.md\" or \"**/package.json\". Use it to see what is actually here before reading anything — paths come back workspace-relative and ready to hand to read_file. Build output, node_modules and .git are skipped. This lists THIS project, never the read-only reference library; use search_references for that.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "read"
+  ],
+  "scope": "workspace",
+  "risk": "safe",
+  "autoExecute": true,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "pattern"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "pattern": {
+        "type": "string",
+        "description": "Glob: \"*\" matches within one path segment, \"**\" matches across segments, \"?\" one character. E.g. \"src/**/*.ts\", \"*.json\", \"**/README.md\"."
+      },
+      "dir": {
+        "type": "string",
+        "description": "Optional subdirectory to search under, e.g. \"src\". Defaults to the workspace root."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000,
+        "description": "Cap on paths returned (default 200)."
+      },
+      "includeDirs": {
+        "type": "boolean",
+        "description": "Match directories as well as files (default false)."
+      }
+    }
+  },
+  "keywords": [
+    "list",
+    "files",
+    "glob",
+    "find",
+    "tree",
+    "directory",
+    "what is here"
+  ],
+  "examples": [
+    "list every markdown file at the top level",
+    "what test files exist"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

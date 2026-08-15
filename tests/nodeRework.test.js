@@ -278,7 +278,7 @@ test('resolveWorker: explicit worker > categoryWorkers > priority defaults > exe
 
 test('the seed library is the combined set', () => {
   const ids = SEED_NODE_TEMPLATES.map(t => t.id).sort();
-  assert.deepEqual(ids, ['combine', 'compare', 'evaluation', 'general-analysis', 'plan-start', 'prompt-refiner', 'split', 'translation', 'work']);
+  assert.deepEqual(ids, ['combine', 'compare', 'evaluation', 'general-analysis', 'orient', 'plan-start', 'prompt-refiner', 'split', 'translation', 'work']);
 });
 
 test('NodeStore.migrateSeeds retires the old set and writes the combined one, once', () => {

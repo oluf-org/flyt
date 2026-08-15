@@ -181,8 +181,45 @@ beats a URL they cannot fetch. Nodes fed directly by a repo port are granted
 may hold anyway), because a node handed a repository and no way to open it is
 just a node holding a string.
 
+Such a node is also **stamped with the subject** (`subjectRepo`, D38), which is
+what scopes its `search_references` to that one repository, gives a fan-out's
+lanes their addressing block, and makes a read of this project's own workspace
+show up in the log as `tool_target_unexpected` instead of passing for a finding
+about the subject. `repo: "*"` on a search opts out of the scoping.
+
 A flow with no `inputs:` block is unchanged in every respect; the implicit
 `input` node stays exactly as it is.
+
+### Orientation (`use: orient`)
+
+A flow that reads someone else's repository produces work for **the workspace you
+are standing in**, and nothing else in the flow establishes what that workspace
+is. The `orient` template (D38) runs first and cheaply, and says what this
+project is and how it relates to the subject — `empty`, `similar`, `adjacent` or
+`unrelated`. The same repository read against those four stances should produce
+four different backlogs.
+
+```yaml
+nodes:
+  orient:
+    use: orient
+    title: Where are we standing?
+flow:
+  - inputs.repo -> orient
+  - orient.summary -> read      # ≤120 words, safe for every lane
+  - orient -> plan              # the whole picture, for the roster and the backlog
+```
+
+Ports: `context` (primary), `summary` (capped at 120 words **in code**, because
+it reaches every lane of a fan-out and a detailed shared prior collapses the
+divergence a fan-out exists to produce), `stance` (JSON) and `questions`.
+
+It may park the run at the `awaiting_input` gate exactly as the prompt refiner
+does, under the same discipline and the same one-round cap — and never on an
+unattended run, where the questions become recorded `ASSUMED:` assumptions
+instead. On an attended run it also writes `.flyt/context.md` in the project:
+stamped, re-surveyed when HEAD moves or the subject changes, and **never**
+overwritten once you have edited it by hand.
 
 ### The loop node (`type: loop`)
 

@@ -104,7 +104,26 @@ export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx
 // with no way back to the full result would just make it re-run the call.
 function toolMessage(record) {
   const body = JSON.stringify(record.ok ? record.result : { error: record.error });
-  return record.note ? `${body}\n${record.note}` : body;
+  return [whichRoot(record), body, record.note].filter(Boolean).join('\n');
+}
+
+// WHERE a file result came from, as a visible first line (HOME-CONTEXT P1.2).
+// The tools have always returned `target`; it was buried in the JSON body among
+// the file's contents, which is exactly where nobody reads it. A node holding
+// both a subject repository and its own workspace can address the wrong one in
+// a single plausible tool call, get a confident answer, and never find out —
+// so the answer says which root it came from before it says anything else.
+function whichRoot(record) {
+  const r = record.ok ? record.result : null;
+  if (!r || typeof r !== 'object') return '';
+  if (r.target === 'reference') {
+    const name = String(r.path ?? '').replace(/^reference:/, '').split('/')[0];
+    return `[from reference:${name} — a read-only clone, NOT this project]`;
+  }
+  if (r.target === 'workspace' || r.target === 'run-workspace') {
+    return '[from THIS PROJECT\'s own workspace — not a reference repository]';
+  }
+  return '';
 }
 
 // Merge token usage across loop iterations so retrospectives stay honest.

@@ -348,6 +348,91 @@ writes the planned roster back into the `.flow.yaml` as an authoring aid.
 
 ---
 
+### D38 — A flow knows where it is standing before it reads anything
+
+**Context.** `learn-from-repo` reads a foreign repository and produces backlog tasks for
+**the workspace the user is standing in** — and nothing in the flow ever establishes what that
+workspace is. Follow the chain and every step knows the subject; not one of them knows home.
+The `plan` node is the sharp end: it held no tools at all, and its contract demands
+`blastRadius: ["src/thing.js"]` and `gates: ["npm test"]` — real paths and a real command for a
+repository it has never seen a single file of. Those fields were invented, and the loop was
+what found out.
+
+The deeper gap sits upstream of that: *"what should we learn from this repo"* has no answer
+until you know whether we are empty, building the same thing, or building something unrelated.
+The same repository read against those three situations should produce three different rosters
+and three completely different backlogs. It produced one.
+
+**Decision.**
+1. **An orientation node runs first.** An agent, not a code-generated digest: *what is this
+   workspace, and what relationship does it have to the thing we are about to read* is a
+   judgement, not a file listing. It gets a deterministic seed (`core/homeSeed.js`) so it does
+   not spend its first four tool calls rediscovering `package.json`, plus read-only tools so it
+   can go past the seed — and read enough of the SUBJECT to place the two side by side.
+2. **The stance is a closed enum of four**, and each one changes what the flow does: `empty`
+   (adopt wholesale), `similar` (where they solved it better), `adjacent` (the transferable
+   mechanism), `unrelated`. **`unrelated` is first-class and non-embarrassing.** A flow that
+   cannot conclude "this repository has nothing for us" manufactures six tasks to avoid saying
+   it, and those tasks reach the loop and spend real money. Orientation is the cheapest step in
+   the flow, which is exactly why it is the right place to say it.
+3. **NOT a typed `project` input.** An earlier draft proposed one. Dropped: the workspace is
+   already bound at `meta.workspace` and every tool resolves against it, so a typed input would
+   declare something the run already knows — and a digest cannot answer the relationship
+   question, which is the part the rest of the flow needs.
+4. **The fan-out inherits `mission`, `focus` and `ignore`** rather than deriving them from the
+   prompt as D37 had it. A node that read both repositories has better evidence than one that
+   read the prompt, and the lane planner's job narrows to the part it is uniquely placed to do:
+   choosing the roster.
+5. **Addressing is a safety property, not a hint.** Both roots are reachable from the same two
+   tools with only a path prefix between them, so a lane reading `src/index.js` gets OUR code,
+   is told nothing unusual happened, and reports it as a finding about the subject. Three
+   answers, none of which is a wall: the preamble names the failure mode (a model that knows it
+   catches its own slip), every file result opens with the root it came from, and
+   `search_references` scopes to the subject by default because the library is shared. A bare
+   workspace read is LOGGED, never blocked — a lane comparing subject to home is legitimate,
+   and the requirement is visibility.
+6. **`backlog-plan` gets a read grant**, and its contract tightens accordingly: confirm a
+   `blastRadius` path before naming it, take `gates` from the commands the project actually
+   has, and leave gates empty rather than naming `npm test` in a repository with no test
+   script. A plausible string becomes a checked claim.
+7. **The input gate is role-agnostic.** `orient` asks the way `refine` asks — same gate, same
+   three-question cap, same "resolve ordinary ambiguity yourself" discipline. **An unattended
+   run never parks**: the questions are recorded as `ASSUMED:` assumptions and logged, because
+   a flow that can park forever is not usable from the loop, and the loop is where these flows
+   are meant to end up (D36 point 9).
+8. **The context file lands in `.flyt/context.md`** on attended runs — per-project,
+   version-controllable, hand-editable, exactly what `.flyt/` is for (D15, D22, D29). It is
+   what makes "the first run gives you that context" true across runs: the next orientation
+   seeds from it and becomes a confirm-or-revise. Stamped with commit, date and subject, and
+   re-surveyed when any of those move — never silently trusted against a *different* subject
+   repository. **A hand-edited file is never overwritten**; the run reports what it would now
+   say instead. Silently rewriting a file the user edited is the one way this feature becomes
+   something people turn off.
+
+**A new tool.** `glob` — read-effect, workspace-confined. `read_file` could only open a path you
+already knew and `search_references` only reaches the read-only library, so a node asked to
+orient itself in this project had no way to see what is in it, and a model that cannot list
+guesses paths. It joins the `read-only` toolset automatically, because that set is a selector
+(`effects:read`) and not a list someone maintains.
+
+**Failure posture, throughout: degrade, never fail** — the `workspaceFor()` rule. No workspace →
+`relation: empty`, low confidence. Planner unreachable → the prose stands as the context and the
+stance defaults to `adjacent`, which assumes least. `.flyt/` unwritable → the run-folder copy,
+which is what everything downstream actually reads.
+
+**What this changes elsewhere.** `FLOW_NODES.md` gains §7f (the orient node) and an addressing
+section in §7b. `FLOW_LANG.md` gains `use: orient` and the subject-scoping rule. The seed
+library grows a tenth template, and `AGENT_TOOLS` a tenth tool.
+
+**Status.** Decided and **implemented** (`orient` wired into `learn-from-repo`). Open: whether
+one lane should read the HOME repository on purpose — an adoption lane asking what would have to
+change here to take any of this on (it breaks the invariant that every lane reads the subject,
+and may be the most useful lane in the flow); whether `orient` should be extracted as a sub-flow
+once a second caller exists; and whether `relation` should gate the fan-out's lane budget, where
+`unrelated` with six lanes is six expensive confirmations of a cheap conclusion.
+
+---
+
 ## Open questions (consolidated)
 
 **Product (from `PRODUCT-SPEC.md` §10):**
