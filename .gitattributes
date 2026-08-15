@@ -1,0 +1,6 @@
+# The DSL serializer emits LF (core/flowlang/serialize.js), and the app rewrites
+# a flow through it on every save. With core.autocrlf=true a Windows checkout
+# hands back CRLF, so serialize(parse(file)) !== file for a file nobody has
+# touched — which fails the shipped-flow byte-stability test and would show the
+# first real edit as a whole-file diff. Pin the working copy to LF.
+*.flow.yaml text eol=lf
