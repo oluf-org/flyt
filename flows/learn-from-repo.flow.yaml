@@ -2,8 +2,9 @@ version: 1
 id: learn-from-repo
 name: Learn from a repo
 description: |
-  Point it at any repository and a question. Four models read it in parallel,
-  each told to look somewhere the others will not, their findings are merged,
+  Point it at any repository and a question. The fan-out reads the brief, picks
+  how many readers it needs and what each one is for, then runs them in parallel
+  — each told to look somewhere the others will not. Their findings are merged,
   and the result becomes queued work the loop can pick up.
 
 inputs:
@@ -18,9 +19,17 @@ inputs:
     placeholder: e.g. how it recovers from a failed task, and what we should copy
 
 nodes:
+  orient:
+    use: orient
+    title: "Where are we standing?"
+    goal: |
+      Say what THIS project is and what relationship it has to the repository we
+      are about to read: are we empty, building the same kind of thing, solving
+      overlapping problems, or is there no real overlap? Read enough of both to
+      argue it. Everything after you is aimed by your answer.
   read:
     type: fanout
-    title: Read it four ways
+    title: Read it, however many ways it takes
     goal: |
       Read the repository you have been given and answer the question in the
       brief. Ground every claim in a file and a line you actually opened:
@@ -28,20 +37,29 @@ nodes:
       not determine rather than filling the gap.
     tools: [search_references, read_file]
     lanes:
-      - { id: architecture, label: Architecture, intent: "how the thing is put together, and why", preset: standard, worker: google/gemini-2.5-flash }
-      - { id: wildcard, preset: wildcard, worker: deepseek/deepseek-v4-flash }
-      - { id: adversarial, preset: adversarial, worker: moonshotai/kimi-k2.6 }
-      - { id: contrarian, preset: contrarian, worker: z-ai/glm-4.7 }
+      - { id: architecture, label: Architecture, intent: "how the thing is put together, and why", preset: standard, worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 } }
+      - { id: wildcard, preset: wildcard, worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 } }
+      - { id: adversarial, preset: standard, worker: { provider: auto, model: moonshotai/kimi-k3 } }
+      - { id: contrarian, preset: contrarian, worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 } }
+    maxLanes: 6
+    plan: auto
     template: general-analysis
   synthesise:
     use: combine
-    title: Merge the four reads
+    title: Merge the reads
     instructions: |
-      Four independent readings of one repository follow, each with a different
-      slant. Merge them into one account: what is agreed, what only one lane
-      saw, and what they contradict each other about. Keep the citations. Where
-      two lanes disagree, say so rather than picking a winner silently.
-    worker: { provider: openrouter, model: openai/gpt-5-mini }
+      Several independent readings of one repository follow, each with a
+      different slant. Merge them into one account: what is agreed, what only
+      one lane saw, and what they contradict each other about. Keep the
+      citations. Where two lanes disagree, say so rather than picking a winner
+      silently.
+
+      The orientation above says what THIS project is and how it relates to
+      what was read. Use it: separate what is relevant here from what is not,
+      say plainly where a finding describes something we have already solved,
+      and drop what does not apply to us rather than carrying it forward.
+    worker: { provider: auto, model: moonshotai/kimi-k3 }
+    requiresApproval: false
   plan:
     use: backlog-plan
     title: What we should actually do
@@ -49,7 +67,13 @@ nodes:
       Propose only work that this project should genuinely do as a result of
       what was read. Prefer three real tasks to ten plausible ones. Every task
       must be claimable on its own by someone who has not read the analysis.
-    worker: { provider: openrouter, model: openai/gpt-5-mini }
+
+      You can read this project — use that. Confirm every path you put in
+      blastRadius, and take gates from the commands this project actually has.
+      If the orientation says the relation is "unrelated", a short backlog or an
+      honest "nothing here transfers" is the correct answer; do not manufacture
+      work to avoid saying it.
+    worker: { provider: auto, model: moonshotai/kimi-k3 }
   work:
     type: loop
     title: Queue it
@@ -57,9 +81,15 @@ nodes:
     waitFor: none
 
 flow:
+  - inputs.repo -> orient
+  - inputs.goal -> orient
   - inputs.repo -> read
   - inputs.goal -> read
+  - orient.summary -> read
   - read -> synthesise
+  - orient -> synthesise
   - synthesise -> plan
+  - orient -> plan
   - plan.tasks -> work
   - work -> output
+  - input -> inputs

@@ -49,6 +49,17 @@ export default {
       };
     }
     const host = fileHost(ctx);
+    // A node pointed at a subject repository just read a path out of THIS
+    // project instead (HOME-CONTEXT §0.1). Not blocked — comparing the subject
+    // against home is legitimate, and a lane may do it on purpose — but it is
+    // one plausible tool call away from a confident finding about the wrong
+    // repository, so it must not be invisible in the run log.
+    if (ctx?.subject?.repo && ctx.subject.strict !== false) {
+      ctx.store?.appendLog?.(ctx.runId, {
+        event: 'tool_target_unexpected', node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
+        tool: 'read_file', path: args.path, read: 'workspace', expected: `reference:${ctx.subject.repo}`
+      });
+    }
     const content = readText(host, args.path);
     if (content == null) throw new Error(`File "${args.path}" not found in the workspace.`);
     const bytes = Buffer.byteLength(content, 'utf8');

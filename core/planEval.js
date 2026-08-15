@@ -7,6 +7,9 @@
 // { ok: false, errors } (plan-eval) or null / { errors } so the runner can
 // fail gracefully, log the violations, and keep the run auditable.
 import { NODE_TEMPLATES, NODE_CATEGORIES, EFFORT_LEVELS } from '../src/flowTypes.js';
+// The lane-plan cap lives with the lane presets it bounds, so the parser and
+// normalizeLane() can never drift apart on how long an emphasis may be.
+import { MAX_EMPHASIS as MAX_LANE_EMPHASIS } from './nodes/fanout.js';
 
 const ID_RE = /^[a-zA-Z0-9_-]+$/;
 const isStr = v => typeof v === 'string' && v.trim().length > 0;
@@ -277,19 +280,37 @@ export function parseTriage(text, extraTemplateIds = []) {
 export function parseRefineQuestions(text) {
   const obj = extractJson(text);
   if (!obj || typeof obj !== 'object' || !Array.isArray(obj.questions)) return null;
-  const questions = [];
-  for (const [i, q] of obj.questions.entries()) {
-    if (questions.length >= 3) break;
+  const questions = normalizeQuestions(obj.questions);
+  return questions.length ? { questions } : null;
+}
+
+// The question shape, shared by every role that may park the run at the input
+// gate (HOME-CONTEXT §4 — `orient` asks the same way `refine` does, and the cap
+// is the same three, because every question costs the user a round-trip).
+// `text` accepts the synonym `question`; invalid entries are dropped rather
+// than failing the whole block.
+export const MAX_QUESTIONS = 3;
+export function normalizeQuestions(raw) {
+  const out = [];
+  for (const [i, q] of (Array.isArray(raw) ? raw : []).entries()) {
+    if (out.length >= MAX_QUESTIONS) break;
     if (!q || typeof q !== 'object') continue;
     const qText = isStr(q.text) ? q.text.trim() : (isStr(q.question) ? q.question.trim() : '');
     if (!qText) continue;
-    questions.push({
+    out.push({
       id: isStr(q.id) && ID_RE.test(q.id.trim()) ? q.id.trim() : `q${i + 1}`,
       text: qText,
       ...(isStr(q.why) ? { why: q.why.trim() } : {})
     });
   }
-  return questions.length ? { questions } : null;
+  return out;
+}
+
+// Prose without its trailing contract block — the `orient` twin of
+// stripRefineQuestions (D38 §3.3). The context file a person reads should not
+// end in the JSON the machine reads.
+export function stripJsonBlock(text) {
+  return String(text ?? '').replace(/\n*```(?:json)?\s*\{[\s\S]*?```\s*$/i, '').trimEnd();
 }
 
 // The refined brief WITHOUT its trailing questions fence — what downstream
@@ -297,6 +318,147 @@ export function parseRefineQuestions(text) {
 // block (the refiner's questions), leaving the prose brief intact.
 export function stripRefineQuestions(text) {
   return String(text ?? '').replace(/\n*```(?:json)?\s*\{[\s\S]*?"questions"[\s\S]*?```\s*$/i, '').trimEnd();
+}
+
+// The fan-out lane plan (FANOUT P3.3): one strict-JSON roster, chosen from the
+// FIXED preset enum. Total — never throws; invalid content comes back as
+// { ok: false, errors } so runFanout can re-ask once and then fall back to the
+// authored lanes (P3.7).
+//
+//   { "mission": "<one sentence completing 'your shared goal is to …'>",
+//     "subject": "the repository | these three repositories | the codebase",
+//     "focus":  ["what this reading is actually for"],
+//     "ignore": ["what the person asking did not ask about"],
+//     "lanes":  [{ preset, id, label, intent, emphasis?, reason? }] }
+//
+// The enum is the whole mitigation for letting a model shape the roster at all
+// (D37): it SELECTS and DUPLICATES presets, it never writes what a lane is. A
+// model that can pick lanes but not define them cannot turn an adversarial read
+// into a flattering one — so an unknown preset is a hard rejection, never a
+// coerced near-match.
+const MAX_MISSION = 400;
+export function parseLanePlan(text, { presetIds = [], minLanes = 2, maxLanes = 6 } = {}) {
+  const obj = extractJson(text);
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    return { ok: false, errors: ['no JSON object found in the lane plan (expected a ```json block or raw JSON)'] };
+  }
+  const errors = [];
+
+  // A mission is what the preamble's "your shared goal is to …" completes, so
+  // an empty one produces a lane briefed on nothing. Multi-sentence missions
+  // are rejected rather than truncated: the second sentence is invariably the
+  // planner starting to write lane instructions.
+  const mission = isStr(obj.mission) ? obj.mission.trim() : '';
+  if (!mission) errors.push('mission: required non-empty string');
+  else if (mission.length > MAX_MISSION) errors.push(`mission: at most ${MAX_MISSION} characters (got ${mission.length})`);
+  else if (/[.!?]\s+\S/.test(mission)) errors.push('mission: exactly one sentence');
+
+  const subject = isStr(obj.subject) ? obj.subject.trim() : '';
+  if (!subject) errors.push('subject: required non-empty string, e.g. "the repository"');
+
+  // A brief with neither is the common case, so absent is empty, not an error.
+  const strList = (v, at) => {
+    if (v == null) return [];
+    if (!Array.isArray(v) || v.some(x => !isStr(x))) { errors.push(`${at}: must be an array of non-empty strings`); return []; }
+    return v.map(x => x.trim());
+  };
+  const focus = strList(obj.focus, 'focus');
+  const ignore = strList(obj.ignore, 'ignore');
+
+  const rawLanes = Array.isArray(obj.lanes) ? obj.lanes : null;
+  if (!rawLanes) errors.push('lanes: required array of lane objects');
+  const lanes = [];
+  const seen = new Set();
+  for (const [i, l] of (rawLanes ?? []).entries()) {
+    const at = `lanes[${i}]`;
+    if (!l || typeof l !== 'object' || Array.isArray(l)) { errors.push(`${at}: must be an object`); continue; }
+    const preset = isStr(l.preset) ? l.preset.trim() : '';
+    if (!presetIds.includes(preset)) {
+      errors.push(`${at}.preset: required, one of: ${presetIds.join(', ')}`);
+      continue;
+    }
+    const id = isStr(l.id) ? l.id.trim() : '';
+    if (!id || !ID_RE.test(id)) { errors.push(`${at}.id: required; letters, digits, "_", "-" only`); continue; }
+    if (seen.has(id)) { errors.push(`${at}.id: "${id}" is declared twice`); continue; }
+    seen.add(id);
+    const emphasis = isStr(l.emphasis) ? l.emphasis.trim() : '';
+    if (emphasis.length > MAX_LANE_EMPHASIS) {
+      errors.push(`${at}.emphasis: at most ${MAX_LANE_EMPHASIS} characters (got ${emphasis.length}) — one sentence narrowing this lane, not a rewrite of its preset`);
+      continue;
+    }
+    lanes.push({
+      preset, id,
+      label: isStr(l.label) ? l.label.trim() : id,
+      intent: isStr(l.intent) ? l.intent.trim() : '',
+      ...(emphasis ? { emphasis } : {}),
+      ...(isStr(l.reason) ? { reason: l.reason.trim() } : {})
+    });
+  }
+  // Bounds are checked on what SURVIVED validation: a roster of six where four
+  // named an invented preset is a roster of two, and saying "six declared" in
+  // the re-ask would point the planner at the wrong problem.
+  if (rawLanes && (lanes.length < minLanes || lanes.length > maxLanes)) {
+    errors.push(`lanes: declared ${lanes.length} valid lane(s); this fan-out's budget is ${minLanes}-${maxLanes} (inclusive)`);
+  }
+
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, errors: [], plan: { mission, subject, focus, ignore, lanes } };
+}
+
+// The orientation contract (HOME-CONTEXT §3.2 / D38): what the workspace we are
+// standing in IS, and what relationship it has to the repository we are about
+// to read. Prose first, then exactly one fenced JSON block.
+//
+// Total, and deliberately forgiving about everything except `relation`: the
+// prose IS the deliverable (it becomes the context file), so a missing `focus`
+// list costs the flow very little, while a missing or invented stance changes
+// what every downstream node is for.
+export const RELATIONS = ['empty', 'similar', 'adjacent', 'unrelated'];
+const CONFIDENCES = ['high', 'medium', 'low'];
+export function parseOrientation(text) {
+  const obj = extractJson(text);
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    return { ok: false, errors: ['no JSON object found in the orientation (expected a ```json block after the prose)'] };
+  }
+  const errors = [];
+  const relation = isStr(obj.relation) ? obj.relation.trim().toLowerCase() : '';
+  if (!RELATIONS.includes(relation)) {
+    errors.push(`relation: required, one of: ${RELATIONS.join(', ')}`);
+  }
+  const mission = isStr(obj.mission) ? obj.mission.trim() : '';
+  // `unrelated` is the one stance that legitimately has no mission: there is
+  // nothing here to go and learn.
+  if (!mission && relation !== 'unrelated') {
+    errors.push('mission: required non-empty string completing "your shared goal is to …"');
+  } else if (mission && /[.!?]\s+\S/.test(mission)) {
+    errors.push('mission: exactly one sentence');
+  }
+  const strList = (v, at) => {
+    if (v == null) return [];
+    if (!Array.isArray(v) || v.some(x => !isStr(x))) { errors.push(`${at}: must be an array of non-empty strings`); return []; }
+    return v.map(x => x.trim());
+  };
+  const focus = strList(obj.focus, 'focus');
+  const ignore = strList(obj.ignore, 'ignore');
+  const assumptions = strList(obj.assumptions, 'assumptions');
+  // Questions reuse the refiner's shape and its cap, because they park the run
+  // at the same gate (§4).
+  const questions = normalizeQuestions(obj.questions);
+
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    errors: [],
+    orientation: {
+      relation,
+      confidence: CONFIDENCES.includes(String(obj.confidence).trim?.().toLowerCase?.()) ? obj.confidence.trim().toLowerCase() : 'medium',
+      mission,
+      focus,
+      ignore,
+      assumptions,
+      questions
+    }
+  };
 }
 
 // feedback-review verdict (FOLLOWUP-PLAN FU6): closes every follow-up turn.

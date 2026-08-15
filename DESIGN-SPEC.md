@@ -287,6 +287,10 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | **Benchmark + archive** (`benchmark/`, `.flyt/archive/`) | BUILT | D35 — a fixed suite against a throwaway clone, scored by independent probes |
 | **Reference library** (read-only clones, `search_references`) | BUILT | D35 — recipes, greppable at task time; never vendored (D24) |
 | Model overseer, picker LLM tiebreak | PLANNED | D35 — deliberately after the deterministic layer, bought with measurements |
+| **Planned fan-out rosters** (`plan: auto`, peek, `brief`/`peek` ports) | BUILT | D37 — the roster is chosen from the brief, from a fixed preset enum; opt-in, and a planner failure falls back to the authored lanes |
+| **Workspace orientation** (`orient` node, `homeSeed`, `.flyt/context.md`) | BUILT | D38 — a flow says what THIS project is and how it relates to what it is reading, before it reads it; `unrelated` is a first-class answer |
+| **Subject addressing** (`subjectRepo`, scoped `search_references`, rooted tool results) | BUILT | D38 — closes the silent failure where a lane read our own repository and reported it as a finding about someone else's |
+| **`glob` tool** | BUILT | D38 — read-effect, workspace-confined; a node that cannot list guesses paths |
 
 ---
 

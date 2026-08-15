@@ -3,6 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { lintText, lintFlow, RUNTIME_RULES } from '../core/flowlang/lint.js';
 import { SEED_NODE_TEMPLATES, normalizeTemplate } from '../src/flowTypes.js';
+import { builtinDefinitions } from '../core/tools/builtins.js';
+import { normalizeTool } from '../src/toolTypes.js';
 
 const templates = SEED_NODE_TEMPLATES.map(normalizeTemplate);
 
@@ -299,6 +301,62 @@ test('lint: a fan-out template that does not exist is an error, on the node or o
   const fine = lintFlow(fanFlow({ goal: 'g', lanes: [{ id: 'a', worker: 'a/one' }, { id: 'b', worker: 'b/two' }] }),
     { templates: TEMPLATES, modelSets: SETS });
   assert.ok(!fine.errors.some(e => e.rule === 'fanout-template'), 'the default template ships in the library');
+});
+
+// --- the lane planner (FANOUT P4) -------------------------------------------
+
+test('lint: a lane budget that cannot be satisfied is an error', () => {
+  const { errors } = lintFlow(fanFlow({ goal: 'g', lanes: ['standard'], minLanes: 5, maxLanes: 3 }),
+    { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(errors.some(e => e.rule === 'fanout-plan' && /minLanes \(5\) is greater than maxLanes \(3\)/.test(e.message)));
+
+  const fine = lintFlow(fanFlow({ goal: 'g', lanes: ['standard'], minLanes: 2, maxLanes: 6 }),
+    { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(!fine.errors.some(e => e.rule === 'fanout-plan'));
+});
+
+test('lint: "plan: auto" with nothing to read warns', () => {
+  // The planner reads the brief; a node with no goal and nothing wired in has
+  // only the run prompt to choose a roster from.
+  const bare = {
+    id: 'f', name: 'F',
+    nodes: [
+      { id: 'input', type: 'input', kind: 'user', data: {} },
+      { id: 'fan', type: 'fanout', kind: 'ai', data: { plan: 'auto', lanes: ['standard', 'wildcard'] } },
+      { id: 'output', type: 'output', kind: 'user', data: {} }
+    ],
+    edges: [{ id: 'e-fan-output', source: 'fan', target: 'output' }]
+  };
+  const { findings } = lintFlow(bare, { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(findings.some(f => f.rule === 'fanout-plan' && f.severity === 'warning' && /only the run prompt/.test(f.message)));
+
+  // A goal is enough on its own, and so is an inbound edge.
+  const withGoal = lintFlow(fanFlow({ plan: 'auto', goal: 'Read it.', lanes: ['standard', 'wildcard'] }),
+    { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(!withGoal.findings.some(f => f.rule === 'fanout-plan'));
+  const wired = lintFlow(fanFlow({ plan: 'auto', lanes: ['standard', 'wildcard'] }),
+    { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(!wired.findings.some(f => f.rule === 'fanout-plan'), 'something feeding the node IS a brief');
+});
+
+test('lint: a system prompt on the node makes "plan: auto" inert, and says so', () => {
+  const { findings } = lintFlow(
+    fanFlow({ plan: 'auto', goal: 'g', system: 'You are five readers.', lanes: ['standard', 'wildcard'] }),
+    { templates: TEMPLATES, modelSets: SETS });
+  assert.ok(findings.some(f => f.rule === 'fanout-plan' && f.severity === 'warning'
+    && /wins over "plan: auto"/.test(f.message)),
+  'both keys look active in the file; only one of them is');
+});
+
+test('lint: a peek cannot widen a fan-out past the read-only rule', () => {
+  // The peek's grant is the INTERSECTION of PEEK_TOOLS with the node's own, so
+  // the existing readonly-tools rule is what bounds it. Asserted here because
+  // "the peek is read-only" is a safety claim, not a comment.
+  const library = { tools: builtinDefinitions().map(normalizeTool), sets: [] };
+  const { errors } = lintFlow(fanFlow({ plan: 'auto', goal: 'g', tools: ['write_file'], lanes: ['standard', 'wildcard'] }),
+    { templates: TEMPLATES, modelSets: SETS, library });
+  assert.ok(errors.some(e => e.rule === 'readonly-tools' && /write_file/.test(e.message)));
+  assert.ok(RUNTIME_RULES.includes('readonly-tools'), 'and it blocks the pre-run gate');
 });
 
 test('lint: a fan-out written in the DSL parses and passes', () => {

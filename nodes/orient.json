@@ -1,0 +1,17 @@
+{
+  "id": "orient",
+  "name": "Orient",
+  "description": "Surveys the workspace this run is standing in and says what it is, and what relationship it has to the subject the flow is about to read. Everything downstream is aimed by its answer.",
+  "category": null,
+  "icon": "⌖",
+  "baseType": "aiStep",
+  "role": "orient",
+  "effort": "medium",
+  "worker": null,
+  "instructions": "",
+  "tools": ["glob", "read_file", "search_references"],
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false,
+  "outputs": null
+}

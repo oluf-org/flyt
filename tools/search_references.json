@@ -29,7 +29,7 @@
       },
       "repo": {
         "type": "string",
-        "description": "Limit to one reference repository by name. Omit to search all of them."
+        "description": "Limit to one reference repository by name. When this run was given a subject repository, that is the default — pass \"*\" to deliberately search every reference instead."
       },
       "context": {
         "type": "integer",

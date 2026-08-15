@@ -40,7 +40,7 @@ export default {
       },
       repo: {
         type: 'string',
-        description: 'Limit to one reference repository by name. Omit to search all of them.'
+        description: 'Limit to one reference repository by name. When this run was given a subject repository, that is the default — pass "*" to deliberately search every reference instead.'
       },
       context: {
         type: 'integer', minimum: 0, maximum: 20,
@@ -66,8 +66,16 @@ export default {
         `The reference library is empty (${catalog.map(r => r.name).join(', ') || 'nothing configured'}). `
         + 'Run `flyt ref update` to clone it, or proceed without prior art.');
     }
+    // The library is shared and pinned, so an unscoped search over it is a
+    // search of OTHER people's repositories too (HOME-CONTEXT §0.2): a lane
+    // reading repo X matches a line in `opencode`, reads it, and cites it as a
+    // finding about X. When this run was handed a subject, that is the default
+    // scope; "*" is how you opt out, deliberately and visibly.
+    const asked = typeof args.repo === 'string' ? args.repo.trim() : '';
+    const scoped = asked === '*' ? null : (asked || ctx.subject?.repo || null);
+    const defaulted = !asked && Boolean(scoped);
     const out = ctx.references.search(args.pattern, {
-      repo: args.repo ?? null,
+      repo: scoped,
       maxResults: args.maxResults ?? 40,
       maxPerFile: args.maxPerFile ?? 3,
       contextLines: args.context ?? 0
@@ -76,12 +84,15 @@ export default {
       event: 'reference_search',
       node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
       pattern: args.pattern,
-      repo: args.repo ?? null,
+      repo: scoped,
+      ...(defaulted ? { scopedToSubject: true } : {}),
       hits: out.results.length
     });
     return {
       pattern: args.pattern,
-      searched: cloned.map(r => r.name),
+      ...(scoped ? { scopedTo: scoped } : {}),
+      ...(defaulted ? { note: `Scoped to the subject repository "${scoped}". Pass repo: "*" to search every reference instead.` } : {}),
+      searched: scoped ? [scoped] : cloned.map(r => r.name),
       hits: out.results.length,
       truncated: out.truncated,
       results: out.results,

@@ -26,6 +26,9 @@
 //   step-eval -> structured verdict: pass | retry (bounded, with enriched
 //                retry-for-<node>.md guidance) | escalate (human gate)
 //   stitch    -> fixTasks[] routed through the existing create_task tool
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { callModel, abortError, isAbortError } from './adapters/index.js';
 import { runAgent, toolProtocol, supportsToolsFor } from './agent.js';
 import { makeRetrospective } from './retrospective.js';
@@ -35,7 +38,11 @@ import { runExecutorTask } from './nodes/executor.js';
 import {
   runContainer, ensureChildStatuses, commitChildren, placeInContainer, placeByLayout
 } from './nodes/expand.js';
-import { resolveLanes, laneBrief, laneInventory, DEFAULT_LANE_TEMPLATE } from './nodes/fanout.js';
+import {
+  resolveLanes, laneBrief, laneInventory, DEFAULT_LANE_TEMPLATE,
+  normalizeLane, normalizeLaneWorker, uniqueLaneIds, sharedPreamble, applyPreamble, assignWorkers,
+  renderBrief, LANE_PRESETS, LANE_PRESET_IDS
+} from './nodes/fanout.js';
 import { spliceAllSubflows, SubflowError } from './nodes/subflow.js';
 import { parseBacklogPlan } from './nodes/backlogPlan.js';
 import {
@@ -51,7 +58,7 @@ import { createWriteLedger } from './writeLedger.js';
 import { executeTool, grantContext, resolveTools, toolLibraryForLint } from './tools/index.js';
 import { narrowCeiling } from '../src/toolGrants.js';
 import { checkToolCall } from './safetyCheck.js';
-import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, parseRefineQuestions, stripRefineQuestions, extractJson } from './planEval.js';
+import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, parseRefineQuestions, parseLanePlan, parseOrientation, stripRefineQuestions, stripJsonBlock, extractJson } from './planEval.js';
 import { JUDGE_SYSTEM, buildJudgePrompt, parseJudgeVerdict } from './judge.js';
 import { deriveRunName } from './state.js';
 import {
@@ -59,7 +66,8 @@ import {
   effectiveRole, isFeedbackEdge, forwardEdges, EFFORT_MAX_TOKENS, LEGACY_TEMPLATE_MAP,
   validateOverrideMap, mergeOverrideMaps
 } from '../src/flowTypes.js';
-import { pickDefaultWorker } from './modelPriority.js';
+import { pickDefaultWorker, providerModelsFor, taskKindOf, PROVIDER_ORDER } from './modelPriority.js';
+import { homeSeed, projectGates } from './homeSeed.js';
 import { taskNodeStatus } from '../src/runGraph.js';
 import { layoutPositions, containerLayout } from '../src/flowLayout.js';
 import { lintFlow, RUNTIME_RULES } from './flowlang/lint.js';
@@ -218,7 +226,18 @@ const DEFAULT_SYSTEM = {
     '- Every task needs at least one "done when" someone else could check.',
     '- Prefer few real tasks to many plausible ones. A task nobody can verify is',
     '  not a task, and a backlog full of those is worse than an empty one.',
-    '- dependsOn names another task by its exact title in this same list.'
+    '- dependsOn names another task by its exact title in this same list.',
+    // D38 P6. These fields describe THIS project, and this node used to hold no
+    // tools at all — so every path and every gate command was invented, and the
+    // loop was what found out. With a read grant they are checkable claims.
+    '- blastRadius names paths in THIS project that you have CONFIRMED exist —',
+    '  glob or read them first. A path you did not check does not go in the list.',
+    '  For work that creates new files, name the files it will create and say so.',
+    '- gates name commands this project actually has (its package.json scripts, or',
+    '  the equivalent). Do not write "npm test" into a repository that has no test',
+    '  script; leave gates empty rather than naming one that cannot run.',
+    '- The tasks are for THIS project, not for whatever was read. A finding about',
+    '  another repository only becomes a task once you can say what changes here.'
   ].join('\n'),
   translate: [
     'ROLE: translate',
@@ -244,6 +263,64 @@ const DEFAULT_SYSTEM = {
     '{ "questions": [{ "id": "<short-slug>", "text": "<the question>", "why": "<what changes depending on the answer>" }] }',
     'At most 3 questions; fewer is better; usually none. Every question you ask',
     'stalls the run and costs the user a round-trip — ask only when you truly must.'
+  ].join('\n'),
+  // HOME-CONTEXT / D38. The cheapest node in the flow, and the one that aims
+  // every expensive node after it: what is THIS project, and what relationship
+  // does it have to the thing we are about to read? "What should we learn from
+  // this repo" has no answer until you know whether we are empty, building the
+  // same thing, or building something unrelated — the same repository read
+  // against those three situations should produce three different backlogs.
+  orient: [
+    'ROLE: orient',
+    'You are the first step of a workflow that is about to read SOMETHING ELSE —',
+    'usually another repository — on behalf of THIS project. Your job is to say what',
+    'this project is, and what relationship it has to that subject. Everything after',
+    'you is aimed by your answer; nothing after you can recover from getting it wrong.',
+    'You have a seed (assembled facts about this workspace) and read-only tools. The',
+    'seed is a starting point, not the answer: go deeper wherever it looks thin or',
+    'contradicts itself. Read enough of the SUBJECT to place the two side by side —',
+    'you cannot judge a relationship having seen only one end of it.',
+    'THE FOUR STANCES, and what each one makes the rest of the flow do:',
+    '- empty: this workspace is empty or barely started. The reading is for what is',
+    '  worth adopting wholesale, and in what order to build it.',
+    '- similar: we are building the same kind of thing. The reading is for where they',
+    '  solved what we solved worse, and where they diverge from us.',
+    '- adjacent: different product, overlapping problems. The reading is for the',
+    '  transferable mechanism, not the feature.',
+    '- unrelated: no meaningful overlap. Say so, early, and read narrowly.',
+    '"unrelated" is a FIRST-CLASS, non-embarrassing answer. A flow that cannot',
+    'conclude "this repository has nothing for us" invents work to avoid saying it,',
+    'and that work reaches a queue and spends real money. If that is the honest',
+    'reading, give it and say why.',
+    'Write the CONTEXT FILE first, as prose a person would want to read:',
+    '# Context',
+    '## This project — <what it is, what it is for, how it is built>',
+    '## Where it stands — <what exists, what is half-built, what has been decided>',
+    '## The subject — <what we are about to read, in a sentence or two>',
+    '## The relationship — <the stance, argued from evidence on BOTH sides>',
+    '## What to look for — <what a reading of that subject should come back with>',
+    'Ground it: name files you actually opened. Do not describe intent you inferred',
+    'from a directory name.',
+    'Then end with EXACTLY ONE ```json block and nothing after it:',
+    '{',
+    '  "relation": "empty|similar|adjacent|unrelated",',
+    '  "confidence": "high|medium|low",',
+    '  "mission": "<ONE sentence completing \'your shared goal is to …\', for the readers who come after you>",',
+    '  "focus": ["<what this reading is actually for, HERE>"],',
+    '  "ignore": ["<what this workspace does not need from that subject>"],',
+    '  "assumptions": ["<anything you resolved yourself where the evidence was thin>"],',
+    '  "questions": [{ "id": "<slug>", "text": "<the question>", "why": "<what changes with the answer>" }]',
+    '}',
+    'Resolve ordinary ambiguity yourself by recording an assumption. ONLY when an',
+    'ambiguity would MATERIALLY change what the whole flow is for — a fork you cannot',
+    'responsibly pick — may you ask, and then at most 3 questions, fewer is better,',
+    'usually none. Never ask what either repository already tells you: an orientation',
+    'that asks "what does this project do?" when README.md says so has failed at its',
+    'actual job. The case that genuinely warrants asking is an EMPTY workspace whose',
+    'prompt does not say what is being built — there is no evidence anywhere, and',
+    'everything downstream depends on the answer.',
+    '`ignore` is advice for the readers, not a ban: it means "do not spend effort',
+    'here", never "do not report it if it turns out to matter".'
   ].join('\n'),
   orchestrate: [
     'ROLE: orchestrate',
@@ -364,6 +441,159 @@ const SUMMARIZE_SYSTEM = [
   'Long sources are truncated to a character budget and the prompt says so;',
   'note genuinely missing information rather than guessing.'
 ].join('\n');
+
+// The fan-out peek (FANOUT P3.1): not a node role — a direct read-only agent
+// call made before the lane planner, over a hard cap of PEEK_MAX_CALLS tool
+// calls. It answers ONE question: what am I actually looking at? A Rust
+// workspace or a monorepo of notebooks; four services or one script. It is
+// deliberately not a pre-read of the subject — that is what the lanes are for,
+// and a peek that reads the repo has spent the budget it was meant to save.
+const PEEK_SYSTEM = [
+  'ROLE: subject-peek',
+  'You are taking ONE quick look at a subject so that another model can decide',
+  'how a team of readers should divide it up. You are NOT reading it yourself.',
+  'Spend your few tool calls establishing shape, not content: what kind of thing',
+  'this is, what the top-level parts are, which languages/frameworks are in play,',
+  'roughly how big it is, and where the entry points look like they are.',
+  'Answer in at most 200 words of plain prose or bullets. Say "could not tell"',
+  'rather than guessing — a wrong map is worse than a blank one.'
+].join('\n');
+
+// The peek's ceiling: enough calls to list a tree and open a manifest, not
+// enough to start reading source. §4 costs the whole feature at 10-15% overhead
+// on the strength of this number.
+const PEEK_MAX_CALLS = 6;
+const PEEK_MAX_TOKENS = 700;
+
+// The tools a peek may hold, intersected with (never added to) whatever the
+// fan-out itself was granted. `glob` is listed for the day it exists; today the
+// read-only library is read_file + search_references, and the intersection is
+// what actually runs.
+const PEEK_TOOLS = ['glob', 'read_file', 'search_references'];
+
+// The lane planner (FANOUT P3.2 / D37): not a node role — a direct call that
+// chooses a fan-out's roster from the brief, the way TRIAGE_SYSTEM classifies a
+// follow-up before any node exists.
+//
+// This is the part of D36 §7b that FANOUT reverses: a fan-out DOES now make a
+// planning call. What makes that safe is the enum below. The planner SELECTS
+// and DUPLICATES presets; it never authors one. A model that can pick lanes but
+// cannot define them cannot turn the adversarial read into a flattering one —
+// which is the property "no planning call" was protecting in the first place.
+const LANE_PLAN_SYSTEM = [
+  'ROLE: lane-planner',
+  'A fan-out node is about to run N independent readers over one subject, in',
+  'parallel. Each reader is a FIXED role you pick from a closed list. You decide',
+  'the shared mission every reader opens with, and which readers exist.',
+  'You are NOT writing what a reader does — that text is fixed and you cannot',
+  'change it. You choose from the list, and you may choose the same role more',
+  'than once: three architecture lanes is the correct answer to "focus entirely',
+  'on how this is put together".',
+  'THE ROLES:',
+  ...LANE_PRESET_IDS.map(id => `- ${id}: ${LANE_PRESETS[id].intent}`),
+  'Read the brief for what the person actually wants, not for keywords. If they',
+  'said to focus somewhere, weight the roster there. If they said to ignore',
+  'something, put it in "ignore" — that is ADVISORY wording in every lane\'s',
+  'prompt, not a filter, and you must NOT drop a lane because it might touch an',
+  'ignored area.',
+  'Respond with ONE ```json block — nothing else is used:',
+  '{',
+  '  "mission": "<one sentence completing \'your shared goal is to …\'>",',
+  '  "subject": "<what they are reading: the repository | these three repositories | the codebase>",',
+  '  "focus":  ["<what this reading is actually for>"],',
+  '  "ignore": ["<what the person asking did not ask about>"],',
+  '  "lanes": [{',
+  `    "preset": "${LANE_PRESET_IDS.join('|')}",`,
+  '    "id": "<kebab-case, unique>",',
+  '    "label": "<e.g. Architecture — the data path>",',
+  '    "intent": "<one line, shown to the other lanes>",',
+  '    "emphasis": "<at most ONE sentence narrowing this lane inside its preset>",',
+  '    "reason": "<why this lane exists — for the log, never sent to the lane>"',
+  '  }]',
+  '}',
+  'When you repeat a preset, the lanes MUST differ in label, intent and emphasis',
+  '— otherwise you have ordered the same read twice and called it coverage.',
+  'mission is exactly one sentence. focus and ignore may be empty arrays; most',
+  'briefs have neither, and inventing them is worse than leaving them out.'
+].join('\n');
+
+// --- the workspace context file (D38 §3.3) ----------------------------------
+//
+// One HTML comment carries everything staleness needs: when it was written,
+// against which commit, about which subject, and a hash of the body as written.
+// A comment rather than front matter because the file is markdown a person
+// reads and may commit, and front matter renders as a table on most viewers.
+const CONTEXT_STAMP = /^<!--\s*flyt-context:\s*(\{[\s\S]*?\})\s*-->/;
+export const stampLine = stamp => `<!-- flyt-context: ${JSON.stringify(stamp)} -->`;
+export const bodyOf = text => String(text ?? '').replace(CONTEXT_STAMP, '').trim();
+export function readContextStamp(text) {
+  const m = String(text ?? '').match(CONTEXT_STAMP);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch { return null; }
+}
+const hashText = text => createHash('sha256').update(String(text ?? '').trim()).digest('hex').slice(0, 16);
+
+// Re-survey when the code has moved on, when the file has simply aged out, or
+// when it was written about a DIFFERENT subject — that last one matters most:
+// a context file written while reading repository A says almost nothing
+// trustworthy about a run reading repository B, and trusting it silently is
+// how a flow ends up confidently oriented against the wrong thing.
+export function contextIsStale(stamp, { subject = null, head = null, days = 30, now = Date.now() } = {}) {
+  if (!stamp) return true;
+  if (subject && stamp.subject && stamp.subject !== subject) return true;
+  if (head && stamp.head && stamp.head !== head) return true;
+  const written = Date.parse(stamp.written ?? '');
+  if (!Number.isFinite(written)) return true;
+  return now - written > days * 24 * 60 * 60 * 1000;
+}
+
+function gitHead(root) {
+  try {
+    return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 4000 }).trim() || null;
+  } catch { return null; }
+}
+
+// The orientation in ≤ORIENT_SUMMARY_WORDS words (D38 §P6), for the port that
+// reaches EVERY lane of a fan-out.
+//
+// Capped in code rather than by instruction, deliberately. This is the field
+// most likely to grow until every lane opens with a detailed shared prior, and
+// a shared prior is exactly what collapses the divergence a fan-out exists to
+// produce (D36 point 4). Lanes need to know who is asking and why; they do not
+// need our architecture.
+export const ORIENT_SUMMARY_WORDS = 120;
+export function orientSummary(orientation, prose) {
+  const head = [
+    `Relation to the subject: ${orientation.relation}`
+      + (orientation.confidence ? ` (confidence: ${orientation.confidence})` : '') + '.',
+    orientation.mission ? `What this reading is for: ${orientation.mission}` : ''
+  ].filter(Boolean).join(' ');
+  // The "This project" section if the agent wrote one, else the opening prose:
+  // enough to say who is asking, and no more.
+  const section = String(prose ?? '').match(/^##\s*This project[^\n]*\n([\s\S]*?)(?=\n##\s|\n*$)/mi)?.[1]
+    ?? String(prose ?? '').replace(/^#[^\n]*\n/, '');
+  const words = `${head} ${section.replace(/\s+/g, ' ').trim()}`.trim().split(' ').filter(Boolean);
+  return words.length <= ORIENT_SUMMARY_WORDS
+    ? words.join(' ')
+    : `${words.slice(0, ORIENT_SUMMARY_WORDS).join(' ')}…`;
+}
+
+// The subject repository a node was pointed at, stamped by materializeInputs
+// when a `repo` input feeds it (HOME-CONTEXT P1). `strict: false` marks a node
+// that reads the workspace by design — `orient` — so its home reads are not
+// reported as mis-addressed.
+export function subjectOf(node) {
+  const repo = node?.data?.subjectRepo;
+  if (!repo) return null;
+  return { repo: String(repo), strict: node.data.subjectStrict !== false };
+}
+
+// Fan-out lane budget (P3.4). Each lane is a full read of the subject on a
+// metered API, so an unbounded roster is the same class of liability as an
+// unbounded loop.
+const DEFAULT_MIN_LANES = 2;
+const DEFAULT_MAX_LANES = 6;
 
 // How often a token stream may reach the disk and the renderer. Every flush is
 // a file write plus an IPC push, and adapters call onText per chunk — at real
@@ -587,7 +817,7 @@ export class FlowRunner {
   // plans better. Only read-effect tools may be granted here — the linter's
   // `readonly-tools` rule — and runAgent with an empty tool list IS
   // trackedCallModel, so every existing aiStep takes exactly its old path.
-  async trackedRunAgent(runId, nodeId, params, tools) {
+  async trackedRunAgent(runId, nodeId, params, tools, subject = null) {
     if (!tools.length) return this.trackedCallModel(runId, params);
     const ctl = this.trackAbort(runId);
     try {
@@ -598,17 +828,23 @@ export class FlowRunner {
       // grant on an aiStep (TOOLS-PLAN §6.4) failed the node the moment it was
       // used. Nothing in the suite exercised it until fan-out lanes started
       // inheriting a grant (D36 P2), which is how it surfaced.
-      const { apiKey, system, prompt, onText, onRetry, retry, ...worker } = params;
+      const { apiKey, system, prompt, onText, onRetry, retry, maxIterations, ...worker } = params;
       return await runAgent({
         worker, apiKey, system, prompt, onText, onRetry, retry,
         timeout: this.config.timeout, tools, signal: ctl.signal,
         // A node that searches a repository needs more rounds than one that
-        // checks the time (core/agent.js MAX_ITERATIONS).
-        maxIterations: this.config.maxToolIterations ?? null,
+        // checks the time (core/agent.js MAX_ITERATIONS). A caller may cap
+        // itself BELOW the configured ceiling — the fan-out peek does, because
+        // a peek that keeps going is just a slow lane (FANOUT P3.1).
+        maxIterations: maxIterations ?? this.config.maxToolIterations ?? null,
         ctx: {
           store: this.store, runId, nodeId, workspace: this.workspaceFor(runId),
           backlog: this.backlog ?? null, feedback: this.feedback ?? null,
-          references: this.references ?? null
+          references: this.references ?? null,
+          // The repository this node was pointed at, when it was pointed at one
+          // (HOME-CONTEXT P1.3/P1.4). Scopes `search_references` and makes a
+          // read of the wrong root visible.
+          ...(subject?.repo ? { subject } : {})
         }
       });
     } finally {
@@ -638,6 +874,79 @@ export class FlowRunner {
       this.store.appendLog(runId, { event: 'tool_missing', node: node.id, tool: t.name, reason: 'not read-only on an aiStep' });
     }
     return readOnly;
+  }
+
+  // The workspace copy of an orientation (D38 §3.3): `.flyt/context.md`,
+  // per-project, version-controllable and hand-editable — exactly what `.flyt/`
+  // is for (D15, D22, D29). It is what makes "the first run gives you that
+  // context" true across runs: the next orientation seeds from it and becomes a
+  // confirm-or-revise rather than a full survey.
+  //
+  // Three rules, and the third is the one that decides whether people keep this
+  // feature turned on:
+  //   1. attended runs only — an unattended loop does not edit your repository;
+  //   2. absent or stale only — a fresh file is left alone;
+  //   3. NEVER over a hand edit. The divergence is reported instead.
+  // Never throws: an unwritable `.flyt/` leaves the run-folder copy, which is
+  // the artifact everything downstream actually reads.
+  writeContextFile(runId, node, prose, orientation) {
+    try {
+      const ws = this.workspaceFor(runId);
+      if (!ws) return;
+      if (this.approvalMode(runId) === 'always') {
+        this.store.appendLog(runId, { event: 'context_file_skipped', node: node.id, reason: 'unattended run does not edit the project' });
+        return;
+      }
+      const rel = `${ws.configDirName}/context.md`;
+      const existing = ws.readFile(rel);
+      const subject = node.data?.subjectRepo ?? null;
+      const head = existing ? readContextStamp(existing) : null;
+      if (existing) {
+        if (!head) {
+          this.store.appendLog(runId, { event: 'context_file_kept', node: node.id, reason: 'hand-written file with no stamp' });
+          this.reportContextDivergence(runId, node, rel, prose);
+          return;
+        }
+        if (head.bodyHash !== hashText(bodyOf(existing))) {
+          this.store.appendLog(runId, { event: 'context_file_kept', node: node.id, reason: 'edited by hand since it was written' });
+          this.reportContextDivergence(runId, node, rel, prose);
+          return;
+        }
+        if (!contextIsStale(head, { subject, days: 30 })) {
+          this.store.appendLog(runId, { event: 'context_file_kept', node: node.id, reason: 'still fresh' });
+          return;
+        }
+      }
+      const stamp = {
+        written: new Date().toISOString(),
+        head: gitHead(ws.root),
+        subject,
+        relation: orientation.relation,
+        bodyHash: hashText(prose)
+      };
+      ws.ensure();
+      fs.writeFileSync(ws.resolve(rel), `${stampLine(stamp)}\n\n${prose}\n`, 'utf8');
+      this.store.appendLog(runId, { event: 'context_file_written', node: node.id, path: rel, relation: orientation.relation });
+    } catch (err) {
+      this.store.appendLog(runId, { event: 'context_file_skipped', node: node.id, reason: String(err?.message ?? err) });
+    }
+  }
+
+  // We would now say something different from what your file says. Reported,
+  // never applied: silently rewriting a file the user edited is the one way
+  // this feature becomes something people turn off.
+  reportContextDivergence(runId, node, rel, prose) {
+    this.store.writeNodeOutput(runId, `${node.id}.divergence`, [
+      `# Your ${rel} was left alone`,
+      '',
+      'It has been edited since a run last wrote it (or was written by hand), so this run did',
+      'not touch it. This run would now say the following instead — adopt any of it by editing',
+      'that file yourself.',
+      '',
+      '---',
+      '',
+      prose
+    ].join('\n'));
   }
 
   // The run's bound project, or null when it has none / the folder is gone.
@@ -819,9 +1128,9 @@ export class FlowRunner {
     // handleStepEval, handleFeedbackReview), so it never lands a 'rejected'.
     const gateResolve = this.gates.get(runId);
     if (gateResolve) { this.gates.delete(runId); gateResolve(false); }
-    // Settle a pending refiner input gate (T6) the same way — resolve null so
-    // the awaiting_input walk unwinds; handleRefineQuestions skips its bookkeeping
-    // under stopRequests, leaving the cancelled state intact.
+    // Settle a pending input gate (T6, and D38's orient) the same way — resolve
+    // null so the awaiting_input walk unwinds; handleNodeQuestions skips its
+    // bookkeeping under stopRequests, leaving the cancelled state intact.
     const inputResolve = this.inputGates.get(runId);
     if (inputResolve) { this.inputGates.delete(runId); inputResolve(null); }
     // Requeue tasks that were claimed when the stop landed; the executor's own
@@ -1769,7 +2078,7 @@ export class FlowRunner {
           event: 'run_input_adopted', input: spec.name, reference: reference.name, commit: reference.commit
         });
         for (const e of forwardEdges(flow.edges)) {
-          if (e.source === node.id && e.sourceHandle === spec.name) repoTargets.add(e.target);
+          if (e.source === node.id && e.sourceHandle === spec.name) repoTargets.add([e.target, reference.name]);
         }
       }
       this.store.writeNodeOutput(runId, `${node.id}.${spec.name}`, renderInputValue(spec, value, { reference }));
@@ -1777,17 +2086,29 @@ export class FlowRunner {
     // P1.5: a node handed a repository needs to be able to read it. Both tools
     // are read-effect, which is all an aiStep may hold anyway (§6.4) — without
     // this the node receives a reference name and no way to open it.
-    for (const id of repoTargets) {
+    for (const [id, repo] of repoTargets) {
       const target = flow.nodes.find(n => n.id === id);
       if (!target) continue;
       const have = Array.isArray(target.data?.tools) ? target.data.tools : [];
       const granted = [...new Set([...have, 'search_references', 'read_file'])];
+      // Which repository this node was POINTED AT (HOME-CONTEXT P1). Everything
+      // downstream of the addressing problem reads it from here: the fan-out
+      // preamble's addressing block, the default scope of `search_references`,
+      // and the `tool_target_unexpected` log line. A node that reads the
+      // workspace on purpose (`orient`) records it non-strictly, so surveying
+      // home is not reported as a mis-addressed read.
+      target.data = {
+        ...target.data,
+        ...(granted.length !== have.length ? { tools: granted } : {}),
+        subjectRepo: repo,
+        ...(target.data?.role === 'orient' ? { subjectStrict: false } : {})
+      };
       if (granted.length !== have.length) {
-        target.data = { ...target.data, tools: granted };
         this.store.appendLog(runId, {
           event: 'run_input_granted', node: id, tools: ['search_references', 'read_file'], reason: 'fed by a repo input'
         });
       }
+      this.store.appendLog(runId, { event: 'run_input_subject', node: id, reference: repo });
     }
     // The node's MAIN output is its PRIMARY port's value, because that is what a
     // primary port means everywhere else in the DSL — upstreamContext only
@@ -2285,7 +2606,7 @@ export class FlowRunner {
     }
     // A refine node that asked clarifying questions parks the whole run at the
     // awaiting_input gate until the user answers (MODES-COMPARE T6).
-    if (outcome?.refineQuestions?.length) return this.handleRefineQuestions(runId, flow, node, outcome.refineQuestions);
+    if (outcome?.questions?.length) return this.handleNodeQuestions(runId, flow, node, outcome.questions);
     if (outcome?.stepEval) return this.handleStepEval(runId, flow, node, outcome.stepEval, opts);
     // A feedback-edge verdict is handled exactly like a step-eval verdict — the
     // explicit feedback targets take precedence inside handleStepEval.
@@ -2379,12 +2700,29 @@ export class FlowRunner {
     return { ok: true };
   }
 
-  // A refine node emitted clarifying questions: park the run at the
-  // awaiting_input gate (sibling of awaiting_approval) until the user answers
-  // from the composer, then re-run the node with the answers as context. One
-  // round only — the re-run carries answeredInputs so it can't park again.
-  // Returns { ok, requeue? }.
-  async handleRefineQuestions(runId, flow, node, questions) {
+  // A node emitted clarifying questions: park the run at the awaiting_input
+  // gate (sibling of awaiting_approval) until the user answers from the
+  // composer, then re-run the node with the answers as context. One round only
+  // — the re-run carries answeredInputs so it can't park again.
+  //
+  // Role-agnostic since D38: `refine` asks about the request, `orient` asks
+  // about the workspace, and both park identically. Returns { ok, requeue? }.
+  async handleNodeQuestions(runId, flow, node, questions) {
+    // Nobody is there to answer (APPROVAL-MODES: 'always' IS "the agent runs
+    // unattended"). A flow that can park forever is not usable from the loop,
+    // and the loop is where these flows are meant to end up — so the questions
+    // are recorded and the run proceeds on the node's stated assumptions. They
+    // stay visible in the node's output and in the log, so a human reading the
+    // run afterwards sees exactly which forks were taken blind.
+    if (this.approvalMode(runId) === 'always') {
+      this.store.writeNodeOutput(runId, `${node.id}.answers`,
+        '(nobody was available to answer — this run is unattended. Proceed on your stated assumptions.)');
+      this.store.appendLog(runId, {
+        event: 'input_gate_skipped', node: node.id, questions: questions.length,
+        reason: 'unattended run (approvalMode: always)'
+      });
+      return { ok: true };
+    }
     this.store.writeNodeQuestions(runId, node.id, questions);
     this.setNodeStatus(runId, node.id, 'waiting');
     this.store.setStage(runId, 'awaiting_input', {
@@ -2738,16 +3076,25 @@ export class FlowRunner {
       const retryGuidance = this.store.readNodeOutput(runId, `retry-for-${node.id}`);
       // A refine node re-running after the awaiting_input gate gets the user's
       // answers to the questions it asked (MODES-COMPARE T6).
-      const refineAnswers = role === 'refine' ? this.store.readNodeOutput(runId, `${node.id}.answers`) : null;
+      // Both roles that may park at the input gate re-run with the user's
+      // answers in context (MODES-COMPARE T6, D38 §4).
+      const gateAnswers = (role === 'refine' || role === 'orient')
+        ? this.store.readNodeOutput(runId, `${node.id}.answers`) : null;
       // Planning roles learn from prior runs' retrospectives (historyDigest),
       // matching the classic pipeline's planner behavior.
       const history = (role === 'plan' || role === 'plan-start') ? this.store.historyDigest() : '';
+      // The orientation seed (D38 §3.1): assembled facts about this workspace,
+      // so the cheapest node in the flow does not spend its first four tool
+      // calls rediscovering that package.json exists. A starting point, not the
+      // answer — the node holds tools precisely so it can go past it.
+      const seed = role === 'orient' ? homeSeed(this.workspaceFor(runId)) : '';
       const userMsg = [
         `USER PROMPT:\n${this.store.readPrompt(runId)}`,
         node.data?.goal?.trim() ? `GOAL:\n${node.data.goal.trim()}` : '',
         node.data?.instructions?.trim() ? `EXTRA INSTRUCTIONS (from the node template / workflow):\n${node.data.instructions.trim()}` : '',
+        seed ? `WHAT IS ALREADY KNOWN ABOUT THIS WORKSPACE (assembled, not judged — verify anything load-bearing):\n${seed}` : '',
         parts.length ? `CONTEXT:\n${parts.join('\n\n')}` : '',
-        refineAnswers ? `USER ANSWERS TO YOUR CLARIFYING QUESTIONS (incorporate these and do NOT ask again):\n${refineAnswers}` : '',
+        gateAnswers ? `USER ANSWERS TO YOUR CLARIFYING QUESTIONS (incorporate these and do NOT ask again):\n${gateAnswers}` : '',
         history ? `LESSONS FROM PREVIOUS RUNS (retrospective recommendations):\n${history}` : '',
         retryGuidance ? `RETRY GUIDANCE (a previous attempt was rejected — fix this):\n${retryGuidance}` : ''
       ].filter(Boolean).join('\n\n');
@@ -2763,7 +3110,7 @@ export class FlowRunner {
           // Effort level sets the response budget; medium keeps the default.
           ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
           onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
-        }, stepTools);
+        }, stepTools, subjectOf(node));
         // A call that comes back with nothing is not a success. Recording one as
         // success wrote a 0-byte artifact, marked the node done, and handed
         // emptiness to every downstream node — the run read as healthy the whole
@@ -2889,7 +3236,7 @@ export class FlowRunner {
         if (parsed?.questions?.length) {
           this.store.writeNodeOutput(runId, `${node.id}.questions`,
             parsed.questions.map((q, i) => `${i + 1}. ${q.text}${q.why ? `\n   (why: ${q.why})` : ''}`).join('\n\n'));
-          outcome.refineQuestions = parsed.questions;
+          outcome.questions = parsed.questions;
           this.store.appendLog(runId, { event: 'refine_questions', node: node.id, count: parsed.questions.length });
         } else {
           if (answered && parseRefineQuestions(outText)) {
@@ -2897,6 +3244,66 @@ export class FlowRunner {
           }
           this.store.appendLog(runId, { event: 'refine_done', node: node.id });
         }
+      }
+      if (role === 'orient') {
+        // The prose IS the deliverable — it is the context file every
+        // downstream node holds — so the fenced stance is stripped from the
+        // primary port the way the refiner's questions are.
+        const prose = stripJsonBlock(outText);
+        if (prose && prose !== outText) this.store.writeNodeOutput(runId, node.id, prose);
+
+        let parsed = parseOrientation(outText);
+        if (!parsed.ok) {
+          const fixed = await this.reAsk(runId, node, worker, apiKey, system, userMsg, outText, parsed.errors);
+          if (fixed != null) {
+            const reparsed = parseOrientation(fixed);
+            if (reparsed.ok) {
+              parsed = reparsed;
+              this.store.writeNodeOutput(runId, node.id, stripJsonBlock(fixed) || fixed);
+            }
+          }
+        }
+        // Degrade, never fail (§6): unparseable twice means the prose stands as
+        // the context file and the stance defaults to `adjacent` — the reading
+        // that assumes least. An orientation that cannot be parsed is still an
+        // orientation someone can read.
+        const orientation = parsed.ok ? parsed.orientation : {
+          relation: 'adjacent', confidence: 'low', mission: '', focus: [], ignore: [],
+          assumptions: ['The orientation contract could not be parsed; the stance defaults to "adjacent", which assumes least.'],
+          questions: []
+        };
+        if (!parsed.ok) {
+          problems.push('orientation emitted no parseable stance JSON; defaulted to relation "adjacent"');
+          this.store.appendLog(runId, { event: 'orientation_failed', node: node.id, errors: parsed.errors });
+        }
+
+        const answered = (this.store.readMeta(runId).answeredInputs ?? []).includes(node.id);
+        const unattended = this.approvalMode(runId) === 'always';
+        // Unattended, a question is a fork taken blind, not a question — it is
+        // recorded as an explicit assumption so the run afterwards shows which
+        // ones were taken and on what basis (§4).
+        if (orientation.questions.length && (unattended || answered)) {
+          for (const q of orientation.questions) orientation.assumptions.push(`ASSUMED: ${q.text} — answered by the run's own judgement, nobody was asked.`);
+          this.store.appendLog(runId, {
+            event: 'orientation_assumed', node: node.id, questions: orientation.questions.map(q => q.text),
+            reason: unattended ? 'unattended run' : 'one-round cap: already asked once'
+          });
+        } else if (orientation.questions.length) {
+          this.store.writeNodeOutput(runId, `${node.id}.questions`,
+            orientation.questions.map((q, i) => `${i + 1}. ${q.text}${q.why ? `\n   (why: ${q.why})` : ''}`).join('\n\n'));
+          outcome.questions = orientation.questions;
+        }
+
+        this.store.writeNodeOutput(runId, `${node.id}.stance`, JSON.stringify(orientation, null, 2));
+        this.store.writeNodeOutput(runId, `${node.id}.summary`,
+          orientSummary(orientation, prose || outText));
+        this.store.appendLog(runId, {
+          event: 'orientation', node: node.id, relation: orientation.relation,
+          confidence: orientation.confidence, assumptions: orientation.assumptions.length
+        });
+        // The workspace copy (§3.3): what makes the next run cheap. Attended
+        // runs only, never over a hand edit.
+        this.writeContextFile(runId, node, prose || outText, orientation);
       }
       if (role === 'feedback-review') {
         const templateIds = this.nodeStore ? this.nodeStore.listFull().map(t => t.id) : [];
@@ -3168,16 +3575,232 @@ export class FlowRunner {
     return {};
   }
 
-  // The Fan-out container (BRICKS P2 / D36 B5–B6): N deliberately diverged
-  // takes on ONE brief. Where the orchestrator asks a model which children to
-  // create, a fan-out already knows — the author wrote a lane list, or pointed
-  // at a model set. So there is no planning call, no contract to violate, and
-  // nothing to re-ask: the node mints one child per lane and runs them through
-  // the same scoped sub-walk every container uses (core/nodes/expand.js).
+  // The ordered model pool a PLANNED roster is staffed from (FANOUT P2).
+  // Explicit lane workers are pinned before this list is consulted; what is
+  // left is: the node's own worker, then the model-priority ranking for this
+  // kind of reading, then whatever else is active, then the configured default
+  // so a run always has something to fall back on.
+  //
+  // Deduplicated by model id, because a pool listing one model twice would let
+  // two same-preset lanes "differ" while landing on the same model.
+  lanePool(node, authored = []) {
+    const pool = [];
+    const seen = new Set();
+    const push = w => {
+      const n = normalizeLaneWorker(w);
+      if (!n || seen.has(n.model)) return;
+      seen.add(n.model);
+      pool.push(n);
+    };
+    push(node?.data?.worker);
+    // The models the author picked for THIS fan-out. A planned roster replaces
+    // their lanes, but not their judgement about which models read well here —
+    // and without them, a flow whose lanes name four models by hand would have
+    // nothing but the executor default to staff a planned roster from.
+    for (const lane of authored) push(lane.worker);
+
+    const active = (this.config.activeModels ?? []).filter(m => m && m.enabled !== false).map(m => m.id);
+    const known = new Set(active);
+    // Lanes read and report, whatever template they instantiate — so the pool
+    // is ranked as analysis work unless the node says otherwise.
+    const kind = taskKindOf({ type: 'aiStep', data: { role: 'analyze', category: node?.data?.category } });
+    const effort = node?.data?.effort ?? 'medium';
+    const order = PROVIDER_ORDER[kind]?.[effort] ?? PROVIDER_ORDER.general.medium;
+    for (const provider of order) {
+      if (!this.config.providerKeys?.[provider]) continue;
+      for (const model of providerModelsFor(provider, kind, effort, { kimiKeyKind: this.config.kimiKeyKind })) {
+        // A ranked model the user has switched off is not available to staff a
+        // lane with; the lint rule that warns about it says the same thing.
+        if (known.size && !known.has(model)) continue;
+        push({ provider, model });
+      }
+    }
+    for (const id of active) push(id);
+    push(this.config.workers?.executor);
+    return pool;
+  }
+
+  // The peek (FANOUT P3.1): one bounded read-only look at the subject, so the
+  // lane planner knows whether it is dividing up a Rust workspace or a folder
+  // of notebooks. Capped at PEEK_MAX_CALLS tool calls and a small token budget.
+  //
+  // Its grant is the INTERSECTION of the fan-out's own read-only tools with
+  // PEEK_TOOLS — never a union. A node that decides what other nodes may do
+  // must not be able to do more than they may (§6.3), and that goes double for
+  // the call that decides who they are.
+  //
+  // Total, except for a stop: no grant, or a failed call, degrades to a blind
+  // planner (which is simply P3-without-P3.1, and still better than no planner).
+  async fanoutPeek(runId, node, worker, apiKey, brief) {
+    const grant = this.aiStepTools(runId, node).filter(t => PEEK_TOOLS.includes(t.name));
+    if (!grant.length) {
+      this.store.appendLog(runId, { event: 'fanout_peek_skipped', node: node.id, reason: 'no read-only tool grant to look with' });
+      return null;
+    }
+    const target = { ...worker };
+    if (target.provider !== 'mock' && target.provider !== 'anthropic') {
+      target.supportsTools = supportsToolsFor(target, this.config);
+    }
+    try {
+      const res = await this.trackedRunAgent(runId, node.id, {
+        ...target, apiKey, system: PEEK_SYSTEM, prompt: brief,
+        maxTokens: PEEK_MAX_TOKENS, maxIterations: PEEK_MAX_CALLS,
+        onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
+      }, grant, subjectOf(node));
+      const text = String(res.text ?? '').trim();
+      this.store.appendLog(runId, {
+        event: 'fanout_peek', node: node.id,
+        tools: grant.map(t => t.name), calls: res.toolCalls?.length ?? 0
+      });
+      if (text) this.store.writeNodeOutput(runId, `${node.id}.peek`, text);
+      return text || null;
+    } catch (err) {
+      if (isAbortError(err) || this.stopRequests.has(runId)) {
+        throw isAbortError(err) ? err : abortError(`Fan-out ${node.id} stopped`);
+      }
+      this.store.appendLog(runId, { event: 'fanout_peek_skipped', node: node.id, reason: String(err?.message ?? err) });
+      return null;
+    }
+  }
+
+  // The orientation an upstream `orient` node settled, or null (D38 P6).
+  //
+  // The fan-out's own planner used to invent a mission, a focus and an ignore
+  // list from the prompt alone. When a node that has actually read BOTH
+  // repositories has already decided them, re-deriving them is a duplicated
+  // inference with worse evidence — so the planner inherits them and its job
+  // narrows to choosing a roster, which is the part it is uniquely placed to do.
+  orientationFor(runId, flow, node) {
+    for (const e of forwardEdges(flow.edges)) {
+      if (e.target !== node.id) continue;
+      const src = flow.nodes.find(n => n.id === e.source);
+      if (src?.data?.role !== 'orient') continue;
+      const raw = this.store.readNodeOutput(runId, `${src.id}.stance`);
+      if (!raw) continue;
+      try {
+        const stance = JSON.parse(raw);
+        if (!stance?.relation) continue;
+        return { ...stance, node: src.id, summary: this.store.readNodeOutput(runId, `${src.id}.summary`) ?? '' };
+      } catch { /* an unparseable sidecar is no orientation at all */ }
+    }
+    return null;
+  }
+
+  // The planning call (FANOUT P3.2–P3.4). Returns { plan, pool, reason } —
+  // `plan` null when the roster could not be planned, with `reason` saying why
+  // so `.brief.md` can be honest about running the authored fallback.
+  async planLanes(runId, flow, node, opts, authored) {
+    const worker = resolveCallTarget(resolveWorker(node, this.config), this.config);
+    const apiKey = worker.apiKey;
+    const minLanes = Math.max(1, Math.floor(Number(node.data?.minLanes ?? DEFAULT_MIN_LANES) || DEFAULT_MIN_LANES));
+    const maxLanes = Math.max(minLanes, Math.floor(Number(node.data?.maxLanes ?? DEFAULT_MAX_LANES) || DEFAULT_MAX_LANES));
+    const pool = this.lanePool(node, authored);
+
+    const goal = node.data?.goal?.trim() ?? '';
+    const parts = this.upstreamContext(runId, flow, node, opts.taskIdByNode);
+    const orientation = this.orientationFor(runId, flow, node);
+    const brief = [
+      `USER PROMPT:\n${this.store.readPrompt(runId)}`,
+      goal ? `THIS FAN-OUT'S GOAL:\n${goal}` : '',
+      orientation ? [
+        `THE ORIENTATION (settled by an upstream node that read BOTH this project and the subject):`,
+        `- relation to the subject: ${orientation.relation} (confidence: ${orientation.confidence})`,
+        orientation.mission ? `- mission: ${orientation.mission}` : '',
+        orientation.focus?.length ? `- focus: ${orientation.focus.join('; ')}` : '',
+        orientation.ignore?.length ? `- low priority: ${orientation.ignore.join('; ')}` : '',
+        orientation.summary ? `\n${orientation.summary}` : ''
+      ].filter(Boolean).join('\n') : '',
+      parts.length ? `WHAT FEEDS THIS NODE:\n${parts.join('\n\n')}` : ''
+    ].filter(Boolean).join('\n\n');
+
+    const peek = await this.fanoutPeek(runId, node, worker, apiKey, brief);
+
+    const userMsg = [
+      brief,
+      peek ? `A QUICK LOOK AT THE SUBJECT (one bounded read-only pass — shape only, not a reading):\n${peek}` : '',
+      `THE ROSTER THE AUTHOR WROTE (${authored.length}) — the fallback if you fail, and a hint at what they had in mind:\n`
+        + authored.map(l => `- ${l.id} · ${l.preset ?? 'no preset'}${l.intent ? ` — ${l.intent}` : ''}`).join('\n'),
+      pool.length
+        ? `MODELS AVAILABLE TO STAFF LANES (${pool.length}), in preference order:\n${pool.map(p => `- ${p.model}`).join('\n')}`
+        : '',
+      orientation
+        ? 'THE MISSION IS ALREADY SETTLED. Reuse the orientation\'s mission, focus and low-priority list '
+          + 'verbatim — a node that read both repositories decided them and you have not. Your job is the '
+          + 'ROSTER: which readers this relation calls for, and how many.'
+        : '',
+      `LANE BUDGET: declare between ${minLanes} and ${maxLanes} lanes (inclusive). `
+        + `Two lanes sharing a preset are staffed on DIFFERENT models, and ${pool.length} model(s) are available — `
+        + 'a roster that asks for more copies of one preset than there are models is truncated, not doubled up.'
+    ].filter(Boolean).join('\n\n');
+
+    const onText = this.streamInto(runId, t => this.store.writeNodeOutput(runId, `${node.id}.brief`, t));
+    let outText;
+    try {
+      const result = await this.trackedCallModel(runId, {
+        ...worker, apiKey, system: LANE_PLAN_SYSTEM, prompt: userMsg, onText,
+        ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
+        onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
+      });
+      outText = String(result.text ?? '').trim();
+    } catch (err) {
+      // A stop unwinds the walk; anything else degrades to the authored roster
+      // (P3.7). A fan-out that cannot reach its planner should still read the
+      // repo — same posture as workspaceFor().
+      if (isAbortError(err) || this.stopRequests.has(runId)) {
+        throw isAbortError(err) ? err : abortError(`Fan-out ${node.id} stopped`);
+      }
+      return { plan: null, pool, reason: `the planning call failed (${String(err?.message ?? err)})` };
+    }
+
+    const bounds = { presetIds: LANE_PRESET_IDS, minLanes, maxLanes };
+    let parsed = parseLanePlan(outText, bounds);
+    if (!parsed.ok) {
+      const fixed = await this.reAsk(runId, node, worker, apiKey, LANE_PLAN_SYSTEM, userMsg, outText, parsed.errors);
+      if (fixed != null) {
+        const reparsed = parseLanePlan(fixed, bounds);
+        if (reparsed.ok) parsed = reparsed;
+      }
+    }
+    if (!parsed.ok) {
+      this.store.appendLog(runId, { event: 'fanout_plan_failed', node: node.id, errors: parsed.errors });
+      return { plan: null, pool, reason: 'the planner\'s roster violated the lane contract twice' };
+    }
+    // The orientation WINS on mission/focus/ignore (D38 P6). The planner is
+    // told to reuse them, but told is not the same as bound: an inherited
+    // mission that drifts through a re-ask is the duplicated inference coming
+    // back, and the node that read both repositories is the better authority.
+    const plan = orientation
+      ? {
+        ...parsed.plan,
+        mission: orientation.mission || parsed.plan.mission,
+        focus: orientation.focus?.length ? orientation.focus : parsed.plan.focus,
+        ignore: orientation.ignore?.length ? orientation.ignore : parsed.plan.ignore,
+        relation: orientation.relation
+      }
+      : parsed.plan;
+    this.store.appendLog(runId, {
+      event: 'fanout_planned', node: node.id, mission: plan.mission,
+      ...(orientation ? { inheritedFrom: orientation.node, relation: orientation.relation } : {}),
+      lanes: plan.lanes.map(l => ({ id: l.id, preset: l.preset }))
+    });
+    return { plan, pool, reason: '' };
+  }
+
+  // The Fan-out container (BRICKS P2 / D36 B5–B6, planning added by D37): N
+  // deliberately diverged takes on ONE brief.
+  //
+  // The author writes a lane list, or points at a model set, and by default
+  // exactly that runs — no planning call, nothing to re-ask. Under `plan: auto`
+  // the node first peeks at the subject and asks a model which of the FIXED
+  // presets should be on this particular brief, and how many (D37). What keeps
+  // that safe is the enum: the planner selects and duplicates presets, it never
+  // writes what a lane is, so nothing it can say turns the adversarial read
+  // into a flattering one.
   //
   // Every lane is told who its siblings are and asked for at least one finding
   // none of them can reach. No lane ever sees another's OUTPUT — that would
-  // collapse the divergence the whole node exists to produce (B6).
+  // collapse the divergence the whole node exists to produce (B6), and it is
+  // the one part of D36 that planning does not touch.
   async runFanout(runId, flow, node, opts) {
     this.store.appendLog(runId, { event: 'node_start', node: node.id, type: 'fanout' });
 
@@ -3194,13 +3817,16 @@ export class FlowRunner {
       return new Error(`Fan-out ${node.id} failed: ${msg}`);
     };
 
-    const lanes = resolveLanes(node, {
+    // The authored roster: what runs by default, and the fallback a planning
+    // failure lands on (P3.7). Never discarded, only possibly replaced.
+    const authored = resolveLanes(node, {
       modelSets: this.config.modelSets ?? {},
       activeModels: this.config.activeModels ?? null
     });
-    if (!lanes.length) {
+    if (!authored.length) {
       throw failNode('no lanes — declare "lanes:", or point "modelSet:" at a set with active members');
     }
+    let lanes = authored;
 
     // Resume: children materialized on a previous pass are reused, matched
     // back to their lanes by the laneId stamped on them.
@@ -3208,14 +3834,98 @@ export class FlowRunner {
     const laneOf = new Map();
 
     if (children.length) {
-      for (const c of children) {
-        const lane = lanes.find(l => l.id === c.data?.laneId);
-        if (lane) laneOf.set(c.id, lane);
-      }
+      // A resumed run re-plans zero times and re-peeks zero times: the roster
+      // that ran is reconstructed from the children themselves, because under
+      // `plan: auto` the authored list is not the list that ran and matching
+      // against it would mislabel every lane in the aggregate.
+      lanes = children.map(c => {
+        const laneId = c.data?.laneId ?? c.id;
+        // The child's own stamps first, the authored lane only as backfill —
+        // for a run materialized before those stamps existed, and for the
+        // fields a child does not carry.
+        const known = authored.find(l => l.id === laneId) ?? null;
+        const preset = c.data?.lanePreset ?? known?.preset ?? null;
+        const lane = {
+          id: laneId,
+          label: c.data?.title?.trim() || known?.label || laneId,
+          intent: c.data?.laneIntent ?? known?.intent ?? '',
+          instructions: known?.instructions ?? '',
+          worker: normalizeLaneWorker(c.data?.worker) ?? known?.worker ?? null,
+          template: known?.template ?? null,
+          tools: known?.tools ?? null,
+          ...(preset ? { preset } : {})
+        };
+        laneOf.set(c.id, lane);
+        return lane;
+      });
       ensureChildStatuses(this.store, runId, children);
       this.store.appendLog(runId, { event: 'node_resume', node: node.id, type: 'fanout', children: children.length });
     } else {
       const goal = node.data?.goal?.trim() ?? '';
+      // The repository the lanes are pointed at, when a repo input feeds this
+      // node: it buys every lane the addressing block (HOME-CONTEXT P1.1).
+      const subjectRepo = node.data?.subjectRepo ? String(node.data.subjectRepo) : '';
+
+      // A `system:` on the fan-out node itself is the author writing the shared
+      // preamble by hand: it wins outright and skips both the peek and the
+      // planning call (P3.8). Until now this key was legal on a fanout and read
+      // by nothing — it lint-cleaned and did nothing at all.
+      const authorSystem = typeof node.data?.system === 'string' && node.data.system.trim()
+        ? node.data.system.trim() : '';
+      const planMode = String(node.data?.plan ?? 'off').trim().toLowerCase();
+
+      if (planMode === 'auto' && authorSystem) {
+        this.store.appendLog(runId, {
+          event: 'fanout_plan_inert', node: node.id,
+          reason: 'a system prompt written on the node wins over the planner'
+        });
+      }
+
+      if (planMode === 'auto' && !authorSystem) {
+        const { plan, pool, reason } = await this.planLanes(runId, flow, node, opts, authored);
+        let staffed = null;
+        if (plan) {
+          const roster = uniqueLaneIds(plan.lanes.map((l, i) => ({ ...normalizeLane(l, i), reason: l.reason ?? '' })));
+          const assigned = assignWorkers(roster, pool);
+          for (const d of assigned.dropped) {
+            // Truncating and saying so beats three correlated reads sold as
+            // coverage — the failure this node exists to prevent (P2).
+            this.store.appendLog(runId, { event: 'fanout_lane_unstaffed', node: node.id, lane: d.id, preset: d.preset, reason: d.reason });
+          }
+          if (assigned.lanes.length) staffed = assigned.lanes;
+          else this.store.appendLog(runId, { event: 'fanout_plan_failed', node: node.id, errors: ['every planned lane went unstaffed'] });
+        }
+        if (staffed) {
+          lanes = applyPreamble(staffed, sharedPreamble({
+            mission: plan.mission, subject: plan.subject, count: staffed.length,
+            focus: plan.focus, ignore: plan.ignore, subjectRepo
+          }));
+          this.store.writeNodeOutput(runId, `${node.id}.brief`,
+            renderBrief({ ...plan, lanes }));
+        } else {
+          // P3.7: degrade, never fail. The authored lanes run on a mission
+          // derived mechanically from the goal — or, better, on the one an
+          // upstream orientation already settled, which survives a planner
+          // failure because it was decided before the planner ran (D38 P6).
+          const settled = this.orientationFor(runId, flow, node);
+          const mission = settled?.mission || `answer: ${goal || this.store.readPrompt(runId) || 'the brief above'}`;
+          const fallbackReason = plan ? 'no planned lane could be staffed with a model of its own' : reason;
+          const subject = subjectRepo ? `the repository \`reference:${subjectRepo}\`` : 'the subject of this brief';
+          lanes = applyPreamble(authored, sharedPreamble({
+            mission, subject, count: authored.length, subjectRepo,
+            focus: settled?.focus ?? [], ignore: settled?.ignore ?? []
+          }));
+          this.store.writeNodeOutput(runId, `${node.id}.brief`, renderBrief(
+            {
+              mission, subject, focus: settled?.focus ?? [], ignore: settled?.ignore ?? [],
+              ...(settled?.relation ? { relation: settled.relation } : {}), lanes
+            },
+            { fallback: true, reason: fallbackReason }));
+        }
+      } else if (authorSystem) {
+        lanes = applyPreamble(authored, authorSystem);
+      }
+
       const created = [];
       const errors = [];
       for (const lane of lanes) {
@@ -3231,6 +3941,12 @@ export class FlowRunner {
           title: lane.label,
           goal,
           instructions: laneBrief(lane, lanes, { goal }),
+          // The lane's ROLE prompt (FANOUT §1): the shared preamble plus the
+          // preset's fixed text. It replaces DEFAULT_SYSTEM[role], which is the
+          // point — one report format imposed on every lane is why four lanes
+          // used to come back reading alike. A lane with neither a preset nor a
+          // system of its own carries none, and falls through as it always did.
+          ...(lane.system ? { system: lane.system } : {}),
           ...(lane.worker ? { worker: lane.worker } : node.data?.worker ? { worker: node.data.worker } : {}),
           // A lane with no grant of its own inherits the fan-out's, the same
           // way it inherits its template. Without this an aiStep lane gets NO
@@ -3248,6 +3964,14 @@ export class FlowRunner {
         child.data = {
           ...child.data,
           laneId: lane.id,
+          // A lane inherits the subject the fan-out was pointed at, so its own
+          // tool calls are scoped and audited the same way (HOME-CONTEXT P1).
+          ...(subjectRepo ? { subjectRepo } : {}),
+          // Stamped so a resumed run can rebuild the roster from its children
+          // without re-planning: under `plan: auto` the authored lane list is
+          // not the list that ran.
+          ...(lane.preset ? { lanePreset: lane.preset } : {}),
+          ...(lane.intent ? { laneIntent: lane.intent } : {}),
           generatedBy: node.id,
           managedBy: node.id,
           requiresApproval: false,
@@ -3606,8 +4330,9 @@ export class FlowRunner {
       // The library path passes the whole override map through resolveInstance;
       // this fallback used to forward a fixed subset, which quietly dropped
       // exactly the three fields a fan-out lane is made of (D36 P2.1). Both
-      // paths now carry the same set.
-      instructions, worker, tools
+      // paths now carry the same set — `system` joined them for the same
+      // reason (FANOUT P1.3): a lane's role prompt IS the lane.
+      instructions, worker, tools, system
     } = overrides;
     return createNodeFromTemplate(templateId, {
       id,
@@ -3623,6 +4348,7 @@ export class FlowRunner {
         ...(instructions ? { instructions } : {}),
         ...(worker ? { worker } : {}),
         ...(tools ? { tools } : {}),
+        ...(typeof system === 'string' && system.trim() ? { system } : {}),
         ...(requiresApproval != null ? { requiresApproval } : {})
       }
     });

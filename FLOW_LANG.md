@@ -81,8 +81,9 @@ Declare an input explicitly only to attach default `text:` to it.
 ### Fan-out lanes (`type: fanout`)
 
 A fan-out runs **N deliberately different takes on ONE brief**, each in its own
-node inside the box. Its children come from a lane list you wrote — not from a
-model's plan — so it needs no planning call and has no contract to violate.
+node inside the box. By default its children come from a lane list you wrote, so
+it needs no planning call and has no contract to violate; `plan: auto` (below)
+lets it choose the roster from the brief instead.
 
 ```yaml
 nodes:
@@ -102,9 +103,11 @@ nodes:
 ```
 
 Lane fields: `id`, `label`, `intent` (one line, shown to the OTHER lanes),
-`preset` (`standard` | `wildcard` | `adversarial` | `contrarian`),
-`instructions`, `worker`, `template`, `tools`. Everything is optional — an id
-is derived from the label, then the preset, then the position.
+`preset` (`standard` | `architecture` | `wildcard` | `adversarial` |
+`contrarian`), `instructions`, `system` (this lane's role prompt, composed after
+the preset's), `emphasis` (at most one sentence narrowing the lane inside its
+preset), `worker`, `template`, `tools`. Everything is optional — an id is
+derived from the label, then the preset, then the position.
 
 Instead of (or as well as) `lanes:`, point the node at a named model set with
 `modelSet: <setId>` (Settings → Models → Model sets) and it mints **one lane
@@ -116,8 +119,27 @@ labels + intents of its siblings, with the instruction to surface at least one
 finding no other lane is positioned to reach. **Lane outputs never cross** —
 sharing them would collapse the divergence the node exists to produce.
 
-Ports: `results` (primary, one labelled section per lane) and `lanes` (the
-roster: label, id, model, intent).
+**Planning the roster (`plan: auto`, D37).** Off by default. Set it and the node
+takes one bounded read-only look at the subject, then asks a model which lanes
+*this* brief needs — repeating a preset where the brief calls for it (three
+architecture readers when the question is structural) and dropping one it does
+not. The planner picks from the preset list and cannot write what a lane is.
+
+```yaml
+    plan: auto        # 'auto' | 'off' (default)
+    minLanes: 2       # default 2
+    maxLanes: 6       # default 6
+```
+
+Your authored `lanes:` stay as the fallback — a planner that fails runs them
+instead, so deleting them turns a degraded run into a failed one. Two lanes of
+the same preset are always staffed on different models; when the models run out
+the roster is truncated rather than doubled up. A `system:` on the fan-out node
+is the shared preamble written by hand: it wins outright and skips the planner.
+
+Ports: `results` (primary, one labelled section per lane), `lanes` (the roster:
+label, id, model, intent), and — under `plan: auto` — `brief` (why these lanes
+ran) and `peek` (what the planner looked at).
 
 ### Typed run inputs (`inputs:`)
 
@@ -159,8 +181,45 @@ beats a URL they cannot fetch. Nodes fed directly by a repo port are granted
 may hold anyway), because a node handed a repository and no way to open it is
 just a node holding a string.
 
+Such a node is also **stamped with the subject** (`subjectRepo`, D38), which is
+what scopes its `search_references` to that one repository, gives a fan-out's
+lanes their addressing block, and makes a read of this project's own workspace
+show up in the log as `tool_target_unexpected` instead of passing for a finding
+about the subject. `repo: "*"` on a search opts out of the scoping.
+
 A flow with no `inputs:` block is unchanged in every respect; the implicit
 `input` node stays exactly as it is.
+
+### Orientation (`use: orient`)
+
+A flow that reads someone else's repository produces work for **the workspace you
+are standing in**, and nothing else in the flow establishes what that workspace
+is. The `orient` template (D38) runs first and cheaply, and says what this
+project is and how it relates to the subject — `empty`, `similar`, `adjacent` or
+`unrelated`. The same repository read against those four stances should produce
+four different backlogs.
+
+```yaml
+nodes:
+  orient:
+    use: orient
+    title: Where are we standing?
+flow:
+  - inputs.repo -> orient
+  - orient.summary -> read      # ≤120 words, safe for every lane
+  - orient -> plan              # the whole picture, for the roster and the backlog
+```
+
+Ports: `context` (primary), `summary` (capped at 120 words **in code**, because
+it reaches every lane of a fan-out and a detailed shared prior collapses the
+divergence a fan-out exists to produce), `stance` (JSON) and `questions`.
+
+It may park the run at the `awaiting_input` gate exactly as the prompt refiner
+does, under the same discipline and the same one-round cap — and never on an
+unattended run, where the questions become recorded `ASSUMED:` assumptions
+instead. On an attended run it also writes `.flyt/context.md` in the project:
+stamped, re-surveyed when HEAD moves or the subject changes, and **never**
+overwritten once you have edited it by hand.
 
 ### The loop node (`type: loop`)
 
@@ -355,6 +414,7 @@ scalars, or multi-document files — the linter reports these as parse errors.
 | `fanout-lanes` | error/warning | a fan-out with no lanes or an unknown `modelSet` (error); duplicate lane ids (warning) |
 | `fanout-worker` | warning | no lane names a model (N copies, not a fan-out), or a lane names a model that is not active |
 | `fanout-template` | error | a lane or node `template:` that is not in the Node Library |
+| `fanout-plan` | error/warning | `minLanes > maxLanes` (error); `plan: auto` with no goal and nothing wired in, or made inert by a node-level `system:` (warning) |
 | `unknown-flow` | error | `flow:` references a flow that does not exist |
 | `flow-cycle` | error | a flow contains itself, directly or through another flow |
 | `flow-depth` | error | containment nests deeper than 3 (sub-flows, orchestrators and fan-outs all count) |

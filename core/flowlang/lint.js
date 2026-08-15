@@ -346,6 +346,37 @@ export function lintFlow(flow, { templates = null, rules = null, library = null,
       }
     }
 
+    // --- the lane planner (FANOUT P4) ---------------------------------------
+    if (on('fanout-plan')) {
+      const planAuto = String(d.plan ?? 'off').trim().toLowerCase() === 'auto';
+      const min = d.minLanes == null ? null : Number(d.minLanes);
+      const max = d.maxLanes == null ? null : Number(d.maxLanes);
+      if (min != null && max != null && Number.isFinite(min) && Number.isFinite(max) && min > max) {
+        out.push(finding('fanout-plan', 'error',
+          `node "${n.id}": minLanes (${min}) is greater than maxLanes (${max}) — no roster can satisfy that budget`,
+          { nodeId: n.id }));
+      }
+      if (planAuto) {
+        // The planner reads the brief. A node with neither a goal nor anything
+        // feeding it has no brief to read, so it will plan from the run prompt
+        // alone — legal, but almost never what the author meant.
+        const fed = (flow.edges ?? []).some(e => e.target === n.id && !isFeedbackEdge(e));
+        if (!d.goal?.trim() && !fed) {
+          out.push(finding('fanout-plan', 'warning',
+            `node "${n.id}": "plan: auto" with no goal and nothing wired in — the planner has only the run prompt to choose a roster from`,
+            { nodeId: n.id }));
+        }
+        // P3.8: a system prompt on the node IS the shared preamble, written by
+        // hand. It wins outright, which means the planner never runs — worth
+        // saying out loud, because both keys look active in the file.
+        if (typeof d.system === 'string' && d.system.trim()) {
+          out.push(finding('fanout-plan', 'warning',
+            `node "${n.id}": "system:" on the node wins over "plan: auto" — the peek and the planning call are skipped, and this text is the shared preamble`,
+            { nodeId: n.id }));
+        }
+      }
+    }
+
     if (on('fanout-template') && tplById) {
       for (const id of new Set([d.template, ...lanes.map(l => l.template)].filter(Boolean))) {
         if (!tplById.has(id)) {

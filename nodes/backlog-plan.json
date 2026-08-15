@@ -10,7 +10,7 @@
   "evalType": "step",
   "worker": null,
   "instructions": "",
-  "tools": null,
+  "tools": ["glob", "read_file"],
   "skills": [],
   "requiresApproval": true,
   "approveToolCalls": false,
