@@ -164,7 +164,12 @@ export const TYPE_PORTS = {
   ],
   fanout: [
     { id: 'results', label: 'results', description: 'Every lane\'s output, one labelled section per lane.' },
-    { id: 'lanes', label: 'lanes', description: 'The lane roster: label, id, model and intent for each lane that ran.' }
+    { id: 'lanes', label: 'lanes', description: 'The lane roster: label, id, model and intent for each lane that ran.' },
+    // Written only under `plan: auto` (FANOUT P3.6). Both are empty on a
+    // fan-out that runs its authored roster, the same way an orchestrator's
+    // `summary` port is empty until it has planned.
+    { id: 'brief', label: 'brief', description: 'Why these lanes: the mission, what was treated as central, and each lane\'s reason for existing.' },
+    { id: 'peek', label: 'peek', description: 'The bounded read-only look at the subject that the lane planner read before choosing the roster.' }
   ],
   output: []
 };

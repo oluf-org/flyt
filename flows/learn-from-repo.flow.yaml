@@ -2,8 +2,9 @@ version: 1
 id: learn-from-repo
 name: Learn from a repo
 description: |
-  Point it at any repository and a question. Four models read it in parallel,
-  each told to look somewhere the others will not, their findings are merged,
+  Point it at any repository and a question. The fan-out reads the brief, picks
+  how many readers it needs and what each one is for, then runs them in parallel
+  — each told to look somewhere the others will not. Their findings are merged,
   and the result becomes queued work the loop can pick up.
 
 inputs:
@@ -20,7 +21,7 @@ inputs:
 nodes:
   read:
     type: fanout
-    title: Read it four ways
+    title: Read it, however many ways it takes
     goal: |
       Read the repository you have been given and answer the question in the
       brief. Ground every claim in a file and a line you actually opened:
@@ -30,17 +31,20 @@ nodes:
     lanes:
       - { id: architecture, label: Architecture, intent: "how the thing is put together, and why", preset: standard, worker: google/gemini-2.5-flash }
       - { id: wildcard, preset: wildcard, worker: deepseek/deepseek-v4-flash }
-      - { id: adversarial, preset: adversarial, worker: moonshotai/kimi-k2.6 }
+      - { id: adversarial, preset: standard, worker: { provider: auto, model: moonshotai/kimi-k3 } }
       - { id: contrarian, preset: contrarian, worker: z-ai/glm-4.7 }
+    maxLanes: 6
+    plan: auto
     template: general-analysis
   synthesise:
     use: combine
-    title: Merge the four reads
+    title: Merge the reads
     instructions: |
-      Four independent readings of one repository follow, each with a different
-      slant. Merge them into one account: what is agreed, what only one lane
-      saw, and what they contradict each other about. Keep the citations. Where
-      two lanes disagree, say so rather than picking a winner silently.
+      Several independent readings of one repository follow, each with a
+      different slant. Merge them into one account: what is agreed, what only
+      one lane saw, and what they contradict each other about. Keep the
+      citations. Where two lanes disagree, say so rather than picking a winner
+      silently.
     worker: { provider: openrouter, model: openai/gpt-5-mini }
   plan:
     use: backlog-plan
@@ -63,3 +67,4 @@ flow:
   - synthesise -> plan
   - plan.tasks -> work
   - work -> output
+  - input -> inputs

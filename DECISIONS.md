@@ -286,6 +286,68 @@ task it queued. Open items Q-B1–Q-B5 in that plan's §5.
 
 ---
 
+### D37 — The fan-out reads the brief before it picks its lanes
+
+**Context.** D36 point 4 gave the fan-out its defining property: the author writes the lane
+list, so nothing a model says can change what runs. In practice the roster is therefore fixed
+at authoring time. `learn-from-repo` declares four lanes and runs exactly those four whatever
+the user asked for — so *"focus entirely on how it handles retries, ignore style"* still gets
+four readers, three of them pointed somewhere the user explicitly did not care about. The
+fixed roster is not neutral; it is a guess made before the question was asked.
+
+**Decision.**
+1. **A fan-out may make one planning call, behind `plan: auto`.** It peeks at the subject with
+   read-only tools, writes the shared preamble every lane opens with, picks the roster, and
+   extracts focus/ignore from the intent of the prompt rather than from dedicated fields. Off
+   by default: every existing flow behaves identically until its author asks for this.
+2. **The enum is the mitigation, and it is the whole of it.** This reverses part of D36's "no
+   planning call", so what mattered about that property has to be preserved another way. The
+   planner **selects and duplicates** from `LANE_PRESETS`; it never authors a lane. Repeating a
+   preset is legal — that is how "focus entirely on architecture" becomes three architecture
+   readers — but a model that can pick lanes and not define them cannot turn the adversarial
+   read into a flattering one. An unknown preset is a hard rejection, never a coerced
+   near-match. **D36 point 4 survives untouched: lane outputs still never cross.**
+3. **`ignore` is advisory and nothing more.** It reaches the preamble as "do not spend effort
+   here unless it is load-bearing for something they did ask for"; no lane is dropped for
+   colliding with it and no finding is filtered against it. "Don't focus on X" is a statement
+   about attention, not about relevance — a user who says *"ignore syntax errors"* still wants
+   to hear it when a syntax error is why the build is broken. Hard enforcement turns a hint
+   into a blindfold, and the failure is silent, because nobody ever sees the finding that was
+   suppressed.
+4. **Two lanes sharing a preset never share a model; when the pool runs dry the roster is
+   truncated.** Three identical role prompts on one model is three correlated reads sold as
+   coverage — precisely the failure this node exists to prevent — so shipping them silently is
+   worse than running two lanes and logging the drop. Lanes of *different* presets may share a
+   model freely: the preset is doing the diverging there.
+5. **A preset owns its output shape.** Each of the five now carries a `system` role prompt as
+   well as its `instructions`. `DEFAULT_SYSTEM.analyze` otherwise imposed one report format on
+   every lane, which is the single biggest reason four lanes came back reading alike. The
+   generated preamble owns *mission and scope*; the preset owns *method and output shape*.
+6. **Degrade, never fail.** A failed peek plans blind; a failed or unparseable plan runs the
+   **authored** roster on a mission derived mechanically from the goal, and `.brief.md` says
+   so. Same posture as `workspaceFor()`: a missing capability degrades a run, it does not kill
+   it. A fan-out that cannot reach its planner should still read the repo.
+7. **A `system:` on the fan-out node wins outright** and skips both the peek and the planning
+   call — the author writing the shared preamble by hand. This also closes a silent no-op: the
+   key was already legal on a fanout and read by nothing.
+
+**Cost.** One small peek (≤6 tool calls) plus one planning call against N full lane reads:
+roughly 10–15% at four lanes, less as the roster grows. The first time it runs four lanes where
+the author would have written six, it has paid for itself.
+
+**What this changes elsewhere.** `FLOW_NODES.md` §7b is rewritten, not appended to — the "no
+planning call" paragraph was the node's stated defining property. `FLOW_LANG.md` gains `plan`,
+`minLanes`, `maxLanes` on the node, `system` and `emphasis` on a lane, a fifth preset
+(`architecture`), and the `fanout-plan` lint rule. Two new ports, `brief` and `peek`.
+
+**Status.** Decided and **implemented** (`plan: auto` on `learn-from-repo`). Open: whether the
+peek's output should reach the lanes as well as the planner (leaning no — it is one model's
+summary, and seeding every lane with it is exactly the shared prior this node exists to avoid);
+whether `plan: auto` should become the default for new fan-outs; and a `plan: once` mode that
+writes the planned roster back into the `.flow.yaml` as an authoring aid.
+
+---
+
 ## Open questions (consolidated)
 
 **Product (from `PRODUCT-SPEC.md` §10):**

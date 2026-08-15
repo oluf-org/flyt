@@ -192,7 +192,12 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
   let transcript = prompt;
   let lastText = '';
 
-  for (let i = 0; i < MAX_ITERATIONS; i++) {
+  // Honours a caller's own cap the way nativeLoop does. It did not, which made
+  // `maxIterations` mean "8" on every text-protocol provider — silently, since
+  // the loop still terminated. A caller that budgets itself (the fan-out peek,
+  // FANOUT P3.1) needs the bound to hold on both protocols.
+  const rounds = Math.max(1, Number(maxIterations ?? MAX_ITERATIONS));
+  for (let i = 0; i < rounds; i++) {
     const res = await callModel({ ...worker, apiKey, system: fullSystem, prompt: transcript, onText, onRetry, retry, timeout, signal });
     usage = addUsage(usage, res.usage);
     lastText = res.text;

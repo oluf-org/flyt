@@ -1,7 +1,7 @@
 // Unit tests for the strict structured-output parsers (core/planEval.js).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractJson, parsePlanEval, parseStepEvalVerdict, parseStitchDirectives } from '../core/planEval.js';
+import { extractJson, parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseLanePlan } from '../core/planEval.js';
 
 const validNode = {
   id: 'gen-a',
@@ -145,4 +145,106 @@ test('parsePlanEval does not police the category of a user-defined template', ()
     nodes: [{ id: 'n1', template: 'my-own-step', category: 'Code general', goal: 'g' }]
   }) + '\n```';
   assert.equal(parsePlanEval(doc, ['my-own-step']).ok, true);
+});
+
+// --- the fan-out lane plan (FANOUT P3.3 / D37) ------------------------------
+
+const PRESETS = ['standard', 'architecture', 'wildcard', 'adversarial', 'contrarian'];
+const lanePlan = (over = {}) => wrap({
+  mission: 'explain how this repository recovers from a failed task.',
+  subject: 'the repository',
+  focus: ['the retry path'],
+  ignore: ['code style'],
+  lanes: [
+    { preset: 'architecture', id: 'arch-control', label: 'Architecture — control flow', intent: 'how retries are wired', reason: 'the brief is structural' },
+    { preset: 'adversarial', id: 'attack', label: 'Adversarial', intent: 'where it breaks' }
+  ],
+  ...over
+});
+
+test('parseLanePlan: a well-formed roster survives, focus and ignore included', () => {
+  const r = parseLanePlan(lanePlan(), { presetIds: PRESETS });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.equal(r.plan.mission, 'explain how this repository recovers from a failed task.');
+  assert.equal(r.plan.subject, 'the repository');
+  assert.deepEqual(r.plan.focus, ['the retry path']);
+  assert.deepEqual(r.plan.ignore, ['code style']);
+  assert.deepEqual(r.plan.lanes.map(l => l.preset), ['architecture', 'adversarial']);
+  assert.equal(r.plan.lanes[0].reason, 'the brief is structural');
+});
+
+test('parseLanePlan: repeating a preset is legal — that is how "focus entirely on X" works', () => {
+  const r = parseLanePlan(lanePlan({
+    lanes: [
+      { preset: 'architecture', id: 'a1', label: 'Arch — the data path', intent: 'x' },
+      { preset: 'architecture', id: 'a2', label: 'Arch — the control path', intent: 'y' },
+      { preset: 'architecture', id: 'a3', label: 'Arch — the boundaries', intent: 'z' }
+    ]
+  }), { presetIds: PRESETS });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.equal(r.plan.lanes.length, 3);
+});
+
+test('parseLanePlan: an invented preset is rejected, never coerced to a near-match', () => {
+  // The enum IS the mitigation for letting a model shape the roster at all: it
+  // selects and duplicates presets, it never writes what a lane is.
+  const r = parseLanePlan(lanePlan({
+    lanes: [{ preset: 'flattering', id: 'nice', label: 'Nice' }, { preset: 'standard', id: 's', label: 'S' }]
+  }), { presetIds: PRESETS });
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.some(e => /lanes\[0\]\.preset: required, one of/.test(e)));
+});
+
+test('parseLanePlan: the budget is checked on lanes that actually survived', () => {
+  const under = parseLanePlan(lanePlan({ lanes: [{ preset: 'standard', id: 'a', label: 'A' }] }),
+    { presetIds: PRESETS, minLanes: 2, maxLanes: 6 });
+  assert.equal(under.ok, false);
+  assert.ok(under.errors.some(e => /declared 1 valid lane\(s\); this fan-out's budget is 2-6/.test(e)));
+
+  const over = parseLanePlan(lanePlan({
+    lanes: Array.from({ length: 7 }, (_, i) => ({ preset: 'standard', id: `l${i}`, label: `L${i}` }))
+  }), { presetIds: PRESETS, minLanes: 2, maxLanes: 6 });
+  assert.equal(over.ok, false);
+  assert.ok(over.errors.some(e => /declared 7 valid lane\(s\)/.test(e)));
+});
+
+test('parseLanePlan: a missing focus or ignore is an empty array, not an error', () => {
+  const r = parseLanePlan(wrap({
+    mission: 'read it.', subject: 'the codebase',
+    lanes: [{ preset: 'standard', id: 'a', label: 'A' }, { preset: 'wildcard', id: 'b', label: 'B' }]
+  }), { presetIds: PRESETS });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(r.plan.focus, []);
+  assert.deepEqual(r.plan.ignore, []);
+});
+
+test('parseLanePlan: mission must exist and be one sentence', () => {
+  assert.equal(parseLanePlan(lanePlan({ mission: '' }), { presetIds: PRESETS }).ok, false);
+  const two = parseLanePlan(lanePlan({ mission: 'Read it. Then judge it.' }), { presetIds: PRESETS });
+  assert.equal(two.ok, false);
+  assert.ok(two.errors.some(e => /mission: exactly one sentence/.test(e)),
+    'the second sentence is invariably the planner starting to write lane instructions');
+});
+
+test('parseLanePlan: duplicate ids and over-long emphasis are rejected', () => {
+  const dupe = parseLanePlan(lanePlan({
+    lanes: [{ preset: 'standard', id: 'same', label: 'A' }, { preset: 'wildcard', id: 'same', label: 'B' }]
+  }), { presetIds: PRESETS });
+  assert.equal(dupe.ok, false);
+  assert.ok(dupe.errors.some(e => /"same" is declared twice/.test(e)));
+
+  const wordy = parseLanePlan(lanePlan({
+    lanes: [
+      { preset: 'standard', id: 'a', label: 'A', emphasis: 'x'.repeat(300) },
+      { preset: 'wildcard', id: 'b', label: 'B' }
+    ]
+  }), { presetIds: PRESETS });
+  assert.equal(wordy.ok, false);
+  assert.ok(wordy.errors.some(e => /emphasis: at most 280 characters/.test(e)));
+});
+
+test('parseLanePlan is total: prose with no JSON comes back as errors, never a throw', () => {
+  const r = parseLanePlan('I think three lanes would be good.', { presetIds: PRESETS });
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.length);
 });

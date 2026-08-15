@@ -287,6 +287,7 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | **Benchmark + archive** (`benchmark/`, `.flyt/archive/`) | BUILT | D35 — a fixed suite against a throwaway clone, scored by independent probes |
 | **Reference library** (read-only clones, `search_references`) | BUILT | D35 — recipes, greppable at task time; never vendored (D24) |
 | Model overseer, picker LLM tiebreak | PLANNED | D35 — deliberately after the deterministic layer, bought with measurements |
+| **Planned fan-out rosters** (`plan: auto`, peek, `brief`/`peek` ports) | BUILT | D37 — the roster is chosen from the brief, from a fixed preset enum; opt-in, and a planner failure falls back to the authored lanes |
 
 ---
 

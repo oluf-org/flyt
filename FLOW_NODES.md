@@ -317,15 +317,28 @@ planning output), `nodes/<id>.summary.md`, `nodes/<id>.md` (aggregate).
 **Output ports:**
 - `results` (primary) — every lane's output, one labelled section per lane
 - `lanes` — the roster: label, id, model and intent for each lane that ran
+- `brief` — *(`plan: auto` only)* why these lanes: the mission, what was treated
+  as central, and each lane's reason for existing
+- `peek` — *(`plan: auto` only)* the bounded read-only look at the subject that
+  the planner read before choosing the roster
 
-**Behavior:** the sibling of the Orchestrator, and its opposite in one respect.
-An orchestrator asks a model *which children to create*; a fan-out already
-knows, because the author wrote a lane list (or pointed the node at a model
-set, which mints one lane per member). So there is **no planning call**, no
-strict contract and no re-ask — the node mints one child per lane and runs them
-through the same scoped sub-walk every container uses
+**Behavior:** the sibling of the Orchestrator. The node mints one child per lane
+and runs them through the same scoped sub-walk every container uses
 (`core/nodes/expand.js`). Lanes are independent by construction: no edges
 between them, all of them in one wave up to `maxParallel`.
+
+**Where the roster comes from.** By default the author wrote it — a lane list,
+or a model set that mints one lane per member — and exactly that runs: no
+planning call, no contract to violate, nothing to re-ask. Under `plan: auto`
+(D37) the node instead peeks at the subject and asks a model which lanes this
+particular brief needs. That is a real reversal of the "a fan-out never plans"
+property D36 gave this node, and what makes it safe is the **enum**: the planner
+*selects and duplicates* presets from the fixed list below, and may never write
+what a lane is. A model that can pick lanes but not define them cannot turn the
+adversarial read into a flattering one — which is the property "no planning
+call" was protecting. The planner may put three architecture readers on a repo
+when architecture is what was asked for; it may not invent a fourth kind of
+reader.
 
 **Divergence is the point (D36 B6).** Each lane's assembled prompt carries the
 shared goal, its own lane instructions, and the **labels + one-line intents of
@@ -333,18 +346,53 @@ its siblings**, plus the instruction to surface at least one finding no other
 lane is positioned to reach. "Find something the others will not" is only
 meaningful if a lane knows who the others are. Lane **outputs** never cross —
 sharing them would make every lane converge on whatever the first one said.
+Planning does not touch this.
 
 **Lane presets** (`core/nodes/fanout.js`): `standard` (the brief, done well),
+`architecture` (how it is put together, and what each decision costs),
 `wildcard` (only the odd, hidden, undocumented, surprising), `adversarial`
 (only what is fragile or wrong), `contrarian` (the case against the obvious
-reading). These are `instructions` presets on a lane — not new node types and
-not new roles — and a lane may take a preset, its own text, or both.
+reading). Each preset carries **two prompt layers**: a `system` role prompt that
+also fixes the lane's output shape, and `instructions` composed into the lane
+brief. The role prompt replaces `DEFAULT_SYSTEM[role]` on purpose — one report
+format imposed on every lane is the single biggest reason four lanes come back
+reading alike. A lane may take a preset, its own text, or both.
+
+**The two prompt layers.** A lane's system prompt is the **shared preamble**
+(generated per run, identical in every lane: the mission, the subject, and any
+focus/ignore) followed by the **role prompt** (the preset's fixed text, plus the
+planner's one-sentence `emphasis` if it gave one). The split is load-bearing:
+the preamble owns *mission and scope*, the preset owns *method and output
+shape*. A `system:` written on the fan-out node itself is the author writing
+that preamble by hand — it wins outright and skips both the peek and the
+planning call.
+
+**`ignore` is advisory, by decision.** It reaches every lane as "do not spend
+effort here *unless it is load-bearing for something they did ask for*", and
+nothing filters findings against it. "Don't focus on X" is a statement about
+attention, not about relevance; a user who says *"ignore syntax errors"* still
+wants to hear it when a syntax error is why the build is broken. No lane is ever
+dropped for colliding with an ignore item.
+
+**Planning keys:** `plan` (`auto` | `off`, default `off`), `minLanes` (default
+2), `maxLanes` (default 6). Each lane is a full read of the subject on a metered
+API, so an unbounded roster is the same liability as an unbounded loop. Two
+lanes sharing a preset are **always staffed on different models**; when the pool
+runs dry the roster is truncated and each drop logged as
+`fanout_lane_unstaffed`, because three identical role prompts on one model is
+three correlated reads sold as coverage. A planner failure never fails the node:
+it logs `fanout_plan_failed`, runs the **authored** lanes, and says so in
+`.brief.md`.
 
 Lanes inherit the fan-out's `toolCeiling` exactly as generated children inherit
 an orchestrator's (§6.3), never pause at approval gates, and are stamped with
-`laneId` so a resumed run matches children back to their lanes.
+`laneId` (plus `lanePreset`) so a resumed run matches children back to their
+lanes and never re-plans. The peek's grant is the *intersection* of the node's
+own read-only tools with `read_file` / `search_references` / `glob`, capped at
+six tool calls — it establishes shape, not content.
 
-Artifacts: `nodes/<id>.lanes.md` (the roster), `nodes/<id>.md` (the aggregate).
+Artifacts: `nodes/<id>.lanes.md` (the roster), `nodes/<id>.brief.md` (why these
+lanes), `nodes/<id>.peek.md` (the look), `nodes/<id>.md` (the aggregate).
 
 ---
 

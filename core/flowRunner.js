@@ -35,7 +35,11 @@ import { runExecutorTask } from './nodes/executor.js';
 import {
   runContainer, ensureChildStatuses, commitChildren, placeInContainer, placeByLayout
 } from './nodes/expand.js';
-import { resolveLanes, laneBrief, laneInventory, DEFAULT_LANE_TEMPLATE } from './nodes/fanout.js';
+import {
+  resolveLanes, laneBrief, laneInventory, DEFAULT_LANE_TEMPLATE,
+  normalizeLane, normalizeLaneWorker, uniqueLaneIds, sharedPreamble, applyPreamble, assignWorkers,
+  renderBrief, LANE_PRESETS, LANE_PRESET_IDS
+} from './nodes/fanout.js';
 import { spliceAllSubflows, SubflowError } from './nodes/subflow.js';
 import { parseBacklogPlan } from './nodes/backlogPlan.js';
 import {
@@ -51,7 +55,7 @@ import { createWriteLedger } from './writeLedger.js';
 import { executeTool, grantContext, resolveTools, toolLibraryForLint } from './tools/index.js';
 import { narrowCeiling } from '../src/toolGrants.js';
 import { checkToolCall } from './safetyCheck.js';
-import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, parseRefineQuestions, stripRefineQuestions, extractJson } from './planEval.js';
+import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, parseRefineQuestions, parseLanePlan, stripRefineQuestions, extractJson } from './planEval.js';
 import { JUDGE_SYSTEM, buildJudgePrompt, parseJudgeVerdict } from './judge.js';
 import { deriveRunName } from './state.js';
 import {
@@ -59,7 +63,7 @@ import {
   effectiveRole, isFeedbackEdge, forwardEdges, EFFORT_MAX_TOKENS, LEGACY_TEMPLATE_MAP,
   validateOverrideMap, mergeOverrideMaps
 } from '../src/flowTypes.js';
-import { pickDefaultWorker } from './modelPriority.js';
+import { pickDefaultWorker, providerModelsFor, taskKindOf, PROVIDER_ORDER } from './modelPriority.js';
 import { taskNodeStatus } from '../src/runGraph.js';
 import { layoutPositions, containerLayout } from '../src/flowLayout.js';
 import { lintFlow, RUNTIME_RULES } from './flowlang/lint.js';
@@ -365,6 +369,87 @@ const SUMMARIZE_SYSTEM = [
   'note genuinely missing information rather than guessing.'
 ].join('\n');
 
+// The fan-out peek (FANOUT P3.1): not a node role — a direct read-only agent
+// call made before the lane planner, over a hard cap of PEEK_MAX_CALLS tool
+// calls. It answers ONE question: what am I actually looking at? A Rust
+// workspace or a monorepo of notebooks; four services or one script. It is
+// deliberately not a pre-read of the subject — that is what the lanes are for,
+// and a peek that reads the repo has spent the budget it was meant to save.
+const PEEK_SYSTEM = [
+  'ROLE: subject-peek',
+  'You are taking ONE quick look at a subject so that another model can decide',
+  'how a team of readers should divide it up. You are NOT reading it yourself.',
+  'Spend your few tool calls establishing shape, not content: what kind of thing',
+  'this is, what the top-level parts are, which languages/frameworks are in play,',
+  'roughly how big it is, and where the entry points look like they are.',
+  'Answer in at most 200 words of plain prose or bullets. Say "could not tell"',
+  'rather than guessing — a wrong map is worse than a blank one.'
+].join('\n');
+
+// The peek's ceiling: enough calls to list a tree and open a manifest, not
+// enough to start reading source. §4 costs the whole feature at 10-15% overhead
+// on the strength of this number.
+const PEEK_MAX_CALLS = 6;
+const PEEK_MAX_TOKENS = 700;
+
+// The tools a peek may hold, intersected with (never added to) whatever the
+// fan-out itself was granted. `glob` is listed for the day it exists; today the
+// read-only library is read_file + search_references, and the intersection is
+// what actually runs.
+const PEEK_TOOLS = ['glob', 'read_file', 'search_references'];
+
+// The lane planner (FANOUT P3.2 / D37): not a node role — a direct call that
+// chooses a fan-out's roster from the brief, the way TRIAGE_SYSTEM classifies a
+// follow-up before any node exists.
+//
+// This is the part of D36 §7b that FANOUT reverses: a fan-out DOES now make a
+// planning call. What makes that safe is the enum below. The planner SELECTS
+// and DUPLICATES presets; it never authors one. A model that can pick lanes but
+// cannot define them cannot turn the adversarial read into a flattering one —
+// which is the property "no planning call" was protecting in the first place.
+const LANE_PLAN_SYSTEM = [
+  'ROLE: lane-planner',
+  'A fan-out node is about to run N independent readers over one subject, in',
+  'parallel. Each reader is a FIXED role you pick from a closed list. You decide',
+  'the shared mission every reader opens with, and which readers exist.',
+  'You are NOT writing what a reader does — that text is fixed and you cannot',
+  'change it. You choose from the list, and you may choose the same role more',
+  'than once: three architecture lanes is the correct answer to "focus entirely',
+  'on how this is put together".',
+  'THE ROLES:',
+  ...LANE_PRESET_IDS.map(id => `- ${id}: ${LANE_PRESETS[id].intent}`),
+  'Read the brief for what the person actually wants, not for keywords. If they',
+  'said to focus somewhere, weight the roster there. If they said to ignore',
+  'something, put it in "ignore" — that is ADVISORY wording in every lane\'s',
+  'prompt, not a filter, and you must NOT drop a lane because it might touch an',
+  'ignored area.',
+  'Respond with ONE ```json block — nothing else is used:',
+  '{',
+  '  "mission": "<one sentence completing \'your shared goal is to …\'>",',
+  '  "subject": "<what they are reading: the repository | these three repositories | the codebase>",',
+  '  "focus":  ["<what this reading is actually for>"],',
+  '  "ignore": ["<what the person asking did not ask about>"],',
+  '  "lanes": [{',
+  `    "preset": "${LANE_PRESET_IDS.join('|')}",`,
+  '    "id": "<kebab-case, unique>",',
+  '    "label": "<e.g. Architecture — the data path>",',
+  '    "intent": "<one line, shown to the other lanes>",',
+  '    "emphasis": "<at most ONE sentence narrowing this lane inside its preset>",',
+  '    "reason": "<why this lane exists — for the log, never sent to the lane>"',
+  '  }]',
+  '}',
+  'When you repeat a preset, the lanes MUST differ in label, intent and emphasis',
+  '— otherwise you have ordered the same read twice and called it coverage.',
+  'mission is exactly one sentence. focus and ignore may be empty arrays; most',
+  'briefs have neither, and inventing them is worse than leaving them out.'
+].join('\n');
+
+// Fan-out lane budget (P3.4). Each lane is a full read of the subject on a
+// metered API, so an unbounded roster is the same class of liability as an
+// unbounded loop.
+const DEFAULT_MIN_LANES = 2;
+const DEFAULT_MAX_LANES = 6;
+
 // How often a token stream may reach the disk and the renderer. Every flush is
 // a file write plus an IPC push, and adapters call onText per chunk — at real
 // token rates that is hundreds of calls a second. 250ms still reads as live.
@@ -598,13 +683,15 @@ export class FlowRunner {
       // grant on an aiStep (TOOLS-PLAN §6.4) failed the node the moment it was
       // used. Nothing in the suite exercised it until fan-out lanes started
       // inheriting a grant (D36 P2), which is how it surfaced.
-      const { apiKey, system, prompt, onText, onRetry, retry, ...worker } = params;
+      const { apiKey, system, prompt, onText, onRetry, retry, maxIterations, ...worker } = params;
       return await runAgent({
         worker, apiKey, system, prompt, onText, onRetry, retry,
         timeout: this.config.timeout, tools, signal: ctl.signal,
         // A node that searches a repository needs more rounds than one that
-        // checks the time (core/agent.js MAX_ITERATIONS).
-        maxIterations: this.config.maxToolIterations ?? null,
+        // checks the time (core/agent.js MAX_ITERATIONS). A caller may cap
+        // itself BELOW the configured ceiling — the fan-out peek does, because
+        // a peek that keeps going is just a slow lane (FANOUT P3.1).
+        maxIterations: maxIterations ?? this.config.maxToolIterations ?? null,
         ctx: {
           store: this.store, runId, nodeId, workspace: this.workspaceFor(runId),
           backlog: this.backlog ?? null, feedback: this.feedback ?? null,
@@ -3168,16 +3255,181 @@ export class FlowRunner {
     return {};
   }
 
-  // The Fan-out container (BRICKS P2 / D36 B5–B6): N deliberately diverged
-  // takes on ONE brief. Where the orchestrator asks a model which children to
-  // create, a fan-out already knows — the author wrote a lane list, or pointed
-  // at a model set. So there is no planning call, no contract to violate, and
-  // nothing to re-ask: the node mints one child per lane and runs them through
-  // the same scoped sub-walk every container uses (core/nodes/expand.js).
+  // The ordered model pool a PLANNED roster is staffed from (FANOUT P2).
+  // Explicit lane workers are pinned before this list is consulted; what is
+  // left is: the node's own worker, then the model-priority ranking for this
+  // kind of reading, then whatever else is active, then the configured default
+  // so a run always has something to fall back on.
+  //
+  // Deduplicated by model id, because a pool listing one model twice would let
+  // two same-preset lanes "differ" while landing on the same model.
+  lanePool(node, authored = []) {
+    const pool = [];
+    const seen = new Set();
+    const push = w => {
+      const n = normalizeLaneWorker(w);
+      if (!n || seen.has(n.model)) return;
+      seen.add(n.model);
+      pool.push(n);
+    };
+    push(node?.data?.worker);
+    // The models the author picked for THIS fan-out. A planned roster replaces
+    // their lanes, but not their judgement about which models read well here —
+    // and without them, a flow whose lanes name four models by hand would have
+    // nothing but the executor default to staff a planned roster from.
+    for (const lane of authored) push(lane.worker);
+
+    const active = (this.config.activeModels ?? []).filter(m => m && m.enabled !== false).map(m => m.id);
+    const known = new Set(active);
+    // Lanes read and report, whatever template they instantiate — so the pool
+    // is ranked as analysis work unless the node says otherwise.
+    const kind = taskKindOf({ type: 'aiStep', data: { role: 'analyze', category: node?.data?.category } });
+    const effort = node?.data?.effort ?? 'medium';
+    const order = PROVIDER_ORDER[kind]?.[effort] ?? PROVIDER_ORDER.general.medium;
+    for (const provider of order) {
+      if (!this.config.providerKeys?.[provider]) continue;
+      for (const model of providerModelsFor(provider, kind, effort, { kimiKeyKind: this.config.kimiKeyKind })) {
+        // A ranked model the user has switched off is not available to staff a
+        // lane with; the lint rule that warns about it says the same thing.
+        if (known.size && !known.has(model)) continue;
+        push({ provider, model });
+      }
+    }
+    for (const id of active) push(id);
+    push(this.config.workers?.executor);
+    return pool;
+  }
+
+  // The peek (FANOUT P3.1): one bounded read-only look at the subject, so the
+  // lane planner knows whether it is dividing up a Rust workspace or a folder
+  // of notebooks. Capped at PEEK_MAX_CALLS tool calls and a small token budget.
+  //
+  // Its grant is the INTERSECTION of the fan-out's own read-only tools with
+  // PEEK_TOOLS — never a union. A node that decides what other nodes may do
+  // must not be able to do more than they may (§6.3), and that goes double for
+  // the call that decides who they are.
+  //
+  // Total, except for a stop: no grant, or a failed call, degrades to a blind
+  // planner (which is simply P3-without-P3.1, and still better than no planner).
+  async fanoutPeek(runId, node, worker, apiKey, brief) {
+    const grant = this.aiStepTools(runId, node).filter(t => PEEK_TOOLS.includes(t.name));
+    if (!grant.length) {
+      this.store.appendLog(runId, { event: 'fanout_peek_skipped', node: node.id, reason: 'no read-only tool grant to look with' });
+      return null;
+    }
+    const target = { ...worker };
+    if (target.provider !== 'mock' && target.provider !== 'anthropic') {
+      target.supportsTools = supportsToolsFor(target, this.config);
+    }
+    try {
+      const res = await this.trackedRunAgent(runId, node.id, {
+        ...target, apiKey, system: PEEK_SYSTEM, prompt: brief,
+        maxTokens: PEEK_MAX_TOKENS, maxIterations: PEEK_MAX_CALLS,
+        onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
+      }, grant);
+      const text = String(res.text ?? '').trim();
+      this.store.appendLog(runId, {
+        event: 'fanout_peek', node: node.id,
+        tools: grant.map(t => t.name), calls: res.toolCalls?.length ?? 0
+      });
+      if (text) this.store.writeNodeOutput(runId, `${node.id}.peek`, text);
+      return text || null;
+    } catch (err) {
+      if (isAbortError(err) || this.stopRequests.has(runId)) {
+        throw isAbortError(err) ? err : abortError(`Fan-out ${node.id} stopped`);
+      }
+      this.store.appendLog(runId, { event: 'fanout_peek_skipped', node: node.id, reason: String(err?.message ?? err) });
+      return null;
+    }
+  }
+
+  // The planning call (FANOUT P3.2–P3.4). Returns { plan, pool, reason } —
+  // `plan` null when the roster could not be planned, with `reason` saying why
+  // so `.brief.md` can be honest about running the authored fallback.
+  async planLanes(runId, flow, node, opts, authored) {
+    const worker = resolveCallTarget(resolveWorker(node, this.config), this.config);
+    const apiKey = worker.apiKey;
+    const minLanes = Math.max(1, Math.floor(Number(node.data?.minLanes ?? DEFAULT_MIN_LANES) || DEFAULT_MIN_LANES));
+    const maxLanes = Math.max(minLanes, Math.floor(Number(node.data?.maxLanes ?? DEFAULT_MAX_LANES) || DEFAULT_MAX_LANES));
+    const pool = this.lanePool(node, authored);
+
+    const goal = node.data?.goal?.trim() ?? '';
+    const parts = this.upstreamContext(runId, flow, node, opts.taskIdByNode);
+    const brief = [
+      `USER PROMPT:\n${this.store.readPrompt(runId)}`,
+      goal ? `THIS FAN-OUT'S GOAL:\n${goal}` : '',
+      parts.length ? `WHAT FEEDS THIS NODE:\n${parts.join('\n\n')}` : ''
+    ].filter(Boolean).join('\n\n');
+
+    const peek = await this.fanoutPeek(runId, node, worker, apiKey, brief);
+
+    const userMsg = [
+      brief,
+      peek ? `A QUICK LOOK AT THE SUBJECT (one bounded read-only pass — shape only, not a reading):\n${peek}` : '',
+      `THE ROSTER THE AUTHOR WROTE (${authored.length}) — the fallback if you fail, and a hint at what they had in mind:\n`
+        + authored.map(l => `- ${l.id} · ${l.preset ?? 'no preset'}${l.intent ? ` — ${l.intent}` : ''}`).join('\n'),
+      pool.length
+        ? `MODELS AVAILABLE TO STAFF LANES (${pool.length}), in preference order:\n${pool.map(p => `- ${p.model}`).join('\n')}`
+        : '',
+      `LANE BUDGET: declare between ${minLanes} and ${maxLanes} lanes (inclusive). `
+        + `Two lanes sharing a preset are staffed on DIFFERENT models, and ${pool.length} model(s) are available — `
+        + 'a roster that asks for more copies of one preset than there are models is truncated, not doubled up.'
+    ].filter(Boolean).join('\n\n');
+
+    const onText = this.streamInto(runId, t => this.store.writeNodeOutput(runId, `${node.id}.brief`, t));
+    let outText;
+    try {
+      const result = await this.trackedCallModel(runId, {
+        ...worker, apiKey, system: LANE_PLAN_SYSTEM, prompt: userMsg, onText,
+        ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
+        onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
+      });
+      outText = String(result.text ?? '').trim();
+    } catch (err) {
+      // A stop unwinds the walk; anything else degrades to the authored roster
+      // (P3.7). A fan-out that cannot reach its planner should still read the
+      // repo — same posture as workspaceFor().
+      if (isAbortError(err) || this.stopRequests.has(runId)) {
+        throw isAbortError(err) ? err : abortError(`Fan-out ${node.id} stopped`);
+      }
+      return { plan: null, pool, reason: `the planning call failed (${String(err?.message ?? err)})` };
+    }
+
+    const bounds = { presetIds: LANE_PRESET_IDS, minLanes, maxLanes };
+    let parsed = parseLanePlan(outText, bounds);
+    if (!parsed.ok) {
+      const fixed = await this.reAsk(runId, node, worker, apiKey, LANE_PLAN_SYSTEM, userMsg, outText, parsed.errors);
+      if (fixed != null) {
+        const reparsed = parseLanePlan(fixed, bounds);
+        if (reparsed.ok) parsed = reparsed;
+      }
+    }
+    if (!parsed.ok) {
+      this.store.appendLog(runId, { event: 'fanout_plan_failed', node: node.id, errors: parsed.errors });
+      return { plan: null, pool, reason: 'the planner\'s roster violated the lane contract twice' };
+    }
+    this.store.appendLog(runId, {
+      event: 'fanout_planned', node: node.id, mission: parsed.plan.mission,
+      lanes: parsed.plan.lanes.map(l => ({ id: l.id, preset: l.preset }))
+    });
+    return { plan: parsed.plan, pool, reason: '' };
+  }
+
+  // The Fan-out container (BRICKS P2 / D36 B5–B6, planning added by D37): N
+  // deliberately diverged takes on ONE brief.
+  //
+  // The author writes a lane list, or points at a model set, and by default
+  // exactly that runs — no planning call, nothing to re-ask. Under `plan: auto`
+  // the node first peeks at the subject and asks a model which of the FIXED
+  // presets should be on this particular brief, and how many (D37). What keeps
+  // that safe is the enum: the planner selects and duplicates presets, it never
+  // writes what a lane is, so nothing it can say turns the adversarial read
+  // into a flattering one.
   //
   // Every lane is told who its siblings are and asked for at least one finding
   // none of them can reach. No lane ever sees another's OUTPUT — that would
-  // collapse the divergence the whole node exists to produce (B6).
+  // collapse the divergence the whole node exists to produce (B6), and it is
+  // the one part of D36 that planning does not touch.
   async runFanout(runId, flow, node, opts) {
     this.store.appendLog(runId, { event: 'node_start', node: node.id, type: 'fanout' });
 
@@ -3194,13 +3446,16 @@ export class FlowRunner {
       return new Error(`Fan-out ${node.id} failed: ${msg}`);
     };
 
-    const lanes = resolveLanes(node, {
+    // The authored roster: what runs by default, and the fallback a planning
+    // failure lands on (P3.7). Never discarded, only possibly replaced.
+    const authored = resolveLanes(node, {
       modelSets: this.config.modelSets ?? {},
       activeModels: this.config.activeModels ?? null
     });
-    if (!lanes.length) {
+    if (!authored.length) {
       throw failNode('no lanes — declare "lanes:", or point "modelSet:" at a set with active members');
     }
+    let lanes = authored;
 
     // Resume: children materialized on a previous pass are reused, matched
     // back to their lanes by the laneId stamped on them.
@@ -3208,14 +3463,87 @@ export class FlowRunner {
     const laneOf = new Map();
 
     if (children.length) {
-      for (const c of children) {
-        const lane = lanes.find(l => l.id === c.data?.laneId);
-        if (lane) laneOf.set(c.id, lane);
-      }
+      // A resumed run re-plans zero times and re-peeks zero times: the roster
+      // that ran is reconstructed from the children themselves, because under
+      // `plan: auto` the authored list is not the list that ran and matching
+      // against it would mislabel every lane in the aggregate.
+      lanes = children.map(c => {
+        const laneId = c.data?.laneId ?? c.id;
+        // The child's own stamps first, the authored lane only as backfill —
+        // for a run materialized before those stamps existed, and for the
+        // fields a child does not carry.
+        const known = authored.find(l => l.id === laneId) ?? null;
+        const preset = c.data?.lanePreset ?? known?.preset ?? null;
+        const lane = {
+          id: laneId,
+          label: c.data?.title?.trim() || known?.label || laneId,
+          intent: c.data?.laneIntent ?? known?.intent ?? '',
+          instructions: known?.instructions ?? '',
+          worker: normalizeLaneWorker(c.data?.worker) ?? known?.worker ?? null,
+          template: known?.template ?? null,
+          tools: known?.tools ?? null,
+          ...(preset ? { preset } : {})
+        };
+        laneOf.set(c.id, lane);
+        return lane;
+      });
       ensureChildStatuses(this.store, runId, children);
       this.store.appendLog(runId, { event: 'node_resume', node: node.id, type: 'fanout', children: children.length });
     } else {
       const goal = node.data?.goal?.trim() ?? '';
+
+      // A `system:` on the fan-out node itself is the author writing the shared
+      // preamble by hand: it wins outright and skips both the peek and the
+      // planning call (P3.8). Until now this key was legal on a fanout and read
+      // by nothing — it lint-cleaned and did nothing at all.
+      const authorSystem = typeof node.data?.system === 'string' && node.data.system.trim()
+        ? node.data.system.trim() : '';
+      const planMode = String(node.data?.plan ?? 'off').trim().toLowerCase();
+
+      if (planMode === 'auto' && authorSystem) {
+        this.store.appendLog(runId, {
+          event: 'fanout_plan_inert', node: node.id,
+          reason: 'a system prompt written on the node wins over the planner'
+        });
+      }
+
+      if (planMode === 'auto' && !authorSystem) {
+        const { plan, pool, reason } = await this.planLanes(runId, flow, node, opts, authored);
+        let staffed = null;
+        if (plan) {
+          const roster = uniqueLaneIds(plan.lanes.map((l, i) => ({ ...normalizeLane(l, i), reason: l.reason ?? '' })));
+          const assigned = assignWorkers(roster, pool);
+          for (const d of assigned.dropped) {
+            // Truncating and saying so beats three correlated reads sold as
+            // coverage — the failure this node exists to prevent (P2).
+            this.store.appendLog(runId, { event: 'fanout_lane_unstaffed', node: node.id, lane: d.id, preset: d.preset, reason: d.reason });
+          }
+          if (assigned.lanes.length) staffed = assigned.lanes;
+          else this.store.appendLog(runId, { event: 'fanout_plan_failed', node: node.id, errors: ['every planned lane went unstaffed'] });
+        }
+        if (staffed) {
+          lanes = applyPreamble(staffed, sharedPreamble({
+            mission: plan.mission, subject: plan.subject, count: staffed.length,
+            focus: plan.focus, ignore: plan.ignore
+          }));
+          this.store.writeNodeOutput(runId, `${node.id}.brief`,
+            renderBrief({ ...plan, lanes }));
+        } else {
+          // P3.7: degrade, never fail. The authored lanes run on a mission
+          // derived mechanically from the goal, and `.brief.md` says so.
+          const mission = `answer: ${goal || this.store.readPrompt(runId) || 'the brief above'}`;
+          const fallbackReason = plan ? 'no planned lane could be staffed with a model of its own' : reason;
+          lanes = applyPreamble(authored, sharedPreamble({
+            mission, subject: 'the subject of this brief', count: authored.length
+          }));
+          this.store.writeNodeOutput(runId, `${node.id}.brief`, renderBrief(
+            { mission, subject: 'the subject of this brief', focus: [], ignore: [], lanes },
+            { fallback: true, reason: fallbackReason }));
+        }
+      } else if (authorSystem) {
+        lanes = applyPreamble(authored, authorSystem);
+      }
+
       const created = [];
       const errors = [];
       for (const lane of lanes) {
@@ -3231,6 +3559,12 @@ export class FlowRunner {
           title: lane.label,
           goal,
           instructions: laneBrief(lane, lanes, { goal }),
+          // The lane's ROLE prompt (FANOUT §1): the shared preamble plus the
+          // preset's fixed text. It replaces DEFAULT_SYSTEM[role], which is the
+          // point — one report format imposed on every lane is why four lanes
+          // used to come back reading alike. A lane with neither a preset nor a
+          // system of its own carries none, and falls through as it always did.
+          ...(lane.system ? { system: lane.system } : {}),
           ...(lane.worker ? { worker: lane.worker } : node.data?.worker ? { worker: node.data.worker } : {}),
           // A lane with no grant of its own inherits the fan-out's, the same
           // way it inherits its template. Without this an aiStep lane gets NO
@@ -3248,6 +3582,11 @@ export class FlowRunner {
         child.data = {
           ...child.data,
           laneId: lane.id,
+          // Stamped so a resumed run can rebuild the roster from its children
+          // without re-planning: under `plan: auto` the authored lane list is
+          // not the list that ran.
+          ...(lane.preset ? { lanePreset: lane.preset } : {}),
+          ...(lane.intent ? { laneIntent: lane.intent } : {}),
           generatedBy: node.id,
           managedBy: node.id,
           requiresApproval: false,
@@ -3606,8 +3945,9 @@ export class FlowRunner {
       // The library path passes the whole override map through resolveInstance;
       // this fallback used to forward a fixed subset, which quietly dropped
       // exactly the three fields a fan-out lane is made of (D36 P2.1). Both
-      // paths now carry the same set.
-      instructions, worker, tools
+      // paths now carry the same set — `system` joined them for the same
+      // reason (FANOUT P1.3): a lane's role prompt IS the lane.
+      instructions, worker, tools, system
     } = overrides;
     return createNodeFromTemplate(templateId, {
       id,
@@ -3623,6 +3963,7 @@ export class FlowRunner {
         ...(instructions ? { instructions } : {}),
         ...(worker ? { worker } : {}),
         ...(tools ? { tools } : {}),
+        ...(typeof system === 'string' && system.trim() ? { system } : {}),
         ...(requiresApproval != null ? { requiresApproval } : {})
       }
     });
