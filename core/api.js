@@ -41,6 +41,14 @@ import { writeArchive, listArchive, readArchive, trend, dateStamp } from './arch
 import { assertRepoUrl, nameFromRepoUrl } from './references.js';
 import { explainRun, probeModel, doctor, modelsInFlow } from './diagnostics.js';
 
+// Is this pid still running? `kill(pid, 0)` sends no signal and only asks — the
+// standard way, and the only one that needs no dependency. EPERM means the
+// process exists and belongs to someone else, which still counts as alive.
+function isProcessAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (err) { return err?.code === 'EPERM'; }
+}
+
 export class ApiError extends Error {
   constructor(message, { status = 400, code = 'bad_request' } = {}) {
     super(message);
@@ -137,6 +145,55 @@ export function createApi(engine) {
     if (!withKey) return target;
     const apiKey = runtimeConfig.providerKeys?.[target.provider] ?? null;
     return apiKey ? { ...target, apiKey } : target;
+  };
+
+  // --- the loop's status, on disk (LOOP-PLAN §11.1) --------------------------
+  //
+  // The supervisor is a long-running process that outlives the window which
+  // started it, so its status cannot live only in its own memory: `flyt loop
+  // status` from a second terminal, `flyt report`, and the desktop app's Loop
+  // view were all answering "no loop running" while one was working. For a
+  // system whose entire premise is running when nobody is watching, being
+  // invisible to everything except the terminal that started it is the wrong
+  // shape.
+  //
+  // One file per project, rewritten on every transition and every poll.
+  const loopStatusFile = projectId => {
+    const dir = engine.configDirOf(projectId);
+    return dir ? path.join(dir, 'loop-status.json') : null;
+  };
+
+  const writeLoopStatus = (projectId, status) => {
+    const file = loopStatusFile(projectId);
+    if (!file) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Write-then-rename: a reader polling this file must never catch it
+    // half-written, and JSON.parse of half a file is an error a status reader
+    // would report as "the loop is broken".
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(status, null, 2));
+    fs.renameSync(tmp, file);
+  };
+
+  // A status written by SOMEONE ELSE. Trusted for what it says, but never for
+  // whether it is still true: a process that died mid-run leaves a file
+  // claiming work is in flight, and a reader that believes it is worse off than
+  // one with no file at all. So liveness is checked against the pid, and a
+  // stale record is reported as stopped with the reason.
+  const readLoopStatus = projectId => {
+    const file = loopStatusFile(projectId);
+    if (!file || !fs.existsSync(file)) return null;
+    let status;
+    try { status = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+    const alive = status.pid != null && isProcessAlive(status.pid);
+    if (status.running && !alive) {
+      return {
+        ...status, running: false, inFlight: [],
+        stopping: `the process that was running it (pid ${status.pid}) is gone`,
+        stale: true, observed: true
+      };
+    }
+    return { ...status, observed: true };
   };
 
   // One supervisor per project, for the life of the process.
@@ -545,7 +602,8 @@ export function createApi(engine) {
           loop: { ...runtimeConfig.loop, dryRun, worker: pinned, models: byLevel }
         },
         parallelism,
-        log: msg => engine.emitLoop?.(projectId, msg)
+        log: msg => engine.emitLoop?.(projectId, msg),
+        writeStatus: status => writeLoopStatus(projectId, status)
       });
       supervisors.set(projectId, sup);
       // Deliberately NOT awaited: the loop runs until it is stopped or capped,
@@ -566,10 +624,20 @@ export function createApi(engine) {
       return { stopped: true, reason };
     },
     'loop:log': ({ projectId }) => engine.loopLog(projectId),
+    // This process's supervisor if it has one; otherwise whatever the loop
+    // running elsewhere last published. `observed: true` marks the second case,
+    // because "what I am doing" and "what I can see someone else doing" are
+    // different claims and a panel should be able to say which it is showing.
     'loop:status': ({ projectId }) => supervisors.get(projectId)?.status()
+      ?? readLoopStatus(projectId)
       ?? { running: false, stopping: null, inFlight: [], parked: [], completed: 0, landed: 0, model: null },
     'loop:report': ({ projectId }) => renderReport({
-      status: supervisors.get(projectId)?.status() ?? { running: false, stopping: null, inFlight: [], landed: 0, completed: 0 },
+      // The same three-way answer `loop:status` gives: mine, someone else's, or
+      // none. A morning report that says "stopped, 0 landed" about a loop that
+      // has been working all night is the one thing this document must not do.
+      status: supervisors.get(projectId)?.status()
+        ?? readLoopStatus(projectId)
+        ?? { running: false, stopping: null, inFlight: [], landed: 0, completed: 0 },
       backlog: backlogFor(projectId),
       ledger: ledgerFor(projectId)
     }),

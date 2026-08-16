@@ -34,7 +34,15 @@ export class Supervisor {
    */
   constructor({
     invoke, projectId, backlog, ledger, store = null, config = {},
-    parallelism = 1, pollMs = POLL_MS, log = () => {}, now = () => Date.now()
+    parallelism = 1, pollMs = POLL_MS, log = () => {}, now = () => Date.now(),
+    // Where the status goes so that something OTHER than this process can read
+    // it (§11.1: the record is owned by the supervisor and kept outside the
+    // worktree). Without it the loop is only observable from the terminal that
+    // started it: `flyt loop status` in a second window, `flyt report`, and the
+    // desktop app's Loop view all answered "no loop running" while one was
+    // working — which is a strange thing for a system whose entire premise is
+    // running while nobody is watching.
+    writeStatus = () => {}
   }) {
     this.invoke = invoke;
     this.projectId = projectId;
@@ -49,6 +57,7 @@ export class Supervisor {
     this.pollMs = pollMs;
     this.log = log;
     this.now = now;
+    this.writeStatus = writeStatus;
 
     this.running = false;
     this.stopping = null;      // why we are winding down, if we are
@@ -83,6 +92,21 @@ export class Supervisor {
     };
   }
 
+  /**
+   * Publish the status where another process can read it.
+   *
+   * Called on every transition and every poll, so a reader never sees a state
+   * the loop left minutes ago. `pid` and `at` ride along because the reader's
+   * hard question is not "what does this say" but "is whoever wrote it still
+   * alive" — a status file outlives the process that wrote it, and a crashed
+   * loop that still claims to be running is worse than no file at all.
+   */
+  #publish() {
+    try {
+      this.writeStatus({ ...this.status(), pid: process.pid, at: new Date(this.now()).toISOString() });
+    } catch { /* an unwritable status file must never take the loop down */ }
+  }
+
   #windowMs() { return this.config.loop?.windowMs ?? 24 * 60 * 60 * 1000; }
   #caps() { return this.config.loop?.caps ?? {}; }
 
@@ -97,6 +121,7 @@ export class Supervisor {
     this.running = true;
     this.stopping = null;
     let started = 0;
+    this.#publish();
 
     try {
       while (this.running && started < maxTasks) {
@@ -133,6 +158,9 @@ export class Supervisor {
       while (this.inFlight.size) await this.#tick();
     } finally {
       this.running = false;
+      // The last thing written says it stopped, so a reader does not inherit a
+      // file claiming work is in flight after the process is gone.
+      this.#publish();
     }
     return this.status();
   }
@@ -225,6 +253,7 @@ export class Supervisor {
   /** One poll across everything in flight. */
   async #tick() {
     await new Promise(r => setTimeout(r, this.pollMs));
+    this.#publish();
     for (const [taskId, hb] of [...this.inFlight]) {
       try {
         await this.#pollTask(taskId, hb);
@@ -505,7 +534,11 @@ export function renderReport({ status, backlog, ledger, windowMs = 24 * 60 * 60 
       + (spend.unknown ? ` — ${spend.unknown} call(s) with no cost reported` : ''), '');
   }
   lines.push(`**Loop:** ${status.running ? 'running' : `stopped (${status.stopping ?? 'idle'})`}`
-    + `, ${status.landed}/${status.completed} attempt(s) landed`, '');
+    + `, ${status.landed}/${status.completed} attempt(s) landed`
+    // Where this came from. A report assembled from a status file written by
+    // another process is still true, and saying so is how a reader knows why
+    // the numbers can move without them doing anything.
+    + (status.observed ? ` _(observed: pid ${status.pid ?? '?'}, as of ${status.at ?? 'unknown'})_` : ''), '');
 
   const section = (title, list, render) => {
     lines.push(`## ${title} (${list.length})`, '');

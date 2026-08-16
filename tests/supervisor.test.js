@@ -391,6 +391,46 @@ test('a task is stopped at its own cap, and what it spent is recorded either way
   assert.ok(ledger.totals({ taskId: 't-0001' }).usd >= 5);
 });
 
+test('the loop publishes its status where another process can read it', async () => {
+  // The supervisor outlives the window that started it, so a status kept only
+  // in its own memory is a status nobody else can see: `flyt loop status` in a
+  // second terminal, `flyt report`, and the desktop Loop view all answered "no
+  // loop running" while one was working. For a system whose premise is running
+  // when nobody is watching, that is the wrong shape.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'work', goal: 'g' });
+  const published = [];
+  const engine = fakeEngine({ backlog });
+  const sup = new Supervisor({
+    ...engine, projectId: 'p', backlog, pollMs: 1,
+    config: { loop: { models: { low: 'deepseek/deepseek-v4-pro' } } },
+    writeStatus: s => published.push(s)
+  });
+
+  await sup.run({ maxTasks: 1 });
+
+  assert.ok(published.length >= 2, 'published at the start and at the end, not once at the end');
+  // Whoever reads it needs to know whether the writer is still alive — a status
+  // file outlives the process that wrote it, and one still claiming work is in
+  // flight is worse than no file at all.
+  assert.equal(published[0].pid, process.pid);
+  assert.match(published[0].at, /^\d{4}-\d\d-\d\dT/);
+  assert.equal(published.at(-1).running, false, 'the last word is that it stopped');
+  // And it carries the decision the session is working to, which a single
+  // `model` cannot describe.
+  assert.deepEqual(published.at(-1).models, { low: 'deepseek/deepseek-v4-pro' });
+
+  // An unwritable status file must never take the loop down with it.
+  const b2 = makeBacklog();
+  b2.add({ title: 'work', goal: 'g' });
+  const e2 = fakeEngine({ backlog: b2 });
+  const noisy = new Supervisor({
+    ...e2, projectId: 'p', backlog: b2, pollMs: 1,
+    writeStatus: () => { throw new Error('disk full'); }
+  });
+  assert.equal((await noisy.run({ maxTasks: 1 })).landed, 1);
+});
+
 test('a dry run reaches the code that would have merged', async () => {
   // The flag's whole job is "do not touch the base branch", and it was decided
   // in loop:start and then never travelled: work:land defaults dryRun to false,
