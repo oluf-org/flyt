@@ -620,3 +620,149 @@ test('an incomplete tool call still shows raw while it assembles', async () => {
   });
   assert.equal(seen[0], '→ write_file({"path":"a.)'); // raw, paren and all
 });
+
+// --- reasoning models (D40) -----------------------------------------------
+//
+// A reasoning model puts most of a turn in `delta.reasoning` and emits its
+// `content` last, or — when the token budget runs out first — not at all. The
+// adapter used to ignore that field entirely, which cost the app three separate
+// things: the progress signal (a node sat visibly frozen for a minute or more
+// and got cancelled by hand on healthy runs), the evidence (a turn that ended
+// in reasoning alone was reported as "empty response" with nothing on disk to
+// say why), and the money already spent on the tokens.
+//
+// Measured against the real provider: deepseek-v4-pro-0813 at max_tokens 4096 —
+// this app's `medium` effort — returned 0 characters of answer, 4096 reasoning
+// tokens and finish_reason "length".
+
+test('openrouter: reasoning deltas are captured, and never leak into the answer', async () => {
+  stubFetch(() => sseRes([
+    { choices: [{ delta: { reasoning: 'let me think' } }] },
+    { choices: [{ delta: { reasoning: ' about it' } }] },
+    { choices: [{ delta: { content: 'The answer.' }, finish_reason: 'stop' }] },
+    '[DONE]'
+  ]));
+  const seen = [];
+  const r = await callModel({
+    provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k', onText: t => seen.push(t)
+  });
+  assert.equal(r.text, 'The answer.', 'the deliverable is content only');
+  assert.equal(r.reasoning, 'let me think about it');
+  // Watchable from the first reasoning delta rather than silent until the end...
+  assert.ok(seen[0].includes('let me think'));
+  // ...and replaced by the real answer the moment there is one.
+  assert.equal(seen.at(-1), 'The answer.');
+});
+
+test('openrouter: reasoning arrives on the non-streamed path too', async () => {
+  stubFetch(() => jsonRes({
+    choices: [{ message: { role: 'assistant', content: 'ok', reasoning: 'thought' }, finish_reason: 'stop' }]
+  }));
+  const r = await callModel({ provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k' });
+  assert.equal(r.text, 'ok');
+  assert.equal(r.reasoning, 'thought');
+});
+
+// The exact failure four live runs died on: the budget goes entirely to
+// reasoning, so the turn ends with finish_reason "length" and no content. It
+// must not be mistaken for a cut connection (which is transient and retried
+// identically) — it is a real, complete, useless answer, and the caller needs
+// the evidence to say so.
+test('openrouter: a turn that is all reasoning and no content still reports itself', async () => {
+  stubFetch(() => sseRes([
+    { choices: [{ delta: { reasoning: 'thinking'.repeat(50) } }] },
+    { choices: [{ delta: {}, finish_reason: 'length' }] },
+    '[DONE]'
+  ]));
+  const r = await callModel({ provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k', onText: () => {} });
+  assert.equal(r.text, '');
+  assert.equal(r.finishReason, 'length');
+  assert.equal(r.reasoning.length, 400);
+});
+
+// --- the empty-turn recovery (D40) ----------------------------------------
+
+test('an empty turn is retried once, with the budget raised and the omission named', async () => {
+  stubFetch(({ n }) => (n === 1
+    ? jsonRes({ choices: [{ message: { content: '', reasoning: 'thought hard' }, finish_reason: 'length' }] })
+    : jsonRes({ choices: [{ message: { content: 'Here it is.' }, finish_reason: 'stop' }] })));
+  const empties = [];
+  const r = await runAgent({
+    worker: { provider: 'openrouter', model: 'm' }, apiKey: 'k',
+    system: 'S', prompt: 'P', maxTokens: 4096,
+    onEmptyTurn: d => empties.push(d)
+  });
+  assert.equal(r.text, 'Here it is.', 'the recovered turn is the answer');
+  assert.equal(calls.length, 2);
+  assert.ok(calls[1].body.max_tokens > calls[0].body.max_tokens, 'the retry gets a bigger budget');
+  assert.match(calls[1].body.messages.at(-1).content, /returned no content/);
+  assert.equal(empties.length, 1);
+  assert.equal(empties[0].finishReason, 'length');
+});
+
+test('a turn that is only tool calls is not treated as empty', async () => {
+  stubFetch(({ n }) => (n === 1
+    ? jsonRes({
+      choices: [{
+        message: { content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'now', arguments: '{}' } }] },
+        finish_reason: 'tool_calls'
+      }]
+    })
+    : jsonRes({ choices: [{ message: { content: 'done' }, finish_reason: 'stop' }] })));
+  const r = await runAgent({
+    worker: { provider: 'openrouter', model: 'm', supportsTools: true }, apiKey: 'k',
+    system: 'S', prompt: 'P',
+    tools: [{ name: 'now', description: 'time', parameters: { type: 'object', properties: {} } }],
+    ctx: {}
+  });
+  assert.equal(r.text, 'done');
+  // Two calls: the tool turn and the answer. A third would mean the tool-only
+  // turn had been misread as empty and nudged.
+  assert.equal(calls.length, 2);
+});
+
+// --- the black box (D40) --------------------------------------------------
+
+test('onCall records what was sent and what came back, for every settled call', async () => {
+  stubFetch(() => jsonRes({
+    choices: [{ message: { content: 'hi', reasoning: 'mm' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 9, completion_tokens: 2 }
+  }));
+  const records = [];
+  await callModel({
+    provider: 'openrouter', model: 'm', system: 'SYS', prompt: 'PROMPT',
+    maxTokens: 777, apiKey: 'k', onCall: r => records.push(r)
+  });
+  assert.equal(records.length, 1);
+  const rec = records[0];
+  assert.equal(rec.ok, true);
+  assert.equal(rec.model, 'm');
+  assert.equal(rec.maxTokens, 777);
+  assert.equal(rec.finishReason, 'stop');
+  assert.equal(rec.contentChars, 2);
+  assert.equal(rec.reasoningChars, 2);
+  assert.equal(rec.promptChars, 'SYS'.length + 'PROMPT'.length);
+  assert.deepEqual(rec.usage, { prompt_tokens: 9, completion_tokens: 2 });
+});
+
+test('onCall records a failure too, once, after the retry budget is spent', async () => {
+  stubFetch(() => errRes(429, 'slow down'));
+  const records = [];
+  await assert.rejects(() => callModel({
+    provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k',
+    retry: { attempts: 2, baseMs: 1 }, onCall: r => records.push(r)
+  }));
+  assert.equal(records.length, 1, 'one record per settled call, not per attempt');
+  assert.equal(records[0].ok, false);
+  assert.match(records[0].error, /429/);
+  assert.equal(records[0].attempts, 2);
+});
+
+test('a throwing onCall never takes the call down with it', async () => {
+  stubFetch(() => jsonRes({ choices: [{ message: { content: 'fine' } }] }));
+  const r = await callModel({
+    provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k',
+    onCall: () => { throw new Error('instrumentation blew up'); }
+  });
+  assert.equal(r.text, 'fine');
+});

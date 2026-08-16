@@ -291,6 +291,11 @@ Carried forward (some from `CRITICAL-REVIEW.md`, re-validated):
 | **Workspace orientation** (`orient` node, `homeSeed`, `.flyt/context.md`) | BUILT | D38 — a flow says what THIS project is and how it relates to what it is reading, before it reads it; `unrelated` is a first-class answer |
 | **Subject addressing** (`subjectRepo`, scoped `search_references`, rooted tool results) | BUILT | D38 — closes the silent failure where a lane read our own repository and reported it as a finding about someone else's |
 | **`glob` tool** | BUILT | D38 — read-effect, workspace-confined; a node that cannot list guesses paths |
+| **Reasoning-aware token budgets** (`effortBudget`, `REASONING_HEADROOM`) | BUILT | D40 — effort is the *answer* budget and reasoning gets room on top; a thinking model no longer spends its whole budget thinking and returns nothing |
+| **Empty-turn recovery** (`callForAnswer`) | BUILT | D40 — one nudged retry at a raised budget before a content-free turn is allowed to fail a node and discard its tool work |
+| **Model-call black box** (`model_call` events, `runs/<id>/calls/<node>.jsonl`) | BUILT | D40 — finish reason, content/reasoning split, request size, usage and timing, per call and per node; tool calls carry their node id |
+| **Run liveness lease** (`runs/<id>/live.json`) | BUILT | D40 — a second process can read a run in flight without mistaking it for a crashed one and rewinding it |
+| **Diagnostics** (`flyt why` / `probe` / `doctor`, `core/diagnostics.js`) | BUILT | D40 — why a run failed *or is stalling*, whether a model works at the budget a node gets, and whether the configuration is sane; `--json` throughout |
 
 ---
 

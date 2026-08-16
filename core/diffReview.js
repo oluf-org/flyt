@@ -14,9 +14,15 @@
 //     gets talked into things.
 import { callModel } from './adapters/index.js';
 import { extractJson } from './planEval.js';
+import { REASONING_HEADROOM } from '../src/flowTypes.js';
 
 const DIFF_BUDGET = 60_000;
-const MAX_TOKENS = 1200;
+// The verdict is short; arriving at it, over 60k of diff, is not. Sending the
+// answer size as the whole completion budget starves a reasoning model into
+// returning nothing (D40) — and this reviewer is the last thing between an
+// unattended change and the main branch, so it failing quietly is the worst
+// place in the system for this bug to live.
+const MAX_TOKENS = 1200 + REASONING_HEADROOM;
 
 export const REVIEW_SYSTEM = [
   'ROLE: diff-review',

@@ -165,8 +165,20 @@ export async function executeTool(name, args, ctx) {
   record.args = redactArgs(record.args, ctx?.secrets);
   archiveResult(record, tool, ctx);
 
-  ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: ctx.taskId ? `executor:${ctx.taskId}` : undefined, ...record });
+  ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: callerOf(ctx), ...record });
   return record;
+}
+
+// Which node made this call. The executor path has always stamped its task; an
+// aiStep's calls were stamped `undefined` and the runner passes `nodeId`, so
+// every tool call a fan-out lane made landed in the log anonymously — four
+// lanes reading one repository in parallel produced a few hundred interleaved
+// entries with nothing to sort them by, and "what did THIS lane open" was
+// unanswerable. `flyt why` counts per node, so it read every lane as having
+// made no tool calls at all.
+function callerOf(ctx) {
+  if (ctx?.taskId) return `executor:${ctx.taskId}`;
+  return ctx?.nodeId ?? undefined;
 }
 
 // Writes the artifact and swaps the record's result for its preview. Failing
@@ -179,7 +191,7 @@ function archiveResult(record, tool, ctx) {
   let written;
   try {
     written = ctx.store.writeToolResult(ctx.runId, {
-      tool: record.tool, node: ctx.taskId ? `executor:${ctx.taskId}` : undefined, task: ctx.taskId ?? undefined,
+      tool: record.tool, node: callerOf(ctx), task: ctx.taskId ?? undefined,
       args: record.args, ok: record.ok, ms: record.ms,
       ...(record.ok ? { result: record.result } : { error: record.error })
     });

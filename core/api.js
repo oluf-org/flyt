@@ -26,6 +26,7 @@ import {
 } from './benchmark.js';
 import { writeArchive, listArchive, readArchive, trend, dateStamp } from './archive.js';
 import { assertRepoUrl, nameFromRepoUrl } from './references.js';
+import { explainRun, probeModel, doctor, modelsInFlow } from './diagnostics.js';
 
 export class ApiError extends Error {
   constructor(message, { status = 400, code = 'bad_request' } = {}) {
@@ -592,6 +593,44 @@ export function createApi(engine) {
       ledgerFor(projectId).totals({ sinceMs, taskId }),
     'ledger:check': ({ projectId, taskId = null }) =>
       ledgerFor(projectId).check({ caps: runtimeConfig.loop?.caps ?? {}, taskId }),
+
+    // --- Diagnostics (D40) --------------------------------------------------
+    //
+    // The three questions a failing run raises, each answerable without paying
+    // to run it again: what happened here, does this model work, and is the
+    // configuration sane. Commands rather than a CLI-only feature, so the
+    // desktop app and any agent driving the HTTP API reach the same answers.
+    'run:explain': ({ projectId, runId }) => explainRun(proj(projectId).store, runId),
+
+    'model:probe': async ({ model, provider = null, maxTokens = null, stream = true }) => {
+      const target = provider
+        ? { provider, model, apiKey: engine.settings.providers?.[provider]?.apiKey ?? null }
+        : engine.resolveModelSource(model);
+      if (!target?.provider) {
+        throw new ApiError(`No connected provider can serve "${model}".`, { status: 400, code: 'no_provider' });
+      }
+      // No budget given means "the budget a node would really get", so the
+      // verdict answers "will this model work in this app" rather than "does it
+      // work at some number I picked".
+      return probeModel({ ...target, model },
+        { ...(maxTokens ? { maxTokens } : {}), stream, timeout: engine.runtimeConfig.timeout });
+    },
+
+    'diag:doctor': ({ projectId, probe = false, models = [], flowId = null }) => {
+      // A flow id checks the models THAT flow pins, which is the set that will
+      // actually be called — a curated list nobody's flow uses proves nothing.
+      const list = flowId ? modelsInFlow(engine.flows.load(flowId)) : models;
+      // Where this project's runs are is the first thing anyone looking into a
+      // failure needs and the hardest thing to guess: a bound folder keeps them
+      // in its own `.flyt/runs`, an appdata project under the user profile, and
+      // the dev checkout in `runs/` — three answers to one question.
+      let project = null;
+      try {
+        const p = proj(projectId);
+        project = { id: p.id ?? projectId, folder: p.folder ?? null, runsDir: p.store.rootDir };
+      } catch { /* no project bound — the rest of the report still stands */ }
+      return doctor(engine, { probe, models: list, project });
+    },
 
     // --- The reference library (LOOP-PLAN §16) ------------------------------
     //

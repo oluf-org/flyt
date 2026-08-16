@@ -30,6 +30,39 @@ Works out of the box with the built-in **mock** provider (no API key). To use
 real models, add an OpenRouter key in the in-app Settings, or edit
 `config.json` (see the `anthropicExample` block).
 
+## Drive it without the window
+
+`flyt` is the headless front door: the same engine, no Electron. Every command
+takes `--json`, and machine-readable output goes to stdout while human text
+goes to stderr — so an agent never has to separate them.
+
+```sh
+npx flyt flows                                     # what can be run
+npx flyt run learn-from-repo --in repo=<url>       # start one and wait
+npx flyt runs                                      # what has been run
+```
+
+### When something goes wrong
+
+Three commands answer the three questions, without re-running anything (D40):
+
+```sh
+npx flyt why                    # the latest run: where it stopped, and what to try
+npx flyt probe <model>          # call one model once — does it work at our budget?
+npx flyt doctor --flow <id>     # providers, priority, library, and the models a flow pins
+```
+
+`flyt why` reads the per-call black box every run now writes (`log.jsonl`
+`model_call` events, and `calls/<node>.jsonl` per node): finish reason, the
+content-vs-reasoning token split, request size and timing. It works on a run
+that is still going, and inspecting a live run is safe — a run holds a liveness
+lease so a second process never mistakes it for a crashed one.
+
+`flyt probe` is the fastest way to answer "is this model usable here?". It
+sends one representative call at the budget a node would really get and reports
+what came back — including whether the model spent its whole budget reasoning
+and returned nothing, which is what an "empty response" almost always is.
+
 ## Architecture
 
 The core design constraint is **file-based state as the single source of

@@ -6,6 +6,7 @@
 // constructed over the SAME store — process state lost, file state intact.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import os from 'node:os';
 import { FlowRunner } from '../core/flowRunner.js';
 import { makeStore, setScript, roleOf, testConfig, waitFor, waitForStage, makeFlow, node, edge } from './helpers.js';
 
@@ -40,6 +41,11 @@ test('resume continues an interrupted run without re-executing completed nodes',
   assert.deepEqual(calls, ['A', 'B']);
 
   // --- app restart ---
+  // A crash is the holder's liveness lease going away (D40): the walk is still
+  // suspended in THIS process, so without this the run is — correctly — still
+  // live, and a second runner must leave it alone. Dropping the lease is what a
+  // dead process's would do on its own.
+  store.clearLease(runId);
   const restarted = new FlowRunner(store, testConfig());
   assert.deepEqual(restarted.reconcileInterrupted(), [runId], 'the run should be flagged interrupted');
   assert.equal(store.readMeta(runId).interrupted, true);
@@ -173,4 +179,60 @@ test('an agentTask whose task already finished is not re-run on resume', async (
   // The task's work is honored, not repeated.
   assert.equal(executorCalls, 1, 'the finished task must not run a second time');
   assert.equal(store.readMeta(runId).nodeStatus.at, 'done');
+});
+
+// The defect the liveness lease exists to fix (D40).
+//
+// `reconcileInterrupted` ran on every project open and decided "nothing is live
+// in this process" meant "nothing is live anywhere". The moment a second
+// process existed — a `flyt` command inspecting a headless run, a window opened
+// beside one — that read a healthy in-flight run as a crashed one: flagged it
+// interrupted and rewound every non-done node to 'pending' underneath the walk
+// still working on it. Observed live: `flyt why <runId>` on a running fan-out
+// requeued its lanes.
+//
+// Which made the headless front door self-defeating. You could start a run
+// without the app and then not look at it.
+test('a second process must not mark a LIVE run interrupted', async () => {
+  const store = makeStore();
+  let release;
+  setScript(async ({ prompt }) => (goalOf(prompt) === 'B' ? NEVER() : `output ${goalOf(prompt)}`));
+
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(crashingFlow());
+  await waitFor(() => store.readMeta(runId).nodeStatus.b === 'active', { label: 'b in flight' });
+
+  // A whole separate FlowRunner over the same store — a `flyt` invocation, or
+  // the desktop app opening the same project.
+  const observer = new FlowRunner(store, testConfig());
+  assert.deepEqual(observer.reconcileInterrupted(), [], 'a live run is not an interrupted one');
+  assert.notEqual(store.readMeta(runId).interrupted, true);
+  assert.equal(store.readMeta(runId).nodeStatus.b, 'active', 'the in-flight node must not be rewound');
+  assert.equal(store.readMeta(runId).nodeStatus.a, 'done');
+
+  // ...and once the holder is gone, the same call reaches the opposite verdict.
+  store.clearLease(runId);
+  assert.deepEqual(observer.reconcileInterrupted(), [runId]);
+  assert.equal(store.readMeta(runId).nodeStatus.b, 'pending');
+  release?.();
+});
+
+// A lease left behind by a process that died without releasing must not pin a
+// run as live forever — the whole recovery path depends on being able to tell.
+test('a lease whose holder is gone does not keep a dead run looking alive', () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  const runId = store.createRun('p');
+  store.writeMeta(runId, { ...store.readMeta(runId), flowId: 'f', stage: 'execution' });
+
+  // A pid that cannot exist, beating just now: the timestamp says fresh, the
+  // process says otherwise, and the process wins on this host.
+  store.writeLease(runId, { pid: 0x7ffffff0, host: os.hostname(), beatAt: Date.now() });
+  assert.equal(runner.isRunLive(runId), false);
+
+  // A stale beat from another machine, where no pid check is possible.
+  store.writeLease(runId, { pid: 1, host: 'some-other-host', beatAt: Date.now() - 10 * 60 * 1000 });
+  assert.equal(runner.isRunLive(runId), false);
+  store.writeLease(runId, { pid: 1, host: 'some-other-host', beatAt: Date.now() });
+  assert.equal(runner.isRunLive(runId), true);
 });

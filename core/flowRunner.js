@@ -27,10 +27,11 @@
 //                retry-for-<node>.md guidance) | escalate (human gate)
 //   stitch    -> fixTasks[] routed through the existing create_task tool
 import fs from 'node:fs';
+import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { callModel, abortError, isAbortError } from './adapters/index.js';
-import { runAgent, toolProtocol, supportsToolsFor } from './agent.js';
+import { runAgent, callForAnswer, describeEmptyTurn, toolProtocol, supportsToolsFor } from './agent.js';
 import { makeRetrospective } from './retrospective.js';
 import { recordToolUsage } from './feedback.js';
 import { resolveCallTarget } from './modelSource.js';
@@ -63,7 +64,7 @@ import { JUDGE_SYSTEM, buildJudgePrompt, parseJudgeVerdict } from './judge.js';
 import { deriveRunName } from './state.js';
 import {
   createNodeFromTemplate, getTemplate, resolveFlow, resolveInstance, primaryPort,
-  effectiveRole, isFeedbackEdge, forwardEdges, EFFORT_MAX_TOKENS, LEGACY_TEMPLATE_MAP,
+  effectiveRole, isFeedbackEdge, forwardEdges, EFFORT_MAX_TOKENS, effortBudget, REASONING_HEADROOM, LEGACY_TEMPLATE_MAP,
   validateOverrideMap, mergeOverrideMaps
 } from '../src/flowTypes.js';
 import { pickDefaultWorker, providerModelsFor, taskKindOf, PROVIDER_ORDER } from './modelPriority.js';
@@ -463,7 +464,12 @@ const PEEK_SYSTEM = [
 // enough to start reading source. §4 costs the whole feature at 10-15% overhead
 // on the strength of this number.
 const PEEK_MAX_CALLS = 6;
-const PEEK_MAX_TOKENS = 700;
+// 200 words is the ANSWER the peek is asked for; 700 tokens is roughly that,
+// and was being sent as the whole completion budget. On a reasoning model that
+// buys a peek cut off mid-thought having written nothing — `flyt why` caught
+// exactly that on a live run, finish_reason "length" at max_tokens 700. The
+// answer stays 200 words; the model gets room to arrive at it (D40).
+const PEEK_MAX_TOKENS = 700 + REASONING_HEADROOM;
 
 // The tools a peek may hold, intersected with (never added to) whatever the
 // fan-out itself was granted. `glob` is listed for the day it exists; today the
@@ -666,6 +672,13 @@ export function topoSort(flow) {
 // never interrupted — but restartNode/branch can still relaunch from one.
 export const TERMINAL_STAGES = new Set(['done', 'failed', 'rejected', 'cancelled']);
 
+// The liveness lease (D40). The beat is short so a lease goes stale quickly
+// once its holder is gone; the window is many beats wide so a busy event loop —
+// a walk sitting inside a 90-second reasoning call — is never mistaken for a
+// dead one.
+const LEASE_BEAT_MS = 5000;
+const LEASE_STALE_MS = 60000;
+
 // The node plus everything transitively DOWNSTREAM of it over forward edges
 // (feedback edges point backwards by design and are excluded). restartNode's
 // reset set; exported for tests.
@@ -746,6 +759,18 @@ export class FlowRunner {
     // it's exactly what's lost in a crash, which is what makes an interrupted
     // run identifiable (see reconcileInterrupted).
     this.live = new Set();
+    // ...and its file-state shadow, so OTHER processes can see it too (D40).
+    // Held one-to-one with `live`: whatever drops a run from that set releases
+    // its lease in the same breath, or a stopped run keeps beating "I'm alive"
+    // until its walk finishes unwinding.
+    this.leases = new Map();
+  }
+
+  // Stop claiming this run. Idempotent — stop() and the walk's own unwind both
+  // reach it, in either order.
+  releaseLease(runId) {
+    this.leases.get(runId)?.release();
+    this.leases.delete(runId);
   }
 
   notify(runId) { this.onUpdate(runId); }
@@ -805,15 +830,44 @@ export class FlowRunner {
   // One model call whose lifetime is registered against the run, so stop()
   // can abort it. The signal itself stays optional all the way down — every
   // other caller of callModel is untouched.
-  async trackedCallModel(runId, params) {
+  async trackedCallModel(runId, params, nodeId = null) {
     const ctl = this.trackAbort(runId);
     try {
       // The deadline default is the runner's, so a per-call timeout in params
       // still wins (LOOP-PLAN §11.5).
-      return await callModel({ timeout: this.config.timeout, ...params, signal: ctl.signal });
+      //
+      // callForAnswer, not callModel: a turn that comes back with nothing but
+      // reasoning gets one nudged retry at a larger budget before anyone calls
+      // it a failure (core/agent.js). Every path through this method wants
+      // that — a planner, a judge and a lane all fail the same way without it.
+      return await callForAnswer({
+        timeout: this.config.timeout, ...params, signal: ctl.signal,
+        onCall: this.callLogger(runId, nodeId)
+      }, this.emptyTurnLogger(runId, nodeId));
     } finally {
       this.untrackAbort(runId, ctl);
     }
+  }
+
+  // The black box (D40). One line per settled model call, in the run's own log:
+  // model, budget, request size, finish reason, the content/reasoning split and
+  // what it cost. Runs used to fail on "returned an empty response" with
+  // nothing on disk to say whether the answer had been truncated, spent on
+  // reasoning, or never started — the only way to find out was to run it again.
+  callLogger(runId, nodeId) {
+    return record => {
+      this.store.appendLog(runId, { event: 'model_call', ...(nodeId ? { node: nodeId } : {}), ...record });
+      if (nodeId) this.store.writeCallTrace(runId, nodeId, record);
+    };
+  }
+
+  // A turn that produced nothing and had to be nudged. Logged whether or not
+  // the recovery worked, because "this model needs two calls to answer once" is
+  // a fact about the configuration worth seeing on a run that succeeded.
+  emptyTurnLogger(runId, nodeId) {
+    return info => this.store.appendLog(runId, {
+      event: 'model_empty_turn', ...(nodeId ? { node: nodeId } : {}), ...info
+    });
   }
 
   // An aiStep with a grant runs through the agent loop instead of a bare model
@@ -822,7 +876,7 @@ export class FlowRunner {
   // `readonly-tools` rule — and runAgent with an empty tool list IS
   // trackedCallModel, so every existing aiStep takes exactly its old path.
   async trackedRunAgent(runId, nodeId, params, tools, subject = null) {
-    if (!tools.length) return this.trackedCallModel(runId, params);
+    if (!tools.length) return this.trackedCallModel(runId, params, nodeId);
     const ctl = this.trackAbort(runId);
     try {
       // runAgent takes the worker NESTED (`{ worker, apiKey, system, ... }`),
@@ -835,6 +889,8 @@ export class FlowRunner {
       const { apiKey, system, prompt, onText, onRetry, retry, maxIterations, ...worker } = params;
       return await runAgent({
         worker, apiKey, system, prompt, onText, onRetry, retry,
+        onCall: this.callLogger(runId, nodeId),
+        onEmptyTurn: this.emptyTurnLogger(runId, nodeId),
         timeout: this.config.timeout, tools, signal: ctl.signal,
         // A node that searches a repository needs more rounds than one that
         // checks the time (core/agent.js MAX_ITERATIONS). A caller may cap
@@ -984,9 +1040,11 @@ export class FlowRunner {
   // live and must not be resumable from underneath itself).
   launch(runId, flow, resume = false) {
     this.live.add(runId);
+    this.leases.set(runId, this.holdLease(runId));
     this.execute(runId, flow, resume)
       .catch(err => this.fail(runId, err))
       .finally(() => {
+        this.releaseLease(runId);
         this.live.delete(runId);
         // RUN-CONTROL: the walk has fully unwound — a stop request has done its
         // work and must not leak into a later relaunch of the same run.
@@ -997,11 +1055,55 @@ export class FlowRunner {
       });
   }
 
+  // Claim this run for this process, and keep saying so while it walks.
+  //
+  // The beat has to be short relative to the staleness window, and the timer
+  // must never be a reason for a process to stay alive — a CLI that has
+  // finished its command should exit, not linger holding a lease it no longer
+  // needs.
+  holdLease(runId) {
+    const beat = () => this.store.writeLease(runId, {
+      pid: process.pid,
+      host: os.hostname(),
+      startedAt: new Date().toISOString(),
+      beatAt: Date.now()
+    });
+    beat();
+    const timer = setInterval(beat, LEASE_BEAT_MS);
+    timer.unref?.();
+    return {
+      release: () => { clearInterval(timer); this.store.clearLease(runId); }
+    };
+  }
+
+  // Is some process — this one or another — actually walking this run?
+  //
+  // The pid check is the precise half: on this host, a process either exists or
+  // it does not, and `kill(pid, 0)` says which without touching it. The
+  // timestamp is the fallback for a lease written on another machine, and for a
+  // pid that has since been recycled onto something unrelated.
+  isRunLive(runId) {
+    if (this.live.has(runId)) return true;
+    const lease = this.store.readLease(runId);
+    if (!lease) return false;
+    const fresh = Date.now() - Number(lease.beatAt ?? 0) < LEASE_STALE_MS;
+    if (lease.host && lease.host !== os.hostname()) return fresh;
+    if (!fresh) return false;
+    try { process.kill(lease.pid, 0); return true; }
+    // ESRCH: no such process — the holder died without releasing. EPERM means
+    // it exists but belongs to someone else, which still counts as alive.
+    catch (err) { return err?.code === 'EPERM'; }
+  }
+
   // At startup nothing is live yet, so any run left in a non-terminal stage was
   // cut off by the app dying — mark it so the UI can offer Resume (D17, V1
   // task 7). awaiting_approval is deliberately excluded: those runs already
   // have a way back (approve/reject → resumeFromGate), and a tool gate must
   // stay abandonable rather than look resumable.
+  //
+  // "Nothing is live yet" is true of a fresh process and false of a fresh
+  // PROCESS BESIDE A RUNNING ONE, which is the normal case the moment anything
+  // headless exists — hence the lease (D40) rather than the in-memory set.
   reconcileInterrupted() {
     const marked = [];
     for (const runId of this.store.listRuns()) {
@@ -1009,7 +1111,7 @@ export class FlowRunner {
       try { meta = this.store.readMeta(runId); } catch { continue; }
       if (!meta?.flowId || meta.interrupted) continue;
       if (TERMINAL_STAGES.has(meta.stage) || meta.stage === 'awaiting_approval' || meta.stage === 'awaiting_input') continue;
-      if (this.live.has(runId)) continue;
+      if (this.isRunLive(runId)) continue;
       this.store.writeMeta(runId, { ...meta, interrupted: true });
       this.store.appendLog(runId, { event: 'run_interrupted', stage: meta.stage });
       this.rewindInFlight(runId);
@@ -1161,6 +1263,7 @@ export class FlowRunner {
     });
     this.store.setStage(runId, 'cancelled', { cancelledAt: new Date().toISOString() });
     this.store.appendLog(runId, { event: 'run_stopped' });
+    this.releaseLease(runId);
     this.live.delete(runId);
     this.notify(runId);
     return { ok: true };
@@ -3143,7 +3246,7 @@ export class FlowRunner {
         result = await this.trackedRunAgent(runId, node.id, {
           ...worker, apiKey, system, prompt: userMsg, onText,
           // Effort level sets the response budget; medium keeps the default.
-          ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
+          maxTokens: effortBudget(node.data?.effort),
           onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
         }, stepTools, subjectOf(node));
         // A call that comes back with nothing is not a success. Recording one as
@@ -3152,7 +3255,20 @@ export class FlowRunner {
         // way while producing nothing. Only ever seen against a real provider;
         // the mock always answers, which is why this survived to V1 task 11.
         if (!String(result.text ?? '').trim()) {
-          throw new Error(`${worker.provider}/${worker.model} returned an empty response`);
+          throw new Error(describeEmptyTurn(worker, result));
+        }
+        // A truncated deliverable is not an empty one, so it is not a failure —
+        // but it IS half an answer being handed downstream as though it were
+        // whole, and nothing said so. The node keeps its output and the run
+        // keeps going; the log carries the fact that the budget, not the model,
+        // decided where this stopped.
+        if (result.finishReason === 'length') {
+          this.store.appendLog(runId, {
+            event: 'output_truncated', node: node.id, role,
+            model: `${worker.provider}/${worker.model}`,
+            maxTokens: EFFORT_MAX_TOKENS[node.data?.effort] ?? null,
+            chars: String(result.text).length
+          });
         }
       } catch (err) {
         // RUN-CONTROL stop: an aborted call is not a node failure — no failed
@@ -3526,9 +3642,9 @@ export class FlowRunner {
       try {
         result = await this.trackedCallModel(runId, {
           ...worker, apiKey, system, prompt: userMsg, onText,
-          ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
+          maxTokens: effortBudget(node.data?.effort),
           onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
-        });
+        }, node.id);
       } catch (err) {
         // RUN-CONTROL stop: not a failure — back to pending, no failed retro.
         if (isAbortError(err) || this.stopRequests.has(runId)) {
@@ -3773,9 +3889,9 @@ export class FlowRunner {
     try {
       const result = await this.trackedCallModel(runId, {
         ...worker, apiKey, system: LANE_PLAN_SYSTEM, prompt: userMsg, onText,
-        ...(EFFORT_MAX_TOKENS[node.data?.effort] ? { maxTokens: EFFORT_MAX_TOKENS[node.data.effort] } : {}),
+        maxTokens: effortBudget(node.data?.effort),
         onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
-      });
+      }, `${node.id}:lane-planner`);
       outText = String(result.text ?? '').trim();
     } catch (err) {
       // A stop unwinds the walk; anything else degrades to the authored roster
@@ -4305,7 +4421,7 @@ export class FlowRunner {
     ].join('\n\n');
     try {
       const result = await this.trackedCallModel(runId, { ...worker, apiKey, system, prompt,
-        onRetry: this.retryLogger(runId, node.id), retry: this.config.retry });
+        onRetry: this.retryLogger(runId, node.id), retry: this.config.retry }, `${node.id}:reask`);
       return String(result.text ?? '').trim();
     } catch (err) {
       // A stop must unwind the walk, not degrade into a graceful contract miss.

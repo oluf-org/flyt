@@ -553,6 +553,59 @@ export class RunStore {
     fs.appendFileSync(path.join(this.runDir(runId), 'log.jsonl'), line + '\n', 'utf8');
   }
 
+  // --- the liveness lease (D40) --------------------------------------------
+  //
+  // Which PROCESS is walking this run, refreshed while it walks.
+  //
+  // `live` was an in-memory Set, so "is anything running this?" could only ever
+  // be answered about the current process. Every other process — a `flyt`
+  // command, a second window, the desktop app opened beside a headless run —
+  // saw an empty set, concluded the run had been cut off, marked it interrupted
+  // and rewound its node statuses to pending underneath the process that was
+  // still working on it. Reading a run in flight corrupted it, which made the
+  // whole point of a headless front door self-defeating: you could start a run
+  // without the app, but not look at it.
+  writeLease(runId, lease) {
+    const p = path.join(this.runDir(runId), 'live.json');
+    try { fs.writeFileSync(p, JSON.stringify(lease), 'utf8'); } catch { /* a lease is advisory */ }
+  }
+  readLease(runId) {
+    try { return JSON.parse(fs.readFileSync(path.join(this.runDir(runId), 'live.json'), 'utf8')); }
+    catch { return null; }
+  }
+  clearLease(runId) {
+    try { fs.rmSync(path.join(this.runDir(runId), 'live.json'), { force: true }); } catch { /* already gone */ }
+  }
+
+  // --- the model-call black box (D40) --------------------------------------
+  // Every model call a node makes, kept per node in calls/<nodeId>.jsonl.
+  //
+  // The same records are in log.jsonl, interleaved with everything else; a
+  // fan-out puts four lanes and several hundred tool calls in that one file,
+  // and "what did THIS lane's calls look like" was a grep with a lot of hope in
+  // it. One file per node makes the question a read.
+  writeCallTrace(runId, nodeId, record) {
+    const dir = path.join(this.runDir(runId), 'calls');
+    fs.mkdirSync(dir, { recursive: true });
+    const line = JSON.stringify({ ts: new Date().toISOString(), ...record });
+    fs.appendFileSync(path.join(dir, `${safeName(nodeId)}.jsonl`), line + '\n', 'utf8');
+  }
+
+  readCallTrace(runId, nodeId) {
+    const file = path.join(this.runDir(runId), 'calls', `${safeName(nodeId)}.jsonl`);
+    if (!fs.existsSync(file)) return [];
+    return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean)
+      .map(l => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean);
+  }
+
+  // Every node that made a call this run, in the order the directory lists them.
+  callTraceNodes(runId) {
+    const dir = path.join(this.runDir(runId), 'calls');
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir).filter(f => f.endsWith('.jsonl')).map(f => f.replace(/\.jsonl$/, ''));
+  }
+
   // Full snapshot for the UI.
   snapshot(runId) {
     const tasks = this.readTasks(runId);
@@ -596,6 +649,11 @@ export class RunStore {
 function readJson(p) { return JSON.parse(fs.readFileSync(p, 'utf8')); }
 function writeJson(p, obj) { fs.writeFileSync(p, JSON.stringify(obj, null, 2), 'utf8'); }
 function truncate(s, n = 200) { return s.length > n ? s.slice(0, n) + '…' : s; }
+
+// The same sanitising nodeOutputPath applies, so a node's call trace and its
+// output artifact are findable under the same name. Node ids carry ':' on the
+// executor path ("executor:task-1"), which is not a legal Windows filename.
+function safeName(nodeId) { return String(nodeId).replace(/[^a-zA-Z0-9_-]/g, '_'); }
 
 export const UNTITLED_RUN = 'Untitled run';
 const MAX_RUN_NAME = 80;

@@ -498,6 +498,102 @@ a failure needs a door out of.
 
 ---
 
+### D40 — A run that fails says what it measured, and can be inspected while it runs
+
+**The occasion.** `learn-from-repo` failed on its fan-out four evenings running. Every attempt
+ended on the same sentence — `openrouter/deepseek/deepseek-v4-pro-0813 returned an empty
+response` — and the only available next step was to run it again, at full cost, and watch
+harder. Two of the four runs were cancelled by hand at the hour mark because the nodes looked
+frozen. They were not: they were thinking.
+
+**What it actually was.** `max_tokens` bounds the *whole* completion, and on a reasoning model
+most of a completion is reasoning nobody sees. The app was sending its **answer** budget as
+`max_tokens`, so a thinking node got a budget it could exhaust before writing its first visible
+character. Measured against the live provider:
+
+| max_tokens | answer | reasoning tokens | finish_reason | wall clock |
+|---|---|---|---|---|
+| 1024 | 0 chars | 1024 | `length` | 19s |
+| **4096** (this app's `medium`, and what the fan-out lanes ran at) | **0 chars** | **4096** | **`length`** | **69s** |
+| 12288 | 311 chars | 939 | `stop` | 18s |
+
+Read the third row against the second: given room, it thought *less*. A tight budget does not
+buy a shorter answer — it buys a model that reasons until it is cut off and returns nothing.
+
+**Four defects, not one.**
+
+1. **Reasoning was discarded.** `delta.reasoning` was never read, so the tokens were paid for
+   and dropped, the turn read as empty, and nothing on disk said otherwise.
+2. **Nothing recorded what happened.** No finish reason, no token split, no request size, no
+   timing. The failure was undiagnosable by construction.
+3. **An empty turn was fatal.** A lane that had spent three minutes reading a repository lost
+   all of it to one content-free turn.
+4. **Inspecting a run corrupted it.** `reconcileInterrupted()` read "nothing is live *in this
+   process*" as "nothing is live", so any second process — a `flyt` command, a window opened
+   beside a headless run — flagged a healthy run interrupted and rewound its in-flight nodes to
+   `pending` underneath the walk still working on them. Observed live during this very
+   investigation: `flyt why <runId>` requeued a running fan-out's lanes.
+
+**What was decided.**
+
+- **Effort is the answer budget; reasoning gets its own room on top.** `effortBudget(effort)` =
+  `EFFORT_MAX_TOKENS[effort] + REASONING_HEADROOM`, and nodes that declare no effort get the
+  default rather than the adapter's bare 4096 — "unset" is where the same starvation was
+  hiding for every non-lane node, including the `combine` that merges a fan-out. Headroom is
+  free when unused: `max_tokens` is a ceiling and billing is per token generated, so a model
+  that does not reason is unaffected.
+- **An empty turn is recovered, once, before it is a failure.** Nudged with the omission named,
+  at double the budget. This lives in `callForAnswer`, which every model call in the runner
+  goes through — a planner, a judge and a lane all failed the same way without it.
+- **Reasoning is streamed as progress, never as the deliverable.** `text` stays exactly the
+  model's `content`; the watch view shows thinking only while there is nothing better, so a
+  node moves at ~1s instead of sitting silent for 90. This is what the two hand-cancelled runs
+  actually needed.
+- **Every model call is recorded** — provider, model, budget, request size, finish reason,
+  content/reasoning split, usage, timing — to `log.jsonl` and to `calls/<node>.jsonl`. One file
+  per node, because a fan-out puts four lanes and several hundred tool calls in one timeline.
+  Tool calls now carry their node id too; an `aiStep`'s were logged anonymously, so a lane's
+  reads were unattributable.
+- **A run holds a liveness lease** (`runs/<id>/live.json`, pid + host + beat). `isRunLive`
+  trusts the pid on this host and the timestamp elsewhere. Reading a run in flight is now safe,
+  which is the precondition for a headless front door being worth having.
+
+**The tools, which are the point as much as the fix.** Three commands, all `--json` for an
+agent and prose for a person, in `core/diagnostics.js` behind `run:explain` / `model:probe` /
+`diag:doctor`:
+
+- **`flyt why [<runId>]`** — defaults to the latest run. What it was doing, where it stopped,
+  the calls at that point, and a next step *derived from evidence*: a truncation names the
+  budget it hit, four transient retries are called throttling. Works on a live run — the
+  in-flight node comes from the log, because `meta.nodeStatus` lags behind a node deep in an
+  agent loop, and the run you want to look at is the one still going. When a run predates the
+  black box it says so rather than guessing: "no trace recorded" is not "no calls made".
+- **`flyt probe <model>...`** — one representative call at the budget a node would really get,
+  reporting the content/reasoning split, the finish reason and time-to-first-output. This is
+  the command that found the bug: 19 seconds and a fraction of a cent to establish what four
+  evenings of runs could not.
+- **`flyt doctor [--flow <id>] [--probe]`** — providers in priority order, the reference
+  library, and the models a *given flow* pins (including lane-only models, which were exactly
+  the unchecked ones). It flags a subscription CLI ranked above a working API provider, since
+  that failure arrives disguised as a model problem — this project's `fanout_peek_skipped`,
+  once per run, was a broken `codex` config being chosen ahead of `openrouter`.
+
+**Surface.** `core/adapters/http.js` (reasoning capture, thinking view), `core/adapters/index.js`
+(`onCall`, `callRecord`), `core/agent.js` (`callForAnswer`, `describeEmptyTurn`),
+`core/flowRunner.js` (call/empty-turn logging, `holdLease`/`isRunLive`, truncation logging),
+`core/state.js` (lease + call trace), `core/tools/index.js` (node attribution),
+`core/nodes/executor.js`, `src/flowTypes.js` (`effortBudget`, `REASONING_HEADROOM`),
+`core/api.js`, `bin/flyt.js`. New: `core/diagnostics.js`, `tests/diagnostics.test.js`.
+
+**Status.** Decided and **implemented**; `learn-from-repo` runs end to end against
+`prime-agent` on the models that used to fail it. Open: whether `REASONING_HEADROOM` should be
+learned per model from the recorded traces rather than fixed; whether `flyt why` belongs in the
+desktop UI as a panel on a failed run (D39 put the error there — this is the layer under it);
+and whether the lane count should adapt to observed provider latency, since six lanes of an
+85s-per-call model is a slow hour by construction.
+
+---
+
 ## Open questions (consolidated)
 
 **Product (from `PRODUCT-SPEC.md` §10):**

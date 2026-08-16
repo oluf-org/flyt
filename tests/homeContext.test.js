@@ -563,3 +563,30 @@ test('search_references scopes itself to the subject, and "*" opts out', async (
   await executeTool('search_references', { pattern: 'retry' }, { references });
   assert.equal(searched[3], null, 'no subject, no scoping — every other flow is unchanged');
 });
+
+// --- attribution (D40) -------------------------------------------------------
+//
+// A tool call has to say WHICH node made it. The executor path always stamped
+// its task; an aiStep's calls were logged with `node: undefined`, so a fan-out
+// reading a repository through several lanes in parallel produced hundreds of
+// interleaved anonymous entries and "what did this lane actually open" had no
+// answer. Observed on a real run: 237 tool calls, none attributable, and the
+// per-node diagnostics read every lane as having made none.
+test('an aiStep tool call is attributed to the node that made it', async () => {
+  const dir = tmpProject({ 'src/ours.js': 'export const ours = 1;' });
+  const store = makeStore();
+  let asked = false;
+  setScript(() => {
+    if (asked) return 'done';
+    asked = true;
+    return '```tool\n{"tool":"read_file","args":{"path":"src/ours.js"}}\n```';
+  });
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(orientFlow(), { userInput: 'brief', workspace: dir });
+  await waitForStage(store, runId, ['done', 'failed']);
+  assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
+
+  const call = store.readLog(runId).find(l => l.event === 'tool_call' && l.tool === 'read_file');
+  assert.ok(call, 'the call happened');
+  assert.equal(call.node, 'step', 'and it says which node made it');
+});

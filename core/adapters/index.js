@@ -203,7 +203,15 @@ export const DEFAULT_RETRY = { attempts: 5, baseMs: 1000, maxMs: 30000 };
 // timeout: { idleMs, hardMs } — the per-attempt deadline above, overridable per
 // call and from config.json (`timeout`). Adapters that supervise their own
 // child process (the CLI-delegation providers) opt out of the idle half.
-export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools, retry, timeout, onText, onRetry, signal, ...rest }) {
+//
+// onCall(record) — fires ONCE per settled call (success or final failure) with
+// a metadata-only record of what was sent and what came back. This is the
+// black box: a run that failed on "empty response" could previously be
+// diagnosed only by re-running it, because nothing anywhere recorded the
+// finish reason, the token split, or how big the request was. Metadata only,
+// by design — the bodies are large, and the sizes are what answer the
+// questions actually asked of a failed call.
+export async function callModel({ provider, model, system, prompt, maxTokens = 4096, apiKey, messages, tools, retry, timeout, onText, onRetry, onCall, signal, ...rest }) {
   const adapter = providers[provider];
   if (!adapter) throw new Error(`Unknown provider "${provider}". Available: ${Object.keys(providers).join(', ')}`);
   const attempts = Math.max(1, retry?.attempts ?? DEFAULT_RETRY.attempts);
@@ -233,22 +241,32 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
         adapter({ model, system, prompt, maxTokens, apiKey, messages, tools, onText: watched, signal: deadline.signal, ...rest }),
         deadline.expired
       ]);
-      return {
+      const settled = {
         ...result, provider, model,
         durationMs: Date.now() - started,
         ...(attempt > 0 ? { retries: attempt } : {})
       };
+      report(onCall, { provider, model, maxTokens, system, prompt, messages, tools, attempt, started, ...rest }, settled, null);
+      return settled;
     } catch (err) {
       // Precedence matters. Aborting the adapter is HOW a deadline is enforced,
       // so a fired deadline arrives here as an AbortError that must not be read
       // as a deliberate stop — but the caller's own signal outranks both, since
       // a stop landing during a timeout is still a stop.
-      if (signal?.aborted) throw isAbortError(err) ? err : abortError();
+      const ctx = { provider, model, maxTokens, system, prompt, messages, tools, attempt, started, ...rest };
+      if (signal?.aborted) {
+        const aborted = isAbortError(err) ? err : abortError();
+        report(onCall, ctx, null, aborted);
+        throw aborted;
+      }
       const failure = deadline.timedOut ? deadline.error : err;
       lastErr = failure;
       // An abort with nobody having asked for one: an adapter's own cancellation.
-      if (isAbortError(failure)) throw failure;
-      if (attempt === attempts - 1 || !isTransientError(failure)) throw failure;
+      if (isAbortError(failure)) { report(onCall, ctx, null, failure); throw failure; }
+      if (attempt === attempts - 1 || !isTransientError(failure)) {
+        report(onCall, ctx, null, failure);
+        throw failure;
+      }
       // The provider's own Retry-After wins whenever it asks for longer than we
       // guessed — it knows when its window reopens and we don't. Capped, so a
       // hostile or mistaken hint can't park the run indefinitely.
@@ -269,4 +287,45 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
     }
   }
   throw lastErr; // unreachable, but keeps the control flow explicit
+}
+
+// The black-box record for one settled model call (see onCall above).
+//
+// Everything here answers a question a failed run actually raised and could not
+// answer: "was the answer truncated?" (finishReason), "did it spend the whole
+// budget thinking?" (reasoningChars / reasoning_tokens vs maxTokens), "was the
+// request enormous?" (promptChars), "did it even get to answer?" (contentChars),
+// "how long did we wait?" (ms). A reporter that throws must never take the call
+// down with it — this is instrumentation, not behavior.
+export function callRecord(ctx, result, error) {
+  const msgs = ctx.messages ?? null;
+  const promptChars = msgs
+    ? msgs.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : 0), 0)
+    : String(ctx.system ?? '').length + String(ctx.prompt ?? '').length;
+  return {
+    provider: ctx.provider,
+    model: ctx.model,
+    ...(result?.resolvedModel && result.resolvedModel !== ctx.model ? { servedBy: result.resolvedModel } : {}),
+    maxTokens: ctx.maxTokens ?? null,
+    messages: msgs ? msgs.length : 2,
+    promptChars,
+    tools: Array.isArray(ctx.tools) ? ctx.tools.length : 0,
+    ms: Date.now() - ctx.started,
+    ...(ctx.attempt ? { attempts: ctx.attempt + 1 } : {}),
+    ...(error
+      ? { ok: false, error: String(error?.message ?? error).slice(0, 400) }
+      : {
+        ok: true,
+        finishReason: result?.finishReason ?? null,
+        contentChars: String(result?.text ?? '').length,
+        reasoningChars: String(result?.reasoning ?? '').length,
+        toolCalls: result?.message?.tool_calls?.length ?? 0,
+        ...(result?.usage ? { usage: result.usage } : {})
+      })
+  };
+}
+
+function report(onCall, ctx, result, error) {
+  if (!onCall) return;
+  try { onCall(callRecord(ctx, result, error)); } catch { /* instrumentation never fails a call */ }
 }

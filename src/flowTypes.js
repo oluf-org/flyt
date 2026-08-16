@@ -255,7 +255,39 @@ export const NODE_CATEGORIES = [
 // an explicitly chosen worker.
 export const EFFORT_LEVELS = ['low', 'medium', 'high'];
 export const DEFAULT_EFFORT = 'medium';
+// The ANSWER budget — how much deliverable a node at this effort may write.
 export const EFFORT_MAX_TOKENS = { low: 2048, medium: 4096, high: 8192 };
+
+// Room for the model to think in, on top of the answer budget (D40).
+//
+// `max_tokens` bounds the WHOLE completion, and on a reasoning model most of a
+// completion is reasoning the caller never sees. Sending the answer budget as
+// max_tokens therefore hands a thinking model a budget it can exhaust before
+// writing its first visible character — which is not a hypothetical:
+//
+//   deepseek-v4-pro-0813, max_tokens 4096 (this app's `medium`):
+//     0 characters of answer, 4096 reasoning tokens, finish_reason "length", 69s
+//   the same model, same question, max_tokens 12288:
+//     311 characters of answer, 939 reasoning tokens, finish_reason "stop", 18s
+//
+// Note the second line: given room, it thought LESS. A tight budget does not
+// buy a shorter answer, it buys a model that reasons until it is cut off and
+// returns nothing. Four evenings of fan-out runs died on exactly that, reported
+// as "returned an empty response".
+//
+// Headroom is free when it is not used — max_tokens is a ceiling, and billing
+// is per token actually generated — so a model that does not reason is
+// unaffected by this.
+export const REASONING_HEADROOM = 8192;
+
+// What to put on the wire for a node at this effort. Nodes that declare no
+// effort get the default one rather than the adapter's bare 4096, because
+// "unset" is where the same starvation was hiding for every non-lane node —
+// the `combine` step that merges a fan-out sets no effort and failed the same
+// way.
+export function effortBudget(effort) {
+  return (EFFORT_MAX_TOKENS[effort] ?? EFFORT_MAX_TOKENS[DEFAULT_EFFORT]) + REASONING_HEADROOM;
+}
 
 // The Work node's task types are exactly the model-selection categories.
 export const WORK_CATEGORIES = NODE_CATEGORIES;

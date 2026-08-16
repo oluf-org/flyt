@@ -25,12 +25,17 @@
 import { callModel } from './adapters/index.js';
 import { extractJson } from './planEval.js';
 import { FeedbackStore, RATINGS } from './feedback.js';
+import { REASONING_HEADROOM } from '../src/flowTypes.js';
 
 // How much of the instance's own output to hand back. Enough to remember what
 // it did, not so much that the retrospective costs as much as the work.
 const OUTPUT_BUDGET = 4000;
 const GOAL_BUDGET = 2000;
-const MAX_TOKENS = 900;
+// 900 is the answer; the headroom is the thinking that reaches it (D40). A
+// retrospective that comes back empty is logged and dropped rather than failing
+// the work, so this was invisible rather than harmless: the aggregate the whole
+// feature exists to build would have been quietly missing its reasoning models.
+const MAX_TOKENS = 900 + REASONING_HEADROOM;
 
 export const RETRO_SYSTEM = [
   'ROLE: retrospective',

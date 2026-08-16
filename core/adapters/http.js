@@ -135,6 +135,15 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
 
     if (stream) {
       let text = '';
+      // Reasoning tokens are content the model produced and was charged for,
+      // and until now this adapter threw them away. A reasoning model routinely
+      // spends most of a turn here — measured against deepseek-v4-pro: 6198 of
+      // 7628 completion tokens — and emits its `content` only at the end, or
+      // (when the budget runs out first) not at all. Dropping the stream meant
+      // two failures at once: nothing to show for the minutes the node spent
+      // thinking, and a turn that ended in reasoning alone read as "empty
+      // response" with no evidence of what actually happened.
+      let reasoning = '';
       let usage = null;
       let finishReason = null;
       // Which model actually answered. With the Auto Router the requested id is
@@ -155,6 +164,17 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
 
         if (choice?.delta?.content) { text += choice.delta.content; moved = true; }
 
+        // OpenRouter normalises every provider's chain-of-thought onto
+        // `delta.reasoning`. It counts as PROGRESS (a reasoning model can be
+        // 100s into a turn before its first content delta — the idle deadline
+        // would otherwise be counting that healthy work as silence) but never
+        // as `text`: what the caller returns as the deliverable stays exactly
+        // what the model put in `content`.
+        if (typeof choice?.delta?.reasoning === 'string' && choice.delta.reasoning) {
+          reasoning += choice.delta.reasoning;
+          moved = true;
+        }
+
         // Tool calls arrive in pieces keyed by `index`: id/type/name land once
         // (usually on the first fragment) and `arguments` is a JSON string
         // delivered a few characters at a time, to be concatenated in arrival
@@ -171,7 +191,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
           moved = true;
         }
 
-        if (moved) onText(renderTurn(text, frags));
+        if (moved) onText(renderTurn(text, frags, reasoning));
         if (choice?.finish_reason) finishReason = choice.finish_reason;
         if (chunk.usage) usage = chunk.usage;
         if (chunk.model) resolvedModel = chunk.model;
@@ -179,7 +199,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
 
       // The turn is fully assembled: emit it unthrottled, so its last and most
       // informative state (a tool call WITH its arguments) is what stands.
-      onText(renderTurn(text, frags), { final: true });
+      onText(renderTurn(text, frags, reasoning), { final: true });
 
       const toolCalls = [...frags.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c);
       // A stream that delivered nothing at all — no content, no tool call, no
@@ -187,14 +207,14 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       // Returning { text: '' } looked like a successful empty answer. Fail
       // instead, marked transient so the retry budget gets a real attempt. A
       // turn that is ONLY tool calls is legitimate.
-      if (!text && !toolCalls.length && !finishReason) {
+      if (!text && !toolCalls.length && !reasoning && !finishReason) {
         throw Object.assign(
           new Error(`${provider} stream ended without any content or a finish reason (upstream cut the response)`),
           { transient: true }
         );
       }
       return {
-        text, usage, finishReason, resolvedModel,
+        text, reasoning, usage, finishReason, resolvedModel,
         message: {
           role: 'assistant',
           content: text || null,
@@ -208,6 +228,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
     if (!choice?.message) throw new Error(`${provider} returned no choices: ${JSON.stringify(data).slice(0, 300)}`);
     return {
       text: choice.message.content ?? '',
+      reasoning: typeof choice.message.reasoning === 'string' ? choice.message.reasoning : '',
       usage: data.usage ?? null,
       finishReason: choice.finish_reason ?? null,
       // See the streaming branch: the Auto Router answers as a different model
@@ -218,6 +239,12 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
   };
 }
 
+// Marks the watch view as thinking rather than answering. Exported because the
+// renderer needs to tell the two apart to style them differently, and because
+// a test asserting "reasoning never leaks into the deliverable" needs the
+// string it is looking for.
+export const THINKING_MARKER = '⟢ thinking…\n\n';
+
 // A watchable view of the turn in progress, for onText.
 //
 // The returned `text` stays pure — it is the model's actual content, and the
@@ -225,9 +252,16 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
 // prose: without rendering the calls there would be nothing to watch, which is
 // the whole reason this path streams. So the call is surfaced as it assembles,
 // arguments and all — you see the file being written as it is written.
-function renderTurn(text, frags) {
+//
+// Reasoning is the same argument one step earlier. A thinking model produces
+// nothing watchable for a minute or more before its first content delta, so the
+// node read as hung and got cancelled by hand — twice in one evening, both
+// times on healthy runs. It is shown ONLY while there is nothing better: the
+// moment real content or a tool call exists, that replaces it, and the caller's
+// final write is authoritative either way.
+function renderTurn(text, frags, reasoning = '') {
   const calls = [...frags.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c);
-  if (!calls.length) return text;
+  if (!calls.length) return text || (reasoning ? THINKING_MARKER + reasoning : '');
   const rendered = calls.map(renderCall).join('\n\n');
   return text ? `${text}\n\n${rendered}` : rendered;
 }

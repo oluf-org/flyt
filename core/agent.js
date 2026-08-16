@@ -29,6 +29,104 @@ const LAST_ROUND_NOTICE = [
   'rather than guessing or promising further work.'
 ].join(' ');
 
+// What a model is told when a turn came back with nothing in it.
+//
+// A reasoning model can spend an entire turn — and an entire token budget — in
+// `reasoning` and emit no `content` at all. Observed against
+// deepseek-v4-pro-0813: 6198 of 7628 completion tokens were reasoning. The turn
+// costs real money, arrives with finish_reason 'stop' or 'length', and used to
+// be reported as `openrouter/<model> returned an empty response` — a hard node
+// failure that discarded every tool call the node had already made, which on a
+// fan-out lane is several minutes of reading a repository.
+//
+// One retry, with the budget doubled and the omission named. That covers both
+// ways a turn ends up empty: cut off mid-thought (needs room) and thought
+// through without writing anything down (needs telling).
+const EMPTY_TURN_NUDGE = [
+  'Your previous turn returned no content at all — only internal reasoning.',
+  'Whatever you worked out did not reach me. Write the answer itself now, as',
+  'ordinary text, starting immediately. Do not think further before writing:',
+  'lead with your conclusion and add detail after it, so that a truncated reply',
+  'is still a useful one.'
+].join(' ');
+
+// The ceiling a recovery attempt may raise a budget to. Generous, because the
+// failure it exists to prevent is losing a whole node's work; bounded, because
+// an unbounded retry on a model that answers with silence is just a bigger bill.
+const RECOVERY_MAX_TOKENS = 32000;
+
+// Did this turn produce anything the loop can use?
+const answered = res =>
+  Boolean(String(res?.text ?? '').trim()) || Boolean(res?.message?.tool_calls?.length);
+
+/**
+ * callModel, with one recovery attempt when a turn comes back empty.
+ *
+ * Returns the recovered turn when the retry worked, and otherwise the ORIGINAL
+ * empty turn — with `emptyTurn` describing both attempts, so the caller can
+ * fail with evidence instead of the bare word "empty".
+ */
+export async function callForAnswer(params, onEmpty) {
+  const first = await callModel(params);
+  if (answered(first)) return first;
+
+  const budget = Math.min(RECOVERY_MAX_TOKENS, Math.max(2 * (params.maxTokens ?? 4096), 8192));
+  const diagnosis = {
+    finishReason: first.finishReason ?? null,
+    reasoningChars: String(first.reasoning ?? '').length,
+    usage: first.usage ?? null,
+    maxTokens: params.maxTokens ?? 4096,
+    retriedWith: budget
+  };
+  onEmpty?.(diagnosis);
+
+  // The nudge goes in as the model's own next instruction, in whichever calling
+  // shape this call used.
+  const retry = params.messages
+    ? { ...params, maxTokens: budget, messages: [...params.messages, { role: 'user', content: EMPTY_TURN_NUDGE }] }
+    : { ...params, maxTokens: budget, prompt: `${params.prompt}\n\n${EMPTY_TURN_NUDGE}` };
+
+  const second = await callModel(retry);
+  if (answered(second)) return { ...second, recoveredFromEmptyTurn: diagnosis };
+  return {
+    ...first,
+    emptyTurn: {
+      ...diagnosis,
+      retryFinishReason: second.finishReason ?? null,
+      retryReasoningChars: String(second.reasoning ?? '').length
+    }
+  };
+}
+
+/**
+ * Why a call produced nothing, in one line a human or an agent can act on.
+ *
+ * The old message named the model and stopped there, which left the only
+ * available next step "run it again and see". Every clause here points at a
+ * different fix: 'length' means raise the effort/budget, a large reasoning
+ * count on 'stop' means the model thought instead of answering, and a large
+ * request means the context is the problem.
+ */
+export function describeEmptyTurn(worker, result) {
+  const d = result?.emptyTurn ?? {};
+  const bits = [`${worker?.provider}/${worker?.model} returned no content`];
+  if (d.finishReason) {
+    bits.push(d.finishReason === 'length'
+      ? `— the response was cut off at the token budget (finish_reason "length", max_tokens ${d.maxTokens})`
+      : `— finish_reason "${d.finishReason}"`);
+  }
+  if (d.reasoningChars) {
+    bits.push(`after spending ${d.reasoningChars} characters on internal reasoning`
+      + `${d.usage?.completion_tokens_details?.reasoning_tokens
+        ? ` (${d.usage.completion_tokens_details.reasoning_tokens} reasoning tokens)` : ''}`);
+  }
+  if (d.retriedWith) bits.push(`a retry at max_tokens ${d.retriedWith} also came back empty`);
+  bits.push(d.finishReason === 'length' || d.reasoningChars
+    ? 'Raise this node\'s effort, or point it at a model that answers within its budget.'
+    : 'Check the provider status and the model id.');
+  return bits.join('; ').replace('; —', ' —');
+}
+
 // Per-tool-call approval gate (V1 task 4). When the run supplies ctx.approveToolCall
 // (an agentTask node flagged approveToolCalls), pause before every DESTRUCTIVE
 // tool call and wait for a human decision. Rejection throws a marked error that
@@ -85,16 +183,23 @@ export function supportsToolsFor(worker, config = {}) {
   return worker?.provider === 'openrouter';
 }
 
-export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, retry, timeout, signal = null, maxIterations = null }) {
+export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal = null, maxIterations = null }) {
   const started = Date.now();
   if (!tools.length) {
-    const r = await callModel({ ...worker, apiKey, system, prompt, onText, onRetry, retry, timeout, signal });
-    return { text: r.text, toolCalls: [], usage: r.usage, durationMs: r.durationMs };
+    const r = await callForAnswer(
+      { ...worker, apiKey, system, prompt, onText, onRetry, onCall, retry, timeout, signal },
+      onEmptyTurn
+    );
+    return {
+      text: r.text, toolCalls: [], usage: r.usage, durationMs: r.durationMs,
+      finishReason: r.finishReason ?? null,
+      ...(r.emptyTurn ? { emptyTurn: r.emptyTurn } : {}),
+      ...(r.recoveredFromEmptyTurn ? { recoveredFromEmptyTurn: r.recoveredFromEmptyTurn } : {})
+    };
   }
   const native = toolProtocol(worker) === 'native';
-  const out = native
-    ? await nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal, maxIterations })
-    : await textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal, maxIterations });
+  const args = { worker, apiKey, system, prompt, tools, ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal, maxIterations };
+  const out = native ? await nativeLoop(args) : await textLoop(args);
   return { ...out, durationMs: Date.now() - started };
 }
 
@@ -137,7 +242,7 @@ function addUsage(total, usage) {
 }
 
 // --- NATIVE path: OpenAI function-tool format over the messages API ---
-async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal, maxIterations = null }) {
+async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal, maxIterations = null }) {
   const messages = [
     { role: 'system', content: system },
     { role: 'user', content: prompt }
@@ -161,11 +266,23 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
     // non-streaming response carries) — so this path stays silent until an
     // adapter can reassemble tool_calls from deltas. Honoring the contract here
     // means that becomes an adapter change alone.
-    const res = await callModel({ ...worker, apiKey, messages, ...(last ? {} : { tools: oaTools }), onText, onRetry, retry, timeout, signal });
+    const res = await callForAnswer(
+      { ...worker, apiKey, messages, ...(last ? {} : { tools: oaTools }), onText, onRetry, onCall, retry, timeout, signal },
+      d => onEmptyTurn?.({ ...d, round: i + 1, of: rounds })
+    );
     usage = addUsage(usage, res.usage);
     lastText = res.text || lastText;
     const calls = res.message?.tool_calls;
-    if (!calls?.length || last) return { text: res.text || lastText, toolCalls, usage, ...(last ? { capped: true } : {}) };
+    if (!calls?.length || last) {
+      return {
+        text: res.text || lastText, toolCalls, usage,
+        finishReason: res.finishReason ?? null,
+        rounds: i + 1,
+        ...(res.emptyTurn ? { emptyTurn: res.emptyTurn } : {}),
+        ...(res.recoveredFromEmptyTurn ? { recoveredFromEmptyTurn: res.recoveredFromEmptyTurn } : {}),
+        ...(last ? { capped: true } : {})
+      };
+    }
 
     // Echo the assistant turn back verbatim, then answer each call with a
     // role:'tool' message (result on success, the error on failure so the
@@ -184,7 +301,7 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
       messages.push({ role: 'tool', tool_call_id: call.id, content: toolMessage(record) });
     }
   }
-  return { text: lastText || '(agent stopped: tool-call iteration cap reached)', toolCalls, usage, capped: true };
+  return { text: lastText || '(agent stopped: tool-call iteration cap reached)', toolCalls, usage, rounds, capped: true };
 }
 
 // --- TEXT path: fenced ```tool blocks parsed out of plain completions ---
@@ -204,7 +321,7 @@ export function textProtocolInstructions(tools) {
   ].join('\n');
 }
 
-async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, retry, timeout, signal, maxIterations = null }) {
+async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal, maxIterations = null }) {
   const fullSystem = system + '\n\n' + textProtocolInstructions(tools);
   const toolCalls = [];
   let usage = null;
@@ -217,11 +334,22 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
   // FANOUT P3.1) needs the bound to hold on both protocols.
   const rounds = Math.max(1, Number(maxIterations ?? MAX_ITERATIONS));
   for (let i = 0; i < rounds; i++) {
-    const res = await callModel({ ...worker, apiKey, system: fullSystem, prompt: transcript, onText, onRetry, retry, timeout, signal });
+    const res = await callForAnswer(
+      { ...worker, apiKey, system: fullSystem, prompt: transcript, onText, onRetry, onCall, retry, timeout, signal },
+      d => onEmptyTurn?.({ ...d, round: i + 1, of: rounds })
+    );
     usage = addUsage(usage, res.usage);
     lastText = res.text;
     const match = res.text.match(TOOL_BLOCK);
-    if (!match) return { text: res.text.trim(), toolCalls, usage };
+    if (!match) {
+      return {
+        text: res.text.trim(), toolCalls, usage,
+        finishReason: res.finishReason ?? null,
+        rounds: i + 1,
+        ...(res.emptyTurn ? { emptyTurn: res.emptyTurn } : {}),
+        ...(res.recoveredFromEmptyTurn ? { recoveredFromEmptyTurn: res.recoveredFromEmptyTurn } : {})
+      };
+    }
 
     let record;
     try {
@@ -245,5 +373,5 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
     ].join('\n');
   }
   // Cap reached: strip any dangling tool block from the last reply.
-  return { text: (lastText.replace(TOOL_BLOCK, '').trim() || '(agent stopped: tool-call iteration cap reached)'), toolCalls, usage, capped: true };
+  return { text: (lastText.replace(TOOL_BLOCK, '').trim() || '(agent stopped: tool-call iteration cap reached)'), toolCalls, usage, rounds, capped: true };
 }

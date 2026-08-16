@@ -439,6 +439,11 @@ test('step-eval escalation gate survives a restart: approve resumes to done', as
 // A node whose model returns nothing must fail loudly. It used to be recorded
 // as success with a 0-byte output file, which then became the context every
 // downstream node read (V1 task 11 — seen on a real provider).
+//
+// It must also fail INFORMATIVELY (D40). The message used to be "<model>
+// returned an empty response" and nothing else, which named the one fact the
+// reader already had and none of the ones that pick the fix — three separate
+// live runs died on it with no way forward but to run them again.
 test('an aiStep whose model returns an empty response fails instead of succeeding', async () => {
   const store = makeStore();
   const runner = new FlowRunner(store, testConfig());
@@ -449,8 +454,17 @@ test('an aiStep whose model returns an empty response fails instead of succeedin
   const runId = runner.start(flow);
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'failed');
   assert.equal(store.readMeta(runId).nodeStatus.step, 'failed');
-  assert.match(store.readMeta(runId).error, /empty response/);
+  const error = store.readMeta(runId).error;
+  assert.match(error, /returned no content/);
+  // The nudged retry ran and is reported, so the reader knows this was not a
+  // one-off flake before they go looking.
+  assert.match(error, /retry at max_tokens \d+ also came back empty/);
   assert.equal(store.readRetrospectives(runId).step.status, 'failed');
+  // The empty turn is on the record with its diagnosis, not just in the message.
+  const empty = readLog(store, runId).filter(e => e.event === 'model_empty_turn');
+  assert.equal(empty.length, 1);
+  assert.equal(empty[0].node, 'step');
+  assert.ok(empty[0].retriedWith > empty[0].maxTokens, 'the recovery attempt must raise the budget');
 });
 
 test('an agentTask whose agent returns an empty response fails instead of succeeding', async () => {

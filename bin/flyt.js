@@ -30,8 +30,11 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt run <flow> --in repo=<url>     supply a typed run input (repeatable)
   flyt runs                           list runs in the current project
   flyt snapshot <runId>               the run's current state
-  flyt log <runId>                    the run's event log
+  flyt log <runId> [--quiet]          the run's event log (--event a,b --node n --tail N)
   flyt approve|reject|stop <runId>    answer a gate or stop a run
+  flyt why [<runId>]                  why a run failed or stalled (default: latest)
+  flyt probe <model>...               call a model once and report what came back
+  flyt doctor [--flow <id>] [--probe] providers, priority, library — and the models a flow pins
   flyt task add "<title>" --goal "<what>"   queue a task for a later run
   flyt task list [--status queued]    the backlog
   flyt task show <id>                 one task, in full
@@ -518,8 +521,28 @@ async function main() {
     case 'snapshot':
       return out(await api.invoke('run:snapshot', { projectId: openProject(api, engine), runId: positional[1] }));
 
-    case 'log':
-      return out(await api.invoke('run:log', { projectId: openProject(api, engine), runId: positional[1] }));
+    // The log is the primary evidence, and a fan-out writes hundreds of lines
+    // of it — a run reading a repository through four lanes logged 441 entries,
+    // 237 of them tool calls. Dumping all of it as one JSON array means the
+    // reader writes a filter script every time, which is what happened.
+    case 'log': {
+      const projectId = openProject(api, engine);
+      let entries = await api.invoke('run:log', { projectId, runId: positional[1] });
+      const only = typeof flags.event === 'string' ? flags.event.split(',').map(s => s.trim()) : null;
+      if (only) entries = entries.filter(e => only.includes(e.event));
+      if (typeof flags.node === 'string') entries = entries.filter(e => e.node === flags.node);
+      // `--quiet` drops the two events that are individually uninteresting and
+      // collectively drown everything else.
+      if (flags.quiet) entries = entries.filter(e => !['tool_call', 'reference_search'].includes(e.event));
+      const tail = Number(flags.tail ?? 0);
+      if (tail > 0) entries = entries.slice(-tail);
+      if (asJson) return out(entries);
+      return out(entries.map(e => {
+        const { ts, event, node, ...rest } = e;
+        const body = JSON.stringify(rest);
+        return `${ts} ${event}${node ? ` [${node}]` : ''} ${body === '{}' ? '' : body.slice(0, 240)}`;
+      }).join('\n'));
+    }
 
     case 'approve':
       return out(await api.invoke('run:approve', { projectId: openProject(api, engine), runId: positional[1] }));
@@ -531,6 +554,57 @@ async function main() {
 
     case 'stop':
       return out(await api.invoke('run:stop', { projectId: openProject(api, engine), runId: positional[1] }));
+
+    // --- Diagnostics (D40) ---------------------------------------------------
+    // The first thing to reach for when a run fails. Defaults to the most
+    // recent run, because "why did that fail" is nearly always about the last
+    // one and looking its id up first is friction with no purpose.
+    case 'why': {
+      const projectId = openProject(api, engine);
+      let runId = positional[1];
+      if (!runId) {
+        const runs = await api.invoke('run:list', { projectId });
+        if (!runs.length) return die('No runs in this project yet.');
+        runId = runs[0].id;
+      }
+      const report = await api.invoke('run:explain', { projectId, runId });
+      if (asJson) return out(report);
+      out(renderWhy(report));
+      // A failed run exits non-zero, so a script can branch on it.
+      process.exitCode = report.verdict === 'completed' ? 0 : 1;
+      return;
+    }
+
+    case 'probe': {
+      const models = positional.slice(1);
+      if (!models.length) return die('flyt probe <model> [<model>...] [--provider p] [--max-tokens n]');
+      const results = [];
+      for (const model of models) {
+        results.push(await api.invoke('model:probe', {
+          model,
+          provider: typeof flags.provider === 'string' ? flags.provider : null,
+          ...(flags['max-tokens'] ? { maxTokens: Number(flags['max-tokens']) } : {}),
+          stream: flags.stream !== 'false'
+        }));
+      }
+      if (asJson) return out(results);
+      out(results.map(renderProbe).join('\n\n'));
+      process.exitCode = results.every(r => r.ok) ? 0 : 1;
+      return;
+    }
+
+    case 'doctor': {
+      const report = await api.invoke('diag:doctor', {
+        projectId: openProject(api, engine),
+        probe: Boolean(flags.probe),
+        flowId: typeof flags.flow === 'string' ? flags.flow : null,
+        models: [].concat(flags.model ?? []).filter(m => typeof m === 'string')
+      });
+      if (asJson) return out(report);
+      out(renderDoctor(report));
+      process.exitCode = report.findings.some(f => f.level === 'error') ? 1 : 0;
+      return;
+    }
 
     case 'run': {
       const flowId = positional[1];
@@ -558,12 +632,18 @@ async function main() {
         timeoutSec: Number(flags.timeout ?? 1800),
         autoApprove: flags.gates === 'approve'
       });
-      if (asJson) out({ ok: stage === 'done', runId, stage, snapshot });
+      // A run that did not finish is explained where it failed, without being
+      // asked (D40). The alternative is handing back an exit code and a stage
+      // name and making the reader — a person at 1am, or an agent with no
+      // memory of this session — go and find the next command themselves.
+      const explained = stage === 'done' ? null : await api.invoke('run:explain', { projectId, runId });
+      if (asJson) out({ ok: stage === 'done', runId, stage, snapshot, ...(explained ? { why: explained } : {}) });
       else {
         say(`run ${runId}: ${stage}`);
         // The deliverable, not the machinery: whatever the last node produced.
         const outputs = Object.values(snapshot.nodeOutputs ?? {});
         console.log(outputs.length ? outputs[outputs.length - 1] : `(no output; stage ${stage})`);
+        if (explained) say(`\n${renderWhy(explained)}\n\nfull detail: flyt why ${runId} --json`);
       }
       // A parked or failed run is a non-zero exit, so a script or an agent can
       // branch on it without parsing anything.
@@ -574,6 +654,80 @@ async function main() {
     default:
       return die(`Unknown command "${command}".\n\n${USAGE}`);
   }
+}
+
+// --- diagnostic rendering (D40) ---------------------------------------------
+// stdout stays machine-readable under --json; these are the human half. They
+// lead with the verdict and the next step, because a diagnostic that buries the
+// action under the evidence gets read like a log file, which is the thing it
+// exists to replace.
+
+const ms = n => (n == null ? '?' : n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${n}ms`);
+
+function renderWhy(r) {
+  const L = [`run ${r.runId} — ${r.verdict}${r.flow ? ` (${r.flow})` : ''}`];
+  if (r.error) L.push(`  error: ${r.error}`);
+  const s = r.signals;
+  L.push(`  ${s.modelCalls} model call(s) over ${ms(s.modelMs)}, ${s.toolCalls} tool call(s)`
+    + `${s.usd ? `, $${s.usd}` : ''}`);
+  const flags = [
+    s.emptyTurns && `${s.emptyTurns} empty turn(s)`,
+    s.truncatedOutputs && `${s.truncatedOutputs} truncated output(s)`,
+    s.transientRetries && `${s.transientRetries} transient retr(ies)`,
+    s.nodeRestarts && `${s.nodeRestarts} manual restart(s)`
+  ].filter(Boolean);
+  if (flags.length) L.push(`  ${flags.join(' · ')}`);
+
+  for (const n of r.nodes) {
+    L.push('');
+    L.push(`  ${n.node} [${n.inFlight ? `running for ${ms(n.runningForMs)}` : n.status}]${n.model ? ` on ${n.model}` : ''}`);
+    if (n.error) L.push(`    ${n.error}`);
+    const c = n.calls;
+    if (!n.traced) L.push('    (no call trace — this run predates the black box)');
+    else L.push(`    ${c.total} call(s), ${c.toolCalls} tool call(s), ${ms(c.totalMs)}`
+      + (c.reasoningShare != null ? ` — ${c.reasoningShare}% of its output was reasoning` : ''));
+    if (c.truncated) L.push(`    ${c.truncated} truncated at the token budget`);
+    if (n.lastCall && n.lastCall.ok === false) L.push(`    last call failed: ${n.lastCall.error}`);
+  }
+  if (r.suggestions.length) {
+    L.push('');
+    L.push('  what to try:');
+    for (const s2 of r.suggestions) L.push(`    - ${s2}`);
+  }
+  return L.join('\n');
+}
+
+function renderProbe(p) {
+  const L = [`${p.provider ?? '?'}/${p.model} — ${p.verdict}`];
+  if (!p.ok && p.error) { L.push(`  ${p.error}`); return L.join('\n'); }
+  L.push(`  ${ms(p.ms)} total${p.firstTextMs != null ? `, first output at ${ms(p.firstTextMs)}` : ''}`
+    + `, finish_reason ${p.finishReason}`);
+  L.push(`  ${p.contentChars} chars of answer, ${p.reasoningChars} chars of reasoning`
+    + (p.reasoningTokens ? ` (${p.reasoningTokens} reasoning tokens)` : ''));
+  if (p.servedBy) L.push(`  served by ${p.servedBy}`);
+  if (p.sample) L.push(`  > ${p.sample.replace(/\s+/g, ' ')}`);
+  return L.join('\n');
+}
+
+function renderDoctor(r) {
+  const L = ['providers (in priority order):'];
+  for (const p of r.providers) {
+    L.push(`  ${p.connected ? '✓' : '·'} ${p.id} (${p.kind})`
+      + (p.subscription?.detail ? ` — ${p.subscription.detail}` : ''));
+  }
+  if (r.references.length) {
+    L.push('', 'reference library:');
+    for (const ref of r.references) L.push(`  ${ref.cloned ? '✓' : '·'} ${ref.name}`);
+  }
+  if (r.probes?.length) {
+    L.push('', 'models:');
+    for (const p of r.probes) L.push('  ' + renderProbe(p).split('\n').join('\n  '));
+  }
+  L.push('', r.findings.length ? 'findings:' : 'findings: none');
+  for (const f of r.findings) L.push(`  [${f.level}] ${f.message}`);
+  L.push('', `settings: ${r.settingsPath}`);
+  if (r.project) L.push(`runs:     ${r.project.runsDir}`);
+  return L.join('\n');
 }
 
 main().catch(err => {

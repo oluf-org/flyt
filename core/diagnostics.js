@@ -1,0 +1,426 @@
+// Diagnostics (D40): answering "why did that run fail?" without re-running it,
+// and "will this model work here?" without spending a flow to find out.
+//
+// The occasion was a flow that failed on its fan-out four evenings running.
+// Every attempt ended on the same sentence — `openrouter/deepseek/
+// deepseek-v4-pro-0813 returned an empty response` — which names the model and
+// stops. Nothing on disk said whether the answer had been truncated, spent on
+// reasoning, or never begun; nothing said whether the model was reachable at
+// all. The only available next step was to run it again, at full cost, and
+// watch harder.
+//
+// These three read what the black box now records and turn it into a verdict:
+//
+//   explainRun()   — a failed or stuck run, explained from its own log
+//   probeModel()   — one representative call, reporting what came back
+//   doctor()       — the standing configuration: keys, providers, library
+//
+// Every one returns plain data. The CLI renders it; an agent reads it as JSON;
+// nothing here prints.
+import { callModel } from './adapters/index.js';
+import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
+import { effortBudget, DEFAULT_EFFORT } from '../src/flowTypes.js';
+
+// --- explainRun -----------------------------------------------------------
+
+// Node statuses that mean "this is where the run stopped".
+const BLOCKING = new Set(['failed', 'active']);
+
+/**
+ * Explain one run: what it was doing, where it stopped, and what the model
+ * calls at that point actually did.
+ *
+ * @param {RunStore} store
+ * @param {string} runId
+ * @returns {object} a structured explanation (see `summary` for the prose)
+ */
+export function explainRun(store, runId) {
+  const meta = store.readMeta(runId);
+  if (!meta) throw new Error(`No run "${runId}" in this project.`);
+  const log = store.readLog(runId) ?? [];
+  const nodeStatus = meta.nodeStatus ?? {};
+
+  const blocked = Object.entries(nodeStatus)
+    .filter(([, s]) => BLOCKING.has(s))
+    .map(([id, status]) => ({ id, status }));
+
+  // What is in flight RIGHT NOW, derived from the log rather than from
+  // nodeStatus. On a live run "which node is this?" is the whole question, and
+  // meta lags: a node deep in an agent loop can still read `pending` there,
+  // which made this command useless for exactly the run you most want to look
+  // at — the one that has been going for forty minutes.
+  // ...minus anything meta already calls finished. Input and container nodes
+  // complete without any of the terminal events a worker node emits, so on the
+  // log alone they look like they never stopped.
+  const inFlight = inFlightFrom(log).filter(f => !['done', 'failed'].includes(nodeStatus[f.node]));
+
+  // Errors are per node in the log even when meta.error carries only the first
+  // one to bubble. A fan-out fails four lanes at once and meta names one.
+  const nodeErrors = log.filter(e => e.event === 'node_error')
+    .map(e => ({ node: e.node, role: e.role ?? null, error: e.error }));
+
+  const nodes = [...new Set([...blocked.map(b => b.id), ...nodeErrors.map(e => e.node), ...inFlight.map(f => f.node)])]
+    .map(id => explainNode(store, runId, log, id, nodeStatus[id] ?? 'unknown', nodeErrors, inFlight));
+
+  return {
+    runId,
+    stage: meta.stage,
+    flow: meta.flowName ?? meta.flowId ?? null,
+    error: meta.error ?? null,
+    startedAt: meta.createdAt ?? null,
+    updatedAt: meta.updatedAt ?? null,
+    // A run nobody stopped and nothing failed is simply still working; saying
+    // so beats an empty report that reads like a broken tool.
+    verdict: verdictFor(meta, nodes),
+    nodes,
+    // Run-wide signals that explain a slow or expensive run even when nothing
+    // failed. Kept separate from the per-node view because the answer to "why
+    // did this take an hour" is usually a count, not one line.
+    signals: signalsFrom(log),
+    suggestions: [...new Set(nodes.flatMap(n => n.suggestions))]
+  };
+}
+
+function verdictFor(meta, nodes) {
+  if (meta.stage === 'failed') return 'failed';
+  if (meta.stage === 'cancelled') return 'stopped by hand';
+  if (meta.stage === 'done') return 'completed';
+  if (nodes.some(n => n.inFlight || n.status === 'active')) return 'still running';
+  return meta.stage;
+}
+
+// Nodes that started and have not been seen to finish, with how long ago they
+// started. A node_start with no later node_error / node_aborted / node_start of
+// its own is still going; a `wave_start` container reports its children, which
+// are the entries that actually carry the work.
+function inFlightFrom(log) {
+  const open = new Map();
+  for (const e of log) {
+    if (e.event === 'node_start' && e.node) open.set(e.node, e);
+    if ((e.event === 'node_error' || e.event === 'node_aborted') && e.node) open.delete(e.node);
+    // A node whose output was written and status advanced shows up as the next
+    // node starting; the terminal signals are what we can rely on.
+    if (e.event === 'retrospective' && e.node) open.delete(e.node);
+    if (e.event === 'stage_change' && ['done', 'failed', 'cancelled'].includes(e.stage)) open.clear();
+  }
+  const now = Date.now();
+  return [...open.values()].map(e => ({
+    node: e.node,
+    role: e.role ?? null,
+    startedAt: e.ts,
+    forMs: Number.isFinite(Date.parse(e.ts)) ? now - Date.parse(e.ts) : null
+  }));
+}
+
+function explainNode(store, runId, log, nodeId, status, nodeErrors, inFlight = []) {
+  const calls = store.readCallTrace(runId, nodeId);
+  const failed = calls.filter(c => c.ok === false);
+  const ok = calls.filter(c => c.ok);
+  const last = calls[calls.length - 1] ?? null;
+  const empties = log.filter(e => e.event === 'model_empty_turn' && e.node === nodeId);
+  const retries = log.filter(e => e.event === 'model_retry' && e.node === nodeId);
+  const toolCalls = log.filter(e => e.event === 'tool_call' && e.node === nodeId);
+  const start = log.find(e => e.event === 'node_start' && e.node === nodeId) ?? null;
+  const error = nodeErrors.find(e => e.node === nodeId)?.error ?? null;
+
+  // Only ANSWERING turns count toward the reasoning share. A turn that ends in
+  // finish_reason "tool_calls" is supposed to carry no prose — counting those
+  // reports every healthy agent loop as "100% reasoning" while it is still
+  // reading, which is a false alarm on exactly the runs someone is watching.
+  const answering = ok.filter(c => c.finishReason !== 'tool_calls');
+  const reasoningChars = answering.reduce((n, c) => n + (c.reasoningChars ?? 0), 0);
+  const contentChars = answering.reduce((n, c) => n + (c.contentChars ?? 0), 0);
+  const spentMs = calls.reduce((n, c) => n + (c.ms ?? 0), 0);
+  // Runs recorded before the black box existed have no trace, which is not the
+  // same fact as "this node made no calls" — and reading it as the latter turns
+  // every archived failure into a confident wrong diagnosis.
+  const traced = calls.length > 0 || log.some(e => e.event === 'model_call');
+
+  const live = inFlight.find(f => f.node === nodeId) ?? null;
+
+  return {
+    node: nodeId,
+    status,
+    traced,
+    ...(live ? { inFlight: true, runningForMs: live.forMs } : {}),
+    role: start?.role ?? null,
+    model: start?.worker ? `${start.worker.provider}/${start.worker.model}` : (last ? `${last.provider}/${last.model}` : null),
+    error,
+    calls: {
+      total: calls.length,
+      failed: failed.length,
+      truncated: ok.filter(c => c.finishReason === 'length').length,
+      emptyTurns: empties.length,
+      transientRetries: retries.length,
+      toolCalls: toolCalls.length,
+      contentChars,
+      reasoningChars,
+      // The one number that explains a node nobody could see progress on.
+      reasoningShare: contentChars + reasoningChars
+        ? Math.round((reasoningChars / (contentChars + reasoningChars)) * 100)
+        : null,
+      totalMs: spentMs,
+      slowestMs: calls.reduce((n, c) => Math.max(n, c.ms ?? 0), 0)
+    },
+    lastCall: last,
+    suggestions: suggestFor({ status, error, calls, ok, empties, retries, reasoningChars, contentChars, traced })
+  };
+}
+
+// The point of the whole module: a next step, derived from evidence rather
+// than from the shape of the error string.
+function suggestFor({ status, error, calls, ok, empties, retries, reasoningChars, contentChars, traced }) {
+  const out = [];
+  if (!traced) {
+    out.push('This run predates the model-call black box, so there is no per-call evidence to read — '
+      + 'only the error text above. Re-run it and `flyt why` will have the finish reason and token split.');
+    // Everything below reasons from records this run does not have; the error
+    // text is genuinely all there is, and inventing more would be worse.
+    if (error && /No connected provider/i.test(error)) {
+      out.push('No provider can serve that model id. Check the id against `flyt doctor`.');
+    }
+    if (error && /CLI failed|config\.toml/i.test(error)) {
+      out.push('A subscription CLI provider failed at its own config, not at the model. '
+        + 'Either fix that CLI or move it below `openrouter` in the provider priority.');
+    }
+    if (error && /empty response|no content/i.test(error)) {
+      out.push('An empty response from a reasoning model is usually its whole budget going to reasoning. '
+        + 'Probe it directly: flyt probe <model>');
+    }
+    return out;
+  }
+  const truncated = ok.filter(c => c.finishReason === 'length');
+  if (truncated.length) {
+    out.push(`${truncated.length} call(s) hit finish_reason "length" — the answer was cut off at max_tokens `
+      + `${truncated[0].maxTokens}. Raise this node's effort (low 2048 / medium 4096 / high 8192), or move it to a model that answers shorter.`);
+  }
+  if (empties.length) {
+    out.push('The model returned reasoning but no content, and the nudged retry is what you are paying for. '
+      + 'A reasoning model that spends its whole budget thinking needs a bigger budget (raise effort) or a different model for this node.');
+  }
+  if (reasoningChars > contentChars * 2 && reasoningChars > 2000) {
+    out.push(`Reasoning outweighs the answer ${reasoningChars}:${contentChars} characters. `
+      + 'This node is paying mostly for thinking — worth checking the model choice against what the node actually needs.');
+  }
+  if (retries.length >= 3) {
+    out.push(`${retries.length} transient retries (rate limits / timeouts). `
+      + 'The provider is throttling; fewer parallel lanes or a second provider in the priority list would both help.');
+  }
+  if (!calls.length && status === 'failed') {
+    out.push('This node failed before any model call was made — the cause is upstream of the provider: '
+      + 'a missing key, an unservable model id, or a tool/config error. The node error text says which.');
+  }
+  if (error && /No connected provider/i.test(error)) {
+    out.push('No provider can serve that model id. Check the id against `flyt doctor`, or add a key for a provider that carries it.');
+  }
+  if (error && /CLI failed|config\.toml/i.test(error)) {
+    out.push('A subscription CLI provider failed at its own config, not at the model. '
+      + 'Either fix that CLI or move it below `openrouter` in the provider priority so it is not chosen.');
+  }
+  return out;
+}
+
+// Run-wide counts worth surfacing even on a healthy run.
+function signalsFrom(log) {
+  const count = ev => log.filter(e => e.event === ev).length;
+  const modelCalls = log.filter(e => e.event === 'model_call');
+  return {
+    modelCalls: modelCalls.length,
+    modelMs: modelCalls.reduce((n, c) => n + (c.ms ?? 0), 0),
+    toolCalls: count('tool_call'),
+    transientRetries: count('model_retry'),
+    emptyTurns: count('model_empty_turn'),
+    truncatedOutputs: count('output_truncated'),
+    nodeRestarts: count('node_restart'),
+    // Cost, when the provider reported it. Summed from the calls themselves so
+    // it covers every round of every agent loop, not just the node's last one.
+    usd: Number(modelCalls.reduce((n, c) => n + (c.usage?.cost ?? 0), 0).toFixed(4)) || 0
+  };
+}
+
+// --- probeModel -----------------------------------------------------------
+
+// A prompt that forces a real answer without being expensive: short input,
+// short expected output, and a question a model cannot answer from its
+// preamble. It is deliberately NOT trivial ("say hi") — a reasoning model will
+// skip thinking entirely on those, which is exactly the behavior a probe needs
+// to observe.
+const PROBE_SYSTEM = 'Answer in at most three sentences. Be specific.';
+const PROBE_PROMPT = 'A run of four parallel readers over one repository keeps failing on one lane. '
+  + 'Name the single most likely cause and one way to confirm it.';
+
+/**
+ * Send one representative call and report what the app would have seen.
+ *
+ * This is the answer to "the flow says this model returns an empty response —
+ * is that the model, the budget, or us?". It reports the content/reasoning
+ * split and the finish reason, which is precisely the evidence that was
+ * missing.
+ *
+ * @param {object} target  { provider, model, apiKey, ...adapter extras }
+ * @param {object} opts    { maxTokens, stream, timeout, retry }
+ */
+export async function probeModel(target, { maxTokens = effortBudget(DEFAULT_EFFORT), stream = true, timeout = null, retry = null } = {}) {
+  const started = Date.now();
+  const base = {
+    ...target,
+    system: PROBE_SYSTEM,
+    prompt: PROBE_PROMPT,
+    maxTokens,
+    ...(timeout ? { timeout } : {}),
+    // One attempt: a probe reporting "it worked on the third try" as success
+    // hides the thing worth knowing.
+    retry: retry ?? { attempts: 1 }
+  };
+  let firstTextMs = null;
+  if (stream) base.onText = () => { firstTextMs ??= Date.now() - started; };
+
+  try {
+    const res = await callModel(base);
+    const content = String(res.text ?? '');
+    const reasoning = String(res.reasoning ?? '');
+    const reasoningTokens = res.usage?.completion_tokens_details?.reasoning_tokens ?? null;
+    return {
+      provider: target.provider,
+      model: target.model,
+      ok: Boolean(content.trim()),
+      ms: Date.now() - started,
+      firstTextMs,
+      finishReason: res.finishReason ?? null,
+      contentChars: content.length,
+      reasoningChars: reasoning.length,
+      reasoningTokens,
+      // Whether this model reasons at all decides how much budget it needs and
+      // how long it will look frozen — both of which the app has to plan for.
+      reasons: Boolean(reasoning.length || reasoningTokens),
+      usage: res.usage ?? null,
+      servedBy: res.resolvedModel && res.resolvedModel !== target.model ? res.resolvedModel : null,
+      sample: content.trim().slice(0, 200),
+      verdict: probeVerdict({ content, reasoning, finishReason: res.finishReason, maxTokens })
+    };
+  } catch (err) {
+    return {
+      provider: target.provider,
+      model: target.model,
+      ok: false,
+      ms: Date.now() - started,
+      error: String(err?.message ?? err).slice(0, 400),
+      verdict: 'unreachable — the call itself failed; see error'
+    };
+  }
+}
+
+function probeVerdict({ content, reasoning, finishReason, maxTokens }) {
+  if (!content.trim() && reasoning) {
+    return `answers with reasoning only at max_tokens ${maxTokens} — this model will empty-turn in a flow `
+      + 'unless the node runs at higher effort';
+  }
+  if (!content.trim()) return 'returned nothing at all — not usable as configured';
+  if (finishReason === 'length') {
+    return `truncated at max_tokens ${maxTokens} — usable, but this node's effort is too low for it`;
+  }
+  if (reasoning.length > content.length * 2) {
+    return 'usable, but spends most of its budget reasoning — budget and latency accordingly';
+  }
+  return 'usable';
+}
+
+// --- doctor ---------------------------------------------------------------
+
+/**
+ * The standing configuration, checked.
+ *
+ * Deliberately offline by default: it reports what IS configured, and only
+ * reaches the network when asked to (`probe: true`), because the commonest
+ * failures here — no key, a provider ahead of the working one in the priority
+ * list, a broken subscription CLI — are all visible without spending anything.
+ *
+ * @param {object} engine  the created engine (paths, settings, references)
+ * @param {object} opts    { probe: boolean, models: string[] }
+ */
+export async function doctor(engine, { probe = false, models = [], project = null } = {}) {
+  const settings = engine.settings ?? {};
+  const priority = settings.providerPriority ?? [];
+
+  const providers = priority.map(id => {
+    const connected = engine.hasKey?.(id) ?? false;
+    const sub = SUBSCRIPTION_PROVIDERS.includes(id) ? (engine.subscriptionStatus?.(id) ?? null) : null;
+    return {
+      id,
+      connected,
+      kind: SUBSCRIPTION_PROVIDERS.includes(id) ? 'subscription' : (id === 'mock' ? 'built-in' : 'api-key'),
+      ...(sub ? { subscription: sub } : {})
+    };
+  });
+
+  const findings = [];
+  if (!providers.some(p => p.connected && p.id !== 'mock')) {
+    findings.push({ level: 'error', message: 'No real provider is connected — every run will fall back to the mock adapter.' });
+  }
+  // The failure this exists to catch: a provider sitting ABOVE the working one
+  // in the priority list, taking every `provider: auto` call and failing it.
+  for (const p of providers) {
+    if (p.kind !== 'subscription' || !p.connected) continue;
+    const ahead = providers.filter(q => q.connected && q.kind === 'api-key'
+      && priority.indexOf(q.id) > priority.indexOf(p.id));
+    if (ahead.length) {
+      findings.push({
+        level: 'warn',
+        message: `"${p.id}" is a subscription CLI ranked above ${ahead.map(a => `"${a.id}"`).join(', ')}. `
+          + `Every "provider: auto" call tries it first, so if that CLI is misconfigured the failure looks like a model problem. `
+          + `Probe it with: flyt probe --provider ${p.id}`
+      });
+    }
+  }
+
+  const references = (engine.references?.list?.() ?? []).map(r => ({
+    name: r.name, cloned: Boolean(r.cloned), commit: r.commit ?? null
+  }));
+  const uncloned = references.filter(r => !r.cloned);
+  if (uncloned.length) {
+    findings.push({
+      level: 'info',
+      message: `${uncloned.length} reference(s) declared but not cloned (${uncloned.map(r => r.name).join(', ')}). `
+        + '`search_references` cannot see them. Run: flyt ref update'
+    });
+  }
+
+  const report = {
+    settingsPath: engine.settingsPath,
+    dataRoot: engine.dataRoot,
+    ...(project ? { project } : {}),
+    providers,
+    priority,
+    references,
+    findings
+  };
+
+  if (probe && models.length) {
+    report.probes = [];
+    for (const model of models) {
+      const target = engine.resolveModelSource(model);
+      report.probes.push(target?.provider
+        ? await probeModel({ ...target, model })
+        : { model, ok: false, verdict: 'no connected provider can serve this model id' });
+    }
+    for (const p of report.probes) {
+      if (!p.ok) findings.push({ level: 'error', message: `${p.model}: ${p.verdict}` });
+      else if (p.verdict !== 'usable') findings.push({ level: 'warn', message: `${p.model}: ${p.verdict}` });
+    }
+  }
+  return report;
+}
+
+/**
+ * Every model id a flow pins, so `doctor` can check the ones that will actually
+ * be called rather than a curated list nobody's flow uses.
+ */
+export function modelsInFlow(flow) {
+  const out = new Set();
+  const add = w => { if (w?.model) out.add(String(w.model)); };
+  for (const node of flow?.nodes ?? []) {
+    add(node.data?.worker);
+    for (const lane of node.data?.lanes ?? []) add(lane.worker);
+  }
+  return [...out];
+}

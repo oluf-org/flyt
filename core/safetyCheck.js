@@ -154,7 +154,13 @@ export async function checkToolCall(call, { resolve, model, retry } = {}) {
         ...target,
         system: SYSTEM,
         prompt: describeCall(call),
-        maxTokens: 120,
+        // 120 is the verdict. The rest is room to reach it: a reasoning model
+        // given only the answer size returns nothing, which parses as no
+        // verdict, which is 'caution' — so every tool call would stop and ask a
+        // human, and an unattended loop would simply stop (D40). Deliberately
+        // smaller than REASONING_HEADROOM: this runs per tool call with a
+        // person waiting on it, and CLASSIFY_TIMEOUT_MS bounds it anyway.
+        maxTokens: 120 + 2048,
         // One attempt: the fallback verdict ('caution' — ask the human) is a
         // better use of eight seconds than a backoff loop the user is waiting on.
         retry: { ...(retry ?? {}), attempts: 1 }

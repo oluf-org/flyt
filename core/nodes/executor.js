@@ -1,7 +1,7 @@
 // Executor node: runs ONE task from tasks.json -> tasks/<id>.md + per-task
 // retrospective. Sequential orchestration lives in pipeline.js; this module
 // only knows how to execute a single self-describing task from file state.
-import { runAgent, toolProtocol } from '../agent.js';
+import { runAgent, toolProtocol, describeEmptyTurn } from '../agent.js';
 import { resolveTools } from '../tools/index.js';
 import { makeRetrospective } from '../retrospective.js';
 import { recordToolUsage } from '../feedback.js';
@@ -9,6 +9,7 @@ import { runRetrospectiveTurn, retroWorker, retroEnabled } from '../retroTurn.js
 import { Workspace } from '../workspace.js';
 import { loadSkills, withSkillsSection } from '../skills.js';
 import { resolveCallTarget } from '../modelSource.js';
+import { effortBudget } from '../../src/flowTypes.js';
 
 // onText (optional): the caller's streaming sink for partial model output (V1
 // task 8). onRetry (optional): fires per transient-error backoff (V1 task 11).
@@ -159,12 +160,22 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   let retro;
   let status;
   try {
-    const result = await runAgent({ worker, apiKey, system, prompt: userMsg, tools, ctx, onText, onRetry, retry: retry ?? config.retry, timeout: timeout ?? config.timeout, signal });
+    const result = await runAgent({
+      worker, apiKey, system, prompt: userMsg, tools, ctx, onText, onRetry,
+      // An executor writes a deliverable and reasons its way there, so it needs
+      // the same reasoning headroom every other node gets (D40). Without one it
+      // fell through to the adapter's bare 4096 — enough budget for a thinking
+      // model to spend entirely on thinking.
+      maxTokens: effortBudget(task.effort),
+      onCall: record => store.writeCallTrace(runId, `executor:${taskId}`, record),
+      onEmptyTurn: info => store.appendLog(runId, { event: 'model_empty_turn', node: `executor:${taskId}`, ...info }),
+      retry: retry ?? config.retry, timeout: timeout ?? config.timeout, signal
+    });
     // An agent that produced no deliverable has not done the task, whatever the
     // transport says. Marking it done would leave the streamed partial (or a
     // 0-byte file) standing as the task's output and let dependents run on it.
     if (!String(result.text ?? '').trim()) {
-      throw new Error(`${worker.provider}/${worker.model} returned an empty response`);
+      throw new Error(describeEmptyTurn(worker, result));
     }
     // Authoritative write: onText may have left the last turn's partial text
     // (or a tool block) in this file, and this is what replaces it.
