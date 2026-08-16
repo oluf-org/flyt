@@ -75,6 +75,35 @@ export function workerForLevel(level, { allowedModels = null, model = AUTO_MODEL
 }
 
 /**
+ * The model for a level, when the bands have been given models by name.
+ *
+ * The Auto Router (above) answers "who should do this" by price band. Naming
+ * models per band answers it yourself, and it is what you want as soon as cost
+ * is the constraint rather than capability: a cheap model does the ordinary
+ * work, and the expensive one is what ESCALATION reaches — which is exactly
+ * what the ladder already means. One expensive model on every task is the bill
+ * nobody wanted; one expensive model on the tasks that failed twice is the
+ * whole point of having rungs.
+ *
+ * The map is sparse and fills DOWNWARD from the nearest band at or below the
+ * one asked for, so `{ low: cheap, high: strong }` is a complete answer for all
+ * five levels: low and medium get cheap, high, xhigh and max get strong. A map
+ * with no entry at or below the level falls back to the lowest one set, because
+ * "no model" is not a useful answer to a task that is ready to run.
+ *
+ * Returns null when nothing is mapped at all — the caller then asks for a band.
+ */
+export function workerForLevelMap(level, models = {}) {
+  const wanted = levelIndex(normalizeLevel(level));
+  const set = LEVELS
+    .map((name, i) => ({ i, model: typeof models?.[name] === 'string' ? models[name].trim() : '' }))
+    .filter(e => e.model);
+  if (!set.length) return null;
+  const at = [...set].reverse().find(e => e.i <= wanted) ?? set[0];
+  return { provider: 'auto', model: at.model, level: LEVELS[at.i] };
+}
+
+/**
  * Should this task move up a rung, and to what?
  *
  * The two triggers the supervisor owns (§8.2, §11.4):

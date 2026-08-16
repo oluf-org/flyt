@@ -252,6 +252,9 @@ const mockSettings = {
     'moonshotai/kimi-k3': { name: 'Kimi K3', contextLength: 262144, supportsTools: true, inUsdPerM: 0.6, outUsdPerM: 2.5 }
   },
   modelSets: {},
+  // The loop's band→model map (LOOP-PLAN §8), empty by default: the shipped
+  // state is "ask for an effort band", and naming models is the deliberate act.
+  loopModels: {},
   workers: {
     executor: { provider: 'mock', model: 'mock-large' },
     // The loop's two (LOOP-PLAN §8, §7.2), unset: no pin means effort bands,
@@ -318,7 +321,7 @@ const mockTasks = [
 ];
 
 const mockLoop = {
-  running: false, stopping: null, model: null,
+  running: false, stopping: null, model: null, models: {},
   inFlight: [], parked: [], completed: 4, landed: 1,
   log: [
     { at: '2026-08-16T04:02:11.000Z', line: '▶ t-0004 "Pin the supervisor" at medium' },
@@ -654,6 +657,8 @@ export function installDevMock() {
       if (Array.isArray(patch.providerPriority)) mockSettings.providerPriority = [...patch.providerPriority];
       if (Array.isArray(patch.activeModels)) mockSettings.activeModels = structuredClone(patch.activeModels);
       if (patch.modelSets && typeof patch.modelSets === 'object') mockSettings.modelSets = structuredClone(patch.modelSets);
+      // Sent whole, like activeModels: clearing a band is its absence.
+      if (patch.loopModels && typeof patch.loopModels === 'object') mockSettings.loopModels = structuredClone(patch.loopModels);
       if (patch.workers) Object.assign(mockSettings.workers, structuredClone(patch.workers));
       if (patch.projectStorage) mockSettings.projectStorage = patch.projectStorage;
       if (patch.approvalMode) mockSettings.approvalMode = patch.approvalMode;
@@ -813,6 +818,7 @@ export function installDevMock() {
       const pinned = mockSettings.workers.loop;
       mockLoop.running = true;
       mockLoop.stopping = null;
+      mockLoop.models = opts.models ?? structuredClone(mockSettings.loopModels ?? {});
       mockLoop.model = opts.worker?.model ?? (pinned?.model ?? null);
       // One task moves into flight, so the health row previews as the thing it
       // is for: a task that is working rather than merely started.

@@ -19,6 +19,7 @@ import {
 } from '../core/modelSource.js';
 // Subscription (CLI-delegation) plumbing: sign-in detection + binary
 // resolution. Presence checks only — no token is ever read (SUBSCRIPTION-AUTH-GUIDE).
+import { LEVELS } from '../core/levels.js';
 import { APP_NAME, LOG_TAG, LEGACY_APP_DIRS } from '../core/brand.js';
 import { migrateUserDataDir } from '../core/migrate.js';
 
@@ -714,6 +715,17 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
       // door: you could choose a model but never go back to effort bands.
       else if (w === null || !w?.model) delete settings.workers[name];
     }
+  }
+  // A model per effort band for the loop (LOOP-PLAN §8). Sent whole rather than
+  // patched per band, the same shape activeModels uses, so clearing one band is
+  // simply its absence. Unknown band names are dropped rather than stored.
+  if (patch.loopModels && typeof patch.loopModels === 'object') {
+    const out = {};
+    for (const band of LEVELS) {
+      const id = patch.loopModels[band];
+      if (typeof id === 'string' && id.trim()) out[band] = id.trim();
+    }
+    settings.loopModels = out;
   }
   // T2a: applies to projects opened from now on; already-open tabs keep the
   // store they were opened with.

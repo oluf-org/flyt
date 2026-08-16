@@ -20,8 +20,9 @@
 // supervisor killed at 2pm and restarted at 2:01pm resumes from what is on disk
 // rather than from what it remembered.
 import { Heartbeat, detectStall, nextIntervention, DEFAULT_THRESHOLDS } from './heartbeat.js';
-import { escalate as escalateLevel, levelFor } from './levels.js';
+import { escalate as escalateLevel, levelFor, workerForLevelMap } from './levels.js';
 import { spendFromRun } from './ledger.js';
+import { unrunnableGates } from './gates.js';
 
 const POLL_MS = 5000;
 
@@ -69,6 +70,10 @@ export class Supervisor {
       // to the next one, and a panel that showed the setting instead of the
       // session would be reporting an intention as a fact.
       model: this.config.loop?.worker?.model ?? null,
+      // The band→model map this session is working to, when it has one. A
+      // single `model` cannot describe it: the whole point is that the answer
+      // differs per attempt.
+      models: this.config.loop?.models ?? {},
       inFlight: [...this.inFlight.values()].map(h => h.toJSON()),
       parked: this.parked.slice(-20),
       completed: this.history.length,
@@ -144,13 +149,33 @@ export class Supervisor {
 
   async #begin(task) {
     const level = levelFor(task, this.config);
-    // A pinned model (`workers.loop`) replaces the band, not the ladder. The
-    // rungs still count attempts and still end in parking, which is what stops
-    // a task retrying forever; what escalation no longer buys is a bigger
-    // model, because you named the model. Said out loud in the log, since
-    // "escalated to high" would otherwise imply a change that did not happen.
-    const worker = this.config.loop?.worker ?? null;
-    this.log(`▶ ${task.id} "${task.title}" ${worker ? `on ${worker.model} (attempt band ${level})` : `at ${level}`}`);
+    // Which model this attempt runs on. Three shapes, most specific first:
+    //
+    //   models  — a model PER BAND. Escalation then buys a bigger model again,
+    //             by name instead of by price tier, which is how a backlog gets
+    //             worked by something cheap while only the tasks that fail
+    //             reach the expensive one.
+    //   worker  — one model for everything. The rungs still count attempts and
+    //             still end in parking (that is what stops a task retrying
+    //             forever); what escalation no longer buys is a bigger model.
+    //   neither — a band, and OpenRouter's Auto Router picks inside it.
+    //
+    // Said out loud in the log either way, because "escalated to high" should
+    // not imply a change of model that did not happen.
+    // A gate this machine cannot run makes the task unlandable however good the
+    // work is, and nothing would say so until the work was finished and paid
+    // for. Nine of this project's thirteen tasks arrived asking for `pytest` in
+    // a repository with no Python. Parking costs nothing; finding out afterwards
+    // costs a run.
+    const badGates = unrunnableGates(task.gates ?? []);
+    if (badGates.length) {
+      this.#park(task.id, `Declares a gate that cannot run here: ${
+        badGates.map(g => g.problem).join('; ')}. Fix the task's gates, or run it somewhere that has them.`);
+      return;
+    }
+
+    const worker = this.#workerFor(level);
+    this.log(`▶ ${task.id} "${task.title}" ${worker ? `on ${worker.model} (band ${level})` : `at ${level}`}`);
     // startedAt, so "how long did this take" survives the process that knew.
     // The first attempt sets it and a retry does not, because the question the
     // benchmark asks is how long the TASK took, not the last try at it.
@@ -348,6 +373,13 @@ export class Supervisor {
    * silently omits the failures is worse than no total: it is lowest exactly
    * when the night is going worst.
    */
+  /** The worker for an attempt at this band — the map first, then the pin. */
+  #workerFor(level) {
+    const mapped = workerForLevelMap(level, this.config.loop?.models);
+    if (mapped) return { provider: mapped.provider, model: mapped.model };
+    return this.config.loop?.worker ?? null;
+  }
+
   /** Recorded spend for this task, plus what the in-flight run has cost. */
   #spentOn(taskId, hb) {
     const recorded = this.ledger?.totals({ taskId }) ?? { usd: 0 };

@@ -41,7 +41,8 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task ready                     what the picker would take, and what is stuck
   flyt task escalate <id>             one effort level up, back to the queue
   flyt task take                      claim the top-scoring ready task
-  flyt loop start [--parallel N] [--model <id>] [--reviewer <id>]  work the backlog
+  flyt loop start [--parallel N] [--model <id> | --models low=a,high=b] [--reviewer <id>]
+                                      work the backlog until empty, capped or stopped
   flyt loop stop|status               stop it, or see what it is doing
   flyt report                         what landed, what needs you, what it cost
   flyt spend [--since 24h]            the ledger
@@ -157,6 +158,20 @@ const namedWorker = id => (id
   ? { provider: String(id).startsWith('mock-') ? 'mock' : 'auto', model: String(id) }
   : null);
 
+// `--models low=a,high=b` (repeatable) → { low: 'a', high: 'b' }. Unknown band
+// names are left to the command surface to reject, so one rule decides what a
+// band is called rather than two.
+function levelModels(flag) {
+  const out = {};
+  for (const chunk of [].concat(flag ?? [])) {
+    for (const pair of String(chunk).split(',')) {
+      const eq = pair.indexOf('=');
+      if (eq > 0) out[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 // Poll a run to a terminal stage. Files are the source of truth (principle #1),
 // so polling them is not a workaround — it is reading the same state the canvas
 // reads, and it survives this process dying halfway.
@@ -223,6 +238,19 @@ async function main() {
       for (const pair of [].concat(flags.arg ?? [])) {
         const eq = String(pair).indexOf('=');
         if (eq > 0) args[String(pair).slice(0, eq)] = String(pair).slice(eq + 1);
+      }
+      // `--arg-json k=[...]` for values that are not strings. Documented above
+      // since this command was written and never implemented, so every command
+      // taking an array or a number — `task:update` with `gates`, which is how
+      // you fix a task that declares a gate this repo cannot run — was
+      // reachable from the desktop app and the HTTP API but not from here.
+      for (const pair of [].concat(flags['arg-json'] ?? [])) {
+        const eq = String(pair).indexOf('=');
+        if (eq <= 0) continue;
+        const key = String(pair).slice(0, eq);
+        const raw = String(pair).slice(eq + 1);
+        try { args[key] = JSON.parse(raw); }
+        catch (err) { return die(`--arg-json ${key}: not valid JSON (${err.message})`); }
       }
       if (!args.projectId && name.includes(':')) args.projectId ??= openProject(api, engine);
       return out(await api.invoke(name, args));
@@ -306,12 +334,20 @@ async function main() {
           maxTasks: flags.tasks ? Number(flags.tasks) : null,
           dryRun: Boolean(flags['dry-run']),
           worker: namedWorker(flags.model),
+          // `--models low=cheap,high=strong` — a model per effort band, so the
+          // cheap one does the ordinary work and escalation is what reaches the
+          // expensive one. Repeatable or comma-separated; the map fills
+          // downward, so naming two bands answers all five.
+          models: levelModels(flags.models),
           // Who reads the diff before anything merges (§7.2). Nameable here
           // because the machine driving a loop is often not the machine whose
           // settings.json holds the answer.
           reviewer: namedWorker(flags.reviewer)
         });
-        say(`loop started on ${ack.model ?? 'effort bands'}`
+        const on = Object.keys(ack.models ?? {}).length
+          ? Object.entries(ack.models).map(([b, m]) => `${b}=${m}`).join(' ')
+          : (ack.model ?? 'effort bands');
+        say(`loop started on ${on}`
           + `, reviewed by ${ack.reviewer ?? 'nobody (nothing will land)'}`
           + ' — ctrl-c to detach, `flyt loop stop` to stop it');
         // Held open on purpose: the loop lives in this process. Detaching it

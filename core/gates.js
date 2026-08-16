@@ -91,6 +91,56 @@ export async function runGates(gates, { cwd, timeoutMs, env, onResult = null } =
  * added. A task may ADD gates and may never remove them (§7.3) — an agent that
  * can delete the check that judges it is not being checked.
  */
+/**
+ * Can this gate command run here at all?
+ *
+ * A task may ADD gates and may never remove them, which is the right rule and
+ * has a sharp edge: a task that declares a gate this project cannot run is
+ * unlandable by construction, and nothing says so until the work is finished
+ * and the gate fails. A backlog written against a different repository is full
+ * of them — nine of this project's thirteen tasks arrived asking for `pytest`
+ * in a repository with no Python, and three more declared the literal command
+ * `none`, which is not a command.
+ *
+ * So the interpreter is checked before the work starts, not after. Only the
+ * FIRST word, and only for existence: whether the suite passes is the gate's
+ * business, and running it to find out is what the gate itself is for.
+ *
+ * `null` when it can run, a reason when it cannot.
+ */
+export function gateProblem(command, { cwd = process.cwd(), lookup = null } = {}) {
+  const text = String(command ?? '').trim();
+  if (!text) return 'an empty gate command';
+  // Shell built-ins and operators are the caller's business, not ours: anything
+  // with a pipe, a redirect or a chain is a shell line we do not try to parse.
+  if (/[|&;<>()$`]/.test(text)) return null;
+  const bin = text.split(/\s+/)[0];
+  const found = (lookup ?? whichSync)(bin, cwd);
+  return found ? null : `\`${bin}\` is not an executable command on this machine`;
+}
+
+// `bin` on PATH, or a file in the project. Deliberately dependency-free and
+// deliberately cheap — this runs once per task, not once per call.
+function whichSync(bin, cwd) {
+  if (/[\\/]/.test(bin)) return fs.existsSync(path.resolve(cwd, bin));
+  const exts = process.platform === 'win32'
+    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : [''];
+  for (const dir of (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+    for (const ext of ['', ...exts]) {
+      try { if (fs.existsSync(path.join(dir, bin + ext))) return true; } catch { /* unreadable PATH entry */ }
+    }
+  }
+  return false;
+}
+
+/** Every declared gate that could not run, with the reason. */
+export function unrunnableGates(gates = [], opts = {}) {
+  return gates
+    .map(command => ({ command, problem: gateProblem(command, opts) }))
+    .filter(g => g.problem);
+}
+
 export function gatesFor({ projectConfig = {}, task = {} } = {}) {
   const base = Array.isArray(projectConfig.gates) && projectConfig.gates.length
     ? projectConfig.gates

@@ -269,6 +269,13 @@ export function createEngine({
     runtimeConfig.modelSets = settings.modelSets ?? {};
     runtimeConfig.activeModels = settings.activeModels ?? [];
     runtimeConfig.categoryWorkers = baseConfig.categoryWorkers ?? {};
+    // A model per effort band for the loop (LOOP-PLAN §8). Settings win over
+    // config.json, the same way every other worker override does — the bands
+    // are a machine's cost decision, not a property of the repository.
+    runtimeConfig.loop = {
+      ...baseConfig.loop,
+      ...(Object.keys(settings.loopModels ?? {}).length ? { models: settings.loopModels } : {})
+    };
     // 'ask' is the shipped default: an agent with a shell should not run
     // unattended because nobody got round to choosing.
     runtimeConfig.approvalMode = normalizeApprovalMode(settings.approvalMode ?? 'ask');
@@ -316,6 +323,8 @@ export function createEngine({
       // picker in the app renders them.
       modelFacts: settings.modelFacts ?? {},
       modelSets: settings.modelSets ?? {},
+      // What the Loop view's per-band pickers show. Model ids, never keys.
+      loopModels: settings.loopModels ?? {},
       workers: Object.fromEntries(
         Object.entries(runtimeConfig.workers).map(([name, w]) => [name, { provider: w.provider, model: w.model }])
       ),

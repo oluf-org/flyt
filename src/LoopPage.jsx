@@ -18,6 +18,29 @@ import { ModelPicker } from './ModelPicker.jsx';
 
 const HEALTH_GLYPH = { working: '◆', quiet: '◇', stalled: '▲', intervened: '⟳' };
 
+// The effort bands, cheapest first. Mirrored from core/levels.js rather than
+// imported, for the reason every other constant in src/ is: the renderer does
+// not import core, and this list changes about once a year.
+const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+// What a band with no model of its own inherits — the nearest one below it.
+// Shown as the picker's placeholder so an empty row reads as "covered by that"
+// rather than as "nothing will happen here".
+function coverageFor(band, models = {}) {
+  const i = LEVELS.indexOf(band);
+  for (let j = i - 1; j >= 0; j--) if (models[LEVELS[j]]) return models[LEVELS[j]];
+  // Nothing below: the lowest model set covers everything under it.
+  for (const b of LEVELS) if (models[b]) return models[b];
+  return null;
+}
+
+const describeModels = models => {
+  const set = LEVELS.filter(b => models?.[b]);
+  return set.length ? set.map(b => `${b}=${models[b]}`).join(', ') : null;
+};
+
+const sameModels = (a, b) => LEVELS.every(band => (a?.[band] ?? null) === (b?.[band] ?? null));
+
 export default function LoopPage({ projectId, activeModels = [], onOpenRun = null }) {
   const [status, setStatus] = useState(null);
   const [tasks, setTasks] = useState([]);
@@ -32,6 +55,9 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
   // outlive the window that made it — the loop's whole point is running when
   // nobody is looking at this page.
   const [workers, setWorkers] = useState({});
+  // A model per effort band (LOOP-PLAN §8): the shape that makes a backlog
+  // affordable, since only the tasks that fail climb into the dear one.
+  const [levelModels, setLevelModels] = useState({});
   // Which task is open, and what the ledger says it spent. Fetched on expand
   // rather than for all forty rows: the queue is polled every three seconds and
   // a spend query per queued task would be forty reads a tick for numbers
@@ -82,6 +108,7 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
   const readWorkers = useCallback(async () => {
     const s = await window.flyt?.getSettings?.();
     setWorkers(s?.workers ?? {});
+    setLevelModels(s?.loopModels ?? {});
   }, []);
   useEffect(() => { readWorkers().catch(() => {}); }, [readWorkers]);
 
@@ -91,6 +118,20 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
       // A null clears the override: for `loop` that is "go back to effort
       // bands", for `reviewer` it is "nothing lands unattended".
       await window.flyt.setSettings({ workers: { [name]: worker } });
+      await readWorkers();
+      setError(null);
+    } catch (err) { setError(String(err?.message ?? err)); }
+    finally { setBusy(false); }
+  };
+
+  // One band's model. Saved whole rather than patched, the same shape
+  // activeModels uses, so clearing one is simply its absence.
+  const setLevelModel = async (band, model) => {
+    const next = { ...levelModels };
+    if (model) next[band] = model; else delete next[band];
+    setBusy(true);
+    try {
+      await window.flyt.setSettings({ loopModels: next });
       await readWorkers();
       setError(null);
     } catch (err) { setError(String(err?.message ?? err)); }
@@ -173,31 +214,40 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
           each (what it costs, whether anything can land) belongs beside it. */}
       <section className="loop-models">
         <h2>Models</h2>
-        <div className="loop-model-row">
-          <label>Work</label>
-          <ModelPicker
-            worker={loopWorker}
-            activeModels={activeModels}
-            idPrefix="loop-work"
-            placeholder="Effort bands"
-            onChange={w => setWorker('loop', w)}
-          />
-          {loopWorker
-            ? <button type="button" className="link" disabled={busy} onClick={() => setWorker('loop', null)}>
-                Use effort bands
-              </button>
-            : <span className="loop-model-hint">
-                Effort bands — each task asks OpenRouter's router for a cost tier, and a failed
-                attempt retries one band up.
-              </span>}
-        </div>
-        {loopWorker && (
-          <p className="loop-model-note">
-            Every task runs on <code className="mono">{loopWorker.model}</code>. The ladder still
-            counts attempts and still parks a task at the top; what it no longer does is reach for
-            a bigger model.
-          </p>
-        )}
+        {/* A model PER BAND, because that is the decision cost actually forces:
+            something cheap does the ordinary work, and the expensive one is
+            what a task reaches by FAILING — which is what the ladder already
+            means. One model on every task is the bill nobody wanted. The map
+            fills downward, so naming two bands answers all five. */}
+        {LEVELS.map(band => {
+          const id = levelModels[band] ?? null;
+          const covered = coverageFor(band, levelModels);
+          return (
+            <div className="loop-model-row" key={band}>
+              <label>{band}</label>
+              <ModelPicker
+                worker={id ? { provider: 'auto', model: id } : null}
+                activeModels={activeModels}
+                idPrefix={`loop-band-${band}`}
+                placeholder={covered ? `↑ ${covered}` : 'Effort band'}
+                onChange={w => setLevelModel(band, w?.model ?? null)}
+              />
+              {id && (
+                <button type="button" className="link" disabled={busy} onClick={() => setLevelModel(band, null)}>
+                  Clear
+                </button>
+              )}
+            </div>
+          );
+        })}
+        <p className="loop-model-note">
+          {Object.keys(levelModels).length
+            ? <>A task starts at its own band and moves up one on every failed attempt, so the
+                dearer models are reached only by the work that needs them. Bands with no model of
+                their own inherit the nearest one below.</>
+            : <>No models named — each task asks OpenRouter's router for a cost tier instead, and a
+                failed attempt retries one band up.</>}
+        </p>
         <div className="loop-model-row">
           <label>Review</label>
           <ModelPicker
@@ -216,12 +266,12 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
                 merging.
               </span>}
         </div>
-        {running && status?.model !== (loopWorker?.model ?? null) && (
+        {running && !sameModels(status?.models, levelModels) && (
           // A pick made after Start belongs to the next loop. Saying so beats a
           // panel that reports an intention as though it were what is running.
           <p className="loop-model-note warn">
-            The running loop is on {status?.model ?? 'effort bands'}; this change applies when you
-            start it again.
+            The running loop is on {describeModels(status?.models) ?? status?.model ?? 'effort bands'};
+            this change applies when you start it again.
           </p>
         )}
       </section>

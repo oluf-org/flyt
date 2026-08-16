@@ -120,7 +120,22 @@ export function migrateSettings(raw) {
   // sets. Both are additive — settings written before D36 simply have none.
   s.modelFacts = normalizeModelFacts(s.modelFacts);
   s.modelSets = normalizeModelSets(s.modelSets);
+  // The loop's band→model map (LOOP-PLAN §8). Normalized here so a hand-edited
+  // settings.json cannot put a non-string, an empty id, or a band that is not a
+  // band into the one structure the supervisor reads per attempt.
+  s.loopModels = normalizeLoopModels(s.loopModels);
   return s;
+}
+
+export const LOOP_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+export function normalizeLoopModels(raw) {
+  const out = {};
+  for (const band of LOOP_LEVELS) {
+    const id = raw?.[band];
+    if (typeof id === 'string' && id.trim()) out[band] = id.trim();
+  }
+  return out;
 }
 
 // --- Model facts (BRICKS P0.2) ----------------------------------------------

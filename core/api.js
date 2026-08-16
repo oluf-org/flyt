@@ -17,6 +17,18 @@ import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
 import { pushRefs, git } from './worktree.js';
 import { workerForLevel, levelFor, LEVELS } from './levels.js';
+
+// A band→model map, cleaned: known band names, non-empty ids, nothing else.
+// Sent by a UI, a CLI flag and config.json alike, so it is normalized once here
+// rather than trusted three times.
+function normalizeLevelModels(raw) {
+  const out = {};
+  for (const band of LEVELS) {
+    const id = raw?.[band];
+    if (typeof id === 'string' && id.trim()) out[band] = id.trim();
+  }
+  return out;
+}
 import { Supervisor, renderReport } from './supervisor.js';
 import { reviewWorker } from './diffReview.js';
 import { APPROVAL_MODES } from './flowRunner.js';
@@ -457,25 +469,44 @@ export function createApi(engine) {
     // One supervisor per project, held here for the life of the process: it is
     // the thing that outlives a closed window, and starting a second one over
     // the same backlog would have two pickers racing for the same tasks.
-    'loop:start': async ({ projectId, parallelism = 1, maxTasks = null, dryRun = false, worker = null, reviewer = null }) => {
+    'loop:start': async ({
+      projectId, parallelism = 1, maxTasks = null, dryRun = false,
+      worker = null, reviewer = null, models = null
+    }) => {
       proj(projectId);
       // The model every task runs on, when one has been named. `workers.loop`
       // is where the Loop view saves its pick; an explicit `worker` on the call
       // is for a caller that wants a different one for this session only.
       // Resolved here rather than at the first model call, because the point of
       // a pre-flight check is to fail before a worktree exists.
+      //
+      // `models` is the other shape of the same decision: a model PER BAND, so
+      // the cheap one does the ordinary work and escalation is what reaches the
+      // expensive one. It wins over a single pin, because it is strictly more
+      // specific — a caller that sent both meant the map.
+      const byLevel = normalizeLevelModels(models ?? runtimeConfig.loop?.models);
       let pinned, sessionReviewer;
       try {
         pinned = resolveWorkerArg(worker) ?? resolveWorkerArg(runtimeConfig.workers?.loop);
-        sessionReviewer = resolveWorkerArg(reviewer);
+        sessionReviewer = resolveWorkerArg(reviewer, { withKey: true });
+        // Every model in the map is checked now, not when a task first escalates
+        // into it — an unroutable model at `max` is a failure that would
+        // otherwise surface hours later, on the task that most needed to work.
+        for (const [band, id] of Object.entries(byLevel)) {
+          const w = resolveWorkerArg({ provider: 'auto', model: id });
+          if (w && w.provider !== 'mock' && !engine.hasKey(w.provider)) {
+            throw new Error(`The "${band}" band is set to "${id}", but its provider (${w.provider}) is not connected.`);
+          }
+        }
       } catch (err) {
         throw new ApiError(String(err?.message ?? err), { status: 400, code: 'no_provider_key' });
       }
+      if (Object.keys(byLevel).length) pinned = null; // the map answers per attempt
       // Fail once, here, rather than per task. Levels route through
       // OpenRouter's Auto Router (§8), so without a key every task would fail
       // at its first node with a provider error and the whole backlog would
       // end the night parked for a reason that has nothing to do with the work.
-      const useLevels = runtimeConfig.loop?.levels !== false && !pinned;
+      const useLevels = runtimeConfig.loop?.levels !== false && !pinned && !Object.keys(byLevel).length;
       if (useLevels && !engine.hasKey('openrouter')) {
         throw new ApiError(
           'Effort levels route through OpenRouter, and no OpenRouter key is set. Add one in Settings, pick a model for the loop, or set loop.levels to false to run on the configured workers instead.',
@@ -511,7 +542,7 @@ export function createApi(engine) {
           workers: sessionReviewer
             ? { ...runtimeConfig.workers, reviewer: sessionReviewer }
             : runtimeConfig.workers,
-          loop: { ...runtimeConfig.loop, dryRun, worker: pinned }
+          loop: { ...runtimeConfig.loop, dryRun, worker: pinned, models: byLevel }
         },
         parallelism,
         log: msg => engine.emitLoop?.(projectId, msg)
@@ -522,8 +553,9 @@ export function createApi(engine) {
       // open for the length of a working day.
       sup.run({ maxTasks: maxTasks ?? Infinity }).catch(err => engine.emitLoop?.(projectId, `loop failed: ${err.message}`));
       return {
-        started: true, parallelism, levels: !pinned,
+        started: true, parallelism, levels: useLevels,
         model: pinned?.model ?? null,
+        models: byLevel,
         reviewer: (sessionReviewer ?? reviewWorker(runtimeConfig))?.model ?? null
       };
     },

@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WorktreePool, git, slugify, branchFor, land, defaultWorktreeRoot, isInside } from '../core/worktree.js';
-import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression } from '../core/gates.js';
+import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, gateProblem, unrunnableGates } from '../core/gates.js';
 import { parseReview, buildReviewPrompt, reviewDiff, reviewWorker } from '../core/diffReview.js';
 import { landTask, mechanicalChecks, advancePin, readPin } from '../core/landing.js';
 import { setScript } from './helpers.js';
@@ -166,6 +166,29 @@ test('a reviewer that cannot be reached blocks the landing', async () => {
   });
   assert.equal(down.verdict, 'request-changes');
   assert.match(down.reason, /could not be completed/);
+});
+
+test('a gate this machine cannot run is caught before the work, not after it', () => {
+  // A task may ADD gates and may never remove them, which is right and has a
+  // sharp edge: a task declaring a gate the project cannot run is unlandable
+  // however good the work is, and nothing said so until the work was finished
+  // and paid for. Nine of this project's thirteen backlog tasks arrived asking
+  // for `pytest` in a repository with no Python; three more declared the
+  // literal command `none`.
+  assert.equal(gateProblem('npm test'), null);
+  assert.match(gateProblem('pytest -q'), /`pytest` is not an executable command/);
+  assert.match(gateProblem('none'), /`none` is not an executable/);
+  assert.match(gateProblem('   '), /empty gate command/);
+
+  // Only the interpreter, and only for existence: whether the suite passes is
+  // the gate's own business, and running it to find out is what it is for.
+  assert.equal(gateProblem('npm run lint -- --fix'), null);
+  // A shell line is the caller's business — we do not try to parse one.
+  assert.equal(gateProblem('npm test | tee out.txt'), null);
+  assert.equal(gateProblem('npm test && npm run lint'), null);
+
+  assert.deepEqual(unrunnableGates(['npm test', 'pytest']).map(g => g.command), ['pytest']);
+  assert.deepEqual(unrunnableGates([]), []);
 });
 
 test('a configured reviewer keeps the key it was stamped with', async () => {

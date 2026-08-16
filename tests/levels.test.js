@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   LEVELS, DEFAULT_LEVEL, normalizeLevel, nextLevel, maxLevel,
-  workerForLevel, escalate, levelFor, AUTO_MODEL
+  workerForLevel, workerForLevelMap, escalate, levelFor, AUTO_MODEL
 } from '../core/levels.js';
 import { Backlog } from '../core/backlog.js';
 import { openrouterAdapter } from '../core/adapters/openrouter.js';
@@ -56,6 +56,36 @@ test('a level is a request for a band, not a model we picked', () => {
   // caller would never see which model actually answered.
   const pinned = workerForLevel('high', { model: 'deepseek/deepseek-v4-pro' });
   assert.deepEqual(pinned, { provider: 'openrouter', model: 'deepseek/deepseek-v4-pro' });
+});
+
+test('a sparse band→model map is a complete answer, and escalation is what reaches the expensive one', () => {
+  const models = { low: 'deepseek/deepseek-v4-pro', high: 'moonshotai/kimi-k3' };
+
+  // Fills DOWNWARD from the nearest band at or below the one asked for, so
+  // naming two bands answers all five. This is the shape that makes a backlog
+  // affordable: the cheap model does the ordinary work, and only a task that
+  // has already failed twice costs what the expensive one costs.
+  assert.equal(workerForLevelMap('low', models).model, 'deepseek/deepseek-v4-pro');
+  assert.equal(workerForLevelMap('medium', models).model, 'deepseek/deepseek-v4-pro');
+  assert.equal(workerForLevelMap('high', models).model, 'moonshotai/kimi-k3');
+  assert.equal(workerForLevelMap('xhigh', models).model, 'moonshotai/kimi-k3');
+  assert.equal(workerForLevelMap('max', models).model, 'moonshotai/kimi-k3');
+  // The band the answer came FROM, so a log line can say which rung is talking.
+  assert.equal(workerForLevelMap('xhigh', models).level, 'high');
+
+  // A level below everything mapped still gets a model: "nothing" is not a
+  // useful answer to a task that is ready to run.
+  assert.equal(workerForLevelMap('low', { high: 'x' }).model, 'x');
+
+  // Nothing mapped at all means "ask for a band instead", which the caller
+  // distinguishes by the null.
+  assert.equal(workerForLevelMap('low', {}), null);
+  assert.equal(workerForLevelMap('low', { high: '  ' }), null);
+  assert.equal(workerForLevelMap('low', null), null);
+
+  // 'auto' because the id is the decision and who serves it is the priority
+  // walk's business — the same shape every picker in the app produces.
+  assert.equal(workerForLevelMap('low', models).provider, 'auto');
 });
 
 test('escalation moves up a rung, and running out of ladder is a human decision', () => {
