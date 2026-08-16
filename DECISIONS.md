@@ -790,9 +790,42 @@ this window did not start cannot be stopped from it either.
 `core/modelSource.js` (`normalizeLoopModels`), `electron/main.js`, `bin/flyt.js`
 (`--models`, `--arg-json`), `src/LoopPage.jsx`, `src/devMock.js`, `src/styles.css`.
 
-**Status.** Decided and **implemented**. 927/927 green, and the loop is working this project's
+**Then the loop found three more, by running.** None of these were visible from reading the
+code; each took a real task, a real model and real money to surface.
+
+- **Nobody told the agent what "done" means here.** Landing merges a *diff*, and an answer
+  written as prose leaves the repository unchanged — an empty diff, which cannot land however
+  good the answer is. The agent could not know: it reads "produce a cited report" and produces
+  one. Five attempts across two models and three tasks each read the right files, reasoned well,
+  wrote nothing, and were rejected for having no diff, climbing a band each time. The supervisor
+  says it now, because the supervisor is the part that knows.
+- **An empty diff was sent to the reviewer.** A model was paid to write a paragraph explaining
+  that the diff is empty — free to know, and paid for again on every failed attempt.
+- **A task nobody could do was escalated instead of parked.** The brief promises the opposite:
+  change nothing, say so, and a person decides. So the agent needs a way to *say* it that is not
+  prose — `TASK-IMPOSSIBLE: <why>` — because "I could not do this" and "this cannot be done"
+  decide whether the ladder is worth climbing, and that is not a difference to infer from
+  wording. Checked before the landing sequence, since `work:land` escalates the backlog itself
+  and gates-plus-reviewer-plus-canary on an impossible task is a bill for confirming what the
+  agent just said.
+
+**And one that had been corrupting deliverables all along.** Models reach for tool syntax this
+harness does not speak — `<tool>{…}</tool>`, `<tool_calls><invoke …>`, a `<tool_call>` naming a
+tool that does not exist here. The native path saw no tool call, the text path matched no fenced
+block, so the text fell through as CONTENT and a node whose deliverable was
+`<tool_call>…</tool_call>` counted as having produced one. **Four of six task outputs in one
+run** were that, and they flowed downstream into the result and into the reviewer's diff. It is
+an empty turn by another name, so it takes the same single retry — with a nudge that names the
+real problem, since telling a model it "returned only internal reasoning" when it in fact
+emitted a tool call in the wrong shape spends the one retry on the wrong advice.
+
+**Status.** Decided and **implemented**. 932/932 green, and the loop is working this project's
 own thirteen tasks with `low=deepseek/deepseek-v4-pro high=moonshotai/kimi-k3` and
 `anthropic/claude-sonnet-5` reviewing.
+
+The pattern across all of it is worth keeping: every defect here was invisible to a reading of
+the code and obvious within one real run. The suite was green through all of them — because a
+green suite proves the parts agree with the tests, and a loop proves they agree with each other.
 
 ---
 
