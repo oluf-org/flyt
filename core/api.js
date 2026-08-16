@@ -418,6 +418,15 @@ export function createApi(engine) {
     // finished loop looks like.
     'task:take': ({ projectId, by = 'supervisor' }) => backlogFor(projectId).take(by),
     'task:release': ({ projectId, id, status = 'queued' }) => backlogFor(projectId).release(id, { status }),
+    // Out of the queue for good. Parking a task that should never have been
+    // written only moves it to the pile a person reads every morning; this is
+    // the one that ends it. A claimed task is refused unless forced, because
+    // something holds a lease and probably a worktree.
+    'task:remove': ({ projectId, id, force = false }) => {
+      const removed = backlogFor(projectId).remove(id, { force });
+      if (!removed) throw new ApiError(`No task "${id}".`, { status: 404, code: 'no_task' });
+      return { removed: removed.id, title: removed.title, status: removed.status };
+    },
     // One rung up and back in the queue — or parked, when the ladder is spent.
     // The supervisor calls this on a failed attempt and on a stalled one (§11.4).
     'task:escalate': ({ projectId, id, reason = 'failed', note = '' }) =>

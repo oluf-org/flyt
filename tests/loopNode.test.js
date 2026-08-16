@@ -102,6 +102,34 @@ test('enqueue writes claimable tasks, with provenance and resolved dependsOn', (
 
   // dependsOn named a TITLE in the plan; ids only exist after add().
   assert.deepEqual(backlog.get(ids[1]).dependsOn, [ids[0]]);
+  // A run that read nothing attaches nothing.
+  assert.deepEqual(first.references, []);
+});
+
+test('a task learned from another repository says which one', () => {
+  // Without this the task names the READ repository's files as if they were
+  // ours, and whoever claims it is standing here, where those paths do not
+  // exist. Every agent then reports it impossible — correctly — and a sound
+  // backlog parks. Watched exactly that: nine tasks about
+  // `code_quality_manager.py` and `agent.py`, with a read-only clone containing
+  // both sitting in the reference library the whole time, named by nothing.
+  const backlog = tmpBacklog();
+  const { tasks } = parseBacklogPlan(fenced(PLAN));
+  const ids = enqueuePlan(backlog, tasks, {
+    runId: 'run-1', nodeId: 'loop',
+    references: [{ name: 'self_improving_coding_agent', commit: 'abc1234' }]
+  });
+
+  // The NAME is the useful half: `reference:<name>/<path>` opens a file in it
+  // and `search_references` scopes to it.
+  assert.deepEqual(backlog.get(ids[0]).references, ['self_improving_coding_agent']);
+  // Survives the round trip through the file, like every other field.
+  assert.deepEqual(new Backlog(backlog.rootDir).get(ids[0]).references, ['self_improving_coding_agent']);
+  // A plain string is accepted too — callers should not have to know the shape
+  // the runner happens to record.
+  const b2 = tmpBacklog();
+  const id2 = enqueuePlan(b2, tasks, { runId: 'r', nodeId: 'l', references: ['opencode'] })[0];
+  assert.deepEqual(b2.get(id2).references, ['opencode']);
 });
 
 test('resolveDependsOn drops names that were never enqueued', () => {

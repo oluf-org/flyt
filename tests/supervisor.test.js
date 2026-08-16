@@ -503,6 +503,35 @@ test('a task the agent says cannot be done here is parked, not escalated', async
   assert.equal(b2.get('t-0001').level, 'medium');
 });
 
+test('a task learned from another repository is told where to look', async () => {
+  // The task names that repository's files; the agent claiming it stands here,
+  // where those paths do not exist. Without being told, the only honest thing
+  // it can report is that the task is impossible — which nine tasks got,
+  // correctly, while a read-only clone containing every one of those files sat
+  // in the reference library unmentioned.
+  const backlog = makeBacklog();
+  backlog.add({
+    title: 'Port the evaluator', goal: 'Extract the evaluation logic',
+    references: ['self_improving_coding_agent']
+  });
+  const engine = fakeEngine({ backlog });
+  await new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 }).run({ maxTasks: 1 });
+
+  const brief = engine.calls.find(c => c.name === 'flow:run').args.userInput;
+  assert.match(brief, /reference:self_improving_coding_agent/);
+  assert.match(brief, /search_references/);
+  // The half that prevents the opposite mistake: read there, write here.
+  assert.match(brief, /goes into THIS project/);
+
+  // A task with no reference gets no such section — there is nowhere else to
+  // look, and saying so would be noise in every ordinary brief.
+  const b2 = makeBacklog();
+  b2.add({ title: 'Ordinary work', goal: 'g' });
+  const e2 = fakeEngine({ backlog: b2 });
+  await new Supervisor({ ...e2, projectId: 'p', backlog: b2, pollMs: 1 }).run({ maxTasks: 1 });
+  assert.ok(!e2.calls.find(c => c.name === 'flow:run').args.userInput.includes('WHERE THIS TASK CAME FROM'));
+});
+
 test('the loop publishes its status where another process can read it', async () => {
   // The supervisor outlives the window that started it, so a status kept only
   // in its own memory is a status nobody else can see: `flyt loop status` in a

@@ -49,6 +49,12 @@ const DEFAULTS = () => ({
   dependsOn: [],
   gates: [],         // extra gate commands beyond the project defaults
   blastRadius: [],   // paths this task expects to touch
+  // Reference repositories this task was LEARNED FROM (§16), by name. A task
+  // written from reading someone else's code names that code's files, and the
+  // agent that claims it is standing somewhere those paths do not exist —
+  // without this it can only report the task impossible, however good the task
+  // is. With it, `reference:<name>/<path>` opens the file.
+  references: [],
   budgetUsd: null,
   attempts: 0,
   createdBy: 'human',
@@ -212,6 +218,34 @@ export class Backlog {
     }
     fs.writeFileSync(this.#file(task.id), serializeTask(stripId(next)));
     return next;
+  }
+
+  /**
+   * Take a task out of the queue for good.
+   *
+   * The queue could be added to and never emptied: `release` and `escalate`
+   * move a task between states, and nothing removed one. So a backlog written
+   * against the wrong repository — or by an experiment, or a duplicate — could
+   * only be hidden by parking it, where it sits in the pile a person reads
+   * every morning, forever.
+   *
+   * A task that is CLAIMED is refused rather than deleted: something holds a
+   * lease and probably a worktree, and removing the file it is working from is
+   * how a worker ends up writing into a directory the supervisor has forgotten.
+   * Release it first, deliberately.
+   *
+   * Returns the task that was removed, so a caller can report or undo it.
+   */
+  remove(id, { force = false } = {}) {
+    const safe = this.#assertId(id);
+    const task = this.get(safe);
+    if (!task) return null;
+    if (!force && fs.existsSync(this.#lock(safe))) {
+      throw new Error(`Task "${safe}" is claimed by ${task.claimedBy ?? 'someone'}. Release it before removing it.`);
+    }
+    fs.rmSync(this.#file(safe));
+    try { fs.rmSync(this.#lock(safe)); } catch { /* no lock, or already gone */ }
+    return task;
   }
 
   // --- claiming ------------------------------------------------------------

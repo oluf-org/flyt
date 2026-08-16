@@ -69,6 +69,40 @@ const HOW_IT_LANDS = [
   'instead and it will be retried.'
 ].join('\n');
 
+/**
+ * Where a task's file names actually live, when it was learned from elsewhere.
+ *
+ * A task written by reading someone else's repository describes THAT
+ * repository's files, and the agent claiming it is standing in this project,
+ * where those paths do not exist. Every such agent then reports the task
+ * impossible — correctly, from where it is standing — and a perfectly good
+ * backlog parks. Watched exactly that happen: nine tasks naming
+ * `code_quality_manager.py` and `agent.py`, while a read-only clone containing
+ * both sat in the reference library the whole time, mentioned by nothing.
+ *
+ * The task carries the reference name (`references:`), so the brief can say
+ * where to look and how — which is all that was missing.
+ */
+function whereItCameFrom(task) {
+  const refs = (task.references ?? []).filter(Boolean);
+  if (!refs.length) return '';
+  const list = refs.map(r => `\`reference:${r}\``).join(', ');
+  return [
+    'WHERE THIS TASK CAME FROM (added by the supervisor):',
+    '',
+    `This task was written by reading ${list} — a read-only clone in the reference`,
+    'library, NOT part of this project. Any file, class or function it names that you cannot',
+    'find here is almost certainly there, and its absence from this workspace is the point of',
+    'the task rather than a reason it cannot be done.',
+    '',
+    `Search it with \`search_references\` and open a file with \`read_file\` on`,
+    `\`reference:${refs[0]}/<path>\`. Look there BEFORE concluding anything is missing.`,
+    '',
+    'What you write still goes into THIS project. The reference is what you are learning from;',
+    'the workspace is what you are changing.'
+  ].join('\n');
+}
+
 // How an agent says "not here". A sentinel line rather than a judgement about
 // its prose: the difference between "I could not do this" and "this cannot be
 // done" decides whether the ladder is worth climbing, and it is not a
@@ -334,6 +368,7 @@ export class Supervisor {
     return [
       task.title,
       task.body,
+      whereItCameFrom(task),
       HOW_IT_LANDS,
       task.blockedReason ? `\nA PREVIOUS ATTEMPT FAILED:\n${task.blockedReason}` : ''
     ].filter(Boolean).join('\n\n');

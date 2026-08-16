@@ -82,6 +82,32 @@ test('a malformed task is reported, not thrown past', () => {
 
 // --- claiming --------------------------------------------------------------
 
+test('a task can leave the queue for good, unless something is holding it', () => {
+  // The queue could be added to and never emptied: release and escalate move a
+  // task between states, and nothing removed one. A backlog written against the
+  // wrong repository could only be HIDDEN by parking it, where it then sits in
+  // the pile a person reads every morning, forever.
+  const backlog = newBacklog();
+  const a = backlog.add({ title: 'wrong repo', goal: 'g' });
+  const b = backlog.add({ title: 'keep me', goal: 'g' });
+
+  const removed = backlog.remove(a.id);
+  assert.equal(removed.id, a.id);
+  assert.equal(removed.title, 'wrong repo', 'the caller gets what it removed, so it can say so');
+  assert.equal(backlog.get(a.id), null);
+  assert.deepEqual(backlog.ids(), [b.id]);
+  assert.equal(backlog.remove('t-9999'), null, 'removing what is not there is not an error');
+
+  // A claimed task is refused: something holds a lease and probably a worktree,
+  // and deleting the file it is working from is how a worker ends up writing
+  // into a directory the supervisor has forgotten about.
+  backlog.claim(b.id, 'worker-a');
+  assert.throws(() => backlog.remove(b.id), /claimed by worker-a/);
+  assert.ok(backlog.get(b.id), 'refused means still there');
+  assert.equal(backlog.remove(b.id, { force: true }).id, b.id);
+  assert.deepEqual(backlog.ids(), [], 'and the lock goes with it');
+});
+
 test('only one worker can claim a task', () => {
   const backlog = newBacklog();
   const task = backlog.add({ title: 'contended', goal: 'g' });

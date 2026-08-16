@@ -308,9 +308,16 @@ export const WORK_CATEGORIES = NODE_CATEGORIES;
 // `lib/`, `packages/` and `python/` one read at a time, then invented a
 // `list_files` tool that does not exist here. Read-effect, workspace-confined,
 // safe — it widens nothing either.
+// `search_references` is on every list for the same reason `glob` is, one level
+// out: a task LEARNED from another repository (§16) names that repository's
+// files, and `read_file` already opens them through the `reference:<name>/…`
+// prefix — but only if the node can find out what to open. Without the search
+// half the agent knows a reference exists, cannot grep it, and falls back to
+// guessing paths in the wrong tree. Read-effect and confined to the read-only
+// library, so it widens nothing either.
 export const WORK_TOOLS = {
-  'Test-creation': ['read_file', 'glob', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md', 'read_tool_result'],
-  default: ['read_file', 'glob', 'create_file', 'write_file', 'write_task_md', 'read_tool_result']
+  'Test-creation': ['read_file', 'glob', 'search_references', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md', 'read_tool_result'],
+  default: ['read_file', 'glob', 'search_references', 'create_file', 'write_file', 'write_task_md', 'read_tool_result']
 };
 
 // The Evaluation node's evalType option -> the concrete runtime role.

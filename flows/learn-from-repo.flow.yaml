@@ -75,6 +75,14 @@ nodes:
       If the orientation says the relation is "unrelated", a short backlog or an
       honest "nothing here transfers" is the correct answer; do not manufacture
       work to avoid saying it.
+
+      Whoever picks these tasks up will be standing in THIS project, weeks from
+      now, with the analysis long gone. So whenever a task points at something
+      in the repository you read, name it as `reference:<name>/<path>` and say
+      in the goal that it lives there. A bare path reads as a file we have: a
+      task saying "extract the evaluator from code_quality_manager.py" sends
+      someone hunting through a workspace that has never contained it, and the
+      only honest thing they can report is that the task is impossible.
     worker: { provider: auto, model: moonshotai/kimi-k3 }
   work:
     type: loop

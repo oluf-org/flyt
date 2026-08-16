@@ -47,7 +47,7 @@ export function readLoopState(runDir, nodeId) {
 //
 // Two passes, because dependsOn in the plan names another task by TITLE and the
 // ids do not exist until add() allocates them.
-export function enqueuePlan(backlog, tasks, { runId, nodeId, budgetUsd = null } = {}) {
+export function enqueuePlan(backlog, tasks, { runId, nodeId, budgetUsd = null, references = [] } = {}) {
   const byTitle = new Map();
   const created = [];
   for (const t of tasks) {
@@ -67,7 +67,20 @@ export function enqueuePlan(backlog, tasks, { runId, nodeId, budgetUsd = null } 
       // preserves unknown frontmatter fields, so this is additive by design —
       // an older reader keeps them, a newer one navigates by them.
       sourceRunId: runId,
-      sourceNodeId: nodeId
+      sourceNodeId: nodeId,
+      // WHICH REPOSITORY THIS WAS LEARNED FROM, when the run read one.
+      //
+      // A task written from reading someone else's code names that code's
+      // files, and it is claimed later by an agent standing in a workspace
+      // where none of those paths exist. Every one of them then reports the
+      // task impossible, correctly, and the backlog parks. Observed exactly
+      // that: nine tasks about `code_quality_manager.py` and `agent.py`, and a
+      // read-only clone containing both sitting in the reference library the
+      // whole time, unmentioned by any task.
+      //
+      // The name is the useful half — `reference:<name>/<path>` is how a file
+      // in it is opened, and `search_references` scopes to it.
+      ...(references.length ? { references: references.map(r => (typeof r === 'string' ? r : r.name)) } : {})
     });
     byTitle.set(t.title, task.id);
     created.push({ plan: t, task });

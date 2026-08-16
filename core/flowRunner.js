@@ -238,7 +238,17 @@ const DEFAULT_SYSTEM = {
     '  the equivalent). Do not write "npm test" into a repository that has no test',
     '  script; leave gates empty rather than naming one that cannot run.',
     '- The tasks are for THIS project, not for whatever was read. A finding about',
-    '  another repository only becomes a task once you can say what changes here.'
+    '  another repository only becomes a task once you can say what changes here.',
+    // The failure this closes: a task that names the READ repository's files as
+    // if they were ours. Whoever claims it later stands in this workspace, and
+    // those paths are not here — so it is reported impossible, correctly, and a
+    // sound task is thrown away. Nine were, in one sitting.
+    '- When a task refers to something in the repository you READ, say so in the',
+    '  goal and name it as `reference:<name>/<path>` — never as a bare path, which',
+    '  reads as a file in THIS project. Whoever picks the task up will be standing',
+    '  here, not there: "port the retry logic from `reference:their-repo/core/run.py`"',
+    '  is claimable, "extract the logic from core/run.py" is a task about a file we',
+    '  do not have.'
   ].join('\n'),
   translate: [
     'ROLE: translate',
@@ -2224,6 +2234,23 @@ export class FlowRunner {
         this.store.appendLog(runId, {
           event: 'run_input_adopted', input: spec.name, reference: reference.name, commit: reference.commit
         });
+        // On the RUN, not just in the log: everything this run produces was
+        // learned from here, and the things it produces outlive the run. A
+        // backlog task written from reading someone else's repository is the
+        // case that matters — it names that repository's files, and without
+        // this the task is claimed later by an agent standing in a workspace
+        // where none of those paths exist. Observed: nine tasks describing
+        // `code_quality_manager.py` and `agent.py`, correctly reported as
+        // impossible by every agent that looked, while a read-only clone
+        // containing both sat in the reference library the whole time.
+        const meta = this.store.readMeta(runId);
+        const seen = Array.isArray(meta.references) ? meta.references : [];
+        if (!seen.some(r => r.name === reference.name)) {
+          this.store.writeMeta(runId, {
+            ...meta,
+            references: [...seen, { name: reference.name, url: reference.url ?? null, commit: reference.commit ?? null }]
+          });
+        }
         for (const e of forwardEdges(flow.edges)) {
           if (e.source === node.id && e.sourceHandle === spec.name) repoTargets.add([e.target, reference.name]);
         }
@@ -4324,7 +4351,11 @@ export class FlowRunner {
       const tasks = maxTasks ? parsed.tasks.slice(0, maxTasks) : parsed.tasks;
       const taskIds = enqueuePlan(host.backlog, tasks, {
         runId, nodeId: node.id,
-        budgetUsd: Number.isFinite(Number(node.data?.budgetUsd)) ? Number(node.data.budgetUsd) : null
+        budgetUsd: Number.isFinite(Number(node.data?.budgetUsd)) ? Number(node.data.budgetUsd) : null,
+        // What this run read to arrive at these tasks. Without it a task
+        // learned from another repository names files the claiming agent
+        // cannot find, and the loop parks a backlog it could have worked.
+        references: this.store.readMeta(runId)?.references ?? []
       });
       state = writeLoopState(runDir, node.id, {
         nodeId: node.id, runId, taskIds, waitFor,

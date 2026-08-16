@@ -40,6 +40,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task show <id>                 one task, in full
   flyt task ready                     what the picker would take, and what is stuck
   flyt task escalate <id>             one effort level up, back to the queue
+  flyt task rm <id>... [--all]        take tasks out of the queue for good
   flyt task take                      claim the top-scoring ready task
   flyt loop start [--parallel N] [--model <id> | --models low=a,high=b] [--reviewer <id>]
                                       work the backlog until empty, capped or stopped
@@ -313,6 +314,24 @@ async function main() {
           return out(await api.invoke('task:release', {
             projectId, id: positional[2], status: String(flags.status ?? 'queued')
           }));
+        // `flyt task rm <id>...` / `--all` / `--status parked`. Plural because
+        // the case it exists for is plural: a backlog written against the wrong
+        // repository is thirteen wrong tasks, not one.
+        case 'rm':
+        case 'remove': {
+          const { tasks } = await api.invoke('task:list', {
+            projectId, status: typeof flags.status === 'string' ? flags.status : null
+          });
+          const ids = positional.slice(2).length ? positional.slice(2)
+            : (flags.all || flags.status) ? tasks.map(t => t.id)
+              : [];
+          if (!ids.length) return die('flyt task rm <id>... — or --all, or --status <status>');
+          const removed = [];
+          for (const id of ids) {
+            removed.push(await api.invoke('task:remove', { projectId, id, force: Boolean(flags.force) }));
+          }
+          return out(asJson ? { removed } : removed.map(r => `removed ${r.removed}\t${r.title}`).join('\n'));
+        }
         case 'stats':
           return out(await api.invoke('task:stats', { projectId }));
         default:
