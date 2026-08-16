@@ -49,6 +49,19 @@ test('the library can write code and run a command somewhere', () => {
   }
 });
 
+test('every work node can find out what is here before reading it', () => {
+  // `glob` was built and granted to nobody, so a work node had `read_file` and
+  // no way to know what to read. Watched live: an agent looking for one file
+  // tried the repository root, src/, backend/, lib/, packages/ and python/ one
+  // read at a time, then invented a `list_files` tool that does not exist. The
+  // tool's own header says why it exists — "a model that cannot list guesses
+  // paths" — and a guessed path that happens to exist is indistinguishable from
+  // a read one.
+  for (const category of WORK_CATEGORIES) {
+    assert.ok(workNode(category).data.tools.includes('glob'), `${category} cannot list files`);
+  }
+});
+
 // bash only STARTS in the workspace and can cd out (core/tools/bash.js says so);
 // the approval gate is its only guard. Writes, by contrast, resolve through
 // Workspace.resolve() and genuinely cannot escape — so write-only task types

@@ -300,9 +300,17 @@ export const WORK_CATEGORIES = NODE_CATEGORIES;
 // cannot read the rest of is worse than no truncation at all (TOOLS-PLAN §13):
 // it is read-effect, run-scoped, and can only reach results this same run
 // already produced — so granting it widens nothing.
+//
+// `glob` is on every list for the reason its own header gives: "a model that
+// cannot list guesses paths". It was built and then granted to nobody, so every
+// work node had `read_file` and no way to find out what to read. Watched live:
+// an agent looking for one file tried the repository root, `src/`, `backend/`,
+// `lib/`, `packages/` and `python/` one read at a time, then invented a
+// `list_files` tool that does not exist here. Read-effect, workspace-confined,
+// safe — it widens nothing either.
 export const WORK_TOOLS = {
-  'Test-creation': ['read_file', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md', 'read_tool_result'],
-  default: ['read_file', 'create_file', 'write_file', 'write_task_md', 'read_tool_result']
+  'Test-creation': ['read_file', 'glob', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md', 'read_tool_result'],
+  default: ['read_file', 'glob', 'create_file', 'write_file', 'write_task_md', 'read_tool_result']
 };
 
 // The Evaluation node's evalType option -> the concrete runtime role.
