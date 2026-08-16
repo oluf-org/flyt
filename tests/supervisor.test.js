@@ -189,7 +189,7 @@ test('the ladder is climbed once per rung, then stays at the bottom', () => {
 // same command the CLI calls by hand, so the supervisor reads the result rather
 // than duplicating the transition. The fake therefore has to apply it too, or
 // the test would be simulating a different system.
-function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', land = () => ({ landed: true, stage: 'landed', mergeSha: 'abc12345' }) } = {}) {
+function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = null, land = () => ({ landed: true, stage: 'landed', mergeSha: 'abc12345' }) } = {}) {
   const calls = [];
   let runSeq = 0;
   const runs = new Map(); // runId -> { polls, taskId }
@@ -217,7 +217,7 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', land = () =
           // produce tests the fake.
           nodeStatus: { 'work-1': stage === 'done' ? 'done' : 'active' }
         },
-        nodeOutputs: { 'work-1': stage === 'done' ? 'finished' : 'thinking' },
+        nodeOutputs: { 'work-1': stage === 'done' ? (output ?? 'finished') : 'thinking' },
         retrospectives: {}
       };
     }
@@ -412,6 +412,40 @@ test('the brief says how the work will be judged, because the task file cannot k
   // And the honest exit, so a task that cannot be done here does not get
   // invented work to look busy.
   assert.match(brief, /do not invent work/);
+});
+
+test('a task the agent says cannot be done here is parked, not escalated', async () => {
+  // The brief promises this: change nothing, say so, and it will be parked for
+  // a person. A loop that then escalated the task to a more expensive model
+  // would be punishing an agent for following instructions — seen live, a task
+  // naming a Python file this repository does not contain, correctly reported
+  // as impossible, climbing a band to be told the same thing by a dearer model.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'Port the Python evaluator', goal: 'g', level: 'low' });
+  const engine = fakeEngine({
+    backlog,
+    output: 'TASK-IMPOSSIBLE: this repository has no code_quality_manager.py\n\nI looked in every plausible place.'
+  });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+
+  await sup.run({ maxTasks: 1 });
+  const task = backlog.get('t-0001');
+  assert.equal(task.status, 'parked');
+  assert.match(task.blockedReason, /cannot be done in this repository/);
+  assert.match(task.blockedReason, /no code_quality_manager\.py/);
+  assert.equal(task.level, 'low', 'no band was bought to be told the same thing again');
+  // ...and the landing sequence was never run: gates, a reviewer and a canary
+  // on a task nobody can do is a bill for confirming what the agent just said.
+  assert.equal(engine.calls.filter(c => c.name === 'work:land').length, 0);
+
+  // An ordinary empty-handed run still escalates: "I could not" and "this
+  // cannot be" are different claims, and only one is worth a person.
+  const b2 = makeBacklog();
+  b2.add({ title: 'Try harder', goal: 'g', level: 'low' });
+  const e2 = fakeEngine({ backlog: b2, land: () => ({ landed: false, stage: 'no-changes', guidance: 'nothing changed' }) });
+  await new Supervisor({ ...e2, projectId: 'p', backlog: b2, pollMs: 1 }).run({ maxTasks: 1 });
+  assert.equal(b2.get('t-0001').status, 'queued');
+  assert.equal(b2.get('t-0001').level, 'medium');
 });
 
 test('the loop publishes its status where another process can read it', async () => {

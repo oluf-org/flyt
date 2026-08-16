@@ -56,9 +56,21 @@ const HOW_IT_LANDS = [
   'writing.',
   '',
   'If the task cannot be done here at all — it names files this repository does not have, or',
-  'asks for something already true — do not invent work to look busy. Say so plainly in your',
-  'final answer, change nothing, and it will be parked for a person to decide.'
+  'asks for something already true — do not invent work to look busy. Change nothing, and make',
+  'the FIRST LINE of your final answer exactly:',
+  '',
+  '    TASK-IMPOSSIBLE: <one line saying what is missing or already true>',
+  '',
+  'That parks the task for a person instead of retrying it on a more expensive model. Use it only',
+  'when more capability could not help; if you simply failed, say that instead and it will be',
+  'retried.'
 ].join('\n');
+
+// How an agent says "not here". A sentinel line rather than a judgement about
+// its prose: the difference between "I could not do this" and "this cannot be
+// done" decides whether the ladder is worth climbing, and it is not a
+// difference to infer from wording.
+const IMPOSSIBLE = /^\s*TASK-IMPOSSIBLE:\s*(.+)$/m;
 
 export class Supervisor {
   /**
@@ -456,6 +468,29 @@ export class Supervisor {
    * silently omits the failures is worse than no total: it is lowest exactly
    * when the night is going worst.
    */
+  /**
+   * Did this run declare the task impossible here? The reason, or null.
+   *
+   * Read from what the run WROTE, not from the model's mood: the sentinel is a
+   * line the brief asks for by name, so "I could not do this" and "this cannot
+   * be done" stay distinguishable — the first is worth another band, the second
+   * is worth a person.
+   */
+  async #saidImpossible(runId) {
+    let snapshot;
+    try { snapshot = await this.invoke('run:snapshot', { projectId: this.projectId, runId }); }
+    catch { return null; }
+    const texts = [
+      ...Object.values(snapshot?.nodeOutputs ?? {}),
+      ...Object.values(snapshot?.taskOutputs ?? {})
+    ];
+    for (const text of texts) {
+      const hit = IMPOSSIBLE.exec(String(text ?? ''));
+      if (hit) return hit[1].trim().slice(0, 300);
+    }
+    return null;
+  }
+
   /** The worker for an attempt at this band — the map first, then the pin. */
   #workerFor(level) {
     const mapped = workerForLevelMap(level, this.config.loop?.models);
@@ -500,6 +535,25 @@ export class Supervisor {
       const result = this.backlog.escalate(taskId, { reason: 'failed', note: 'The run itself failed.' });
       this.history.push({ taskId, landed: false, stage: 'run-failed' });
       if (!result.escalation.escalated) this.parked.push({ taskId, reason: result.escalation.reason });
+      return;
+    }
+
+    // The agent declared the task impossible here (§the brief). Park it BEFORE
+    // the landing sequence: gates, a reviewer and a canary on a task nobody can
+    // do is a bill for confirming what the agent already said, and `work:land`
+    // escalates the backlog itself on failure — so checking afterwards would
+    // park a task that had already been pushed up a band.
+    //
+    // The brief promises this outcome, and a loop that escalated instead would
+    // be punishing an agent for following instructions. Seen live: a task naming
+    // a Python file this repository does not contain, correctly reported as
+    // impossible, climbing a band to be told the same thing by a dearer model.
+    // Parking is not letting it off — it is handing the judgement to a person,
+    // which is the one thing an agent cannot award itself.
+    const impossible = await this.#saidImpossible(hb.runId);
+    if (impossible) {
+      await this.#discard(taskId);
+      this.#park(taskId, `The agent reports this cannot be done in this repository: ${impossible}`);
       return;
     }
 
