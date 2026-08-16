@@ -707,9 +707,12 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
   if (patch.workers && typeof patch.workers === 'object') {
     settings.workers = { ...settings.workers };
     for (const [name, w] of Object.entries(patch.workers)) {
-      if (baseConfig.workers[name] && w?.provider && w?.model) {
-        settings.workers[name] = { provider: w.provider, model: w.model };
-      }
+      if (!baseConfig.workers[name]) continue;
+      if (w?.provider && w?.model) settings.workers[name] = { provider: w.provider, model: w.model };
+      // An explicit null CLEARS the override back to config.json's default.
+      // Without a way to un-set one, the loop's model pin would be a one-way
+      // door: you could choose a model but never go back to effort bands.
+      else if (w === null || !w?.model) delete settings.workers[name];
     }
   }
   // T2a: applies to projects opened from now on; already-open tabs keep the

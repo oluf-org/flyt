@@ -594,6 +594,135 @@ and whether the lane count should adapt to observed provider latency, since six 
 
 ---
 
+### D41 — The loop's models are chosen where the loop is started, and its queue opens up
+
+**The occasion.** The Loop view could start a night of unattended work and could not say what
+that work would run on. The two models that decide everything about a loop — the one doing the
+work and the one reviewing the diff — were reachable only by hand-editing `config.json`, while
+the panel beside the Start button showed neither. And the queue rendered thirteen titles with
+no way to see what any of them actually asked for; answering "what is t-0007" meant leaving the
+app and opening a file.
+
+**A band and a model are the same decision, made at different times.** LOOP-PLAN §8 deliberately
+declined to pick models: a task carries a *level* and OpenRouter's Auto Router picks inside that
+cost band, so there is no price table to go stale. That stays the default. But asking for a band
+is asking someone else to name a model, and a person who already knows which model they want is
+making the same decision earlier — so `workers.loop` pins it, and the pin and the band share one
+slot (`config.levelWorker`) rather than becoming two competing answers to "what does an unpinned
+node run on".
+
+Three consequences worth stating out loud, because each is a place this could have been fudged:
+
+- **A pin does not disable the ladder.** The rungs are also the attempt counter, and the thing
+  that ends in parking; a task that could retry forever because a model was named would be worse
+  than one that escalates pointlessly. So the level still travels with the attempt, escalation
+  still happens, `max` still parks — what escalation no longer buys is a bigger model. The log
+  line says `on <model> (attempt band <level>)` rather than implying a change that did not
+  happen.
+- **A named model carries no routing.** `workerForLevel` used to attach a `cost_tier` to
+  whatever model it was given; sending both asks the Auto Router to overrule the pin, and the
+  caller would never learn which model actually answered.
+- **A pin is checked before a worktree exists.** `'auto'` resolves at `loop:start`, so "no
+  connected provider can serve this" is a pre-flight error, next to the one that already
+  refuses to start a levels-based loop with no OpenRouter key.
+
+**The reviewer is nameable per session.** `workers.reviewer` remains the configured answer, but
+`loop:start` and `flyt loop start --reviewer <id>` accept one for this session. The machine
+driving a loop is often not the machine whose `settings.json` holds the answer — a desktop app
+that is running owns that file and rewrites it from memory — and "who reviews this" has to be
+answerable at the call. Keys never travel that way: callers name models, the main process stamps
+the key.
+
+**The queue opens up.** A task card expands in place to its frontmatter and its body — status,
+band, attempts, value-over-effort, who queued it and when, dependencies, extra gates, blast
+radius, the runs it has had, and what the ledger says it spent. Empty fields are absent rather
+than dashed, because a grid of dashes reads as broken while a missing row reads as nothing to
+say. Spend is fetched per task on expand instead of for every row on every three-second poll.
+The shaping is `taskDetail()` in `src/loopViewData.js`, tested without a renderer like the rest
+of that file.
+
+**Six bugs the first real loop runs found, none of which 916 tests could.** Each is the same
+shape: a decision made in one place that never travelled to the place that acts on it.
+
+1. **`--dry-run` merged anyway.** `loop:start` recorded it, the supervisor never passed it, and
+   `work:land` defaults it to `false`. The one flag whose entire job is "do not touch the base
+   branch" did not reach the code that touches the base branch — so the posture §6.4 recommends
+   for the first nights did not exist.
+2. **The reviewer's key was blanked by its own caller.** `reviewDiff` spread `apiKey` over the
+   worker unconditionally, and every caller passes the worker without a separate key, so a
+   stamped key became `undefined`. The call failed on a missing key, a failed review is a
+   request for changes, and therefore *nothing could ever land unattended* — surfacing only as
+   the reviewer's own excuse, which reads like an opinion about the diff.
+3. **A capital letter threw away a whole plan.** `NODE_CATEGORIES` is
+   `Code general | Code design | documentation | Test-creation` — three capitalized, one not —
+   and the check is exact-match. A live run emitted `"category": "Documentation"`, the whole
+   plan-eval document was rejected (by design: no partial materialization), no nodes were
+   materialized, the run **completed having done nothing**, and the loop escalated the task to a
+   bigger model that would spell it the same way. Case is not information in a fixed vocabulary,
+   so a term that matches except for case is now that term, normalized to the canonical spelling.
+   Unknown words still reject the document.
+4. **The interruption ladder's two cheapest rungs were dead code.** `currentNodeOf` looked for a
+   node whose status is `'running'`; the runner writes `'active'` and nothing anywhere writes
+   `'running'`. So it always returned null, nudge and restart could never fire, and the
+   fall-through — written in a comment, not in the code — took every stall straight to parking
+   without trying the escalate rung. The fake command surface in the tests wrote `'running'`, a
+   state the system cannot produce, so the suite stayed green on a path that did not exist. Same
+   lesson as §15's `work:discard` stub: a fake that models something the system does not do
+   tests the fake.
+5. **The spin detector counted polls.** `spinRepeats: 2` at a five-second poll meant *fifteen
+   seconds* of no observable change was a spin — and a reasoning model produces nothing
+   observable for minutes at a time. A healthy task with 12 model calls and 10 tool calls behind
+   it was parked 15 seconds in. It needs elapsed time as well now, floored above the per-call
+   idle deadline (`timeout.idleMs`, 5 min): below that line the adapter is already killing and
+   retrying the call itself, so anything the supervisor cuts sooner is work it took from a
+   mechanism that was about to rescue it.
+6. **Money was recorded only when a task ended tidily.** `#complete` wrote the ledger; the
+   interrupted paths did not. The burn-down therefore omitted exactly the runs that went wrong,
+   reading lowest when the night was going worst — and since the per-task cap is checked against
+   the ledger, `taskUsd` could never fire at all: an in-flight task always reported $0.00. Spend
+   is recorded on every ending now, and the cap reads the in-flight run's own artifacts.
+
+**And two more about a value travelling too far, or not far enough.** The first was introduced by
+this work and caught by reading a live log; the second had been shipping since D40.
+
+- **A stamped key rode into the run log.** Resolving the pinned worker attached its API key, and
+  `resolveWorker` spread that object whole — so `node_start` in `log.jsonl`, `tasks.json` and the
+  retrospectives each carried a live OpenRouter key in plaintext, in files agents read and the
+  archive copies. (`.flyt/` is gitignored, so none of it reached git; the affected files were
+  scrubbed.) A run-level worker is provider/model/routing and nothing else now, pinned by a test,
+  and the key is looked up at call time from `providerKeys` as it always was for every other
+  worker path. Only the reviewer — called directly, never logged as a node — is handed one.
+- **D40's reasoning headroom never reached the nodes that do the work.** `effortBudget` is the
+  answer budget *plus* 8192, and the executor passes it to `runAgent` — which accepted
+  `maxTokens`, used it on the no-tools path, and left it out of the object it hands the tool
+  loops. Every tool-using node therefore ran on the adapter's bare 4096, the budget D40 measured
+  as fatal: `deepseek/deepseek-v4-pro` spent all of it on internal reasoning, returned no
+  content, the empty-turn retry doubled to 8192 and came back empty too, and the task failed with
+  the exact error D40 was written to end. The budget was computed correctly by its caller and
+  dropped one function short of the call.
+
+**Surface.** `core/levels.js` (a named model carries no routing), `core/api.js`
+(`resolveWorkerArg`, `flow:run` worker, `loop:start` worker/reviewer, `work:land` reviewer),
+`core/supervisor.js` (pin per attempt, dry-run and reviewer threaded, `status().model`,
+spend on every ending, the ladder's fall-through, `currentNodeOf`), `core/heartbeat.js`
+(`model` per attempt, `spinMs`), `core/diffReview.js` (key), `core/planEval.js` (`canonical`),
+`core/agent.js` (`maxTokens` into both tool loops), `core/flowRunner.js` (a run-level worker
+carries no key), `core/engine.js` (unset workers stay unset), `config.json` (`workers.loop`,
+`workers.reviewer`), `electron/main.js` (clearing a worker override), `bin/flyt.js`
+(`--model`, `--reviewer`), `src/LoopPage.jsx`, `src/loopViewData.js` (`taskDetail`),
+`src/ModelPicker.jsx` (`placeholder`), `src/devMock.js` (the loop's endpoints, so the panel
+previews outside Electron), `src/styles.css`.
+
+**Status.** Decided and **implemented**; verified by driving a real loop end to end on
+`deepseek/deepseek-v4-pro` with `anthropic/claude-sonnet-5` reviewing. Open: the three dollar
+caps (§9) are still reachable only from `config.json`, so the panel that shows a burn-down
+cannot set the ceiling it draws; and this repo's own `npm test` gate is red on the development
+machine (three environment-specific failures), which means **no task can land here at all** —
+the loop escalates every task on gate failure and would park the whole backlog for a reason that
+has nothing to do with the work.
+
+---
+
 ## Open questions (consolidated)
 
 **Product (from `PRODUCT-SPEC.md` §10):**

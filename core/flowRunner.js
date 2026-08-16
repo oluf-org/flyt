@@ -625,10 +625,19 @@ export const WORKER_NODE_TYPES = new Set(['aiStep', 'agentTask', 'orchestrator',
 export function resolveWorker(node, config) {
   const w = node?.data?.worker;
   if (w?.provider && w?.model) return { provider: w.provider, model: w.model };
-  // A run started at an effort LEVEL (LOOP-PLAN §8) routes every unpinned node
-  // through it. Below an explicitly authored worker on purpose: a flow that
-  // names its model meant it, and a band is a default, not an override.
-  if (config.levelWorker?.provider && config.levelWorker?.model) return { ...config.levelWorker };
+  // A run started at an effort LEVEL (LOOP-PLAN §8), or pinned to a model,
+  // routes every unpinned node through it. Below an explicitly authored worker
+  // on purpose: a flow that names its model meant it, and a band is a default,
+  // not an override.
+  //
+  // provider/model/routing only, never a key: this object is logged verbatim in
+  // `node_start`, and the key is looked up at call time from `providerKeys`.
+  // Spreading it whole once wrote a live OpenRouter key into every run's
+  // log.jsonl — a file agents read and the archive copies.
+  if (config.levelWorker?.provider && config.levelWorker?.model) {
+    const { provider, model, routing } = config.levelWorker;
+    return { provider, model, ...(routing ? { routing } : {}) };
+  }
   const cat = node?.data?.category;
   const pref = cat ? config.categoryWorkers?.[cat] : null;
   if (pref?.provider && pref?.model) return { provider: pref.provider, model: pref.model };

@@ -18,6 +18,18 @@ import crypto from 'node:crypto';
 export const DEFAULT_THRESHOLDS = {
   silentMs: 10 * 60 * 1000,   // no event of any kind
   spinRepeats: 2,             // identical work signature, back to back
+  // ...and it must also have been identical for this LONG. A repeat count is a
+  // property of the observer, not of the work: the supervisor polls every five
+  // seconds, so "2 repeats" alone meant fifteen seconds, and a node thinking
+  // its way through a single call on a reasoning model was declared a spin and
+  // parked. Seen live — a task with 12 model calls and 10 tool calls behind it,
+  // killed 15 seconds in.
+  //
+  // The floor is not a guess: a model call that goes `timeout.idleMs`
+  // (config.json, 5 min) without producing anything is already killed by its
+  // own deadline and retried. So anything the supervisor kills sooner is work
+  // the adapter would have rescued, and this sits just above that line.
+  spinMs: 6 * 60 * 1000,
   groundhogRepeats: 3,        // identical gate failure
   outlierFactor: 4            // times the median for this class of task
 };
@@ -58,10 +70,14 @@ export function workSignature(snapshot = {}) {
  * report on its own health (§11.1).
  */
 export class Heartbeat {
-  constructor({ taskId, runId, level = null, now = Date.now() }) {
+  constructor({ taskId, runId, level = null, model = null, now = Date.now() }) {
     this.taskId = taskId;
     this.runId = runId;
     this.level = level;
+    // The model this attempt is running on, when one was named rather than
+    // asked for by band. Recorded per attempt because it is a property of the
+    // attempt: the next one may be pinned to something else.
+    this.model = model;
     this.startedAt = now;
     this.lastProgressAt = now;
     this.lastPollAt = now;
@@ -114,7 +130,8 @@ export class Heartbeat {
 
   toJSON() {
     return {
-      taskId: this.taskId, runId: this.runId, level: this.level, phase: this.phase, stage: this.stage,
+      taskId: this.taskId, runId: this.runId, level: this.level, model: this.model,
+      phase: this.phase, stage: this.stage,
       startedAt: new Date(this.startedAt).toISOString(),
       ageMs: this.ageMs, idleMs: this.idleMs,
       repeats: this.repeats,
@@ -141,10 +158,12 @@ export function detectStall(heartbeat, { thresholds = DEFAULT_THRESHOLDS, median
       detail: `The same gate failure ${heartbeat.gateFailures.length} times running. The last ${heartbeat.gateFailures.length} attempts changed nothing the gate can see.`
     };
   }
-  if (heartbeat.repeats >= t.spinRepeats) {
+  // Both halves, deliberately: enough polls to be sure it is not one unlucky
+  // sample, and enough time that a model legitimately working cannot trip it.
+  if (heartbeat.repeats >= t.spinRepeats && heartbeat.idleMs >= (t.spinMs ?? 0)) {
     return {
       detector: 'spin',
-      detail: `${heartbeat.repeats} consecutive polls with byte-identical work. Whatever it is doing, it is producing the same thing each time.`
+      detail: `${heartbeat.repeats} consecutive polls over ${Math.round(heartbeat.idleMs / 60000)} minutes with byte-identical work. Whatever it is doing, it is producing the same thing each time.`
     };
   }
   if (heartbeat.idleMs >= t.silentMs) {

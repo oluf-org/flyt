@@ -218,6 +218,10 @@ export function createEngine({
       let w = override?.provider && override?.model
         ? { provider: override.provider, model: override.model }
         : { provider: def.provider, model: def.model };
+      // A worker declared with no model (the loop's own two) is UNSET, not
+      // broken: it is how "no pin" and "no reviewer" stay expressible, and
+      // resolving it would only stamp a key onto a model that does not exist.
+      if (!w.provider || !w.model) { workers[name] = { provider: null, model: null }; continue; }
       // A model the user activated is resolved through the providers map: its
       // pinned source (or the priority walk for 'auto') decides who serves it,
       // and the key rides along (PROVIDERS-PLAN §4).

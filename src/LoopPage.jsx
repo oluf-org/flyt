@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  pilesOf, burndown, flightRow, headline, tailLines, trendBars, PILE_ORDER, PILE_LABELS
+  pilesOf, burndown, flightRow, headline, tailLines, trendBars, taskDetail,
+  PILE_ORDER, PILE_LABELS
 } from './loopViewData.js';
+import { ModelPicker } from './ModelPicker.jsx';
 
 // The Loop view (LOOP-PLAN §14): what the supervisor is doing, what it wants
 // from you, and what it has spent.
@@ -16,7 +18,7 @@ import {
 
 const HEALTH_GLYPH = { working: '◆', quiet: '◇', stalled: '▲', intervened: '⟳' };
 
-export default function LoopPage({ projectId, onOpenRun = null }) {
+export default function LoopPage({ projectId, activeModels = [], onOpenRun = null }) {
   const [status, setStatus] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [caps, setCaps] = useState({});
@@ -25,6 +27,17 @@ export default function LoopPage({ projectId, onOpenRun = null }) {
   const [series, setSeries] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  // The two models the loop uses (workers.loop, workers.reviewer). Kept in
+  // settings rather than in this component's state, because the choice has to
+  // outlive the window that made it — the loop's whole point is running when
+  // nobody is looking at this page.
+  const [workers, setWorkers] = useState({});
+  // Which task is open, and what the ledger says it spent. Fetched on expand
+  // rather than for all forty rows: the queue is polled every three seconds and
+  // a spend query per queued task would be forty reads a tick for numbers
+  // nobody is looking at.
+  const [openTask, setOpenTask] = useState(null);
+  const [taskSpend, setTaskSpend] = useState({});
   const tailRef = useRef(null);
 
   const refresh = useCallback(async () => {
@@ -63,6 +76,38 @@ export default function LoopPage({ projectId, onOpenRun = null }) {
     return () => clearInterval(timer);
   }, [refresh]);
 
+  // The saved model choices. Read once and after every save, not on the poll:
+  // settings do not change underneath this page, and a picker whose value is
+  // replaced every three seconds fights the person using it.
+  const readWorkers = useCallback(async () => {
+    const s = await window.flyt?.getSettings?.();
+    setWorkers(s?.workers ?? {});
+  }, []);
+  useEffect(() => { readWorkers().catch(() => {}); }, [readWorkers]);
+
+  const setWorker = async (name, worker) => {
+    setBusy(true);
+    try {
+      // A null clears the override: for `loop` that is "go back to effort
+      // bands", for `reviewer` it is "nothing lands unattended".
+      await window.flyt.setSettings({ workers: { [name]: worker } });
+      await readWorkers();
+      setError(null);
+    } catch (err) { setError(String(err?.message ?? err)); }
+    finally { setBusy(false); }
+  };
+
+  // One task's ledger line, fetched when it is opened.
+  const openDetail = async task => {
+    const next = openTask === task.id ? null : task.id;
+    setOpenTask(next);
+    if (!next || taskSpend[task.id] !== undefined) return;
+    try {
+      const totals = await window.flyt.ledgerTotals(projectId, { taskId: task.id });
+      setTaskSpend(prev => ({ ...prev, [task.id]: totals }));
+    } catch { setTaskSpend(prev => ({ ...prev, [task.id]: null })); }
+  };
+
   useEffect(() => {
     if (!projectId) return undefined;
     window.flyt?.loopLog?.(projectId).then(entries => setLines(tailLines(entries))).catch(() => {});
@@ -82,6 +127,13 @@ export default function LoopPage({ projectId, onOpenRun = null }) {
   const burn = burndown(spend, caps);
   const trend = series ? trendBars(series) : null;
   const running = Boolean(status?.running);
+  // An unset worker arrives as `{ provider: null, model: null }` (config.json
+  // declares both so they are settable while their unset state stays the
+  // fail-closed one). The picker wants a plain null, which is what makes it
+  // show its placeholder — "Effort bands", "No reviewer" — rather than a model.
+  const asWorker = w => (w?.provider && w?.model ? w : null);
+  const loopWorker = asWorker(workers.loop);
+  const reviewerWorker = asWorker(workers.reviewer);
 
   const act = async fn => {
     setBusy(true);
@@ -115,6 +167,65 @@ export default function LoopPage({ projectId, onOpenRun = null }) {
 
       {error && <div className="loop-error">{error}</div>}
 
+      {/* The two models the loop runs on. They live here rather than only in
+          Settings because this is where the decision is made — you choose a
+          model in the same glance as pressing Start, and the consequence of
+          each (what it costs, whether anything can land) belongs beside it. */}
+      <section className="loop-models">
+        <h2>Models</h2>
+        <div className="loop-model-row">
+          <label>Work</label>
+          <ModelPicker
+            worker={loopWorker}
+            activeModels={activeModels}
+            idPrefix="loop-work"
+            placeholder="Effort bands"
+            onChange={w => setWorker('loop', w)}
+          />
+          {loopWorker
+            ? <button type="button" className="link" disabled={busy} onClick={() => setWorker('loop', null)}>
+                Use effort bands
+              </button>
+            : <span className="loop-model-hint">
+                Effort bands — each task asks OpenRouter's router for a cost tier, and a failed
+                attempt retries one band up.
+              </span>}
+        </div>
+        {loopWorker && (
+          <p className="loop-model-note">
+            Every task runs on <code className="mono">{loopWorker.model}</code>. The ladder still
+            counts attempts and still parks a task at the top; what it no longer does is reach for
+            a bigger model.
+          </p>
+        )}
+        <div className="loop-model-row">
+          <label>Review</label>
+          <ModelPicker
+            worker={reviewerWorker}
+            activeModels={activeModels}
+            idPrefix="loop-review"
+            placeholder="No reviewer"
+            onChange={w => setWorker('reviewer', w)}
+          />
+          {reviewerWorker
+            ? <button type="button" className="link" disabled={busy} onClick={() => setWorker('reviewer', null)}>
+                Clear
+              </button>
+            : <span className="loop-model-hint warn">
+                Nothing lands until a reviewer is set — the loop will run, verify and stop before
+                merging.
+              </span>}
+        </div>
+        {running && status?.model !== (loopWorker?.model ?? null) && (
+          // A pick made after Start belongs to the next loop. Saying so beats a
+          // panel that reports an intention as though it were what is running.
+          <p className="loop-model-note warn">
+            The running loop is on {status?.model ?? 'effort bands'}; this change applies when you
+            start it again.
+          </p>
+        )}
+      </section>
+
       {burn && (
         <section className={`loop-burn loop-burn-${burn.state}`}>
           <div className="loop-burn-bar"><span style={{ width: `${burn.pct}%` }} /></div>
@@ -139,7 +250,9 @@ export default function LoopPage({ projectId, onOpenRun = null }) {
                 <span className="glyph" title={row.health}>{HEALTH_GLYPH[row.health] ?? '◆'}</span>
                 <span className="id">{row.taskId}</span>
                 <span className="stage">{row.stage}</span>
-                <span className="level">{row.level ?? ''}</span>
+                <span className="level" title={row.model ? 'the model this attempt is running on' : 'the effort band this attempt asked for'}>
+                  {row.model ?? row.level ?? ''}
+                </span>
                 <span className="age">{row.age}</span>
                 <span className="idle" title="since anything last changed">idle {row.idle}</span>
                 {row.interventions.length > 0 && (
@@ -161,13 +274,32 @@ export default function LoopPage({ projectId, onOpenRun = null }) {
             <section key={key} className={`loop-pile loop-pile-${key}`}>
               <h2>{PILE_LABELS[key]} <span className="count">{list.length}</span></h2>
               {!list.length && <p className="empty">Nothing waiting on you.</p>}
-              {list.map(t => (
-                <article key={t.id} className="loop-task">
-                  <div className="loop-task-head">
-                    <span className="id">{t.id}</span>
-                    <span className="title">{t.title}</span>
-                    {t.level && <span className="level">{t.level}</span>}
-                    {t.attempts > 0 && <span className="attempts">{t.attempts} attempt(s)</span>}
+              {list.map(t => {
+                const open = openTask === t.id;
+                const detail = open ? taskDetail(t, { spend: taskSpend[t.id] ?? null }) : null;
+                return (
+                <article key={t.id} className={'loop-task' + (open ? ' open' : '')}>
+                  {/* The head is the expander. A queue row that only shows a
+                      title makes you go and read the file to answer "what is
+                      this, actually" — which is the question the pile provokes
+                      and the one it should answer itself. */}
+                  {/* One row, two controls: the head expands, the source link
+                      navigates. They are siblings rather than nested because a
+                      button inside a button is neither valid nor clickable —
+                      and the row keeps them on one line as before. */}
+                  <div className="loop-task-row">
+                    <button
+                      type="button"
+                      className="loop-task-head"
+                      aria-expanded={open}
+                      onClick={() => openDetail(t)}
+                    >
+                      <span className="caret" aria-hidden>{open ? '▾' : '▸'}</span>
+                      <span className="id">{t.id}</span>
+                      <span className="title">{t.title}</span>
+                      {t.level && <span className="level">{t.level}</span>}
+                      {t.attempts > 0 && <span className="attempts">{t.attempts} attempt(s)</span>}
+                    </button>
                     {/* Where this task came from (D36 P4.5). A task a flow
                         queued is otherwise indistinguishable from one a human
                         typed, and "why is this here" is the first question the
@@ -184,6 +316,42 @@ export default function LoopPage({ projectId, onOpenRun = null }) {
                   {/* The reason is the point of the parked pile: a task that
                       needs you without saying why is a task you cannot act on. */}
                   {t.blockedReason && <p className="reason">{t.blockedReason}</p>}
+
+                  {open && (
+                    <div className="loop-task-detail">
+                      {detail.facts.length > 0 && (
+                        <dl className="loop-task-facts">
+                          {detail.facts.map(f => (
+                            <div key={f.label} title={f.title}>
+                              <dt>{f.label}</dt><dd>{f.value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      )}
+                      {detail.lists.map(l => (
+                        <div key={l.key} className="loop-task-list">
+                          <span className="label">{l.label}</span>
+                          {l.items.map(item => <code key={item} className="mono">{item}</code>)}
+                        </div>
+                      ))}
+                      {detail.runIds.length > 0 && (
+                        <div className="loop-task-list">
+                          <span className="label">Runs</span>
+                          {detail.runIds.map(id => (
+                            <button key={id} type="button" className="link mono" onClick={() => onOpenRun?.(id)}>
+                              {id}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {/* The task as its author wrote it. Not summarized: the
+                          file is already written for a reader who has not seen
+                          the run (§5.1). */}
+                      {detail.body && <pre className="loop-task-body">{detail.body}</pre>}
+                      {detail.empty && <p className="empty">Nothing recorded beyond the title.</p>}
+                    </div>
+                  )}
+
                   {key === 'parked' && (
                     <div className="loop-task-actions">
                       <button disabled={busy} onClick={() => act(() => window.flyt.releaseTask(projectId, t.id, 'queued'))}>
@@ -195,7 +363,8 @@ export default function LoopPage({ projectId, onOpenRun = null }) {
                     </div>
                   )}
                 </article>
-              ))}
+                );
+              })}
             </section>
           );
         })}

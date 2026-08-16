@@ -238,11 +238,26 @@ const mockSettings = {
   },
   claudeSubscriptionActive: false,
   providerPriority: ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'],
-  activeModels: [],
-  modelFacts: {},
+  // Enough of a registry that every picker in the app previews with something
+  // in it. An empty list is a legitimate first-run state, but it is not the
+  // state anyone is iterating on the design of.
+  activeModels: [
+    { id: 'deepseek/deepseek-v4-pro', source: 'openrouter', enabled: true },
+    { id: 'anthropic/claude-sonnet-5', source: 'openrouter', enabled: true },
+    { id: 'moonshotai/kimi-k3', source: 'openrouter', enabled: true }
+  ],
+  modelFacts: {
+    'deepseek/deepseek-v4-pro': { name: 'DeepSeek V4 Pro', contextLength: 1048576, supportsTools: true, inUsdPerM: 1.168, outUsdPerM: 2.336 },
+    'anthropic/claude-sonnet-5': { name: 'Claude Sonnet 5', contextLength: 200000, supportsTools: true, inUsdPerM: 3, outUsdPerM: 15 },
+    'moonshotai/kimi-k3': { name: 'Kimi K3', contextLength: 262144, supportsTools: true, inUsdPerM: 0.6, outUsdPerM: 2.5 }
+  },
   modelSets: {},
   workers: {
-    executor: { provider: 'mock', model: 'mock-large' }
+    executor: { provider: 'mock', model: 'mock-large' },
+    // The loop's two (LOOP-PLAN §8, §7.2), unset: no pin means effort bands,
+    // no reviewer means nothing lands.
+    loop: { provider: null, model: null },
+    reviewer: { provider: null, model: null }
   },
   summary: { connected: 0, activeModelCount: 0 },
   projectStorage: 'workspace',
@@ -258,6 +273,60 @@ const mockSettings = {
     { id: 'mock-small', provider: 'mock', label: 'Mock (dry runs only)', connected: true }
   ]
 };
+// --- The loop (LOOP-PLAN §14) ----------------------------------------------
+// The Loop view is the one surface with no canvas behind it: everything on it
+// comes from the supervisor, the backlog and the ledger, so without these the
+// panel previews as an error message. Tasks carry their real frontmatter shape
+// (core/backlog.js) — body, gates, blastRadius, dependsOn, runIds — because the
+// expanded card is a projection OF that shape and a thinner fake would preview
+// a panel that cannot exist.
+const mockTasks = [
+  {
+    id: 't-0001', title: 'Add Evaluator and structured feedback schema',
+    status: 'queued', level: 'medium', value: 4, effort: 3, attempts: 0,
+    createdBy: 'human', createdAt: '2026-08-14T07:12:00.000Z', updatedAt: '2026-08-14T07:12:00.000Z',
+    dependsOn: [], gates: ['npm test'], blastRadius: ['core/judge.js', 'tests/judge.test.js'],
+    runIds: [], budgetUsd: null, blockedReason: null,
+    body: '## Goal\n\nThe reviewer returns prose, so nothing downstream can act on it.\nGive it a schema the harness can read.\n\n## Done when\n\n- a verdict block parses to { verdict, reason, changes }\n- an unparseable review is a request for changes, not an approval'
+  },
+  {
+    id: 't-0002', title: 'Implement Supervisor._update_coder_prompt with validation',
+    status: 'queued', level: 'high', value: 5, effort: 4, attempts: 1,
+    createdBy: 'agent:t-0031', createdAt: '2026-08-14T09:40:11.000Z', updatedAt: '2026-08-15T18:02:00.000Z',
+    dependsOn: ['t-0001'], gates: [], blastRadius: ['core/supervisor.js'],
+    runIds: ['run-20260712-101512'], budgetUsd: 1.5, blockedReason: null,
+    // Queued by a flow rather than a person (D36 P4.5), so the link back to the
+    // run that wrote it is exercised too.
+    sourceRunId: 'run-20260712-101512', sourceNodeId: 'work',
+    body: '## Goal\n\nThe supervisor rewrites the coder prompt in memory only, so a restart loses it.'
+  },
+  {
+    id: 't-0003', title: 'Locate tests and benchmarking scripts',
+    status: 'parked', level: 'max', value: 2, effort: 1, attempts: 3,
+    createdBy: 'human', createdAt: '2026-08-13T06:00:00.000Z', updatedAt: '2026-08-16T04:11:00.000Z',
+    startedAt: '2026-08-16T03:40:00.000Z',
+    dependsOn: [], gates: [], blastRadius: [], runIds: ['run-20260716-142200'],
+    blockedReason: 'Already at "max", the top of the ladder, after 3 attempt(s). A bigger model is not the missing piece.',
+    body: ''
+  },
+  {
+    id: 't-0004', title: 'Pin the supervisor to a known-good revision',
+    status: 'landed', level: 'medium', value: 5, effort: 2, attempts: 1,
+    createdBy: 'human', createdAt: '2026-08-12T06:00:00.000Z', updatedAt: '2026-08-15T22:14:00.000Z',
+    dependsOn: [], gates: [], blastRadius: ['core/worktree.js'], runIds: [], body: '## Goal\n\nSelf-modification hazard (§6.3).'
+  }
+];
+
+const mockLoop = {
+  running: false, stopping: null, model: null,
+  inFlight: [], parked: [], completed: 4, landed: 1,
+  log: [
+    { at: '2026-08-16T04:02:11.000Z', line: '▶ t-0004 "Pin the supervisor" at medium' },
+    { at: '2026-08-16T04:19:52.000Z', line: '✔ t-0004 landed 1f3c9a20' },
+    { at: '2026-08-16T04:20:03.000Z', line: '⏸ t-0003 parked: out of ladder' }
+  ]
+};
+
 const refreshMockSummary = () => {
   mockSettings.summary = {
     connected: ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter']
@@ -736,6 +805,68 @@ export function installDevMock() {
     }),
     toolsFolder: async () => ({ dir: 'tools', packaged: false }),
     // No shell to open a file with in a browser; the link is still exercised.
-    openRunArtifact: async (_pid, _runId, rel) => { console.info('[devMock] would open', rel); }
+    openRunArtifact: async (_pid, _runId, rel) => { console.info('[devMock] would open', rel); },
+
+    // --- The loop (LOOP-PLAN §14) ---
+    loopStatus: async () => structuredClone(mockLoop),
+    loopStart: async (_pid, opts = {}) => {
+      const pinned = mockSettings.workers.loop;
+      mockLoop.running = true;
+      mockLoop.stopping = null;
+      mockLoop.model = opts.worker?.model ?? (pinned?.model ?? null);
+      // One task moves into flight, so the health row previews as the thing it
+      // is for: a task that is working rather than merely started.
+      const next = mockTasks.find(t => t.status === 'queued');
+      if (next) {
+        next.status = 'running';
+        mockLoop.inFlight = [{
+          taskId: next.id, runId: 'run-20260712-101512', level: next.level,
+          model: mockLoop.model, stage: 'execution',
+          ageMs: 4 * 60_000, idleMs: 12_000, interventions: []
+        }];
+      }
+      mockLoop.log.push({ at: new Date().toISOString(), line: `▶ ${next?.id ?? '—'} on ${mockLoop.model ?? 'effort bands'}` });
+      return { started: true, parallelism: opts.parallelism ?? 1, model: mockLoop.model, levels: !mockLoop.model };
+    },
+    loopStop: async () => {
+      mockLoop.running = false;
+      mockLoop.stopping = 'stopped by request';
+      for (const t of mockTasks) if (t.status === 'running') t.status = 'queued';
+      mockLoop.inFlight = [];
+      return { stopped: true };
+    },
+    loopReport: async () => '# Loop report (dev mock)\n\n**Spend:** $2.28 across 41 call(s)\n',
+    loopLog: async () => structuredClone(mockLoop.log),
+    onLoopEvent: () => () => {},
+    listTasks: async () => ({ tasks: structuredClone(mockTasks), problems: [] }),
+    addTask: async (_pid, task) => task,
+    // Money is per task in the ledger, which is what the expanded card reads.
+    ledgerTotals: async (_pid, { taskId = null } = {}) => (taskId
+      ? { usd: 0.4213, calls: 9, estimated: 0, unknown: 1 }
+      : { usd: 2.28, calls: 41, estimated: 0, unknown: 2 }),
+    ledgerCheck: async () => ({
+      ok: true, action: null,
+      window: { usd: 2.28, calls: 41, estimated: 0, unknown: 2 },
+      caps: { taskUsd: 1.5, softUsd: 3, hardUsd: 4 }
+    }),
+    releaseTask: async (_pid, id, status = 'queued') => {
+      const t = mockTasks.find(t => t.id === id);
+      if (t) { t.status = status; t.blockedReason = null; }
+      return t;
+    },
+    escalateTask: async (_pid, id) => {
+      const t = mockTasks.find(t => t.id === id);
+      if (t) { t.status = 'queued'; t.blockedReason = null; }
+      return t;
+    },
+    archiveTrend: async () => ({
+      points: [
+        { date: '2026-08-13', score: 0.5, verified: 1, cases: 2, benchUsd: 3.1 },
+        { date: '2026-08-14', score: null },
+        { date: '2026-08-15', score: 1, verified: 2, cases: 2, benchUsd: 2.4 }
+      ],
+      scored: 2, latest: { date: '2026-08-15', score: 1, verified: 2, cases: 2 }, direction: 'improving'
+    }),
+    feedbackStats: async () => ({ pending: 0, tools: [] })
   };
 }

@@ -109,7 +109,16 @@ export async function reviewDiff({
   }
   try {
     const res = await callModel({
-      ...worker, apiKey,
+      ...worker,
+      // An explicit key wins; otherwise the worker's own, which the main
+      // process stamps onto every configured worker. This used to spread
+      // `apiKey` unconditionally, so a caller that had nothing extra to pass
+      // (every one of them — `work:land` resolves the worker and not the key)
+      // overwrote a stamped key with `undefined`. The review then failed on a
+      // missing key, and a failed review is a request for changes: nothing
+      // could ever land unattended, and the reason never appeared anywhere
+      // except inside the reviewer's own excuse.
+      ...(apiKey ? { apiKey } : {}),
       system: REVIEW_SYSTEM,
       prompt: buildReviewPrompt({ task, diff, gates, blastRadius, changedFiles }),
       maxTokens: MAX_TOKENS, retry, timeout, signal, onRetry

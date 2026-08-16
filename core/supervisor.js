@@ -21,6 +21,7 @@
 // rather than from what it remembered.
 import { Heartbeat, detectStall, nextIntervention, DEFAULT_THRESHOLDS } from './heartbeat.js';
 import { escalate as escalateLevel, levelFor } from './levels.js';
+import { spendFromRun } from './ledger.js';
 
 const POLL_MS = 5000;
 
@@ -63,6 +64,11 @@ export class Supervisor {
     return {
       running: this.running,
       stopping: this.stopping,
+      // What this loop is actually running on, which is not necessarily what
+      // the settings say right now: a pick made after the loop started belongs
+      // to the next one, and a panel that showed the setting instead of the
+      // session would be reporting an intention as a fact.
+      model: this.config.loop?.worker?.model ?? null,
       inFlight: [...this.inFlight.values()].map(h => h.toJSON()),
       parked: this.parked.slice(-20),
       completed: this.history.length,
@@ -138,7 +144,13 @@ export class Supervisor {
 
   async #begin(task) {
     const level = levelFor(task, this.config);
-    this.log(`▶ ${task.id} "${task.title}" at ${level}`);
+    // A pinned model (`workers.loop`) replaces the band, not the ladder. The
+    // rungs still count attempts and still end in parking, which is what stops
+    // a task retrying forever; what escalation no longer buys is a bigger
+    // model, because you named the model. Said out loud in the log, since
+    // "escalated to high" would otherwise imply a change that did not happen.
+    const worker = this.config.loop?.worker ?? null;
+    this.log(`▶ ${task.id} "${task.title}" ${worker ? `on ${worker.model} (attempt band ${level})` : `at ${level}`}`);
     // startedAt, so "how long did this take" survives the process that knew.
     // The first attempt sets it and a retry does not, because the question the
     // benchmark asks is how long the TASK took, not the last try at it.
@@ -162,9 +174,10 @@ export class Supervisor {
         approvalMode: 'always',
         // `loop.levels: false` runs on whatever workers are configured, for a
         // project whose keys are not OpenRouter's.
-        level: this.config.loop?.levels === false ? null : level
+        level: this.config.loop?.levels === false ? null : level,
+        worker
       });
-      this.inFlight.set(task.id, new Heartbeat({ taskId: task.id, runId, level, now: this.now() }));
+      this.inFlight.set(task.id, new Heartbeat({ taskId: task.id, runId, level, now: this.now(), model: worker?.model ?? null }));
       this.backlog.update(task.id, { runIds: [...(task.runIds ?? []), runId] });
     } catch (err) {
       // A task that cannot even be started is not a task that should be retried
@@ -211,7 +224,12 @@ export class Supervisor {
     const snapshot = await this.invoke('run:snapshot', { projectId: this.projectId, runId: hb.runId });
     const stage = snapshot.meta?.stage;
 
-    const taskSpend = this.ledger?.totals({ taskId }) ?? { usd: 0 };
+    // What this task has cost SO FAR — previous attempts from the ledger, plus
+    // the run currently in flight read from its own artifacts. The ledger is
+    // written when a run ends, so reading only the ledger meant an in-flight
+    // task always reported $0 and the per-task cap below could never fire: the
+    // one ceiling whose job is to stop a single runaway task was decorative.
+    const taskSpend = this.#spentOn(taskId, hb);
     hb.observe(snapshot, { now: this.now(), usd: 0 });
     // Which node the ladder's nudge and restart rungs would act on. Without
     // this they silently fall through to escalate, which spends money to solve
@@ -257,6 +275,9 @@ export class Supervisor {
     const caps = this.#caps();
     if (caps.taskUsd != null && taskSpend.usd >= caps.taskUsd) {
       await this.invoke('run:stop', { projectId: this.projectId, runId: hb.runId });
+      // Record before discarding: the money was spent whether or not the work
+      // was any good, and this is the path where the most of it goes.
+      this.#recordSpend(taskId, hb, 'stopped at its cap');
       await this.#discard(taskId);
       this.#park(taskId, `Spent $${taskSpend.usd.toFixed(2)} against a $${caps.taskUsd} per-task cap.`);
       return;
@@ -268,7 +289,7 @@ export class Supervisor {
 
   /** The ladder (§11.4). Each rung once, in order, per task. */
   async #intervene(taskId, hb, stall) {
-    const rung = nextIntervention(hb);
+    let rung = nextIntervention(hb);
     hb.interventions.push(rung);
     this.log(`… ${taskId} ${stall.detector}: ${stall.detail} → ${rung}`);
 
@@ -287,14 +308,22 @@ export class Supervisor {
         hb.lastProgressAt = this.now();
         return;
       }
-      // Nothing identifiable to restart — fall through to the next rung rather
-      // than marking a rung "tried" that did nothing.
-      hb.interventions.push('restart');
+      // Nothing identifiable to restart. Both node-level rungs are unusable, so
+      // mark them tried and TAKE THE NEXT ONE — the escalate branch below tests
+      // `rung`, and leaving it as 'nudge' fell all the way through to parking.
+      // The intent ("fall through to the next rung") was in the comment and not
+      // in the code, so a task the supervisor could have escalated was parked on
+      // its first stall instead.
+      if (!hb.interventions.includes('restart')) hb.interventions.push('restart');
+      rung = nextIntervention(hb);
+      hb.interventions.push(rung);
+      this.log(`  ${taskId} nothing to restart → ${rung}`);
     }
 
     if (rung === 'escalate' && !this.noEscalate) {
       await this.invoke('run:stop', { projectId: this.projectId, runId: hb.runId });
       this.inFlight.delete(taskId);
+      this.#recordSpend(taskId, hb);
       const result = this.backlog.escalate(taskId, { reason: 'stalled', note: stall.detail });
       await this.#discard(taskId);
       this.log(`↑ ${taskId} ${result.escalation.reason}`);
@@ -304,18 +333,46 @@ export class Supervisor {
     }
 
     await this.invoke('run:stop', { projectId: this.projectId, runId: hb.runId });
+    this.#recordSpend(taskId, hb);
     await this.#discard(taskId);
     this.#park(taskId, `${stall.detail} The supervisor exhausted what it can try.`);
+  }
+
+  /**
+   * What a run cost, into the ledger.
+   *
+   * Called on every ending, not just the tidy one. Only `#complete` used to do
+   * this, so a task the supervisor interrupted — the expensive kind, the one
+   * that ground for an hour and produced nothing — contributed NOTHING to the
+   * burn-down. The caps are rolling totals of real money, and a total that
+   * silently omits the failures is worse than no total: it is lowest exactly
+   * when the night is going worst.
+   */
+  /** Recorded spend for this task, plus what the in-flight run has cost. */
+  #spentOn(taskId, hb) {
+    const recorded = this.ledger?.totals({ taskId }) ?? { usd: 0 };
+    if (!this.ledger || !this.store || !hb?.runId) return recorded;
+    let live = 0;
+    try {
+      for (const e of spendFromRun(this.store, hb.runId, { prices: this.config.loop?.prices ?? {} })) {
+        live += e.usd ?? 0;
+      }
+    } catch { /* a run with nothing readable yet has cost nothing yet */ }
+    return { ...recorded, usd: recorded.usd + live };
+  }
+
+  #recordSpend(taskId, hb, note = '') {
+    if (!this.ledger || !this.store) return null;
+    const entries = this.ledger.recordRun(this.store, { runId: hb.runId, taskId, level: hb.level });
+    const usd = entries.reduce((n, e) => n + (e.usd ?? 0), 0);
+    this.log(`  ${taskId} ${note || 'run ended'}, $${usd.toFixed(4)} across ${entries.length} call(s)`);
+    return { usd, calls: entries.length };
   }
 
   /** A finished run: record the spend, then verify, review and land it. */
   async #complete(taskId, hb, stage) {
     this.inFlight.delete(taskId);
-    if (this.ledger && this.store) {
-      const entries = this.ledger.recordRun(this.store, { runId: hb.runId, taskId, level: hb.level });
-      const usd = entries.reduce((n, e) => n + (e.usd ?? 0), 0);
-      this.log(`  ${taskId} run ${stage}, $${usd.toFixed(4)} across ${entries.length} call(s)`);
-    }
+    this.#recordSpend(taskId, hb, `run ${stage}`);
 
     if (stage === 'failed') {
       await this.#discard(taskId);
@@ -334,7 +391,18 @@ export class Supervisor {
     // fires unattended, and deleting tests to go green is the cheapest exit
     // there is.
     const landed = await this.invoke('work:land', {
-      projectId: this.projectId, taskId, baselineOutput: this.lastCanaryOutput ?? null
+      projectId: this.projectId, taskId, baselineOutput: this.lastCanaryOutput ?? null,
+      // The dry-run posture (§6.4): gates and a reviewer run, nothing merges.
+      // This was decided in `loop:start` and then never travelled — `work:land`
+      // defaults it to false, so a loop started with --dry-run merged anyway.
+      // The one flag whose whole job is "do not touch the base branch" has to
+      // reach the code that touches the base branch.
+      dryRun: this.config.loop?.dryRun === true,
+      // Who reviews this session's work, when the caller named someone. The key
+      // stays behind: `work:land` re-stamps it from the provider map.
+      reviewer: this.config.workers?.reviewer
+        ? { provider: this.config.workers.reviewer.provider, model: this.config.workers.reviewer.model }
+        : null
     });
     if (landed.canaryOutput) this.lastCanaryOutput = landed.canaryOutput;
     this.history.push({ taskId, landed: landed.landed, stage: landed.stage, guidance: landed.guidance ?? null });
@@ -373,12 +441,20 @@ export class Supervisor {
   }
 }
 
-// The node a run is currently working on: the first one still running. Null
-// when nothing is (between waves, or parked), which the ladder reads as "there
-// is nothing to nudge" and moves down a rung.
+// The node a run is currently working on: the first one still going. Null when
+// nothing is (between waves, or parked), which the ladder reads as "there is
+// nothing to nudge" and moves down a rung.
+//
+// `active` is the status the runner actually writes for a node it is executing
+// (`FlowRunner.setNodeStatus(runId, node.id, 'active')`); nothing anywhere
+// writes 'running'. Looking for the wrong word meant this ALWAYS returned null,
+// so the two cheapest rungs of the interruption ladder — nudge and restart —
+// could never fire on any run, and every stall went straight to the bottom.
+const RUNNING = new Set(['active', 'running']);
+
 function currentNodeOf(snapshot) {
   const statuses = snapshot?.meta?.nodeStatus ?? {};
-  return Object.entries(statuses).find(([, s]) => s === 'running')?.[0] ?? null;
+  return Object.entries(statuses).find(([, s]) => RUNNING.has(s))?.[0] ?? null;
 }
 
 /**

@@ -68,6 +68,29 @@ test('parsePlanEval: rejects unknown category (node and categories map)', () => 
   assert.equal(r2.ok, false);
 });
 
+test('parsePlanEval: a vocabulary term in the wrong case is that term, not a violation', () => {
+  // The vocabulary is `Code general | Code design | documentation | Test-creation`
+  // — three capitalized and one not — so a planner writing "Documentation"
+  // beside "Code general" is being consistent with what it was shown. It cost a
+  // whole live run: one node's category rejected the entire plan, nothing was
+  // materialized, the run "completed" having done nothing, and the loop
+  // escalated the task to a bigger model that spells it the same way.
+  const r = parsePlanEval(wrap({
+    nodes: [{ id: 'n1', template: 'documentation-step', category: 'Documentation', effort: 'Medium', goal: 'g' }],
+    categories: { 'task-1': 'Documentation' }
+  }));
+  assert.equal(r.ok, true, r.errors?.join('\n'));
+  // Normalized to the vocabulary's own spelling, so the category→model routing
+  // and the template pairing downstream compare one form of the word.
+  assert.equal(r.plan.nodes[0].category, 'documentation');
+  assert.equal(r.plan.nodes[0].effort, 'medium');
+  assert.equal(r.plan.categories['task-1'], 'documentation');
+
+  // Strict is still strict: a word that is not in the vocabulary in any case
+  // still rejects the document.
+  assert.equal(parsePlanEval(wrap({ nodes: [{ ...validNode, category: 'Wizardry' }] })).ok, false);
+});
+
 test('parsePlanEval: rejects malformed contextSpec', () => {
   const r = parsePlanEval(wrap({ nodes: [{ ...validNode, contextSpec: { files: [{ description: 'no path' }] } }] }));
   assert.equal(r.ok, false);

@@ -5,7 +5,7 @@
 // panel is a projection, and a projection you can test is one you can trust.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pilesOf, burndown, flightRow, headline, humanDuration, tailLines, trendBars, PILE_ORDER } from '../src/loopViewData.js';
+import { pilesOf, burndown, flightRow, headline, humanDuration, tailLines, trendBars, taskDetail, shortStamp, PILE_ORDER } from '../src/loopViewData.js';
 
 test('the pile that needs a person comes first', () => {
   // The only part of the screen that is ASKING for something. Landed is
@@ -58,6 +58,66 @@ test('a flight row distinguishes long from stuck', () => {
   const handled = flightRow({ taskId: 't', idleMs: 11 * 60_000, interventions: ['nudge'] });
   assert.equal(handled.health, 'intervened');
   assert.deepEqual(handled.interventions, ['nudge']);
+});
+
+test('a pinned model replaces the band on the row that is running it', () => {
+  // "high" describes a rung that chose a model. Once a model is named the rung
+  // chooses nothing, so showing it would describe a decision nobody made.
+  assert.equal(flightRow({ taskId: 't', level: 'high' }).model, null);
+  assert.equal(flightRow({ taskId: 't', level: 'high', model: 'deepseek/deepseek-v4-pro' }).model, 'deepseek/deepseek-v4-pro');
+});
+
+test('an opened task says why it is here, what it would touch, and what has been tried', () => {
+  const detail = taskDetail({
+    id: 't-0007', title: 'Add an explicit agent promotion policy',
+    status: 'queued', level: 'high', attempts: 2, value: 4, effort: 2,
+    createdBy: 'agent:t-0031', createdAt: '2026-08-14T06:40:11.000Z',
+    dependsOn: ['t-0038'], gates: ['npm test'], blastRadius: ['core/gates/'],
+    runIds: ['run-1', 'run-2'], budgetUsd: 1.5,
+    body: '## Goal\n\nA hung gate parks a worktree forever.'
+  }, { spend: { usd: 0.4213, calls: 9, unknown: 1 } });
+
+  assert.equal(detail.empty, false);
+  const facts = Object.fromEntries(detail.facts.map(f => [f.label, f.value]));
+  assert.equal(facts.Status, 'queued');
+  assert.equal(facts.Effort, 'high');
+  assert.equal(facts.Attempts, '2');
+  assert.equal(facts.Value, '4/5 for 2/5 effort');
+  assert.equal(facts.Created, '08-14 06:40');
+  assert.equal(facts.Budget, '$1.50');
+  // The number someone will check against a bank statement has to say how much
+  // of itself is guesswork — the same rule the burn-down follows.
+  assert.match(facts.Spent, /\$0\.4213 across 9 call\(s\) · 1 unpriced/);
+  assert.deepEqual(detail.lists.map(l => l.key), ['dependsOn', 'gates', 'blastRadius']);
+  assert.deepEqual(detail.runIds, ['run-1', 'run-2']);
+  assert.match(detail.body, /^## Goal/);
+});
+
+test('an empty field is absent rather than dashed', () => {
+  // A grid of "—" reads as broken; a missing row reads as nothing to say.
+  const detail = taskDetail({ id: 't-1', title: 'bare', status: 'queued' });
+  const labels = detail.facts.map(f => f.label);
+  assert.ok(!labels.includes('Attempts'));
+  assert.ok(!labels.includes('Budget'));
+  assert.ok(!labels.includes('Spent'));
+  assert.deepEqual(detail.lists, []);
+  // Nothing to open onto: the expander should say so rather than show a blank.
+  assert.equal(detail.empty, true);
+  // A level nobody set is the project's default, not an absence of one.
+  assert.equal(detail.facts.find(f => f.label === 'Effort').value, 'project default');
+});
+
+test('a spend of nothing is not reported as a measurement', () => {
+  // Zero calls means the ledger has never seen this task, which is not the same
+  // as it having cost $0.00.
+  const detail = taskDetail({ id: 't-1', title: 'x' }, { spend: { usd: 0, calls: 0 } });
+  assert.ok(!detail.facts.some(f => f.label === 'Spent'));
+});
+
+test('a stamp keeps what someone would read and drops what they would not', () => {
+  assert.equal(shortStamp('2026-08-16T09:41:03.000Z'), '08-16 09:41');
+  assert.equal(shortStamp(null), null);
+  assert.equal(shortStamp('whenever'), null);
 });
 
 test('durations read the way a person would say them', () => {

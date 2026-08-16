@@ -2116,12 +2116,13 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   border-radius: 9px;
 }
 
-/* A backlog task's link back to the run that queued it (BRICKS P4.5). */
-.loop-task-head .source-run {
-  margin-left: auto; flex: none;
+/* A backlog task's link back to the run that queued it (BRICKS P4.5). Sits
+   beside the expander rather than inside it — same line, separate control. */
+.loop-task-row .source-run {
+  flex: none;
   font-size: 10px; color: var(--faint);
 }
-.loop-task-head .source-run:hover { color: var(--accent); }
+.loop-task-row .source-run:hover { color: var(--accent); }
 
 /* ---------- fan-out lanes (BRICKS P2) ----------
    A fan-out's lanes ARE its shape, so the lane list is the node's main
@@ -4324,6 +4325,29 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 .loop-burn-label strong { color: var(--tx); }
 .loop-burn-label em { font-style: normal; color: var(--faint); }
 
+/* The two models the loop runs on. Beside Start rather than buried in Settings:
+   the choice and its consequence (cost, and whether anything can land) belong in
+   the same glance as the button that acts on it. */
+.loop-models { display: flex; flex-direction: column; gap: 8px; }
+.loop-models h2 {
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--dim); margin: 0 0 2px;
+}
+.loop-model-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.loop-model-row > label {
+  font-size: 12px; color: var(--dim); width: 52px; flex: none;
+}
+/* An unset picker is showing a WORD, not a model id — mono type would claim it
+   is one. */
+.model-trigger-id.unset { font-family: inherit; color: var(--dim); }
+.loop-model-hint { font-size: 12px; color: var(--faint); }
+.loop-model-hint.warn { color: var(--warn); }
+.loop-model-note {
+  margin: 0 0 0 62px; font-size: 12px; color: var(--faint); max-width: 62ch;
+}
+.loop-model-note.warn { color: var(--warn); }
+.loop-model-note code { color: var(--tx); }
+
 /* In flight: a long task is fine, a stuck one is not, so health leads the row. */
 .loop-flight h2, .loop-pile h2, .loop-tail h2 {
   font-size: 12px; font-weight: 600; text-transform: uppercase;
@@ -4353,13 +4377,53 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 /* The pile that is asking for something reads differently from the ones that
    are only reporting. */
 .loop-pile-parked .loop-task { border-left: 3px solid var(--warn); }
-.loop-task-head { display: flex; align-items: baseline; gap: 10px; font-size: 13px; }
+/* The head IS the expander: the whole row is the hit target, because a queue
+   entry you cannot open is one you have to go and read the file for. The row
+   keeps the "queued by" link beside it — a sibling, since a button cannot
+   contain a button. */
+.loop-task-row { display: flex; align-items: baseline; gap: 8px; }
+.loop-task-row > .loop-task-head { flex: 1; min-width: 0; }
+.loop-task-head {
+  display: flex; align-items: baseline; gap: 10px; font-size: 13px; width: 100%;
+  background: none; border: 0; padding: 0; margin: 0; text-align: left;
+  color: inherit; font: inherit; cursor: pointer;
+}
+.loop-task-head:hover .title { color: var(--accent); }
+.loop-task-head .caret { color: var(--faint); font-size: 10px; flex: none; }
 .loop-task-head .id { font-family: var(--mono, monospace); color: var(--faint); font-size: 11px; }
 .loop-task-head .title { color: var(--tx); }
 .loop-task-head .level, .loop-task-head .attempts {
   margin-left: auto; color: var(--faint); font-size: 11px;
 }
+.loop-task-head .attempts { margin-left: 0; }
 .loop-task .reason { margin: 6px 0 0; font-size: 12px; color: var(--dim); }
+.loop-task.open { border-color: var(--divider); }
+
+/* Opened up: what it is for, what it would touch, what has been tried on it.
+   Empty fields are absent rather than dashed — a grid of dashes reads broken. */
+.loop-task-detail {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.loop-task-facts {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px 16px; margin: 0;
+}
+.loop-task-facts dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
+.loop-task-facts dd { margin: 2px 0 0; font-size: 12px; color: var(--tx); }
+.loop-task-list { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.loop-task-list .label { color: var(--faint); font-size: 11px; }
+.loop-task-list code {
+  background: var(--chip); border-radius: 4px;
+  padding: 1px 6px; font-size: 11px; color: var(--chip-tx);
+}
+.loop-task-body {
+  margin: 0; padding: 10px 12px; border-radius: 6px;
+  background: var(--canvas); border: 1px solid var(--border);
+  font-size: 12px; line-height: 1.55; color: var(--dim);
+  white-space: pre-wrap; overflow-x: auto; max-height: 320px; overflow-y: auto;
+  font-family: inherit;
+}
 .loop-task-actions { display: flex; gap: 8px; margin-top: 8px; }
 .loop-pile .empty, .loop-tail .empty { color: var(--faint); font-size: 12px; margin: 0; }
 

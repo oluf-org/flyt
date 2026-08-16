@@ -83,9 +83,12 @@ export function FactChips({ facts, className = '' }) {
 const isMock = w => w?.provider === 'mock';
 export const workerModelId = w => (w?.model ? w.model : null);
 
-// What the control shows when closed.
-export function workerLabel(worker) {
-  if (!worker?.model) return 'default worker';
+// What the control shows when closed. `placeholder` is what UNSET means at
+// this call site: "default worker" is right in the Inspector and wrong on the
+// Loop view, where an empty work picker means effort bands and an empty
+// reviewer means nothing lands. Same control, different absences.
+export function workerLabel(worker, placeholder = 'default worker') {
+  if (!worker?.model) return placeholder;
   if (isMock(worker)) return worker.model;
   return worker.model;
 }
@@ -297,7 +300,7 @@ function Popover({ anchorRect, onClose, children }) {
 // The button-plus-popover used as a form field (Inspector, node library,
 // launch composer). `worker` is { provider, model }; provider 'auto' means an
 // active model resolved by priority at call time.
-export function ModelPicker({ worker, activeModels, onChange, idPrefix, className = '' }) {
+export function ModelPicker({ worker, activeModels, onChange, idPrefix, className = '', placeholder = 'default worker' }) {
   const { modelFacts, providers, providerPriority } = useModelMeta();
   const [rect, setRect] = useState(null);
   const btnRef = useRef(null);
@@ -321,7 +324,7 @@ export function ModelPicker({ worker, activeModels, onChange, idPrefix, classNam
         aria-label="model"
         title={unrouted ? 'No connected provider can serve this model' : (r ? `Served by ${r}` : 'Choose a model')}
       >
-        <span className="model-trigger-id mono">{workerLabel(worker)}</span>
+        <span className={'model-trigger-id mono' + (id ? '' : ' unset')}>{workerLabel(worker, placeholder)}</span>
         <FactChips facts={id ? modelFacts[id] : null} />
         {unrouted && <span className="status-pill pill-err">unrouted</span>}
         <span className="model-trigger-caret" aria-hidden>▾</span>

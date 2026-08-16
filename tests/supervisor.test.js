@@ -122,11 +122,34 @@ test('a different error is progress; the same error three times is a groundhog',
   assert.deepEqual(hb.gateFailures, []);
 });
 
+test('a poll count is not a measure of the work', () => {
+  // The supervisor polls every five seconds, so "2 consecutive polls with
+  // identical work" meant FIFTEEN SECONDS. A node thinking its way through one
+  // call on a reasoning model produces nothing observable for minutes, so a
+  // healthy task — 12 model calls and 10 tool calls behind it — was declared a
+  // spin and parked. Repeats alone say how often we looked, not what happened.
+  const busy = new Heartbeat({ taskId: 't', runId: 'r', now: 0 });
+  busy.observe(snap({ a: 'active' }), { now: 0 });
+  busy.observe(snap({ a: 'active' }), { now: 5_000 });
+  busy.observe(snap({ a: 'active' }), { now: 10_000 });
+  assert.equal(busy.repeats, 2);
+  assert.equal(detectStall(busy), null, 'fifteen seconds of thinking is not a spin');
+
+  // The floor sits above the per-call idle deadline (config.json timeout.idleMs,
+  // 5 min): a call quiet for longer than that is already being killed and
+  // retried by the adapter, so anything the supervisor cuts sooner is work the
+  // adapter would have rescued.
+  busy.observe(snap({ a: 'active' }), { now: 4 * 60_000 });
+  assert.equal(detectStall(busy), null);
+  busy.observe(snap({ a: 'active' }), { now: 7 * 60_000 });
+  assert.equal(detectStall(busy).detector, 'spin');
+});
+
 test('the detectors fire on evidence, and say what it was', () => {
   const spinning = new Heartbeat({ taskId: 't', runId: 'r', now: 0 });
   spinning.observe(snap({ a: 'running' }), { now: 0 });
   spinning.observe(snap({ a: 'running' }), { now: 1 });
-  spinning.observe(snap({ a: 'running' }), { now: 2 });
+  spinning.observe(snap({ a: 'running' }), { now: 7 * 60 * 1000 });
   const spin = detectStall(spinning);
   assert.equal(spin.detector, 'spin');
   assert.match(spin.detail, /byte-identical/);
@@ -186,7 +209,13 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', land = () =
       return {
         meta: {
           stage, pendingGateKind: stage === 'awaiting_approval' ? gateKind : null,
-          nodeStatus: { 'work-1': stage === 'done' ? 'done' : 'running' }
+          // 'active' is what FlowRunner.setNodeStatus actually writes for a node
+          // it is executing. This fake said 'running', which nothing writes, so
+          // the supervisor's currentNodeOf() matched here and matched NOTHING in
+          // a real run — the nudge and restart rungs were dead in production and
+          // green in the suite. A fake that models a state the system cannot
+          // produce tests the fake.
+          nodeStatus: { 'work-1': stage === 'done' ? 'done' : 'active' }
         },
         nodeOutputs: { 'work-1': stage === 'done' ? 'finished' : 'thinking' },
         retrospectives: {}
@@ -232,6 +261,29 @@ test('the loop works the queue and stops when there is nothing ready', async () 
   assert.deepEqual(started, ['t-0001', 't-0002']);
 });
 
+test('a model the loop was pinned to is what every task runs on, and the ladder still ends', async () => {
+  // A band asks someone else to name the model; naming it is the same decision
+  // made earlier. What a pin must NOT do is disable the ladder — the rungs are
+  // also the attempt counter, and without them a failing task retries forever.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'work', goal: 'g', level: 'low' });
+  const worker = { provider: 'openrouter', model: 'deepseek/deepseek-v4-pro' };
+  const engine = fakeEngine({ backlog, land: () => ({ landed: false, stage: 'review', guidance: 'no' }) });
+  const sup = new Supervisor({
+    ...engine, projectId: 'p', backlog, pollMs: 1,
+    config: { loop: { worker } }
+  });
+
+  await sup.run({ maxTasks: 1 });
+  const run = engine.calls.find(c => c.name === 'flow:run');
+  assert.deepEqual(run.args.worker, worker, 'the run is told which model to use');
+  // The band still travels with the attempt, so escalation still counts.
+  assert.equal(run.args.level, 'low');
+  assert.equal(backlog.get('t-0001').level, 'medium', 'a failed attempt still moves up a rung');
+  // And the panel reports what the loop is RUNNING on, not what settings say now.
+  assert.equal(sup.status().model, 'deepseek/deepseek-v4-pro');
+});
+
 test('a gate the loop may not answer parks its task; the loop takes the next one', async () => {
   // Unattended, one approval request must not cost the rest of the day (§10).
   // An ESCALATION gate is the case: step-eval concluded a human must decide,
@@ -261,7 +313,10 @@ test('a stalled task is nudged before it is escalated', async () => {
   const engine = fakeEngine({ stages: { default: ['running'] } });
   const sup = new Supervisor({
     ...engine, projectId: 'p', backlog, pollMs: 1,
-    config: { loop: { thresholds: { spinRepeats: 1 } } }
+    // spinMs: 0 because this test is about the LADDER, not the threshold — the
+    // shipped floor is six minutes of wall clock (see the poll-count test) and
+    // a unit test must not wait for it.
+    config: { loop: { thresholds: { spinRepeats: 1, spinMs: 0 } } }
   });
 
   await sup.run({ maxTasks: 1 });
@@ -275,6 +330,86 @@ test('a stalled task is nudged before it is escalated', async () => {
   const task = backlog.get('t-0001');
   assert.ok(['queued', 'parked'].includes(task.status));
   if (task.status === 'queued') assert.equal(task.level, 'medium');
+});
+
+test('with nothing to restart, the ladder moves down a rung instead of falling off it', async () => {
+  // Between waves there is no node to nudge. The intent — "fall through to the
+  // next rung" — was written in a comment and not in the code: the escalate
+  // branch tests `rung`, which was still 'nudge', so the task went straight to
+  // parked on its FIRST stall, skipping the rung that would have tried a bigger
+  // model. With currentNodeOf() also matching a status nothing writes, that was
+  // every stall in every run.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'stalls between waves', goal: 'g', level: 'low' });
+  const engine = fakeEngine({ backlog, stages: { default: ['running'] } });
+  // No node is running: nothing to restart.
+  const bare = async (name, args) => {
+    if (name === 'run:snapshot') {
+      const s = await engine.invoke(name, args);
+      return { ...s, meta: { ...s.meta, nodeStatus: {} } };
+    }
+    return engine.invoke(name, args);
+  };
+  const sup = new Supervisor({
+    invoke: bare, calls: engine.calls, projectId: 'p', backlog, pollMs: 1,
+    config: { loop: { thresholds: { spinRepeats: 1, spinMs: 0 } } }
+  });
+
+  await sup.run({ maxTasks: 1 });
+  assert.equal(engine.calls.filter(c => c.name === 'run:restartNode').length, 0, 'there was nothing to restart');
+  const task = backlog.get('t-0001');
+  assert.equal(task.status, 'queued', 'escalated back to the queue, not parked');
+  assert.equal(task.level, 'medium');
+});
+
+test('a task is stopped at its own cap, and what it spent is recorded either way', async () => {
+  // The per-task cap read the LEDGER, and the ledger is only written when a run
+  // ends — so an in-flight task always reported $0.00 and the one ceiling whose
+  // job is to stop a single runaway task could never fire. It reads the run's
+  // own artifacts now, which is where the money is visible while it is spent.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'expensive', goal: 'g' });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  const store = {
+    snapshot: () => ({
+      retrospectives: { n1: { usage: { cost: 5 }, model: { provider: 'openrouter', model: 'm' } } }
+    })
+  };
+  const engine = fakeEngine({ backlog, stages: { default: ['running'] } });
+  const sup = new Supervisor({
+    ...engine, projectId: 'p', backlog, ledger, store, pollMs: 1,
+    config: { loop: { caps: { taskUsd: 1 } } }
+  });
+
+  await sup.run({ maxTasks: 1 });
+  const task = backlog.get('t-0001');
+  assert.equal(task.status, 'parked');
+  assert.match(task.blockedReason, /per-task cap/);
+  // ...and the spend survives the interruption. Only the tidy ending used to
+  // record, so the burn-down omitted exactly the runs that went wrong — it read
+  // lowest when the night was going worst.
+  assert.ok(ledger.totals({ taskId: 't-0001' }).usd >= 5);
+});
+
+test('a dry run reaches the code that would have merged', async () => {
+  // The flag's whole job is "do not touch the base branch", and it was decided
+  // in loop:start and then never travelled: work:land defaults dryRun to false,
+  // so a loop started with --dry-run merged anyway. The posture the first
+  // nights are supposed to run in (§6.4) did not exist.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'work', goal: 'g' });
+  const engine = fakeEngine({ backlog, land: () => ({ landed: false, stage: 'dry-run', approved: true }) });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1, config: { loop: { dryRun: true } } });
+
+  await sup.run({ maxTasks: 1 });
+  assert.equal(engine.calls.find(c => c.name === 'work:land').args.dryRun, true);
+
+  // ...and a loop that did not ask for one still lands.
+  const b2 = makeBacklog();
+  b2.add({ title: 'work', goal: 'g' });
+  const e2 = fakeEngine({ backlog: b2 });
+  await new Supervisor({ ...e2, projectId: 'p', backlog: b2, pollMs: 1 }).run({ maxTasks: 1 });
+  assert.equal(e2.calls.find(c => c.name === 'work:land').args.dryRun, false);
 });
 
 test('a failed landing escalates instead of retrying the same band', async () => {

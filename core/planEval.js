@@ -14,6 +14,32 @@ import { MAX_EMPHASIS as MAX_LANE_EMPHASIS } from './nodes/fanout.js';
 const ID_RE = /^[a-zA-Z0-9_-]+$/;
 const isStr = v => typeof v === 'string' && v.trim().length > 0;
 
+/**
+ * A fixed-vocabulary value, in the spelling the vocabulary uses.
+ *
+ * The contract is strict on purpose and stays strict: an unknown value is still
+ * an error, and one error still rejects the whole document. What this fixes is
+ * a trap of our own making — NODE_CATEGORIES reads
+ * `Code general | Code design | documentation | Test-creation`, three of them
+ * capitalized and one not, so a planner writing "Documentation" (the obvious
+ * spelling beside "Code general") loses its ENTIRE plan. Seen live: a real run
+ * emitted `"category": "Documentation"`, no nodes were materialized, the run
+ * completed having done nothing, and the loop escalated the task to a bigger
+ * model — which would spell it the same way.
+ *
+ * Case is not information here. A value that matches a term exactly except for
+ * case IS that term, and returning the canonical spelling means everything
+ * downstream (the category→model routing, the template pairing) keeps comparing
+ * one spelling.
+ */
+export function canonical(value, vocabulary) {
+  if (typeof value !== 'string') return null;
+  const v = value.trim();
+  if (vocabulary.includes(v)) return v;
+  const lower = v.toLowerCase();
+  return vocabulary.find(term => term.toLowerCase() === lower) ?? null;
+}
+
 // Pull the first parseable JSON value out of LLM output: a ```json fence,
 // the whole text, or the outermost {...} slice — in that order.
 export function extractJson(text) {
@@ -70,9 +96,11 @@ function validateNodeSpecs(rawNodes, extraTemplateIds, errors) {
     } else if (!isKnownTemplate(n.template.trim())) {
       errors.push(`${at}.template: unknown "${n.template.trim()}" (known: ${knownTemplates.join(', ')})`);
     }
-    if (n.category != null && !NODE_CATEGORIES.includes(n.category)) {
+    const category = n.category != null ? canonical(n.category, NODE_CATEGORIES) : null;
+    if (n.category != null && !category) {
       errors.push(`${at}.category: "${n.category}" is not one of: ${NODE_CATEGORIES.join(', ')}`);
     }
+    const effort = n.effort != null ? canonical(n.effort, EFFORT_LEVELS) : null;
     // Category and template are documented 1:1 (FLOW_NODES.md): the category
     // picks the model, the template picks the tools and the base type. Pairing
     // them wrongly hands a node work its template isn't shaped for, and the
@@ -81,11 +109,11 @@ function validateNodeSpecs(rawNodes, extraTemplateIds, errors) {
     // checked, so the mismatch sailed through. Only built-in templates carry a
     // known category; a user's own template is left to them.
     const tplCategory = NODE_TEMPLATES[isStr(n.template) ? n.template.trim() : '']?.category;
-    if (n.category != null && tplCategory != null && n.category !== tplCategory) {
+    if (category && tplCategory != null && category !== tplCategory) {
       errors.push(`${at}: category "${n.category}" does not match template "${n.template.trim()}"`
         + ` (whose category is "${tplCategory}") — they are 1:1; pick the template for the category`);
     }
-    if (n.effort != null && !EFFORT_LEVELS.includes(n.effort)) {
+    if (n.effort != null && !effort) {
       errors.push(`${at}.effort: "${n.effort}" is not one of: ${EFFORT_LEVELS.join(', ')}`);
     }
     if (n.taskRef != null && !isStr(n.taskRef)) errors.push(`${at}.taskRef: must be a non-empty string when present`);
@@ -104,8 +132,10 @@ function validateNodeSpecs(rawNodes, extraTemplateIds, errors) {
       id: isStr(n.id) ? n.id.trim() : `invalid-${i}`,
       template: isStr(n.template) ? n.template.trim() : '',
       ...(isStr(n.taskRef) ? { taskRef: n.taskRef.trim() } : {}),
-      ...(n.category != null ? { category: n.category } : {}),
-      ...(EFFORT_LEVELS.includes(n.effort) ? { effort: n.effort } : {}),
+      // The canonical spelling, so everything downstream — the category→model
+      // routing, the template pairing — compares one form of the word.
+      ...(category ? { category } : {}),
+      ...(effort ? { effort } : {}),
       ...(isStr(n.title) ? { title: n.title.trim() } : {}),
       ...(isStr(n.goal) ? { goal: n.goal.trim() } : {}),
       ...(dependsOn ? { dependsOn } : {}),
@@ -147,10 +177,11 @@ export function parsePlanEval(text, extraTemplateIds = []) {
     } else {
       categories = {};
       for (const [k, v] of Object.entries(obj.categories)) {
-        if (!NODE_CATEGORIES.includes(v)) {
+        const term = canonical(v, NODE_CATEGORIES);
+        if (!term) {
           errors.push(`categories["${k}"]: "${v}" is not one of: ${NODE_CATEGORIES.join(', ')}`);
         } else {
-          categories[k] = v;
+          categories[k] = term;
         }
       }
     }

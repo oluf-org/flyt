@@ -50,6 +50,12 @@ test('a level is a request for a band, not a model we picked', () => {
   // A project can pin itself to providers it trusts without naming models.
   const narrowed = workerForLevel('max', { allowedModels: ['anthropic/*'] });
   assert.deepEqual(narrowed.routing.allowedModels, ['anthropic/*']);
+
+  // ...and a model somebody NAMED carries no routing at all. Sending a cost
+  // tier alongside a pinned id asks the router to overrule the pin, and the
+  // caller would never see which model actually answered.
+  const pinned = workerForLevel('high', { model: 'deepseek/deepseek-v4-pro' });
+  assert.deepEqual(pinned, { provider: 'openrouter', model: 'deepseek/deepseek-v4-pro' });
 });
 
 test('escalation moves up a rung, and running out of ladder is a human decision', () => {

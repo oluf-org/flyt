@@ -183,11 +183,11 @@ export function supportsToolsFor(worker, config = {}) {
   return worker?.provider === 'openrouter';
 }
 
-export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal = null, maxIterations = null }) {
+export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal = null, maxIterations = null, maxTokens = null }) {
   const started = Date.now();
   if (!tools.length) {
     const r = await callForAnswer(
-      { ...worker, apiKey, system, prompt, onText, onRetry, onCall, retry, timeout, signal },
+      { ...worker, apiKey, system, prompt, onText, onRetry, onCall, retry, timeout, signal, ...(maxTokens ? { maxTokens } : {}) },
       onEmptyTurn
     );
     return {
@@ -198,7 +198,16 @@ export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx
     };
   }
   const native = toolProtocol(worker) === 'native';
-  const args = { worker, apiKey, system, prompt, tools, ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal, maxIterations };
+  // maxTokens travels into the tool loops too. It did not, and the loops fall
+  // back to a bare 4096 — so the reasoning headroom D40 added (`effortBudget`,
+  // 4096 + 8192) reached every node EXCEPT the ones holding tools, which is
+  // every node that does the actual work. On a reasoning model that is fatal
+  // rather than tight: `deepseek/deepseek-v4-pro` spent all 4096 on internal
+  // reasoning and returned no content, the empty-turn retry doubled to 8192 and
+  // came back empty as well, and the task failed with "returned no content" —
+  // the exact failure D40 was written to end. The budget was computed correctly
+  // by the caller and dropped one function short of the call.
+  const args = { worker, apiKey, system, prompt, tools, ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal, maxIterations, maxTokens };
   const out = native ? await nativeLoop(args) : await textLoop(args);
   return { ...out, durationMs: Date.now() - started };
 }
@@ -242,7 +251,7 @@ function addUsage(total, usage) {
 }
 
 // --- NATIVE path: OpenAI function-tool format over the messages API ---
-async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal, maxIterations = null }) {
+async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal, maxIterations = null, maxTokens = null }) {
   const messages = [
     { role: 'system', content: system },
     { role: 'user', content: prompt }
@@ -267,7 +276,7 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
     // adapter can reassemble tool_calls from deltas. Honoring the contract here
     // means that becomes an adapter change alone.
     const res = await callForAnswer(
-      { ...worker, apiKey, messages, ...(last ? {} : { tools: oaTools }), onText, onRetry, onCall, retry, timeout, signal },
+      { ...worker, apiKey, messages, ...(last ? {} : { tools: oaTools }), onText, onRetry, onCall, retry, timeout, signal, ...(maxTokens ? { maxTokens } : {}) },
       d => onEmptyTurn?.({ ...d, round: i + 1, of: rounds })
     );
     usage = addUsage(usage, res.usage);
@@ -321,7 +330,7 @@ export function textProtocolInstructions(tools) {
   ].join('\n');
 }
 
-async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal, maxIterations = null }) {
+async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal, maxIterations = null, maxTokens = null }) {
   const fullSystem = system + '\n\n' + textProtocolInstructions(tools);
   const toolCalls = [];
   let usage = null;
@@ -335,7 +344,7 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
   const rounds = Math.max(1, Number(maxIterations ?? MAX_ITERATIONS));
   for (let i = 0; i < rounds; i++) {
     const res = await callForAnswer(
-      { ...worker, apiKey, system: fullSystem, prompt: transcript, onText, onRetry, onCall, retry, timeout, signal },
+      { ...worker, apiKey, system: fullSystem, prompt: transcript, onText, onRetry, onCall, retry, timeout, signal, ...(maxTokens ? { maxTokens } : {}) },
       d => onEmptyTurn?.({ ...d, round: i + 1, of: rounds })
     );
     usage = addUsage(usage, res.usage);

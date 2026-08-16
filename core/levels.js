@@ -59,6 +59,11 @@ export const maxLevel = (a, b) => (levelIndex(a) >= levelIndex(b) ? normalizeLev
  * naming individual models.
  */
 export function workerForLevel(level, { allowedModels = null, model = AUTO_MODEL } = {}) {
+  // A model somebody NAMED is a decision already made. The Auto Router plugin
+  // exists to make that decision, so sending both asks OpenRouter to overrule
+  // the pin — and the caller would never see which model actually answered. A
+  // named model therefore carries no routing at all.
+  if (model !== AUTO_MODEL) return { provider: 'openrouter', model };
   return {
     provider: 'openrouter',
     model,

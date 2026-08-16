@@ -358,6 +358,43 @@ test('anthropic: HTTP errors carry the status for retry classification', async (
   assert.equal(r.retries, 1);
 });
 
+// The reasoning headroom D40 added (effortBudget: the answer budget PLUS 8192)
+// reached every node except the ones holding tools. `runAgent` accepted
+// maxTokens, used it on the no-tools path, and did not put it in the object it
+// handed the tool loops — which then fell back to a bare 4096. So the nodes
+// that do the actual work ran on the budget D40 proved was fatal:
+// deepseek-v4-pro spent all 4096 on internal reasoning, returned no content,
+// and failed the task with the exact error D40 was written to end.
+test('a tool-using agent is given the budget its caller computed', async () => {
+  const store = { appendLog: () => {}, writeTaskSpec: () => 'tasks/task-1.spec.md' };
+  stubFetch(({ n }) => (n === 1
+    ? jsonRes({
+      choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+          role: 'assistant', content: null,
+          tool_calls: [{ id: 'c1', type: 'function', function: { name: 'write_task_md', arguments: JSON.stringify({ content: '# Spec' }) } }]
+        }
+      }]
+    })
+    : jsonRes({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Answered.' } }] })));
+
+  const { getTools } = await import('../core/tools/index.js');
+  const out = await runAgent({
+    worker: { provider: 'openrouter', model: 'tool-model', supportsTools: true },
+    apiKey: 'k', system: 'SYS', prompt: 'P',
+    tools: getTools(['write_task_md']),
+    ctx: { store, runId: 'r1', taskId: 'task-1' },
+    maxTokens: 12288
+  });
+
+  assert.equal(out.text, 'Answered.');
+  // Every round, not just the first: the round that must WRITE the answer is
+  // the one that needs the room.
+  assert.deepEqual(calls.map(c => c.body.max_tokens), [12288, 12288]);
+  restoreFetch();
+});
+
 // --- native tool-calling over a real adapter ------------------------------
 
 // The NATIVE path (task 11 names it explicitly): only reachable on OpenRouter

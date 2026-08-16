@@ -43,6 +43,31 @@ test('resolveWorker: category worker beats the executor default', () => {
     { provider: 'cat', model: 'cat-m' });
 });
 
+test('resolveWorker: a run-level worker routes unpinned nodes, and carries no key', () => {
+  // A level or a pinned model (LOOP-PLAN §8) becomes every unpinned node's
+  // worker. It must arrive as provider/model/routing and nothing else: this
+  // object is logged verbatim in `node_start`, so spreading a stamped worker
+  // wrote a live OpenRouter key into every run's log.jsonl — a file agents
+  // read, the archive copies, and people paste into bug reports. The key is
+  // looked up at call time from providerKeys, so nothing needs it here.
+  const config = testConfig({
+    levelWorker: { provider: 'openrouter', model: 'deepseek/deepseek-v4-pro', apiKey: 'sk-or-v1-secret' }
+  });
+  const w = resolveWorker(node('x', 'aiStep', {}), config);
+  assert.deepEqual(w, { provider: 'openrouter', model: 'deepseek/deepseek-v4-pro' });
+  assert.ok(!('apiKey' in w));
+  assert.ok(!JSON.stringify(w).includes('secret'));
+
+  // A band still travels: it is how the Auto Router is asked for a cost tier.
+  const banded = testConfig({ levelWorker: { provider: 'openrouter', model: 'openrouter/auto', routing: { costTier: 'high' } } });
+  assert.deepEqual(resolveWorker(node('x', 'aiStep', {}), banded).routing, { costTier: 'high' });
+
+  // ...and a node that names its own model still wins over both.
+  assert.deepEqual(
+    resolveWorker(node('x', 'aiStep', { worker: { provider: 'exp', model: 'exp-m' } }), config),
+    { provider: 'exp', model: 'exp-m' });
+});
+
 test('resolveWorker: falls back to the executor default', () => {
   assert.deepEqual(resolveWorker(node('x', 'aiStep', {}), testConfig()),
     { provider: 'script', model: 'test-model' });

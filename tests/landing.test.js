@@ -168,6 +168,26 @@ test('a reviewer that cannot be reached blocks the landing', async () => {
   assert.match(down.reason, /could not be completed/);
 });
 
+test('a configured reviewer keeps the key it was stamped with', async () => {
+  // The worker the main process builds carries its provider's key. reviewDiff
+  // used to spread `apiKey` unconditionally over it, so every caller that had
+  // no separate key to pass — which is all of them — blanked it, the call
+  // failed on a missing key, and the failure surfaced only as "the review could
+  // not be completed". Nothing could land unattended, for a reason that looked
+  // like the reviewer's opinion.
+  let seen = null;
+  setScript(({ apiKey }) => { seen = apiKey; return '```json\n{"verdict":"approve","reason":"fine"}\n```'; });
+  const ok = await reviewDiff({
+    worker: { provider: 'script', model: 'm', apiKey: 'sk-stamped' }, task: {}, diff: 'x'
+  });
+  assert.equal(ok.verdict, 'approve');
+  assert.equal(seen, 'sk-stamped');
+
+  // An explicitly passed key still wins.
+  await reviewDiff({ worker: { provider: 'script', model: 'm', apiKey: 'sk-stamped' }, apiKey: 'sk-explicit', task: {}, diff: 'x' });
+  assert.equal(seen, 'sk-explicit');
+});
+
 test('the reviewer is told which files left the declared blast radius', () => {
   const prompt = buildReviewPrompt({
     task: { title: 'Add tag filtering' },

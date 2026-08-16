@@ -16,7 +16,11 @@ export const PILE_ORDER = ['parked', 'landed', 'running', 'queued', 'failed'];
 export const PILE_LABELS = {
   parked: 'Waiting on you',
   landed: 'Landed',
-  running: 'In flight',
+  // Not "In flight": the section above the piles already carries that name for
+  // the HEARTBEATS, and two headings reading the same thing on one screen is a
+  // reader's problem even when both are accurate. This one is a backlog fact —
+  // a worker holds the lease — and the one above is a health reading.
+  running: 'With a worker',
   queued: 'Queued',
   failed: 'Failed'
 };
@@ -88,6 +92,10 @@ export function flightRow(hb, { thresholds = {} } = {}) {
     taskId: hb.taskId,
     runId: hb.runId,
     level: hb.level ?? null,
+    // What it is running on, when a model was named rather than a band asked
+    // for. Shown instead of the level in that case: "high" would describe a
+    // ladder rung that is no longer choosing anything.
+    model: hb.model ?? null,
     stage: hb.stage ?? hb.phase ?? 'running',
     age: humanDuration(hb.ageMs ?? 0),
     idle: humanDuration(idle),
@@ -96,6 +104,79 @@ export function flightRow(hb, { thresholds = {} } = {}) {
     // handled rather than wondering whether to intervene themselves.
     interventions: hb.interventions ?? []
   };
+}
+
+/**
+ * One task, opened up.
+ *
+ * The card answers "what is this"; the expansion answers "why is it here, what
+ * would it touch, and what has already been tried on it" — the questions a
+ * person actually has when they stop scrolling and click something. The
+ * projection lives here so the component can be layout only, and so the rules
+ * about what is worth showing are testable.
+ *
+ * Two rules, both about not padding the panel with nothing:
+ *   - a field that is empty is OMITTED, not rendered as "none". A grid of
+ *     dashes reads as broken; an absent row reads as "nothing to say".
+ *   - the body is the task as its author wrote it (§5.1). It is not summarized
+ *     here, because a task file is already written for a reader who has not
+ *     seen the run.
+ */
+export function taskDetail(task = {}, { spend = null } = {}) {
+  const facts = [];
+  const add = (label, value, title = null) => {
+    if (value === null || value === undefined || value === '') return;
+    facts.push({ label, value: String(value), ...(title ? { title } : {}) });
+  };
+
+  add('Status', task.status);
+  // A level is the band the NEXT attempt runs at, which is the interesting
+  // half — the one that already ran is in the attempt count.
+  add('Effort', task.level ?? 'project default');
+  if (task.attempts) add('Attempts', task.attempts);
+  add('Value', task.value != null && task.effort != null ? `${task.value}/5 for ${task.effort}/5 effort` : null,
+    'What it is worth, over what it costs — the two halves of the picker\'s score');
+  add('Queued by', task.createdBy);
+  add('Created', shortStamp(task.createdAt), task.createdAt ?? undefined);
+  add('Started', shortStamp(task.startedAt), task.startedAt ?? undefined);
+  add('Updated', shortStamp(task.updatedAt), task.updatedAt ?? undefined);
+  if (task.claimedBy) add('Claimed by', task.claimedBy);
+  if (task.budgetUsd != null) add('Budget', `$${Number(task.budgetUsd).toFixed(2)}`);
+  // Spend is fetched per task rather than carried on it: the ledger is the
+  // source of truth for money (the same reason the burn-down reads it), and a
+  // number copied into a task file is a number that goes stale.
+  if (spend && spend.calls) {
+    add('Spent', `$${(spend.usd ?? 0).toFixed(4)} across ${spend.calls} call(s)`
+      + (spend.unknown ? ` · ${spend.unknown} unpriced` : ''));
+  }
+
+  return {
+    id: task.id,
+    title: task.title ?? '',
+    body: String(task.body ?? '').trim(),
+    facts,
+    lists: [
+      { key: 'dependsOn', label: 'Depends on', items: arr(task.dependsOn) },
+      { key: 'gates', label: 'Extra gates', items: arr(task.gates) },
+      { key: 'blastRadius', label: 'Blast radius', items: arr(task.blastRadius) }
+    ].filter(l => l.items.length),
+    runIds: arr(task.runIds),
+    blockedReason: task.blockedReason ?? null,
+    // Nothing to open up: a bare title with no body, no lists and no history is
+    // the one case where an expander would open onto what the card already said.
+    empty: !String(task.body ?? '').trim() && !arr(task.dependsOn).length
+      && !arr(task.gates).length && !arr(task.blastRadius).length && !arr(task.runIds).length
+  };
+}
+
+const arr = v => (Array.isArray(v) ? v.filter(x => x !== null && x !== undefined && x !== '') : []);
+
+// '2026-08-16T09:41:03.000Z' → '08-16 09:41'. The year is almost always this
+// one and the seconds are never the question.
+export function shortStamp(iso) {
+  const s = String(iso ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return null;
+  return `${s.slice(5, 10)} ${s.slice(11, 16)}`;
 }
 
 // A one-line summary for the header: what the loop is doing right now, in the

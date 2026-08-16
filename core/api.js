@@ -18,6 +18,7 @@ import { landTask, verifyTask } from './landing.js';
 import { pushRefs, git } from './worktree.js';
 import { workerForLevel, levelFor, LEVELS } from './levels.js';
 import { Supervisor, renderReport } from './supervisor.js';
+import { reviewWorker } from './diffReview.js';
 import { APPROVAL_MODES } from './flowRunner.js';
 import { lintFlow } from './flowlang/lint.js';
 import {
@@ -90,6 +91,40 @@ export function createApi(engine) {
         { status: 400, code: 'no_backlog' });
     }
     return backlog;
+  };
+
+  /**
+   * A worker a CALLER named, turned into one the runner can use.
+   *
+   * `{ provider: 'auto', model }` is what every picker and every `--model` flag
+   * produces: the id is the decision, and who serves it is the priority walk's
+   * business. Resolving here rather than at the first model call is what makes
+   * "no connected provider can serve this" a pre-flight error instead of a
+   * worktree's worth of wasted work.
+   *
+   * The key never travels the other way: callers name models, the main process
+   * holds keys, and a command surface reachable over HTTP must not be a way to
+   * hand one in or read one out.
+   *
+   * `withKey` is OFF by default and must stay that way for anything that
+   * becomes a node's worker. `log.jsonl` records `node_start` with the worker
+   * object verbatim, so a key stamped here is a key written in plaintext into
+   * every run's log — which agents read, the archive copies, and people paste
+   * into bug reports. The runner does not need it: `resolveCallTarget` looks
+   * the key up from `providerKeys` at call time. Only a caller that calls a
+   * model DIRECTLY (the reviewer, which is not a node and is never logged)
+   * asks for one.
+   */
+  const resolveWorkerArg = (worker, { withKey = false } = {}) => {
+    if (!worker?.provider || !worker?.model) return null;
+    let target = { provider: worker.provider, model: worker.model };
+    if (target.provider === 'auto') {
+      const r = runtimeConfig.resolveModelSource(target.model); // throws with a settings-pointing message
+      target = { provider: r.provider, model: r.model };
+    }
+    if (!withKey) return target;
+    const apiKey = runtimeConfig.providerKeys?.[target.provider] ?? null;
+    return apiKey ? { ...target, apiKey } : target;
   };
 
   // One supervisor per project, for the life of the process.
@@ -186,7 +221,7 @@ export function createApi(engine) {
     // The workspace is bound at run time (D15) — a bound tab IS its workspace
     // (T19), an appdata project has its own managed one (L5), and only an
     // unbound project picks one per run (or none, for mock/no-file flows).
-    'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null, level = null }) => {
+    'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null, level = null, worker = null }) => {
       const entry = proj(projectId);
       let workspace = null;
       // An explicit workspaceDir WINS, even for a bound project. That is how the
@@ -202,9 +237,17 @@ export function createApi(engine) {
       // worker routes through OpenRouter's Auto Router at that cost tier. Set on
       // the runner's config rather than baked into the flow, because the level
       // belongs to the ATTEMPT — a retry runs the same flow one rung up.
-      entry.runner.config.levelWorker = level
-        ? workerForLevel(level, { allowedModels: runtimeConfig.loop?.allowedModels ?? null })
-        : null;
+      //
+      // A NAMED worker wins over a band, and is the same slot rather than a
+      // second one: "which model does an unpinned node use" has to have exactly
+      // one answer, or a run would be routed by whichever branch was written
+      // last. Asking for a band is asking someone else to name the model; naming
+      // it yourself is the same decision made earlier.
+      entry.runner.config.levelWorker = worker?.provider && worker?.model
+        ? { ...worker }
+        : level
+          ? workerForLevel(level, { allowedModels: runtimeConfig.loop?.allowedModels ?? null })
+          : null;
       return entry.runner.start(flows.load(flowId), {
         userInput: String(userInput ?? ''),
         workspace,
@@ -368,7 +411,7 @@ export function createApi(engine) {
     // The whole sequence: gates → mechanical checks → review → merge → canary.
     // Every outcome that is not "landed" carries guidance, because a task that
     // fails without telling the next attempt why is just re-rolling dice.
-    'work:land': async ({ projectId, taskId, dryRun = false, push = null, baselineOutput = null }) => {
+    'work:land': async ({ projectId, taskId, dryRun = false, push = null, baselineOutput = null, reviewer = null }) => {
       const entry = proj(projectId);
       const backlog = backlogFor(projectId);
       const pool = poolFor(projectId);
@@ -380,9 +423,18 @@ export function createApi(engine) {
       // `loop.push` in config, or --push on the command. A repo with no origin
       // is still a perfectly good local loop.
       const wantPush = push ?? runtimeConfig.loop?.push === true;
+      // A reviewer named for this session beats the configured one. The loop is
+      // often driven from a machine whose settings belong to a running desktop
+      // app, and "who reviews this" has to be answerable at the call.
+      // withKey: the reviewer is called directly by `reviewDiff`, not through
+      // the runner's call-time key lookup — and it is never logged as a node.
+      const named = resolveWorkerArg(reviewer, { withKey: true });
+      const config = named
+        ? { ...runtimeConfig, workers: { ...runtimeConfig.workers, reviewer: named } }
+        : runtimeConfig;
       const result = await landTask({
         pool, repoRoot: entry.folder, taskId, task, base, dryRun, baselineOutput,
-        config: runtimeConfig,
+        config,
         push: wantPush ? (args => pushRefs({ ...args, log: () => {} })) : null,
         // The canary: the gates again, on the merged result in the main
         // checkout. Two branches that each pass alone can fail together.
@@ -405,23 +457,45 @@ export function createApi(engine) {
     // One supervisor per project, held here for the life of the process: it is
     // the thing that outlives a closed window, and starting a second one over
     // the same backlog would have two pickers racing for the same tasks.
-    'loop:start': async ({ projectId, parallelism = 1, maxTasks = null, dryRun = false }) => {
+    'loop:start': async ({ projectId, parallelism = 1, maxTasks = null, dryRun = false, worker = null, reviewer = null }) => {
       proj(projectId);
+      // The model every task runs on, when one has been named. `workers.loop`
+      // is where the Loop view saves its pick; an explicit `worker` on the call
+      // is for a caller that wants a different one for this session only.
+      // Resolved here rather than at the first model call, because the point of
+      // a pre-flight check is to fail before a worktree exists.
+      let pinned, sessionReviewer;
+      try {
+        pinned = resolveWorkerArg(worker) ?? resolveWorkerArg(runtimeConfig.workers?.loop);
+        sessionReviewer = resolveWorkerArg(reviewer);
+      } catch (err) {
+        throw new ApiError(String(err?.message ?? err), { status: 400, code: 'no_provider_key' });
+      }
       // Fail once, here, rather than per task. Levels route through
       // OpenRouter's Auto Router (§8), so without a key every task would fail
       // at its first node with a provider error and the whole backlog would
       // end the night parked for a reason that has nothing to do with the work.
-      const useLevels = runtimeConfig.loop?.levels !== false;
+      const useLevels = runtimeConfig.loop?.levels !== false && !pinned;
       if (useLevels && !engine.hasKey('openrouter')) {
         throw new ApiError(
-          'Effort levels route through OpenRouter, and no OpenRouter key is set. Add one in Settings, or set loop.levels to false to run on the configured workers instead.',
+          'Effort levels route through OpenRouter, and no OpenRouter key is set. Add one in Settings, pick a model for the loop, or set loop.levels to false to run on the configured workers instead.',
           { status: 400, code: 'no_openrouter_key' });
       }
-      // Nothing lands unattended without a reviewer (§7.2) — also worth saying
-      // before a night of work rather than after it.
-      if (!runtimeConfig.workers?.reviewer && !dryRun) {
+      // A pinned model whose provider is not connected fails the same way for
+      // the same reason, so it gets the same one-shot check rather than forty
+      // identical provider errors spread across a night.
+      if (pinned && pinned.provider !== 'mock' && !engine.hasKey(pinned.provider)) {
         throw new ApiError(
-          'No reviewer model is configured (workers.reviewer), so nothing could land. Configure one, or start the loop with dryRun to have it stop after review.',
+          `The loop is set to run on "${pinned.model}", but its provider (${pinned.provider}) is not connected. Add a key in Settings, or choose another model.`,
+          { status: 400, code: 'no_provider_key' });
+      }
+      // Nothing lands unattended without a reviewer (§7.2) — also worth saying
+      // before a night of work rather than after it. Asked of the same function
+      // the landing sequence asks, because a reviewer that is merely PRESENT is
+      // not a reviewer that can be called.
+      if (!sessionReviewer && !reviewWorker(runtimeConfig) && !dryRun) {
+        throw new ApiError(
+          'No reviewer model is configured, so nothing could land. Pick one on the Loop view (or set workers.reviewer), or start the loop with dryRun to have it stop after review.',
           { status: 400, code: 'no_reviewer' });
       }
       if (supervisors.get(projectId)?.running) {
@@ -432,7 +506,13 @@ export function createApi(engine) {
         backlog: backlogFor(projectId),
         ledger: ledgerFor(projectId),
         store: proj(projectId).store,
-        config: { ...runtimeConfig, loop: { ...runtimeConfig.loop, dryRun } },
+        config: {
+          ...runtimeConfig,
+          workers: sessionReviewer
+            ? { ...runtimeConfig.workers, reviewer: sessionReviewer }
+            : runtimeConfig.workers,
+          loop: { ...runtimeConfig.loop, dryRun, worker: pinned }
+        },
         parallelism,
         log: msg => engine.emitLoop?.(projectId, msg)
       });
@@ -441,7 +521,11 @@ export function createApi(engine) {
       // and the caller gets an acknowledgement rather than a connection held
       // open for the length of a working day.
       sup.run({ maxTasks: maxTasks ?? Infinity }).catch(err => engine.emitLoop?.(projectId, `loop failed: ${err.message}`));
-      return { started: true, parallelism };
+      return {
+        started: true, parallelism, levels: !pinned,
+        model: pinned?.model ?? null,
+        reviewer: (sessionReviewer ?? reviewWorker(runtimeConfig))?.model ?? null
+      };
     },
     'loop:stop': ({ projectId, reason = 'stopped by request' }) => {
       const sup = supervisors.get(projectId);
@@ -451,7 +535,7 @@ export function createApi(engine) {
     },
     'loop:log': ({ projectId }) => engine.loopLog(projectId),
     'loop:status': ({ projectId }) => supervisors.get(projectId)?.status()
-      ?? { running: false, stopping: null, inFlight: [], parked: [], completed: 0, landed: 0 },
+      ?? { running: false, stopping: null, inFlight: [], parked: [], completed: 0, landed: 0, model: null },
     'loop:report': ({ projectId }) => renderReport({
       status: supervisors.get(projectId)?.status() ?? { running: false, stopping: null, inFlight: [], landed: 0, completed: 0 },
       backlog: backlogFor(projectId),

@@ -1,9 +1,18 @@
 {
-  "comment": "Committed defaults for worker assignment; settings.json in the app's userData folder overrides the executor worker (edit via the in-app Settings panel). Providers: 'mock' (no API key needed), 'anthropic', 'openai', 'kimi' (platform or Kimi-Code key), 'openrouter' — keys saved via Settings → Providers; anthropic/openai also accept ANTHROPIC_API_KEY / OPENAI_API_KEY from the shell. A worker may also be { provider: 'auto', model }, resolved at call time through Settings' provider priority. The executor worker is the app-wide default, used when a node template sets no worker of its own.",
+  "comment": "Committed defaults for worker assignment; settings.json in the app's userData folder overrides these workers (edit via the in-app Settings panel, or the Loop view for the two the loop uses). Providers: 'mock' (no API key needed), 'anthropic', 'openai', 'kimi' (platform or Kimi-Code key), 'openrouter' — keys saved via Settings → Providers; anthropic/openai also accept ANTHROPIC_API_KEY / OPENAI_API_KEY from the shell. A worker may also be { provider: 'auto', model }, resolved at call time through Settings' provider priority. The executor worker is the app-wide default, used when a node template sets no worker of its own.",
+  "workersLoopComment": "The loop's two workers are DECLARED here with no model, so that they are settable from the UI while their unset state stays the fail-closed one. `loop` is the model every unpinned node runs on while the loop is working a task; null means effort bands instead (LOOP-PLAN 8 — a level, not a model). `reviewer` reads the diff before anything merges; null means nothing lands unattended, which is the correct default for a repo nobody has configured.",
   "workers": {
     "executor": {
       "provider": "mock",
       "model": "mock-large"
+    },
+    "loop": {
+      "provider": null,
+      "model": null
+    },
+    "reviewer": {
+      "provider": null,
+      "model": null
     }
   },
   "retryComment": "Transient-error retry for every model call (429 / 408 / 5xx / network). A provider's own Retry-After wins when it asks for longer than the backoff; maxMs bounds any single wait so a bad hint cannot park a run.",

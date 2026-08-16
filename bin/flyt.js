@@ -41,7 +41,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task ready                     what the picker would take, and what is stuck
   flyt task escalate <id>             one effort level up, back to the queue
   flyt task take                      claim the top-scoring ready task
-  flyt loop start [--parallel N]      work the backlog until empty, capped or stopped
+  flyt loop start [--parallel N] [--model <id>] [--reviewer <id>]  work the backlog
   flyt loop stop|status               stop it, or see what it is doing
   flyt report                         what landed, what needs you, what it cost
   flyt spend [--since 24h]            the ledger
@@ -149,6 +149,13 @@ function openProject(api, engine) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// A model id typed on the command line, as a worker. 'auto' resolves through
+// the provider priority walk the way every picker in the app does; a `mock-`
+// id is the dry-run provider and nothing else can serve it.
+const namedWorker = id => (id
+  ? { provider: String(id).startsWith('mock-') ? 'mock' : 'auto', model: String(id) }
+  : null);
 
 // Poll a run to a terminal stage. Files are the source of truth (principle #1),
 // so polling them is not a workaround — it is reading the same state the canvas
@@ -289,13 +296,24 @@ async function main() {
       const sub = positional[1] ?? 'status';
       const projectId = openProject(api, engine);
       if (sub === 'start') {
-        await api.invoke('loop:start', {
+        // `--model` names the model every task runs on for this session,
+        // instead of asking for an effort band; `--reviewer` names who reads
+        // the diff. Both go in as provider 'auto' — the id is the decision, and
+        // who serves it is the priority walk's business.
+        const ack = await api.invoke('loop:start', {
           projectId,
           parallelism: Number(flags.parallel ?? 1),
           maxTasks: flags.tasks ? Number(flags.tasks) : null,
-          dryRun: Boolean(flags['dry-run'])
+          dryRun: Boolean(flags['dry-run']),
+          worker: namedWorker(flags.model),
+          // Who reads the diff before anything merges (§7.2). Nameable here
+          // because the machine driving a loop is often not the machine whose
+          // settings.json holds the answer.
+          reviewer: namedWorker(flags.reviewer)
         });
-        say('loop started — ctrl-c to detach, `flyt loop stop` to stop it');
+        say(`loop started on ${ack.model ?? 'effort bands'}`
+          + `, reviewed by ${ack.reviewer ?? 'nobody (nothing will land)'}`
+          + ' — ctrl-c to detach, `flyt loop stop` to stop it');
         // Held open on purpose: the loop lives in this process. Detaching it
         // into a daemon is the next thing, and until then closing the terminal
         // is what stops it.
