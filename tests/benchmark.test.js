@@ -28,8 +28,17 @@ import {
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-bench-'));
 // Unquoted on purpose: a `probe:` value is a plain YAML scalar, exactly as a
-// real case file writes it. Quoting it would test a shape nobody uses.
-const NODE = process.execPath;
+// real case file writes it — and quoting it would not survive the parse anyway,
+// since a scalar opening with `"` ends at the next one.
+//
+// So it has to be a command with no spaces in it, which is why this is the bare
+// `node` every shipped case uses (`benchmark/*.bench.md`) rather than
+// `process.execPath`. That expands to `C:\Program Files\nodejs\node.exe` on a
+// default Windows install, and an unquoted path with a space is not a command:
+// the shell reports `'C:\Program' is not recognized` and the case scores as a
+// failed setup. The test was asserting a shape no case file has ever used, and
+// failing on the machine this project is developed on.
+const NODE = 'node';
 
 const CASE = ({ id = 'demo', probe = `${NODE} -e "process.exit(0)"`, setup = null, extra = '' } = {}) => [
   '---',

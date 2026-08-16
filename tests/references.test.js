@@ -49,8 +49,14 @@ test('the shipped library is the one the plan actually learned from', () => {
   // Each says what it is good FOR: a name and a URL is a bibliography, and the
   // whole point of this is not being one.
   for (const r of DEFAULT_REFERENCES) assert.ok(r.about?.length > 40, `${r.name} needs a reason to be here`);
-  // Outside every project, on every platform.
-  assert.ok(defaultReferenceRoot({ home: '/home/x' }).startsWith('/home/x'));
+  // Outside every project, on every platform — asserted in a way that is true
+  // on every platform. `path.join` returns separators native to the host, so a
+  // hard-coded '/home/x' prefix only ever matched on POSIX and failed on the
+  // machine this is developed on, where the answer is `\home\x\.flyt\references`.
+  const home = path.join(path.sep, 'home', 'x');
+  const root = defaultReferenceRoot({ home });
+  assert.ok(root.startsWith(home));
+  assert.match(root, /[\\/]\.flyt[\\/]references$/);
 });
 
 test('a crafted path cannot leave the library', () => {
