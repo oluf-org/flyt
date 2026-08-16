@@ -90,6 +90,28 @@ export async function landTask({
 
   // 2. Mechanical checks — free, and not a model's judgment call.
   const changedFiles = await pool.changedFiles(taskId, { base });
+
+  // Nothing changed. That is not a diff to review, it is the absence of one,
+  // and asking a model to review it buys a paragraph explaining that the diff
+  // is empty — which we already know for free, and which every failed attempt
+  // pays for again. Seen live: a task whose target file does not exist in this
+  // repository produced no change three times, and three reviewers were paid to
+  // say so.
+  //
+  // It is a failure, not a pass: a task that changed nothing has not done the
+  // work whatever its run produced, and "landing" an empty merge would put a
+  // commit on the base branch attesting to work that did not happen. The
+  // guidance separates the two ways to get here, because they need different
+  // answers from the next attempt.
+  if (!changedFiles.length) {
+    return {
+      landed: false, stage: 'no-changes', steps,
+      guidance: 'The task produced no change to the repository at all. If its deliverable is a '
+        + 'file, write it into the workspace — an answer that exists only in the run\'s own output '
+        + 'cannot land. If the task is investigative and was never going to change code, it cannot '
+        + 'land by this route and needs a person to close it.'
+    };
+  }
   const mech = record('checks', mechanicalChecks({
     changedFiles, task,
     baselineOutput,

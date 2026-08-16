@@ -230,6 +230,39 @@ const approving = () => setScript(({ system }) => {
   return 'ok';
 });
 
+test('a task that changed nothing is a failure, and does not cost a review to notice', async () => {
+  // An empty diff is not a diff to review, it is the absence of one. Asking a
+  // model buys a paragraph explaining that the diff is empty — which is free to
+  // know, and which every failed attempt would pay for again. Seen live: a task
+  // whose target file does not exist in this repository produced no change on
+  // three consecutive attempts.
+  const root = await makeRepo();
+  const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
+  await pool.create('t-0001', 'Change nothing');
+  let reviewed = false;
+  setScript(({ system }) => {
+    if (/ROLE: diff-review/.test(system)) reviewed = true;
+    return '```json\n{"verdict":"approve","reason":"fine"}\n```';
+  });
+
+  const result = await landTask({
+    pool, repoRoot: root, taskId: 't-0001', base: 'main',
+    task: { title: 'Change nothing' },
+    config: { workers: { reviewer: { provider: 'script', model: 'm' } }, retry: { attempts: 1, baseMs: 1 } },
+    verify: async () => runGates([SUITE], { cwd: root })
+  });
+
+  assert.equal(result.landed, false);
+  assert.equal(result.stage, 'no-changes');
+  assert.equal(reviewed, false, 'no reviewer was asked about an empty diff');
+  // The two ways to get here need different answers from the next attempt.
+  assert.match(result.guidance, /write it into the workspace/);
+  assert.match(result.guidance, /needs a person to close it/);
+  // And nothing was merged: an empty merge commit would attest on the base
+  // branch to work that did not happen.
+  assert.equal((await git(['rev-list', '--count', 'main'], { cwd: root })).trim(), '1');
+});
+
 test('a task lands on main by itself when the gates and the reviewer agree', async () => {
   const root = await makeRepo();
   const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));

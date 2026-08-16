@@ -716,10 +716,83 @@ previews outside Electron), `src/styles.css`.
 **Status.** Decided and **implemented**; verified by driving a real loop end to end on
 `deepseek/deepseek-v4-pro` with `anthropic/claude-sonnet-5` reviewing. Open: the three dollar
 caps (§9) are still reachable only from `config.json`, so the panel that shows a burn-down
-cannot set the ceiling it draws; and this repo's own `npm test` gate is red on the development
-machine (three environment-specific failures), which means **no task can land here at all** —
-the loop escalates every task on gate failure and would park the whole backlog for a reason that
-has nothing to do with the work.
+cannot set the ceiling it draws. (The red-gate blocker recorded here is closed by D42.)
+
+---
+
+### D42 — What stood between the loop and a backlog it could actually work
+
+**The occasion.** D41 made the loop's models choosable and fixed eight defects in how it runs a
+task. It still could not work a queue: pointed at this project's thirteen tasks it would have
+failed every one of them, for three reasons that had nothing to do with the models or the work.
+
+**1. The gate was red, so nothing could ever land.** `npm test` is the default gate, and three
+of this repo's own tests failed on the machine it is developed on — both of them the *tests*
+being wrong about Windows, not the code. `benchmark.test.js` built its probe commands from
+`process.execPath` (`C:\Program Files\nodejs\node.exe`); a `probe:` is a plain YAML scalar so it
+cannot be quoted, and unquoted a path with a space is not a command. Every shipped case in
+`benchmark/` writes the bare `node`, so the test was asserting a shape no case file has ever
+used. `references.test.js` asserted a `path.join` result starts with `/home/x`, which only holds
+where the separator is a slash. Neither is exotic; both had simply never been read on the
+platform they fail on. With the gate red the loop escalates every task to `max` and parks the
+entire backlog for reasons unrelated to the work — which is what a night of it would have
+produced.
+
+**2. Nine tasks demanded a gate this repository cannot run.** The backlog was written by a
+fan-out reading *other* repositories, and it brought their idioms: `pytest` in a project with no
+Python, and three tasks declaring the literal command `none`. A task may add gates and may never
+remove them (§7.3) — the right rule, with a sharp edge: a task naming a gate the project cannot
+run is unlandable however good the work is, and nothing said so until the work was finished and
+paid for. The supervisor now checks the interpreter before it starts, parks with the reason, and
+costs nothing. Only the first word, only for existence: whether the suite passes is the gate's
+own business, and running it to find out is what the gate is for. The twelve tasks were then
+corrected in place — which needed `flyt call --arg-json`, documented in the usage text since that
+command was written and never implemented, so every command taking an array was reachable from
+the app and the HTTP API but not from the CLI.
+
+**3. Money, not capability, is what bounds a backlog.** The Auto Router's bands answer "who
+should do this" without letting you say who, so the only way to name a model was to name one for
+*everything* — and one strong model on thirteen tasks is the bill nobody wanted. The bands take
+model ids now: `low: deepseek-v4-pro, high: kimi-k3` means the cheap model does the ordinary work
+and the dear one is reached by ESCALATION, which is what the ladder already meant. Sparse and
+filling downward, so naming two bands answers all five; every model in the map is checked for a
+connected provider at `loop:start`, not hours later on the task that most needed to work. Three
+front doors, one implementation: a picker per band on the Loop view (an unset band shows what it
+inherits), `flyt loop start --models low=a,high=b`, and `loop.models` in `config.json`.
+
+**The loop was also invisible from everywhere except the terminal that started it.** The
+supervisor outlives the window that started it (§4.1) and kept its status in that process's
+memory alone, so `flyt loop status` from a second terminal, `flyt report`, and the desktop Loop
+view all answered "no loop running" while one was working — a morning report saying "stopped,
+0/0 landed" about a night's work. §11.1 already said the heartbeat record is owned by the
+supervisor and kept outside the worktree; it is now kept outside the *process* too, one
+`.flyt/loop-status.json` per project, written on every transition and poll, write-then-rename so
+a three-second poll never catches half a file.
+
+Reading it is the half that matters. A status file outlives its writer, and one still claiming
+work is in flight is worse than no file: the panel built to answer "is it stuck" would answer
+"it is fine" about a process that no longer exists. So the record carries its pid, the reader
+asks the OS whether that process lives (`kill(pid, 0)`), and a dead writer's file is reported as
+stopped with the reason. Every reader now answers three ways — my own supervisor, one I can only
+observe, or none — and `observed: true` marks the middle, because "what I am doing" and "what I
+can see someone else doing" are different claims.
+
+That visibility creates the hazard it also closes: an app that can SEE a loop started from a
+terminal will be asked to Start one. `already_running` therefore consults the published status as
+well as this process's, since two supervisors over one backlog is two pickers racing for the same
+tasks. The Loop view stops offering the button and says "running in another process" — a loop
+this window did not start cannot be stopped from it either.
+
+**Surface.** `tests/benchmark.test.js`, `tests/references.test.js` (the gate), `core/gates.js`
+(`gateProblem`, `unrunnableGates`), `core/levels.js` (`workerForLevelMap`), `core/supervisor.js`
+(band→model per attempt, gate preflight, `#publish`), `core/api.js` (`loop:start` models,
+`writeLoopStatus`/`readLoopStatus`, cross-process `already_running`), `core/engine.js`,
+`core/modelSource.js` (`normalizeLoopModels`), `electron/main.js`, `bin/flyt.js`
+(`--models`, `--arg-json`), `src/LoopPage.jsx`, `src/devMock.js`, `src/styles.css`.
+
+**Status.** Decided and **implemented**. 927/927 green, and the loop is working this project's
+own thirteen tasks with `low=deepseek/deepseek-v4-pro high=moonshotai/kimi-k3` and
+`anthropic/claude-sonnet-5` reviewing.
 
 ---
 
