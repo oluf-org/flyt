@@ -391,6 +391,29 @@ test('a task is stopped at its own cap, and what it spent is recorded either way
   assert.ok(ledger.totals({ taskId: 't-0001' }).usd >= 5);
 });
 
+test('the brief says how the work will be judged, because the task file cannot know', async () => {
+  // Landing means merging a diff. An answer written as prose leaves the
+  // repository unchanged, which is an empty diff, which cannot land however
+  // good the answer is. The agent cannot know that from the task text: it reads
+  // "produce a cited report" and produces one, as its answer, exactly as asked.
+  // Observed across five attempts on two models and three tasks — every one
+  // read the right files, reasoned well, wrote nothing, and was rejected for
+  // having no diff.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'Write a report', goal: 'Analyse the store and report on it' });
+  const engine = fakeEngine({ backlog });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+
+  await sup.run({ maxTasks: 1 });
+  const brief = engine.calls.find(c => c.name === 'flow:run').args.userInput;
+  assert.match(brief, /Write a report/, 'the task itself still leads');
+  assert.match(brief, /CHANGE IN THE FILES/);
+  assert.match(brief, /create_file or write_file/);
+  // And the honest exit, so a task that cannot be done here does not get
+  // invented work to look busy.
+  assert.match(brief, /do not invent work/);
+});
+
 test('the loop publishes its status where another process can read it', async () => {
   // The supervisor outlives the window that started it, so a status kept only
   // in its own memory is a status nobody else can see: `flyt loop status` in a

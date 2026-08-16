@@ -379,6 +379,24 @@ under every task, so a repo can refuse the cheapest band without editing anythin
 still need real numbers before an overnight run can promise a ceiling. A band is a policy, not a
 budget — and the ledger, the price table and the three ceilings remain unbuilt.
 
+### 8.3 A band may also name its model — [BUILT, D42]
+
+The Auto Router answers *who should do this* by price band, which is the right default and the
+wrong shape as soon as money is the binding constraint: it will not let you say who. The only
+way to name a model was to name one for *everything*, and one strong model across a whole
+backlog is the bill nobody wanted.
+
+So the bands take model ids — `low: deepseek-v4-pro, high: kimi-k3` — and the cheap model does
+the ordinary work while the dear one is reached by **escalation**, which is what the ladder
+already meant. The map is sparse and fills downward, so naming two bands answers all five, and
+every model in it is checked for a connected provider at `loop:start` rather than hours later on
+the task that most needed to work. Three front doors, one implementation: a picker per band on
+the Loop view, `flyt loop start --models low=a,high=b`, and `loop.models` in `config.json`.
+
+`workers.loop` (one model for every task) still exists and sits below this, since a map is
+strictly more specific. A pin of either kind replaces the *band*, never the ladder: the rungs are
+also the attempt counter and the thing that ends in parking.
+
 ### 8.2 Escalation — [BUILT]
 
 Because the ladder has real rungs, escalation is one function (`core/levels.js`), and the two
@@ -458,6 +476,17 @@ Fed by what the app already emits — `log.jsonl` events, snapshot diffs (`core/
 `node_start`/`tool_call`/`model_retry` — so this is aggregation, not new instrumentation. It is
 also exactly the payload the CLI's `flyt loop status` and the Electron Loop view render, so one
 record serves the machine and the human.
+
+**Kept outside the process, not just outside the worktree — [BUILT, D42].** The record lived in
+the supervisor's memory, so `flyt loop status` from a second terminal, `flyt report` and the
+Loop view all answered "no loop running" while one was working. It is published to
+`.flyt/loop-status.json` on every transition and every poll (write-then-rename, so a poll never
+catches half a file). The reader's hard question is not what the file says but whether its writer
+is still alive: the record carries its pid, the reader asks the OS, and a dead writer's file is
+reported as stopped with the reason rather than believed. `already_running` consults it too —
+now that the app can *see* a loop started from a terminal, the next thing a person does is press
+Start, and two supervisors over one backlog is two pickers racing for the same tasks.
+`scripts/loop-watch.mjs` is the same record as one line per change.
 
 ### 11.2 What counts as headway
 

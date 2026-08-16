@@ -26,6 +26,40 @@ import { unrunnableGates } from './gates.js';
 
 const POLL_MS = 5000;
 
+/**
+ * The one thing a task file cannot tell the agent: how this will be judged.
+ *
+ * Landing means merging a DIFF (§6.2). An answer written as prose — however
+ * good, however well cited — leaves the repository unchanged, and an unchanged
+ * repository is an empty diff, which cannot land whatever the work was worth.
+ *
+ * The agent cannot know this from the task text. It reads "produce a cited
+ * report" and produces one, as its answer, which is exactly what it was asked
+ * for. Observed across five attempts on two models and three tasks: every one
+ * read the right files, reasoned well, answered in prose, and changed nothing —
+ * so every one was rejected by a reviewer for having no diff, and climbed a
+ * band to do the same thing again with a more expensive model.
+ *
+ * So the supervisor says it, because the supervisor is the part that knows.
+ */
+const HOW_IT_LANDS = [
+  'HOW THIS WILL BE JUDGED (added by the supervisor, not by whoever wrote the task):',
+  '',
+  'Your work is accepted only if it leaves a CHANGE IN THE FILES of this workspace.',
+  'The harness runs the project\'s gates, a reviewer reads your diff, and the result is',
+  'merged. A run that changes no file produces an empty diff and cannot be accepted, no',
+  'matter how good its answer is — prose in your final message is not a deliverable.',
+  '',
+  'So: if the task asks for a report, an analysis or an answer, WRITE IT INTO A FILE with',
+  'create_file or write_file (`docs/<something>.md` is a reasonable home when the task does',
+  'not say). If it asks for code, change the code. Read whatever you need first, but end by',
+  'writing.',
+  '',
+  'If the task cannot be done here at all — it names files this repository does not have, or',
+  'asks for something already true — do not invent work to look busy. Say so plainly in your',
+  'final answer, change nothing, and it will be parked for a person to decide.'
+].join('\n');
+
 export class Supervisor {
   /**
    * @param {object} deps
@@ -232,6 +266,9 @@ export class Supervisor {
       });
       this.inFlight.set(task.id, new Heartbeat({ taskId: task.id, runId, level, now: this.now(), model: worker?.model ?? null }));
       this.backlog.update(task.id, { runIds: [...(task.runIds ?? []), runId] });
+      // Say so at once rather than at the next tick: a task appearing in flight
+      // is the most interesting single event a watcher sees.
+      this.#publish();
     } catch (err) {
       // A task that cannot even be started is not a task that should be retried
       // at a bigger model: the failure is in the harness, not the capability.
@@ -241,11 +278,14 @@ export class Supervisor {
   }
 
   // What the run is told. The task file is already written for a reader who has
-  // not seen this run (§5.1), so the brief is the task, not a summary of it.
+  // not seen this run (§5.1), so the brief is the task, not a summary of it —
+  // plus the one thing the task file cannot know, which is how it will be
+  // judged.
   #briefFor(task) {
     return [
       task.title,
       task.body,
+      HOW_IT_LANDS,
       task.blockedReason ? `\nA PREVIOUS ATTEMPT FAILED:\n${task.blockedReason}` : ''
     ].filter(Boolean).join('\n\n');
   }
@@ -434,6 +474,12 @@ export class Supervisor {
   async #complete(taskId, hb, stage) {
     this.inFlight.delete(taskId);
     this.#recordSpend(taskId, hb, `run ${stage}`);
+    // Landing takes minutes — gates, a reviewer, a merge, a canary — and it all
+    // happens inside one tick, so without this the published status keeps
+    // saying whatever it said before the run finished. A watcher then shows a
+    // task "executing" for the two minutes it is actually being landed, which
+    // is the one stretch where somebody watching most wants to know.
+    this.#publish();
 
     if (stage === 'failed') {
       await this.#discard(taskId);
@@ -499,6 +545,7 @@ export class Supervisor {
     this.parked.push({ taskId, reason });
     this.history.push({ taskId, landed: false, stage: 'parked' });
     this.log(`⏸ ${taskId} parked: ${reason}`);
+    this.#publish();
   }
 }
 
