@@ -73,6 +73,12 @@ error.
 - **Restart** rewinds a node *and its downstream* (forward edges only — feedback
   channels don't get rewound) and lets you attach one line of guidance that lands in
   the node's prompt. "Do this part again, but differently."
+- **…and a different model.** The retry carries a model picker (`src/RetryBox.jsx`),
+  because the commonest reason a step fails is the model it was pointed at — a
+  missing key, a broken vendor CLI, an id no connected provider can serve — and
+  against that, "run it again" can only fail again. The pin is written into the
+  **run's** `flow.json`, never the authored workflow: this attempt changes, the
+  saved flow does not (D39).
 - **Branch** forks the whole run directory at a node: upstream stays done, downstream
   re-runs, the original is untouched. Branches carry a `⑂ branch` chip in the run bar
   so provenance is always visible. This is how you explore "what if the analysis had
@@ -199,6 +205,19 @@ viewport-clamped positioning.
 
 ## Failure honesty
 
+- A failed step **says why, verbatim** — the provider's own sentence, on the card and
+  in Node Focus's "Why it failed", copyable. It used to read "1 problem noted" with
+  the reason in a `title` tooltip, which is the app knowing the cause of death and
+  declining to say it. Problems on a step that did *not* fail are still counted:
+  those are notes, not a cause of death (D39).
+- A failed run ends in a **failure panel** (`src/RunFailure.jsx`) at the tail of the
+  feed, where stick-to-bottom already put the eye: the error, the model it was on,
+  and the retry. The run's own wording ("Node a (orient) failed: …") only appears
+  when it carries something the step's error doesn't.
+- Pause/Stop live in the **pinned chat topbar**, not only on the RunBar the feed
+  scrolls past — and classic (flow-less) runs have no RunBar at all, so that was the
+  only stop button and it wasn't there. A control you cannot reach is a control you
+  do not have (D39).
 - IPC rejections surface as a 4-second `.run-toast` (e.g. "run is live — stop or
   pause it first") — no `window.alert`, no silent swallows.
 - Stop during an approval gate cannot hang the walk (gates settle on stop; a

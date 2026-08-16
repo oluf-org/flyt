@@ -235,6 +235,13 @@ body {
   font-size: 10.5px; padding: 3px 8px; border-radius: 6px;
   color: var(--accent); background: var(--accent-soft);
 }
+/* A failed run's chip is the one status the accent must not absorb: the topbar
+   is the only part of the surface that never scrolls away, so it is where a
+   run's death is read from (D39). */
+.stage-chip.stage-failed {
+  color: var(--err);
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
 /* The mode a run was launched with (MODES-COMPARE T4), beside its name. Reads
    as an identity tag, not a status, so it borrows the accent outline rather
    than the filled stage-chip. */
@@ -3462,6 +3469,18 @@ button.link:hover { color: var(--accent); }
 .focus-summary { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--tx); }
 .focus-summary-note { color: var(--warn); font-size: 12px; }
 .focus-actions-inline { margin-top: 6px; display: flex; gap: 8px; }
+/* "Why it failed" (D39): the thrown error verbatim, above the raw output. */
+.focus-error {
+  margin: 0; padding: 9px 11px;
+  max-height: 16em; overflow: auto;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11.5px; line-height: 1.6; color: var(--err);
+  white-space: pre-wrap; word-break: break-word;
+  user-select: text;
+  background: color-mix(in srgb, var(--err) 7%, var(--canvas));
+  border: 1px solid color-mix(in srgb, var(--err) 28%, transparent);
+  border-radius: 9px;
+}
 
 /* Loading shimmer for the summary — CSS-only, stilled under reduced motion. */
 .focus-shimmer {
@@ -3715,6 +3734,88 @@ button.link:hover { color: var(--accent); }
 .feed-retro-problems { color: var(--warn); }
 .feed-retro-note { flex-basis: 100%; color: var(--dim); }
 .feed-waiting { margin-top: 8px; font-size: 12px; color: var(--warn); }
+
+/* The thrown error, verbatim (D39). Mono because it is machine output and the
+   user will be pasting it somewhere; selectable, and tall enough to read a
+   stack-ish message without the card swallowing the feed. */
+.feed-error {
+  margin: 0; padding: 8px 10px;
+  max-height: 12em; overflow: auto;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11.5px; line-height: 1.55; color: var(--err);
+  white-space: pre-wrap; word-break: break-word;
+  user-select: text; cursor: text;
+  background: color-mix(in srgb, var(--err) 8%, var(--canvas));
+  border: 1px solid color-mix(in srgb, var(--err) 30%, transparent);
+  border-radius: 8px;
+}
+
+/* --- the failure panel (D39) --- */
+/* A stopped run's last word, at the tail of the flow where the feed's
+   stick-to-bottom already puts the eye: what broke, verbatim, and the two
+   controls that change the outcome. Tinted with color-mix, not --err-soft —
+   see the token note at the top of this section. */
+.run-failure {
+  display: flex; flex-direction: column; gap: 10px;
+  align-self: center;
+  width: min(780px, 100%);
+  margin-top: 4px;
+  padding: 13px 15px 15px;
+  background: color-mix(in srgb, var(--err) 6%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--err) 34%, transparent);
+  border-radius: 13px;
+  animation: slide-up .18s ease both;
+}
+.run-failure-head { display: flex; align-items: flex-start; gap: 10px; }
+.run-failure-glyph {
+  flex: none; width: 22px; height: 22px; margin-top: 1px;
+  display: grid; place-items: center;
+  font-size: 11px; color: var(--err);
+  background: color-mix(in srgb, var(--err) 14%, transparent);
+  border-radius: 50%;
+}
+.run-failure-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.run-failure-title strong { font-size: 13.5px; color: var(--tx); font-weight: 600; }
+.run-failure-sub { font-size: 11.5px; line-height: 1.5; color: var(--dim); }
+.run-failure-error {
+  margin: 0; padding: 9px 11px;
+  max-height: 14em; overflow: auto;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11.5px; line-height: 1.6; color: var(--err);
+  white-space: pre-wrap; word-break: break-word;
+  user-select: text;
+  background: var(--canvas);
+  border: 1px solid color-mix(in srgb, var(--err) 26%, transparent);
+  border-radius: 9px;
+}
+.run-failure-error.secondary { color: var(--dim); }
+.run-failure-note { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--dim); }
+
+/* --- the retry box (D39) --- */
+/* Shared by the failure panel and Node Focus: the model this attempt runs on,
+   optional guidance, one button. */
+.retry-box {
+  display: flex; flex-direction: column; gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--divider);
+}
+.retry-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.retry-label { font-size: 11.5px; color: var(--dim); }
+.retry-model { flex: 0 1 auto; min-width: 0; }
+.retry-go { flex: none; padding: 7px 14px; font-size: 12.5px; }
+.retry-guidance {
+  width: 100%; resize: vertical;
+  padding: 8px 10px;
+  font: inherit; font-size: 12.5px; line-height: 1.5; color: var(--tx);
+  background: var(--canvas); border: 1px solid var(--border); border-radius: 9px;
+}
+.retry-guidance:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.retry-guidance::placeholder { color: var(--faint); }
+.retry-note { font-size: 11px; line-height: 1.5; color: var(--faint); }
+
+/* The topbar's copy of the run controls sits beside the stage chip; the bar's
+   own copy keeps its left margin. */
+.run-controls.chat-topbar-controls { margin-left: 4px; }
 
 /* The jump chip: floats above the composer when fresh work lands while the
    user is scrolled up reading — the chat-client "new messages" pill. */

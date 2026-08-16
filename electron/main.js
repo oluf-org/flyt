@@ -236,7 +236,8 @@ bindIpc('run:reject', (projectId, runId, reason) => ({ projectId, runId, reason 
 bindIpc('run:resume', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:stop', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:pause', (projectId, runId) => ({ projectId, runId }));
-bindIpc('run:restartNode', (projectId, runId, nodeId, guidance = '') => ({ projectId, runId, nodeId, guidance }));
+bindIpc('run:restartNode', (projectId, runId, nodeId, guidance = '', worker = null) =>
+  ({ projectId, runId, nodeId, guidance, worker }));
 bindIpc('run:followUp', (projectId, runId, text) => ({ projectId, runId, text }));
 bindIpc('run:answerInput', (projectId, runId, text) => ({ projectId, runId, text }));
 // The loop (LOOP-PLAN §14): the same commands the CLI and the HTTP server bind,

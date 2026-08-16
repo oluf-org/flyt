@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { runProgress, formatElapsed, isTerminal } from './runProgress.js';
 import { sigil } from './sigil.js';
+import RunControls from './RunControls.jsx';
 import Tip from './Tip.jsx';
 
 // The run view's header (V1 task 9). D4 makes the canvas the live transparency
@@ -16,22 +17,6 @@ export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace, docVie
   const live = Boolean(p?.live);
   const paused = Boolean(snapshot.meta?.paused);
   const branchedFrom = snapshot.meta?.branchedFrom ?? null;
-
-  // Stop is the one destructive action: the first click re-arms the button
-  // for three seconds instead of opening a dialog (same rule as the menu).
-  const [confirmStop, setConfirmStop] = useState(false);
-  const confirmTimer = useRef(null);
-  useEffect(() => () => clearTimeout(confirmTimer.current), []);
-  const clickStop = () => {
-    if (confirmStop) {
-      clearTimeout(confirmTimer.current);
-      setConfirmStop(false);
-      onStop?.();
-      return;
-    }
-    setConfirmStop(true);
-    confirmTimer.current = setTimeout(() => setConfirmStop(false), 3000);
-  };
 
   // Tick only while the run is live. A finished run's clock is frozen at its
   // last write, so re-rendering it every second would be pure waste.
@@ -99,20 +84,7 @@ export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace, docVie
       <div className="toolbar-spacer" />
 
       {live && onStop && (
-        <div className="run-controls">
-          {paused ? (
-            <Tip as="button" type="button" className="run-ctl" text="Resume the run" onClick={onResume}>▶</Tip>
-          ) : (
-            <Tip as="button" type="button" className="run-ctl" text="Pause after the current step" onClick={onPause}>❚❚</Tip>
-          )}
-          <Tip
-            as="button"
-            type="button"
-            className={'run-ctl danger' + (confirmStop ? ' confirm' : '')}
-            text={confirmStop ? 'Click again to confirm stop' : 'Stop the run — finished work is kept'}
-            onClick={clickStop}
-          >■</Tip>
-        </div>
+        <RunControls paused={paused} onPause={onPause} onResume={onResume} onStop={onStop} />
       )}
 
       {onDocView && (

@@ -164,6 +164,47 @@ const snapshots = {
     nodeOutputs: {
       plan: 'Plan: wipe node_modules, reinstall from the lockfile, rerun the export test suite.'
     }
+  },
+  // Died on the model it was pointed at — previews the failure panel, the
+  // verbatim error on the card, and the retry-with-another-model box (D39).
+  'run-20260815-140900': {
+    meta: {
+      runId: 'run-20260815-140900', stage: 'failed',
+      flowId: 'learn-from-repo', flowName: 'Learn from a repo',
+      name: 'Learn from a repo',
+      createdAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 60 * 1000).toISOString(),
+      nodeStatus: { in: 'done', inputs: 'done', orient: 'failed', read: 'pending', out: 'pending' },
+      error: 'Node orient (orient) failed: Codex CLI failed: Error loading config.toml: unknown variant `priority`, expected `fast` or `flex` in `service_tier`'
+    },
+    prompt: 'We are in an agent orchestration app, and want to learn how this other repo is handling agents working on long tasks.',
+    flow: {
+      id: 'learn-from-repo', name: 'Learn from a repo',
+      nodes: [
+        { id: 'in', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
+        { id: 'inputs', type: 'inputs', kind: 'user', position: { x: 0, y: 110 }, data: {} },
+        { id: 'orient', type: 'aiStep', kind: 'ai', position: { x: 0, y: 220 },
+          data: { title: 'Where are we standing?', role: 'orient' } },
+        { id: 'read', type: 'aiStep', kind: 'ai', position: { x: 0, y: 330 },
+          data: { title: 'Read it, however many ways it takes', role: 'execute' } },
+        { id: 'out', type: 'output', kind: 'user', position: { x: 0, y: 440 }, data: {} }
+      ],
+      edges: [
+        { id: 'e-in-inputs', source: 'in', target: 'inputs' },
+        { id: 'e-inputs-orient', source: 'inputs', target: 'orient' },
+        { id: 'e-orient-read', source: 'orient', target: 'read' },
+        { id: 'e-read-out', source: 'read', target: 'out' }
+      ]
+    },
+    retrospectives: {
+      orient: {
+        status: 'failed', confidence: 0,
+        problems: ['Codex CLI failed: Error loading config.toml: unknown variant `priority`, expected `fast` or `flex` in `service_tier`'],
+        recommendation: 'AI step "Where are we standing?" failed calling codex/gpt-5.2 — check provider key/config, then retry the run.',
+        model: { provider: 'codex', model: 'gpt-5.2' }
+      }
+    },
+    nodeOutputs: {}
   }
 };
 
@@ -322,7 +363,7 @@ const mockFlows = {
 // not just an id. The fixtures are dated relative to now so the date sections
 // are actually exercised when previewing the list in a browser.
 const runNameOverrides = {};
-const mockRunAge = { 'run-20260720-091500': 0, 'run-20260716-142200': 0, 'run-20260714-091500': 0, 'run-20260712-101512': 3 }; // days ago
+const mockRunAge = { 'run-20260815-140900': 0, 'run-20260720-091500': 0, 'run-20260716-142200': 0, 'run-20260714-091500': 0, 'run-20260712-101512': 3 }; // days ago
 const derivedName = id => (snapshots[id]?.prompt ?? '').split('\n')[0].trim() || 'Untitled run';
 const daysAgo = n => {
   const d = new Date();
@@ -342,6 +383,17 @@ const mockProjects = {
   active: 'appdata:fix-auth-flow',
   storage: 'workspace'
 };
+// The mock's snapshot push channel (see onRunUpdate). Bumping the rev keeps the
+// renderer's stale-push guards happy without a diff engine behind them.
+const pushListeners = new Set();
+let mockRev = 0;
+const pushRun = runId => {
+  const full = snapshots[runId];
+  if (!full) return;
+  mockRev += 1;
+  for (const fn of pushListeners) fn({ runId, full: { ...full }, rev: mockRev });
+};
+
 let mockRunCursor = 0; // rotates runFlow over the fixtures (compare preview)
 const mockComparisons = []; // in-memory comparison records (P2 preview)
 const mockAppdataSlugs = () => new Set(
@@ -371,7 +423,11 @@ export function installDevMock() {
       return clean || derivedName(id);
     },
     deleteRun: async (_pid, id) => { delete snapshots[id]; return true; },
-    getSnapshot: async (_pid, id) => snapshots[id] ?? null,
+    // A copy, not the fixture itself: real IPC structured-clones every
+    // snapshot, so the renderer always gets a fresh object and its useMemos
+    // recompute. Handing back the same reference made mutations (restartNode)
+    // land in the data but never on screen — a preview-only ghost bug.
+    getSnapshot: async (_pid, id) => (snapshots[id] ? { ...snapshots[id] } : null),
     // Synthesize a plausible in-order log from a finished mock run's flow, so the
     // replay scrubber can be previewed in the browser dev shell.
     readRunLog: async (_pid, id) => {
@@ -401,7 +457,21 @@ export function installDevMock() {
     // so these resolve with inert ok payloads — just enough to not crash.
     stopRun: async () => ({ ok: true }),
     pauseRun: async () => ({ ok: true }),
-    restartNode: async () => ({ ok: true }),
+    // Restart is the one stub that must not be inert: it carries the worker
+    // re-pin (D39), and a mock that swallowed it would look exactly like the
+    // stale-bridge case the renderer now warns about. So it applies the pin to
+    // the fixture, rewinds the node, and echoes the pin back like the engine.
+    restartNode: async (_pid, runId, nodeId, _guidance, worker = null) => {
+      const snap = snapshots[runId];
+      if (!snap?.flow) return { ok: true };
+      const node = snap.flow.nodes.find(n => n.id === nodeId);
+      if (worker?.provider && worker.model && node) node.data = { ...node.data, worker };
+      snap.meta = { ...snap.meta, stage: 'execution', error: null };
+      snap.meta.nodeStatus = { ...snap.meta.nodeStatus, [nodeId]: 'active' };
+      delete snap.retrospectives?.[nodeId];
+      pushRun(runId);
+      return worker?.model ? { ok: true, worker } : { ok: true };
+    },
     branchRun: async (_pid, runId) => ({ ok: true, runId }),
     investigateNode: async () => ({
       ok: true, status: 'done', output: '', retro: null, logTail: [],
@@ -417,7 +487,11 @@ export function installDevMock() {
     openRunFolder: async () => {},
     pickWorkspace: async () => null, // no native folder picker in the browser dev shell
     openWorkspace: async () => {},
-    onRunUpdate: () => () => {},
+    // A real (if tiny) push channel. It used to be a no-op, which meant any
+    // mock action that changed a run — restartNode above — landed in the data
+    // and never on screen. Full pushes only: the mock has no diff engine, and
+    // the renderer accepts `full` from any rev.
+    onRunUpdate: fn => { pushListeners.add(fn); return () => pushListeners.delete(fn); },
 
     // --- Project tabs (D22) ---
     listProjects: async () => structuredClone(mockProjects),

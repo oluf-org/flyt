@@ -604,6 +604,10 @@ const STREAM_FLUSH_MS = 250;
 // outputs may be huge; investigate truncates its log/output the same way).
 const SUMMARY_SOURCE_BUDGET = 3000;
 
+// The node types that resolve a worker (i.e. actually call a model). Anything
+// else has no model to re-pin — see restartNode's worker override.
+export const WORKER_NODE_TYPES = new Set(['aiStep', 'agentTask', 'orchestrator', 'fanout']);
+
 // Unified worker resolution for aiStep AND agentTask nodes:
 //   1. an explicit worker set on the node wins,
 //   2. otherwise the node's category picks from config.categoryWorkers
@@ -1167,7 +1171,14 @@ export class FlowRunner {
   // to 'pending' with its stale outputs deleted, then the run relaunches with
   // resume semantics so exactly those nodes re-run. Optional guidance lands in
   // retry-for-<nodeId>.md, which runNode already injects into the prompt.
-  restartNode(runId, nodeId, guidance = '') {
+  //
+  // `worker` re-pins the node's model for the retry (D39): the commonest reason
+  // a step fails is the model it was pointed at — a missing key, a broken CLI,
+  // a provider that can't serve the id — so "run it again" is useless unless
+  // "run it again somewhere else" comes with it. The pin is written into the
+  // RUN's flow.json, not the authored flow: this attempt changes, the workflow
+  // on disk does not. `{ provider: null }` clears the pin back to the default.
+  restartNode(runId, nodeId, guidance = '', worker = null) {
     if (this.live.has(runId) || this.stopRequests.has(runId)) {
       throw new Error('run is live — stop or pause it first');
     }
@@ -1175,7 +1186,26 @@ export class FlowRunner {
     if (!meta?.flowId) throw new Error('Only flow runs can restart a node.');
     const flow = this.store.readFlow(runId);
     if (!flow) throw new Error(`Run ${runId} has no flow.json; cannot restart a node.`);
-    if (!flow.nodes.some(n => n.id === nodeId)) throw new Error(`No node "${nodeId}" in this run's flow.`);
+    const target = flow.nodes.find(n => n.id === nodeId);
+    if (!target) throw new Error(`No node "${nodeId}" in this run's flow.`);
+
+    // Re-pin before the walk reads the flow again. Only aiStep/agentTask nodes
+    // resolve a worker at all; pinning one on an input node would be a silent
+    // no-op, so say so instead.
+    let repinned = null;
+    if (worker) {
+      if (!WORKER_NODE_TYPES.has(target.type)) {
+        throw new Error(`Node "${nodeId}" (${target.type}) does not call a model — it has no worker to change.`);
+      }
+      target.data = { ...(target.data ?? {}) };
+      if (worker.provider && worker.model) {
+        repinned = { provider: String(worker.provider), model: String(worker.model) };
+        target.data.worker = repinned;
+      } else {
+        delete target.data.worker; // back to category / priority / default resolution
+      }
+      this.store.writeFlow(runId, flow);
+    }
 
     // Forward edges only: a feedback edge points backwards by design and is no
     // reason to reset its target.
@@ -1203,10 +1233,15 @@ export class FlowRunner {
       this.store.writeNodeOutput(runId, `retry-for-${nodeId}`,
         `# Retry guidance (manual restart)\n\n${text}`);
     }
-    this.store.appendLog(runId, { event: 'node_restart', node: nodeId, reset: [...reset], guidance: Boolean(text) });
+    this.store.appendLog(runId, {
+      event: 'node_restart', node: nodeId, reset: [...reset], guidance: Boolean(text),
+      ...(worker ? { worker: repinned } : {})
+    });
     this.notify(runId);
     this.launch(runId, flow, true);
-    return { ok: true };
+    // The re-pin echoes back only when there was one — plain restarts keep the
+    // { ok: true } every existing caller matches on.
+    return repinned ? { ok: true, worker: repinned } : { ok: true };
   }
 
   // Fork a run at a node: copy the run directory wholesale, prune the copy's
@@ -1686,7 +1721,7 @@ export class FlowRunner {
         ...worker, apiKey,
         system: TRIAGE_SYSTEM, prompt: userMsg,
         onRetry: this.retryLogger(runId, label), retry: this.config.retry
-      });
+      }, label);
       outText = String(result.text ?? '').trim();
     } catch (err) {
       this.store.appendLog(runId, { event: 'followup_triage_failed', turn, error: String(err?.message ?? err) });

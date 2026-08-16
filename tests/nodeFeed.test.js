@@ -2,15 +2,15 @@
 // execution reading order — pure over a run snapshot, so it tests without a DOM.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { feedItems, finalAnswer } from '../src/nodeFeedData.js';
+import { feedItems, finalAnswer, runFailure } from '../src/nodeFeedData.js';
 
 const node = (id, type, extra = {}) => ({
   id, type, position: { x: 0, y: 0 }, data: {}, ...extra
 });
 const edge = (source, target) => ({ id: `e-${source}-${target}`, source, target });
 
-const snap = ({ nodeStatus = {}, nodes = [], edges = [], tasks = [], nodeOutputs = {}, taskOutputs = {}, retrospectives = {}, stage = 'execution' }) => ({
-  meta: { runId: 'r1', stage, nodeStatus },
+const snap = ({ nodeStatus = {}, nodes = [], edges = [], tasks = [], nodeOutputs = {}, taskOutputs = {}, retrospectives = {}, stage = 'execution', error = null }) => ({
+  meta: { runId: 'r1', stage, nodeStatus, error },
   flow: { id: 'f', name: 'F', nodes, edges },
   tasks: { tasks },
   taskOutputs,
@@ -109,6 +109,86 @@ test('classic pipeline runs (no flow) fall back to the stage feed', () => {
   assert.equal(items[4].status, 'active');
   assert.equal(items[4].depth, 1);
   assert.equal(items[0].status, 'done'); // prompt is always done
+});
+
+// D39: a failed step's problems ARE the thrown error — the card says it rather
+// than counting it, and only when the step actually failed.
+test('a failed step carries its error verbatim; a passing step keeps notes as notes', () => {
+  const items = feedItems(snap({
+    nodes: [node('in', 'input'), node('a', 'aiStep'), node('b', 'aiStep')],
+    edges: [edge('in', 'a'), edge('a', 'b')],
+    nodeStatus: { in: 'done', a: 'failed', b: 'pending' },
+    stage: 'failed',
+    retrospectives: {
+      a: { status: 'failed', problems: ['Codex CLI failed: unknown variant `priority`'], model: { provider: 'codex', model: 'gpt-5.2' } },
+      b: { status: 'partial', problems: ['thin data'] }
+    }
+  }));
+  const [, a, b] = items;
+  assert.equal(a.error, 'Codex CLI failed: unknown variant `priority`');
+  assert.deepEqual(a.worker, { provider: 'codex', model: 'gpt-5.2' });
+  assert.equal(b.error, null, 'a step that did not fail has no cause of death');
+});
+
+test('runFailure names the step, the words, and the model to retry from', () => {
+  const s = snap({
+    nodes: [node('in', 'input'), node('a', 'aiStep', { data: { title: 'Where are we standing?' } }), node('out', 'output')],
+    edges: [edge('in', 'a'), edge('a', 'out')],
+    nodeStatus: { in: 'done', a: 'failed', out: 'pending' },
+    stage: 'failed',
+    error: 'Node a (orient) failed: Codex CLI failed: unknown variant `priority`',
+    retrospectives: {
+      a: {
+        status: 'failed',
+        problems: ['Codex CLI failed: unknown variant `priority`'],
+        recommendation: 'check provider key/config, then retry the run.',
+        model: { provider: 'codex', model: 'gpt-5.2' }
+      }
+    }
+  });
+  const f = runFailure(s);
+  assert.equal(f.nodeId, 'a');
+  assert.equal(f.retryNodeId, 'a');
+  assert.equal(f.message, 'Codex CLI failed: unknown variant `priority`');
+  assert.equal(f.runError, null, 'the run’s wording only wraps the node’s — not shown twice');
+  assert.deepEqual(f.worker, { provider: 'codex', model: 'gpt-5.2' });
+  assert.equal(f.recommendation, 'check provider key/config, then retry the run.');
+
+  // A walk that died somewhere the node's own error does not explain keeps both.
+  const wrapped = runFailure({
+    ...s,
+    meta: { ...s.meta, error: 'Flow aborted after 3 consecutive step failures' }
+  });
+  assert.equal(wrapped.runError, 'Flow aborted after 3 consecutive step failures');
+});
+
+test('runFailure is null unless the run failed, and falls back to the run error', () => {
+  assert.equal(runFailure(null), null);
+  assert.equal(runFailure(snap({ nodes: [node('a', 'aiStep')], stage: 'done' })), null);
+  assert.equal(runFailure(snap({ nodes: [node('a', 'aiStep')], stage: 'cancelled' })), null,
+    'a run the user stopped is not a failure to explain');
+  const f = runFailure(snap({
+    nodes: [node('a', 'aiStep')], nodeStatus: { a: 'pending' },
+    stage: 'failed', error: 'Flow contains a cycle involving: a'
+  }));
+  assert.equal(f.nodeId, null, 'a walk that died outside a node has no step to blame');
+  assert.equal(f.retryNodeId, null);
+  assert.equal(f.message, 'Flow contains a cycle involving: a');
+  assert.equal(f.runError, null, 'the same sentence is not printed twice');
+});
+
+test('a spawned task cannot be retried from — it has no node of its own', () => {
+  const f = runFailure(snap({
+    nodes: [node('in', 'input'), node('a', 'aiStep')],
+    edges: [edge('in', 'a')],
+    nodeStatus: { in: 'done', a: 'done' },
+    stage: 'failed',
+    tasks: [{ id: 't1', status: 'failed', title: 'Sub job', worker: { provider: 'mock', model: 'm' }, createdBy: 'a' }],
+    retrospectives: { 'executor-t1': { status: 'failed', problems: ['tool exploded'] } }
+  }));
+  assert.equal(f.nodeId, 't1');
+  assert.equal(f.message, 'tool exploded');
+  assert.equal(f.retryNodeId, null);
 });
 
 test('finalAnswer reads the output node, and stays honest when empty', () => {

@@ -239,8 +239,10 @@ export function createApi(engine) {
     'run:resume': ({ projectId, runId }) => runnerFor(projectId).resume(runId),
     'run:stop': ({ projectId, runId }) => runnerFor(projectId).stop(runId),
     'run:pause': ({ projectId, runId }) => runnerFor(projectId).pause(runId),
-    'run:restartNode': ({ projectId, runId, nodeId, guidance = '' }) =>
-      runnerFor(projectId).restartNode(runId, nodeId, String(guidance ?? '')),
+    // `worker` re-pins the node's model for this attempt only (D39) — the way
+    // back from "the step failed because of the model it was pointed at".
+    'run:restartNode': ({ projectId, runId, nodeId, guidance = '', worker = null }) =>
+      runnerFor(projectId).restartNode(runId, nodeId, String(guidance ?? ''), worker ?? null),
     'run:followUp': ({ projectId, runId, text }) => runnerFor(projectId).followUp(runId, String(text ?? '')),
     'run:answerInput': ({ projectId, runId, text }) => runnerFor(projectId).answerInput(runId, String(text ?? '')),
 

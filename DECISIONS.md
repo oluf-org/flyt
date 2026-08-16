@@ -433,6 +433,71 @@ once a second caller exists; and whether `relation` should gate the fan-out's la
 
 ---
 
+### D39 — A failed run says why, and can be retried somewhere else
+
+**Context.** A real `learn-from-repo` run died on its first AI step because this machine's
+`codex` CLI has a broken `config.toml`. What the app did with that is the decision:
+
+1. The run's chat surface offered **no way to stop it**. Pause/Stop live on the `RunBar`,
+   which sits at the top of the scrolling feed — so the moment a run is long enough to be
+   worth stopping, its stop button is above the fold. Worse, `RunBar` returns `null` for a
+   run with no `flow.json` (classic pipeline runs), so for those there was no stop button
+   anywhere on the surface at all.
+2. There was **no way to retry against a different model**. `restartNode` re-ran the same
+   prompt against the same worker — which, when the failure IS the worker, can only fail
+   again. The one escape hatch was to edit the authored flow and start over, losing the
+   finished steps.
+3. The **reason was known and unsaid**. The engine wrote the provider's exact sentence into
+   the node's retrospective, and the card rendered "1 problem noted" with the sentence in a
+   `title` tooltip. The run knew why it died and would not say it out loud.
+
+**Decision.**
+
+- **Run controls follow the run.** `RunControls` (extracted from `RunBar`) also renders in the
+  pinned `.chat-topbar` while the run is live, and disappears the instant it settles. The
+  two-click stop confirm is unchanged. A control you cannot reach is a control you do not have.
+- **The retry carries a model picker.** `restartNode(runId, nodeId, guidance, worker)` re-pins
+  the node's worker for the attempt, writing it into the **run's** `flow.json` — never the
+  authored workflow. This attempt changes; the saved flow does not. `{ provider: null }` clears
+  the pin back to normal resolution; a worker on a node that calls no model is an error, not a
+  silent no-op. The picker is the same `ModelPicker` used everywhere else (D36 P0.4), so the
+  cost and routing facts are already on it — including `unrouted`, which is often the answer.
+- **A dropped re-pin is named, not repeated.** The engine echoes the pin back on success;
+  when the renderer asked for one and the response has none, the main process predates the
+  `worker` argument and dropped it — the retry ran on the *same* model and failed the same
+  way. This is not hypothetical: in a `npm run dev` session the renderer hot-reloads and the
+  Electron half does not, which is exactly how this landed the first time. It now says
+  "Retried on the original model — restart Flyt to use `<model>`" instead of silently
+  reproducing the failure.
+- **The error is shown, verbatim.** A failed step renders its thrown message on the feed card
+  and under "Why it failed" in Node Focus, copyable and selectable. Problems on a step that did
+  *not* fail stay counted — those are notes, not a cause of death. A failed run ends in a
+  failure panel at the tail of the feed (where stick-to-bottom already put the eye) carrying
+  the error, the model it was on, and the retry.
+
+**Why the retry is scoped to the run.** The alternative — edit the flow, re-run — throws away
+every finished step to change one field, and quietly rewrites a shared workflow to work around
+one machine's broken CLI. Re-pinning the run keeps the authored flow honest and the finished
+work intact; promoting a pin that turned out to be right is what "Save as config" already does
+(D27).
+
+**Surface.** `core/flowRunner.js` (`restartNode` worker override, `WORKER_NODE_TYPES`),
+`core/api.js`, `electron/main.js`, `electron/preload.cjs`, `src/App.jsx` (`runControl.restart`).
+New: `src/RunControls.jsx`, `src/RetryBox.jsx`, `src/RunFailure.jsx`. Changed:
+`src/nodeFeedData.js` (`error` and `worker` per item, `runFailure()`), `src/NodeFeed.jsx`,
+`src/NodeFocus.jsx`, `src/ChatRun.jsx`, `src/RunBar.jsx`. `src/devMock.js` gained a failed-run
+fixture, an honest `restartNode`, and a real (previously no-op) snapshot push channel — without
+that last one, mock mutations landed in the data and never on screen.
+
+**Status.** Decided and **implemented**. Open: whether the failure panel should offer "retry
+the whole run" as well as "retry from here" (restart-from-the-failed-node covers it today, but
+not a failure in the first node of a fan-out lane); whether a repeated failure on the same
+model should *suggest* a routable alternative rather than waiting to be asked; and whether the
+run-level Runs section deserves the same panel, or whether the chat surface is the only place
+a failure needs a door out of.
+
+---
+
 ## Open questions (consolidated)
 
 **Product (from `PRODUCT-SPEC.md` §10):**

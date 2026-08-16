@@ -24,11 +24,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import FlowCanvas from './FlowCanvas.jsx';
 import RunBar from './RunBar.jsx';
+import RunControls from './RunControls.jsx';
+import RunFailure from './RunFailure.jsx';
 import NodeFocus from './NodeFocus.jsx';
 import NodeFeed from './NodeFeed.jsx';
 import ChatSidebar from './ChatSidebar.jsx';
 import ApprovalModal, { gateCopy } from './ApprovalModal.jsx';
-import { feedItems } from './nodeFeedData.js';
+import { feedItems, runFailure } from './nodeFeedData.js';
 import { isTerminal } from './runProgress.js';
 import { sigil } from './sigil.js';
 import { APP_NAME } from '../core/brand.js';
@@ -48,10 +50,11 @@ export default function ChatRun({
   onFollowUp, onAnswerInput, onNewChat,
   onOpenFolder, onOpenWorkspace,
   onResume, resuming, onApprove, onReject,
-  runToast, coachTip, onDismissCoachTip
+  activeModels, runToast, coachTip, onDismissCoachTip
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [focusNodeId, setFocusNodeId] = useState(null);
   const [view, setView] = useState(() => readPref('chatrun:view', 'feed'));
@@ -82,6 +85,17 @@ export default function ChatRun({
   // sidebar, and the scroll logic (its size is a handful of nodes — deriving
   // three times would still be cheap, but once is clearer).
   const items = useMemo(() => (loaded ? feedItems(snapshot) : []), [loaded, snapshot]);
+  // The cause of death, when there is one — see RunFailure.
+  const failure = useMemo(() => (loaded ? runFailure(snapshot, items) : null), [loaded, snapshot, items]);
+
+  // Retrying relaunches the run, so the failure panel disappears on its own
+  // with the next snapshot push; the flag only covers the round trip.
+  const retry = async (nodeId, guidance, worker) => {
+    if (retrying) return;
+    setRetrying(true);
+    try { await runControl.restart(nodeId, guidance, worker); }
+    finally { setRetrying(false); }
+  };
 
   const pickView = v => { setView(v); writePref('chatrun:view', v); };
   const toggleSide = () => setSideOpen(s => { writePref('chatrun:side', s ? '0' : '1'); return !s; });
@@ -236,8 +250,20 @@ export default function ChatRun({
             />
             <span className="chat-run-name" title={runId}>{meta.name ?? meta.flowName ?? 'Run'}</span>
             {meta.modeName && <span className="mode-chip" title="Mode this run was launched with">{meta.modeName}</span>}
-            {stage && <span className="stage-chip">{stage.replace(/_/g, ' ')}</span>}
+            {stage && <span className={'stage-chip' + (stage === 'failed' ? ' stage-failed' : '')}>{stage.replace(/_/g, ' ')}</span>}
           </>
+        )}
+        {/* Pause / stop live in the pinned topbar, not only on the RunBar the
+            feed scrolls away (D39): a run you cannot reach is a run you cannot
+            stop. Hidden the instant it settles — nothing to stop. */}
+        {live && (
+          <RunControls
+            paused={paused}
+            onPause={runControl.pause}
+            onResume={runControl.resume}
+            onStop={runControl.stop}
+            className="chat-topbar-controls"
+          />
         )}
         <button
           type="button"
@@ -311,6 +337,17 @@ export default function ChatRun({
                       />
                     </div>
                   )}
+                  {/* At the tail, not the top: a failure is the newest thing
+                      that happened, and the feed already sticks to the tail —
+                      so the panel lands under the eye instead of above the
+                      scroll. Same place in both views. */}
+                  <RunFailure
+                    failure={failure}
+                    activeModels={activeModels}
+                    retrying={retrying}
+                    onRetry={retry}
+                    onInspect={setFocusNodeId}
+                  />
                 </>
               ) : (
                 <div className="chat-canvas chat-canvas-loading">
@@ -409,6 +446,7 @@ export default function ChatRun({
             projectId={projectId}
             runId={runId}
             live={live}
+            activeModels={activeModels}
             onClose={() => setFocusNodeId(null)}
             onRestart={runControl.restart}
             onBranch={runControl.branch}

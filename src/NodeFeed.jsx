@@ -41,7 +41,8 @@ function streamTail(text) {
 
 function FeedCard({ item, selected, onSelect }) {
   const retro = item.retro;
-  const hasBody = Boolean(item.streamText || item.outputPreview || retro?.recommendation || retro?.problems?.length);
+  const hasBody = Boolean(item.streamText || item.outputPreview || item.error
+    || retro?.recommendation || retro?.problems?.length);
   return (
     <div
       className={
@@ -82,6 +83,13 @@ function FeedCard({ item, selected, onSelect }) {
             {item.outputPreview && (
               <pre className="feed-output">{item.outputPreview}</pre>
             )}
+            {/* A failed step says why, in the provider's own words (D39). The
+                old card counted the problems and hid the sentence in a
+                tooltip, which is the app knowing the reason and not telling. */}
+            {item.error && (
+              // Selecting the error must not also open the focus panel.
+              <pre className="feed-error" onClick={e => e.stopPropagation()}>{item.error}</pre>
+            )}
             {retro && (
               <div className="feed-retro">
                 {retro.status && (
@@ -89,7 +97,9 @@ function FeedCard({ item, selected, onSelect }) {
                     {retro.status}{retro.confidence != null ? ` · ${Math.round(retro.confidence * 100)}%` : ''}
                   </span>
                 )}
-                {retro.problems?.length > 0 && (
+                {/* Problems on a step that did NOT fail are notes, not a cause
+                    of death — those stay counted. */}
+                {!item.error && retro.problems?.length > 0 && (
                   <span className="feed-retro-problems" title={retro.problems.join('\n')}>
                     {retro.problems.length} problem{retro.problems.length === 1 ? '' : 's'} noted
                   </span>

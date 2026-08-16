@@ -3,7 +3,7 @@
 ## Read first
 
 1. `GOALS.md` — product goals and current status. Read this first.
-2. `DECISIONS.md` — the "why" log (D1–D29). The authority on resolved decisions, deferred items, and open questions.
+2. `DECISIONS.md` — the "why" log (D1–D39). The authority on resolved decisions, deferred items, and open questions.
 3. `DESIGN-SPEC.md` — how the system is built; the built-vs-planned ledger lives in §11.
 
 ## Reference docs

@@ -10,8 +10,10 @@ const api = {
   // resumeRun doubles as the pause-release; restartNode/branchRun reject while live.
   stopRun: (pid, runId) => ipcRenderer.invoke('run:stop', pid, runId),
   pauseRun: (pid, runId) => ipcRenderer.invoke('run:pause', pid, runId),
-  restartNode: (pid, runId, nodeId, guidance) =>
-    ipcRenderer.invoke('run:restartNode', pid, runId, nodeId, guidance),
+  // `worker` ({ provider, model }) re-pins the node's model for the retry (D39);
+  // omit it to re-run exactly as configured.
+  restartNode: (pid, runId, nodeId, guidance, worker = null) =>
+    ipcRenderer.invoke('run:restartNode', pid, runId, nodeId, guidance, worker),
   branchRun: (pid, runId, nodeId) => ipcRenderer.invoke('run:branch', pid, runId, nodeId),
   investigateNode: (pid, runId, nodeId) =>
     ipcRenderer.invoke('run:investigateNode', pid, runId, nodeId),

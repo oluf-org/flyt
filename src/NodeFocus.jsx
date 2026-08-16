@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import MarkdownView from './MarkdownView.jsx';
+import RetryBox from './RetryBox.jsx';
 import { statusPill } from './Inspector.jsx';
 import { TYPE_META, nodeLabel } from './flowTypes.js';
 import { nodeOutputText, taskNodeStatus } from './runGraph.js';
@@ -20,6 +21,12 @@ import { formatElapsed } from './runProgress.js';
 const ipcMessage = err => String(err?.message ?? err)
   .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '');
 
+// Node types that resolve a model, i.e. the ones a retry can re-point (D39).
+// Mirrors WORKER_NODE_TYPES in core/flowRunner.js — duplicated rather than
+// imported, the same way runProgress duplicates TERMINAL_STAGES: that module
+// reaches node:fs through its adapter imports and this one is the renderer.
+const MODEL_TYPES = new Set(['aiStep', 'agentTask', 'orchestrator', 'fanout']);
+
 // One resolver for every shape a focusable thing comes in: a flow node, a
 // run-time-spawned task (no flow node of its own), or a legacy stage id from
 // runs recorded before flow.json.
@@ -27,20 +34,27 @@ function resolveFocusNode(snapshot, nodeId) {
   if (!snapshot) return null;
   const flowNode = snapshot.flow?.nodes?.find(n => n.id === nodeId) ?? null;
   if (flowNode) {
+    const retro = snapshot.retrospectives?.[nodeId] ?? null;
     return {
       flowBacked: true,
+      modelBacked: MODEL_TYPES.has(flowNode.type),
+      // What it actually ran on beats what it was configured with: the resolved
+      // model is the one the user watched fail.
+      worker: retro?.model ?? flowNode.data?.worker ?? null,
       title: nodeLabel(flowNode),
       icon: flowNode.data?.icon ?? TYPE_META[flowNode.type]?.icon ?? '▢',
       sub: `${TYPE_META[flowNode.type]?.label.toLowerCase() ?? flowNode.type} · ${flowNode.kind}`,
       status: snapshot.meta?.nodeStatus?.[nodeId] ?? 'pending',
       text: nodeOutputText(snapshot, nodeId),
-      retro: snapshot.retrospectives?.[nodeId] ?? null
+      retro
     };
   }
   const task = snapshot.tasks?.tasks?.find(t => t.id === nodeId);
   if (task) {
     return {
       flowBacked: false, // engine restarts/branches flow nodes, not bare tasks
+      modelBacked: false,
+      worker: task.worker ?? null,
       title: task.title || task.id,
       icon: TYPE_META.agentTask?.icon ?? '⚙',
       sub: `spawned task · ${task.worker?.provider}/${task.worker?.model}`,
@@ -59,6 +73,8 @@ function resolveFocusNode(snapshot, nodeId) {
   if (legacy) {
     return {
       flowBacked: false,
+      modelBacked: false,
+      worker: null,
       ...legacy,
       sub: `run stage · ${nodeId}`,
       status: null,
@@ -85,7 +101,7 @@ function factsOf(retro, invModel) {
 }
 
 export default function NodeFocus({
-  snapshot, nodeId, projectId, runId, live,
+  snapshot, nodeId, projectId, runId, live, activeModels,
   onClose, onRestart, onBranch, onOpenFolder
 }) {
   const info = useMemo(() => resolveFocusNode(snapshot, nodeId), [snapshot, nodeId]);
@@ -172,6 +188,11 @@ export default function NodeFocus({
   const controlTitle = live
     ? 'Stop the run first'
     : !info.flowBacked ? 'Only flow nodes can be restarted or branched' : undefined;
+  // The thrown error, verbatim — see nodeFeedData.failureText for why it is
+  // shown rather than counted.
+  const errorText = status === 'failed'
+    ? ((retro?.problems ?? []).filter(Boolean).join('\n').trim() || null)
+    : null;
 
   return (
     <aside className="node-focus" aria-label={`Node focus — ${info.title}`}>
@@ -220,6 +241,30 @@ export default function NodeFocus({
           )}
         </section>
 
+        {errorText && (
+          <section>
+            <h3>Why it failed</h3>
+            <pre className="focus-error">{errorText}</pre>
+          </section>
+        )}
+
+        {/* Retry lives above the raw output on purpose: on a failed step the
+            question is "how do I get past this", and the answer is a model
+            choice, not a scroll through a half-written artifact (D39). */}
+        {info.flowBacked && info.modelBacked && (
+          <section>
+            <h3>Retry</h3>
+            <RetryBox
+              worker={info.worker}
+              activeModels={activeModels}
+              disabled={live}
+              disabledReason={live ? 'Stop or pause the run before retrying a step.' : null}
+              onRetry={(worker, guidance) => onRestart?.(nodeId, guidance, worker)}
+              label="Retry step"
+            />
+          </section>
+        )}
+
         <section>
           <h3>Output</h3>
           <div className="live-body focus-stream" ref={bodyRef} onScroll={onScroll}>
@@ -246,12 +291,16 @@ export default function NodeFocus({
         )}
 
         <div className="focus-actions">
-          <button
-            className="ghost mini"
-            disabled={live || !info.flowBacked}
-            title={controlTitle ?? 'Restart this node and everything downstream'}
-            onClick={() => onRestart?.(nodeId)}
-          >↺ Restart</button>
+          {/* Nodes that call a model retry through the box above; this covers
+              the rest (input, output, sub-flow, loop hand-off). */}
+          {!(info.flowBacked && info.modelBacked) && (
+            <button
+              className="ghost mini"
+              disabled={live || !info.flowBacked}
+              title={controlTitle ?? 'Restart this node and everything downstream'}
+              onClick={() => onRestart?.(nodeId)}
+            >↺ Restart</button>
+          )}
           <button
             className="ghost mini"
             disabled={live || !info.flowBacked}

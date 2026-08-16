@@ -262,6 +262,63 @@ test('restartNode resets the node and its downstream, keeps ancestors, re-runs w
   assert.ok(store.readLog(runId).some(e => e.event === 'node_restart' && e.node === 'a'));
 });
 
+// D39: the commonest reason a step fails is the model it was pointed at, so
+// "run it again" is only useful with "run it again somewhere else".
+test('restartNode re-points the failed step at a different model, for this run only', async () => {
+  const store = makeStore();
+  const seen = [];
+  setScript(({ model }) => {
+    seen.push(model);
+    if (model === 'test-model') throw new Error('Codex CLI failed: unknown variant `priority`');
+    return Promise.resolve(`output from ${model}`);
+  });
+  const runner = new FlowRunner(store, testConfig());
+  const authored = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+      node('a', 'aiStep', { goal: 'A' }),
+      node('out', 'output')],
+    [edge('in', 'a'), edge('a', 'out')]);
+  const runId = runner.start(authored);
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'failed');
+  assert.match(store.readMeta(runId).error, /unknown variant/, 'the run records the provider’s own words');
+  assert.deepEqual(store.readRetrospectives(runId).a.problems, ['Codex CLI failed: unknown variant `priority`']);
+
+  assert.deepEqual(
+    runner.restartNode(runId, 'a', '', { provider: 'script', model: 'better-model' }),
+    { ok: true, worker: { provider: 'script', model: 'better-model' } });
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+
+  assert.deepEqual(seen, ['test-model', 'better-model'], 'the retry ran on the new model');
+  assert.deepEqual(store.readFlow(runId).nodes.find(n => n.id === 'a').data.worker,
+    { provider: 'script', model: 'better-model' }, 'the pin is written into the run’s flow');
+  assert.equal(authored.nodes.find(n => n.id === 'a').data.worker, undefined,
+    'the authored workflow keeps its own model');
+  assert.ok(store.readLog(runId).some(e =>
+    e.event === 'node_restart' && e.worker?.model === 'better-model'));
+});
+
+test('restartNode clears a pin back to the default, and refuses one on a node with no model', async () => {
+  const store = makeStore();
+  const seen = [];
+  setScript(({ model }) => { seen.push(model); return Promise.resolve('ok'); });
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+      node('a', 'aiStep', { goal: 'A', worker: { provider: 'script', model: 'pinned' } }),
+      node('out', 'output')],
+    [edge('in', 'a'), edge('a', 'out')]));
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.deepEqual(seen, ['pinned']);
+
+  assert.throws(() => runner.restartNode(runId, 'in', '', { provider: 'script', model: 'x' }),
+    /does not call a model/, 'an input node has no worker to change');
+
+  assert.deepEqual(runner.restartNode(runId, 'a', '', { provider: null, model: null }), { ok: true });
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.deepEqual(seen, ['pinned', 'test-model'], 'clearing the pin falls back to the configured default');
+  assert.equal(store.readFlow(runId).nodes.find(n => n.id === 'a').data.worker, undefined);
+});
+
 test('restartNode and branch refuse a live run', async () => {
   const store = makeStore();
   setScript(({ signal }) => untilAborted(signal));

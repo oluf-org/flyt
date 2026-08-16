@@ -31,7 +31,7 @@ import ConfigsPanel, { slugConfigId } from './ConfigsPanel.jsx';
 import { ModelMetaProvider } from './ModelPicker.jsx';
 import RematchPicker from './RematchPicker.jsx';
 import Logo from './Logo.jsx';
-import { LEGACY_STORAGE_PREFIX } from '../core/brand.js';
+import { APP_NAME, LEGACY_STORAGE_PREFIX } from '../core/brand.js';
 
 const THEME_KEY = 'flyt-theme';
 
@@ -1746,8 +1746,23 @@ export default function App() {
       pause: () => guard(() => window.flyt.pauseRun(activeTabRef.current, runId)),
       resume: () => guard(() => window.flyt.resumeRun(activeTabRef.current, runId)),
       stop: () => guard(() => window.flyt.stopRun(activeTabRef.current, runId)),
-      restart: (nodeId, guidance) =>
-        guard(() => window.flyt.restartNode(activeTabRef.current, runId, nodeId, guidance)),
+      // `worker` re-pins the node's model for the retry (D39) — the way out of
+      // a step that failed on the model it was pointed at, not on its prompt.
+      //
+      // The engine echoes the pin back on success. When it doesn't, the main
+      // process is older than the worker argument and dropped it: the retry ran
+      // on the SAME model and will fail the same way. That happens for real in
+      // a dev session — the renderer hot-reloads, the Electron half does not —
+      // and repeating a failure without saying why is the worst answer
+      // available, so it gets named.
+      restart: (nodeId, guidance, worker = null) =>
+        guard(() => window.flyt.restartNode(activeTabRef.current, runId, nodeId, guidance, worker))
+          .then(res => {
+            if (worker?.model && res?.ok && !res.worker) {
+              setRunToast(`Retried on the original model — this app build can't re-point a step yet. Restart ${APP_NAME} to use ${worker.model}.`);
+            }
+            return res;
+          }),
       // A successful branch launches the fork — switch the view to the new run.
       branch: nodeId =>
         guard(() => window.flyt.branchRun(activeTabRef.current, runId, nodeId))
@@ -1989,6 +2004,7 @@ export default function App() {
               resuming={resuming}
               onApprove={() => window.flyt.approvePlan(activeTab, chatRunId)}
               onReject={() => window.flyt.rejectPlan(activeTab, chatRunId, 'Rejected by user')}
+              activeModels={activeModels}
               runToast={runToast}
               coachTip={coachTip}
               onDismissCoachTip={dismissCoachTip}
@@ -2536,6 +2552,7 @@ export default function App() {
                       projectId={activeTab}
                       runId={activeRunId}
                       live={watching}
+                      activeModels={activeModels}
                       onClose={() => setFocusNodeId(null)}
                       onRestart={runControl.restart}
                       onBranch={runControl.branch}

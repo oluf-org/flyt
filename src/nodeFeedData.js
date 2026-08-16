@@ -6,7 +6,7 @@
 //
 // One feed item per unit of work:
 //   { id, depth, icon, label, sub, kind, status, turn, spawned,
-//     streamText, outputPreview, retro }
+//     streamText, outputPreview, retro, error }
 // depth 1 marks work nested under a container (orchestrator children, spawned
 // tasks, classic-pipeline execution tasks) — the feed indents it under its
 // owner instead of drawing the box.
@@ -80,8 +80,20 @@ function retroBrief(retro) {
     status: retro.status ?? null,
     confidence: retro.confidence ?? null,
     recommendation: retro.recommendation || null,
-    problems: (retro.problems ?? []).filter(Boolean)
+    problems: (retro.problems ?? []).filter(Boolean),
+    model: retro.model ?? null
   };
+}
+
+// What actually went wrong, verbatim (D39). The retrospective's `problems` on a
+// failed step ARE the thrown error — "1 problem noted" behind a tooltip was the
+// app knowing the reason and declining to say it, which is exactly the state a
+// failed run must not be in. Null unless the step failed: a passing step's
+// problems are notes, not a cause of death.
+function failureText(status, retro) {
+  if (status !== 'failed') return null;
+  const text = (retro?.problems ?? []).join('\n').trim();
+  return text || null;
 }
 
 // --- Flow runs ---------------------------------------------------------------
@@ -92,23 +104,30 @@ function flowFeed(snapshot) {
   const streams = streamByKey(snapshot);
   const byId = new Map(flow.nodes.map(n => [n.id, n]));
 
-  const itemFor = (n, depth, extra = {}) => ({
-    id: n.id,
-    depth,
-    icon: n.data?.icon ?? TYPE_META[n.type]?.icon ?? '▢',
-    label: nodeLabel(n),
-    sub: nodeSub(n),
-    kind: n.kind,
-    nodeType: n.type,
-    status: statusOf(n.id),
-    // Follow-up provenance badge, same rule as the canvas card (FU5).
-    ...(n.data?.origin === 'followup' ? { turn: n.data.turn } : {}),
-    streamText: streams.get(`node:${n.id}`) ?? null,
-    outputPreview: statusOf(n.id) === 'done' ? preview(snapshot.nodeOutputs?.[outputKey(n.id)]) : null,
-    retro: retroBrief(snapshot.retrospectives?.[n.id]),
-    spawned: false,
-    ...extra
-  });
+  const itemFor = (n, depth, extra = {}) => {
+    const status = statusOf(n.id);
+    const retro = retroBrief(snapshot.retrospectives?.[n.id]);
+    return {
+      id: n.id,
+      depth,
+      icon: n.data?.icon ?? TYPE_META[n.type]?.icon ?? '▢',
+      label: nodeLabel(n),
+      sub: nodeSub(n),
+      kind: n.kind,
+      nodeType: n.type,
+      status,
+      // Follow-up provenance badge, same rule as the canvas card (FU5).
+      ...(n.data?.origin === 'followup' ? { turn: n.data.turn } : {}),
+      streamText: streams.get(`node:${n.id}`) ?? null,
+      outputPreview: status === 'done' ? preview(snapshot.nodeOutputs?.[outputKey(n.id)]) : null,
+      retro,
+      error: failureText(status, retro),
+      // The model this step actually ran on — what a retry picker starts from.
+      worker: retro?.model ?? n.data?.worker ?? null,
+      spawned: false,
+      ...extra
+    };
+  };
 
   const top = flow.nodes.filter(n => !n.parentId || !byId.has(n.parentId));
   const items = [];
@@ -127,20 +146,28 @@ function flowFeed(snapshot) {
   // the node that spawned them (or at the tail when ownership is untraceable).
   const spawned = spawnedTasks(snapshot);
   if (spawned.length) {
-    const taskItem = ({ task }) => ({
-      id: task.id,
-      depth: 1,
-      icon: TYPE_META.agentTask.icon,
-      label: task.title || task.id,
-      sub: `spawned task · ${task.worker?.provider}/${task.worker?.model}`,
-      kind: 'ai',
-      nodeType: 'agentTask',
-      status: task.status === 'running' ? 'active' : task.status === 'done' ? 'done' : task.status === 'failed' ? 'failed' : 'pending',
-      streamText: streams.get(`task:${task.id}`) ?? null,
-      outputPreview: task.status === 'done' ? preview(snapshot.taskOutputs?.[task.id]) : null,
-      retro: retroBrief(snapshot.retrospectives?.[`executor-${task.id}`]),
-      spawned: true
-    });
+    const taskItem = ({ task }) => {
+      const status = task.status === 'running' ? 'active'
+        : task.status === 'done' ? 'done'
+          : task.status === 'failed' ? 'failed' : 'pending';
+      const retro = retroBrief(snapshot.retrospectives?.[`executor-${task.id}`]);
+      return {
+        id: task.id,
+        depth: 1,
+        icon: TYPE_META.agentTask.icon,
+        label: task.title || task.id,
+        sub: `spawned task · ${task.worker?.provider}/${task.worker?.model}`,
+        kind: 'ai',
+        nodeType: 'agentTask',
+        status,
+        streamText: streams.get(`task:${task.id}`) ?? null,
+        outputPreview: status === 'done' ? preview(snapshot.taskOutputs?.[task.id]) : null,
+        retro,
+        error: failureText(status, retro),
+        worker: retro?.model ?? task.worker ?? null,
+        spawned: true
+      };
+    };
     for (const s of spawned) {
       const it = taskItem(s);
       const ownerIdx = s.ownerNodeId ? items.findIndex(i => i.id === s.ownerNodeId) : -1;
@@ -184,23 +211,32 @@ function stageStatus(nodeStage, meta) {
 function classicFeed(snapshot) {
   const { meta, tasks, retrospectives } = snapshot;
   const streams = streamByKey(snapshot);
-  const items = STAGE_DEFS.map(def => ({
-    id: def.id,
-    depth: 0,
-    icon: def.icon,
-    label: def.label,
-    sub: def.sub ?? `${def.id === 'router' ? 'logic' : def.id === 'execution' ? 'tool' : def.id === 'verifier' ? 'eval' : 'llm'} · ${retrospectives?.[def.id]?.model ? `${retrospectives[def.id].model.provider}/${retrospectives[def.id].model.model}` : 'idle'}`,
-    kind: null,
-    nodeType: def.id,
-    status: def.id === 'prompt' ? 'done' : stageStatus(def.stage, meta),
-    streamText: streams.get(`node:${def.id}`) ?? null,
-    outputPreview: null,
-    retro: retroBrief(retrospectives?.[def.id]),
-    spawned: false
-  }));
+  const items = STAGE_DEFS.map(def => {
+    const status = def.id === 'prompt' ? 'done' : stageStatus(def.stage, meta);
+    const retro = retroBrief(retrospectives?.[def.id]);
+    return {
+      id: def.id,
+      depth: 0,
+      icon: def.icon,
+      label: def.label,
+      sub: def.sub ?? `${def.id === 'router' ? 'logic' : def.id === 'execution' ? 'tool' : def.id === 'verifier' ? 'eval' : 'llm'} · ${retrospectives?.[def.id]?.model ? `${retrospectives[def.id].model.provider}/${retrospectives[def.id].model.model}` : 'idle'}`,
+      kind: null,
+      nodeType: def.id,
+      status,
+      streamText: streams.get(`node:${def.id}`) ?? null,
+      outputPreview: null,
+      retro,
+      // A classic run records its cause of death on the run, not the stage.
+      error: failureText(status, retro) ?? (status === 'failed' ? (meta.error || null) : null),
+      worker: retro?.model ?? null,
+      spawned: false
+    };
+  });
   let execIdx = items.findIndex(i => i.id === 'execution');
   for (const t of tasks?.tasks ?? []) {
     const running = t.status === 'running' || (meta.currentTaskId === t.id && meta.stage === 'execution');
+    const status = running ? 'active' : t.status === 'done' ? 'done' : t.status === 'failed' ? 'failed' : 'pending';
+    const retro = retroBrief(retrospectives?.[`executor-${t.id}`]);
     items.splice(++execIdx, 0, {
       id: t.id,
       depth: 1,
@@ -209,10 +245,12 @@ function classicFeed(snapshot) {
       sub: `tool · ${t.worker.provider}/${t.worker.model}`,
       kind: null,
       nodeType: 'task',
-      status: running ? 'active' : t.status === 'done' ? 'done' : t.status === 'failed' ? 'failed' : 'pending',
+      status,
       streamText: streams.get(`task:${t.id}`) ?? null,
-      outputPreview: t.status === 'done' ? preview(snapshot.taskOutputs?.[t.id]) : null,
-      retro: retroBrief(retrospectives?.[`executor-${t.id}`]),
+      outputPreview: status === 'done' ? preview(snapshot.taskOutputs?.[t.id]) : null,
+      retro,
+      error: failureText(status, retro),
+      worker: retro?.model ?? t.worker ?? null,
       spawned: false
     });
   }
@@ -224,6 +262,35 @@ export function feedItems(snapshot) {
   if (!snapshot?.meta) return [];
   if (snapshot.flow) return flowFeed(snapshot);
   return classicFeed(snapshot);
+}
+
+// The run's cause of death (D39), or null while it is still walking / ended
+// clean. The failure panel needs exactly three things and this is where they
+// come from: which step stopped, what it said verbatim, and which model it was
+// on — so the retry can change the one that matters.
+//
+// `retryNodeId` is non-null only when the engine can actually re-run it: flow
+// runs only (restartNode needs flow.json), and never a runtime-spawned task,
+// which has no node of its own to restart from.
+export function runFailure(snapshot, items = null) {
+  const meta = snapshot?.meta;
+  if (meta?.stage !== 'failed') return null;
+  const step = (items ?? feedItems(snapshot)).find(i => i.status === 'failed') ?? null;
+  const runError = meta.error ? String(meta.error).trim() : null;
+  const message = step?.error ?? runError ?? 'The run failed without recording a reason.';
+  return {
+    nodeId: step?.id ?? null,
+    label: step?.label ?? null,
+    worker: step?.worker ?? null,
+    message,
+    // Kept apart: the node said why it threw, the run says where the walk gave
+    // up. The run's wording usually just wraps the node's ("Node a (orient)
+    // failed: <the same sentence>") — showing both would be the same error
+    // twice, so the wrapper only appears when it carries something new.
+    runError: runError && !runError.includes(message) ? runError : null,
+    recommendation: step?.retro?.recommendation ?? null,
+    retryNodeId: snapshot.flow && step && !step.spawned ? step.id : null
+  };
 }
 
 // The final answer, when the run has produced one: the Output node's primary

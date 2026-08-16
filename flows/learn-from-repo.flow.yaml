@@ -22,11 +22,13 @@ nodes:
   orient:
     use: orient
     title: "Where are we standing?"
+    effort: high
     goal: |
       Say what THIS project is and what relationship it has to the repository we
       are about to read: are we empty, building the same kind of thing, solving
       overlapping problems, or is there no real overlap? Read enough of both to
       argue it. Everything after you is aimed by your answer.
+    worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 }
   read:
     type: fanout
     title: Read it, however many ways it takes
@@ -83,8 +85,6 @@ nodes:
 flow:
   - inputs.repo -> orient
   - inputs.goal -> orient
-  - inputs.repo -> read
-  - inputs.goal -> read
   - orient.summary -> read
   - read -> synthesise
   - orient -> synthesise
