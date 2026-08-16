@@ -200,13 +200,19 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
               supervisor lives in that other process. Saying where it is beats
               a Stop button that fails, or a Start button that would put a
               second picker on the same queue. */}
-          {running && status?.observed
-            ? <span className="loop-elsewhere" title={`Started by process ${status.pid}`}>
-                running in another process
-              </span>
-            : running
-              ? <button className="reject" disabled={busy} onClick={() => act(() => window.flyt.loopStop(projectId))}>Stop</button>
-              : <button className="primary" disabled={busy} onClick={() => act(() => window.flyt.loopStart(projectId, {}))}>Start loop</button>}
+          {running && status?.observed && (
+            <span className="loop-elsewhere" title={`Started by process ${status.pid}`}>
+              running in another process
+            </span>
+          )}
+          {running
+            // Stop works either way: for a loop this window owns it is direct,
+            // and for one it is only watching it leaves a request the loop
+            // reads on its next poll — which winds down cleanly, where killing
+            // the process would leave a worktree, a claimed task and possibly a
+            // half-landed merge behind.
+            ? <button className="reject" disabled={busy} onClick={() => act(() => window.flyt.loopStop(projectId))}>Stop</button>
+            : <button className="primary" disabled={busy} onClick={() => act(() => window.flyt.loopStart(projectId, {}))}>Start loop</button>}
           <button disabled={busy} onClick={() => act(async () => {
             const md = await window.flyt.loopReport(projectId);
             await navigator.clipboard?.writeText(md);

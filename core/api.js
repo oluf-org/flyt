@@ -196,6 +196,34 @@ export function createApi(engine) {
     return { ...status, observed: true };
   };
 
+  // A stop asked for by a process that does not own the supervisor. Same
+  // file-shaped answer as the status: the loop reads it once a tick, so the
+  // app's Stop button and a second terminal both reach the running loop
+  // wherever it is, and it winds down cleanly rather than being killed.
+  const loopStopFile = projectId => {
+    const dir = engine.configDirOf(projectId);
+    return dir ? path.join(dir, 'loop-stop') : null;
+  };
+
+  const requestLoopStop = (projectId, reason) => {
+    const file = loopStopFile(projectId);
+    if (!file) return false;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ reason, at: new Date().toISOString(), by: process.pid }));
+    return true;
+  };
+
+  // Read once and consumed: a stop request left on disk would stop the NEXT
+  // loop the moment it started, which is a confusing way to discover a file.
+  const takeLoopStop = projectId => {
+    const file = loopStopFile(projectId);
+    if (!file || !fs.existsSync(file)) return null;
+    let reason = 'stopped by request';
+    try { reason = JSON.parse(fs.readFileSync(file, 'utf8')).reason ?? reason; } catch { /* keep the default */ }
+    try { fs.rmSync(file); } catch { /* it will be read again and stop again, which is harmless */ }
+    return reason;
+  };
+
   // One supervisor per project, for the life of the process.
   const supervisors = new Map();
   // One in-flight benchmark per project. Same reason: two benchmark runs over
@@ -617,8 +645,12 @@ export function createApi(engine) {
         },
         parallelism,
         log: msg => engine.emitLoop?.(projectId, msg),
-        writeStatus: status => writeLoopStatus(projectId, status)
+        writeStatus: status => writeLoopStatus(projectId, status),
+        stopRequested: () => takeLoopStop(projectId)
       });
+      // Anything left over from a previous loop is not a request to stop this
+      // one before it has done anything.
+      takeLoopStop(projectId);
       supervisors.set(projectId, sup);
       // Deliberately NOT awaited: the loop runs until it is stopped or capped,
       // and the caller gets an acknowledgement rather than a connection held
@@ -633,9 +665,17 @@ export function createApi(engine) {
     },
     'loop:stop': ({ projectId, reason = 'stopped by request' }) => {
       const sup = supervisors.get(projectId);
-      if (!sup) return { stopped: false, reason: 'no loop running' };
-      sup.stop(reason);
-      return { stopped: true, reason };
+      if (sup) { sup.stop(reason); return { stopped: true, reason }; }
+      // Not ours. If one is running elsewhere, ask it — the loop reads the
+      // request once a tick and winds down the way a local stop does. Killing
+      // the process instead would leave a worktree, a claimed task and a
+      // half-landed merge behind, which is the thing this sequence exists to
+      // avoid.
+      const elsewhere = readLoopStatus(projectId);
+      if (elsewhere?.running && requestLoopStop(projectId, reason)) {
+        return { stopped: false, requested: true, pid: elsewhere.pid, reason };
+      }
+      return { stopped: false, reason: 'no loop running' };
     },
     'loop:log': ({ projectId }) => engine.loopLog(projectId),
     // This process's supervisor if it has one; otherwise whatever the loop

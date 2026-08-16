@@ -76,7 +76,11 @@ export class Supervisor {
     // desktop app's Loop view all answered "no loop running" while one was
     // working — which is a strange thing for a system whose entire premise is
     // running while nobody is watching.
-    writeStatus = () => {}
+    writeStatus = () => {},
+    // Asked to stop by someone who is not in this process. Checked once per
+    // tick, so a stop takes effect within a poll and still winds down cleanly —
+    // in-flight work finishes rather than being abandoned half-landed.
+    stopRequested = () => null
   }) {
     this.invoke = invoke;
     this.projectId = projectId;
@@ -92,6 +96,7 @@ export class Supervisor {
     this.log = log;
     this.now = now;
     this.writeStatus = writeStatus;
+    this.stopRequested = stopRequested;
 
     this.running = false;
     this.stopping = null;      // why we are winding down, if we are
@@ -293,6 +298,15 @@ export class Supervisor {
   /** One poll across everything in flight. */
   async #tick() {
     await new Promise(r => setTimeout(r, this.pollMs));
+    // A stop asked for from somewhere else — the app's button, a second
+    // terminal. It reaches the same `stop()` a local caller uses, so it winds
+    // down the same way: what is in flight finishes, nothing is abandoned
+    // half-landed.
+    const asked = this.stopRequested();
+    if (asked && this.running) {
+      this.log(`stop requested: ${asked}`);
+      this.stop(asked);
+    }
     this.#publish();
     for (const [taskId, hb] of [...this.inFlight]) {
       try {

@@ -81,6 +81,23 @@ test('a loop running in another process is visible here — and a dead one is no
   // Garbage is "no status", never a crash: this file is read on a 3s poll.
   fs.writeFileSync(file, '{ not json');
   assert.equal((await api.invoke('loop:status', { projectId })).running, false);
+
+  // Stopping a loop this process does not own leaves a request rather than
+  // failing: the loop reads it on its next poll and winds down the way a local
+  // stop does. Killing the process would leave a worktree, a claimed task and
+  // possibly a half-landed merge behind — the exact things the landing sequence
+  // exists to avoid.
+  fs.writeFileSync(file, JSON.stringify({ ...record, pid: process.pid, at: new Date().toISOString() }));
+  const asked = await api.invoke('loop:stop', { projectId, reason: 'enough for today' });
+  assert.equal(asked.requested, true);
+  assert.equal(asked.stopped, false, 'asked, not done — the other process decides when');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(workspace, '.flyt', 'loop-stop'), 'utf8')).reason, 'enough for today');
+
+  // ...and with nothing running there is nothing to ask.
+  fs.rmSync(path.join(workspace, '.flyt', 'loop-stop'));
+  fs.writeFileSync(file, JSON.stringify({ ...record, running: false, pid: process.pid }));
+  assert.equal((await api.invoke('loop:stop', { projectId })).reason, 'no loop running');
+  assert.equal(fs.existsSync(path.join(workspace, '.flyt', 'loop-stop')), false);
 });
 
 test('a run can be started and gated entirely through the map', async () => {
