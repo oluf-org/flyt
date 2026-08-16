@@ -4340,6 +4340,11 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 /* An unset picker is showing a WORD, not a model id — mono type would claim it
    is one. */
 .model-trigger-id.unset { font-family: inherit; color: var(--dim); }
+/* A loop this window is only watching, not driving. */
+.loop-elsewhere {
+  font-size: 12px; color: var(--dim); align-self: center;
+  padding: 4px 10px; border-radius: 999px; background: var(--chip);
+}
 .loop-model-hint { font-size: 12px; color: var(--faint); }
 .loop-model-hint.warn { color: var(--warn); }
 .loop-model-note {

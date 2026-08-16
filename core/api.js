@@ -589,6 +589,20 @@ export function createApi(engine) {
       if (supervisors.get(projectId)?.running) {
         throw new ApiError('A loop is already running for this project.', { status: 409, code: 'already_running' });
       }
+      // ...and one running in ANOTHER process counts. This guard was per
+      // process, which was harmless while a loop was invisible outside its own:
+      // now that the status is published, the desktop app can SEE a loop
+      // started from a terminal, and the obvious next thing a person does is
+      // press Start. Two supervisors over one backlog is two pickers racing for
+      // the same tasks — the exact thing "one supervisor per project" exists to
+      // prevent. A dead writer's file does not count, which readLoopStatus has
+      // already decided by checking the pid.
+      const elsewhere = readLoopStatus(projectId);
+      if (elsewhere?.running) {
+        throw new ApiError(
+          `A loop is already working this backlog in another process (pid ${elsewhere.pid}). Stop that one first, or watch it here.`,
+          { status: 409, code: 'already_running' });
+      }
       const sup = new Supervisor({
         invoke, projectId,
         backlog: backlogFor(projectId),

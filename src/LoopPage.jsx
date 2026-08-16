@@ -196,9 +196,17 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
           </p>
         </div>
         <div className="loop-actions">
-          {running
-            ? <button className="reject" disabled={busy} onClick={() => act(() => window.flyt.loopStop(projectId))}>Stop</button>
-            : <button className="primary" disabled={busy} onClick={() => act(() => window.flyt.loopStart(projectId, {}))}>Start loop</button>}
+          {/* A loop this window did not start cannot be stopped from it — the
+              supervisor lives in that other process. Saying where it is beats
+              a Stop button that fails, or a Start button that would put a
+              second picker on the same queue. */}
+          {running && status?.observed
+            ? <span className="loop-elsewhere" title={`Started by process ${status.pid}`}>
+                running in another process
+              </span>
+            : running
+              ? <button className="reject" disabled={busy} onClick={() => act(() => window.flyt.loopStop(projectId))}>Stop</button>
+              : <button className="primary" disabled={busy} onClick={() => act(() => window.flyt.loopStart(projectId, {}))}>Start loop</button>}
           <button disabled={busy} onClick={() => act(async () => {
             const md = await window.flyt.loopReport(projectId);
             await navigator.clipboard?.writeText(md);
