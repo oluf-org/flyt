@@ -438,6 +438,18 @@ test('a task the agent says cannot be done here is parked, not escalated', async
   // on a task nobody can do is a bill for confirming what the agent just said.
   assert.equal(engine.calls.filter(c => c.name === 'work:land').length, 0);
 
+  // A model that echoed the example instead of writing its finding has still
+  // declared the task impossible, so it still parks — but the pile a person
+  // reads must not contain a fill-in-the-blank. Seen on the first real use: the
+  // parked reason was literally "<one line saying what is missing or already true>".
+  const b3 = makeBacklog();
+  b3.add({ title: 'Port it', goal: 'g', level: 'low' });
+  const e3 = fakeEngine({ backlog: b3, output: 'TASK-IMPOSSIBLE: <one line saying what is missing or already true>' });
+  await new Supervisor({ ...e3, projectId: 'p', backlog: b3, pollMs: 1 }).run({ maxTasks: 1 });
+  assert.equal(b3.get('t-0001').status, 'parked');
+  assert.match(b3.get('t-0001').blockedReason, /no reason given/);
+  assert.ok(!b3.get('t-0001').blockedReason.includes('<one line'), 'the placeholder never reaches the pile');
+
   // An ordinary empty-handed run still escalates: "I could not" and "this
   // cannot be" are different claims, and only one is worth a person.
   const b2 = makeBacklog();

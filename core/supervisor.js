@@ -56,14 +56,17 @@ const HOW_IT_LANDS = [
   'writing.',
   '',
   'If the task cannot be done here at all — it names files this repository does not have, or',
-  'asks for something already true — do not invent work to look busy. Change nothing, and make',
-  'the FIRST LINE of your final answer exactly:',
+  'asks for something already true — do not invent work to look busy. Change nothing, and begin',
+  'your final answer with a line starting `TASK-IMPOSSIBLE:` followed by what you actually found.',
+  'For example:',
   '',
-  '    TASK-IMPOSSIBLE: <one line saying what is missing or already true>',
+  '    TASK-IMPOSSIBLE: there is no code_quality_manager.py anywhere in this repository; it is a',
+  '    JavaScript project with no Python at all.',
   '',
-  'That parks the task for a person instead of retrying it on a more expensive model. Use it only',
-  'when more capability could not help; if you simply failed, say that instead and it will be',
-  'retried.'
+  'Write your own finding there — an example copied word for word tells the person reading it',
+  'nothing. That line parks the task for a person instead of retrying it on a more expensive',
+  'model, so use it only when more capability could not help; if you simply failed, say that',
+  'instead and it will be retried.'
 ].join('\n');
 
 // How an agent says "not here". A sentinel line rather than a judgement about
@@ -486,7 +489,16 @@ export class Supervisor {
     ];
     for (const text of texts) {
       const hit = IMPOSSIBLE.exec(String(text ?? ''));
-      if (hit) return hit[1].trim().slice(0, 300);
+      if (!hit) continue;
+      const why = hit[1].trim().slice(0, 300);
+      // A model that echoed the example instead of writing its finding has
+      // still declared the task impossible, so it still parks — but a
+      // fill-in-the-blank must not reach the pile a person reads. Seen on the
+      // first real use: the parked reason was literally
+      // "<one line saying what is missing or already true>".
+      return !why || /^<.*>$/.test(why)
+        ? 'no reason given — the agent declared it impossible but echoed the example instead of its finding'
+        : why;
     }
     return null;
   }
