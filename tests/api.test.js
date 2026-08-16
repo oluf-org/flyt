@@ -43,6 +43,46 @@ test('an unopened project is a caller error, not a crash', async () => {
     err instanceof ApiError && err.status === 404 && err.code === 'no_project');
 });
 
+test('a loop running in another process is visible here — and a dead one is not believed', async () => {
+  // The status file outlives the process that wrote it. A reader that trusts it
+  // blindly reports work in flight that stopped hours ago, which is worse than
+  // reporting nothing: the panel that exists to answer "is it stuck" would be
+  // answering "it is fine" about a process that no longer exists.
+  const { api, dataRoot } = makeApi();
+  const workspace = path.join(dataRoot, 'work');
+  fs.mkdirSync(workspace, { recursive: true });
+  const { id: projectId } = await api.invoke('project:open', { folder: workspace });
+
+  const file = path.join(workspace, '.flyt', 'loop-status.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const record = {
+    running: true, stopping: null, inFlight: [{ taskId: 't-0001', ageMs: 1000, idleMs: 10 }],
+    parked: [], completed: 2, landed: 1, models: { low: 'a', high: 'b' }
+  };
+
+  // A live writer is believed, and marked as observed rather than owned.
+  fs.writeFileSync(file, JSON.stringify({ ...record, pid: process.pid, at: new Date().toISOString() }));
+  const live = await api.invoke('loop:status', { projectId });
+  assert.equal(live.running, true);
+  assert.equal(live.observed, true);
+  assert.equal(live.inFlight.length, 1);
+  assert.deepEqual(live.models, { low: 'a', high: 'b' });
+  // The report says where its numbers came from, in words.
+  assert.match(await api.invoke('loop:report', { projectId }), /observed: pid \d+/);
+
+  // A pid that is gone is reported as stopped, with the reason, not as running.
+  fs.writeFileSync(file, JSON.stringify({ ...record, pid: 999999, at: new Date().toISOString() }));
+  const dead = await api.invoke('loop:status', { projectId });
+  assert.equal(dead.running, false);
+  assert.equal(dead.stale, true);
+  assert.deepEqual(dead.inFlight, []);
+  assert.match(dead.stopping, /pid 999999.*gone/);
+
+  // Garbage is "no status", never a crash: this file is read on a 3s poll.
+  fs.writeFileSync(file, '{ not json');
+  assert.equal((await api.invoke('loop:status', { projectId })).running, false);
+});
+
 test('a run can be started and gated entirely through the map', async () => {
   const { api, engine, dataRoot } = makeApi();
   const workspace = path.join(dataRoot, 'work');
