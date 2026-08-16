@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { callModel } from '../core/adapters/index.js';
-import { runAgent } from '../core/agent.js';
+import { runAgent, callForAnswer, toolCallShaped } from '../core/agent.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -392,6 +392,43 @@ test('a tool-using agent is given the budget its caller computed', async () => {
   // Every round, not just the first: the round that must WRITE the answer is
   // the one that needs the room.
   assert.deepEqual(calls.map(c => c.body.max_tokens), [12288, 12288]);
+  restoreFetch();
+});
+
+test('a turn that is only an unreadable tool call is not a deliverable', async () => {
+  // Models reach for tool syntax this harness does not speak. Observed from
+  // three models in one run: `<tool>{...}</tool>`, `<tool_calls><invoke ...>`,
+  // and a `<tool_call>` naming a tool that does not exist here. The native path
+  // saw no tool call and the text path matched no fenced block, so the text
+  // fell through as CONTENT — and a node whose deliverable was
+  // `<tool_call>…</tool_call>` counted as having produced one. Four of six task
+  // outputs in that run were exactly this, and they flowed downstream into the
+  // result and the reviewer.
+  assert.equal(toolCallShaped('<tool>\n{"tool":"read_file","args":{"path":"a"}}\n</tool>'), true);
+  assert.equal(toolCallShaped('<tool_calls>\n<invoke name="read_file">\n</invoke>\n</tool_calls>'), true);
+  assert.equal(toolCallShaped('<tool_call>\n<invoke name="list_files">\n</invoke>\n</tool_calls>'), true);
+  // Narrow on purpose: the WHOLE answer must be the attempt. Prose that quotes
+  // tool syntax while explaining something is a real answer.
+  assert.equal(toolCallShaped('Here is what a call looks like: <tool>{"tool":"x"}</tool> — and it failed.'), false);
+  assert.equal(toolCallShaped('The report is written to docs/x.md.'), false);
+  assert.equal(toolCallShaped(''), false);
+  // And ONLY syntax this harness cannot read. The fenced block is the text
+  // protocol's own contract, parsed a few lines later by textLoop — calling it
+  // unanswered retries a turn whose tool call was about to run.
+  assert.equal(toolCallShaped('```tool\n{"tool":"read_file","args":{"path":"a"}}\n```'), false);
+
+  // End to end: the turn is retried with a nudge naming the real problem, and
+  // the recovered answer is what the caller gets.
+  stubFetch(({ n }) => jsonRes({
+    choices: [{
+      finish_reason: 'stop',
+      message: { role: 'assistant', content: n === 1 ? '<tool>\n{"tool":"read_file"}\n</tool>' : 'The file does not exist.' }
+    }]
+  }));
+  const r = await callForAnswer({ provider: 'openrouter', model: 'm', apiKey: 'k', prompt: 'p' });
+  assert.equal(r.text, 'The file does not exist.');
+  assert.match(calls[1].body.messages.at(-1).content, /format I cannot read/);
+  assert.ok(r.recoveredFromEmptyTurn.unparsedToolCall, 'the diagnosis names what actually happened');
   restoreFetch();
 });
 

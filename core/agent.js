@@ -50,14 +50,57 @@ const EMPTY_TURN_NUDGE = [
   'is still a useful one.'
 ].join(' ');
 
+// What a model is told when its whole turn was an attempt to call a tool in a
+// syntax this harness does not parse (see toolCallShaped). It does not need
+// room or encouragement — it needs to know which shape reaches us, and that the
+// last thing it emitted reached nobody.
+const UNPARSED_TOOL_NUDGE = [
+  'Your previous turn was only a tool call written in a format I cannot read, so no tool ran',
+  'and nothing was returned to you. Do not repeat it.',
+  'If you need a tool, call it through the tool-calling interface you were given — and only',
+  'tools from the list you were given; anything else does not exist here.',
+  'Otherwise write your answer now as ordinary text.'
+].join(' ');
+
 // The ceiling a recovery attempt may raise a budget to. Generous, because the
 // failure it exists to prevent is losing a whole node's work; bounded, because
 // an unbounded retry on a model that answers with silence is just a bigger bill.
 const RECOVERY_MAX_TOKENS = 32000;
 
 // Did this turn produce anything the loop can use?
+/**
+ * Is this whole answer just an attempt to call a tool that we did not parse?
+ *
+ * Models reach for tool syntax we do not speak. Observed from three different
+ * models in one run: `<tool>{"tool":"read_file",…}</tool>`,
+ * `<tool_calls><invoke name="read_file">…`, and `<tool_call>` wrapping an
+ * `<invoke>` of a tool that does not exist here. The native path did not see a
+ * tool call (there was none in the response's `tool_calls`), the text path did
+ * not match its fenced ```tool block, so the text fell through as CONTENT — and
+ * a node whose deliverable is `<tool_call>…</tool_call>` was recorded as having
+ * produced one. Four of six task outputs in that run were this.
+ *
+ * It is the same situation as an empty turn: the model tried to act and nothing
+ * came of it. Treating it as an answer is what turns a recoverable turn into a
+ * garbage deliverable that flows downstream into the result and the reviewer.
+ *
+ * Deliberately narrow, in two ways. The WHOLE answer must be the attempt —
+ * prose that quotes a tool call while explaining something is a real answer,
+ * and a file whose contents include this syntax must survive being written
+ * about. And ONLY syntax this harness cannot read: the fenced ```tool block is
+ * the text protocol's own contract, parsed a few lines later by textLoop, so
+ * treating it as unanswered retries a turn whose tool call was about to run.
+ * (Written that way first; three tests said so immediately.)
+ */
+export function toolCallShaped(text) {
+  const s = String(text ?? '').trim();
+  if (!s) return false;
+  return /^<(tool|tool_call|tool_calls|function_calls|invoke)\b[\s\S]*>$/.test(s);
+}
+
 const answered = res =>
-  Boolean(String(res?.text ?? '').trim()) || Boolean(res?.message?.tool_calls?.length);
+  (Boolean(String(res?.text ?? '').trim()) && !toolCallShaped(res.text))
+  || Boolean(res?.message?.tool_calls?.length);
 
 /**
  * callModel, with one recovery attempt when a turn comes back empty.
@@ -71,20 +114,27 @@ export async function callForAnswer(params, onEmpty) {
   if (answered(first)) return first;
 
   const budget = Math.min(RECOVERY_MAX_TOKENS, Math.max(2 * (params.maxTokens ?? 4096), 8192));
+  // Two different silences, and telling the model the wrong one wastes the one
+  // retry it gets: a turn that thought and never wrote needs room and a push to
+  // write, while a turn that tried to call a tool in a syntax we do not speak
+  // needs to be told which syntax we DO speak.
+  const unparsedToolCall = toolCallShaped(first.text);
   const diagnosis = {
     finishReason: first.finishReason ?? null,
     reasoningChars: String(first.reasoning ?? '').length,
     usage: first.usage ?? null,
     maxTokens: params.maxTokens ?? 4096,
-    retriedWith: budget
+    retriedWith: budget,
+    ...(unparsedToolCall ? { unparsedToolCall: String(first.text).trim().slice(0, 200) } : {})
   };
   onEmpty?.(diagnosis);
 
   // The nudge goes in as the model's own next instruction, in whichever calling
   // shape this call used.
+  const nudge = unparsedToolCall ? UNPARSED_TOOL_NUDGE : EMPTY_TURN_NUDGE;
   const retry = params.messages
-    ? { ...params, maxTokens: budget, messages: [...params.messages, { role: 'user', content: EMPTY_TURN_NUDGE }] }
-    : { ...params, maxTokens: budget, prompt: `${params.prompt}\n\n${EMPTY_TURN_NUDGE}` };
+    ? { ...params, maxTokens: budget, messages: [...params.messages, { role: 'user', content: nudge }] }
+    : { ...params, maxTokens: budget, prompt: `${params.prompt}\n\n${nudge}` };
 
   const second = await callModel(retry);
   if (answered(second)) return { ...second, recoveredFromEmptyTurn: diagnosis };
@@ -121,6 +171,15 @@ export function describeEmptyTurn(worker, result) {
         ? ` (${d.usage.completion_tokens_details.reasoning_tokens} reasoning tokens)` : ''}`);
   }
   if (d.retriedWith) bits.push(`a retry at max_tokens ${d.retriedWith} also came back empty`);
+  // A turn that was a tool call we could not read is a different diagnosis from
+  // a turn that produced nothing, and points at a different fix: the model's
+  // tool syntax, not its budget or the provider.
+  if (d.unparsedToolCall) {
+    bits.push(`the turn was a tool call in a format this harness does not parse (${d.unparsedToolCall})`);
+    bits.push('The model is not using the tool interface it was given — check that this model supports '
+      + 'native tool calling, or that the text protocol\'s fenced `tool` block reached its prompt.');
+    return bits.join('; ').replace('; —', ' —');
+  }
   bits.push(d.finishReason === 'length' || d.reasoningChars
     ? 'Raise this node\'s effort, or point it at a model that answers within its budget.'
     : 'Check the provider status and the model id.');
