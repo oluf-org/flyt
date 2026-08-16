@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Ledger, costOf, spendFromRun } from '../core/ledger.js';
 import { Heartbeat, detectStall, workSignature, nextIntervention } from '../core/heartbeat.js';
-import { Supervisor, renderReport } from '../core/supervisor.js';
+import { Supervisor, renderReport, providerBlocked } from '../core/supervisor.js';
 import { Backlog } from '../core/backlog.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-sup-'));
@@ -189,7 +189,7 @@ test('the ladder is climbed once per rung, then stays at the bottom', () => {
 // same command the CLI calls by hand, so the supervisor reads the result rather
 // than duplicating the transition. The fake therefore has to apply it too, or
 // the test would be simulating a different system.
-function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = null, land = () => ({ landed: true, stage: 'landed', mergeSha: 'abc12345' }) } = {}) {
+function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = null, error = null, land = () => ({ landed: true, stage: 'landed', mergeSha: 'abc12345' }) } = {}) {
   const calls = [];
   let runSeq = 0;
   const runs = new Map(); // runId -> { polls, taskId }
@@ -208,7 +208,8 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
       const stage = plan[Math.min(r.polls - 1, plan.length - 1)];
       return {
         meta: {
-          stage, pendingGateKind: stage === 'awaiting_approval' ? gateKind : null,
+          stage, error: stage === 'failed' ? error : null,
+          pendingGateKind: stage === 'awaiting_approval' ? gateKind : null,
           // 'active' is what FlowRunner.setNodeStatus actually writes for a node
           // it is executing. This fake said 'running', which nothing writes, so
           // the supervisor's currentNodeOf() matched here and matched NOTHING in
@@ -412,6 +413,48 @@ test('the brief says how the work will be judged, because the task file cannot k
   // And the honest exit, so a task that cannot be done here does not get
   // invented work to look busy.
   assert.match(brief, /do not invent work/);
+});
+
+test('a provider refusing everyone stops the loop instead of grinding the backlog', async () => {
+  // A spent key is not a failed task. It fails every task after it the same way
+  // in seconds, and the ladder turns that into a parked backlog: up a band,
+  // fail identically, up again, out of ladder, parked — then the next task.
+  // Watched live when a key hit its spending limit: two tasks driven from their
+  // own band to `max` and parked inside a minute, `$0.0000 across 0 call(s)` on
+  // every attempt.
+  assert.match(providerBlocked('OpenRouter API 403: {"error":{"message":"Key limit exceeded (total limit)"}}'),
+    /Key limit exceeded/);
+  assert.ok(providerBlocked('Anthropic API 401: unauthorized'));
+  assert.ok(providerBlocked('insufficient credit'));
+  // 429 is transient and the adapter already retries it with backoff; stopping
+  // the night for one would be its own failure.
+  assert.equal(providerBlocked('OpenRouter API 429: rate limited'), null);
+  assert.equal(providerBlocked('the model returned no content'), null);
+  assert.equal(providerBlocked(null), null);
+
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g', value: 5, effort: 1, level: 'medium' });
+  backlog.add({ title: 'second', goal: 'g', value: 3, effort: 3 });
+  const engine = fakeEngine({
+    backlog,
+    stages: { default: ['failed'] },
+    error: 'OpenRouter API 403: {"error":{"message":"Key limit exceeded (total limit)","code":403}}'
+  });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+
+  const status = await sup.run();
+  assert.match(status.stopping, /provider refused the call/);
+  assert.match(status.stopping, /Key limit exceeded/);
+  // The task goes back untouched: same band, no attempt spent, and nothing in
+  // its reason blaming work that never ran.
+  const task = backlog.get('t-0001');
+  assert.equal(task.status, 'queued');
+  assert.equal(task.level, 'medium');
+  assert.equal(task.attempts, 0);
+  // ...and the second task was never started, because it would have failed the
+  // same way.
+  assert.equal(backlog.get('t-0002').attempts, 0);
+  assert.equal(engine.calls.filter(c => c.name === 'flow:run').length, 1);
 });
 
 test('a task the agent says cannot be done here is parked, not escalated', async () => {

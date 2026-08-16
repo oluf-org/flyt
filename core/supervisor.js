@@ -75,6 +75,35 @@ const HOW_IT_LANDS = [
 // difference to infer from wording.
 const IMPOSSIBLE = /^\s*TASK-IMPOSSIBLE:\s*(.+)$/m;
 
+/**
+ * Is this failure the provider refusing everyone, rather than this task failing?
+ *
+ * A spent key, a revoked one, an exhausted quota: none of it is about the work,
+ * and every task after it will fail the same way in seconds. Left alone the
+ * loop treats each as a failed attempt, climbs a band, tries again, exhausts
+ * the ladder and parks the task — then does it to the next one. Watched live: a
+ * key hit its spending limit and two tasks were driven from their own band to
+ * `max` and parked, four attempts and three attempts, in under a minute, with
+ * `$0.0000 across 0 call(s)` on each. The backlog was being destroyed at the
+ * speed of an HTTP error.
+ *
+ * 429 is deliberately NOT here. Rate limiting is transient and the adapter
+ * already retries it with backoff; stopping the night for one would be its own
+ * failure.
+ */
+export function providerBlocked(error) {
+  const s = String(error ?? '');
+  if (!s) return null;
+  if (/\b40[13]\b/.test(s) || /\b(unauthorized|forbidden)\b/i.test(s)) {
+    const detail = /"message"\s*:\s*"([^"]+)"/.exec(s)?.[1] ?? s.slice(0, 200);
+    return detail.trim();
+  }
+  if (/\b(key limit exceeded|insufficient (credit|funds|balance)|quota exceeded|billing)\b/i.test(s)) {
+    return s.slice(0, 200).trim();
+  }
+  return null;
+}
+
 export class Supervisor {
   /**
    * @param {object} deps
@@ -390,7 +419,7 @@ export class Supervisor {
     }
 
     if (stage === 'done' || stage === 'failed') {
-      await this.#complete(taskId, hb, stage);
+      await this.#complete(taskId, hb, stage, snapshot.meta?.error ?? null);
       return;
     }
 
@@ -532,7 +561,7 @@ export class Supervisor {
   }
 
   /** A finished run: record the spend, then verify, review and land it. */
-  async #complete(taskId, hb, stage) {
+  async #complete(taskId, hb, stage, error = null) {
     this.inFlight.delete(taskId);
     this.#recordSpend(taskId, hb, `run ${stage}`);
     // Landing takes minutes — gates, a reviewer, a merge, a canary — and it all
@@ -543,6 +572,28 @@ export class Supervisor {
     this.#publish();
 
     if (stage === 'failed') {
+      // The provider refusing everyone is not this task failing. A spent key or
+      // an exhausted quota will do the same to every task after it, in seconds,
+      // and the ladder would turn that into a parked backlog: the task goes up
+      // a band, fails identically, goes up again, runs out of ladder, parks —
+      // and the loop moves on to do it to the next one. Watched live: two tasks
+      // driven to `max` and parked inside a minute, `$0.0000 across 0 call(s)`
+      // on every attempt, because a key hit its spending limit.
+      //
+      // So the task goes back UNTOUCHED — same band, no attempt spent, nothing
+      // in its blockedReason blaming work that never ran — and the loop stops
+      // and says why. This is the same judgement `loop:start`'s pre-flight
+      // makes before the first task; nothing was checking for it afterwards.
+      const blocked = providerBlocked(error);
+      if (blocked) {
+        await this.#discard(taskId);
+        this.backlog.release(taskId, { status: 'queued' });
+        this.stopping = `the provider refused the call: ${blocked}`;
+        this.running = false;
+        this.log(`✖ ${taskId} ${this.stopping} — stopping, because every task would fail the same way`);
+        this.#publish();
+        return;
+      }
       await this.#discard(taskId);
       const result = this.backlog.escalate(taskId, { reason: 'failed', note: 'The run itself failed.' });
       this.history.push({ taskId, landed: false, stage: 'run-failed' });
