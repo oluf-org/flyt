@@ -665,6 +665,43 @@ test('an unusable plan falls back to the authored lanes and the run still comple
   assert.match(brief, /Read this repo\./, 'with a mission derived mechanically from the goal');
 });
 
+test('the planner is staffed from the lanes, not from the app-wide default', async () => {
+  // A fan-out names no worker of its own — the models live on its lanes, which
+  // is how every authored flow in this repo is written. The planner used to
+  // fall through to the global default worker, a provider chosen for the whole
+  // app with nothing to do with this flow. Watched it cost a whole reading:
+  // four lanes each naming a working model, planned on a subscription CLI that
+  // could not start, so the planning call failed and the authored roster ran as
+  // the fallback. The "read it four ways" was never shaped to the brief, and
+  // the only evidence was one line at the bottom of a brief file.
+  const store = makeStore();
+  let plannedOn = null;
+  setScript(call => {
+    const role = roleOf(call.system);
+    if (role === 'subject-peek') return 'A small JS repo.';
+    if (role === 'lane-planner') {
+      plannedOn = call.model;
+      return planJson({
+        mission: 'read it.', subject: 'the repository', focus: [], ignore: [],
+        lanes: [{ preset: 'standard', id: 'main', label: 'Main', intent: 'the brief as written' }]
+      });
+    }
+    return 'lane output';
+  });
+
+  const runner = new FlowRunner(store, POOL_CONFIG({
+    workers: { ...testConfig().workers, executor: { provider: 'script', model: 'the-app-default' } }
+  }));
+  const runId = runner.start(planFlow({
+    plan: 'auto', tools: ['read_file'],
+    lanes: [{ id: 'arch', preset: 'architecture', worker: 'm/two' }, { id: 'wild', preset: 'wildcard', worker: 'm/three' }]
+  }), { userInput: 'brief' });
+  await waitForStage(store, runId, ['done', 'failed']);
+
+  assert.equal(plannedOn, 'm/two', 'the first model the author staffed a lane with');
+  assert.notEqual(plannedOn, 'the-app-default');
+});
+
 test('a resumed fan-out re-plans zero times and re-peeks zero times', async () => {
   const store = makeStore();
   const roles = [];

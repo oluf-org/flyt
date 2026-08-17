@@ -3877,11 +3877,26 @@ export class FlowRunner {
   // `plan` null when the roster could not be planned, with `reason` saying why
   // so `.brief.md` can be honest about running the authored fallback.
   async planLanes(runId, flow, node, opts, authored) {
-    const worker = resolveCallTarget(resolveWorker(node, this.config), this.config);
-    const apiKey = worker.apiKey;
     const minLanes = Math.max(1, Math.floor(Number(node.data?.minLanes ?? DEFAULT_MIN_LANES) || DEFAULT_MIN_LANES));
     const maxLanes = Math.max(minLanes, Math.floor(Number(node.data?.maxLanes ?? DEFAULT_MAX_LANES) || DEFAULT_MAX_LANES));
     const pool = this.lanePool(node, authored);
+    // Who plans the roster, when the fan-out itself names nobody.
+    //
+    // `resolveWorker` falls through to the global default, which is a provider
+    // chosen for the whole app and has nothing to do with this flow. Watched it
+    // cost a whole reading: a fan-out whose four lanes each named a working
+    // OpenRouter model planned on a subscription CLI that could not start
+    // (`Error loading config.toml`), so the planning call failed, the authored
+    // roster ran as the fallback, and the "read it four ways" the flow exists
+    // for was never shaped to the brief at all — a degradation visible only in
+    // one line at the bottom of the brief file.
+    //
+    // The models the author staffed the lanes with are right there, already
+    // ranked, and a flow that can read on them can plan on them.
+    const authoredWorker = node?.data?.worker?.provider && node?.data?.worker?.model;
+    const planner = !authoredWorker && pool.length ? pool[0] : resolveWorker(node, this.config);
+    const worker = resolveCallTarget(planner, this.config);
+    const apiKey = worker.apiKey;
 
     const goal = node.data?.goal?.trim() ?? '';
     const parts = this.upstreamContext(runId, flow, node, opts.taskIdByNode);

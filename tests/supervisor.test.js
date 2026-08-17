@@ -198,7 +198,7 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
     if (name === 'work:start') return { dir: '/tmp/wt', branch: 'b' };
     if (name === 'flow:run') {
       const runId = `run-${++runSeq}`;
-      runs.set(runId, { polls: 0, taskId: args.userInput });
+      runs.set(runId, { polls: 0, taskId: args.userInput, prompt: String(args.userInput ?? '') });
       return runId;
     }
     if (name === 'run:snapshot') {
@@ -218,7 +218,17 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
           // produce tests the fake.
           nodeStatus: { 'work-1': stage === 'done' ? 'done' : 'active' }
         },
-        nodeOutputs: { 'work-1': stage === 'done' ? (output ?? 'finished') : 'thinking' },
+        // The prompt the supervisor actually sent, and the echo of it that a
+        // real run's first node writes as its output. Both were missing here,
+        // and their absence hid a defect that cost a night: the brief carried a
+        // worked example of the TASK-IMPOSSIBLE line, the echo made it a node
+        // output, and every task parked quoting the example. A fake with no
+        // prompt and no echo cannot see that.
+        prompt: r.prompt,
+        nodeOutputs: {
+          'user-input': r.prompt,
+          'work-1': stage === 'done' ? (output ?? 'finished') : 'thinking'
+        },
         retrospectives: {}
       };
     }
@@ -257,6 +267,20 @@ test('the loop works the queue and stops when there is nothing ready', async () 
   assert.equal(status.stopping, 'backlog empty');
   assert.equal(status.landed, 2);
   assert.deepEqual(backlog.list().map(t => t.status), ['landed', 'landed']);
+  // "Nothing ready" is two different pieces of news and the morning reader
+  // needs to know which. A task parked with three tasks depending on it leaves
+  // the queue full and the loop idle; reporting that as "backlog empty" says
+  // the night went fine.
+  const stuck = makeBacklog();
+  const blocker = stuck.add({ title: 'blocker', goal: 'g' });
+  stuck.add({ title: 'waits', goal: 'g', dependsOn: [blocker.id] });
+  stuck.update(blocker.id, { status: 'parked' });
+  const idle = await new Supervisor({
+    ...fakeEngine({ backlog: stuck }), projectId: 'p', backlog: stuck, pollMs: 1
+  }).run();
+  assert.match(idle.stopping, /1 task\(s\) blocked/);
+  assert.match(idle.stopping, /t-0002 \(waiting on t-0001 \(parked\)\)/);
+
   // Highest score first: the picker's order is the loop's order.
   const started = engine.calls.filter(c => c.name === 'work:start').map(c => c.args.taskId);
   assert.deepEqual(started, ['t-0001', 't-0002']);
@@ -492,6 +516,25 @@ test('a task the agent says cannot be done here is parked, not escalated', async
   assert.equal(b3.get('t-0001').status, 'parked');
   assert.match(b3.get('t-0001').blockedReason, /no reason given/);
   assert.ok(!b3.get('t-0001').blockedReason.includes('<one line'), 'the placeholder never reaches the pile');
+
+  // A sentinel that came from the QUESTION is not an answer. The brief used to
+  // carry a worked example of the line, the first node of a run echoes the
+  // brief as its output, and the scan reads node outputs — so a task about a
+  // JSONL session tree parked as "there is no code_quality_manager.py anywhere
+  // in this repository", three dependent tasks blocked behind it, and a
+  // finished worktree was deleted. A task whose own goal quotes the sentinel
+  // (a task to fix this very function) would park itself the same way.
+  const b4 = makeBacklog();
+  b4.add({
+    title: 'Fix the impossible detector',
+    goal: 'The brief tells the agent to answer with a line like\n'
+      + 'TASK-IMPOSSIBLE: there is no code_quality_manager.py anywhere in this repository\n'
+      + 'and the scan reads that line back out of its own question.',
+    level: 'low'
+  });
+  const e4 = fakeEngine({ backlog: b4, output: 'Done — I changed core/supervisor.js.' });
+  await new Supervisor({ ...e4, projectId: 'p', backlog: b4, pollMs: 1 }).run({ maxTasks: 1 });
+  assert.equal(b4.get('t-0001').status, 'landed', 'the question is not the answer');
 
   // An ordinary empty-handed run still escalates: "I could not" and "this
   // cannot be" are different claims, and only one is worth a person.

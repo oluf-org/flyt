@@ -58,13 +58,17 @@ const HOW_IT_LANDS = [
   'If the task cannot be done here at all — it names files this repository does not have, or',
   'asks for something already true — do not invent work to look busy. Change nothing, and begin',
   'your final answer with a line starting `TASK-IMPOSSIBLE:` followed by what you actually found.',
-  'For example:',
   '',
-  '    TASK-IMPOSSIBLE: there is no code_quality_manager.py anywhere in this repository; it is a',
-  '    JavaScript project with no Python at all.',
+  // Described, not demonstrated. A worked example here is a line that matches
+  // the sentinel, sitting inside the brief the first node of every run echoes
+  // as its output — which is how a task about a JSONL session tree parked as
+  // "there is no code_quality_manager.py anywhere in this repository". The scan
+  // now ignores anything it was asked, and the brief no longer asks it.
+  'What follows the colon is your OWN finding, in one line: the thing you looked for, where you',
+  'looked, and what was there instead. Naming the file or symbol you could not find is what makes',
+  'it readable weeks later.',
   '',
-  'Write your own finding there — an example copied word for word tells the person reading it',
-  'nothing. That line parks the task for a person instead of retrying it on a more expensive',
+  'That line parks the task for a person instead of retrying it on a more expensive',
   'model, so use it only when more capability could not help; if you simply failed, say that',
   'instead and it will be retried.'
 ].join('\n');
@@ -261,7 +265,15 @@ export class Supervisor {
         if (!task) {
           // Nothing ready. If work is in flight it may unblock something, so
           // keep polling; otherwise the loop is genuinely done.
-          if (!this.inFlight.size) { this.stopping = 'backlog empty'; break; }
+          //
+          // "Done" and "stuck" look identical from here and are not the same
+          // news. A backlog of four where the first task parks and the other
+          // three depend on it has nothing READY, and reporting that as
+          // "backlog empty" tells the person who comes back in the morning that
+          // the night went fine — the loop stopped after one task, three good
+          // tasks sat behind a parked one, and the status said empty. Say which
+          // it is, and what is in the way.
+          if (!this.inFlight.size) { this.stopping = this.#whyNothingReady(); break; }
           await this.#tick();
           continue;
         }
@@ -543,10 +555,42 @@ export class Supervisor {
    * be done" stay distinguishable — the first is worth another band, the second
    * is worth a person.
    */
+  /**
+   * Nothing is ready — is that because there is nothing, or because everything
+   * left is waiting on something that will never happen?
+   *
+   * The backlog already knows: `blocked()` returns every queued task with the
+   * reason it cannot be picked. This turns that into the one line a person
+   * reads at breakfast, naming the tasks in the way and what they wait on.
+   */
+  #whyNothingReady() {
+    let blocked = [];
+    try { blocked = this.backlog.blocked() ?? []; } catch { blocked = []; }
+    if (!blocked.length) return 'backlog empty';
+    const shown = blocked.slice(0, 3).map(t => `${t.id} (${t.reason})`).join(', ');
+    const rest = blocked.length > 3 ? `, and ${blocked.length - 3} more` : '';
+    return `nothing ready — ${blocked.length} task(s) blocked: ${shown}${rest}`;
+  }
+
   async #saidImpossible(runId) {
     let snapshot;
     try { snapshot = await this.invoke('run:snapshot', { projectId: this.projectId, runId }); }
     catch { return null; }
+    // What the run was ASKED, so a sentinel that came from the question is not
+    // mistaken for an answer.
+    //
+    // This cost a night. The brief carries a worked example of the sentinel
+    // line; the first node of a task run echoes the brief verbatim as its
+    // output; the scan reads node outputs — so every task declared itself
+    // impossible with the example's words, and t-0001 parked as "there is no
+    // code_quality_manager.py anywhere in this repository" while working on a
+    // JSONL session tree. Three dependent tasks blocked behind it and the
+    // finished worktree was deleted. The same trap catches a task whose own
+    // goal quotes the sentinel — a task to fix THIS function would park itself.
+    //
+    // The rule that holds in all three cases: a line that is already in the
+    // question cannot be this run's answer.
+    const asked = String(snapshot?.prompt ?? '');
     const texts = [
       ...Object.values(snapshot?.nodeOutputs ?? {}),
       ...Object.values(snapshot?.taskOutputs ?? {})
@@ -554,6 +598,10 @@ export class Supervisor {
     for (const text of texts) {
       const hit = IMPOSSIBLE.exec(String(text ?? ''));
       if (!hit) continue;
+      // The whole matched line, not just its reason: an agent quoting the
+      // example while genuinely refusing is vanishingly rare next to a node
+      // that echoed the brief, and the brief is where this line comes from.
+      if (asked && asked.includes(hit[0].trim())) continue;
       const why = hit[1].trim().slice(0, 300);
       // A model that echoed the example instead of writing its finding has
       // still declared the task impossible, so it still parks — but a
