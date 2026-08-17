@@ -915,12 +915,15 @@ And **a shared blind spot is not four readings**: three of four lanes hit the sa
 truncation on the same file and each said so, leaving the reading's load-bearing question open
 because the tail was unreachable. `read_file` takes an `offset` now.
 
-**Open, and left open deliberately:** with the planner working, all five planned lanes were
-staffed on ONE model, because `assignWorkers` only decorrelates lanes that share a preset
-(fanout.js, documented). Different presets diverging on one model is a defensible position; it
-is also a single model's blind spots and a single provider's rate limit applied to the whole
-reading. Spreading the pool across all lanes is a one-line change to a documented invariant, so
-it is a decision rather than a fix.
+**Open, and left open deliberately:** `assignWorkers` decorrelates lanes that share a preset and
+lets lanes of different presets share a model (fanout.js, documented). Both halves were watched.
+A planned roster of five distinct presets ran entirely on one model; a later roster that asked
+for three `architecture` lanes spread them across three, which is the rule working exactly as
+written. So the invariant holds where correlation is most likely, and the remaining question is
+narrower than it first looked: whether lanes that differ only by preset should also differ by
+model, given that one model's blind spots and one provider's rate limit otherwise apply to the
+whole reading. That is a one-line change to a documented invariant, so it is a decision rather
+than a fix.
 
 **The loop destroyed its own best work with its own words.** The brief carried a worked example
 of the `TASK-IMPOSSIBLE:` line; a run's first node echoes the brief as its output; the scan read
