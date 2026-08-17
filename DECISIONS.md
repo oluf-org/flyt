@@ -829,6 +829,42 @@ green suite proves the parts agree with the tests, and a loop proves they agree 
 
 ---
 
+### D43 — A queue you cannot delete from is a queue that fills up
+
+**The occasion.** Running the loop for real produced tasks that should never have been worked:
+duplicates, experiments, and a fan-out's worth of entries written against somebody else's
+repository. `Backlog.remove` and `flyt task rm` existed, but the surface where a person actually
+watches the queue had only Requeue and Requeue-a-level-up — so the only way to make an unwanted
+task stop appearing was to park it, which is to say move it to the pile a person reads every
+morning, forever.
+
+**Remove belongs on every pile, not just the parked one.** The task you most want gone is as
+often a queued duplicate as a stuck one, and a landed row somebody no longer wants in the
+history is their call. It asks twice, because it is the only action on that page that cannot be
+undone, and it sits at the far end of the row so a hand reaching for Requeue does not land on
+it. It is quiet but never invisible: a control you can only find by hovering is barely better
+than the nothing that was there before.
+
+**A refusal is a second press, not a hidden button.** The backlog refuses to remove a claimed
+task because a worker holds the lease and probably a worktree, and deleting the file it is
+working from is how a worker ends up writing into a directory the supervisor has forgotten. The
+honest answer is to say what is in the way — the claim message, in full — and let the second
+press mean it. `force` is what the CLI already had; the panel now reaches the same door.
+
+**The one entry a reader tolerates must not be the one entry a remover refuses.** A task file
+that does not parse is reported in `problems` rather than thrown past, so forty good tasks still
+run — which is exactly what made it invisible: no pile, no title, no status, and `remove` threw
+on it too. It was the queue's only permanent resident. Unreadable is now a reason to delete, not
+to refuse; the removal reports `unreadable` instead of inventing a title it never read, the Loop
+view lists those files with their parse error, and `flyt task rm --all` includes them (a
+`--status` filter still does not — an unreadable file has no status to match).
+
+**Status.** Decided and **implemented**. `core/backlog.js`, `task:remove` in `core/api.js`,
+`bin/flyt.js`, the `task:remove` IPC bridge, the Loop view, and the dev mock (which keeps the
+refusal, since the second confirm state only exists when something says no). 938/938 green.
+
+---
+
 ## Open questions (consolidated)
 
 **Product (from `PRODUCT-SPEC.md` §10):**

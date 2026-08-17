@@ -80,6 +80,23 @@ test('a malformed task is reported, not thrown past', () => {
   assert.match(backlog.problems[0].error, /frontmatter/);
 });
 
+test('a task nobody can read is still a task somebody can delete', () => {
+  // The one entry a reader tolerates must not be the one entry a remover
+  // refuses: `list` skips a malformed file so the other forty run, which is
+  // exactly what makes it invisible — and if removing it throws too, it is a
+  // permanent resident of the queue with no way out short of a text editor.
+  const backlog = newBacklog();
+  const good = backlog.add({ title: 'fine', goal: 'g' });
+  fs.writeFileSync(path.join(backlog.rootDir, 't-0099.task.md'), 'no frontmatter here');
+
+  const removed = backlog.remove('t-0099');
+  assert.equal(removed.id, 't-0099');
+  assert.match(removed.unreadable, /frontmatter/, 'and it says so rather than inventing a title');
+  assert.deepEqual(backlog.ids(), [good.id]);
+  backlog.list();
+  assert.deepEqual(backlog.problems, [], 'the queue is clean afterwards');
+});
+
 // --- claiming --------------------------------------------------------------
 
 test('a task can leave the queue for good, unless something is holding it', () => {

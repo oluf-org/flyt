@@ -269,6 +269,7 @@ bindIpc('task:list', (projectId, status = null) => ({ projectId, status }));
 bindIpc('task:add', (projectId, task = {}) => ({ projectId, ...task }));
 bindIpc('task:escalate', (projectId, id, reason = 'failed') => ({ projectId, id, reason }));
 bindIpc('task:release', (projectId, id, status = 'queued') => ({ projectId, id, status }));
+bindIpc('task:remove', (projectId, id, force = false) => ({ projectId, id, force }));
 bindIpc('feedback:stats', projectId => ({ projectId }));
 bindIpc('feedback:digest', (projectId, enqueue = false) => ({ projectId, enqueue }));
 // The benchmark trend (§12.1) — the only number on the Loop view that answers

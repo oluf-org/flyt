@@ -234,12 +234,27 @@ export class Backlog {
    * how a worker ends up writing into a directory the supervisor has forgotten.
    * Release it first, deliberately.
    *
+   * A file that does not PARSE is removed anyway. `list` already tolerates one
+   * (it reports it in `problems` so forty good tasks still run), but a reader
+   * that tolerates a bad file and a remover that throws on it together mean the
+   * one entry nobody can act on is also the one entry nobody can delete — the
+   * queue's only permanent resident. Deleting is the whole point of this method,
+   * so unreadable is a reason to proceed, not to refuse; the returned task
+   * carries `unreadable` so the caller reports it honestly rather than printing
+   * a title it never read.
+   *
    * Returns the task that was removed, so a caller can report or undo it.
    */
   remove(id, { force = false } = {}) {
     const safe = this.#assertId(id);
-    const task = this.get(safe);
-    if (!task) return null;
+    let task = null;
+    try {
+      task = this.get(safe);
+      if (!task) return null;
+    } catch (err) {
+      if (!fs.existsSync(this.#file(safe))) return null;
+      task = { id: safe, title: '(unreadable)', status: 'unknown', unreadable: String(err.message ?? err) };
+    }
     if (!force && fs.existsSync(this.#lock(safe))) {
       throw new Error(`Task "${safe}" is claimed by ${task.claimedBy ?? 'someone'}. Release it before removing it.`);
     }

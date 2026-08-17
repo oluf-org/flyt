@@ -121,6 +121,9 @@ const api = {
   addTask: (pid, task) => ipcRenderer.invoke('task:add', pid, task),
   escalateTask: (pid, id, reason) => ipcRenderer.invoke('task:escalate', pid, id, reason),
   releaseTask: (pid, id, status) => ipcRenderer.invoke('task:release', pid, id, status),
+  // Out of the queue for good. `force` is the second press: a claimed task is
+  // refused first, because something holds a lease and probably a worktree.
+  removeTask: (pid, id, force = false) => ipcRenderer.invoke('task:remove', pid, id, force),
   feedbackStats: (pid) => ipcRenderer.invoke('feedback:stats', pid),
   feedbackDigest: (pid, enqueue = false) => ipcRenderer.invoke('feedback:digest', pid, enqueue),
   archiveTrend: (pid, limit = 30) => ipcRenderer.invoke('archive:trend', pid, limit),

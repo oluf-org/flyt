@@ -4429,7 +4429,22 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
   white-space: pre-wrap; overflow-x: auto; max-height: 320px; overflow-y: auto;
   font-family: inherit;
 }
-.loop-task-actions { display: flex; gap: 8px; margin-top: 8px; }
+.loop-task-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+/* Remove sits at the far end, apart from the requeue pair: it is the one action
+   here that cannot be undone, and it should not be the thing a hand lands on
+   while reaching for Requeue. Quiet until the row is hovered — though never
+   invisible: a control you can only find by hovering is barely better than the
+   nothing this page had before. */
+.loop-task-actions .loop-remove { margin-left: auto; opacity: .6; transition: opacity .14s ease, color .14s ease; }
+.loop-task:hover .loop-remove, .loop-remove:focus-visible { opacity: 1; }
+.loop-task-actions .loop-remove:hover { color: var(--err); }
+.loop-remove-confirm { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.loop-remove-confirm .ask { font-size: 11px; color: var(--dim); }
+
+/* Backlog files that would not parse. Marked in the error colour rather than
+   the warning one: a parked task is waiting for a person, this is broken. */
+.loop-pile-problems .loop-task { border-left: 3px solid var(--err); }
+.loop-pile-problems .title { font-size: 12px; color: var(--dim); }
 .loop-pile .empty, .loop-tail .empty { color: var(--faint); font-size: 12px; margin: 0; }
 
 /* The benchmark trend (§12.1): the one panel that answers "is it getting

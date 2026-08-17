@@ -319,12 +319,18 @@ async function main() {
         // repository is thirteen wrong tasks, not one.
         case 'rm':
         case 'remove': {
-          const { tasks } = await api.invoke('task:list', {
+          const { tasks, problems = [] } = await api.invoke('task:list', {
             projectId, status: typeof flags.status === 'string' ? flags.status : null
           });
+          // `--all` means all, including the files that would not parse. They
+          // are exactly the ones a person reaches for this command over, and
+          // they are invisible in `task list` — leaving them behind would empty
+          // the queue in the report and not on disk. A `--status` filter still
+          // skips them: an unreadable file has no status to match.
           const ids = positional.slice(2).length ? positional.slice(2)
-            : (flags.all || flags.status) ? tasks.map(t => t.id)
-              : [];
+            : flags.all ? [...tasks.map(t => t.id), ...problems.map(p => p.id)]
+              : flags.status ? tasks.map(t => t.id)
+                : [];
           if (!ids.length) return die('flyt task rm <id>... — or --all, or --status <status>');
           const removed = [];
           for (const id of ids) {

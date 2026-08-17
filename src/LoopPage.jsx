@@ -64,6 +64,17 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
   // nobody is looking at.
   const [openTask, setOpenTask] = useState(null);
   const [taskSpend, setTaskSpend] = useState({});
+  // Files in the backlog directory that would not parse. They are reported
+  // alongside the tasks rather than thrown past (one bad file must not hide the
+  // other forty), and until they are shown here they are a queue entry nobody
+  // can see and nobody can delete.
+  const [problems, setProblems] = useState([]);
+  // Removal is the one action on this page that cannot be undone, so it asks
+  // twice: `pendingRemove` is the task whose Remove has been pressed once.
+  // `forceRemove` is the narrower case — the backlog refused because a worker
+  // holds the lease — where the second press has to mean something stronger.
+  const [pendingRemove, setPendingRemove] = useState(null);
+  const [forceRemove, setForceRemove] = useState(null);
   const tailRef = useRef(null);
 
   const refresh = useCallback(async () => {
@@ -79,6 +90,7 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
       ]);
       setStatus(st);
       setTasks(list?.tasks ?? []);
+      setProblems(list?.problems ?? []);
       setCaps(spendCheck?.caps ?? {});
       setSeries(trend);
       // The LEDGER is the source of truth for spend, not the supervisor's copy
@@ -182,6 +194,62 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
     catch (err) { setError(String(err?.message ?? err)); }
     finally { setBusy(false); }
   };
+
+  /**
+   * Take a task out of the queue for good.
+   *
+   * Requeue and Requeue-a-level-up move a task between piles; nothing on this
+   * page removed one, so a task written against the wrong repository — or an
+   * experiment, or a duplicate — could only be parked, where it sits in the
+   * pile a person reads every morning, forever.
+   *
+   * The refusal path is the interesting one. A claimed task is refused by the
+   * backlog because a worker holds the lease and probably a worktree, and the
+   * honest answer is not to hide the button but to say what is in the way and
+   * let the second press mean it.
+   */
+  const removeTask = async (id, { force = false } = {}) => {
+    setBusy(true);
+    try {
+      await window.flyt.removeTask(projectId, id, force);
+      setPendingRemove(null);
+      setForceRemove(null);
+      if (openTask === id) setOpenTask(null);
+      setError(null);
+      await refresh();
+    } catch (err) {
+      const msg = String(err?.message ?? err);
+      setError(msg);
+      if (/claimed/i.test(msg)) setForceRemove(id);
+      else { setPendingRemove(null); setForceRemove(null); }
+    } finally { setBusy(false); }
+  };
+
+  // The Remove control for one task: one press to ask, one to mean it.
+  const removeControls = id => (pendingRemove === id
+    ? (
+      <span className="loop-remove-confirm">
+        <span className="ask">{forceRemove === id ? 'Still remove it?' : 'Remove for good?'}</span>
+        <button
+          className="reject"
+          disabled={busy}
+          onClick={() => removeTask(id, { force: forceRemove === id })}
+        >{forceRemove === id ? 'Remove anyway' : 'Remove'}</button>
+        <button
+          className="link"
+          disabled={busy}
+          onClick={() => { setPendingRemove(null); setForceRemove(null); }}
+        >Cancel</button>
+      </span>
+    )
+    : (
+      <button
+        className="link loop-remove"
+        disabled={busy}
+        title="Delete this task from the backlog"
+        onClick={() => { setPendingRemove(id); setForceRemove(null); }}
+      >Remove</button>
+    ));
 
   return (
     <div className="loop-page">
@@ -330,6 +398,25 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
         </section>
       )}
 
+      {/* Files in the backlog directory that would not parse. The loop skips
+          them, so they never appear in a pile and never finish — an entry that
+          is invisible and permanent at once. Shown with the parse error and a
+          way out. */}
+      {problems.length > 0 && (
+        <section className="loop-pile loop-pile-problems">
+          <h2>Unreadable <span className="count">{problems.length}</span></h2>
+          {problems.map(p => (
+            <article key={p.id} className="loop-task">
+              <div className="loop-task-row">
+                <span className="id mono">{p.id}</span>
+                <span className="title">{p.error}</span>
+              </div>
+              <div className="loop-task-actions">{removeControls(p.id)}</div>
+            </article>
+          ))}
+        </section>
+      )}
+
       <div className="loop-piles">
         {PILE_ORDER.map(key => {
           const list = piles[key] ?? [];
@@ -416,16 +503,23 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
                     </div>
                   )}
 
-                  {key === 'parked' && (
-                    <div className="loop-task-actions">
-                      <button disabled={busy} onClick={() => act(() => window.flyt.releaseTask(projectId, t.id, 'queued'))}>
-                        Requeue
-                      </button>
-                      <button disabled={busy} onClick={() => act(() => window.flyt.escalateTask(projectId, t.id, 'stalled'))}>
-                        Requeue a level up
-                      </button>
-                    </div>
-                  )}
+                  {/* Every pile, not only the parked one: the task you most
+                      want gone is as often a queued duplicate as a stuck one,
+                      and a landed row you no longer want in the history is the
+                      person's call to make. */}
+                  <div className="loop-task-actions">
+                    {key === 'parked' && (
+                      <>
+                        <button disabled={busy} onClick={() => act(() => window.flyt.releaseTask(projectId, t.id, 'queued'))}>
+                          Requeue
+                        </button>
+                        <button disabled={busy} onClick={() => act(() => window.flyt.escalateTask(projectId, t.id, 'stalled'))}>
+                          Requeue a level up
+                        </button>
+                      </>
+                    )}
+                    {removeControls(t.id)}
+                  </div>
                 </article>
                 );
               })}

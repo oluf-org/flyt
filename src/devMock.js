@@ -320,6 +320,10 @@ const mockTasks = [
   }
 ];
 
+const mockProblems = [
+  { id: 't-0007', error: 't-0007: no YAML frontmatter' }
+];
+
 const mockLoop = {
   running: false, stopping: null, model: null, models: {},
   inFlight: [], parked: [], completed: 4, landed: 1,
@@ -844,7 +848,10 @@ export function installDevMock() {
     loopReport: async () => '# Loop report (dev mock)\n\n**Spend:** $2.28 across 41 call(s)\n',
     loopLog: async () => structuredClone(mockLoop.log),
     onLoopEvent: () => () => {},
-    listTasks: async () => ({ tasks: structuredClone(mockTasks), problems: [] }),
+    // A file that would not parse comes back beside the tasks, never instead of
+    // them. It is in the mock because it is the entry with no pile of its own —
+    // the panel has to show it or it is invisible and permanent at once.
+    listTasks: async () => ({ tasks: structuredClone(mockTasks), problems: structuredClone(mockProblems) }),
     addTask: async (_pid, task) => task,
     // Money is per task in the ledger, which is what the expanded card reads.
     ledgerTotals: async (_pid, { taskId = null } = {}) => (taskId
@@ -864,6 +871,24 @@ export function installDevMock() {
       const t = mockTasks.find(t => t.id === id);
       if (t) { t.status = 'queued'; t.blockedReason = null; }
       return t;
+    },
+    removeTask: async (_pid, id, force = false) => {
+      const p = mockProblems.findIndex(x => x.id === id);
+      if (p >= 0) {
+        const [gone] = mockProblems.splice(p, 1);
+        return { removed: gone.id, title: '(unreadable)', status: 'unknown', unreadable: gone.error };
+      }
+      const i = mockTasks.findIndex(t => t.id === id);
+      if (i < 0) throw new Error(`No task "${id}".`);
+      // The mock keeps the refusal, not just the happy path: the two-press
+      // confirm in the Loop view only shows its second state when something
+      // says no, and that is the half worth being able to see without a
+      // worktree and a real lease behind it.
+      if (!force && ['claimed', 'running'].includes(mockTasks[i].status)) {
+        throw new Error(`Task "${id}" is claimed by supervisor. Release it before removing it.`);
+      }
+      const [removed] = mockTasks.splice(i, 1);
+      return { removed: removed.id, title: removed.title, status: removed.status };
     },
     archiveTrend: async () => ({
       points: [

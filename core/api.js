@@ -425,7 +425,10 @@ export function createApi(engine) {
     'task:remove': ({ projectId, id, force = false }) => {
       const removed = backlogFor(projectId).remove(id, { force });
       if (!removed) throw new ApiError(`No task "${id}".`, { status: 404, code: 'no_task' });
-      return { removed: removed.id, title: removed.title, status: removed.status };
+      return {
+        removed: removed.id, title: removed.title, status: removed.status,
+        ...(removed.unreadable ? { unreadable: removed.unreadable } : {})
+      };
     },
     // One rung up and back in the queue — or parked, when the ladder is spent.
     // The supervisor calls this on a failed attempt and on a stalled one (§11.4).
