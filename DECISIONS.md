@@ -874,6 +874,74 @@ already on disk.
 `bin/flyt.js`, the `task:remove` IPC bridge, the Loop view, and the dev mock (which keeps the
 refusal, since the second confirm state only exists when something says no). 939/939 green.
 
+### D44 — Supervising the supervisor: what one repository-reading actually cost
+
+**The occasion.** The app was pointed at `PrimeIntellect-ai/prime-agent` to learn how a coding
+agent survives a long task, and the result was four good tasks, one attempt, nothing landed, and
+a queue that could not be emptied. This is what a supervised repeat of that run found, in the
+order the work flows: prompt → flow → fan-out → merge → backlog → loop → ledger.
+
+**The prompt was the least of it.** The original goal ("we are in an agent orchestration app and
+want to learn how this other repo is handling agents working on long tasks") produced a *good*
+backlog — four tasks, each citing `reference:prime-agent/...` paths, each naming what not to
+copy. Sharpening it helps at the margin (say what this project already has, so the readers do
+not spend calls rediscovering the supervisor; say the constraints, so nothing proposes a
+dependency), but every real failure was downstream of it and none would have been fixed by
+better wording.
+
+**The readers were never told which repository to read.** A repo input feeds ONE node, and in
+this flow that node is `orient`. The five readers downstream inherited nothing: no default
+search scope, no addressing block, and no report when they read something else. On the repeat,
+all five read THIS project and a second reference for 107 model calls and seventeen minutes, and
+the merge concluded "findings about prime-agent are irrelevant and have been dropped". Every
+lane reported success. A run has one subject, so a fan-out with none of its own now inherits it,
+and naming a different reference explicitly is logged and said back to the model.
+
+**The four-way split earns its cost; the four-model staffing is what makes it four.** From the
+one reading where it worked: the contrarian lane reframed the whole architecture (the thing to
+copy is not the JSONL tree but a three-tier hot/warm/cold discipline), the wildcard found that
+the live IPython kernel is the real procedural memory and survives compaction on purpose, and
+the two lanes that SHARED a preset on different models produced materially different material —
+one reached the lease internals the other never opened. The merge is where the value is
+realized: it attributed every single-lane finding, stated the central disagreement instead of
+silently picking a winner, produced a framing no lane had, and carried the falsifiers forward as
+an open question. It is worth more than the sum of the lanes, which is the argument for the
+split rather than against it.
+
+Two caveats, both measured. **That roster was never planned** — the planning call failed on a
+provider unrelated to the flow and the authored fallback ran, so "read it four ways" was luck
+rather than design; the planner is now staffed from the models the flow's own lanes name.
+And **a shared blind spot is not four readings**: three of four lanes hit the same 60,000-char
+truncation on the same file and each said so, leaving the reading's load-bearing question open
+because the tail was unreachable. `read_file` takes an `offset` now.
+
+**Open, and left open deliberately:** with the planner working, all five planned lanes were
+staffed on ONE model, because `assignWorkers` only decorrelates lanes that share a preset
+(fanout.js, documented). Different presets diverging on one model is a defensible position; it
+is also a single model's blind spots and a single provider's rate limit applied to the whole
+reading. Spreading the pool across all lanes is a one-line change to a documented invariant, so
+it is a decision rather than a fix.
+
+**The loop destroyed its own best work with its own words.** The brief carried a worked example
+of the `TASK-IMPOSSIBLE:` line; a run's first node echoes the brief as its output; the scan read
+node outputs. So t-0001 — an append-only JSONL session tree — parked as "there is no
+code_quality_manager.py anywhere in this repository", three dependent tasks blocked behind it,
+its finished worktree was deleted, and the status line said `backlog empty`. Four separate
+defects in one sentence, all now fixed and all invisible to a green suite.
+
+**And the money was never being counted.** Only the supervisor recorded spend, and only for runs
+it started, so every flow run — including the four-lane reading, the most expensive single thing
+this app does — left no ledger line. `flyt spend` reported $3.62 for a period that had exhausted
+an OpenRouter key's total limit.
+
+**Status.** Decided and **implemented**, except where noted above: subject inheritance and
+foreign-reference auditing, the planner's staffing, the impossible-scan guard, blocked-vs-empty
+reporting, ledger coverage for unsupervised runs, `read_file` offsets, `flyt answer`, per-session
+spend caps on `flyt loop start`, task removal (D43) and monotonic ids. 943/943 green. The
+pattern D42 recorded held again and is worth repeating: every defect here was invisible to a
+reading of the code and obvious within one real run.
+
+
 ---
 
 ## Open questions (consolidated)
