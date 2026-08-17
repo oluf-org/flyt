@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FlowRunner, topoSort, resolveWorker } from '../core/flowRunner.js';
+import { Ledger } from '../core/ledger.js';
+import os from 'node:os';
 import { makeStore, setScript, roleOf, testConfig, waitFor, waitForStage, makeFlow, node, edge } from './helpers.js';
 
 const readLog = (store, runId) =>
@@ -576,4 +578,33 @@ test('the runner records per-edge context bytes into meta (thick full-context, t
   assert.ok(ec['e-in-a'] > 0, `e-in-a should carry context, got ${ec['e-in-a']}`);
   // The contextSpec node ignored its upstream output — that edge carried nothing.
   assert.equal(ec['e-a-b'], 0, 'the edge into a contextSpec node should be measured empty');
+});
+
+test('a flow run that nobody supervised still reaches the ledger', async () => {
+  // Only the supervisor recorded spend, and only for the runs it started. So
+  // every run a person or a flow launched — including the fan-out that reads
+  // another repository across four lanes, the most expensive single thing this
+  // app does — spent real money and left no ledger line. `flyt spend` answered
+  // $3.62 for a day that had emptied an OpenRouter key's total limit, and the
+  // caps, which are rolling totals of real money, were counting a fraction.
+  const store = makeStore();
+  const recorded = [];
+  setScript(() => 'done');
+  const runner = new FlowRunner(store, testConfig());
+  runner.ledger = { recordRun: (_store, args) => recorded.push(args) };
+
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'go' }), node('work', 'aiStep', { goal: 'do it' }), node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'out')]);
+
+  const runId = runner.start(flow, { userInput: 'go' });
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.deepEqual(recorded, [{ runId }], 'the run it never owned is still counted');
+
+  // A run the supervisor DOES own is left alone: it records the same calls
+  // against the TASK when the task ends, and counting them twice would make
+  // every cap read double.
+  const owned = runner.start(flow, { userInput: 'go', loopTaskId: 't-0001' });
+  assert.equal(await waitForStage(store, owned, ['done', 'failed']), 'done');
+  assert.equal(recorded.filter(r => r.runId === owned).length, 0);
 });

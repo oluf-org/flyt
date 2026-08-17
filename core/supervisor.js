@@ -357,7 +357,11 @@ export class Supervisor {
         // `loop.levels: false` runs on whatever workers are configured, for a
         // project whose keys are not OpenRouter's.
         level: this.config.loop?.levels === false ? null : level,
-        worker
+        worker,
+        // This run belongs to a task, and its spend is recorded against that
+        // task when the task ends. Saying so is what keeps the runner from
+        // recording the same calls a second time as an unattributed run.
+        loopTaskId: task.id
       });
       this.inFlight.set(task.id, new Heartbeat({ taskId: task.id, runId, level, now: this.now(), model: worker?.model ?? null }));
       this.backlog.update(task.id, { runIds: [...(task.runIds ?? []), runId] });

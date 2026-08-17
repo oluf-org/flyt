@@ -318,7 +318,7 @@ export function createApi(engine) {
     // The workspace is bound at run time (D15) — a bound tab IS its workspace
     // (T19), an appdata project has its own managed one (L5), and only an
     // unbound project picks one per run (or none, for mock/no-file flows).
-    'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null, level = null, worker = null }) => {
+    'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null, level = null, worker = null, loopTaskId = null }) => {
       const entry = proj(projectId);
       let workspace = null;
       // An explicit workspaceDir WINS, even for a bound project. That is how the
@@ -354,7 +354,12 @@ export function createApi(engine) {
         // Typed run inputs (D36 P1). Without this the composer collects them
         // and the runner never sees them.
         inputs: launch?.inputs ?? null,
-        compareGroup: launch?.compareGroup ?? null
+        compareGroup: launch?.compareGroup ?? null,
+        // Which backlog task this run IS, when the supervisor started it. The
+        // supervisor records that run's spend against the task when the task
+        // ends, so the runner must not also record it as an unattributed flow
+        // run — one call, one ledger line.
+        loopTaskId
       });
     },
 

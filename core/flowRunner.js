@@ -2089,7 +2089,7 @@ export class FlowRunner {
   //   'ask'    — pause before every destructive tool call.
   //   'smart'  — screen each call (core/safetyCheck.js); pause only on risk.
   //   'always' — never pause. The dangerous one.
-  start(flow, { userInput = '', workspace = null, approvalMode = null, modeId = null, overrides = null, compareGroup = null, inputs = null } = {}) {
+  start(flow, { userInput = '', workspace = null, approvalMode = null, modeId = null, overrides = null, compareGroup = null, inputs = null, loopTaskId = null } = {}) {
     // Pre-run gate (REFACTOR-PLAN §4): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
@@ -2186,6 +2186,10 @@ export class FlowRunner {
         : {}),
       // From the SPLICED graph: sub-flow children are real nodes in this run.
       ...(inputValues ? { runInputs: inputValues } : {}),
+      // Whose run this is. The supervisor records its own runs against the task
+      // when the task ends; without this marker the runner would record them
+      // too, and every loop call would be counted twice.
+      ...(loopTaskId ? { loopTaskId: String(loopTaskId) } : {}),
       nodeStatus: Object.fromEntries(flowCopy.nodes.map(n => [n.id, 'pending']))
     });
     this.store.appendLog(runId, {
@@ -2514,6 +2518,7 @@ export class FlowRunner {
 
     if (this.stopRequests.has(runId)) return; // stopped during the final wave
     this.store.setStage(runId, 'done', { currentTaskId: null });
+    this.#recordSpend(runId);
     this.notify(runId);
   }
 
@@ -4488,6 +4493,31 @@ export class FlowRunner {
     }
   }
 
+  /**
+   * What this run cost, into the ledger.
+   *
+   * Only the SUPERVISOR recorded spend, and only for the runs it started. So
+   * every run a person or a flow launched — including the fan-out that reads
+   * another repository with four lanes, the most expensive single thing this
+   * app does — spent real money and left no ledger line. `flyt spend` answered
+   * $3.62 for a day that had emptied an OpenRouter key's total limit; the
+   * burn-down on the Loop view drew a bar against a ceiling it could not see
+   * past; and the caps, which are rolling totals of real money, were counting
+   * a fraction of it.
+   *
+   * A run the supervisor owns is left alone: it records the same calls against
+   * the TASK when the task ends (§9), and that attribution is what the Loop
+   * view's per-task spend reads. `loopTaskId` in the meta is how a run says
+   * which it is.
+   */
+  #recordSpend(runId) {
+    try {
+      if (!this.ledger?.recordRun) return;
+      if (this.store.readMeta(runId)?.loopTaskId) return;
+      this.ledger.recordRun(this.store, { runId });
+    } catch { /* accounting must never take a run down */ }
+  }
+
   fail(runId, err) {
     // Never throws: a run stopped and then deleted mid-unwind pulls the files
     // out from under these writes, and an unhandled rejection here would take
@@ -4504,6 +4534,10 @@ export class FlowRunner {
       const meta = this.store.readMeta(runId);
       const current = meta.currentNodeId;
       this.store.setStage(runId, 'failed', { error: String(err?.message ?? err) });
+      // A run that failed still spent. The expensive kind — four lanes over a
+      // large repository, dying at the merge — is exactly the one whose cost a
+      // ledger that only records tidy endings would omit.
+      this.#recordSpend(runId);
       // In a parallel wave currentNodeId is just the last node that went
       // active — it may have finished fine. Only flag it if it's still active.
       if (current && this.store.readMeta(runId).nodeStatus?.[current] === 'active') {
