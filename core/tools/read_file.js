@@ -11,7 +11,8 @@ export default {
   description: [
     'Read a text file from the workspace (the bound target project). Forward-slash relative path',
     'like "src/app.js"; confined to the workspace root. Returns the file contents (large files are',
-    'truncated). A path beginning "reference:" reads from the READ-ONLY reference library instead,',
+    'truncated — the result says where it stopped, and `offset` reads on from there). A path',
+    'beginning "reference:" reads from the READ-ONLY reference library instead,',
     'e.g. "reference:opencode/packages/opencode/src/server/server.ts" — use search_references to',
     'find one.'
   ].join(' '),
@@ -28,6 +29,14 @@ export default {
       path: {
         type: 'string',
         description: 'Relative path inside the workspace, e.g. "src/app.js" — or "reference:<repo>/<path>" for the read-only reference library.'
+      },
+      // The tail of a long file used to be unreachable: the read stopped at the
+      // cap and there was no second call that could start anywhere else. One
+      // number fixes it, and the truncation marker names the number to pass.
+      offset: {
+        type: 'integer',
+        minimum: 0,
+        description: 'Character to start reading from. Use the offset named in a previous truncation marker to read the rest of a long file.'
       }
     }
   },
@@ -36,16 +45,18 @@ export default {
     // the workspace. It is a separate path rather than a mounted directory
     // precisely so no write tool can reach it — none of them know the prefix,
     // and there is no write path in ReferenceLibrary to reach if they did.
+    const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
     if (String(args.path ?? '').startsWith('reference:')) {
       if (!ctx?.references) throw new Error('No reference library is available in this run.');
-      const content = ctx.references.read(args.path);
+      const content = ctx.references.read(args.path, { offset });
       if (content == null) throw new Error(`Reference "${args.path}" not found. Use search_references to find a path.`);
       return {
         path: args.path,
         content,
         bytes: Buffer.byteLength(content, 'utf8'),
         target: 'reference',
-        readOnly: true
+        readOnly: true,
+        ...(offset ? { offset } : {})
       };
     }
     const host = fileHost(ctx);
@@ -60,12 +71,18 @@ export default {
         tool: 'read_file', path: args.path, read: 'workspace', expected: `reference:${ctx.subject.repo}`
       });
     }
-    const content = readText(host, args.path);
-    if (content == null) throw new Error(`File "${args.path}" not found in the workspace.`);
-    const bytes = Buffer.byteLength(content, 'utf8');
+    const whole = readText(host, args.path);
+    if (whole == null) throw new Error(`File "${args.path}" not found in the workspace.`);
+    const bytes = Buffer.byteLength(whole, 'utf8');
+    const content = offset ? whole.slice(Math.min(offset, whole.length)) : whole;
     if (content.length > MAX_CHARS) {
-      return { path: args.path, content: content.slice(0, MAX_CHARS), truncated: true, bytes, target: host.target };
+      const end = offset + MAX_CHARS;
+      return {
+        path: args.path, content: content.slice(0, MAX_CHARS), truncated: true, bytes, target: host.target,
+        // Where it stopped, so reading on is a call rather than a guess.
+        ...(offset ? { offset } : {}), nextOffset: end, chars: whole.length
+      };
     }
-    return { path: args.path, content, bytes, target: host.target };
+    return { path: args.path, content, bytes, target: host.target, ...(offset ? { offset } : {}) };
   }
 };

@@ -200,6 +200,28 @@ test('read_file reaches the library through a prefix, and says it is read-only',
   assert.match(missing.error, /search_references/, 'the error points at the way to find a real path');
 });
 
+test('the tail of a long reference file is reachable', async () => {
+  // It was not, and the cost was a reading rather than a crash. A 60,041-char
+  // file gave up its first 60,000 characters and the rest existed nowhere a
+  // reader could get to: three of four lanes in one run hit the same wall on
+  // the same file, each said so honestly, and the reading's load-bearing
+  // question — is there an index over the dropped entries? — stayed open
+  // because nobody could read the end of the file.
+  const lib = seeded();
+  const long = 'A'.repeat(60_000) + 'THE-PART-NOBODY-COULD-REACH';
+  fs.writeFileSync(path.join(lib.rootDir, 'prime-agent', 'huge.ts'), long);
+  const ctx = ctxWith(lib);
+
+  const first = await executeTool('read_file', { path: 'reference:prime-agent/huge.ts' }, ctx);
+  assert.ok(!first.result.content.includes('THE-PART-NOBODY-COULD-REACH'), 'still capped');
+  const at = /offset: (\d+)/.exec(first.result.content)?.[1];
+  assert.ok(at, 'and the marker says where to resume, so the next call is obvious');
+
+  const rest = await executeTool('read_file', { path: 'reference:prime-agent/huge.ts', offset: Number(at) }, ctx);
+  assert.match(rest.result.content, /THE-PART-NOBODY-COULD-REACH/);
+  assert.match(rest.result.content, /resumed at character 60000/);
+});
+
 test('no write tool can reach the library, because none of them know the prefix', async () => {
   const ctx = ctxWith(seeded());
   // write_file treats it as an ordinary workspace path: a file literally named

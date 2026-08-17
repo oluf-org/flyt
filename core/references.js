@@ -287,14 +287,27 @@ export class ReferenceLibrary {
 
   // Read one file out of the library. Null when it isn't there — a missing
   // reference file is an ordinary answer, not an error.
-  read(ref, { maxChars = 60_000 } = {}) {
+  //
+  // `offset` is what makes a big file readable at all. The window was the whole
+  // story: a 60,041-character file gave up its first 60,000 characters and the
+  // rest existed nowhere a reader could reach. Watched three of four lanes hit
+  // the same wall on the same file in one run, each say so honestly, and leave
+  // the reading's load-bearing question open — not because the answer was hard
+  // but because the tail was unreachable. The truncation marker now says where
+  // to resume, so the next call is obvious rather than inventable.
+  read(ref, { maxChars = 60_000, offset = 0 } = {}) {
     const abs = this.resolve(ref);
     try {
       if (!fs.statSync(abs).isFile()) return null;
       const text = fs.readFileSync(abs, 'utf8');
-      return text.length > maxChars
-        ? `${text.slice(0, maxChars)}\n…[truncated at ${maxChars} characters]`
-        : text;
+      const from = Math.max(0, Math.min(Math.floor(Number(offset) || 0), text.length));
+      const window = text.slice(from, from + maxChars);
+      const end = from + window.length;
+      const head = from > 0 ? `…[resumed at character ${from} of ${text.length}]\n` : '';
+      const tail = end < text.length
+        ? `\n…[truncated at character ${end} of ${text.length} — read the rest with offset: ${end}]`
+        : '';
+      return `${head}${window}${tail}`;
     } catch { return null; }
   }
 

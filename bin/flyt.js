@@ -32,6 +32,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt snapshot <runId>               the run's current state
   flyt log <runId> [--quiet]          the run's event log (--event a,b --node n --tail N)
   flyt approve|reject|stop <runId>    answer a gate or stop a run
+  flyt answer <runId> "<text>"        reply to a node that stopped to ask
   flyt why [<runId>]                  why a run failed or stalled (default: latest)
   flyt probe <model>...               call a model once and report what came back
   flyt doctor [--flow <id>] [--probe] providers, priority, library — and the models a flow pins
@@ -648,6 +649,19 @@ async function main() {
 
     case 'stop':
       return out(await api.invoke('run:stop', { projectId: openProject(api, engine), runId: positional[1] }));
+
+    // A node that stops to ASK could not be answered from here, only approved
+    // or killed — so a headless run that asked one question sat until it timed
+    // out, and the only way to move it was the desktop app. `flyt why` would
+    // say it was waiting; nothing could reply.
+    case 'answer': {
+      const runId = positional[1];
+      const text = String(flags.text ?? positional.slice(2).join(' ') ?? '').trim();
+      if (!runId || !text) return die('flyt answer <runId> "<your answer>"');
+      return out(await api.invoke('run:answerInput', {
+        projectId: openProject(api, engine), runId, text
+      }));
+    }
 
     // --- Diagnostics (D40) ---------------------------------------------------
     // The first thing to reach for when a run fails. Defaults to the most
