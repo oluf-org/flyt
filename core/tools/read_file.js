@@ -50,13 +50,28 @@ export default {
       if (!ctx?.references) throw new Error('No reference library is available in this run.');
       const content = ctx.references.read(args.path, { offset });
       if (content == null) throw new Error(`Reference "${args.path}" not found. Use search_references to find a path.`);
+      // Which reference this actually is. The workspace read below has been
+      // audited against the run's subject since HOME-CONTEXT P1; reading a
+      // DIFFERENT reference was not, and the library holds other people's
+      // repositories. Watched a lane read one for its entire life and report
+      // confident findings about it under a brief naming another.
+      const repo = /^reference:([^/]+)/.exec(String(args.path))?.[1] ?? null;
+      const elsewhere = ctx.subject?.repo && repo && repo !== ctx.subject.repo;
+      if (elsewhere) {
+        ctx.store?.appendLog?.(ctx.runId, {
+          event: 'tool_target_unexpected',
+          node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
+          tool: 'read_file', path: args.path, read: repo, expected: `reference:${ctx.subject.repo}`
+        });
+      }
       return {
         path: args.path,
         content,
         bytes: Buffer.byteLength(content, 'utf8'),
         target: 'reference',
         readOnly: true,
-        ...(offset ? { offset } : {})
+        ...(offset ? { offset } : {}),
+        ...(elsewhere ? { note: `This file is in "${repo}", NOT the repository you were asked to read ("${ctx.subject.repo}").` } : {})
       };
     }
     const host = fileHost(ctx);

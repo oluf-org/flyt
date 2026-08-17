@@ -590,3 +590,31 @@ test('an aiStep tool call is attributed to the node that made it', async () => {
   assert.ok(call, 'the call happened');
   assert.equal(call.node, 'step', 'and it says which node made it');
 });
+
+test('the readers inherit the subject even when the repo input fed a different node', async () => {
+  // The repo input feeds ONE node and it is rarely the fan-out. In
+  // `learn-from-repo` the edge is `inputs.repo -> orient`, so orient was
+  // stamped and the READERS were not — and a lane with no subject has no
+  // default search scope, no addressing block, and nothing that reports a read
+  // of the wrong repository. Watched the whole reading go wrong exactly that
+  // way: five lanes read this project and a different reference, and the merge
+  // then discarded the actual subject as irrelevant.
+  const store = makeStore();
+  setScript(call => (roleOf(call.system) === 'subject-peek' ? 'shape' : 'findings'));
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     // Stamped by materializeInputs on the node the repo input feeds.
+     node('orient', 'aiStep', { goal: 'Where are we standing?', role: 'orient', subjectRepo: 'their-repo', subjectStrict: false }),
+     node('fan', 'fanout', { title: 'Read it', goal: 'Read it.', tools: ['read_file'], lanes: ['standard', 'wildcard'] }),
+     node('out', 'output')],
+    [edge('in', 'orient'), edge('orient', 'fan'), edge('fan', 'out')]);
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(flow, { userInput: 'brief' });
+  await waitForStage(store, runId, ['done', 'failed']);
+
+  const f = store.readFlow(runId);
+  for (const id of ['fan-standard', 'fan-wildcard']) {
+    assert.equal(f.nodes.find(n => n.id === id).data.subjectRepo, 'their-repo',
+      'the node that does the reading is not the node that was handed the URL');
+  }
+});

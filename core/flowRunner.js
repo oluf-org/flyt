@@ -3881,6 +3881,23 @@ export class FlowRunner {
   // The planning call (FANOUT P3.2–P3.4). Returns { plan, pool, reason } —
   // `plan` null when the roster could not be planned, with `reason` saying why
   // so `.brief.md` can be honest about running the authored fallback.
+  /**
+   * The one repository this run was pointed at, if there is exactly one.
+   *
+   * Read off the graph rather than the meta: `materializeInputs` stamps
+   * `subjectRepo` on whichever nodes a repo input feeds, so the flow itself
+   * already records the answer. Exactly one, or nothing — a run given two
+   * repositories has no single subject, and guessing which one a reader meant
+   * is worse than leaving it unscoped.
+   */
+  #runSubject(flow) {
+    const names = new Set();
+    for (const n of flow?.nodes ?? []) {
+      if (n?.data?.subjectRepo) names.add(String(n.data.subjectRepo));
+    }
+    return names.size === 1 ? [...names][0] : null;
+  }
+
   async planLanes(runId, flow, node, opts, authored) {
     const minLanes = Math.max(1, Math.floor(Number(node.data?.minLanes ?? DEFAULT_MIN_LANES) || DEFAULT_MIN_LANES));
     const maxLanes = Math.max(minLanes, Math.floor(Number(node.data?.maxLanes ?? DEFAULT_MAX_LANES) || DEFAULT_MAX_LANES));
@@ -4071,7 +4088,18 @@ export class FlowRunner {
       const goal = node.data?.goal?.trim() ?? '';
       // The repository the lanes are pointed at, when a repo input feeds this
       // node: it buys every lane the addressing block (HOME-CONTEXT P1.1).
-      const subjectRepo = node.data?.subjectRepo ? String(node.data.subjectRepo) : '';
+      //
+      // Inherited when this node has none of its own, because a repo input
+      // feeds ONE node and it is rarely the fan-out. In `learn-from-repo` the
+      // edge is `inputs.repo -> orient`, so orient was stamped and the readers
+      // were not — and a lane with no subject has no default search scope, no
+      // addressing block, and nothing that reports a read of the wrong
+      // repository. Watched the whole reading go wrong that way: five lanes
+      // read THIS project and a different reference, and the merge then
+      // discarded the actual subject as irrelevant. A run has one subject; a
+      // node that does the reading should not have to be the node that was
+      // handed the URL.
+      const subjectRepo = String(node.data?.subjectRepo ?? this.#runSubject(flow) ?? '');
 
       // A `system:` on the fan-out node itself is the author writing the shared
       // preamble by hand: it wins outright and skips both the peek and the

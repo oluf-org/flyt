@@ -88,10 +88,24 @@ export default {
       ...(defaulted ? { scopedToSubject: true } : {}),
       hits: out.results.length
     });
+    // Asking for a DIFFERENT repository by name overrides the subject silently,
+    // and the whole point of the default scope is that a finding about the
+    // wrong repository must not be one plausible tool call away. Not blocked —
+    // comparing two references is legitimate — but never invisible, and the
+    // model is told which repository it is actually standing in.
+    const elsewhere = ctx.subject?.repo && scoped && scoped !== ctx.subject.repo;
+    if (elsewhere) {
+      ctx.store?.appendLog?.(ctx.runId, {
+        event: 'tool_target_unexpected',
+        node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
+        tool: 'search_references', repo: scoped, expected: ctx.subject.repo
+      });
+    }
     return {
       pattern: args.pattern,
       ...(scoped ? { scopedTo: scoped } : {}),
       ...(defaulted ? { note: `Scoped to the subject repository "${scoped}". Pass repo: "*" to search every reference instead.` } : {}),
+      ...(elsewhere ? { note: `This is "${scoped}", NOT the repository you were asked to read ("${ctx.subject.repo}"). Anything you find here is about a different codebase.` } : {}),
       searched: scoped ? [scoped] : cloned.map(r => r.name),
       hits: out.results.length,
       truncated: out.truncated,
