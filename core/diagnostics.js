@@ -163,12 +163,30 @@ function explainNode(store, runId, log, nodeId, status, nodeErrors, inFlight = [
       slowestMs: calls.reduce((n, c) => Math.max(n, c.ms ?? 0), 0)
     },
     lastCall: last,
+    // What the node itself said was wrong with the work, as opposed to what
+    // went wrong with the call. A node can fail with every call green: the
+    // `work` node rejects a plan that does not meet the backlog contract, and
+    // the sentence that helps — "no JSON array of tasks found" — was written
+    // into the retrospective while `flyt why` printed only "the upstream plan
+    // violated the backlog task contract" and "0 call(s)". The useful half was
+    // on disk the whole time.
+    problems: retrospectiveProblems(store, runId, nodeId),
     suggestions: suggestFor({ status, error, calls, ok, empties, retries, reasoningChars, contentChars, traced })
   };
 }
 
 // The point of the whole module: a next step, derived from evidence rather
 // than from the shape of the error string.
+// The problems a node recorded about the WORK, not about the call. Never
+// throws: a run whose retrospectives were never written is an ordinary older
+// run, not a broken one.
+function retrospectiveProblems(store, runId, nodeId) {
+  try {
+    const problems = store.readRetrospectives?.(runId)?.[nodeId]?.problems;
+    return Array.isArray(problems) ? problems.filter(p => typeof p === 'string').slice(0, 6) : [];
+  } catch { return []; }
+}
+
 function suggestFor({ status, error, calls, ok, empties, retries, reasoningChars, contentChars, traced }) {
   const out = [];
   if (!traced) {

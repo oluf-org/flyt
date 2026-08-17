@@ -796,6 +796,9 @@ function renderWhy(r) {
       + (c.reasoningShare != null ? ` — ${c.reasoningShare}% of its output was reasoning` : ''));
     if (c.truncated) L.push(`    ${c.truncated} truncated at the token budget`);
     if (n.lastCall && n.lastCall.ok === false) L.push(`    last call failed: ${n.lastCall.error}`);
+    // What the node said was wrong with the WORK. A node can fail with every
+    // call green, and then the call trace is the least useful thing on screen.
+    for (const p of n.problems ?? []) L.push(`    ✖ ${p}`);
   }
   if (r.suggestions.length) {
     L.push('');
