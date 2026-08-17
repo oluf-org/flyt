@@ -823,8 +823,17 @@ function renderProbe(p) {
 function renderDoctor(r) {
   const L = ['providers (in priority order):'];
   for (const p of r.providers) {
+    // A present key and a usable key are different facts, and only one of them
+    // was ever on this line.
+    const left = p.credit?.limit != null && p.credit?.usage != null
+      ? p.credit.limit - p.credit.usage : null;
+    const credit = left == null ? ''
+      : left <= 0
+        ? ` — SPENT ($${p.credit.usage.toFixed(2)} of $${p.credit.limit.toFixed(2)})`
+        : ` — $${left.toFixed(2)} left of $${p.credit.limit.toFixed(2)}`;
     L.push(`  ${p.connected ? '✓' : '·'} ${p.id} (${p.kind})`
-      + (p.subscription?.detail ? ` — ${p.subscription.detail}` : ''));
+      + (p.subscription?.detail ? ` — ${p.subscription.detail}` : '')
+      + credit);
   }
   if (r.references.length) {
     L.push('', 'reference library:');

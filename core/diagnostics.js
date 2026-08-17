@@ -403,6 +403,36 @@ export async function doctor(engine, { probe = false, models = [], project = nul
     });
   }
 
+  // How much of the key is left, for the one provider that publishes it.
+  //
+  // `connected` only ever meant "a key is present", and an EXHAUSTED key is
+  // present. Twice now a night has ended on `403 Key limit exceeded` with
+  // doctor reporting a healthy tick beside the provider that was refusing
+  // every call: the first time it destroyed a backlog, the second it killed a
+  // reading four lanes deep. The credit endpoint is free and answers in one
+  // call, which is cheaper than any of the ways of finding out afterwards.
+  const credit = await openrouterCredit(engine);
+  if (credit) {
+    const or = providers.find(p => p.id === 'openrouter');
+    if (or) or.credit = credit;
+    if (credit.limit != null && credit.usage != null) {
+      const left = credit.limit - credit.usage;
+      if (left <= 0) {
+        findings.push({
+          level: 'error',
+          message: `The OpenRouter key is spent: $${credit.usage.toFixed(2)} used of a $${credit.limit.toFixed(2)} limit. `
+            + 'Every call will 403 until the limit is raised or another key is set.'
+        });
+      } else if (left < credit.limit * 0.1) {
+        findings.push({
+          level: 'warn',
+          message: `The OpenRouter key has $${left.toFixed(2)} left of $${credit.limit.toFixed(2)}. `
+            + 'A long run will end partway through.'
+        });
+      }
+    }
+  }
+
   const report = {
     settingsPath: engine.settingsPath,
     dataRoot: engine.dataRoot,
@@ -427,6 +457,27 @@ export async function doctor(engine, { probe = false, models = [], project = nul
     }
   }
   return report;
+}
+
+/**
+ * What OpenRouter says about the key it was handed: its ceiling and what has
+ * been spent against it. Never throws and never returns the key — an offline
+ * machine, a proxy, or a provider that changed its API must not take `doctor`
+ * down, since a broken doctor is worse than a quiet one.
+ */
+async function openrouterCredit(engine) {
+  const key = engine.settings?.providers?.openrouter?.apiKey;
+  if (!key) return null;
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/key', {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) return { error: `HTTP ${res.status}` };
+    const d = (await res.json())?.data ?? {};
+    const num = v => (typeof v === 'number' ? v : null);
+    return { limit: num(d.limit), usage: num(d.usage), freeTier: Boolean(d.is_free_tier) };
+  } catch (err) { return { error: String(err?.message ?? err).slice(0, 120) }; }
 }
 
 /**
