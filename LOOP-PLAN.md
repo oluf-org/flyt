@@ -197,6 +197,14 @@ Markdown-with-frontmatter rather than JSON because a human writes these at 7am o
 agent writes them mid-run, and both need to read them. Same reasoning that made flows a DSL
 rather than JSON (D24, `FLOW_LANG.md`).
 
+Two sibling files share the directory. `<id>.lock` is the claim (§5.4) — exclusive-create is
+what makes claiming atomic. `next-id.json` is the highest id ever handed out, which is not the
+same as the highest one still present: a task can be removed (D43), and the ledger, the archive
+and the run log all key history by task id, so a reused id would hand a new task the old one's
+spend. The file is a floor rather than the answer — the directory is still consulted and the
+larger wins — so a backlog written before it existed keeps working and a lost counter degrades
+to the old behaviour instead of colliding.
+
 ### 5.2 Where it lives, and why that matters more than it looks
 
 The backlog lives in the **main checkout's** `.flyt/backlog/`, which is **gitignored** in this

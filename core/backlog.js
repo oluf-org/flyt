@@ -113,6 +113,49 @@ export class Backlog {
   #ensure() { fs.mkdirSync(this.rootDir, { recursive: true }); return this.rootDir; }
   #file(id) { return path.join(this.rootDir, `${id}.task.md`); }
   #lock(id) { return path.join(this.rootDir, `${id}.lock`); }
+  #counter() { return path.join(this.rootDir, 'next-id.json'); }
+
+  /**
+   * The highest task number ever handed out, not the highest one still on disk.
+   *
+   * Ids used to be `max(existing) + 1`, which quietly REUSES an id the moment
+   * its file is removed — and the ledger, the archive and the run log all key
+   * spend and history by task id, so the new t-0004 inherits the old t-0004's
+   * money and its runs. That was survivable while nothing removed a task; now
+   * that removing one is a button, it is a way to corrupt the history by
+   * tidying up.
+   *
+   * The counter file is the memory of what is gone. It is a floor rather than
+   * the answer: the existing files are still consulted and the larger wins, so
+   * a backlog written before this file existed keeps working, a counter that
+   * gets deleted degrades to exactly the old behaviour instead of colliding,
+   * and a counter that somehow runs behind the directory cannot hand out an id
+   * that is already taken.
+   */
+  #highWater() {
+    const onDisk = this.ids().reduce((m, id) => Math.max(m, idNumber(id)), 0);
+    return Math.max(onDisk, this.#recorded());
+  }
+
+  #recorded() {
+    try {
+      const saved = JSON.parse(fs.readFileSync(this.#counter(), 'utf8'));
+      return Number.isFinite(saved?.last) ? Number(saved.last) : 0;
+    } catch { return 0; } // no counter yet, or unreadable: the directory is the floor
+  }
+
+  // Remember a number as spent. Compared against the FILE, not the high-water
+  // mark: by the time this is called the task exists on disk, so a mark that
+  // included the directory would always already cover it and nothing would ever
+  // be written down. Only ever climbs — two workers enqueue at once, and the
+  // one that got there second must not walk the mark back onto an id the first
+  // just used.
+  #recordId(id) {
+    const n = idNumber(id);
+    if (!n || n <= this.#recorded()) return;
+    try { fs.writeFileSync(this.#counter(), `${JSON.stringify({ last: n }, null, 2)}\n`); }
+    catch { /* an unwritable counter must not fail the add: the id is taken on disk regardless */ }
+  }
 
   // An id is only ever the stem of a file this class wrote. Callers pass ids in
   // from a CLI, an HTTP body and a model's tool call, so a traversal attempt
@@ -185,6 +228,9 @@ export class Backlog {
       const task = { id, ...fields, body };
       try {
         fs.writeFileSync(this.#file(id), serializeTask(stripId(task)), { flag: 'wx' });
+        // A caller naming `t-0050` itself still spends that number, or the
+        // generated ids would walk straight into it later.
+        this.#recordId(id);
         return task;
       } catch (err) {
         if (err?.code === 'EEXIST') throw new Error(`Task "${id}" already exists.`);
@@ -195,12 +241,13 @@ export class Backlog {
     // Exclusive create, retried on collision: two agents enqueueing at the same
     // instant must not land on the same id, and 'wx' is the only way to find
     // out atomically that someone else took it.
-    let n = this.ids().reduce((m, id) => Math.max(m, Number((/^t-(\d+)$/.exec(id) ?? [])[1] ?? 0)), 0);
+    let n = this.#highWater();
     for (let attempt = 0; attempt < 50; attempt++) {
       const id = `t-${String(++n).padStart(4, '0')}`;
       const task = { id, ...fields, body };
       try {
         fs.writeFileSync(this.#file(id), serializeTask(stripId(task)), { flag: 'wx' });
+        this.#recordId(id);
         return task;
       } catch (err) {
         if (err?.code !== 'EEXIST') throw err;
@@ -260,6 +307,11 @@ export class Backlog {
     }
     fs.rmSync(this.#file(safe));
     try { fs.rmSync(this.#lock(safe)); } catch { /* no lock, or already gone */ }
+    // Spend the number on the way out. `add` already records what it hands out,
+    // so this only matters for a file a human wrote by hand and then removed —
+    // but that is the whole point of the counter: the directory has just
+    // forgotten this id, and the ledger has not.
+    this.#recordId(safe);
     return task;
   }
 
@@ -420,5 +472,6 @@ export class Backlog {
 }
 
 function stripId({ id, ...rest }) { return rest; }
+function idNumber(id) { return Number((/^t-(\d+)$/.exec(String(id)) ?? [])[1] ?? 0); }
 function clamp(n, lo, hi) { return Math.min(hi, Math.max(lo, Number(n) || lo)); }
 function statMtime(p) { try { return fs.statSync(p).mtimeMs; } catch { return null; } }

@@ -97,6 +97,36 @@ test('a task nobody can read is still a task somebody can delete', () => {
   assert.deepEqual(backlog.problems, [], 'the queue is clean afterwards');
 });
 
+test('an id is never handed out twice, however much of the queue is deleted', () => {
+  // Ids used to be max(existing) + 1, which reuses a number as soon as its file
+  // goes — and the ledger, the archive and the run log all key spend and
+  // history by task id. Removing the newest task and adding another would give
+  // the new one the old one's money.
+  const backlog = newBacklog();
+  backlog.add({ title: 'one', goal: 'g' });
+  const second = backlog.add({ title: 'two', goal: 'g' });
+  assert.equal(second.id, 't-0002');
+
+  backlog.remove(second.id);
+  assert.equal(backlog.add({ title: 'three', goal: 'g' }).id, 't-0003', 'not t-0002 again');
+
+  // Emptied entirely, including the highest id, and it still climbs.
+  for (const id of backlog.ids()) backlog.remove(id);
+  assert.deepEqual(backlog.ids(), []);
+  assert.equal(backlog.add({ title: 'four', goal: 'g' }).id, 't-0004');
+
+  // A caller that names its own id spends that number too, or the generated
+  // ones walk into it later.
+  backlog.add({ id: 't-0050', title: 'named', goal: 'g' });
+  backlog.remove('t-0050');
+  assert.equal(backlog.add({ title: 'after', goal: 'g' }).id, 't-0051');
+
+  // A lost counter degrades to the old behaviour rather than colliding: the
+  // files on disk are still a floor.
+  fs.rmSync(path.join(backlog.rootDir, 'next-id.json'));
+  assert.equal(backlog.add({ title: 'no counter', goal: 'g' }).id, 't-0052');
+});
+
 // --- claiming --------------------------------------------------------------
 
 test('a task can leave the queue for good, unless something is holding it', () => {

@@ -859,9 +859,20 @@ to refuse; the removal reports `unreadable` instead of inventing a title it neve
 view lists those files with their parse error, and `flyt task rm --all` includes them (a
 `--status` filter still does not — an unreadable file has no status to match).
 
+**An id is never handed out twice.** Removal exposed something that was harmless while the
+queue only grew: ids were `max(existing) + 1`, so deleting the newest task handed its number to
+the next one written. The ledger, the archive and the run log all key spend and history by task
+id — reuse means a new task inherits the removed one's money and its runs, and tidying up
+becomes a way to corrupt the history. `.flyt/backlog/next-id.json` records the highest number
+ever spent, including ids a caller named itself and ids that leave through `remove`. It is a
+floor, not the answer: the directory is still read and the larger of the two wins, so a backlog
+written before the file existed keeps working, a deleted counter degrades to the old behaviour
+rather than colliding, and a counter that has fallen behind cannot hand out a number that is
+already on disk.
+
 **Status.** Decided and **implemented**. `core/backlog.js`, `task:remove` in `core/api.js`,
 `bin/flyt.js`, the `task:remove` IPC bridge, the Loop view, and the dev mock (which keeps the
-refusal, since the second confirm state only exists when something says no). 938/938 green.
+refusal, since the second confirm state only exists when something says no). 939/939 green.
 
 ---
 
