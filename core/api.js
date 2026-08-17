@@ -568,7 +568,7 @@ export function createApi(engine) {
     // the same backlog would have two pickers racing for the same tasks.
     'loop:start': async ({
       projectId, parallelism = 1, maxTasks = null, dryRun = false,
-      worker = null, reviewer = null, models = null
+      worker = null, reviewer = null, models = null, caps = null
     }) => {
       proj(projectId);
       // The model every task runs on, when one has been named. `workers.loop`
@@ -582,6 +582,12 @@ export function createApi(engine) {
       // expensive one. It wins over a single pin, because it is strictly more
       // specific — a caller that sent both meant the map.
       const byLevel = normalizeLevelModels(models ?? runtimeConfig.loop?.models);
+      // Only the caps actually named: an absent one keeps the project's, and a
+      // zero is a real ceiling ("spend nothing more"), not an absent one.
+      const sessionCaps = Object.fromEntries(
+        ['taskUsd', 'softUsd', 'hardUsd']
+          .map(k => [k, Number(caps?.[k])])
+          .filter(([, v]) => Number.isFinite(v) && v >= 0));
       let pinned, sessionReviewer;
       try {
         pinned = resolveWorkerArg(worker) ?? resolveWorkerArg(runtimeConfig.workers?.loop);
@@ -653,7 +659,16 @@ export function createApi(engine) {
           workers: sessionReviewer
             ? { ...runtimeConfig.workers, reviewer: sessionReviewer }
             : runtimeConfig.workers,
-          loop: { ...runtimeConfig.loop, dryRun, worker: pinned, models: byLevel }
+          // A ceiling for THIS session, over whatever the project configured.
+          // The same reason the reviewer and the band models are nameable at the
+          // call: the machine starting an unattended loop is often not the
+          // machine whose config holds the answer, and "how much may this cost"
+          // is the one question you want answered before you walk away — not
+          // after, in a ledger.
+          loop: {
+            ...runtimeConfig.loop, dryRun, worker: pinned, models: byLevel,
+            caps: { ...(runtimeConfig.loop?.caps ?? {}), ...sessionCaps }
+          }
         },
         parallelism,
         log: msg => engine.emitLoop?.(projectId, msg),
@@ -672,7 +687,9 @@ export function createApi(engine) {
         started: true, parallelism, levels: useLevels,
         model: pinned?.model ?? null,
         models: byLevel,
-        reviewer: (sessionReviewer ?? reviewWorker(runtimeConfig))?.model ?? null
+        reviewer: (sessionReviewer ?? reviewWorker(runtimeConfig))?.model ?? null,
+        // What it may spend, said back at the moment you walk away from it.
+        caps: sup.config.loop.caps
       };
     },
     'loop:stop': ({ projectId, reason = 'stopped by request' }) => {

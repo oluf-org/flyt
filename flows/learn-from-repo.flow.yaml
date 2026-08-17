@@ -70,6 +70,16 @@ nodes:
       what was read. Prefer three real tasks to ten plausible ones. Every task
       must be claimable on its own by someone who has not read the analysis.
 
+      Prefer tasks that can LAND on their own. A dependency is a real
+      statement — "this cannot be written until that exists" — and it is
+      sometimes true, but a backlog where three tasks all wait on one is a
+      queue that stops the moment that one stops. Seen exactly that: four
+      tasks, three of them behind the first, the first parked, and the night
+      ended after one attempt with three good tasks untouched. If the
+      foundation genuinely must come first, say so and keep the chain short;
+      otherwise write each task so it stands up alone, even when that means a
+      little overlap between them.
+
       You can read this project — use that. Confirm every path you put in
       blastRadius, and take gates from the commands this project actually has.
       If the orientation says the relation is "unrelated", a short backlog or an

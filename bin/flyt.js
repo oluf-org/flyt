@@ -43,6 +43,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task rm <id>... [--all]        take tasks out of the queue for good
   flyt task take                      claim the top-scoring ready task
   flyt loop start [--parallel N] [--model <id> | --models low=a,high=b] [--reviewer <id>]
+                  [--cap-usd 6] [--soft-usd 4] [--task-usd 1.5]
                                       work the backlog until empty, capped or stopped
   flyt loop stop|status               stop it, or see what it is doing
   flyt report                         what landed, what needs you, what it cost
@@ -367,13 +368,27 @@ async function main() {
           // Who reads the diff before anything merges (§7.2). Nameable here
           // because the machine driving a loop is often not the machine whose
           // settings.json holds the answer.
-          reviewer: namedWorker(flags.reviewer)
+          reviewer: namedWorker(flags.reviewer),
+          // What it may spend before it stops, for THIS session. The models and
+          // the reviewer were nameable at the call and the ceiling was not, so
+          // the only way to bound a night was to edit the project's config
+          // first — which is the one thing you do not want to be doing at the
+          // moment you have decided to walk away.
+          caps: {
+            ...(flags['task-usd'] != null ? { taskUsd: Number(flags['task-usd']) } : {}),
+            ...(flags['soft-usd'] != null ? { softUsd: Number(flags['soft-usd']) } : {}),
+            ...(flags['cap-usd'] != null ? { hardUsd: Number(flags['cap-usd']) } : {})
+          }
         });
         const on = Object.keys(ack.models ?? {}).length
           ? Object.entries(ack.models).map(([b, m]) => `${b}=${m}`).join(' ')
           : (ack.model ?? 'effort bands');
+        const ceiling = ack.caps?.hardUsd != null ? `, stopping at $${Number(ack.caps.hardUsd).toFixed(2)}`
+          : ack.caps?.softUsd != null ? `, no escalation past $${Number(ack.caps.softUsd).toFixed(2)}`
+            : ', with no spending ceiling';
         say(`loop started on ${on}`
           + `, reviewed by ${ack.reviewer ?? 'nobody (nothing will land)'}`
+          + ceiling
           + ' — ctrl-c to detach, `flyt loop stop` to stop it');
         // Held open on purpose: the loop lives in this process. Detaching it
         // into a daemon is the next thing, and until then closing the terminal
