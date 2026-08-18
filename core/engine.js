@@ -325,12 +325,14 @@ export function createEngine({
       modelSets: settings.modelSets ?? {},
       // What the Loop view's per-band pickers show. Model ids, never keys.
       loopModels: settings.loopModels ?? {},
+      // The backlog chat's model, when this person has chosen one (D45 §E2).
+      chat: settings.chat ?? {},
       workers: Object.fromEntries(
         Object.entries(runtimeConfig.workers).map(([name, w]) => [name, { provider: w.provider, model: w.model }])
       ),
       summary: {
         connected: connectable.filter(hasKey).length,
-        activeModelCount: activeModels.filter(m => m.enabled !== false).length
+        activeModelCount: activeModels.filter(m => m.enabled !== false && m.pinned !== false).length
       },
       projectStorage: settings.projectStorage === 'appdata' ? 'appdata' : 'workspace',
       approvalMode: normalizeApprovalMode(settings.approvalMode ?? 'ask'),
@@ -367,6 +369,14 @@ export function createEngine({
     if (canEmit()) emit('loop:event', entry);
   }
   const loopLog = projectId => (loopLogs.get(projectId) ?? []).slice();
+
+  // The chat's live channel (LOOP-BOARD §E1), mirroring `loop:event` exactly.
+  // Not ring-buffered: a chat turn's transcript is already persisted per turn
+  // in .flyt/chats/<id>.jsonl, so the only thing this carries is the tokens
+  // arriving BEFORE that write — which have nowhere else to be.
+  function emitChat(projectId, event) {
+    if (canEmit()) emit('chat:event', { projectId, at: new Date().toISOString(), ...event });
+  }
 
   // --- Push plumbing (per project) ---
   // Bursts of state changes (parallel waves, streaming chunks) coalesce into at
@@ -535,6 +545,9 @@ export function createEngine({
       // argument so every existing FlowRunner call site is untouched.
       Object.defineProperty(runner, 'backlog', { get: () => backlogFor(projectId), configurable: true });
       Object.defineProperty(runner, 'ledger', { get: () => ledgerFor(projectId), configurable: true });
+      // The worktree pool, for read_run's diff. Lazy for the same reason the
+      // two above are: a project that never runs the loop never makes one.
+      Object.defineProperty(runner, 'pool', { get: () => { try { return poolFor(projectId); } catch { return null; } }, configurable: true });
       // A flow's `loop` node hands its tasks to the SAME supervisor the Loop
       // page drives — one queue, one picker, one process (D36 P4.2). api.js
       // owns the supervisor map, so it registers the driver; this is only the
@@ -576,7 +589,7 @@ export function createEngine({
     // Providers
     hasKey, subscriptionStatus, resolveModelSource, effectiveSafetyModel,
     // Push
-    pushStateFor, broadcastActivity, pushUpdateFor, emitLoop, loopLog,
+    pushStateFor, broadcastActivity, pushUpdateFor, emitLoop, loopLog, emitChat,
     // A project id that is gone for good (an appdata project adopted into a
     // real folder) takes its push channels with it.
     dropPushState: projectId => pushState.delete(projectId),

@@ -1,0 +1,47 @@
+{
+  "id": "read_task",
+  "title": "Read a backlog task",
+  "description": "Read one task from the project backlog by id, body included — the task as its author wrote it. Use it to read a dependency before assuming what it covers, or to re-read your own task.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "read"
+  ],
+  "scope": "workspace",
+  "risk": "safe",
+  "autoExecute": true,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "id"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string",
+        "description": "Task id, e.g. \"t-0006\"."
+      }
+    }
+  },
+  "keywords": [
+    "backlog",
+    "task",
+    "read",
+    "dependency"
+  ],
+  "examples": [
+    "read t-0006",
+    "what does the task I depend on actually say"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

@@ -23,6 +23,7 @@ import { Heartbeat, detectStall, nextIntervention, DEFAULT_THRESHOLDS } from './
 import { escalate as escalateLevel, levelFor, workerForLevelMap } from './levels.js';
 import { spendFromRun } from './ledger.js';
 import { unrunnableGates } from './gates.js';
+import { whyNothingReady } from './blockers.js';
 
 const POLL_MS = 5000;
 
@@ -563,17 +564,26 @@ export class Supervisor {
    * Nothing is ready — is that because there is nothing, or because everything
    * left is waiting on something that will never happen?
    *
-   * The backlog already knows: `blocked()` returns every queued task with the
-   * reason it cannot be picked. This turns that into the one line a person
-   * reads at breakfast, naming the tasks in the way and what they wait on.
+   * core/blockers.js knows, and it is the SAME module the board reads — so the
+   * line a person gets at breakfast and the sentence on the stuck card cannot
+   * drift into two different accounts of one fact. It also knows the difference
+   * D44 recorded getting wrong: an empty backlog and a backlog where everything
+   * left is parked are not the same report.
    */
   #whyNothingReady() {
-    let blocked = [];
-    try { blocked = this.backlog.blocked() ?? []; } catch { blocked = []; }
-    if (!blocked.length) return 'backlog empty';
-    const shown = blocked.slice(0, 3).map(t => `${t.id} (${t.reason})`).join(', ');
-    const rest = blocked.length > 3 ? `, and ${blocked.length - 3} more` : '';
-    return `nothing ready — ${blocked.length} task(s) blocked: ${shown}${rest}`;
+    try {
+      return whyNothingReady({
+        tasks: this.backlog.list() ?? [],
+        problems: this.backlog.problems ?? [],
+        config: this.config,
+        // The loop is running by definition when this is asked, so a
+        // `loop-stopped` blocker can never be the answer here.
+        // No cwd: the gate check falls back to process.cwd(), which is what
+        // `#begin`'s own unrunnableGates() call already does — one answer, not
+        // two that disagree about which machine we are on.
+        status: { running: true, inFlight: [...this.inFlight.values()] }
+      });
+    } catch { return 'backlog empty'; }
   }
 
   async #saidImpossible(runId) {

@@ -920,6 +920,15 @@ export class FlowRunner {
           store: this.store, runId, nodeId, workspace: this.workspaceFor(runId),
           backlog: this.backlog ?? null, feedback: this.feedback ?? null,
           references: this.references ?? null,
+          // The runtime config, for the tools whose answer depends on how this
+          // INSTALLATION is set up rather than on this run: web_search needs to
+          // know whether a search key exists, why_blocked needs to know whether
+          // a reviewer is configured. Read-only by convention; nothing in
+          // core/tools/ writes it.
+          config: this.config ?? null,
+          // The worktree pool, so read_run can show what an earlier attempt
+          // actually changed. Lazily borrowed the same way `backlog` is.
+          pool: this.pool ?? null,
           // The repository this node was pointed at, when it was pointed at one
           // (HOME-CONTEXT P1.3/P1.4). Scopes `search_references` and makes a
           // read of the wrong root visible.
@@ -2571,6 +2580,8 @@ export class FlowRunner {
       backlog: this.backlog ?? null,
       feedback: this.feedback ?? null,
       references: this.references ?? null,
+      // read_run's diff: what an earlier attempt on this task actually changed.
+      pool: this.pool ?? null,
       signal: abortCtl.signal,
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };

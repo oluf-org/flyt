@@ -1,0 +1,64 @@
+{
+  "id": "edit_file",
+  "title": "Edit part of a file",
+  "description": "Replace an exact piece of text in an existing file, leaving the rest untouched. PREFER THIS over write_file for any file you have not written yourself in this run: write_file replaces the WHOLE file, so anything you did not include is deleted. `old` must appear EXACTLY ONCE — include surrounding lines to make it unique. If it appears several times the call fails and names each line, so widen the anchor or pass replaceAll when you really do mean every occurrence. The result shows the changed region with a few lines of context on each side.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "write"
+  ],
+  "scope": "workspace",
+  "risk": "caution",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "path",
+      "old",
+      "new"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Relative path inside the workspace, e.g. \"src/app.js\"."
+      },
+      "old": {
+        "type": "string",
+        "description": "The exact text to find, whitespace included. Must match exactly once unless replaceAll is true."
+      },
+      "new": {
+        "type": "string",
+        "description": "What to put there instead. Pass an empty string to delete the text."
+      },
+      "replaceAll": {
+        "type": "boolean",
+        "description": "Replace every occurrence instead of requiring exactly one. Default false."
+      }
+    }
+  },
+  "keywords": [
+    "edit",
+    "replace",
+    "patch",
+    "change",
+    "modify",
+    "fix",
+    "file"
+  ],
+  "examples": [
+    "change the timeout constant in core/gates.js from 10 to 20 minutes",
+    "rename the handler in src/App.jsx without rewriting the file"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

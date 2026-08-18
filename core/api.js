@@ -17,6 +17,9 @@ import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
 import { pushRefs, git } from './worktree.js';
 import { workerForLevel, levelFor, LEVELS } from './levels.js';
+import { blockersAll, boardBlockers } from './blockers.js';
+import { ChatStore, runChatTurn, CHAT_TOOLS } from './chat.js';
+import { costOf } from './ledger.js';
 
 // A band→model map, cleaned: known band names, non-empty ids, nothing else.
 // Sent by a UI, a CLI flag and config.json alike, so it is normalized once here
@@ -103,6 +106,23 @@ export function createApi(engine) {
       { status: 400, code: 'no_ledger' });
     return ledger;
   };
+  // One chat store per project, beside the backlog. Same rule as everything
+  // else the loop owns: it lives in the MAIN checkout's config dir, never in a
+  // worktree (LOOP-PLAN §5.2).
+  const chats = new Map();
+  const chatFor = projectId => {
+    proj(projectId);
+    let c = chats.get(projectId);
+    if (c) return c;
+    const dir = engine.configDirOf(projectId);
+    if (!dir) {
+      throw new ApiError('This project has no folder, so it has nowhere to keep a conversation.',
+        { status: 400, code: 'no_chat' });
+    }
+    chats.set(projectId, c = new ChatStore(path.join(dir, 'chats')));
+    return c;
+  };
+
   const backlogFor = projectId => {
     proj(projectId); // resolve/validate the project first, for the honest 404
     const backlog = engine.backlogFor(projectId);
@@ -226,6 +246,51 @@ export function createApi(engine) {
 
   // One supervisor per project, for the life of the process.
   const supervisors = new Map();
+  // One in-flight chat turn per thread, so `chat:stop` has something to abort
+  // and a second send cannot race the first into the same jsonl file.
+  const chatRuns = new Map();
+
+  /**
+   * The model chat uses when the caller names none.
+   *
+   * In order: the choice this person already made and saved; then the band
+   * models they picked for the loop, cheapest first, because those are the
+   * models they have already decided they trust; then nothing — and "nothing"
+   * is an honest error rather than a silent pick, since this is a chat box
+   * wired to a paid API.
+   */
+  const chatWorkerDefault = () => {
+    const saved = engine.settings?.chat?.worker;
+    if (saved?.model) return saved;
+    for (const band of LEVELS) {
+      const model = runtimeConfig.loop?.models?.[band];
+      if (model) return { provider: 'auto', model };
+    }
+    const loop = runtimeConfig.workers?.loop;
+    return loop?.model ? { provider: loop.provider, model: loop.model } : null;
+  };
+
+  // What one turn cost, priced the same way every other line in the ledger is.
+  const costFor = (usage, target) =>
+    costOf({ usage, provider: target.provider, model: target.model, prices: runtimeConfig.loop?.prices ?? {} });
+
+  // --- what the blocker model needs, without a caller having to assemble it --
+  //
+  // Both of these answer "what is the state of the world right now" for
+  // core/blockers.js, and both must be TOTAL: a blocker list is a diagnosis,
+  // and a diagnosis that throws because the ledger is missing is worse than one
+  // that says nothing about money. So each degrades to null rather than up.
+  const loopStatusOf = projectId => {
+    try {
+      return supervisors.get(projectId)?.status()
+        ?? readLoopStatus(projectId)
+        ?? { running: false, inFlight: [] };
+    } catch { return { running: false, inFlight: [] }; }
+  };
+  const spendCheckOf = projectId => {
+    try { return engine.ledgerFor(projectId)?.check({ caps: runtimeConfig.loop?.caps ?? {} }) ?? null; }
+    catch { return null; }
+  };
   // One in-flight benchmark per project. Same reason: two benchmark runs over
   // one project would write two cards claiming to describe the same revision.
   const benchmarks = new Map();
@@ -401,9 +466,35 @@ export function createApi(engine) {
     'task:list': ({ projectId, status = null }) => {
       const backlog = backlogFor(projectId);
       const tasks = backlog.list({ status });
-      // Malformed files are reported rather than thrown past: one bad task must
-      // not stop the loop working the other forty.
-      return { tasks, problems: backlog.problems ?? [] };
+      const problems = backlog.problems ?? [];
+      // WHY each of them is not moving, in the same words the supervisor's
+      // headline uses (LOOP-BOARD §B2). This used to be computed by
+      // `backlog.blocked()`, reachable only through `task:ready`, which the
+      // preload never exposed — so the one screen whose job is "what is stuck"
+      // was the one caller that could not see it.
+      //
+      // A filtered list must still be judged against the WHOLE backlog: a
+      // dependency that is not in `status` is still a dependency.
+      const all = status ? backlog.list() : tasks;
+      const ctx = {
+        tasks: all, problems,
+        config: runtimeConfig,
+        settings: publicSettings(),
+        status: loopStatusOf(projectId),
+        spend: spendCheckOf(projectId),
+        cwd: proj(projectId).folder ?? undefined
+      };
+      const blockers = Object.fromEntries(blockersAll(ctx));
+      return {
+        tasks,
+        // Malformed files are reported rather than thrown past: one bad task
+        // must not stop the loop working the other forty.
+        problems,
+        blockers,
+        // What is wrong with the PROJECT rather than with any one task — a
+        // banner, not the same badge on forty cards.
+        boardBlockers: boardBlockers(ctx)
+      };
     },
     'task:get': ({ projectId, id }) => {
       const task = backlogFor(projectId).get(id);
@@ -440,6 +531,96 @@ export function createApi(engine) {
     'task:escalate': ({ projectId, id, reason = 'failed', note = '' }) =>
       backlogFor(projectId).escalate(id, { reason, note }),
     'task:levels': () => ({ levels: LEVELS }),
+
+    // --- Chat (LOOP-BOARD §E) ------------------------------------------------
+    //
+    // ONE agent turn loop over a read-mostly toolset whose single write is
+    // enqueue_task. It is deliberately NOT a second orchestrator: everything
+    // expensive still goes through the loop, in a worktree, behind gates, with
+    // a reviewer. The toolset (core/chat.js CHAT_TOOLS) is what enforces that —
+    // not the system prompt, which a model can be talked out of.
+    'chat:threads': ({ projectId }) => {
+      const store = chatFor(projectId);
+      return { threads: store.threads(), problems: store.problems ?? [] };
+    },
+    'chat:read': ({ projectId, threadId }) => ({ turns: chatFor(projectId).read(threadId) }),
+    'chat:new': ({ projectId }) => ({ threadId: chatFor(projectId).newThreadId() }),
+    'chat:delete': ({ projectId, threadId }) => ({ removed: chatFor(projectId).remove(threadId) }),
+    'chat:stop': ({ projectId, threadId }) => {
+      const ctl = chatRuns.get(`${projectId}:${threadId}`);
+      if (!ctl) return { stopped: false, reason: 'nothing running' };
+      ctl.abort();
+      return { stopped: true };
+    },
+    'chat:send': async ({ projectId, threadId, text, worker = null }) => {
+      const key = `${projectId}:${threadId}`;
+      if (chatRuns.has(key)) {
+        throw new ApiError('That thread is already answering. Stop it first.',
+          { status: 409, code: 'chat_busy' });
+      }
+      const entry = proj(projectId);
+      const store = chatFor(projectId);
+      const backlog = backlogFor(projectId);
+      const tasks = backlog.list();
+      // The same context the board reads, so the chat's answer to "why is
+      // t-0008 blocked" and the card's sentence cannot disagree.
+      const blockerCtx = {
+        tasks, problems: backlog.problems ?? [],
+        config: runtimeConfig, settings: publicSettings(),
+        status: loopStatusOf(projectId), spend: spendCheckOf(projectId),
+        cwd: entry.folder ?? undefined
+      };
+      // The picked worker, or the band the user already trusts, or nothing —
+      // in which case say so rather than silently calling something they did
+      // not choose.
+      const target = resolveWorkerArg(worker ?? chatWorkerDefault(), { withKey: true });
+      if (!target) {
+        throw new ApiError('No model is set for chat. Pick one beside the send button.',
+          { status: 400, code: 'no_worker' });
+      }
+      const ctl = new AbortController();
+      chatRuns.set(key, ctl);
+      try {
+        return await runChatTurn({
+          store, threadId, text, projectName: entry.name ?? null,
+          worker: { provider: target.provider, model: target.model },
+          apiKey: target.apiKey ?? null,
+          tasks, blockerCtx,
+          // The tool ctx. `backlog` is what makes list_tasks/read_task/
+          // why_blocked/enqueue_task work; `workspace` is what read_file and
+          // glob act on. No `pool`, so nothing here can reach a worktree.
+          toolCtx: {
+            backlog,
+            references: engine.references ?? null,
+            config: runtimeConfig,
+            ...(entry.folder ? { workspace: new Workspace(entry.folder) } : {})
+          },
+          signal: ctl.signal,
+          timeout: runtimeConfig.timeout,
+          retry: runtimeConfig.retry,
+          onText: chunk => engine.emitChat?.(projectId, { kind: 'text', threadId, text: chunk }),
+          onEvent: ev => engine.emitChat?.(projectId, ev)
+        });
+      } finally {
+        chatRuns.delete(key);
+        // Chat spend rides the SAME ledger as everything else, tagged so it can
+        // be told apart. Money spent in a text box is still money, and a burn
+        // bar that omits it is the one that is lowest exactly when someone has
+        // been chatting all afternoon.
+        try {
+          const last = store.read(threadId).at(-1);
+          const ledger = engine.ledgerFor(projectId);
+          if (ledger && last?.usage) {
+            ledger.record({
+              source: 'chat', threadId, node: 'chat',
+              provider: target.provider, model: target.model, usage: last.usage,
+              ...costFor(last.usage, target)
+            });
+          }
+        } catch { /* an unwritable ledger must never fail a turn that succeeded */ }
+      }
+    },
+    'chat:tools': () => ({ tools: CHAT_TOOLS }),
 
     // --- Tool feedback (LOOP-PLAN §12) -------------------------------------
     //

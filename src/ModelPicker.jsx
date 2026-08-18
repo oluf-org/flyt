@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { canServe, routeFor, MOCK_MODELS, PROVIDER_ORDER } from './providerMirror.js';
+import { groupModels, presentModel } from './modelPresentation.js';
 
 // One model picker, used everywhere a model is chosen (D36 P0.4 / B14):
 // the Inspector's field, the node-library editor, the launch composer, and the
@@ -90,7 +91,7 @@ export const workerModelId = w => (w?.model ? w.model : null);
 export function workerLabel(worker, placeholder = 'default worker') {
   if (!worker?.model) return placeholder;
   if (isMock(worker)) return worker.model;
-  return worker.model;
+  return presentModel(worker.model).modelPart;
 }
 
 // --- The menu body ----------------------------------------------------------
@@ -105,7 +106,7 @@ function ModelMenu({ worker, activeModels, onChange, onClose, idPrefix }) {
   useEffect(() => { searchRef.current?.focus(); }, []);
 
   const actives = useMemo(
-    () => (activeModels ?? []).filter(m => m && m.enabled !== false),
+    () => (activeModels ?? []).filter(m => m && m.enabled !== false && m.pinned !== false),
     [activeModels]);
 
   const sets = useMemo(() => Object.entries(modelSets ?? {})
@@ -125,12 +126,23 @@ function ModelMenu({ worker, activeModels, onChange, onClose, idPrefix }) {
   };
 
   const shown = actives.filter(matches);
+  // A person can have both a direct id and its OpenRouter alias left over from
+  // older settings. They are still two valid routes, but one visible model.
+  const shownUnique = shown.filter((m, index, list) => {
+    const p = presentModel(m);
+    return list.findIndex(other => {
+      const o = presentModel(other);
+      return o.creatorKey === p.creatorKey && o.modelPart.toLowerCase() === p.modelPart.toLowerCase();
+    }) === index;
+  });
+  const shownGroups = groupModels(shownUnique.map(m => ({ ...m, name: modelFacts[m.id]?.name })));
   // Nothing activated yet: offer the fetched catalog rather than a dead list.
   // The old picker's free-text-only fallback is still here, one field down.
   const fallback = useMemo(() => {
     if (actives.length || !q) return [];
     return (catalog ?? []).filter(m => m.id.toLowerCase().includes(q)).slice(0, 40);
   }, [actives.length, catalog, q]);
+  const fallbackGroups = useMemo(() => groupModels(fallback), [fallback]);
 
   const mocks = MOCK_MODELS.filter(id => !q || id.includes(q));
   const current = workerModelId(worker);
@@ -149,7 +161,7 @@ function ModelMenu({ worker, activeModels, onChange, onClose, idPrefix }) {
           ref={searchRef}
           type="search"
           value={query}
-          placeholder={actives.length ? 'Search your models…' : 'Search the catalog…'}
+          placeholder={actives.length ? 'Search pinned models…' : 'Search the catalog…'}
           onChange={e => setQuery(e.target.value)}
           onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose?.(); } }}
           aria-label="Search models"
@@ -177,38 +189,49 @@ function ModelMenu({ worker, activeModels, onChange, onClose, idPrefix }) {
 
       <div className="model-menu-list">
         {shown.length === 0 && actives.length > 0 && (
-          <div className="model-menu-empty muted">No active model matches “{query}”.</div>
+          <div className="model-menu-empty muted">No pinned model matches “{query}”.</div>
         )}
         {actives.length === 0 && (
           <div className="model-menu-empty muted">
-            No models activated yet — add some in Settings → Models, or type an id below.
+            No models pinned yet — pin some on the Models page, or type an id below.
           </div>
         )}
-        {shown.map(m => {
-          const r = route(m.id, m.source);
-          return (
-            <button
-              key={m.id}
-              type="button"
-              className={'model-option' + (current === m.id && !isMock(worker) ? ' on' : '')}
-              onClick={() => pick('auto', m.id)}
-            >
-              <span className="model-option-id mono">{m.id}</span>
-              <FactChips facts={modelFacts[m.id]} />
-              {r
-                ? <span className="model-option-route" title={`Served by ${r}`}>{r}</span>
-                : <span className="status-pill pill-err" title="No connected provider can serve this model — add a key in Settings → Providers">unrouted</span>}
-            </button>
-          );
-        })}
+        {shownGroups.map(group => (
+          <React.Fragment key={group.key}>
+            <div className="model-menu-head">{group.name}</div>
+            {group.models.map(m => {
+              const r = route(m.id, m.source);
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={'model-option' + (current === m.id && !isMock(worker) ? ' on' : '')}
+                  onClick={() => pick('auto', m.id)}
+                  title={m.id}
+                >
+                  <span className="model-option-id">{m.presentation.name}</span>
+                  <FactChips facts={modelFacts[m.id]} />
+                  {r
+                    ? <span className="model-option-route" title={`Served by ${r}`}>{r}</span>
+                    : <span className="status-pill pill-err" title="No connected provider can serve this model — add a key in Settings → Providers">unrouted</span>}
+                </button>
+              );
+            })}
+          </React.Fragment>
+        ))}
         {fallback.length > 0 && (
           <>
-            <div className="model-menu-head">Catalog (not activated)</div>
-            {fallback.map(m => (
-              <button key={m.id} type="button" className="model-option" onClick={() => pick('auto', m.id)}>
-                <span className="model-option-id mono">{m.id}</span>
-                <FactChips facts={modelFacts[m.id] ?? m} />
-              </button>
+            <div className="model-menu-head">Catalog (not pinned)</div>
+            {fallbackGroups.map(group => (
+              <React.Fragment key={group.key}>
+                <div className="model-menu-subhead">{group.name}</div>
+                {group.models.map(m => (
+                  <button key={m.id} type="button" className="model-option" onClick={() => pick('auto', m.id)} title={m.id}>
+                    <span className="model-option-id">{m.presentation.name}</span>
+                    <FactChips facts={modelFacts[m.id] ?? m} />
+                  </button>
+                ))}
+              </React.Fragment>
             ))}
           </>
         )}

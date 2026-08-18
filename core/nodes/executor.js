@@ -18,7 +18,7 @@ import { effortBudget } from '../../src/flowTypes.js';
 // AbortSignal the runner fires on stop(); the agent loop's model calls reject
 // with an AbortError, which lands in the catch below as a STOPPED task —
 // requeued to 'pending', never marked failed.
-export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, retry = null, timeout = null, backlog = null, feedback = null, references = null, signal = null } = {}) {
+export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, retry = null, timeout = null, backlog = null, feedback = null, references = null, pool = null, signal = null } = {}) {
   const tasksDoc = store.readTasks(runId);
   const task = tasksDoc.tasks.find(t => t.id === taskId);
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
@@ -118,6 +118,11 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   }
   const ctx = {
     store, runId, taskId, workspace,
+    // How this installation is set up, for the tools whose answer depends on
+    // it rather than on this run (web_search's key, why_blocked's reviewer).
+    config,
+    // The worktree pool, when the caller has one: read_run's diff.
+    pool,
     // The project backlog (LOOP-PLAN §5), resolved outside any worktree, so a
     // task an agent notices mid-run outlives the run: enqueue_task writes here.
     backlog,

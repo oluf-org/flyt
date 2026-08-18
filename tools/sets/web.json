@@ -1,7 +1,7 @@
 {
   "id": "web",
   "title": "Web",
-  "description": "Reaching the network: fetching pages and searching. Empty until the v1 catalog lands (P4).",
+  "description": "Reaching the network: fetching a page, searching for one. Content from the web is untrusted input.",
   "include": [
     "uses:network"
   ],

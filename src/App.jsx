@@ -3,8 +3,9 @@ import { flushSync } from 'react-dom';
 import FlowCanvas, { FlowEditor, freshNodeId } from './FlowCanvas.jsx';
 import Inspector, { FlowInspector } from './Inspector.jsx';
 import Settings from './Settings.jsx';
+import ModelsPage from './ModelsPage.jsx';
 import NodesPage from './NodesPage.jsx';
-import LoopPage from './LoopPage.jsx';
+import LoopPage from './loop/LoopPage.jsx';
 import NodePicker from './NodePicker.jsx';
 import FlowYamlEditor from './FlowYamlEditor.jsx';
 import LiveStream from './LiveStream.jsx';
@@ -155,6 +156,13 @@ const RailIcon = {
       <rect x="4" y="13" width="7" height="7" rx="1.6" /><rect x="13" y="13" width="7" height="7" rx="1.6" />
     </svg>
   ),
+  // Models — three stacked model cards, promoted from Settings to a first-class page.
+  models: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="4" y="4" width="16" height="5" rx="2" /><rect x="4" y="10" width="16" height="5" rx="2" /><rect x="4" y="16" width="16" height="4" rx="2" />
+      <circle cx="16.5" cy="6.5" r=".8" fill="currentColor" stroke="none" /><circle cx="16.5" cy="12.5" r=".8" fill="currentColor" stroke="none" />
+    </svg>
+  ),
   // Runs — run history (clock with a back-arrow)
   runs: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -176,10 +184,11 @@ const NAV = [
   { key: 'home', label: 'Home', hint: 'Home  (Ctrl+1)' },
   { key: 'flows', label: 'Flows', hint: 'Flows  (Ctrl+2)' },
   { key: 'library', label: 'Library', hint: 'Node Library  (Ctrl+3)' },
-  { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+4)' },
+  { key: 'models', label: 'Models', hint: 'Models  (Ctrl+4)' },
+  { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+5)' },
   // The unattended half (LOOP-PLAN §14): the backlog, what the supervisor is
   // doing with it, and what it has spent.
-  { key: 'loop', label: 'Loop', hint: 'Loop  (Ctrl+5)' }
+  { key: 'loop', label: 'Loop', hint: 'Loop  (Ctrl+6)' }
 ];
 
 // The run's plaintext mirror (flare 7): the same run as a typeset dossier you
@@ -268,6 +277,7 @@ export default function App() {
   const [runView2, setRunView2] = useState('canvas'); // run view: 'canvas' | 'document'
   // Resizable outer columns (explorer left, run panel right).
   const [leftColW, startLeftResize, resetLeftCol] = useResizableColumn('flyt.col.left', 288, { min: 208, max: 520 }, 1);
+
   const [rightColW, startRightResize, resetRightCol] = useResizableColumn('flyt.col.right', 372, { min: 300, max: 640 }, -1);
   // Replay scrubber (finished runs): folded frames + where the scrubber sits
   // (null = live/final), and whether it's playing.
@@ -311,6 +321,10 @@ export default function App() {
   // (activeFlowId / activeRunId / selectedTemplateId) so switching sections and
   // coming back is lossless.
   const [activeActivity, setActiveActivity] = useState('home'); // 'home' | 'flows' | 'library' | 'runs'
+  // Which activities actually put something in the explorer. Named from the
+  // three branches inside it rather than from a list of the pages that don't,
+  // so a new section gets the right answer by default rather than a blank panel.
+  const sidebarFills = ['flows', 'library', 'runs'].includes(activeActivity);
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
 
   // Undo/redo over flow edits. Bursts of changes (a node drag emits one per
@@ -1084,12 +1098,12 @@ export default function App() {
     };
   }, []);
 
-  // Section shortcuts: Ctrl/Cmd + 1/2/3 jump between Flows / Library / Runs.
+  // Section shortcuts: Ctrl/Cmd + 1–6 follow the visible rail order.
   useEffect(() => {
     const onKey = e => {
       if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
-      const idx = { '1': 0, '2': 1, '3': 2, '4': 3 }[e.key];
-      if (idx === undefined) return;
+      const idx = Number(e.key) - 1;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= NAV.length) return;
       e.preventDefault();
       // Ctrl+1 goes Home; when already Home, it focuses the composer instead —
       // the fast path back to typing. (A fresh switch autofocuses on mount.)
@@ -1861,6 +1875,7 @@ export default function App() {
   const landerProjectName = projectless || !activeTabInfo || activeTabInfo.kind === 'default'
     ? null : activeTabInfo.name;
   const libraryView = activeActivity === 'library';
+  const modelsView = activeActivity === 'models';
   const loopView = activeActivity === 'loop';
   const selectedTemplate = templates.find(t => t.id === selectedTemplateId) ?? null;
 
@@ -1876,6 +1891,7 @@ export default function App() {
   const activeRunName = runs.find(r => r.id === activeRunId)?.name ?? activeRunId;
   const crumb =
     homeView ? ['Home'] :
+    modelsView ? ['Models'] :
     loopView ? ['Loop'] :
     libraryView ? ['Library', selectedTemplate?.name].filter(Boolean) :
     activeActivity === 'runs' ? (activeRunId ? ['Runs', activeRunName] : ['Runs']) :
@@ -2047,9 +2063,19 @@ export default function App() {
             }}
           />
           )
+        ) : modelsView ? (
+          <ModelsPage
+            onChanged={refreshSettings}
+            onOpenSettings={() => setShowSettings(true)}
+          />
         ) : (
         <>
-        <aside className="sidebar" style={{ width: leftColW }}>
+        {/* The explorer fills for flows, library and runs, and for nothing else.
+            On the Loop page it was an empty 288px panel beside a board that had
+            been squeezed into a horizontally-scrolling strip — 40% of the width
+            spent on a blank column. A panel with nothing in it is not a layout,
+            so it is not rendered. */}
+        {sidebarFills && <aside className="sidebar" style={{ width: leftColW }}>
           {activeActivity === 'flows' && (
             <>
               <div className="sidebar-section">
@@ -2117,9 +2143,9 @@ export default function App() {
               />
             </>
           )}
-        </aside>
+        </aside>}
 
-        <ColumnResizer onStart={startLeftResize} onReset={resetLeftCol} label="Resize explorer" />
+        {sidebarFills && <ColumnResizer onStart={startLeftResize} onReset={resetLeftCol} label="Resize explorer" />}
 
         <main className="canvas-area">
           {flowView && (
@@ -2584,7 +2610,11 @@ export default function App() {
         )}
       </div>
 
-      {showSettings && <Settings onOpenProject={openProjectTab} onClose={() => { setShowSettings(false); refreshSettings(); }} />}
+      {showSettings && <Settings
+        onOpenProject={openProjectTab}
+        onOpenModels={() => { setShowSettings(false); refreshSettings(); goActivity('models'); }}
+        onClose={() => { setShowSettings(false); refreshSettings(); }}
+      />}
       {rematch && (
         <RematchPicker
           run={rematch}

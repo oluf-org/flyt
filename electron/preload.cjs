@@ -124,6 +124,40 @@ const api = {
   // Out of the queue for good. `force` is the second press: a claimed task is
   // refused first, because something holds a lease and probably a worktree.
   removeTask: (pid, id, force = false) => ipcRenderer.invoke('task:remove', pid, id, force),
+  // The rest of the backlog vocabulary (LOOP-BOARD B2). Every one of these was
+  // implemented in core/api.js and unreachable from the renderer, which is how
+  // the one screen whose job is "what is stuck" ended up unable to say.
+  getTask: (pid, id) => ipcRenderer.invoke('task:get', pid, id),
+  // Correcting a task's own description of itself - its level, its gates, what
+  // it depends on. The BACKLOG decides what may be written; this is a pipe.
+  updateTask: (pid, id, patch = {}) => ipcRenderer.invoke('task:update', pid, id, patch),
+  taskReady: (pid) => ipcRenderer.invoke('task:ready', pid),
+  taskStats: (pid) => ipcRenderer.invoke('task:stats', pid),
+  // A worker's worktree: what it has changed, and whether the gates pass.
+  // `workDiff` shells out to git, so it belongs on a slow timer and only while
+  // something is actually looking at it.
+  workDiff: (pid, taskId, base = null) => ipcRenderer.invoke('work:diff', pid, taskId, base),
+  workVerify: (pid, taskId) => ipcRenderer.invoke('work:verify', pid, taskId),
+  // Which runs are live right now, per project - how a card knows whether the
+  // snapshot it is holding is still moving.
+  runLive: (pid = null) => ipcRenderer.invoke('run:live', pid),
+  // --- The chat (LOOP-BOARD E) ---
+  // One turn loop over a read-mostly toolset whose single write is
+  // enqueue_task. Not a second orchestrator: work still goes through the loop.
+  chatThreads: (pid) => ipcRenderer.invoke('chat:threads', pid),
+  chatRead: (pid, threadId) => ipcRenderer.invoke('chat:read', pid, threadId),
+  chatNew: (pid) => ipcRenderer.invoke('chat:new', pid),
+  chatSend: (pid, threadId, text, worker = null) => ipcRenderer.invoke('chat:send', pid, threadId, text, worker),
+  chatStop: (pid, threadId) => ipcRenderer.invoke('chat:stop', pid, threadId),
+  chatDelete: (pid, threadId) => ipcRenderer.invoke('chat:delete', pid, threadId),
+  chatTools: () => ipcRenderer.invoke('chat:tools'),
+  // Streaming tokens and tool calls, mirroring onLoopEvent.
+  onChatEvent: (cb) => {
+    const handler = (_e, entry) => cb(entry);
+    ipcRenderer.on('chat:event', handler);
+    return () => ipcRenderer.removeListener('chat:event', handler);
+  },
+
   feedbackStats: (pid) => ipcRenderer.invoke('feedback:stats', pid),
   feedbackDigest: (pid, enqueue = false) => ipcRenderer.invoke('feedback:digest', pid, enqueue),
   archiveTrend: (pid, limit = 30) => ipcRenderer.invoke('archive:trend', pid, limit),

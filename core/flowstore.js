@@ -312,7 +312,18 @@ export class FlowStore {
         { id: 'user-input', type: 'input', kind: 'user', position: pos(0), data: {} },
         { id: 'plan', templateId: 'plan-start', position: pos(1), overrides: { title: 'Planning' } },
         // The post-planning human gate: pause for approval before routing.
-        { id: 'route', templateId: 'evaluation', position: pos(2), overrides: { title: 'Routing', evalType: 'plan', requiresApproval: true } },
+        //
+        // `toolCeiling: 'loop'` is set HERE and not only in the generated file,
+        // because `flows/` is gitignored and this builder is what a fresh
+        // install actually gets. This node is the one that materializes the
+        // work nodes, and a generated node inherits its owner's ceiling
+        // narrowed by its own (TOOLS-PLAN §6.3) — so setting it here sets it
+        // for the whole downstream walk. The `loop` set is repo-full plus the
+        // tools that let a worker understand the SYSTEM it is inside: the queue
+        // it was picked from, why something is stuck, the run that failed last
+        // time, the project's own gates, and a way to ask a question instead of
+        // guessing (D45).
+        { id: 'route', templateId: 'evaluation', position: pos(2), overrides: { title: 'Routing', evalType: 'plan', toolCeiling: 'loop', requiresApproval: true } },
         { id: 'verify', templateId: 'evaluation', position: pos(3), overrides: { title: 'Verification', evalType: 'final' } },
         { id: 'result', type: 'output', kind: 'user', position: pos(4), data: {} }
       ],

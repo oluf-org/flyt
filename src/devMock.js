@@ -242,14 +242,16 @@ const mockSettings = {
   // in it. An empty list is a legitimate first-run state, but it is not the
   // state anyone is iterating on the design of.
   activeModels: [
-    { id: 'deepseek/deepseek-v4-pro', source: 'openrouter', enabled: true },
-    { id: 'anthropic/claude-sonnet-5', source: 'openrouter', enabled: true },
-    { id: 'moonshotai/kimi-k3', source: 'openrouter', enabled: true }
+    { id: 'deepseek/deepseek-v4-pro', source: 'openrouter', enabled: true, pinned: true },
+    { id: 'anthropic/claude-sonnet-5', source: 'openrouter', enabled: true, pinned: true },
+    { id: 'moonshotai/kimi-k3', source: 'openrouter', enabled: true, pinned: true },
+    { id: 'openai/gpt-5.2', source: 'openrouter', enabled: true, pinned: true }
   ],
   modelFacts: {
     'deepseek/deepseek-v4-pro': { name: 'DeepSeek V4 Pro', contextLength: 1048576, supportsTools: true, inUsdPerM: 1.168, outUsdPerM: 2.336 },
     'anthropic/claude-sonnet-5': { name: 'Claude Sonnet 5', contextLength: 200000, supportsTools: true, inUsdPerM: 3, outUsdPerM: 15 },
-    'moonshotai/kimi-k3': { name: 'Kimi K3', contextLength: 262144, supportsTools: true, inUsdPerM: 0.6, outUsdPerM: 2.5 }
+    'moonshotai/kimi-k3': { name: 'Kimi K3', contextLength: 262144, supportsTools: true, inUsdPerM: 0.6, outUsdPerM: 2.5 },
+    'openai/gpt-5.2': { name: 'GPT-5.2', contextLength: 400000, supportsTools: true, inUsdPerM: 1.25, outUsdPerM: 10 }
   },
   modelSets: {},
   // The loop's band→model map (LOOP-PLAN §8), empty by default: the shipped
@@ -317,8 +319,46 @@ const mockTasks = [
     status: 'landed', level: 'medium', value: 5, effort: 2, attempts: 1,
     createdBy: 'human', createdAt: '2026-08-12T06:00:00.000Z', updatedAt: '2026-08-15T22:14:00.000Z',
     dependsOn: [], gates: [], blastRadius: ['core/worktree.js'], runIds: [], body: '## Goal\n\nSelf-modification hazard (§6.3).'
+  },
+  {
+    // The live fixture for the Blocked column: a task naming a dependency that
+    // does not exist. Before the blocker model this sat in a list called
+    // "Queued", which is a lie a person acts on.
+    id: 't-0005', title: 'Wire the board columns to the blocker model',
+    status: 'queued', level: 'high', value: 4, effort: 3, attempts: 0,
+    createdBy: 'human', createdAt: '2026-08-17T08:00:00.000Z', updatedAt: '2026-08-17T08:00:00.000Z',
+    dependsOn: ['t-0006'], gates: [], blastRadius: ['src/loopBoardData.js'],
+    runIds: [], budgetUsd: null, blockedReason: null,
+    body: ['## Goal', '', 'The columns are derived from the blocker model, not from status alone.'].join('\n')
+  },
+  {
+    // A question an agent asked rather than guessed at (ask_human). The one
+    // card on this page where a person unblocks a night by typing a word.
+    id: 't-0008', title: 'Decide where the drawer height is remembered',
+    status: 'parked', level: 'medium', value: 3, effort: 1, attempts: 1,
+    createdBy: 'human', createdAt: '2026-08-17T10:00:00.000Z', updatedAt: '2026-08-17T11:30:00.000Z',
+    dependsOn: [], gates: [], blastRadius: ['src/loop/LoopPage.jsx'], runIds: [],
+    blockedReason: [
+      'Q: Should the log drawer remember its height per project or globally?',
+      'Options: (1) per project  (2) globally',
+      'Already established: both are one line; nothing in the plan says which.'
+    ].join('\n'),
+    body: ['## Goal', '', 'The drawer is resizable and has to remember something.'].join('\n')
   }
 ];
+
+// Conversations, in memory. One seeded so the rail is not empty on first open.
+const mockChats = new Map([['c-mock1', {
+  id: 'c-mock1', title: 'why is the queue stuck?', updatedAt: '2026-08-17T09:00:00.000Z',
+  turns: [
+    { role: 'user', text: 'why is the queue stuck?', at: '2026-08-17T09:00:00.000Z' },
+    {
+      role: 'assistant', at: '2026-08-17T09:00:04.000Z', model: 'mock-large',
+      toolCalls: [{ tool: 'why_blocked', args: {}, ok: true, ms: 8 }],
+      text: 'Two things. t-0005 names t-0006, which does not exist. And no reviewer is set, so nothing can land even once it runs.'
+    }
+  ]
+}]]);
 
 const mockProblems = [
   { id: 't-0007', error: 't-0007: no YAML frontmatter' }
@@ -338,7 +378,7 @@ const refreshMockSummary = () => {
   mockSettings.summary = {
     connected: ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter']
       .filter(p => mockSettings.providers[p].hasKey).length,
-    activeModelCount: mockSettings.activeModels.filter(m => m.enabled !== false).length
+    activeModelCount: mockSettings.activeModels.filter(m => m.enabled !== false && m.pinned !== false).length
   };
   mockSettings.hasKey = mockSettings.summary.connected > 0;
   mockSettings.claudeSubscriptionActive = Boolean(mockSettings.providers['claude-code'].hasKey);
@@ -851,8 +891,79 @@ export function installDevMock() {
     // A file that would not parse comes back beside the tasks, never instead of
     // them. It is in the mock because it is the entry with no pile of its own —
     // the panel has to show it or it is invisible and permanent at once.
-    listTasks: async () => ({ tasks: structuredClone(mockTasks), problems: structuredClone(mockProblems) }),
+    // The board reads `blockers` and `boardBlockers` beside the tasks
+    // (LOOP-BOARD B2). The real backend computes them in core/blockers.js from
+    // the whole backlog; the mock STATES them, because the point of a fixture is
+    // to show the shapes a person has to be able to read — a missing dependency,
+    // a question, an unreadable file, a project with no reviewer.
+    listTasks: async () => ({
+      tasks: structuredClone(mockTasks),
+      problems: structuredClone(mockProblems),
+      blockers: {
+        't-0002': [{
+          kind: 'dep-unlanded', severity: 'blocked',
+          summary: 'Waiting on t-0001 (queued) to land.',
+          detail: null, subjects: ['t-0001'], remedy: null
+        }],
+        't-0005': [{
+          kind: 'dep-missing', severity: 'blocked',
+          summary: 'Waiting on t-0006, which does not exist.',
+          detail: 'It was removed, or the id was written down wrong. This task can never be picked while it names a task that is not there.',
+          subjects: ['t-0006'],
+          remedy: { action: 'remove-dep', label: 'Drop the dependency on t-0006', args: { id: 't-0005', dependsOn: [] } }
+        }],
+        't-0003': [{
+          kind: 'attempts-exhausted', severity: 'blocked',
+          summary: 'Parked after 3 attempt(s) at the top band — there is no bigger model to try.',
+          detail: 'A bigger model is not the missing piece.',
+          subjects: ['t-0003'],
+          remedy: { action: 'requeue', label: 'Put it back in the queue', args: { id: 't-0003' } }
+        }],
+        't-0007': [{
+          kind: 'unreadable', severity: 'blocked',
+          summary: 'This file in the backlog directory could not be read, so the loop skips it.',
+          detail: 't-0007: no YAML frontmatter',
+          subjects: ['t-0007'],
+          remedy: { action: 'remove-task', label: 'Remove it', args: { id: 't-0007' } }
+        }]
+      },
+      boardBlockers: mockSettings.workers?.reviewer?.model ? [] : [{
+        kind: 'no-reviewer', severity: 'blocked',
+        summary: 'No reviewer model is set, so nothing can land.',
+        detail: 'The loop will pick tasks, run them and verify them, then stop before merging. Set a reviewer to let work land.',
+        subjects: [], remedy: { action: 'set-reviewer', label: 'Set a reviewer', args: {} }
+      }]
+    }),
     addTask: async (_pid, task) => task,
+    getTask: async (_pid, id) => structuredClone(mockTasks.find(t => t.id === id) ?? null),
+    // Inline editing on the board writes through this. The allowlist is the
+    // backlog's business; the mock only has to move the fields.
+    updateTask: async (_pid, id, patch = {}) => {
+      const t = mockTasks.find(t => t.id === id);
+      if (!t) throw new Error(`No task "${id}".`);
+      Object.assign(t, patch, { updatedAt: new Date().toISOString() });
+      return structuredClone(t);
+    },
+    taskStats: async () => ({ total: mockTasks.length, counts: {}, ready: 1, blocked: 2, open: 4 }),
+    // A worktree diff, so the Working card's Changes tab previews as itself.
+    workDiff: async () => [
+      'diff --git a/core/supervisor.js b/core/supervisor.js',
+      '--- a/core/supervisor.js',
+      '+++ b/core/supervisor.js',
+      '@@ -560,7 +560,7 @@',
+      '   #whyNothingReady() {',
+      '-    let blocked = [];',
+      '+    return whyNothingReady({ tasks: this.backlog.list() });',
+      '   }'
+    ].join('\n'),
+    workVerify: async () => ({
+      ok: true, gates: ['npm test'],
+      results: [{
+        command: 'npm test', status: 'pass', code: 0, ms: 31200,
+        output: ['# tests 1070', '# pass 1070', '# fail 0'].join('\n')
+      }]
+    }),
+    runLive: async () => ({}),
     // Money is per task in the ledger, which is what the expanded card reads.
     ledgerTotals: async (_pid, { taskId = null } = {}) => (taskId
       ? { usd: 0.4213, calls: 9, estimated: 0, unknown: 1 }
@@ -890,6 +1001,44 @@ export function installDevMock() {
       const [removed] = mockTasks.splice(i, 1);
       return { removed: removed.id, title: removed.title, status: removed.status };
     },
+
+    // --- The backlog chat (LOOP-BOARD E) ---
+    // In-memory threads and a canned turn, so the drawer previews as itself:
+    // a tool call rendered as one collapsed line, then an answer, then a task
+    // the model queued shown as the card it became. There is no model here —
+    // what is being previewed is the SHAPE of a turn, which is the half that
+    // has to be legible.
+    chatThreads: async () => ({ threads: [...mockChats.values()].map(t => ({
+      id: t.id, title: t.title, turns: t.turns.length, updatedAt: t.updatedAt
+    })).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))), problems: [] }),
+    chatNew: async () => ({ threadId: `c-mock${mockChats.size + 1}` }),
+    chatRead: async (_pid, threadId) => ({ turns: structuredClone(mockChats.get(threadId)?.turns ?? []) }),
+    chatDelete: async (_pid, threadId) => ({ removed: mockChats.delete(threadId) }),
+    chatStop: async () => ({ stopped: true }),
+    chatTools: async () => ({ tools: ['list_tasks', 'read_task', 'why_blocked', 'read_file', 'glob', 'search_references', 'read_run', 'enqueue_task'] }),
+    chatSend: async (_pid, threadId, text) => {
+      const thread = mockChats.get(threadId) ?? { id: threadId, title: text.slice(0, 80), turns: [] };
+      thread.title ||= text.slice(0, 80);
+      thread.turns.push({ role: 'user', text, at: new Date().toISOString() });
+      const queueing = /queue|task|build|add|split|write/i.test(text);
+      const turn = {
+        role: 'assistant', at: new Date().toISOString(), model: 'mock-large',
+        toolCalls: [
+          { tool: 'list_tasks', args: {}, ok: true, ms: 6 },
+          ...(queueing ? [{ tool: 'enqueue_task', args: { title: text.slice(0, 60), goal: 'Queued from the chat.' }, ok: true, ms: 11 }] : [])
+        ],
+        text: queueing
+          ? 'Nothing in the queue covers that, so I have queued it. The loop will pick it up.'
+          : 't-0005 is the only one stuck: it names t-0006, which does not exist.',
+        ...(queueing ? { proposals: [{ id: 't-0009', title: text.slice(0, 60), goal: 'Queued from the chat.' }] } : {})
+      };
+      thread.turns.push(turn);
+      thread.updatedAt = turn.at;
+      mockChats.set(threadId, thread);
+      return turn;
+    },
+    onChatEvent: () => () => {},
+
     archiveTrend: async () => ({
       points: [
         { date: '2026-08-13', score: 0.5, verified: 1, cases: 2, benchUsd: 3.1 },

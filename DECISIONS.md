@@ -944,6 +944,134 @@ spend caps on `flyt loop start`, task removal (D43) and monotonic ids. 943/943 g
 pattern D42 recorded held again and is worth repeating: every defect here was invisible to a
 reading of the code and obvious within one real run.
 
+### D45 — The Loop page becomes a board, and the agent gets the tools to build it
+
+**Context.** The Loop page answered one of its three questions. "Does it need me" was legible —
+"Waiting on you" led the piles and kept its heading when empty. "What is moving" and "what is
+stuck" were not: eight statuses collapsed into five stacked sections, `claimed|verifying|review|
+running` all read as one pile, and finding anything meant scrolling past the model pickers and the
+burn bar. Worse, a task that could never be picked sat in a list titled **Queued** — the backlog
+computed the reason (`blocked()` at `core/backlog.js:436`, "waiting on t-0006 (missing)") and then
+threw it away, because the only command that returned it was `task:ready`, which the preload never
+exposed. The one screen whose job is "what is stuck" was the one caller that could not see it.
+
+Underneath that, a narrower problem with a wider blast radius: **the agent that is supposed to
+improve this app could not.** It had no surgical edit — only whole-file `write_file`, which is how
+a model destroys the 2,200 lines of a file it cannot see. No way to read the queue it was picked
+from, so five runs queued five versions of one idea. No way to run the project's own gates before
+declaring itself done. No way to look at the run that failed last time. `tools/sets/web.json`
+promised `uses:network` and delivered nothing. And no way to ask a question: an agent that hit a
+genuine ambiguity could guess, or burn its whole attempt ladder re-rolling the same ambiguity at
+increasing expense, or park with a stack trace nobody can answer.
+
+**Decision.** Six phases, in the order the dependencies actually run.
+
+**Tools first, because every later phase is work you want the loop to do.** Ten new built-ins.
+`edit_file` is the one that matters most: anchored replacement, where a non-unique anchor is an
+*error naming every match's line* and a zero-match anchor carries the closest line by trigram
+similarity — the two failure modes closed deliberately, because a guess that is right most of the
+time corrupts silently the rest of the time. `run_gate` runs only commands the project declared,
+and still declares `effects: ['shell']`: an allowlist narrows what can run, it does not turn
+execution into a read, and scoping it otherwise is exactly the dodge LOOP-PLAN Q-L9 names.
+`list_tasks` / `read_task` / `why_blocked` / `update_task` give the agent its own queue —
+`update_task`'s field allowlist *is* the tool, enforced in code rather than asked for in a prompt,
+because `status: 'landed'` is the field an agent optimizing for "done" has every incentive to
+write. `read_run` makes a retry smarter than the attempt before it. `web_fetch` fills the web set
+with a zero-dependency HTML reducer and labels its output `untrusted` **in the result**, next to
+the content, rather than only in a policy document nobody hands to the model; `web_search` ships
+*disabled* with a readable refusal rather than absent or crashing. `ask_human` parks with a
+question instead of a failure, and the board renders it as an answer box — which turns three
+attempts guessing at an ambiguity into one attempt that knows.
+
+**`core/blockers.js` is the keystone, and it fixes a real bug rather than only reporting one.**
+Thirteen kinds, each a sentence with a remedy where one exists, imported by both `core/api.js` and
+`core/supervisor.js` so the line at breakfast and the line on the card cannot drift into two
+accounts of one fact. Two tasks that depend on each other previously both scored 0 forever while
+the status line said "nothing ready" without ever using the word *cycle*; `cycleThrough` names the
+ring in order and the edge to cut. Project-wide blockers (`no-reviewer`, `budget-hard`,
+`loop-stopped`, `no-model`) are computed once and attached to the **board**, not repeated on forty
+cards. `severity: 'warning'` exists so `parallelism-full` and `budget-soft` never paint a healthy
+queue red.
+
+**Six columns, and the split between Queued and Blocked is the whole argument.** Needs you /
+Queued / Blocked / Working / Review / Done, left to right in the order work flows. Every task
+lands in exactly one; an unroutable status goes to "Needs you", because a state nobody planned for
+is precisely what a person should see. The blocker prints as a **sentence on the collapsed card**,
+never a badge — a badge means "look this up somewhere", and the entire point of the phase before
+was that there is nothing left to look up. `allowedMoves` puts the legal transitions in data, so
+the buttons, the keyboard shortcuts and any future drag all obey one table and none of them can
+invent a move the backlog would refuse. Inline editing of `level`/`value`/`effort`/`dependsOn`/
+`gates`/`blastRadius` is what makes this a working surface instead of a dashboard — and it is
+**refused** on a claimed or running task, because `core/backlog.js` `update()` is a
+read-modify-write and two writers to one file lose a field silently. That race is real; pretending
+otherwise would cost someone a task.
+
+**Watching a worker needed no new backend state at all.** A loop worker's run is an ordinary run,
+`core/engine.js` has always pushed `run:update` with snapshot patches for every run in the
+project, and the Loop page simply was not listening. `src/loopLive.js` is a rearrangement of data
+that was already on the wire: the active node, the tool calls newest-first, the files from
+`work:diff`, the idle clock against the supervisor's own threshold. One `onRunUpdate` subscription
+for the page rather than one per card; `work:diff` on a slow 15s timer and only while expanded,
+because it shells out to git. The highest-value line in the phase is also the cheapest — a
+one-line `now:` on the collapsed row that answers "is it thinking or is it working" without
+expanding anything.
+
+**The chat is one turn loop over a read-mostly toolset, and that is a position, not an
+implementation detail.** `.flyt/chats/<id>.jsonl`, one object per turn, the same discipline as the
+ledger. Its single write is `enqueue_task`; there is no `bash`, no `write_file`, no `edit_file`,
+and the test asserts that against the **registry**, not the prompt. A chat that can write files is
+a second unsupervised loop with no worktree, which is the one thing LOOP-PLAN §6 exists to
+prevent. Chat spend rides the same ledger tagged `source: 'chat'`, because money spent in a text
+box is still money and a burn bar that omits it reads lowest exactly when someone has been
+chatting all afternoon. Tool calls render as one collapsed line each and are never hidden: the
+trust model of this app is that you can see what it did.
+
+**Status.** Decided and **implemented**. 1086/1086 green (from 944), with new suites for the edit
+tool, the backlog tools, the web tools, the blocker taxonomy, the live worker projection, the
+board projections and the chat. `tests/loopView.test.js` is unedited through the `src/loop/` split
+— that was the check that the move was a move. Verified in the running app against this repo's own
+backlog: every column routes, the `dep-missing` sentence prints on `t-0008`, a remedy button
+clears the dependency it names, the filter operators narrow, `j/k/h/l/Enter/r/x//` all work, a
+worker card streams its tokens and its tool calls, and the chat queues a task as a card. Every
+`.loop-*` rule resolves through the oklch/`light-dark()` token seeds — no hex literal, no shimmer
+(D26). `flyt doctor` clean, `default-pipeline.flow.yaml` lints and stays byte-stable.
+
+**The first board looked terrible, and the reasons are worth writing down.** Six columns at a
+fixed `minmax(240px, 1fr)` need 1,440px; the centre pane is often half that, so the board scrolled
+sideways *and* vertically on the same box, over cards clipped mid-title. Four things fixed it, and
+three of them were not about the board at all:
+
+- **The columns wrap, they do not overflow.** Flex-wrap rather than grid, because a grid gives
+  every track the same width — so three EMPTY columns claimed as much room as the two holding all
+  the work. An empty column is now a pill carrying its label and count, ordered last so the pills
+  gather into one strip under the work. `align-content: flex-start`, because a multi-line flex
+  container stretches its rows by default and left that strip floating 130px below what it belongs
+  under.
+- **A collapsed card is one line.** It was ~90px: a title, then two permanently-visible buttons
+  nobody presses most days. The actions are still there, still keyboard-reachable through
+  `:focus-within`, just revealed rather than shouting.
+- **`container-type: inline-size` is inline-axis size CONTAINMENT.** Putting it on `.loop-column`
+  so the cards could query their column silently made the column unable to be sized *by* its
+  contents, collapsing `width: max-content` to 24px of padding — a chip reading "NEE YOU". The
+  container belongs on the cards wrapper, and both containers are named, because an unnamed
+  `@container` resolves to the nearest one and that was the wrong one.
+- **The explorer was rendering an empty 288px panel.** It fills for flows, library and runs, and
+  for nothing else — so on the Loop page 40% of the width went to a blank column beside a board
+  that had been squeezed into a strip. Not rendering it nearly doubled the board and took every
+  card title from ~20 characters to ~50.
+
+Measured across four window widths in the real app rather than judged from one screenshot: no
+horizontal scrollbar at any size, no nested scroll regions, and the visible fraction of a card
+title went from 3–5 characters at 1420px to 42–50.
+
+**What was deliberately not built, and is queued instead** (t-0009 … t-0014, written through
+`task:add` per the one-door rule): a two-phase propose/commit for `enqueue_task`, so the chat can
+show a task card *before* writing it; a resizable drawer that remembers its height; the board's
+density toggle; the thirteen-kind blocker walk-through in the real UI, because a test suite cannot
+tell you a sentence is legible; a Settings field for a search-provider key; and an mtime
+short-circuit in `core/backlog.js` before the 3s poll hurts at a hundred tasks. Drag-and-drop
+between columns is **not** queued and should stay unbuilt: most of these transitions are the
+supervisor's to make, and a button that names the action beats dragging a card and hoping.
 
 ---
 

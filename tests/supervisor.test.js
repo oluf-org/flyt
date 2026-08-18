@@ -279,7 +279,11 @@ test('the loop works the queue and stops when there is nothing ready', async () 
     ...fakeEngine({ backlog: stuck }), projectId: 'p', backlog: stuck, pollMs: 1
   }).run();
   assert.match(idle.stopping, /1 task\(s\) blocked/);
-  assert.match(idle.stopping, /t-0002 \(waiting on t-0001 \(parked\)\)/);
+  // The sentence comes from core/blockers.js now, so the line at breakfast and
+  // the line on the card are the same words rather than two accounts of one
+  // fact (LOOP-BOARD §B2). It also says the consequence, which "(parked)" did
+  // not: a parked dependency will not finish on its own.
+  assert.match(idle.stopping, /t-0002 \(Waiting on t-0001, which is parked — it will not finish on its own\.\)/);
 
   // Highest score first: the picker's order is the loop's order.
   const started = engine.calls.filter(c => c.name === 'work:start').map(c => c.args.taskId);

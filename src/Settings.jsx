@@ -55,7 +55,7 @@ const PROVIDER_META = {
 // agree is one too many.
 const CATALOG_PROVIDERS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi']; // curated lists; openrouter fetches live
 
-export default function Settings({ onClose, onOpenProject = null }) {
+export default function Settings({ onClose, onOpenProject = null, onOpenModels = null }) {
   const [tab, setTab] = useState('providers');
   const [s, setS] = useState(null); // the public settings payload
   const [error, setError] = useState('');
@@ -82,14 +82,15 @@ export default function Settings({ onClose, onOpenProject = null }) {
           <div className="inspector-title">
             <h2>Settings</h2>
             <div className="node-sub">
-              {s ? `${s.summary.connected} provider${s.summary.connected === 1 ? '' : 's'} connected · ${s.summary.activeModelCount} active model${s.summary.activeModelCount === 1 ? '' : 's'}` : 'providers & models'}
+              {s ? `${s.summary.connected} provider${s.summary.connected === 1 ? '' : 's'} connected · ${s.summary.activeModelCount} pinned model${s.summary.activeModelCount === 1 ? '' : 's'}` : 'providers, repositories & safety'}
             </div>
           </div>
+          {onOpenModels && <button className="ghost" onClick={onOpenModels}>Models</button>}
           <button className="ghost" onClick={onClose} aria-label="Close settings">✕</button>
         </div>
 
         <div className="settings-tabs" role="tablist" aria-label="Settings sections">
-          {[['providers', 'Providers'], ['models', 'Models'], ['repos', 'Repositories'], ['safety', 'Safety']].map(([id, label]) => (
+          {[['providers', 'Providers'], ['repos', 'Repositories'], ['safety', 'Safety']].map(([id, label]) => (
             <button
               key={id} role="tab" aria-selected={tab === id}
               className={'settings-tab' + (tab === id ? ' active' : '')}
@@ -100,8 +101,7 @@ export default function Settings({ onClose, onOpenProject = null }) {
 
         <div className="settings-body">
           {!s && !error && <div className="muted">Loading…</div>}
-          {s && tab === 'providers' && <ProvidersTab s={s} save={save} onKeySaved={() => setTab('models')} />}
-          {s && tab === 'models' && <ModelsTab s={s} save={save} />}
+          {s && tab === 'providers' && <ProvidersTab s={s} save={save} onKeySaved={onOpenModels} />}
           {s && tab === 'repos' && <ReposPanel onOpenProject={onOpenProject} />}
           {s && tab === 'safety' && <SafetyTab s={s} save={save} />}
           {error && <div className="settings-error mono">{error}</div>}
@@ -145,7 +145,7 @@ function ProvidersTab({ s, save, onKeySaved }) {
   const [savedTick, setSavedTick] = useState(null);
   const [tests, setTests] = useState({}); // provider -> { state: 'running'|'ok'|'err', error? }
 
-  const activeCount = p => (s.activeModels ?? []).filter(m => m.enabled !== false && canServe(p, m.id)).length;
+  const activeCount = p => (s.activeModels ?? []).filter(m => m.enabled !== false && m.pinned !== false && canServe(p, m.id)).length;
 
   const saveKey = async p => {
     const key = (keyInputs[p] ?? '').trim();

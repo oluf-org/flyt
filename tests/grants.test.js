@@ -28,10 +28,15 @@ const ids = r => r.tools.slice().sort();
 test('selectors resolve by what a tool IS, not by a list someone maintains', () => {
   // effects:read is a SUBSET test — a tool that also writes can never sneak in.
   const readOnly = [...expandRefs('effects:read', ctx).ids].sort();
-  assert.deepEqual(readOnly, ['glob', 'read_file', 'read_tool_result', 'search_references']);
+  assert.deepEqual(readOnly, ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_references', 'why_blocked']);
   assert.ok(!readOnly.includes('write_file'));
 
-  assert.deepEqual([...expandRefs('trust:trusted', ctx).ids].sort(), library.map(t => t.id).sort());
+  // Trust follows the SOURCE, and for the two web tools the source of the
+  // CONTENT is the public internet — so `trust:trusted` is now a real filter
+  // rather than a synonym for the whole library.
+  assert.deepEqual([...expandRefs('trust:trusted', ctx).ids].sort(),
+    library.filter(t => t.trust === 'trusted').map(t => t.id).sort());
+  assert.deepEqual([...expandRefs('trust:untrusted', ctx).ids].sort(), ['web_fetch', 'web_search']);
   assert.deepEqual([...expandRefs('provider:mcp', ctx).ids], []);
   assert.equal(expandRefs('*', ctx).ids.size, library.length);
 
@@ -39,9 +44,13 @@ test('selectors resolve by what a tool IS, not by a list someone maintains', () 
   // "reaches nothing beyond the network". Using the subset test here would
   // sweep in every read-only tool.
   assert.deepEqual([...expandRefs('uses:write', ctx).ids].sort(),
-    ['create_file', 'create_task', 'enqueue_task', 'write_file', 'write_task_md']);
-  assert.deepEqual([...expandRefs('uses:network', ctx).ids], [], 'no network tools until P4');
-  assert.deepEqual([...expandRefs('web', ctx).ids], [], 'the web set is empty, not "everything that only reads"');
+    ['ask_human', 'create_file', 'create_task', 'edit_file', 'enqueue_task', 'update_task', 'write_file', 'write_task_md']);
+  // The web set was declared and empty for its whole life; LOOP-BOARD §A5
+  // filled it, and the membership test is what picks its members out.
+  assert.deepEqual([...expandRefs('uses:network', ctx).ids].sort(), ['web_fetch', 'web_search']);
+  assert.deepEqual([...expandRefs('web', ctx).ids].sort(), ['web_fetch', 'web_search']);
+  assert.ok(![...expandRefs('web', ctx).ids].includes('read_file'),
+    'the web set is "anything that can reach the network", not "everything that only reads"');
 
   const bad = expandRefs('effects:teleport', ctx);
   assert.deepEqual([...bad.ids], []);
@@ -65,7 +74,7 @@ test('the store\'s catalog is the shape the linter reads', () => {
 });
 
 test('toolsets compose, exclude wins, and a cycle degrades instead of hanging', () => {
-  assert.deepEqual([...expandRefs('read-only', ctx).ids].sort(), ['glob', 'read_file', 'read_tool_result', 'search_references']);
+  assert.deepEqual([...expandRefs('read-only', ctx).ids].sort(), ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_references', 'why_blocked']);
   // repo-write includes read-only and every write tool, minus bash.
   const repoWrite = [...expandRefs('repo-write', ctx).ids].sort();
   assert.ok(repoWrite.includes('write_file') && repoWrite.includes('read_file'));
@@ -103,7 +112,7 @@ test('MIGRATION: absent a ceiling, the ceiling IS the static grant', () => {
 });
 
 test('an absent grant means everything the ceiling allows', () => {
-  assert.deepEqual(ids(resolveGrant({ grant: null, ceiling: 'read-only', ctx })), ['glob', 'read_file', 'read_tool_result', 'search_references']);
+  assert.deepEqual(ids(resolveGrant({ grant: null, ceiling: 'read-only', ctx })), ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_references', 'why_blocked']);
   assert.deepEqual(ids(resolveGrant({ grant: null, ceiling: 'none', ctx })), []);
 });
 
@@ -125,7 +134,7 @@ test('an orchestrator child narrows its parent, and can never widen it', () => {
   // Declares nothing → inherits verbatim, so the canvas still reads "repo-write".
   assert.equal(narrowCeiling('repo-write', null, ctx), 'repo-write');
   // Narrows → keeps only what both allow.
-  assert.deepEqual(narrowCeiling('repo-write', 'read-only', ctx).sort(), ['glob', 'read_file', 'read_tool_result', 'search_references']);
+  assert.deepEqual(narrowCeiling('repo-write', 'read-only', ctx).sort(), ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_references', 'why_blocked']);
   // Tries to widen → the parent still wins; bash never appears.
   const widened = narrowCeiling('repo-write', 'repo-full', ctx);
   assert.ok(!widened.includes('bash'), 'a child cannot decide it may do more than its parent');

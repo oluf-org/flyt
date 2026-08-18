@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   migrateSettings, createResolver, resolveCallTarget,
-  DEFAULT_PRIORITY, CURATED_MODELS,
+  DEFAULT_PRIORITY, DEFAULT_PINNED_MODELS, CURATED_MODELS,
   usdPerMillion, catalogFromOpenRouter, factsFromCatalog, normalizeModelFacts,
   normalizeModelSets, modelSetId, resolveModelSet, MODEL_SET_MAX,
   proposeStarterSet, STARTER_ROLES
@@ -29,10 +29,11 @@ test('migration does not overwrite a providers-map key with the legacy field', (
   assert.ok(!('openrouterApiKey' in s));
 });
 
-test('migration fills defaults: priority order, empty active models, kimi keyKind', () => {
+test('migration fills defaults: priority order, pinned starter models, kimi keyKind', () => {
   const s = migrateSettings({});
   assert.deepEqual(s.providerPriority, DEFAULT_PRIORITY);
-  assert.deepEqual(s.activeModels, []);
+  assert.deepEqual(s.activeModels, DEFAULT_PINNED_MODELS);
+  assert.deepEqual(migrateSettings({ activeModels: [] }).activeModels, [], 'an explicit empty list stays empty');
   const k = migrateSettings({ providers: { kimi: { apiKey: 'k' } } });
   assert.equal(k.providers.kimi.keyKind, 'platform');
 });
@@ -50,8 +51,8 @@ test('migration normalizes priority and active-model entries', () => {
   // Unknown ids dropped, duplicates removed, missing providers appended.
   assert.deepEqual(s.providerPriority, ['openrouter', ...DEFAULT_PRIORITY.filter(p => p !== 'openrouter')]);
   assert.deepEqual(s.activeModels, [
-    { id: 'claude-sonnet-5', source: 'anthropic', enabled: true },
-    { id: 'gpt-5.2', source: 'auto', enabled: true }
+    { id: 'claude-sonnet-5', source: 'anthropic', enabled: true, pinned: true },
+    { id: 'gpt-5.2', source: 'auto', enabled: true, pinned: true }
   ]);
 });
 

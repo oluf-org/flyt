@@ -1,0 +1,23 @@
+{
+  "id": "loop",
+  "title": "Loop worker",
+  "description": "What an unattended worker gets: the repo, the shell, the queue it lives in, the run that failed last time, and a way to ask a human.",
+  "include": [
+    "edit_file",
+    "run_gate",
+    "list_tasks",
+    "read_task",
+    "why_blocked",
+    "update_task",
+    "enqueue_task",
+    "read_run",
+    "ask_human"
+  ],
+  "includeSets": [
+    "repo-full"
+  ],
+  "exclude": [],
+  "source": {
+    "kind": "builtin"
+  }
+}

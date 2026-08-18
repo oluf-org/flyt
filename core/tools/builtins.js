@@ -17,8 +17,25 @@ import searchReferences from './search_references.js';
 import writeTaskMd from './write_task_md.js';
 import readToolResult from './read_tool_result.js';
 import glob from './glob.js';
+// LOOP-BOARD Phase A: what an agent needs to build this app from inside it —
+// a surgical edit, the project's own gates, the queue it lives in, the run that
+// failed last time, the network, and a way to ask instead of guessing.
+import editFile from './edit_file.js';
+import runGate from './run_gate.js';
+import listTasks from './list_tasks.js';
+import readTask from './read_task.js';
+import whyBlocked from './why_blocked.js';
+import updateTask from './update_task.js';
+import readRun from './read_run.js';
+import webFetch from './web_fetch.js';
+import webSearch from './web_search.js';
+import askHuman from './ask_human.js';
 
-export const BUILTIN_MODULES = [readFile, glob, createFile, writeFile, bash, createTask, enqueueTask, searchReferences, writeTaskMd, readToolResult];
+export const BUILTIN_MODULES = [
+  readFile, glob, createFile, writeFile, editFile, bash, createTask, enqueueTask,
+  searchReferences, writeTaskMd, readToolResult,
+  runGate, listTasks, readTask, whyBlocked, updateTask, readRun, webFetch, webSearch, askHuman
+];
 
 export const builtinModule = id => BUILTIN_MODULES.find(t => t.name === id) ?? null;
 
@@ -34,7 +51,10 @@ export const builtinDefinition = tool => ({
   risk: tool.risk,
   autoExecute: tool.autoExecute === true,
   source: { kind: 'builtin', importedFrom: null, importedAt: null },
-  trust: 'trusted',
+  // A built-in is trusted BY DEFAULT because its run() is in this source tree —
+  // but a built-in whose RESULTS come from outside it (web_fetch) says so, and
+  // the tier follows the content, not the code (TOOLS-PLAN §12.2).
+  trust: tool.trust ?? 'trusted',
   parameters: tool.parameters,
   keywords: tool.keywords ?? [],
   examples: tool.examples ?? [],

@@ -21,6 +21,10 @@
 - `OUTPUT-VIEW-PLAN.md` — the current implementation plan (markdown output view, canvas reader, summary nodes). Not started yet.
 - `CONFIGS-COMPARE-DESIGN.md` — P1–P3 shipped; P4 sweeps still open.
 
+The Loop page's rebuild as a board — the agent toolset, `core/blockers.js`, the six columns, the
+live worker view and the backlog chat — landed as **D45**. Its remainder is in the backlog
+(`t-0009`…`t-0014`), not in a plan document.
+
 ## Standing rules
 
 - Flows live in `flows/<id>.flow.yaml` + `.layout.json`; node templates in `nodes/*.json`; per-project config in `.flyt/` (D15, D22, renamed in D29).

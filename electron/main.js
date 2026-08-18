@@ -270,6 +270,20 @@ bindIpc('task:add', (projectId, task = {}) => ({ projectId, ...task }));
 bindIpc('task:escalate', (projectId, id, reason = 'failed') => ({ projectId, id, reason }));
 bindIpc('task:release', (projectId, id, status = 'queued') => ({ projectId, id, status }));
 bindIpc('task:remove', (projectId, id, force = false) => ({ projectId, id, force }));
+bindIpc('task:get', (projectId, id) => ({ projectId, id }));
+bindIpc('task:update', (projectId, id, patch = {}) => ({ projectId, id, ...patch }));
+bindIpc('task:ready', projectId => ({ projectId }));
+bindIpc('task:stats', projectId => ({ projectId }));
+bindIpc('work:diff', (projectId, taskId, base = null) => ({ projectId, taskId, base }));
+bindIpc('work:verify', (projectId, taskId) => ({ projectId, taskId }));
+bindIpc('run:live', (projectId = null) => ({ projectId }));
+bindIpc('chat:threads', projectId => ({ projectId }));
+bindIpc('chat:read', (projectId, threadId) => ({ projectId, threadId }));
+bindIpc('chat:new', projectId => ({ projectId }));
+bindIpc('chat:send', (projectId, threadId, text, worker = null) => ({ projectId, threadId, text, worker }));
+bindIpc('chat:stop', (projectId, threadId) => ({ projectId, threadId }));
+bindIpc('chat:delete', (projectId, threadId) => ({ projectId, threadId }));
+bindIpc('chat:tools');
 bindIpc('feedback:stats', projectId => ({ projectId }));
 bindIpc('feedback:digest', (projectId, enqueue = false) => ({ projectId, enqueue }));
 // The benchmark trend (§12.1) — the only number on the Loop view that answers
@@ -698,7 +712,8 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
       .map(m => ({
         id: m.id.trim(),
         source: PROVIDER_IDS.includes(m.source) ? m.source : 'auto',
-        enabled: m.enabled !== false
+        enabled: m.enabled !== false,
+        pinned: m.pinned !== false
       }));
   }
   // Named model sets (D36 B13). Sent whole rather than patched per set, so

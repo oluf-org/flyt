@@ -7,7 +7,7 @@
 //   providers:       { anthropic: { apiKey }, openai: { apiKey },
 //                      kimi: { apiKey, keyKind }, openrouter: { apiKey } }
 //   providerPriority: ['anthropic', 'openai', 'kimi', 'openrouter', 'mock']
-//   activeModels:    [{ id, source: 'auto' | providerId, enabled: bool }]
+//   activeModels:    [{ id, source: 'auto' | providerId, enabled: bool, pinned: bool }]
 //   workers:         { executor: { provider, model } }   (unchanged)
 
 // Subscription providers (SUBSCRIPTION-AUTH-GUIDE): connected not by a saved
@@ -19,6 +19,17 @@ export const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'];
 export const PROVIDER_IDS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'];
 export const KEYED_PROVIDERS = PROVIDER_IDS.filter(p => p !== 'mock' && !SUBSCRIPTION_PROVIDERS.includes(p));
 export const DEFAULT_PRIORITY = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'];
+
+// The compact pickers should be useful before somebody curates a personal
+// list. These are deliberately one strong, recognizable model per major lab.
+// Bare ids take the direct provider route when it is connected; DeepSeek is an
+// OpenRouter id because the app has no first-party DeepSeek adapter.
+export const DEFAULT_PINNED_MODELS = [
+  { id: 'gpt-5.2', source: 'auto', enabled: true, pinned: true },
+  { id: 'claude-sonnet-5', source: 'auto', enabled: true, pinned: true },
+  { id: 'kimi-k2.7-code', source: 'auto', enabled: true, pinned: true },
+  { id: 'deepseek/deepseek-v4-pro', source: 'auto', enabled: true, pinned: true }
+];
 
 // Curated per-provider model lists (PROVIDERS-PLAN §4): anthropic/openai/kimi
 // model endpoints are inconsistent, so a short static list + the free-text
@@ -90,12 +101,18 @@ export function migrateSettings(raw) {
   const seen = Array.isArray(s.providerPriority) ? s.providerPriority.filter(p => PROVIDER_IDS.includes(p)) : [];
   s.providerPriority = [...new Set([...seen, ...DEFAULT_PRIORITY])];
 
-  s.activeModels = (Array.isArray(s.activeModels) ? s.activeModels : [])
+  // Missing means a fresh profile and gets the small, opinionated default.
+  // An explicit [] remains empty, so a person can unpin everything and have
+  // that choice survive a restart. Existing entries predate `pinned`; treating
+  // them as pinned preserves the choices those users already made.
+  const rawModels = Array.isArray(s.activeModels) ? s.activeModels : DEFAULT_PINNED_MODELS;
+  s.activeModels = rawModels
     .filter(m => m && typeof m.id === 'string' && m.id.trim())
     .map(m => ({
       id: m.id.trim(),
       source: PROVIDER_IDS.includes(m.source) ? m.source : 'auto',
-      enabled: m.enabled !== false
+      enabled: m.enabled !== false,
+      pinned: m.pinned !== false
     }));
 
   if (s.providers.kimi && s.providers.kimi.keyKind !== 'code') {

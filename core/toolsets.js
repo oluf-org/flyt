@@ -39,11 +39,32 @@ export const SEED_TOOLSETS = [
   {
     id: 'web',
     title: 'Web',
-    description: 'Reaching the network: fetching pages and searching. Empty until the v1 catalog lands (P4).',
+    description: 'Reaching the network: fetching a page, searching for one. Content from the web is untrusted input.',
     // `uses:` not `effects:` — this set is "anything that CAN reach the
     // network", not "anything whose effects stay within {network}", which
     // would sweep in every read-only tool.
     include: ['uses:network']
+  },
+  {
+    // What the loop's own workers get (LOOP-BOARD §A7). Everything repo-full
+    // allows, plus the tools that let a worker understand the SYSTEM it is
+    // working inside rather than only the files: the queue it was picked from,
+    // why something is stuck, the run that failed last time, the project's own
+    // gates — and a way to ask a question instead of guessing.
+    //
+    // Deliberately does NOT include the web: a task working a backlog entry
+    // should be reading this repository, and a lane that wanders onto the
+    // internet is a lane spending its budget somewhere nobody asked it to look.
+    // A task that genuinely needs the web can name the `web` set itself.
+    id: 'loop',
+    title: 'Loop worker',
+    description: 'What an unattended worker gets: the repo, the shell, the queue it lives in, the run that failed last time, and a way to ask a human.',
+    includeSets: ['repo-full'],
+    include: [
+      'edit_file', 'run_gate',
+      'list_tasks', 'read_task', 'why_blocked', 'update_task', 'enqueue_task',
+      'read_run', 'ask_human'
+    ]
   }
 ];
 
