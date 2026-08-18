@@ -1,7 +1,7 @@
 // Executor node: runs ONE task from tasks.json -> tasks/<id>.md + per-task
 // retrospective. Sequential orchestration lives in pipeline.js; this module
 // only knows how to execute a single self-describing task from file state.
-import { runAgent, toolProtocol, describeEmptyTurn } from '../agent.js';
+import { runAgent, toolProtocol, describeEmptyTurn, supportsToolsFor } from '../agent.js';
 import { resolveTools } from '../tools/index.js';
 import { makeRetrospective } from '../retrospective.js';
 import { recordToolUsage } from '../feedback.js';
@@ -30,12 +30,21 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   const target = resolveCallTarget(task.worker, config);
   const apiKey = target.apiKey;
 
-  // Native tool-calling is available per MODEL, learned from the provider's
-  // catalogue (settings.modelCapabilities); anything unknown falls back to the
-  // text protocol, which works everywhere.
+  // Native tool-calling is available per MODEL. Asked of the SHARED rule rather
+  // than re-decided here: this line was `Boolean(config.modelCapabilities?.[model])`,
+  // which ignores the catalogue facts and ignores the "unknown, on an
+  // OpenAI-compatible provider, means probably yes" default that
+  // `supportsToolsFor` exists to encode. Nothing outside the desktop app's
+  // Settings page ever fills `modelCapabilities`, so the answer here was always
+  // FALSE — on every model, for every task, forever.
+  //
+  // The executor is the only node that writes code. So the one node whose whole
+  // job is touching the workspace was the one node hardcoded never to call a
+  // tool natively. Watched seven sub-tasks in a row run on the text protocol,
+  // make zero tool calls, report `done`, and produce no diff.
   const worker = { ...task.worker, provider: target.provider, model: target.model, ...(target.keyKind ? { keyKind: target.keyKind } : {}) };
   if (worker.provider !== 'mock' && worker.provider !== 'anthropic') {
-    worker.supportsTools = Boolean(config.modelCapabilities?.[worker.model]);
+    worker.supportsTools = supportsToolsFor(worker, config);
   }
 
   // The grant, intersected with the ceiling (TOOLS-PLAN §6). Absent ceiling ⇒
