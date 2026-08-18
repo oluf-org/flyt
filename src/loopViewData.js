@@ -1,4 +1,4 @@
-// What the Loop view shows, as pure functions (LOOP-PLAN §14).
+// What the Loop view shows, as pure functions (DESIGN-SPEC.md §8).
 //
 // The shaping lives here rather than in the component for the reason the rest
 // of this codebase already follows (`src/nodeFeedData.js`, `src/runDocument.js`):

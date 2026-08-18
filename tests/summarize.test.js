@@ -1,4 +1,4 @@
-// Summary nodes (OUTPUT-VIEW-PLAN B4, D5–D8): flowRunner.summarizeOutputs and
+// Summary nodes (DESIGN-SPEC.md §7, D5–D8): flowRunner.summarizeOutputs and
 // its persistence — summaries/<key>.md + summaries/index.json round-tripping
 // into the snapshot, prompt assembly (named sources, truncation budget),
 // no-model and call-error degradation, delete and position moves.

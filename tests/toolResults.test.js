@@ -1,4 +1,4 @@
-// Tool results as artifacts (TOOLS-PLAN P2/§13): every call writes its full,
+// Tool results as artifacts (DESIGN-SPEC.md §5): every call writes its full,
 // untruncated result to runs/<id>/tools/<seq>-<tool>.json, the model gets a
 // bounded preview plus a handle, and read_tool_result redeems the handle.
 //

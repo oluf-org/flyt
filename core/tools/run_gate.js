@@ -9,7 +9,7 @@
 //      It still declares `effects: ['shell']`, because it does execute: an
 //      allowlist narrows what can run, it does not turn execution into a read,
 //      and scoping this to dodge the approval gate is exactly the move
-//      LOOP-PLAN Q-L9 names. What the allowlist buys is a gate that cannot be
+//      DESIGN-SPEC.md §8 names. What the allowlist buys is a gate that cannot be
 //      turned into an arbitrary shell by a well-phrased argument.
 //   2. More important: it makes "did I actually verify this" a first-class,
 //      loggable event instead of a shell string buried among forty others. The

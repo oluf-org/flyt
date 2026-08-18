@@ -47,7 +47,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     worker.supportsTools = supportsToolsFor(worker, config);
   }
 
-  // The grant, intersected with the ceiling (TOOLS-PLAN §6). Absent ceiling ⇒
+  // The grant, intersected with the ceiling (DESIGN-SPEC.md §5). Absent ceiling ⇒
   // the ceiling is the grant, and an absent grant is the whole library — the
   // pre-ceiling semantics, unchanged.
   //
@@ -123,13 +123,13 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     config,
     // The worktree pool, when the caller has one: read_run's diff.
     pool,
-    // The project backlog (LOOP-PLAN §5), resolved outside any worktree, so a
+    // The project backlog (DESIGN-SPEC.md §8), resolved outside any worktree, so a
     // task an agent notices mid-run outlives the run: enqueue_task writes here.
     backlog,
-    // Where an instance's tool review lands (LOOP-PLAN §12), same canonical
+    // Where an instance's tool review lands (DESIGN-SPEC.md §8), same canonical
     // location rule as the backlog: outside every worktree.
     feedback,
-    // The read-only reference library (LOOP-PLAN §16): prior art an agent can
+    // The read-only reference library (DESIGN-SPEC.md §8): prior art an agent can
     // grep at task time instead of designing from first principles.
     references,
     // Present only when the node opted into per-tool approval: the agent loop
@@ -207,7 +207,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     const problems = [
       // A refused grant is a problem even when the task succeeded: something
       // asked for more than its ceiling allows, and that must be visible
-      // rather than merely absent (TOOLS-PLAN §5.3).
+      // rather than merely absent (DESIGN-SPEC.md §5).
       ...grant.refused.map(r => `Tool "${r.tool}" was refused: outside this node's toolCeiling.`),
       ...failedCalls.map(c => `Tool call ${c.tool} failed: ${c.error}`),
       ...redCommands.map(c => `Command exited ${c.result.exitCode}: ${String(c.result.command ?? '').slice(0, 120)}`)
@@ -229,7 +229,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
       toolCalls: result.toolCalls
     });
 
-    // --- The retrospective turn (LOOP-PLAN §12.0) ---
+    // --- The retrospective turn (DESIGN-SPEC.md §8) ---
     // The instance is prompted once more, with its own completion handed back,
     // and asked how the toolbox was and what was missing. It runs AFTER the
     // deliverable is written and the status is set, so nothing about the task's
@@ -315,7 +315,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   store.writeTasks(runId, freshDoc);
   task.status = status; // keep the in-memory copy consistent for callers
   store.writeRetrospective(runId, `executor-${taskId}`, retro);
-  // The instance's tool use joins the project's feedback pile (LOOP-PLAN §12).
+  // The instance's tool use joins the project's feedback pile (DESIGN-SPEC.md §8).
   // Facts only, derived from the calls it made.
   recordToolUsage(feedback, { runId, nodeId: `executor:${taskId}`, task: taskId, model: task.worker, retro });
   return retro;

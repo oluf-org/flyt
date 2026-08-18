@@ -1,5 +1,5 @@
 // Unit tests for the multi-provider settings model and the resolution rule
-// (PROVIDERS-PLAN §1–§2, task 8): migration, priority walk, pin, disconnected
+// (DESIGN-SPEC.md §6): migration, priority walk, pin, disconnected
 // skip, and the no-match error — plus the new adapters' request shapes.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -56,7 +56,7 @@ test('migration normalizes priority and active-model entries', () => {
   ]);
 });
 
-// --- model facts (BRICKS P0.2) ---------------------------------------------
+// --- model facts (DECISIONS.md D36) ---------------------------------------------
 
 test('per-token catalog prices become per-million; junk becomes null', () => {
   assert.equal(usdPerMillion('0.000003'), 3);
@@ -111,7 +111,7 @@ test('migration normalizes stored facts and drops empty ones', () => {
   assert.deepEqual(normalizeModelFacts(null), {});
 });
 
-// --- model sets (BRICKS P0.3 / D36 B13) ------------------------------------
+// --- model sets (DECISIONS.md D36) ------------------------------------
 
 test('set ids are slugs; names survive', () => {
   assert.equal(modelSetId('The Analysts!'), 'the-analysts');
@@ -145,7 +145,7 @@ test('migration keeps model sets and defaults them to empty', () => {
   assert.deepEqual(migrateSettings({ modelSets: { A: ['x/y'] } }).modelSets, { a: { name: 'a', models: ['x/y'] } });
 });
 
-// --- the starter set (BRICKS P0.1) -----------------------------------------
+// --- the starter set (DECISIONS.md D36) -----------------------------------------
 
 const CATALOG = [
   { id: 'anthropic/claude-haiku-4.5', contextLength: 200000, supportsTools: true, inUsdPerM: 1 },

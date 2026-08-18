@@ -1,4 +1,4 @@
-// The supervisor, the ledger and the stall detectors (LOOP-PLAN §9, §10, §11).
+// The supervisor, the ledger and the stall detectors (DESIGN-SPEC.md §8).
 //
 // The loop is driven through a fake command surface here rather than a real
 // engine: what is under test is the DECISIONS — when to park, when to nudge,
@@ -281,7 +281,7 @@ test('the loop works the queue and stops when there is nothing ready', async () 
   assert.match(idle.stopping, /1 task\(s\) blocked/);
   // The sentence comes from core/blockers.js now, so the line at breakfast and
   // the line on the card are the same words rather than two accounts of one
-  // fact (LOOP-BOARD §B2). It also says the consequence, which "(parked)" did
+  // fact (DECISIONS.md D45). It also says the consequence, which "(parked)" did
   // not: a parked dependency will not finish on its own.
   assert.match(idle.stopping, /t-0002 \(Waiting on t-0001, which is parked — it will not finish on its own\.\)/);
 

@@ -1,4 +1,4 @@
-// The backlog READ tools (LOOP-BOARD §A3) plus run_gate, read_run and
+// The backlog READ tools (DECISIONS.md D45) plus run_gate, read_run and
 // ask_human. `enqueue_task` gave an agent a way to add to the queue and no way
 // to look at it; these are the other half.
 //
@@ -184,7 +184,7 @@ test('run_gate: a failing gate is a successful CALL with ok:false in the result'
   const rec = await executeTool('run_gate', {}, ctx);
   // The call ran — that is what rec.ok means. Whether the gate PASSED is the
   // result's business, and conflating the two is the ambiguity that makes
-  // bash's exit codes untrustworthy (DESIGN-SPEC §11.1).
+  // bash's exit codes untrustworthy (DESIGN-SPEC.md §8).
   assert.equal(rec.ok, true);
   assert.equal(rec.result.ok, false);
   assert.equal(rec.result.results[0].exitCode, 3);

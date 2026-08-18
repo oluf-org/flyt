@@ -1,5 +1,5 @@
 // Unit tests for the pure displacement math (src/displace.js) behind the
-// canvas reader's local displacement (OUTPUT-VIEW-PLAN B3/D4): minimal-
+// canvas reader's local displacement (DESIGN-SPEC.md §7): minimal-
 // translation pushes, the 24px gutter, cascade + depth cap, and exact `from`
 // recording for collapse-restore. No React Flow anywhere — plain rects only.
 import test from 'node:test';

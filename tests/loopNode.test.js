@@ -1,9 +1,9 @@
-// The chain: flow → backlog → loop → done (BRICKS P4 / D36 B9–B12).
+// The chain: flow → backlog → loop → done (DECISIONS.md D36).
 //
 // The contract and the wait policy are pure functions, tested directly. The
 // node itself is tested against a real Backlog on disk with a stub supervisor,
 // because the thing worth pinning is "did the hand-off produce work a
-// supervisor can actually claim" — which is exactly the failure mode BRICKS §3
+// supervisor can actually claim" — which is exactly the failure mode DECISIONS.md D36
 // calls the real risk.
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -25,14 +25,14 @@ const api = {
   moveSummary: (pid, runId, summaryId, position) =>
     ipcRenderer.invoke('run:moveSummary', pid, runId, summaryId, position),
   followUpRun: (pid, runId, text) => ipcRenderer.invoke('run:followUp', pid, runId, text),
-  // Answer a run parked at the refiner's awaiting_input gate (MODES-COMPARE T6).
+  // Answer a run parked at the refiner's awaiting_input gate (DECISIONS.md D27).
   answerInput: (pid, runId, text) => ipcRenderer.invoke('run:answerInput', pid, runId, text),
   // Approval gates: the chat run tells the main process when a run parks at a
   // gate (and when it settles), so an unfocused window can raise an OS
   // notification + taskbar flash — a stopped workflow must find the user.
   signalApprovalGate: (info) => ipcRenderer.invoke('app:approvalGate', info),
   listRuns: (pid) => ipcRenderer.invoke('run:list', pid),
-  // Comparison records (CONFIGS-COMPARE P2): begin mints the shared group id
+  // Comparison records (DECISIONS.md D27): begin mints the shared group id
   // before the two runs start; save persists { id, runIds, origin } and stamps
   // both runs' metas; list feeds the ⚖ badge + pairing restore.
   beginCompare: (pid) => ipcRenderer.invoke('compare:begin', pid),
@@ -62,7 +62,7 @@ const api = {
   flowFolder: () => ipcRenderer.invoke('flow:folder'),
   openFlowFolder: () => ipcRenderer.invoke('flow:openFolder'),
   lintFlow: (id) => ipcRenderer.invoke('flow:lint', id),
-  // Configs (CONFIGS-COMPARE P1): create/update, duplicate, and promote a
+  // Configs (DECISIONS.md D27): create/update, duplicate, and promote a
   // finished run's launch config — all modes on a flow, stored in its YAML.
   saveConfig: (flowId, modeId, config) => ipcRenderer.invoke('flow:saveConfig', flowId, modeId, config),
   duplicateConfig: (flowId, sourceId, newId, name) => ipcRenderer.invoke('flow:duplicateConfig', flowId, sourceId, newId, name),
@@ -109,7 +109,7 @@ const api = {
   pickProjectFolder: () => ipcRenderer.invoke('project:pickFolder'),
   deckData: () => ipcRenderer.invoke('project:deckData'),
 
-  // --- The loop (LOOP-PLAN §14) ---
+  // --- The loop (DESIGN-SPEC.md §8) ---
   loopStart: (pid, opts = {}) => ipcRenderer.invoke('loop:start', pid, opts),
   loopStop: (pid) => ipcRenderer.invoke('loop:stop', pid),
   loopStatus: (pid) => ipcRenderer.invoke('loop:status', pid),
@@ -124,7 +124,7 @@ const api = {
   // Out of the queue for good. `force` is the second press: a claimed task is
   // refused first, because something holds a lease and probably a worktree.
   removeTask: (pid, id, force = false) => ipcRenderer.invoke('task:remove', pid, id, force),
-  // The rest of the backlog vocabulary (LOOP-BOARD B2). Every one of these was
+  // The rest of the backlog vocabulary (DECISIONS.md D45). Every one of these was
   // implemented in core/api.js and unreachable from the renderer, which is how
   // the one screen whose job is "what is stuck" ended up unable to say.
   getTask: (pid, id) => ipcRenderer.invoke('task:get', pid, id),
@@ -141,7 +141,7 @@ const api = {
   // Which runs are live right now, per project - how a card knows whether the
   // snapshot it is holding is still moving.
   runLive: (pid = null) => ipcRenderer.invoke('run:live', pid),
-  // --- The chat (LOOP-BOARD E) ---
+  // --- The chat (DECISIONS.md D45) ---
   // One turn loop over a read-mostly toolset whose single write is
   // enqueue_task. Not a second orchestrator: work still goes through the loop.
   chatThreads: (pid) => ipcRenderer.invoke('chat:threads', pid),

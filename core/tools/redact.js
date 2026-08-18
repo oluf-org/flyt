@@ -1,4 +1,4 @@
-// Redaction for tool-call records (TOOLS-PLAN §13, §10.3).
+// Redaction for tool-call records (DESIGN-SPEC.md §5).
 //
 // The audit trail must be safe to read, share and attach to a bug report, so
 // what lands in log.jsonl and runs/<id>/tools/<seq>-<tool>.json is the call

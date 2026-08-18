@@ -1,10 +1,10 @@
-// The local HTTP front door (LOOP-PLAN §13).
+// The local HTTP front door (DESIGN-SPEC.md §8).
 //
 // Same command map as IPC (core/api.js), reachable from a terminal, a script,
 // or an AI. `POST /api/<command>` with a JSON body, `GET /api/events` for the
 // live stream the Electron viewer and the supervisor both consume.
 //
-// Security posture, decided in TOOLS-PLAN §9.2 and unchanged here: loopback
+// Security posture, decided in DESIGN-SPEC.md §5 and unchanged here: loopback
 // only, and a bearer token required EVEN ON LOOPBACK. Any local process can
 // reach 127.0.0.1 — every other program on the machine, every npm postinstall,
 // every browser tab via a form post. "It's only localhost" is not an

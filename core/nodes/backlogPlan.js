@@ -1,4 +1,4 @@
-// The flow → backlog contract (BRICKS P4.1 / D36 B9).
+// The flow → backlog contract (DECISIONS.md D36).
 //
 // A flow that wants the loop to work on what it just figured out has to hand
 // over something the supervisor can actually claim. The alternative — the loop
@@ -7,7 +7,7 @@
 // the same shape pointed at core/backlog.js instead of at the node catalog.
 //
 // The failure mode this exists to make mechanically detectable: a plausible,
-// useless task that no supervisor can pick up (BRICKS §3, P5.4).
+// useless task that no supervisor can pick up (DECISIONS.md D36, P5.4).
 
 import { extractJson } from '../planEval.js';
 import { LEVELS } from '../levels.js';

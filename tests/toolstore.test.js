@@ -1,4 +1,4 @@
-// ToolStore: tools are files (TOOLS-PLAN §4.1). These pin the properties the
+// ToolStore: tools are files (DESIGN-SPEC.md §5). These pin the properties the
 // rest of the plan leans on — the built-ins seed themselves and stay in step
 // with the modules that actually run, a malformed definition is disabled with
 // a reason instead of crashing the library, and the runtime registry is built

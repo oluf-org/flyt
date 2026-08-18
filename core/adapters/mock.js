@@ -143,7 +143,7 @@ No larger gaps — no corrective task nodes created.
 { "fixTasks": [] }
 \`\`\``,
 
-    // Follow-up turns (FOLLOWUP-PLAN): classify the reply as a small fix so
+    // Follow-up turns (DECISIONS.md D21): classify the reply as a small fix so
     // the whole extend-and-walk loop is exercisable with no API key.
     'followup-triage': JSON.stringify({
       class: 'fix',
@@ -199,7 +199,7 @@ The explicit per-file context descriptions worked: only the listed files were re
 }
 
 // The mock provider serves its own ids (mock-large / mock-small) — a real
-// model id must never resolve to it during a priority walk (PROVIDERS-PLAN §2).
+// model id must never resolve to it during a priority walk (DESIGN-SPEC.md §6).
 mockAdapter.canServe = modelId => String(modelId).startsWith('mock-');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));

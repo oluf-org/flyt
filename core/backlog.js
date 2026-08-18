@@ -1,4 +1,4 @@
-// The backlog: work that survives a run (LOOP-PLAN §5).
+// The backlog: work that survives a run (DESIGN-SPEC.md §8).
 //
 // `create_task` already lets an agent spawn follow-up work, but that work lives
 // in `runs/<id>/tasks.json` and dies with the run. The loop needs the other
@@ -6,7 +6,7 @@
 // 07:00, that an agent can add to mid-run when it notices something worth
 // doing, and that a supervisor can pick from tomorrow.
 //
-// A task is a file, for the same reason a tool is (TOOLS-PLAN §4.1) and a flow
+// A task is a file, for the same reason a tool is (DESIGN-SPEC.md §5) and a flow
 // is (FLOW_LANG.md): markdown with YAML frontmatter, because a human writes
 // these and an agent writes these and both have to read them. Zero dependencies
 // (D24) — the frontmatter goes through core/flowlang/yaml.js.

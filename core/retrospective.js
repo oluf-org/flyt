@@ -17,7 +17,7 @@ export function makeRetrospective({
     node, status, problems,
     resolution: resolution || (problems.length ? '' : 'none needed'),
     confidence, recommendation, model, usage, durationMs, toolCalls,
-    // What this instance did with its toolbox (LOOP-PLAN §12): per tool, how
+    // What this instance did with its toolbox (DESIGN-SPEC.md §8): per tool, how
     // many calls, how many failed, how long they took.
     //
     // DERIVED, never asked for. The facts are already in the tool calls, so

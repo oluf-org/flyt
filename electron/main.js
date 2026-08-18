@@ -18,7 +18,7 @@ import {
   catalogFromOpenRouter, factsFromCatalog, normalizeModelSets
 } from '../core/modelSource.js';
 // Subscription (CLI-delegation) plumbing: sign-in detection + binary
-// resolution. Presence checks only — no token is ever read (SUBSCRIPTION-AUTH-GUIDE).
+// resolution. Presence checks only — no token is ever read (DESIGN-SPEC.md §6).
 import { LEVELS } from '../core/levels.js';
 import { APP_NAME, LOG_TAG, LEGACY_APP_DIRS } from '../core/brand.js';
 import { migrateUserDataDir } from '../core/migrate.js';
@@ -69,7 +69,7 @@ app.on('second-instance', () => {
   win.focus();
 });
 
-// --- The engine (LOOP-PLAN §4.2) ---
+// --- The engine (DESIGN-SPEC.md §8) ---
 // Stores, settings, provider resolution, the project registry and the push
 // plumbing all live in core/engine.js now, so the headless supervisor and the
 // CLI can drive exactly the same app this window does. What stays here is what
@@ -213,7 +213,7 @@ function createWindow() {
 // passes through.
 const proj = projectId => registry.get(projectId);
 
-// --- The command surface (LOOP-PLAN §4.2) ---
+// --- The command surface (DESIGN-SPEC.md §8) ---
 // Commands that don't need a window live in core/api.js so the CLI, the HTTP
 // server and this renderer all reach the same implementation. IPC is positional
 // and the map is keyword, so each binding below names its arguments once —
@@ -241,7 +241,7 @@ bindIpc('run:restartNode', (projectId, runId, nodeId, guidance = '', worker = nu
   ({ projectId, runId, nodeId, guidance, worker }));
 bindIpc('run:followUp', (projectId, runId, text) => ({ projectId, runId, text }));
 bindIpc('run:answerInput', (projectId, runId, text) => ({ projectId, runId, text }));
-// The loop (LOOP-PLAN §14): the same commands the CLI and the HTTP server bind,
+// The loop (DESIGN-SPEC.md §8): the same commands the CLI and the HTTP server bind,
 // so the desktop view is a third front door onto one implementation rather than
 // a second implementation of the same panel.
 bindIpc('loop:start', (projectId, opts = {}) => ({ projectId, ...opts }));
@@ -292,7 +292,7 @@ bindIpc('archive:trend', (projectId, limit = 30) => ({ projectId, limit }));
 
 // One engine, one entry point: pick a workflow, type a request, run it.
 // The user input becomes the flow's User Input node content for that run.
-// approvalMode rides in from the chatbox picker (APPROVAL-MODES §3): the mode
+// approvalMode rides in from the chatbox picker (DESIGN-SPEC.md §5): the mode
 // shown beside the Run button is the mode the run is captured under, so what
 // the user saw when they pressed Run is what governs it for its whole life.
 // Omitted (or unrecognized) falls back to the saved default.
@@ -338,7 +338,7 @@ ipcMain.handle('run:branch', (_e, projectId, runId, nodeId) => proj(projectId).r
 // output, retrospective, log tail, and a model-written summary.
 ipcMain.handle('run:investigateNode', (_e, projectId, runId, nodeId) =>
   proj(projectId).runner.investigateNode(runId, nodeId));
-// Summary nodes (OUTPUT-VIEW-PLAN B4): summarize one or more node outputs into
+// Summary nodes (DESIGN-SPEC.md §7): summarize one or more node outputs into
 // a run artifact (summaries/<key>.md + index.json); delete removes both; move
 // persists a dragged card's canvas position.
 ipcMain.handle('run:summarize', (_e, projectId, runId, sourceIds, position = null) =>
@@ -347,9 +347,9 @@ ipcMain.handle('run:deleteSummary', (_e, projectId, runId, summaryId) =>
   proj(projectId).runner.deleteSummary(runId, summaryId));
 ipcMain.handle('run:moveSummary', (_e, projectId, runId, summaryId, position) =>
   proj(projectId).runner.moveSummary(runId, summaryId, position));
-// Reply to a finished run (FOLLOWUP-PLAN): the flow grows with a continuation
+// Reply to a finished run (DECISIONS.md D21): the flow grows with a continuation
 // subgraph and the walk executes it; completed nodes are never re-run.
-// Answer a run parked at the refiner's awaiting_input gate (MODES-COMPARE T6).
+// Answer a run parked at the refiner's awaiting_input gate (DECISIONS.md D27).
 // Distinct from run:followUp — this closes an in-flight question and re-runs
 // the refine node with the answer; it does not open a new follow-up turn.
 // Summaries, not bare ids: the list names, groups and sorts runs, and reading
@@ -367,7 +367,7 @@ ipcMain.handle('run:delete', (_e, projectId, runId) => {
   return true;
 });
 
-// --- Comparison records (CONFIGS-COMPARE P2) ---
+// --- Comparison records (DECISIONS.md D27) ---
 // compare:begin mints the shared group id BEFORE the two runs start (their
 // metas carry it from creation); compare:save persists the record and stamps
 // both runs (label A/B) — including retroactively for rematch/manual pairs.
@@ -466,7 +466,7 @@ ipcMain.handle('project:adopt', (_e, projectId, folder) => {
 // Reveal a tab's project directory in the OS file manager (folder tabs open the
 // bound workspace; appdata tabs open their app-managed dir). The path comes from
 // Open one file inside a run — today the tool-result artifacts the inspector
-// links (TOOLS-PLAN §13). The path comes from the renderer, so it is resolved
+// links (DESIGN-SPEC.md §5). The path comes from the renderer, so it is resolved
 // against the run directory and rejected if it escapes: a relative path from
 // a record is data, and data does not get to name a file outside the run.
 ipcMain.handle('run:openArtifact', (_e, projectId, runId, relPath) => {
@@ -558,7 +558,7 @@ ipcMain.handle('flow:folder', () => ({ dir: flows.rootDir, packaged: app.isPacka
 ipcMain.handle('flow:openFolder', () => shell.openPath(flows.rootDir));
 // On-save validation for the canvas badge: full rule set, structured findings.
 
-// --- Configs (CONFIGS-COMPARE P1): modes as first-class bundles ---
+// --- Configs (DECISIONS.md D27): modes as first-class bundles ---
 // A config IS a mode in the flow's modes: block; these are thin passes into
 // the FlowStore helpers (the .flow.yaml stays the source of truth).
 ipcMain.handle('flow:saveConfig', (_e, flowId, modeId, config = {}) =>
@@ -598,7 +598,7 @@ ipcMain.handle('flow:listConfigs', () => {
   return out;
 });
 
-// The exposed run inputs (MODES-COMPARE T10) of a flow: which node fields the
+// The exposed run inputs (DECISIONS.md D27) of a flow: which node fields the
 // author surfaced as composer controls, resolved so the renderer can build the
 // controls without re-parsing YAML. Each: { nodeId, title, field, current }.
 ipcMain.handle('flow:launchInputs', (_e, id) => {
@@ -633,7 +633,7 @@ ipcMain.handle('flow:saveFromYaml', (_e, id, yamlText) => {
 // --- Tool Library (tools/<id>.json) ---
 // Read-only over IPC in P1: the renderer uses it to validate grants against
 // what actually exists instead of a hardcoded array. Authoring arrives with
-// the Tools page (TOOLS-PLAN P8).
+// the Tools page (DESIGN-SPEC.md §5).
 ipcMain.handle('tool:folder', () => ({ dir: toolLibrary.rootDir, packaged: app.isPackaged }));
 
   try {
@@ -680,7 +680,7 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
       }
     }
   }
-  // Subscription opt-ins (SUBSCRIPTION-AUTH-GUIDE): per provider —
+  // Subscription opt-ins (DESIGN-SPEC.md §6): per provider —
   // { enabled?, home?, cliPath? }. enabled is the explicit consent gate;
   // empty-string home/cliPath clears the override. No token ever passes here.
   if (patch.subscriptions && typeof patch.subscriptions === 'object') {
@@ -716,7 +716,7 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
         pinned: m.pinned !== false
       }));
   }
-  // Named model sets (D36 B13). Sent whole rather than patched per set, so
+  // Named model sets (D36). Sent whole rather than patched per set, so
   // deleting one is just its absence — the same shape activeModels uses.
   if (patch.modelSets && typeof patch.modelSets === 'object') {
     settings.modelSets = normalizeModelSets(patch.modelSets);
@@ -732,7 +732,7 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
       else if (w === null || !w?.model) delete settings.workers[name];
     }
   }
-  // A model per effort band for the loop (LOOP-PLAN §8). Sent whole rather than
+  // A model per effort band for the loop (DESIGN-SPEC.md §8). Sent whole rather than
   // patched per band, the same shape activeModels uses, so clearing one band is
   // simply its absence. Unknown band names are dropped rather than stored.
   if (patch.loopModels && typeof patch.loopModels === 'object') {
@@ -758,7 +758,7 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
   if (typeof patch.safetyModel === 'string' && patch.safetyModel.trim()) {
     settings.safetyModel = patch.safetyModel.trim();
   }
-  // The comparison judge's model (CONFIGS-COMPARE P3): an explicit model id,
+  // The comparison judge's model (DECISIONS.md D27): an explicit model id,
   // or '' to clear back to the default worker. Same free-id rule as the
   // safety model — resolved at call time, so an unrouted id fails then, not here.
   if (typeof patch.judgeModel === 'string') {
@@ -770,7 +770,7 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
   return publicSettings();
 });
 
-// Per-provider model catalogs (PROVIDERS-PLAN §4): openrouter keeps its live
+// Per-provider model catalogs (DESIGN-SPEC.md §6): openrouter keeps its live
 // fetch; anthropic/openai/kimi return short curated lists (their model
 // endpoints are inconsistent — a static list + the free-text field avoids
 // another failure mode).
@@ -794,7 +794,7 @@ ipcMain.handle('models:list', async (_e, provider = 'openrouter') => {
   settings.modelCapabilities = Object.fromEntries(
     models.filter(m => m.supportsTools).map(m => [m.id, true])
   );
-  // BRICKS P0.2: keep the context/price/tools facts too. They were fetched
+  // DECISIONS.md D36: keep the context/price/tools facts too. They were fetched
   // anyway, and a picker that shows what a model costs is the whole point.
   settings.modelFacts = factsFromCatalog(models, settings.modelFacts);
   persistSettings();
@@ -802,7 +802,7 @@ ipcMain.handle('models:list', async (_e, provider = 'openrouter') => {
   return models;
 });
 
-// The Settings "Test" button (PROVIDERS-PLAN §4): one tiny call through the
+// The Settings "Test" button (DESIGN-SPEC.md §6): one tiny call through the
 // adapter, so a bad key is caught here rather than three nodes into a run.
 ipcMain.handle('provider:test', async (_e, provider) => {
   if (provider === 'mock') return { ok: true };
@@ -843,7 +843,7 @@ ipcMain.handle('titlebar:setTheme', (_e, mode) => {
 // The custom title bar replaces the native menu; drop the default one.
 Menu.setApplicationMenu(null);
 
-// Auto-update via GitHub Releases (BUILD-AND-CICD-PLAN). Packaged builds only;
+// Auto-update via GitHub Releases (DESIGN-SPEC.md §9). Packaged builds only;
 // dev runs skip this entirely. Failures are logged, never fatal.
 function setupAutoUpdate() {
   if (!app.isPackaged) return;

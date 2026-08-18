@@ -1,4 +1,4 @@
-// Fan-out lanes (BRICKS P2 / D36 B5–B6): N takes on ONE brief, deliberately
+// Fan-out lanes (DECISIONS.md D36): N takes on ONE brief, deliberately
 // diverged, run as a scoped subgraph inside the fan-out node's box.
 //
 // Lanes are data on one node, not N authored nodes. Wiring five `work` nodes
@@ -15,7 +15,7 @@
 // node types, and not new roles. A lane may take a preset, its own text, or
 // both (the preset first, the author's text after).
 //
-// Each preset carries TWO prompt layers (FANOUT §1):
+// Each preset carries TWO prompt layers (DECISIONS.md D37):
 //   `system`       — the ROLE prompt, and the lane's output SHAPE. It replaces
 //                    DEFAULT_SYSTEM[role] wholesale, which is the point: one
 //                    report format imposed on every lane is the single biggest
@@ -45,7 +45,7 @@ export const LANE_PRESETS = {
     ].join('\n'),
     instructions: 'Answer the shared brief directly and thoroughly. Prefer what is well-supported over what is striking.'
   },
-  // The fifth preset (FANOUT P1.1). learn-from-repo hand-wrote this as
+  // The fifth preset (DECISIONS.md D37). learn-from-repo hand-wrote this as
   // `standard` plus an intent string, which meant the planner could never
   // select it: it picks from this enum, so anything absent here is unreachable.
   architecture: {
@@ -267,7 +267,7 @@ export function laneBrief(lane, lanes, { goal = '' } = {}) {
   return parts.join('\n\n');
 }
 
-// --- the shared preamble (FANOUT §1.1) --------------------------------------
+// --- the shared preamble (DECISIONS.md D37) -------------------------------------------
 //
 // The first half of a lane's SYSTEM prompt: generated once per run, identical
 // in every lane, and prepended to the preset's fixed role prompt. The split is
@@ -307,7 +307,7 @@ export function sharedPreamble({ mission, subject, count, focus = [], ignore = [
 }
 
 // How to address the SUBJECT rather than the project this flow is running in
-// (HOME-CONTEXT P1.1). Both roots are reachable from the same two tools and
+// (DECISIONS.md D38). Both roots are reachable from the same two tools and
 // only the path prefix distinguishes them, so a lane that slips reads our code
 // and reports on it as if it were the subject — confidently, and with nothing
 // in the log to tell the two apart.
@@ -338,7 +338,7 @@ export function applyPreamble(lanes, preamble) {
   }));
 }
 
-// --- staffing the roster (FANOUT P2) ----------------------------------------
+// --- staffing the roster (DECISIONS.md D37) ----------------------------------------
 //
 // One hard rule: TWO LANES SHARING A PRESET NEVER SHARE A MODEL. A planner may
 // legally put three architecture readers on a repo when architecture is what
@@ -403,7 +403,7 @@ export function laneInventory(lanes) {
   ].join('\n');
 }
 
-// --- the brief artifact (FANOUT P3.6) ---------------------------------------
+// --- the brief artifact (DECISIONS.md D37) ---------------------------------------
 //
 // `<id>.brief.md` is what a user opens to understand why THESE lanes ran, so
 // it is prose, not the raw contract JSON. Each lane's `reason` appears here and

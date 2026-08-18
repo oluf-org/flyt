@@ -1,4 +1,4 @@
-// glob: list files in the workspace by pattern (HOME-CONTEXT P2/P3).
+// glob: list files in the workspace by pattern (DECISIONS.md D38).
 //
 // The gap this closes: `read_file` can open a path you already know and
 // `search_references` can only reach the read-only library, so a node asked to
@@ -98,7 +98,7 @@ export default {
       pattern: args.pattern,
       ...(args.dir ? { dir: args.dir } : {}),
       // Named so a model cannot mistake this listing for the subject repository
-      // it may also be holding (HOME-CONTEXT §0.1).
+      // it may also be holding (DECISIONS.md D38).
       target: host.target,
       count: matches.length,
       ...(truncated ? { truncated: true } : {}),

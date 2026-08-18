@@ -1,7 +1,7 @@
 import React from 'react';
 import { diffOverrides } from './flowTypes.js';
 
-// The Configs panel (CONFIGS-COMPARE P1): one card per config on the open
+// The Configs panel (DECISIONS.md D27): one card per config on the open
 // flow, each showing its diff against Default (the flow as authored on the
 // canvas) as badges, with Run / Duplicate / Edit / Delete actions. Anchored
 // at the "modes" chip in the flow header — the chip toggles it. The panel and

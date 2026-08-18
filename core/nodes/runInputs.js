@@ -1,4 +1,4 @@
-// Typed run inputs (BRICKS P1.1–P1.3 / D36 B7).
+// Typed run inputs (DECISIONS.md D36).
 //
 // A flow could always take ONE free-text prompt. That is enough for "write me
 // a thing" and useless for "read THIS repository, looking for THAT" — a link

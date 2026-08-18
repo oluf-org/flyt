@@ -1,4 +1,4 @@
-// MODES-COMPARE Phase 5 (T12) — the split-view comparison surface. Two ordinary
+// DECISIONS.md D27 (T12) — the split-view comparison surface. Two ordinary
 // runs launched from one prompt, shown side by side: each pane keeps its own
 // feed, gates and stage; a decision in one never blocks the other. The logic
 // (pane state, composer channels, broadcast reach) lives in compareRun.js so

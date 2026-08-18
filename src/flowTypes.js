@@ -8,18 +8,18 @@ export const TYPE_META = {
   agentTask:    { icon: '☑', kind: 'user', label: 'Agent task',   sub: 'task · for the executor' },
   aiStep:       { icon: '✦', kind: 'ai',   label: 'AI step',      sub: 'llm · model call' },
   orchestrator: { icon: '▦', kind: 'ai',   label: 'Orchestrator', sub: 'container · creates & runs task nodes' },
-  // Fan-out (D36 B5): N deliberately diverged takes on ONE brief, run inside
+  // Fan-out (D36): N deliberately diverged takes on ONE brief, run inside
   // its own box. Like the orchestrator it is a container — but its children
   // come from a lane list the author wrote, not from a model's plan.
   fanout:       { icon: '⋔', kind: 'ai',   label: 'Fan-out',      sub: 'container · one lane per model' },
-  // Sub-flow (D36 B1): a flow used as a node. Its children are spliced in from
+  // Sub-flow (D36): a flow used as a node. Its children are spliced in from
   // another flow file at run start — composition, not programming (§0.2).
   subflow:      { icon: '⧉', kind: 'ai',   label: 'Sub-flow',     sub: 'container · another flow, inline' },
-  // The doorway into the loop (D36 B10): enqueues the tasks a backlog-plan
+  // The doorway into the loop (D36): enqueues the tasks a backlog-plan
   // node produced and stays running until the supervisor lands them. NOT a
   // container — the work happens in the loop engine, not inside this box.
   loop:         { icon: '↻', kind: 'ai',   label: 'Loop',         sub: 'hand-off · queue it and wait' },
-  // Typed run inputs (D36 B7): one node whose output ports are the values this
+  // Typed run inputs (D36): one node whose output ports are the values this
   // run was given. An input is a node you can see and wire, not hidden binding.
   inputs:       { icon: '⌸', kind: 'user', label: 'Run inputs',   sub: 'typed · filled in the composer' },
   output:       { icon: '◎', kind: 'user', label: 'Output',       sub: 'result · collects upstream' }
@@ -174,7 +174,7 @@ export const TYPE_PORTS = {
   fanout: [
     { id: 'results', label: 'results', description: 'Every lane\'s output, one labelled section per lane.' },
     { id: 'lanes', label: 'lanes', description: 'The lane roster: label, id, model and intent for each lane that ran.' },
-    // Written only under `plan: auto` (FANOUT P3.6). Both are empty on a
+    // Written only under `plan: auto` (DECISIONS.md D37). Both are empty on a
     // fan-out that runs its authored roster, the same way an orchestrator's
     // `summary` port is empty until it has planned.
     { id: 'brief', label: 'brief', description: 'Why these lanes: the mission, what was treated as central, and each lane\'s reason for existing.' },
@@ -227,10 +227,10 @@ export const AI_ROLES = [
   // Combined-node meta role ('evaluation' resolves to plan-eval / step-eval /
   // final-eval via evalType) and the standalone roles added in the node rework.
   'evaluation', 'combine', 'split', 'analyze', 'translate', 'compare',
-  // The flow -> backlog contract (D36 B9): turns a plan into work the
+  // The flow -> backlog contract (D36): turns a plan into work the
   // supervisor can claim. Strict JSON, like plan-eval.
   'plan-backlog',
-  // The prompt refiner (MODES-COMPARE T5): rewrites the run request into a
+  // The prompt refiner (DECISIONS.md D27): rewrites the run request into a
   // precise brief, and may park the run with clarifying questions.
   'refine',
   // Orientation (D38): what THIS workspace is and how it relates to the subject
@@ -297,7 +297,7 @@ export const WORK_CATEGORIES = NODE_CATEGORIES;
 // ships with the per-call approval gate on by default.
 //
 // read_tool_result is on every list because a truncated result the node
-// cannot read the rest of is worse than no truncation at all (TOOLS-PLAN §13):
+// cannot read the rest of is worse than no truncation at all (DESIGN-SPEC.md §5):
 // it is read-effect, run-scoped, and can only reach results this same run
 // already produced — so granting it widens nothing.
 //
@@ -759,7 +759,7 @@ export function normalizeTemplate(tpl) {
     // toolset or a selector (`effects:read`), and it is resolved against the
     // library at run time (core/tools/index.js resolveTools). Absent ⇒ the
     // ceiling is the static grant, which is what keeps every pre-ceiling flow
-    // at exactly its present envelope (TOOLS-PLAN §6.1).
+    // at exactly its present envelope (DESIGN-SPEC.md §5).
     toolCeiling: normalizeCeiling(tpl.toolCeiling),
     skills: Array.isArray(tpl.skills) ? tpl.skills.map(String) : [],
     requiresApproval: Boolean(tpl.requiresApproval),
@@ -793,7 +793,7 @@ export function resolveInstance(node, tpl) {
   // Ceiling precedence, narrowest wins: the instance's own, else the
   // template's. Absent from both, the static grant IS the ceiling — resolved
   // downstream rather than materialized here, so a flow file stays honest
-  // about what its author actually wrote (TOOLS-PLAN §5, §6.1).
+  // about what its author actually wrote (DESIGN-SPEC.md §5).
   const toolCeiling = normalizeCeiling(ov.toolCeiling) ?? t?.toolCeiling ?? null;
   const workGate = isWork && (tools ?? []).includes('bash');
   const data = {
@@ -820,7 +820,7 @@ export function resolveInstance(node, tpl) {
     ...(t?.outputs?.length ? { outputs: t.outputs } : {}),
     ...(ov.goal ? { goal: ov.goal } : {}),
     ...(ov.contextSpec ? { contextSpec: ov.contextSpec } : {}),
-    // expose (MODES-COMPARE T9): surfaced on data so the resolved flow the
+    // expose (DECISIONS.md D27): surfaced on data so the resolved flow the
     // composer consumes carries which fields become ad-hoc run inputs.
     ...(node.expose?.length ? { expose: node.expose } : {}),
     ...(t ? {} : { missingTemplate: true })
@@ -836,7 +836,7 @@ export function resolveInstance(node, tpl) {
 // Resolve every template instance in a flow against the library. Structural
 // (input/output) and already-resolved/legacy nodes pass through unchanged.
 //
-// launchOverrides (MODES-COMPARE T1) is an optional per-node override map
+// launchOverrides (DECISIONS.md D27) is an optional per-node override map
 // { [nodeId]: { worker?, effort?, system?, ... } } applied at run start on top
 // of each node's stored overrides — launch WINS. It is the single primitive
 // behind modes, run inputs, and comparison: all three assemble a map here.
@@ -870,7 +870,7 @@ export function resolveFlow(flow, templates = [], launchOverrides = null) {
 }
 
 // The subset of a node's exposed fields that are actually overridable on it
-// (MODES-COMPARE T9/T10). Takes a RESOLVED node (data.expose present). Drops
+// Comparison exposure (DECISIONS.md D27). Takes a RESOLVED node (data.expose present). Drops
 // any exposed name a node can't accept — the linter flags those, but the
 // composer must never render a control that would be rejected at run start.
 export function exposedFields(node) {
@@ -881,7 +881,7 @@ export function exposedFields(node) {
   return declared.filter(f => typeof f === 'string' && allowed.has(f) && !seen.has(f) && seen.add(f));
 }
 
-// --- Launch overrides: modes, run inputs, comparison (MODES-COMPARE) --------
+// --- Launch overrides: modes, run inputs, comparison (DECISIONS.md D27) --------
 //
 // The one whitelist of fields a launch override (and therefore a mode override
 // and an exposed run input) may set. Everything universal to AI nodes plus the
@@ -903,10 +903,10 @@ export function overridableFields(node) {
   // B5 / P2.4). `goal` is already common to every AI node below.
   if (type === 'fanout') { fields.add('lanes'); fields.add('modelSet'); fields.add('template'); }
   // A sub-flow call site is parameterised by which saved config of the inner
-  // flow it runs, and by ad-hoc per-inner-node tweaks (D36 B4).
+  // flow it runs, and by ad-hoc per-inner-node tweaks (D36).
   if (type === 'subflow') { fields.add('flowMode'); fields.add('flowOverrides'); }
   // A loop node's knobs are all about how much autonomy to hand over and for
-  // how long — exactly the things worth changing per config (D36 B11–B12).
+  // how long — exactly the things worth changing per config (D36).
   if (type === 'loop') {
     for (const f of ['waitFor', 'budgetUsd', 'parallelism', 'maxTasks']) fields.add(f);
   }
@@ -917,7 +917,7 @@ export function overridableFields(node) {
   if (d.role === 'translate' || d.language != null) fields.add('language');
   // `tools` is the grant. agentTask nodes hold any of them; an aiStep may hold
   // read-effect ones (a planner that can check the time or read a page plans
-  // better — TOOLS-PLAN §6.4), which the linter polices by effect.
+  // better — DESIGN-SPEC.md §5), which the linter polices by effect.
   if (type === 'agentTask' || type === 'aiStep') fields.add('tools');
   // `toolCeiling` is the hard limit the grant lives inside. On an orchestrator
   // it is the envelope its generated children inherit (§6.3).
@@ -970,7 +970,7 @@ export function mergeOverrideMaps(...maps) {
   return out;
 }
 
-// --- Config diff badges (CONFIGS-COMPARE P1) ---------------------------------
+// --- Config diff badges (DECISIONS.md D27) ---------------------------------
 //
 // diffOverrides answers the one question a config card or picker row must:
 // "what does this config actually change?" It diffs a per-node override map

@@ -1,4 +1,4 @@
-// Grants and ceilings (TOOLS-PLAN P3/§6). The invariant under test: no
+// Grants and ceilings (DESIGN-SPEC.md §5). The invariant under test: no
 // mechanism may grant a tool the authoring surface did not already permit —
 // not a toolset, not an orchestrator, not a template default.
 //
@@ -45,7 +45,7 @@ test('selectors resolve by what a tool IS, not by a list someone maintains', () 
   // sweep in every read-only tool.
   assert.deepEqual([...expandRefs('uses:write', ctx).ids].sort(),
     ['ask_human', 'create_file', 'create_task', 'edit_file', 'enqueue_task', 'update_task', 'write_file', 'write_task_md']);
-  // The web set was declared and empty for its whole life; LOOP-BOARD §A5
+  // The web set was declared and empty for its whole life; DECISIONS.md D45
   // filled it, and the membership test is what picks its members out.
   assert.deepEqual([...expandRefs('uses:network', ctx).ids].sort(), ['web_fetch', 'web_search']);
   assert.deepEqual([...expandRefs('web', ctx).ids].sort(), ['web_fetch', 'web_search']);

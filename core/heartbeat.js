@@ -1,4 +1,4 @@
-// Status, headway and stalls (LOOP-PLAN §11.1–§11.3).
+// Status, headway and stalls (DESIGN-SPEC.md §8).
 //
 // With no clock bounding the day, this is what replaces it. A task may
 // legitimately run for hours; the supervisor's job is to know the difference

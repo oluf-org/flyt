@@ -37,7 +37,7 @@ export function isDestructive(nameOrTool) {
   return tool ? effectsAreDestructive(tool) : true;
 }
 
-// Deprecated alias, kept for one release (TOOLS-PLAN §18.3): a Set-shaped view
+// Deprecated alias, kept for one release (DESIGN-SPEC.md §5): a Set-shaped view
 // over the registry so `DESTRUCTIVE_TOOLS.has(name)` keeps working. Use
 // isDestructive() — the Set cannot express "unknown tools gate".
 export const DESTRUCTIVE_TOOLS = { has: name => isDestructive(name) };
@@ -78,7 +78,7 @@ export function registerDefinition(def) {
 
 // Replace the registry with a library's definitions (what the app does at
 // startup with ToolStore.listFull()). Returns what loaded and what didn't,
-// with reasons — resolution is never silent (TOOLS-PLAN §5).
+// with reasons — resolution is never silent (DESIGN-SPEC.md §5).
 export function loadLibrary(defs = [], sets = null) {
   registry.clear();
   const loaded = [], skipped = [];
@@ -90,7 +90,7 @@ export function loadLibrary(defs = [], sets = null) {
   return { loaded, skipped };
 }
 
-// Toolsets are the names ceilings are written in (TOOLS-PLAN §4.2). They live
+// Toolsets are the names ceilings are written in (DESIGN-SPEC.md §5). They live
 // beside the library in tools/sets/ and are cached here so grant resolution
 // has one source at run time, whether or not a ToolStore exists.
 let toolsets = SEED_TOOLSETS.map(normalizeToolset);
@@ -108,7 +108,7 @@ export const grantContext = () => makeContext({ library: [...registry.values()],
 // ceilings against exactly what the run will bind.
 export const toolLibraryForLint = () => ({ tools: [...registry.values()], sets: toolsets });
 
-// Resolve one node's grant against its ceiling (TOOLS-PLAN §6). Returns the
+// Resolve one node's grant against its ceiling (DESIGN-SPEC.md §5). Returns the
 // bound tool objects plus what was refused or missing, so the caller can log
 // and surface both — a refused grant means something tried to exceed its
 // envelope, which must never be silently absent.
@@ -139,7 +139,7 @@ export const toolNames = () => [...registry.keys()];
 // loop can hand them to the model for self-correction.
 //
 // The full result is written to runs/<id>/tools/<seq>-<tool>.json and the
-// record carries a BOUNDED preview plus a handle (TOOLS-PLAN §13) — so a
+// record carries a BOUNDED preview plus a handle (DESIGN-SPEC.md §5) — so a
 // 200 KB command output survives on disk instead of being destroyed by
 // truncation, and the model gets something it can ask more about. Without a
 // store (a unit test, the planned Tools-page test-run) there is nowhere to

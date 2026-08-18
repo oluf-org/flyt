@@ -1,4 +1,4 @@
-// Effort levels, and what they cost (LOOP-PLAN §8).
+// Effort levels, and what they cost (DESIGN-SPEC.md §8).
 //
 // The plan had a tier ladder: a price table per provider+model, a tier axis on
 // `modelPriority.js`, and a routing policy that picked a model per task. That is

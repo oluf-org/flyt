@@ -1,5 +1,5 @@
 // Why a task is not moving — one module, one vocabulary, one sentence per
-// reason (LOOP-BOARD §B1).
+// reason (DECISIONS.md D45).
 //
 // The backlog already computed half of this and threw it away: `blocked()`
 // returns "waiting on t-0006 (missing)" and only `task:ready` could see it,

@@ -1,4 +1,4 @@
-// Effort levels and escalation (LOOP-PLAN §8).
+// Effort levels and escalation (DESIGN-SPEC.md §8).
 //
 // The plan wanted a price table and a tier ladder. OpenRouter's Auto Router
 // already sells that: a cost_tier band, a capable model chosen inside it, kept

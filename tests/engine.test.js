@@ -1,4 +1,4 @@
-// The engine assembles and runs with no Electron (LOOP-PLAN §4.2).
+// The engine assembles and runs with no Electron (DESIGN-SPEC.md §8).
 //
 // This is the day-1 claim in test form: everything the app IS can be stood up
 // from a plain node process, so a headless supervisor, a CLI and the desktop
@@ -21,7 +21,7 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-engine-'));
 // approvalMode: 'always' covers TOOL calls; a node's own `requiresApproval` is
 // a separate, deliberate stop and the shipped default pipeline has one. Doing
 // it here proves the thing the supervisor will need — that a gate can be
-// answered with no renderer in the process (LOOP-PLAN §10).
+// answered with no renderer in the process (DESIGN-SPEC.md §8).
 async function settleRun(runner, store, runId, { gates = 6 } = {}) {
   for (let i = 0; i <= gates; i++) {
     const stage = await waitFor(

@@ -25,7 +25,7 @@
       "additionalProperties": { "$ref": "#/$defs/mode" }
     },
     "inputs": {
-      "description": "Typed run inputs (D36 B7). Each becomes an output port of a node called `inputs`, addressable as `inputs.<name>`.",
+      "description": "Typed run inputs (D36). Each becomes an output port of a node called `inputs`, addressable as `inputs.<name>`.",
       "type": "object",
       "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
       "additionalProperties": { "$ref": "#/$defs/runInput" }
@@ -95,7 +95,7 @@
       }
     },
     "lane": {
-      "description": "One take on the fan-out's shared brief (D36 B5). A bare string is shorthand for a preset lane. `worker` accepts a plain model id as well as the {provider, model} object.",
+      "description": "One take on the fan-out's shared brief (D36). A bare string is shorthand for a preset lane. `worker` accepts a plain model id as well as the {provider, model} object.",
       "oneOf": [
         { "enum": ["standard", "architecture", "wildcard", "adversarial", "contrarian"] },
         {
@@ -107,7 +107,7 @@
             "intent": { "type": "string", "description": "One line, shown to the OTHER lanes so each knows who else is on the brief." },
             "preset": { "enum": ["standard", "architecture", "wildcard", "adversarial", "contrarian"] },
             "instructions": { "type": "string" },
-            "system": { "type": "string", "description": "This lane's role prompt, composed AFTER the preset's (FANOUT §1). Replaces the template role's default system prompt." },
+            "system": { "type": "string", "description": "This lane's role prompt, composed after the preset's (DECISIONS.md D37). Replaces the template role's default system prompt." },
             "emphasis": { "type": "string", "maxLength": 280, "description": "At most one sentence narrowing this lane inside its preset; appended to the role prompt as \"THIS LANE SPECIFICALLY: …\"." },
             "template": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
         "waitFor": { "enum": ["all", "any", "none"], "description": "Loop node: wait for every queued task to settle, for the first, or not at all." },
@@ -172,7 +172,7 @@
         "lanes": { "type": "array", "items": { "$ref": "#/$defs/lane" } },
         "modelSet": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
         "modelSetPreset": { "enum": ["standard", "architecture", "wildcard", "adversarial", "contrarian"] },
-        "plan": { "enum": ["auto", "off"], "description": "Fan-out (FANOUT P3): 'auto' peeks at the subject and plans the roster from the brief before materializing lanes. Default 'off' — the authored lanes run exactly as written." },
+        "plan": { "enum": ["auto", "off"], "description": "Fan-out (DECISIONS.md D37): 'auto' peeks at the subject and plans the roster from the brief before materializing lanes. Default 'off' — the authored lanes run exactly as written." },
         "minLanes": { "type": "integer", "minimum": 1 },
         "maxLanes": { "type": "integer", "minimum": 1 },
         "template": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
@@ -211,7 +211,7 @@
       }
     },
     "subflowNode": {
-      "description": "A flow used as a node (D36 B1). Its nodes are spliced into the run graph as children of this call site at run start.",
+      "description": "A flow used as a node (D36). Its nodes are spliced into the run graph as children of this call site at run start.",
       "type": "object",
       "required": ["flow"],
       "additionalProperties": false,

@@ -1,4 +1,4 @@
-// Isolation and landing (LOOP-PLAN §6).
+// Isolation and landing (DESIGN-SPEC.md §8).
 //
 // One git worktree per in-flight task, on its own branch, OUTSIDE the repo root
 // — a nested checkout inside the working tree confuses grep, test runners and

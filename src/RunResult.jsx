@@ -9,7 +9,7 @@ import { outputKey } from './runGraph.js';
 // has — the Output node writes the same markdown to nodes/<id>.md and result.md
 // — so no new IPC and no opening the run folder to find out what happened.
 //
-// A finished run is also a conversation (FOLLOWUP-PLAN): each follow-up turn
+// A finished run is also a conversation (DECISIONS.md D21): each follow-up turn
 // renders as a thread segment (feedback -> outcome), and the composer at the
 // bottom sends the next one. The composer only exists at terminal stages —
 // while a turn runs the run is live, this panel yields to the live stream, and

@@ -3,7 +3,7 @@
 // The counterpart to list_tasks. A dependency's id in a frontmatter list tells
 // you nothing about whether it overlaps with what you are doing; its body tells
 // you exactly that, and it is already written for a reader who has not seen the
-// run (LOOP-PLAN §5.1).
+// run (DESIGN-SPEC.md §8).
 import { requireBacklog } from './list_tasks.js';
 
 export default {

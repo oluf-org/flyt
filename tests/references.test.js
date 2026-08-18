@@ -1,4 +1,4 @@
-// The reference library (LOOP-PLAN §16).
+// The reference library (DESIGN-SPEC.md §8).
 //
 // Recipes, not dependencies. The properties under test are the ones that make
 // it safe to hand a model: it is READ-ONLY because there is no write path, it

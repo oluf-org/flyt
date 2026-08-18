@@ -1,4 +1,4 @@
-// Tool feedback: what the toolbox was like to work with (LOOP-PLAN §12).
+// Tool feedback: what the toolbox was like to work with (DESIGN-SPEC.md §8).
 //
 // The split under test: the FACTS about tool use are derived from the run's own
 // calls and cost nothing, while the JUDGMENT — was it awkward, what was missing

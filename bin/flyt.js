@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The headless front door (LOOP-PLAN §13).
+// The headless front door (DESIGN-SPEC.md §8).
 //
 // `flyt` stands the engine up in a plain node process — no Electron, no window
 // — and drives it through the same command map the renderer uses. This is the

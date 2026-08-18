@@ -3,7 +3,7 @@
 // is a visual barcode of the id, so a run becomes recognizable at a glance in
 // the list, the run header, and (later) the deck cards.
 //
-// Ported from the "burst" variant (sigil-v4.html, variant I). Pure and
+// The selected "burst" sigil. Pure and
 // deterministic: sigil(id, size) always returns the same SVG string for the
 // same inputs, across restarts. Colour is `currentColor` only — the mark
 // inherits whatever colour its context sets, so it needs no theme awareness of

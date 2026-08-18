@@ -1,4 +1,4 @@
-// The archive (LOOP-PLAN §12.1).
+// The archive (DESIGN-SPEC.md §8).
 //
 // A day of unattended work leaves its evidence scattered across four places
 // that all keep moving: the ledger appends, the backlog is rewritten in place,

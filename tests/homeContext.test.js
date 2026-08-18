@@ -1,4 +1,4 @@
-// Workspace orientation (HOME-CONTEXT / D38): the deterministic seed, the
+// Workspace orientation (DECISIONS.md D38): the deterministic seed, the
 // stance contract, the context file, and the addressing hygiene that stops a
 // node reading OUR repository and reporting it as a finding about someone
 // else's.

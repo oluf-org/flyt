@@ -1,4 +1,4 @@
-// Kimi adapter. One provider, two key kinds (PROVIDERS-PLAN §1):
+// Kimi adapter. One provider, two key kinds (DESIGN-SPEC.md §6):
 //
 //   platform — pay-as-you-go key from platform.moonshot.ai. Standard
 //              OpenAI-compatible endpoint, models like kimi-k2.7-code.
@@ -31,5 +31,5 @@ export async function kimiAdapter(args) {
   return (args.keyKind === 'code' ? code : platform)(args);
 }
 
-// PROVIDERS-PLAN §2: Kimi serves kimi-* (and moonshot-* legacy ids).
+// DESIGN-SPEC.md §6: Kimi serves kimi-* (and moonshot-* legacy ids).
 kimiAdapter.canServe = modelId => /^(kimi-|moonshot-)/.test(String(modelId));

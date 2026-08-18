@@ -1,4 +1,4 @@
-// MODES-COMPARE Phase 2 — the prompt refiner (T5) and the awaiting_input gate
+// DECISIONS.md D27 — the prompt refiner (T5) and the awaiting_input gate
 // (T6). The refiner rewrites the run request into a brief and, only when an
 // ambiguity would materially change the work, parks the run with clarifying
 // questions answered from the composer.

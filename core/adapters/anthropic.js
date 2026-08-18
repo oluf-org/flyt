@@ -60,5 +60,5 @@ export async function anthropicAdapter({ model, system, prompt, maxTokens, apiKe
   };
 }
 
-// PROVIDERS-PLAN §2: Anthropic serves claude-* ids only.
+// DESIGN-SPEC.md §6: Anthropic serves claude-* ids only.
 anthropicAdapter.canServe = modelId => String(modelId).startsWith('claude-');

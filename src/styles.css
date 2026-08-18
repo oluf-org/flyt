@@ -242,7 +242,7 @@ body {
   color: var(--err);
   background: color-mix(in srgb, var(--err) 12%, transparent);
 }
-/* The mode a run was launched with (MODES-COMPARE T4), beside its name. Reads
+/* The mode a run was launched with (DECISIONS.md D27), beside its name. Reads
    as an identity tag, not a status, so it borrows the accent outline rather
    than the filled stage-chip. */
 .mode-chip {
@@ -653,7 +653,7 @@ kbd.shortcut {
 
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
-/* ---------- lander (the chat-first home; LANDER-PLAN.md) ---------- */
+/* ---------- lander (the chat-first home; DECISIONS.md D25) ---------- */
 /* A chat window you already know how to use: greeting + autofocused composer,
    sitting slightly above centre where every chat app has trained the eye. The
    composer is the brightest thing on screen; everything else recedes. */
@@ -809,7 +809,7 @@ kbd.shortcut {
 .lander-picker-item.selected { color: var(--accent); font-weight: 600; }
 .lander-picker-check { width: 12px; flex: none; color: var(--accent); font-size: 11px; }
 .lander-picker-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-/* A mode option (MODES-COMPARE T4) reads as a child of its flow: indented past
+/* A mode option (DECISIONS.md D27) reads as a child of its flow: indented past
    the check column, a touch dimmer, with a leading tick so the tree is legible. */
 .lander-picker-mode { padding-left: 22px; font-size: 12.5px; }
 .lander-picker-mode .lander-picker-name::before { content: '↳ '; color: var(--faint); }
@@ -819,7 +819,7 @@ kbd.shortcut {
   padding: 2px 6px; border-radius: 5px;
 }
 
-/* Composer launch controls (MODES-COMPARE T10): the exposed run inputs, laid
+/* Composer launch controls (DECISIONS.md D27): the exposed run inputs, laid
    out under the composer as compact labelled controls. Shared by the lander and
    the Runs-panel new-run form. */
 .launch-inputs {
@@ -1828,7 +1828,7 @@ body.col-resizing * { cursor: col-resize !important; }
 .lint-badge.warn { color: var(--warn, #c9a227); }
 .lint-badge.error { color: var(--bad, #c0504d); }
 
-/* Modes summary chip on the flow header (MODES-COMPARE T3): a quiet accent
+/* Modes summary chip on the flow header (DECISIONS.md D27): a quiet accent
    pill that jumps to the YAML view where modes are authored. */
 .modes-chip {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
@@ -1842,7 +1842,7 @@ body.col-resizing * { cursor: col-resize !important; }
 .modes-chip.active { box-shadow: 0 0 0 2px var(--accent); }
 .modes-chip.empty { color: var(--faint); background: var(--chip); }
 
-/* --- Configs (CONFIGS-COMPARE P1) --- */
+/* --- Configs (DECISIONS.md D27) --- */
 
 /* The Configs panel: overlays the canvas top-right, anchored at the chip. */
 .configs-panel {
@@ -2013,7 +2013,7 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   max-height: 320px; overflow-y: auto;
 }
 
-/* Tool-result artifacts (TOOLS-PLAN §13): the preview above is bounded, so
+/* Tool-result artifacts (DESIGN-SPEC.md §5): the preview above is bounded, so
    each call's full result is one click away as a file on disk. Quiet by
    default — it is provenance, not a call to action — and underlined on hover
    like the path-shaped thing it is. */
@@ -2142,7 +2142,7 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   font-size: 10.5px; color: var(--err);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* Subscription provider cards (SUBSCRIPTION-AUTH-GUIDE): the usage warning is
+/* Subscription provider cards (DESIGN-SPEC.md §6): the usage warning is
    the one deliberately loud element — enabling this spends a personal plan. */
 .provider-warning {
   color: var(--warn);
@@ -2203,7 +2203,7 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
 }
 .launch-input textarea { width: 100%; resize: vertical; }
 
-/* ---------- repositories (BRICKS P1) ----------
+/* ---------- repositories (DECISIONS.md D36) ----------
    Two modes, two buttons: read it (a pinned read-only clone) or work on it
    (a full clone opened as a project). */
 .repo-actions { gap: 8px; }
@@ -2231,7 +2231,7 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
   border-radius: 9px;
 }
 
-/* A backlog task's link back to the run that queued it (BRICKS P4.5). Sits
+/* A backlog task's link back to the run that queued it (DECISIONS.md D36). Sits
    beside the expander rather than inside it — same line, separate control. */
 .loop-task-row .source-run {
   flex: none;
@@ -2239,7 +2239,7 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
 }
 .loop-task-row .source-run:hover { color: var(--accent); }
 
-/* ---------- fan-out lanes (BRICKS P2) ----------
+/* ---------- fan-out lanes (DECISIONS.md D36) ----------
    A fan-out's lanes ARE its shape, so the lane list is the node's main
    Inspector field rather than a detail tucked below the fold. */
 
@@ -2263,7 +2263,7 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
 }
 .orch-node.orch-fanout .orch-hint { font-style: italic; }
 
-/* ---------- model facts, sets, and the picker (BRICKS P0) ----------
+/* ---------- model facts, sets, and the picker (DECISIONS.md D36) ----------
    Catalog facts (price / context / tools) travel with a model wherever it is
    shown, because choosing one is a cost decision. Chips are deliberately
    quiet: they are reference, not decoration. */
@@ -2598,7 +2598,7 @@ button.link:hover { color: var(--accent); }
 }
 .result-empty { color: var(--faint); }
 
-/* ---------- follow-up thread (FOLLOWUP-PLAN) ---------- */
+/* ---------- follow-up thread (DECISIONS.md D21) ---------- */
 /* A finished run is a conversation: each turn is feedback -> outcome, and the
    composer at the bottom sends the next one. Same token language as the result
    panel it lives in; no motion — replies appear, they don't perform. */
@@ -2750,7 +2750,7 @@ button.link:hover { color: var(--accent); }
 }
 @keyframes live-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
-/* ---------- markdown body (OUTPUT-VIEW-PLAN B1) ---------- */
+/* ---------- markdown body (DESIGN-SPEC.md §7) ---------- */
 /* The one renderer for model output. Sized like the surfaces it replaced
    (result-body / live-body) but set in the UI font for reading; code keeps
    Plex Mono. Tables scroll horizontally rather than breaking the column. */
@@ -4110,7 +4110,7 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 .gate-dock-sub { flex: none; color: var(--faint); font-size: 11.5px; }
 .gate-dock button { flex: none; }
 
-/* The refiner's input gate (MODES-COMPARE T6): a friendly ask, not a
+/* The refiner's input gate (DECISIONS.md D27): a friendly ask, not a
    destructive pause — accent hairline and tinted ground, answered in the
    composer right below it (so no buttons of its own). */
 .input-gate {
@@ -4146,7 +4146,7 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 }
 .input-gate-hint { color: var(--faint); font-size: 11.5px; }
 
-/* ---------- Comparison (MODES-COMPARE T11/T12) ---------- */
+/* ---------- Comparison (DECISIONS.md D27) ---------- */
 
 /* Launch UX (T11): the composer's Compare toggle + the A/B slot chips. */
 .lander-compare-toggle {
@@ -4254,7 +4254,7 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
   .compare-panes { grid-template-columns: 1fr; }
 }
 
-/* ---------- CONFIGS-COMPARE P2 ---------- */
+/* ---------- DECISIONS.md D27 ---------- */
 
 /* The "what differed" header line in the compare thread: one mono line that
    answers it, with the per-entry detail on hover. Amber when the pairing
@@ -4411,7 +4411,7 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
   .chat-scroll { scroll-behavior: auto; }
 }
 
-/* --- The Loop view (LOOP-PLAN §14, rebuilt as a board in LOOP-BOARD §D) ------
+/* --- The Loop view (DESIGN-SPEC.md §8, rebuilt as a board in DECISIONS.md D45) ------
    The human half of an unattended system. Its job is not to let you drive —
    the loop drives itself — but to answer three questions at a glance: what is
    moving, what is stuck, what needs me. The stacked piles answered the third
@@ -4899,7 +4899,7 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 .loop-tail-line .time { color: var(--faint); flex: none; }
 .loop-tail-line .text { color: var(--dim); white-space: pre-wrap; }
 
-/* --- the chat drawer (LOOP-BOARD §E3) ---------------------------------------
+/* --- the chat drawer (DECISIONS.md D45) ---------------------------------------
    A conversation attached to the backlog, sharing the drawer with the log as
    two tabs of one panel. It reads the queue and can QUEUE work; it cannot write
    files or run commands, and the empty state says so — the constraint is the

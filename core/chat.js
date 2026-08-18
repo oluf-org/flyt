@@ -1,11 +1,11 @@
-// A conversation attached to a project's backlog (LOOP-BOARD §E).
+// A conversation attached to a project's backlog (DECISIONS.md D45).
 //
 // WHAT THIS IS NOT, said first because it is the thing that will go wrong:
 // this is not a second orchestration surface. It is ONE agent turn loop over a
 // READ-MOSTLY toolset, whose single write is `enqueue_task`. Everything
 // expensive still goes through the loop, in a worktree, behind gates, with a
 // reviewer. The moment this can write files you have built a second,
-// unsupervised loop with no worktree — which is the one thing LOOP-PLAN §6
+// unsupervised loop with no worktree — which is the one thing DESIGN-SPEC.md §8
 // exists to prevent. The toolset below is the enforcement, not the prompt.
 //
 // Why it exists at all: every model call in this app previously required

@@ -1,4 +1,4 @@
-// CONFIGS-COMPARE P1 — configs (modes, upgraded to first-class).
+// DECISIONS.md D27 — configs (modes, upgraded to first-class).
 // description/derivedFrom pass through parse/serialize/schema; lint warns on
 // a dangling derivedFrom; diffOverrides turns a config into diff-against-
 // Default badges; the FlowStore config helpers back save/duplicate/promote.

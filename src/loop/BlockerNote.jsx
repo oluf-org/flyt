@@ -1,6 +1,6 @@
 import React from 'react';
 
-// One blocker, as a sentence with a button (LOOP-BOARD §D3).
+// One blocker, as a sentence with a button (DECISIONS.md D45).
 //
 // Deliberately not a badge. A badge means "go and look this up somewhere else",
 // and the whole argument of Phase B is that the sentence has already been

@@ -1,6 +1,6 @@
-// Sub-flows (BRICKS P3 / D36 B1–B4): a flow may contain another flow.
+// Sub-flows (DECISIONS.md D36): a flow may contain another flow.
 //
-// This is composition, not programming (see BRICKS-PLAN §0.2). There are no
+// This is composition, not programming (see DECISIONS.md D36). There are no
 // variables, no conditionals and no iteration count — a sub-flow call is a
 // static edge to a named artifact, resolved at run start, with a depth cap.
 //
@@ -15,7 +15,7 @@ import { resolveFlow, mergeOverrideMaps, nodePorts, nodeLabel } from '../../src/
 
 // The id separator for spliced nodes.
 //
-// BRICKS-PLAN B1 says `<callId>/<innerId>`, and that cannot work: RunStore's
+// DECISIONS.md D36 says `<callId>/<innerId>`, and that cannot work: RunStore's
 // nodeOutputPath() maps every character outside [a-zA-Z0-9_-] to '_', and
 // readNodeOutputs() turns filenames back into node ids. A '/' would make
 // `learn/analyse` write to `learn_analyse.md` and then never be found again —
@@ -25,7 +25,7 @@ export const SUBFLOW_SEP = '__';
 
 export const subflowChildId = (callId, innerId) => `${callId}${SUBFLOW_SEP}${innerId}`;
 
-// D36 B3. Counts every container on the way down, not just sub-flow calls.
+// D36 Counts every container on the way down, not just sub-flow calls.
 export const MAX_SUBFLOW_DEPTH = 3;
 
 export class SubflowError extends Error {
@@ -244,7 +244,7 @@ export function spliceAllSubflows(flow, { loadFlow, templates = [], maxNodes = 4
     const r = spliceSubflow(flow, call, { loadFlow, templates, depth: 1, callStack: [] });
     results.set(call.id, r);
     // A sub-flow that explodes the canvas fails the run AT START with a clear
-    // error, rather than degrading the canvas silently (BRICKS §3).
+    // error, rather than degrading the canvas silently (DECISIONS.md D36).
     if (flow.nodes.length > maxNodes) {
       throw new SubflowError(
         `sub-flow splicing produced ${flow.nodes.length} nodes, over the ${maxNodes}-node limit for one run`);

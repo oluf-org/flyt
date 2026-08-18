@@ -92,7 +92,7 @@ for (const [rule, severity, text] of CASES) {
 
 // invalid-override is unreachable through lintText (the schema layer rejects
 // any key it doesn't know first), so it is exercised on a flow OBJECT — which
-// is also how the runner's pre-run gate sees a flow. Since TOOLS-PLAN P3 the
+// is also how the runner's pre-run gate sees a flow. Since DESIGN-SPEC.md §5 the
 // rule no longer fires for `tools`: an aiStep may hold read-effect tools, and
 // `readonly-tools` polices which (tests/grants.test.js).
 test('lint rule: invalid-override (error) on an unknown override key', () => {
@@ -229,7 +229,7 @@ test('lint: parent must be an existing container; structural/container nodes can
   assert.ok(RUNTIME_RULES.includes('parent'), 'a broken parent blocks the pre-run gate');
 });
 
-// --- fan-out lanes (BRICKS P2.5) --------------------------------------------
+// --- fan-out lanes (DECISIONS.md D36) --------------------------------------------
 
 const TEMPLATES = SEED_NODE_TEMPLATES.map(normalizeTemplate);
 const SETS = { analysts: { name: 'Analysts', models: ['a/one', 'b/two'] } };
@@ -303,7 +303,7 @@ test('lint: a fan-out template that does not exist is an error, on the node or o
   assert.ok(!fine.errors.some(e => e.rule === 'fanout-template'), 'the default template ships in the library');
 });
 
-// --- the lane planner (FANOUT P4) -------------------------------------------
+// --- the lane planner (DECISIONS.md D37) -------------------------------------------
 
 test('lint: a lane budget that cannot be satisfied is an error', () => {
   const { errors } = lintFlow(fanFlow({ goal: 'g', lanes: ['standard'], minLanes: 5, maxLanes: 3 }),

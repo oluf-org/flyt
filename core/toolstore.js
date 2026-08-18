@@ -1,7 +1,7 @@
 // Tool Library: one JSON file per tool in tools/, app-level, peer to
 // nodes/<id>.json. Same philosophy as NodeStore and FlowStore — plain files
 // are the source of truth, so a tool is inspectable, diffable and portable
-// (GOALS.md principle 1, TOOLS-PLAN §4.1).
+// (GOALS.md principle 1, DESIGN-SPEC.md §5).
 //
 // Deliberate asymmetry, stated so it isn't read as an oversight: skills are
 // per-project because EXPERTISE is project-specific (D15); tools are app-level

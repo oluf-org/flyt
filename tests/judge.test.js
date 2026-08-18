@@ -1,4 +1,4 @@
-// CONFIGS-COMPARE P3 — the comparison judge: verdict parsing (including the
+// DECISIONS.md D27 — the comparison judge: verdict parsing (including the
 // malformed/missing-JSON fallbacks), the record's verdict half, and the
 // runner's blind compare-role call over two finished runs' outputs.
 import test from 'node:test';

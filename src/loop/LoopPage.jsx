@@ -6,7 +6,7 @@ import Board from './Board.jsx';
 import ModelBands, { sameModels } from './ModelBands.jsx';
 import LoopChat from './LoopChat.jsx';
 
-// The Loop view (LOOP-PLAN §14, rebuilt as a board in LOOP-BOARD §D).
+// The Loop view (DESIGN-SPEC.md §8, rebuilt as a board in DECISIONS.md D45).
 //
 // This is the human half of an unattended system. Its job is not to let you
 // drive — the loop drives itself — but to answer three questions at a glance:
@@ -79,7 +79,7 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
       setTasks(list?.tasks ?? []);
       setProblems(list?.problems ?? []);
       // Why each task is not moving, computed once on the backend in the same
-      // module the supervisor's headline reads (LOOP-BOARD §B2).
+      // module the supervisor's headline reads (DECISIONS.md D45).
       setBlockers(list?.blockers ?? {});
       setBoardLevel(list?.boardBlockers ?? []);
       setCaps(spendCheck?.caps ?? {});

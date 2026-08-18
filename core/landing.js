@@ -1,4 +1,4 @@
-// The landing sequence (LOOP-PLAN §6.2, §7), and the pin that keeps it alive.
+// The landing sequence (DESIGN-SPEC.md §8), and the pin that keeps it alive.
 //
 // Everything from "the agent says it is done" to "it is on main or it never
 // happened", in one place, so the supervisor's loop reads as the sequence it

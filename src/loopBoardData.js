@@ -1,4 +1,4 @@
-// The board's projections (LOOP-BOARD §D2).
+// The board's projections (DECISIONS.md D45).
 //
 // Six columns, left to right, in the order work flows. The shaping lives here
 // rather than in the components for the reason the rest of this codebase

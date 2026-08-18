@@ -142,7 +142,7 @@ export class RunStore {
       try { return l.trim() ? JSON.parse(l) : null; } catch { return null; }
     }).filter(Boolean);
   }
-  // --- tool results: every call's full result as an artifact (TOOLS-PLAN §13) -
+  // --- tool results: every call's full result as an artifact (DESIGN-SPEC.md §5) -
   // The model gets a bounded preview and a handle; the untruncated result
   // lives here, so "file-based state is the single source of truth" holds for
   // what a tool returned as well as for what a node wrote.
@@ -281,7 +281,7 @@ export class RunStore {
     fs.writeFileSync(path.join(this.runDir(runId), 'result.md'), markdown, 'utf8');
   }
 
-  // --- summary nodes (OUTPUT-VIEW-PLAN B4/D5) ---
+  // --- summary nodes (DESIGN-SPEC.md §7) ---
   // Right-click summarization artifacts: one Markdown file per summary under
   // summaries/, plus an index.json registering every summary's provenance —
   // { id, sources: [{ id, statusAtCreation }], at, model, file, position? }.
@@ -346,7 +346,7 @@ export class RunStore {
     return true;
   }
 
-  // --- refiner input gate (MODES-COMPARE T6): a refine node's clarifying
+  // --- refiner input gate (DECISIONS.md D27): a refine node's clarifying
   // questions, parked until the user answers from the composer ---
   #questionsPath(runId, nodeId) {
     return path.join(this.runDir(runId), 'nodes', `${String(nodeId).replace(/[^a-zA-Z0-9_-]/g, '_')}.questions.json`);
@@ -361,7 +361,7 @@ export class RunStore {
     return fs.existsSync(p) ? readJson(p) : null;
   }
 
-  // --- follow-up turns (FOLLOWUP-PLAN): each reply to a finished run gets a
+  // --- follow-up turns (DECISIONS.md D21): each reply to a finished run gets a
   // numbered folder under followups/, append-only like everything else ---
   followupDir(runId, turn) {
     return path.join(this.runDir(runId), 'followups', String(turn));
@@ -432,7 +432,7 @@ export class RunStore {
     return out;
   }
 
-  // --- comparison records (CONFIGS-COMPARE P2) -------------------------------
+  // --- comparison records (DECISIONS.md D27) -------------------------------
   // A comparison is a persisted relationship between two runs of this project:
   //   { id, runIds: [a, b], createdAt, origin: 'launch'|'rematch'|'manual',
   //     verdict: null | {...} }

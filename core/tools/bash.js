@@ -14,7 +14,7 @@ import { fileHost } from './fileHost.js';
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 // Per stream, characters. This used to be 100k and was the point where output
-// was DESTROYED. Since TOOLS-PLAN P2 the full result is archived to
+// was DESTROYED. Since DESIGN-SPEC.md §5 the full result is archived to
 // runs/<id>/tools/<seq>-bash.json and the model sees a bounded preview, so the
 // cap here only has to stop a runaway process from exhausting memory — hence
 // 5 MB rather than a context-sized number.

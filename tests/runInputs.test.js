@@ -1,4 +1,4 @@
-// Typed run inputs (BRICKS P1 / D36 B7). A flow could always take one free-text
+// Typed run inputs (DECISIONS.md D36). A flow could always take one free-text
 // prompt; that is useless for "read THIS repository, looking for THAT", because
 // a link pasted into prose is just prose.
 //

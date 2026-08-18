@@ -1,4 +1,4 @@
-// Adopting a repository at run time (BRICKS P1.4). The library shipped with a
+// Adopting a repository at run time (DECISIONS.md D36). The library shipped with a
 // fixed list; this makes it general purpose — any URL, from the app, from a
 // flow, or from a task that points at one.
 //

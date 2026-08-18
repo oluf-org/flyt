@@ -26,7 +26,7 @@ import { UNTITLED_FLOW, ensureStructuralNodes, migrateLegacyTemplates } from '..
 
 export const DEFAULT_PIPELINE_ID = 'default-pipeline';
 
-// The tiered default pipelines (MODES-COMPARE T7): each is a refiner-first
+// The tiered default pipelines (DECISIONS.md D27): each is a refiner-first
 // flow, shipped with two example worker modes so the mode picker and the
 // comparison view have something to run day one.
 export const SEED_PIPELINE_IDS = ['pipeline-low', 'pipeline-medium', 'pipeline-high', 'pipeline-ultra'];
@@ -96,9 +96,9 @@ export class FlowStore {
     for (const f of files.filter(f => f.endsWith('.flow.yaml'))) {
       try {
         const flow = parseFlow(fs.readFileSync(path.join(this.rootDir, f), 'utf8'));
-        // A modes summary rides in the catalog (MODES-COMPARE T4) so the launch
+        // A modes summary rides in the catalog (DECISIONS.md D27) so the launch
         // picker can expand a flow into its named configurations without
-        // re-reading the file. P1 (CONFIGS-COMPARE) adds the pass-through
+        // re-reading the file. P1 (DECISIONS.md D27) adds the pass-through
         // scalars so pickers/cards can show description + lineage.
         const modes = flow.modes && Object.keys(flow.modes).length
           ? Object.entries(flow.modes).map(([id, m]) => ({
@@ -164,7 +164,7 @@ export class FlowStore {
       id: flow.id,
       name: String(flow.name),
       ...(typeof flow.description === 'string' && flow.description.trim() ? { description: flow.description } : {}),
-      // modes: named launch-override bundles (MODES-COMPARE T2). Structure to
+      // modes: named launch-override bundles (DECISIONS.md D27). Structure to
       // the DSL like everything else; validated by the linter, not here.
       ...(flow.modes && Object.keys(flow.modes).length ? { modes: flow.modes } : {}),
       nodes: (flow.nodes ?? []).map(n => {
@@ -172,7 +172,7 @@ export class FlowStore {
         // parentId marks containment: the node lives inside an orchestrator's
         // box (position is then relative to it) and runs in its sub-walk.
         const parent = n.parentId ? { parentId: n.parentId } : {};
-        // expose (MODES-COMPARE T9): which node fields become composer run
+        // expose (DECISIONS.md D27): which node fields become composer run
         // inputs. A first-class field like parentId, not an override. Read from
         // the node itself or (for a resolved node) its data.
         const exposeList = Array.isArray(n.expose) ? n.expose : (Array.isArray(n.data?.expose) ? n.data.expose : null);
@@ -224,7 +224,7 @@ export class FlowStore {
     fs.rmSync(this.legacyPath(id), { force: true });
   }
 
-  // --- Configs (CONFIGS-COMPARE P1): modes as first-class, editable bundles ---
+  // --- Configs (DECISIONS.md D27): modes as first-class, editable bundles ---
   //
   // A config IS a mode in the flow's `modes:` block — these helpers load the
   // flow, upsert one mode, and save through the normal path (DSL stays the
@@ -317,7 +317,7 @@ export class FlowStore {
         // because `flows/` is gitignored and this builder is what a fresh
         // install actually gets. This node is the one that materializes the
         // work nodes, and a generated node inherits its owner's ceiling
-        // narrowed by its own (TOOLS-PLAN §6.3) — so setting it here sets it
+        // narrowed by its own (DESIGN-SPEC.md §5) — so setting it here sets it
         // for the whole downstream walk. The `loop` set is repo-full plus the
         // tools that let a worker understand the SYSTEM it is inside: the queue
         // it was picked from, why something is stuck, the run that failed last
@@ -341,7 +341,7 @@ export class FlowStore {
     return !fs.existsSync(this.flowPath(id)) && !fs.existsSync(this.legacyPath(id));
   }
 
-  // The tiered default pipelines (MODES-COMPARE T7). Each is seeded only when
+  // The tiered default pipelines (DECISIONS.md D27). Each is seeded only when
   // absent, so user edits (and deletions) are never overwritten. Returns the
   // ids actually created.
   ensureSeedPipelines() {

@@ -2,7 +2,7 @@ import React, { memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-// MarkdownView (OUTPUT-VIEW-PLAN B1): the one renderer for model output.
+// MarkdownView (DESIGN-SPEC.md §7): the one renderer for model output.
 // react-markdown + remark-gfm, no rehype-raw — raw HTML in model output is
 // escaped, never injected (risk D-security).
 //

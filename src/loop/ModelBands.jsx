@@ -1,7 +1,7 @@
 import React from 'react';
 import { ModelPicker } from '../ModelPicker.jsx';
 
-// The models the loop runs on (LOOP-BOARD §D1: lifted out of LoopPage.jsx
+// The models the loop runs on (DECISIONS.md D45: lifted out of LoopPage.jsx
 // unchanged). They live on this page rather than only in Settings because this
 // is where the decision is made — you choose a model in the same glance as
 // pressing Start, and the consequence of each (what it costs, whether anything

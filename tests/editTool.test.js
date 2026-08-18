@@ -1,4 +1,4 @@
-// edit_file (LOOP-BOARD §A1): anchored replacement. The two failure modes it
+// edit_file (DECISIONS.md D45): anchored replacement. The two failure modes it
 // exists to close — an ambiguous anchor silently hitting the wrong place, and a
 // missing anchor sending the next turn back with another guess — are what most
 // of these assert.

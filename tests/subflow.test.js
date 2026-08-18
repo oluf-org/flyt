@@ -1,4 +1,4 @@
-// Sub-flows (BRICKS P3 / D36 B1–B4): the splice as pure functions, then the
+// Sub-flows (DECISIONS.md D36): the splice as pure functions, then the
 // call site end to end — one run, one canvas, inner nodes as real nodes with
 // namespaced ids, the inner flow's RESULT as the call site's output, and the
 // two guards (cycle, depth) that stand between "edit the brick" and "recurse

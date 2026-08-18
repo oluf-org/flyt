@@ -1,4 +1,4 @@
-// What it cost (LOOP-PLAN §9).
+// What it cost (DESIGN-SPEC.md §8).
 //
 // The plan wanted a price table per provider and model. §8 already declined to
 // build one for routing, and the same argument applies here: a table is stale

@@ -1,5 +1,5 @@
 // Container expansion: "materialize children into my box, then walk them as a
-// scoped subgraph" (BRICKS P2.0).
+// scoped subgraph" (DECISIONS.md D36).
 //
 // This is one mechanism with three consumers. The Orchestrator materializes
 // its children from a model's plan; a fan-out node will mint them from a lane

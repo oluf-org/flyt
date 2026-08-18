@@ -3,7 +3,7 @@
 // The distinction from `create_task` is the whole point, and the description
 // below has to teach it to a model that has both: `create_task` adds work to
 // THIS run, executed by this pipeline, in this context, now. `enqueue_task`
-// adds work to the PROJECT'S BACKLOG (LOOP-PLAN §5), for a future run with its
+// adds work to the PROJECT'S BACKLOG (DESIGN-SPEC.md §8), for a future run with its
 // own context, its own budget and its own verification — possibly tomorrow,
 // possibly by a different model.
 //
@@ -75,7 +75,7 @@ export default {
     // Throw rather than return { ok: false }: executeTool's `ok` means the tool
     // RAN, so a soft-failure object would be recorded as a successful call —
     // the exact ambiguity that makes bash's exit codes untrustworthy
-    // (DESIGN-SPEC §11.1). A throw fails the call and lands in the retrospective.
+    // (DESIGN-SPEC.md §8). A throw fails the call and lands in the retrospective.
     if (!ctx?.backlog) {
       throw new Error('No backlog is bound to this run, so there is nowhere to queue work. Use create_task for work that belongs to this run.');
     }

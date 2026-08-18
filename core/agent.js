@@ -293,7 +293,7 @@ export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx
 }
 
 // What the model is told a call returned. The result may be a bounded preview
-// of an artifact on disk (TOOLS-PLAN §13); when it is, the handle note rides
+// of an artifact on disk (DESIGN-SPEC.md §5); when it is, the handle note rides
 // along so the model knows the rest exists and how to redeem it — a preview
 // with no way back to the full result would just make it re-run the call.
 function toolMessage(record) {
@@ -301,7 +301,7 @@ function toolMessage(record) {
   return [whichRoot(record), body, record.note].filter(Boolean).join('\n');
 }
 
-// WHERE a file result came from, as a visible first line (HOME-CONTEXT P1.2).
+// WHERE a file result came from, as a visible first line (DECISIONS.md D38).
 // The tools have always returned `target`; it was buried in the JSON body among
 // the file's contents, which is exactly where nobody reads it. A node holding
 // both a subject repository and its own workspace can address the wrong one in
@@ -420,7 +420,7 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
   // Honours a caller's own cap the way nativeLoop does. It did not, which made
   // `maxIterations` mean "8" on every text-protocol provider — silently, since
   // the loop still terminated. A caller that budgets itself (the fan-out peek,
-  // FANOUT P3.1) needs the bound to hold on both protocols.
+  // DECISIONS.md D37) needs the bound to hold on both protocols.
   const rounds = Math.max(1, Number(maxIterations ?? MAX_ITERATIONS));
   for (let i = 0; i < rounds; i++) {
     const res = await callForAnswer(

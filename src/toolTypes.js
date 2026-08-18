@@ -6,13 +6,13 @@
 // A tool is a FILE (tools/<id>.json, app-level) carrying — beside its schema —
 // what it costs you if it misbehaves (`effects`, `risk`), where it came from
 // (`source`, `trust`), and how its result is handled (`result`). See
-// TOOLS-PLAN.md §4.1 for the full record and §12 for the trust model.
+// See DESIGN-SPEC.md §5 for the full record and trust model.
 import { schemaProblems } from '../core/tools/schema.js';
 
 // The model-visible name is also the file name, so it is deliberately narrow.
 export const TOOL_ID = /^[a-z][a-z0-9_]*$/;
 
-// What a call costs you if it misbehaves (TOOLS-PLAN §12.1).
+// What a call costs you if it misbehaves (DESIGN-SPEC.md §5).
 export const TOOL_EFFECTS = ['read', 'write', 'network', 'shell', 'destructive'];
 export const RISK_LEVELS = ['safe', 'caution', 'danger'];
 export const TRUST_TIERS = ['trusted', 'review', 'untrusted'];
@@ -26,7 +26,7 @@ export const PREVIEW_KINDS = ['json', 'text', 'image', 'none'];
 export const TOOL_SCOPES = ['run', 'workspace'];
 
 // Effects that mutate something. This — not a hardcoded name list — is what
-// the per-call approval gate reads (TOOLS-PLAN §4.3). `network` is absent on
+// the per-call approval gate reads (DESIGN-SPEC.md §5). `network` is absent on
 // purpose: an outbound request is bounded by network policy, not by a prompt.
 export const GATED_EFFECTS = new Set(['write', 'shell', 'destructive']);
 

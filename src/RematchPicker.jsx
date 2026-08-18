@@ -1,4 +1,4 @@
-// CONFIGS-COMPARE P2 — the rematch picker. A finished run's "Compare against…"
+// DECISIONS.md D27 — the rematch picker. A finished run's "Compare against…"
 // button asks one question: which configuration should the re-fire run with?
 // This modal lists the flow's configs (with their diff badges, same data the
 // composer/compare pickers use) plus the flow-as-authored default. Picking one

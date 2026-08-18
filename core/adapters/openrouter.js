@@ -17,7 +17,7 @@ export const openrouterAdapter = openaiCompatible({
     'X-Title': APP_NAME
   },
   keyHelp: 'Add it in Settings, or switch the worker to the "mock" provider.',
-  // The Auto Router (LOOP-PLAN §8): `openrouter/auto` with a cost band, so a
+  // The Auto Router (DESIGN-SPEC.md §8): `openrouter/auto` with a cost band, so a
   // task asks for a LEVEL and OpenRouter picks a capable model inside it. That
   // is the whole of what a per-model price table would have bought us, kept
   // current by someone who updates it daily.
@@ -35,7 +35,7 @@ export const openrouterAdapter = openaiCompatible({
   }
 });
 
-// Which model ids this provider can serve (PROVIDERS-PLAN §2): OpenRouter ids
+// Which model ids this provider can serve (DESIGN-SPEC.md §6): OpenRouter ids
 // are always namespaced ('openai/gpt-4o-mini'), so a bare id is never theirs.
 openrouterAdapter.canServe = modelId => String(modelId).includes('/');
 

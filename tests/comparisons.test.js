@@ -1,4 +1,4 @@
-// CONFIGS-COMPARE P2 — comparison records + compareGroup provenance.
+// DECISIONS.md D27 — comparison records + compareGroup provenance.
 // A comparison is a persisted relationship between two runs in one project;
 // the record lives in comparisons/<id>.json (verdict slot reserved for P3),
 // and both runs carry meta.compareGroup so siblings are discoverable from

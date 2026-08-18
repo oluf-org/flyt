@@ -50,7 +50,7 @@ function parseNodeEntry(id, entry) {
   }
   // `parent: <orchestratorId>` declares containment: the node lives inside
   // that orchestrator's box on the canvas and runs in its inline sub-walk.
-  // `expose: [worker, effort]` (MODES-COMPARE T9) declares which of the node's
+  // `expose: [worker, effort]` (DECISIONS.md D27) declares which of the node's
   // fields the flow author surfaces as ad-hoc run inputs in the composer — a
   // first-class node field, not an override value.
   const { use, type, kind, parent, expose, flow: flowRef, mode, overrides, ...rest } = entry;
@@ -124,7 +124,7 @@ export function parseFlow(text) {
     throw new FlowParseError('"modes" must be a map of mode id -> definition');
   }
 
-  // Typed run inputs (D36 B7). They become ONE node whose output ports are the
+  // Typed run inputs (D36). They become ONE node whose output ports are the
   // declared inputs, so `inputs.repo -> clone` is an ordinary ported edge and
   // nothing downstream needs to know run inputs exist.
   let declaredInputs = [];
@@ -175,7 +175,7 @@ export function parseFlow(text) {
     nodes.push({ id: 'output', type: 'output', kind: 'user', data: {} });
   }
 
-  // modes: named, saved launch-override bundles (MODES-COMPARE T2). One graph,
+  // modes: named, saved launch-override bundles (DECISIONS.md D27). One graph,
   // N configurations picked at run start. Structure is checked here; whether a
   // mode's overrides reference real nodes / legal fields is the linter's job.
   const modes = parseModes(doc.modes);
@@ -193,7 +193,7 @@ export function parseFlow(text) {
 // doc.modes -> { [modeId]: { name?, description?, derivedFrom?, overrides:
 // { [nodeId]: {...fields} } } }. Only structural shape is enforced (map of
 // maps); the linter validates the override fields against the actual nodes.
-// `description` and `derivedFrom` (CONFIGS-COMPARE P1) are pass-through
+// `description` and `derivedFrom` (DECISIONS.md D27) are pass-through
 // scalars: description is picker/card copy; derivedFrom is lineage metadata
 // only — it records which mode a duplicate/promote came from and carries NO
 // merge or inheritance semantics at run time.

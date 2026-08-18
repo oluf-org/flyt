@@ -1,4 +1,4 @@
-// The backlog chat (LOOP-BOARD §E): one agent turn loop over a read-mostly
+// The backlog chat (DECISIONS.md D45): one agent turn loop over a read-mostly
 // toolset whose single write is enqueue_task.
 //
 // The assertion that matters more than any other is the last one: the toolset

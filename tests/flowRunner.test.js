@@ -46,7 +46,7 @@ test('resolveWorker: category worker beats the executor default', () => {
 });
 
 test('resolveWorker: a run-level worker routes unpinned nodes, and carries no key', () => {
-  // A level or a pinned model (LOOP-PLAN §8) becomes every unpinned node's
+  // A level or a pinned model (DESIGN-SPEC.md §8) becomes every unpinned node's
   // worker. It must arrive as provider/model/routing and nothing else: this
   // object is logged verbatim in `node_start`, so spreading a stamped worker
   // wrote a live OpenRouter key into every run's log.jsonl — a file agents

@@ -1,4 +1,4 @@
-// Grants: what a node may reach, and what it actually got (TOOLS-PLAN §5, §6).
+// Grants: what a node may reach, and what it actually got (DESIGN-SPEC.md §5).
 //
 // Two tiers, and the whole safety model rests on the difference:
 //
@@ -10,7 +10,7 @@
 //             the ceiling before binding.
 //
 // The invariant, restated: no mechanism may grant a tool the authoring surface
-// did not already permit. Skills obey it (DESIGN-SPEC §6.2); the clerk must too;
+// did not already permit. Skills obey it (DESIGN-SPEC.md §5); the clerk must too;
 // so must an orchestrator handing tools to nodes it invented.
 //
 // Migration promise: absent a ceiling, THE CEILING IS THE STATIC GRANT. Every

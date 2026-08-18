@@ -1,5 +1,5 @@
 // What one loop worker is doing right now, as a pure projection
-// (LOOP-BOARD §C1).
+// (DECISIONS.md D45).
 //
 // The whole point of this file is that NOTHING new had to be built on the
 // backend. A loop worker's run is an ordinary run: `core/engine.js` already
@@ -26,7 +26,7 @@ import { runProgress } from './runProgress.js';
 import { nodeLabel } from './flowTypes.js';
 
 // Mirrored from core/heartbeat.js DEFAULT_THRESHOLDS.silentMs. The renderer
-// does not import core (LOOP-BOARD ground rule 5), and this number changes
+// does not import core (DECISIONS.md D45), and this number changes
 // about as often as the supervisor does. If that one moves, this comment is the
 // reason to move this one — the same convention `LEVELS` in LoopPage.jsx uses.
 export const SILENT_MS = 10 * 60 * 1000;

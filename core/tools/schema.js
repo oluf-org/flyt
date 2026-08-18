@@ -1,5 +1,5 @@
 // JSON Schema validation for tool arguments — the subset of 2020-12 that tool
-// definitions actually use (TOOLS-PLAN §4.4).
+// definitions actually use (DESIGN-SPEC.md §5).
 //
 // Hand-rolled on purpose (D24): a validator is exactly the kind of thing the
 // zero-dependency rule exists to keep in-house, and the subset needed is
@@ -162,7 +162,7 @@ function deepEqual(a, b) {
 
 // Load-time screen for a tool's `parameters` schema. Returns human-readable
 // problems; a non-empty list means the tool is stored DISABLED with the reason
-// shown rather than silently accepted (TOOLS-PLAN §4.4) — a schema we can't
+// shown rather than silently accepted (DESIGN-SPEC.md §5) — a schema we can't
 // validate against is a schema we can't gate on.
 export function schemaProblems(schema, { requireObjectRoot = true } = {}) {
   const problems = [];

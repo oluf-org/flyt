@@ -276,7 +276,7 @@ function OrchestratorCard({ data }) {
               </span>
             )}
             {/* A sub-flow names the brick it runs — the one thing you need to
-                know about it without opening the Inspector (D36 B2). */}
+                know about it without opening the Inspector (D36). */}
             {data.subflowId && (
               <span className="node-kind kind-inside mono" title={`Runs the "${data.subflowId}" flow`}>
                 ⧉ {data.subflowId}

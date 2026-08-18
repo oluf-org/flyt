@@ -68,7 +68,7 @@ Template instances (`use:`) accept these overrides: `title`, `worker`
 `skills` names expertise the **bound project** supplies as
 `.flyt/skills/<name>.md`; it is appended to that node's prompt at run time,
 so the same flow adapts to whichever project it runs against. See
-`DESIGN-SPEC.md` §6.2.
+`DESIGN-SPEC.md` §6.
 
 Raw nodes (`type:`) are the structural/legacy shape: `input`, `output`,
 `aiStep`, `agentTask`, `orchestrator`, `fanout`, with their data fields flattened
@@ -350,7 +350,7 @@ modes:
       refine:      { worker: { provider: openai, model: gpt-5 } }
 ```
 
-Two optional scalar fields sit beside `name` (CONFIGS-COMPARE P1):
+Two optional scalar fields sit beside `name` (DECISIONS.md D27):
 
 - `description` — one line shown in pickers and on the config's card.
 - `derivedFrom: <modeId>` — **lineage metadata only**. Duplicating a config

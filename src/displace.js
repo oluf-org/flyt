@@ -1,4 +1,4 @@
-// Local displacement (OUTPUT-VIEW-PLAN B3 / D4): when a node grows into its
+// Local displacement (DESIGN-SPEC.md §7 / D4): when a node grows into its
 // expanded reader card, the neighbors it would overlap shift just far enough
 // to get clear — along the minimal-translation vector, plus a gutter — and
 // anything THEY now overlap shifts in turn, cascading outward. The cascade is

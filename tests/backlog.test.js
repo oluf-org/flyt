@@ -1,4 +1,4 @@
-// The backlog: work that survives a run (LOOP-PLAN §5), and the tool that lets
+// The backlog: work that survives a run (DESIGN-SPEC.md §8), and the tool that lets
 // an agent add to it mid-run.
 //
 // Two things are load-bearing here and get the most attention: claiming has to
@@ -302,7 +302,7 @@ test('a run with no backlog bound gets an honest error, not a stray file', async
   ctx.backlog = null;
   const rec = await executeTool('enqueue_task', { title: 't', goal: 'g' }, ctx);
   // The CALL fails — not a successful call carrying a failure object, which is
-  // the ambiguity that makes bash's exit codes untrustworthy (DESIGN-SPEC §11.1).
+  // the ambiguity that makes bash's exit codes untrustworthy (DESIGN-SPEC.md §8).
   assert.equal(rec.ok, false);
   // ...and it points at the right alternative rather than just refusing.
   assert.match(rec.error, /create_task/);

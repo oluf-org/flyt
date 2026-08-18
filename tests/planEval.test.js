@@ -170,7 +170,7 @@ test('parsePlanEval does not police the category of a user-defined template', ()
   assert.equal(parsePlanEval(doc, ['my-own-step']).ok, true);
 });
 
-// --- the fan-out lane plan (FANOUT P3.3 / D37) ------------------------------
+// --- the fan-out lane plan (DECISIONS.md D37) ------------------------------------
 
 const PRESETS = ['standard', 'architecture', 'wildcard', 'adversarial', 'contrarian'];
 const lanePlan = (over = {}) => wrap({

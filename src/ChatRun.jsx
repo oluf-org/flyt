@@ -71,7 +71,7 @@ export default function ChatRun({
   const live = Boolean(loaded && !isTerminal(stage));
   const paused = Boolean(meta?.paused);
   const gated = stage === 'awaiting_approval';
-  // The refiner's input gate (MODES-COMPARE T6): the run is parked with
+  // The refiner's input gate (DECISIONS.md D27): the run is parked with
   // clarifying questions answered from the composer — not an approve/reject
   // dialog, so it gets an inline card, not the blocking ApprovalModal.
   const awaitingInput = stage === 'awaiting_input';

@@ -1,4 +1,4 @@
-// The retrospective turn (LOOP-PLAN §12.0).
+// The retrospective turn (DESIGN-SPEC.md §8).
 //
 // An instance is prompted with its scoped task and the tools it was given. When
 // it finishes, its completion is handed back to it and it is prompted ONCE

@@ -1,4 +1,4 @@
-// The `loop` node (BRICKS P4.2 / D36 B10–B12): the doorway from a flow into
+// The `loop` node (DECISIONS.md D36): the doorway from a flow into
 // the autonomous improvement loop D35 already built.
 //
 // It adds no autonomy. It enqueues the tasks a `backlog-plan` node produced,

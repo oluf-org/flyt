@@ -166,7 +166,7 @@ export default function Inspector({ snapshot, selectedNode, onOpenArtifact = nul
           <section key={label}>
             <h3>{label}</h3>
             <pre>{body}</pre>
-            {/* Result artifacts (TOOLS-PLAN §13): the preview above is bounded,
+            {/* Result artifacts (DESIGN-SPEC.md §5): the preview above is bounded,
                 the file holds everything. Opening it is the point. */}
             {onOpenArtifact && artifacts?.length ? (
               <div className="artifact-links">
@@ -414,7 +414,7 @@ function SubflowEditor({ node, d, set, flow, flows, templates, onOpenFlow }) {
   );
 }
 
-// Edit-target toggle (CONFIGS-COMPARE P1): at the top of the Inspector, switch
+// Edit-target toggle (DECISIONS.md D27): at the top of the Inspector, switch
 // between Flow (stored node overrides — today's behavior) and Config: <name>
 // (that config's override map). Same fields, same override tags, same
 // overridableFields validation — only the write target changes.
@@ -1001,7 +1001,7 @@ function InstanceInspector({ node, parent, template, models, activeModels, onCha
           <section>
             <h3>Tools <OverrideTag active={ov.tools != null} onReset={() => unset('tools')} /></h3>
             {/* An aiStep is offered read-effect tools only: anything else is
-                dropped at run time (TOOLS-PLAN §6.4), and a checkbox for a
+                dropped at run time (DESIGN-SPEC.md §5), and a checkbox for a
                 tool that will be dropped is worse than no checkbox. */}
             {grantableTools(template?.baseType).map(tool => {
               const effective = ov.tools ?? template?.tools ?? grantableTools(template?.baseType);
@@ -1097,7 +1097,7 @@ function InstanceInspector({ node, parent, template, models, activeModels, onCha
   );
 }
 
-// --- Config edit target (CONFIGS-COMPARE P1) ---------------------------------
+// --- Config edit target (DECISIONS.md D27) ---------------------------------
 // The Inspector's Config mode: shows/edits ONE config's override map for the
 // selected node. Fields are exactly the launch-override whitelist for that
 // node (overridableFields — the same set the runner enforces and the linter

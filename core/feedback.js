@@ -1,4 +1,4 @@
-// Tool feedback: what the toolbox was like to work with (LOOP-PLAN §12).
+// Tool feedback: what the toolbox was like to work with (DESIGN-SPEC.md §8).
 //
 // The loop's job is to improve its own ability to improve, and the toolbox is
 // where that bites first: an agent that needed `grep` and didn't have it burns

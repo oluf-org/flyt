@@ -1,4 +1,4 @@
-// homeSeed (HOME-CONTEXT §3.1 / D38): a deterministic first look at the
+// homeSeed (DECISIONS.md D38): a deterministic first look at the
 // workspace the run is standing in.
 //
 // This is a SEED, not the deliverable. The orientation node gets it together

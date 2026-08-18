@@ -1,4 +1,4 @@
-// The archive (LOOP-PLAN §12.1).
+// The archive (DESIGN-SPEC.md §8).
 //
 // The property that makes an archive an archive is that it COPIES. Every source
 // it reads from keeps moving — the ledger appends, the backlog is rewritten in

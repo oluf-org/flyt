@@ -1,33 +1,26 @@
-# CLAUDE.md — guidance for AI assistants working in this repo
+# Contributor guidance
 
 ## Read first
 
-1. `GOALS.md` — product goals and current status. Read this first.
-2. `DECISIONS.md` — the "why" log (D1–D39). The authority on resolved decisions, deferred items, and open questions.
-3. `DESIGN-SPEC.md` — how the system is built; the built-vs-planned ledger lives in §11.
+1. `GOALS.md` for intent and boundaries.
+2. `DESIGN-SPEC.md` for current architecture and safety contracts.
+3. `DECISIONS.md` for durable choices and unresolved decisions.
+4. `FLOW_LANG.md` and `FLOW_NODES.md` when changing flow syntax, linting, node roles, ports, or structured outputs.
 
-## Reference docs
-
-- `FLOW_LANG.md` — the `.flow.yaml` DSL spec (zero-dependency parser in `core/flowlang/`).
-- `FLOW_NODES.md` — node catalog and strict JSON contracts (`nodes/*.json`).
-- `RUN-MODE.md` — live-run UX decisions.
-- `SUBSCRIPTION-AUTH-GUIDE.md` — provider OAuth/ToS research behind D23.
-- `PRODUCT-SPEC.md` — product thesis and open product questions.
-
-## Active work
-
-- `LOOP-PLAN.md` — the autonomous improvement loop (headless supervisor, backlog, worktrees, budget/tiers, harness-run gates, benchmark + archive). Days 1–7 built; the decision landed as D35. §21 carries what is still open.
-- `BRICKS-PLAN.md` — composition and chaining (fan-out lanes, sub-flows, typed run inputs, the flow→backlog→loop handoff). Decided as D36, not started. §0.2 records which `GOALS.md` non-goals it reverses and which it does not — read that before proposing any DSL change.
-- `OUTPUT-VIEW-PLAN.md` — the current implementation plan (markdown output view, canvas reader, summary nodes). Not started yet.
-- `CONFIGS-COMPARE-DESIGN.md` — P1–P3 shipped; P4 sweeps still open.
-
-The Loop page's rebuild as a board — the agent toolset, `core/blockers.js`, the six columns, the
-live worker view and the backlog chat — landed as **D45**. Its remainder is in the backlog
-(`t-0009`…`t-0014`), not in a plan document.
+Current work is tracked in `.flyt/backlog/`. Completed implementation plans are git history, not living documentation. Do not create a new root-level plan for ordinary feature work; use the backlog and promote only durable decisions into `DECISIONS.md`.
 
 ## Standing rules
 
-- Flows live in `flows/<id>.flow.yaml` + `.layout.json`; node templates in `nodes/*.json`; per-project config in `.flyt/` (D15, D22, renamed in D29).
-- **The app is Flyt; a *flow* is still the domain noun (D29).** `.flow.yaml`, `flowlang`, `FlowRunner`, `flow.nodes` and `FLOW_LANG.md`/`FLOW_NODES.md` keep their names on purpose — `grep -i flow` returning thousands of hits is the intended end state, not a half-finished rename. Do not "complete" it. `core/brand.js` is the only source of the product name (and the only place the old one may still appear); `tests/brand.test.js` enforces both halves.
-- Keep the DSL dependency footprint at zero (D24); respect the visual anti-ideas list (D26).
-- Completed plans are retired to git history — don't resurrect them. Record new decisions in `DECISIONS.md` instead of creating new plan docs.
+- Flyt is the product; a flow is the domain object. Do not rename `.flow.yaml`, `flowlang`, `FlowRunner`, `flow.nodes`, `FLOW_LANG.md`, or `FLOW_NODES.md`. `core/brand.js` owns brand literals and legacy migration names.
+- Durable coordination is file-backed. Preserve the storage-root split and project scoping described in `DESIGN-SPEC.md`.
+- Projects use `.flyt/`; `.llmflow/` exists only as a migration input.
+- Preserve approval, confinement, tool-ceiling, worktree, gate, review, and spend boundaries. A convenience feature may narrow authority but must not silently widen it.
+- Keep the flow DSL's hand-written strict YAML subset dependency-free. Run its linter after DSL or node-contract changes.
+- Templates define how; tasks define what. Skills add instructions and never grant tools.
+- Missing tools, skills, models, providers, and degraded fallbacks must be explicit in artifacts or diagnostics.
+- Do not turn the DSL into a general expression language. Composition nodes are bounded and visible; arbitrary conditionals remain outside scope.
+- Update living docs to describe current behavior. Historical acceptance transcripts and implementation diaries belong in git history.
+
+## Verification
+
+Run the smallest relevant tests while iterating, then `npm test` for cross-cutting changes. Run `npm run flow -- lint` after changing shipped flows, the DSL, template resolution, or tool-grant linting.

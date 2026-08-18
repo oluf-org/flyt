@@ -1,6 +1,6 @@
 // The engine: everything the app IS, with nothing Electron in it.
 //
-// Why this exists (LOOP-PLAN §4.2). Flyt's outermost loop used to be a person
+// Why this exists (DESIGN-SPEC.md §8). Flyt's outermost loop used to be a person
 // pressing Run, so the whole assembly — stores, settings, provider resolution,
 // the project registry, the push plumbing — lived inside electron/main.js and
 // could only be reached from a renderer over IPC. Nothing else could drive the
@@ -106,9 +106,9 @@ export function createEngine({
   const flows = new FlowStore(seedFromBundle('flows'));
   const nodeLibrary = new NodeStore(dataDir('nodes')); // seeds itself from code on first launch
   flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable workflow
-  flows.ensureSeedPipelines();   // the tiered Low/Medium/High/Ultra pipelines (MODES-COMPARE T7)
+  flows.ensureSeedPipelines();   // the tiered Low/Medium/High/Ultra pipelines (DECISIONS.md D27)
 
-  // The tool library is files too (TOOLS-PLAN §4.1): tools/<id>.json seeds from
+  // The tool library is files too (DESIGN-SPEC.md §5): tools/<id>.json seeds from
   // the built-in modules, and the runtime registry is loaded FROM the files — so
   // what a run can call is what the library says, not what happens to be
   // imported. App-level like nodes/: capability is portable, expertise is not.
@@ -122,13 +122,13 @@ export function createEngine({
   for (const { file, error } of toolLibrary.problems) warn(`tools/${file}: ${error}`);
 
   // --- Settings & secrets ---
-  // settings.json lives in userData (never the repo). Shape (PROVIDERS-PLAN §1):
+  // settings.json lives in userData (never the repo). Shape (DESIGN-SPEC.md §6):
   //   { providers: { anthropic|openai|kimi|openrouter: { apiKey, keyKind? } },
   //     providerPriority: [providerId, ...],              // auto-source walk order
   //     activeModels: [{ id, source: 'auto'|providerId, enabled }],
   //     modelFacts:   { id: { name?, contextLength?, supportsTools?,
   //                           inUsdPerM?, outUsdPerM? } },   // D36 P0.2
-  //     modelSets:    { setId: { name, models: [id, ...] } },  // D36 B13
+  //     modelSets:    { setId: { name, models: [id, ...] } },  // D36
   //     workers: { executor: { provider, model } },
   //     projectStorage: 'workspace' | 'appdata',        // T2a
   //     approvalMode: 'ask' | 'smart' | 'always',
@@ -177,7 +177,7 @@ export function createEngine({
     return false;
   }
 
-  // The resolution rule (PROVIDERS-PLAN §2). Pinned source wins when it has a
+  // The resolution rule (DESIGN-SPEC.md §6). Pinned source wins when it has a
   // key; 'auto' walks providerPriority, skipping disconnected providers and
   // providers that can't serve the id. Returns the fully-stamped call target.
   const resolveSource = createResolver({ hasKey, canServe, priority: () => settings.providerPriority });
@@ -224,7 +224,7 @@ export function createEngine({
       if (!w.provider || !w.model) { workers[name] = { provider: null, model: null }; continue; }
       // A model the user activated is resolved through the providers map: its
       // pinned source (or the priority walk for 'auto') decides who serves it,
-      // and the key rides along (PROVIDERS-PLAN §4).
+      // and the key rides along (DESIGN-SPEC.md §6).
       const entry = (settings.activeModels ?? []).find(m => m.id === w.model);
       if ((entry && entry.enabled !== false) || w.provider === 'auto') {
         try {
@@ -269,7 +269,7 @@ export function createEngine({
     runtimeConfig.modelSets = settings.modelSets ?? {};
     runtimeConfig.activeModels = settings.activeModels ?? [];
     runtimeConfig.categoryWorkers = baseConfig.categoryWorkers ?? {};
-    // A model per effort band for the loop (LOOP-PLAN §8). Settings win over
+    // A model per effort band for the loop (DESIGN-SPEC.md §8). Settings win over
     // config.json, the same way every other worker override does — the bands
     // are a machine's cost decision, not a property of the repository.
     runtimeConfig.loop = {
@@ -318,14 +318,14 @@ export function createEngine({
       claudeSubscriptionActive: hasKey('claude-code'),
       providerPriority: settings.providerPriority ?? [...DEFAULT_PRIORITY],
       activeModels,
-      // BRICKS P0.2–P0.3: what each model costs and can read, and the named
+      // DECISIONS.md D36: what each model costs and can read, and the named
       // sets built out of them. Facts are catalog data, not secrets — every
       // picker in the app renders them.
       modelFacts: settings.modelFacts ?? {},
       modelSets: settings.modelSets ?? {},
       // What the Loop view's per-band pickers show. Model ids, never keys.
       loopModels: settings.loopModels ?? {},
-      // The backlog chat's model, when this person has chosen one (D45 §E2).
+      // The backlog chat's model, when this person has chosen one (D45).
       chat: settings.chat ?? {},
       workers: Object.fromEntries(
         Object.entries(runtimeConfig.workers).map(([name, w]) => [name, { provider: w.provider, model: w.model }])
@@ -345,14 +345,14 @@ export function createEngine({
     };
   }
 
-  // The reference library (LOOP-PLAN §16): app-level, not per project, because
+  // The reference library (DESIGN-SPEC.md §8): app-level, not per project, because
   // prior art is portable in exactly the way a backlog is not — and read-only,
   // so one copy shared by every project is correct rather than merely thrifty.
   const references = new ReferenceLibrary(runtimeConfig.referenceRoot ?? null, {
     repos: runtimeConfig.references ?? DEFAULT_REFERENCES
   });
 
-  // --- The loop's log (LOOP-PLAN §14) ---
+  // --- The loop's log (DESIGN-SPEC.md §8) ---
   // One line per decision the supervisor makes, pushed live AND kept in a
   // bounded ring per project. The ring is what lets a viewer that attaches at
   // 18:00 see what happened at 09:00 — a live-only stream shows an empty panel
@@ -370,7 +370,7 @@ export function createEngine({
   }
   const loopLog = projectId => (loopLogs.get(projectId) ?? []).slice();
 
-  // The chat's live channel (LOOP-BOARD §E1), mirroring `loop:event` exactly.
+  // The chat's live channel (DECISIONS.md D45), mirroring `loop:event` exactly.
   // Not ring-buffered: a chat turn's transcript is already persisted per turn
   // in .flyt/chats/<id>.jsonl, so the only thing this carries is the tokens
   // arriving BEFORE that write — which have nowhere else to be.
@@ -449,7 +449,7 @@ export function createEngine({
     }, PUSH_COALESCE_MS));
   };
 
-  // --- The backlog, one per project (LOOP-PLAN §5) ---
+  // --- The backlog, one per project (DESIGN-SPEC.md §8) ---
   //
   // Rooted at the project's CANONICAL config dir — the main checkout's
   // `.flyt/backlog/`, never a worktree's. That is the whole invariant of §5.2:
@@ -470,7 +470,7 @@ export function createEngine({
     return b;
   }
 
-  // Tool feedback (LOOP-PLAN §12), same canonical-location rule as the backlog:
+  // Tool feedback (DESIGN-SPEC.md §8), same canonical-location rule as the backlog:
   // one pile per project, in the main checkout, never inside a worktree.
   const feedbackStores = new Map();
   function feedbackFor(projectId) {
@@ -483,7 +483,7 @@ export function createEngine({
     return f;
   }
 
-  // One worktree pool per project (LOOP-PLAN §6.1). The trees live OUTSIDE the
+  // One worktree pool per project (DESIGN-SPEC.md §8). The trees live OUTSIDE the
   // repo root — a nested checkout inside the working tree confuses grep, test
   // runners and the agent's own file tools — so they go under the data root,
   // keyed by project.
@@ -515,7 +515,7 @@ export function createEngine({
     return root ? configDirFor(root) : null;
   }
 
-  // The spend record (LOOP-PLAN §9), per project, beside the backlog.
+  // The spend record (DESIGN-SPEC.md §8), per project, beside the backlog.
   const ledgers = new Map();
   function ledgerFor(projectId) {
     let l = ledgers.get(projectId);

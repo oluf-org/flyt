@@ -3,7 +3,7 @@
 // No OAuth, no tokens, no Anthropic endpoint: `claude -p` is spawned as a
 // child process and authenticates itself from the user's own `/login`
 // credential store (~/.claude), exactly the T3-Code pattern the guide
-// recommends (SUBSCRIPTION-AUTH-GUIDE Parts 1 & 4). We ask it to behave as a
+// recommends (DESIGN-SPEC.md §6). We ask it to behave as a
 // plain model call: our system prompt REPLACES Claude Code's agentic preamble
 // (--system-prompt), every built-in tool is disabled (--tools ""), and no
 // session is persisted. The prompt travels over stdin so no user content ever
@@ -145,6 +145,6 @@ claudeCodeAdapter.canServe = modelId => String(modelId).startsWith('claude-');
 
 // This adapter bounds itself (spawnCliCall's timeoutMs), and the CLI it spawns
 // can legitimately go quiet for minutes while a child process works — an idle
-// deadline over the top of that would kill healthy runs (LOOP-PLAN §11.5). A
+// deadline over the top of that would kill healthy runs (DESIGN-SPEC.md §8). A
 // stop, and any configured hard ceiling, still reach it through the signal.
 claudeCodeAdapter.selfTimed = true;

@@ -1,4 +1,4 @@
-// src/loopLive.js (LOOP-BOARD §C): what one loop worker is doing, derived from
+// src/loopLive.js (DECISIONS.md D45): what one loop worker is doing, derived from
 // the run snapshot that was already on the wire.
 //
 // The assertions that matter: nothing invents a placeholder for state it does

@@ -1,4 +1,4 @@
-// The container-expansion spine (BRICKS P2.0). The orchestrator's own tests
+// The container-expansion spine (DECISIONS.md D36). The orchestrator's own tests
 // (orchestrator.test.js) prove the extraction end to end; these pin the seam
 // itself, because the fan-out (P2) and sub-flow (P3) nodes are about to depend
 // on exactly these edges — scoped dependencies, wave selection, status

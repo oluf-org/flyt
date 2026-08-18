@@ -1,7 +1,7 @@
 # The benchmark suite
 
-A fixed set of scored cases the loop is run against, so that "improve yourself" can be told
-apart from churn (`LOOP-PLAN.md` §12.1).
+A fixed set of scored cases the Loop is run against, so that "improve yourself" can be told
+apart from churn (`DESIGN-SPEC.md` §8).
 
 ```
 flyt bench list                  the cases
@@ -53,9 +53,9 @@ Three rules, each learned the hard way somewhere:
 
 | id | class of work | seeded |
 |---|---|---|
-| `pure-function` | a small pure module plus tests — the `taskline` V1 acceptance (`DESIGN-SPEC.md` §11.1), replayed in this repo's house style | — |
+| `pure-function` | a small pure module plus tests, replayed in this repo's house style | — |
 | `fix-duration` | a defect in existing code that the suite does not cover: find it, fix it, prove it | yes |
 | `cli-flag` | extend a subsystem in place — the harness work that is most of what this loop does | — |
 
-Three is a starting point, not a target (`LOOP-PLAN.md` Q-L3). The suite grows when the loop
+Three is a starting point, not a target. The suite grows when the Loop
 meets a class of task it handles badly; that is what a case is *for*.

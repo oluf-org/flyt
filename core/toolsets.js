@@ -1,4 +1,4 @@
-// Toolsets: named, reusable bundles of tools (TOOLS-PLAN §4.2), stored as
+// Toolsets: named, reusable bundles of tools (DESIGN-SPEC.md §5), stored as
 // tools/sets/<id>.json beside the library itself.
 //
 // A ceiling wants to say "the repo, read-only" once, not list six tool ids and
@@ -46,7 +46,7 @@ export const SEED_TOOLSETS = [
     include: ['uses:network']
   },
   {
-    // What the loop's own workers get (LOOP-BOARD §A7). Everything repo-full
+    // What the loop's own workers get (DECISIONS.md D45). Everything repo-full
     // allows, plus the tools that let a worker understand the SYSTEM it is
     // working inside rather than only the files: the queue it was picked from,
     // why something is stuck, the run that failed last time, the project's own

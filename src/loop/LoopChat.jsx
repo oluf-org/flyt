@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ModelPicker } from '../ModelPicker.jsx';
 
-// The chat drawer (LOOP-BOARD §E3): a conversation attached to this project's
+// The chat drawer (DECISIONS.md D45): a conversation attached to this project's
 // backlog, that can answer questions about the queue and QUEUE WORK — without
 // composing a flow.
 //

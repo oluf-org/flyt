@@ -1,4 +1,4 @@
-// The living constellation (LANDER-PLAN.md L4/§4) — a sparse node-graph drawn
+// The living constellation (DECISIONS.md D25) — a sparse node-graph drawn
 // faintly behind the empty lander: the canvas "asleep" under the surface.
 //
 // Node positions are seeded from the project id with the same FNV-1a hash +

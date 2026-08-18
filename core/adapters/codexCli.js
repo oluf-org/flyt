@@ -1,6 +1,6 @@
 // ChatGPT subscription adapter — delegation via the official Codex CLI.
 //
-// Same delegation model as claudeCode.js (SUBSCRIPTION-AUTH-GUIDE Parts 1 &
+// Same delegation model as claudeCode.js (DESIGN-SPEC.md §6
 // 4): `codex exec` runs as a child process and authenticates itself from the
 // auth.json its own `codex login` wrote (CODEX_HOME selects the account); we
 // never see a token. The call is fenced in: read-only sandbox, an empty
@@ -161,5 +161,5 @@ export async function codexAdapter({ model, system, prompt, onText, signal, cliH
 // ChatGPT-side ids: gpt-* chat models, o-series, and the codex-tuned models.
 codexAdapter.canServe = modelId => /^(gpt-|o\d|codex)/.test(String(modelId));
 
-// Self-bounded like the Claude CLI adapter — see the note there (LOOP-PLAN §11.5).
+// Self-bounded like the Claude CLI adapter — see the note there (DESIGN-SPEC.md §8).
 codexAdapter.selfTimed = true;

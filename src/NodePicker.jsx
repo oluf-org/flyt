@@ -19,7 +19,7 @@ const ORCH_ITEM = {
   spec: () => dndOrchestrator()
 };
 
-// The other container (D36 B5): same box, but the children come from a lane
+// The other container (D36): same box, but the children come from a lane
 // list you wrote rather than from a model's plan.
 const FANOUT_ITEM = {
   key: 'fanout',
@@ -48,7 +48,7 @@ function groupTemplates(templates) {
     .map(([label, items]) => ({ label, items }));
 }
 
-// Every saved flow is offered as a brick you can drop into this one (D36 B1).
+// Every saved flow is offered as a brick you can drop into this one (D36).
 // The flow being edited is filtered out by the caller — a flow containing
 // itself is the cycle the linter rejects, refused one step earlier.
 function subflowItems(flows) {

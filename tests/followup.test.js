@@ -1,4 +1,4 @@
-// Follow-up turns (FOLLOWUP-PLAN): replying to a finished run appends a
+// Follow-up turns (DECISIONS.md D21): replying to a finished run appends a
 // continuation subgraph to its flow and the normal walk executes it. Completed
 // nodes are never re-run (FU1); the feedback is a visible input node (FU4);
 // every turn is closed by a feedback-review node (FU6); failed runs are

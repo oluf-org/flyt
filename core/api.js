@@ -1,4 +1,4 @@
-// The command surface: one map, bound by three front doors (LOOP-PLAN §4.2).
+// The command surface: one map, bound by three front doors (DESIGN-SPEC.md §8).
 //
 // Every command here is transport-agnostic — it takes a plain object, returns
 // plain JSON, and knows nothing about who called it. `electron/main.js` binds
@@ -108,7 +108,7 @@ export function createApi(engine) {
   };
   // One chat store per project, beside the backlog. Same rule as everything
   // else the loop owns: it lives in the MAIN checkout's config dir, never in a
-  // worktree (LOOP-PLAN §5.2).
+  // worktree (DESIGN-SPEC.md §8).
   const chats = new Map();
   const chatFor = projectId => {
     proj(projectId);
@@ -167,7 +167,7 @@ export function createApi(engine) {
     return apiKey ? { ...target, apiKey } : target;
   };
 
-  // --- the loop's status, on disk (LOOP-PLAN §11.1) --------------------------
+  // --- the loop's status, on disk (DESIGN-SPEC.md §8) --------------------------
   //
   // The supervisor is a long-running process that outlives the window which
   // started it, so its status cannot live only in its own memory: `flyt loop
@@ -393,7 +393,7 @@ export function createApi(engine) {
       if (workspaceDir) workspace = new Workspace(workspaceDir).ensure().root;
       else if (entry.folder) workspace = new Workspace(entry.folder).ensure().root;
       else if (entry.kind === 'appdata') workspace = new Workspace(entry.workspaceRoot).ensure().root;
-      // launch (MODES-COMPARE) carries the picked mode and any exposed
+      // launch (DECISIONS.md D27) carries the picked mode and any exposed
       // run-input overrides: { modeId?, overrides? }.
       // An effort band for this run (§8): every node that has not pinned its own
       // worker routes through OpenRouter's Auto Router at that cost tier. Set on
@@ -457,7 +457,7 @@ export function createApi(engine) {
     'run:followUp': ({ projectId, runId, text }) => runnerFor(projectId).followUp(runId, String(text ?? '')),
     'run:answerInput': ({ projectId, runId, text }) => runnerFor(projectId).answerInput(runId, String(text ?? '')),
 
-    // --- Backlog (LOOP-PLAN §5) --------------------------------------------
+    // --- Backlog (DESIGN-SPEC.md §8) --------------------------------------------
     //
     // The supervisor owns these files, so every caller — CLI, HTTP, an agent's
     // enqueue_task — goes through one door. Nothing writes the directory
@@ -468,7 +468,7 @@ export function createApi(engine) {
       const tasks = backlog.list({ status });
       const problems = backlog.problems ?? [];
       // WHY each of them is not moving, in the same words the supervisor's
-      // headline uses (LOOP-BOARD §B2). This used to be computed by
+      // headline uses (DECISIONS.md D45). This used to be computed by
       // `backlog.blocked()`, reachable only through `task:ready`, which the
       // preload never exposed — so the one screen whose job is "what is stuck"
       // was the one caller that could not see it.
@@ -532,7 +532,7 @@ export function createApi(engine) {
       backlogFor(projectId).escalate(id, { reason, note }),
     'task:levels': () => ({ levels: LEVELS }),
 
-    // --- Chat (LOOP-BOARD §E) ------------------------------------------------
+    // --- Chat (DECISIONS.md D45) ------------------------------------------------
     //
     // ONE agent turn loop over a read-mostly toolset whose single write is
     // enqueue_task. It is deliberately NOT a second orchestrator: everything
@@ -622,7 +622,7 @@ export function createApi(engine) {
     },
     'chat:tools': () => ({ tools: CHAT_TOOLS }),
 
-    // --- Tool feedback (LOOP-PLAN §12) -------------------------------------
+    // --- Tool feedback (DESIGN-SPEC.md §8) -------------------------------------
     //
     // What every instance left behind about the toolbox, and the reviewer that
     // folds it into one document. Digesting is deliberately separate from
@@ -669,7 +669,7 @@ export function createApi(engine) {
       return text;
     },
 
-    // --- Isolation and landing (LOOP-PLAN §6, §7) ---------------------------
+    // --- Isolation and landing (DESIGN-SPEC.md §8) ---------------------------
     //
     // The supervisor will drive these in sequence; exposing them as commands
     // means the same steps are drivable by hand, by the CLI and (later) by the
@@ -747,7 +747,7 @@ export function createApi(engine) {
       return result;
     },
 
-    // --- The loop (LOOP-PLAN §4.3, §9, §11) ---------------------------------
+    // --- The loop (DESIGN-SPEC.md §8) ---------------------------------
     //
     // One supervisor per project, held here for the life of the process: it is
     // the thing that outlives a closed window, and starting a second one over
@@ -911,7 +911,7 @@ export function createApi(engine) {
       ledger: ledgerFor(projectId)
     }),
 
-    // --- The benchmark and the archive (LOOP-PLAN §12.1) --------------------
+    // --- The benchmark and the archive (DESIGN-SPEC.md §8) --------------------
     //
     // The score exists so that "improve yourself" can be distinguished from
     // churn. It is a loop run like any other — same supervisor, same gates,
@@ -1041,7 +1041,7 @@ export function createApi(engine) {
     },
     'archive:trend': ({ projectId, limit = 30 }) => trend(stateDir(projectId, 'archive'), { limit }),
 
-    // --- Spend (LOOP-PLAN §9) ----------------------------------------------
+    // --- Spend (DESIGN-SPEC.md §8) ----------------------------------------------
     'ledger:totals': ({ projectId, sinceMs = null, taskId = null }) =>
       ledgerFor(projectId).totals({ sinceMs, taskId }),
     'ledger:check': ({ projectId, taskId = null }) =>
@@ -1085,7 +1085,7 @@ export function createApi(engine) {
       return doctor(engine, { probe, models: list, project });
     },
 
-    // --- The reference library (LOOP-PLAN §16) ------------------------------
+    // --- The reference library (DESIGN-SPEC.md §8) ------------------------------
     //
     // Recipes, not dependencies: read-only clones an agent can grep at task
     // time instead of designing from first principles. App-level, since prior

@@ -1,4 +1,4 @@
-// Command safety screen (APPROVAL-MODES §2). Used by the 'smart' approval mode:
+// Command safety screen (DESIGN-SPEC.md §5). Used by the 'smart' approval mode:
 // before a destructive tool call runs unattended, decide whether it is routine
 // enough to let through or risky enough to stop and ask a human about.
 //

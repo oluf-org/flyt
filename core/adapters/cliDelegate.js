@@ -1,6 +1,6 @@
 // Shared machinery for the subscription (CLI-delegation) adapters.
 //
-// The delegation model (SUBSCRIPTION-AUTH-GUIDE): Flyt never touches an
+// The delegation model (DESIGN-SPEC.md §6): Flyt never touches an
 // OAuth token. Each provider's official CLI — `claude` (Claude Code) and
 // `codex` — is the authentication authority; it finds, refreshes, and uses the
 // credentials its own `login` flow stored on disk. We spawn it as a child
@@ -79,7 +79,7 @@ export function resolveCli({ override, names, npmPkg, npmEntry }) {
 // --- Credential detection ----------------------------------------------------
 // "Signed in" means the vendor CLI's own login flow left its credential store
 // behind. We only check for presence — never read, parse, or log the contents
-// (SUBSCRIPTION-AUTH-GUIDE Part 4 §6).
+// (DESIGN-SPEC.md §6).
 
 // Claude Code: ~/.claude/.credentials.json (Windows/Linux). On macOS the token
 // usually lives in the keychain, but ~/.claude.json still records the OAuth

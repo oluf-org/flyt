@@ -1,4 +1,4 @@
-// MODES-COMPARE Phase 1 — the launch-override foundation (T1) and the modes:
+// DECISIONS.md D27 — the launch-override foundation (T1) and the modes:
 // DSL block (T2). Launch overrides are the single primitive: a per-node map
 // applied at run start on top of stored overrides. Modes are named, saved
 // bundles of exactly that map, carried in the flow file.

@@ -1,4 +1,4 @@
-// The supervisor (LOOP-PLAN §4.3, §10, §11).
+// The supervisor (DESIGN-SPEC.md §8).
 //
 // The outermost loop, which used to be a person pressing Run:
 //

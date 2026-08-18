@@ -1,6 +1,6 @@
-// Gates: the definition of done, run by the harness (LOOP-PLAN §7.1).
+// Gates: the definition of done, run by the harness (DESIGN-SPEC.md §8).
 //
-// `DESIGN-SPEC.md` §11.1 names the weakest joint in the whole system: `bash`
+// `DESIGN-SPEC.md` §8 names the weakest joint in the whole system: `bash`
 // returns a non-zero exit as DATA, so `ok: true` means the tool ran, not that
 // the command succeeded. An agent can therefore report a task complete over a
 // red suite, and a live run did exactly that. Attended you notice. Unattended it

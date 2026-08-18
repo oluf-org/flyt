@@ -3,7 +3,7 @@
 //
 // `flyt loop start` prints its own status while it holds the terminal, which is
 // no use once it is detached or was started from the app. This reads the
-// published status (`.flyt/loop-status.json`, LOOP-PLAN §11.1) and the backlog,
+// published status (`.flyt/loop-status.json`, DESIGN-SPEC.md §8) and the backlog,
 // and appends ONE line per change to stdout.
 //
 // Per change, not per tick: a watcher that prints every poll buries the four

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Flow DSL command line — the AI/CI surface of the DSL (REFACTOR-PLAN §6):
+// Flow DSL command line — the AI/CI surface of the DSL (FLOW_LANG.md):
 //
 //   npm run flow -- lint <file> [--json]     validate a *.flow.yaml (exit 1 on errors)
 //   npm run flow -- templates [--json]       Node Library templates + ports + allowed overrides
@@ -72,7 +72,7 @@ function templateInfo(t) {
       .map(p => ({ id: p.id, label: p.label ?? p.id, ...(p.description ? { description: p.description } : {}) })),
     allowedOverrides: COMMON_OVERRIDES,
     // What may be granted here. An aiStep may hold read-effect tools only
-    // (TOOLS-PLAN §6.4), so it is told a narrower list than an agentTask —
+    // (DESIGN-SPEC.md §5), so it is told a narrower list than an agentTask —
     // and both are told the toolsets a ceiling can be written in.
     availableTools: t.baseType === 'agentTask' ? availableTools : readOnlyTools,
     toolsets: toolLibrary.listSets().map(s => ({ id: s.id, description: s.description }))

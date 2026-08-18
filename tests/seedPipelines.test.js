@@ -1,4 +1,4 @@
-// MODES-COMPARE T7 — the tiered default pipelines (Low/Medium/High/Ultra).
+// DECISIONS.md D27 — the tiered default pipelines (Low/Medium/High/Ultra).
 // Each must parse, lint clean against the seeded Node Library, resolve, and
 // carry two example worker modes; seeding must never overwrite user edits.
 import test from 'node:test';

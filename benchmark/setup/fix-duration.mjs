@@ -7,7 +7,7 @@
 // It adds a module AND a test that passes anyway. Both halves matter: a bug
 // nobody's tests cover is the realistic case, and "the suite is green" being
 // insufficient evidence is the exact lesson the loop keeps having to learn
-// (`DESIGN-SPEC.md` §11.1). It touches nothing that already exists, so the
+// (`DESIGN-SPEC.md` §8). It touches nothing that already exists, so the
 // baseline stays green and the other cases are scored on their own merits.
 import fs from 'node:fs';
 import path from 'node:path';

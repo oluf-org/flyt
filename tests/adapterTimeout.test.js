@@ -1,4 +1,4 @@
-// Per-call deadlines (LOOP-PLAN §11.5).
+// Per-call deadlines (DESIGN-SPEC.md §8).
 //
 // The defect these pin: cancellation was threaded everywhere but nothing ever
 // fired it, so a provider that opened a connection and went quiet hung the node

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-// The approval-mode chip that sits under the run composer (APPROVAL-MODES §3).
+// The approval-mode chip that sits under the run composer (DESIGN-SPEC.md §5).
 //
 // It is one line of chrome by design: the run panel is already dense, and this
 // is a setting you glance at rather than operate. Collapsed it shows an icon and

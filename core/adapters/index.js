@@ -30,7 +30,7 @@ import { kimiAdapter } from './kimi.js';
 import { mockAdapter } from './mock.js';
 // Subscription (CLI-delegation) providers: the vendor's own CLI is spawned as
 // the authenticated runtime — Flyt never holds a token
-// (SUBSCRIPTION-AUTH-GUIDE). Same callModel contract as every other adapter.
+// (DESIGN-SPEC.md §6). Same callModel contract as every other adapter.
 import { claudeCodeAdapter } from './claudeCode.js';
 import { codexAdapter } from './codexCli.js';
 import { abortError, isAbortError } from './http.js';
@@ -54,7 +54,7 @@ export function registerProvider(name, adapter) {
 }
 
 // Can this provider serve this model id? Each adapter declares its own rule
-// (PROVIDERS-PLAN §2); resolveModelSource walks providerPriority with it.
+// (DESIGN-SPEC.md §6); resolveModelSource walks providerPriority with it.
 export function canServe(provider, modelId) {
   const adapter = providers[provider];
   return adapter?.canServe ? Boolean(adapter.canServe(modelId)) : false;
@@ -84,13 +84,13 @@ const sleepAbortable = (ms, signal) => new Promise((resolve, reject) => {
   signal.addEventListener('abort', onAbort, { once: true });
 });
 
-// --- Per-call deadlines (LOOP-PLAN §11.5) -----------------------------------
+// --- Per-call deadlines (DESIGN-SPEC.md §8) -----------------------------------
 //
 // Cancellation already existed — RUN-CONTROL threads an AbortSignal into every
 // adapter — but nothing ever fired it on time. A provider that opens a
 // connection and then goes quiet never errors, so the retry budget never
 // engages and the node sits there: seen live at 347s on a node that normally
-// took 79-104s. Attended you notice and press stop. Unattended (LOOP-PLAN §11)
+// took 79-104s. Attended you notice and press stop. Unattended (DESIGN-SPEC.md §8)
 // nobody does, and that task is wedged until someone comes home.
 //
 // The deadline is on PROGRESS, not on total duration. Every onText emission is

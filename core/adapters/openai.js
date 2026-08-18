@@ -11,6 +11,6 @@ export const openaiAdapter = openaiCompatible({
   envKey: 'OPENAI_API_KEY'
 });
 
-// PROVIDERS-PLAN §2: OpenAI serves gpt-* chat models and the o-series
+// DESIGN-SPEC.md §6: OpenAI serves gpt-* chat models and the o-series
 // reasoners (o1/o3/o4/…). Everything else belongs to someone else.
 openaiAdapter.canServe = modelId => /^(gpt-|o\d)/.test(String(modelId));

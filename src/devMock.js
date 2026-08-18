@@ -7,7 +7,7 @@ import { factsFromCatalog } from '../core/modelSource.js';
 
 const snapshots = {
   // A finished flow run with one follow-up turn: previews the thread view +
-  // composer in RunResult and the turn badges on the canvas (FOLLOWUP-PLAN).
+  // composer in RunResult and the turn badges on the canvas (DECISIONS.md D21).
   'run-20260716-142200': {
     meta: {
       runId: 'run-20260716-142200', stage: 'done', error: null, turn: 1,
@@ -208,7 +208,7 @@ const snapshots = {
   }
 };
 
-// In-memory stand-ins for the settings/models IPC surface (PROVIDERS-PLAN shape).
+// In-memory stand-ins for the settings/models IPC surface (DESIGN-SPEC.md §6).
 const mockSettings = {
   hasKey: false,
   providers: {
@@ -254,12 +254,12 @@ const mockSettings = {
     'openai/gpt-5.2': { name: 'GPT-5.2', contextLength: 400000, supportsTools: true, inUsdPerM: 1.25, outUsdPerM: 10 }
   },
   modelSets: {},
-  // The loop's band→model map (LOOP-PLAN §8), empty by default: the shipped
+  // The loop's band→model map (DESIGN-SPEC.md §8), empty by default: the shipped
   // state is "ask for an effort band", and naming models is the deliberate act.
   loopModels: {},
   workers: {
     executor: { provider: 'mock', model: 'mock-large' },
-    // The loop's two (LOOP-PLAN §8, §7.2), unset: no pin means effort bands,
+    // The loop's two (DESIGN-SPEC.md §8), unset: no pin means effort bands,
     // no reviewer means nothing lands.
     loop: { provider: null, model: null },
     reviewer: { provider: null, model: null }
@@ -278,7 +278,7 @@ const mockSettings = {
     { id: 'mock-small', provider: 'mock', label: 'Mock (dry runs only)', connected: true }
   ]
 };
-// --- The loop (LOOP-PLAN §14) ----------------------------------------------
+// --- The loop (DESIGN-SPEC.md §8) ----------------------------------------------
 // The Loop view is the one surface with no canvas behind it: everything on it
 // comes from the supervisor, the backlog and the ledger, so without these the
 // panel previews as an error message. Tasks carry their real frontmatter shape
@@ -466,7 +466,7 @@ const mockFlows = {
       { id: 'e-user-input-fix', source: 'user-input', target: 'fix' },
       { id: 'e-fix-result', source: 'fix', target: 'result' }
     ],
-    // Two example modes so the launch picker's expansion (MODES-COMPARE T4) is
+    // Two example modes so the launch picker's expansion (DECISIONS.md D27) is
     // exercised in the browser preview.
     modes: {
       fable: { name: 'Fable', overrides: { fix: { worker: { provider: 'anthropic', model: 'claude-fable-5' } } } },
@@ -782,7 +782,7 @@ export function installDevMock() {
       return structuredClone(mockFlows[id]);
     },
     deleteFlow: async id => { delete mockFlows[id]; },
-    // Exposed run inputs (MODES-COMPARE T10): a canned spec for the mock
+    // Exposed run inputs (DECISIONS.md D27): a canned spec for the mock
     // quick-fix flow so the composer controls render in the browser preview.
     // Two lists: exposed override fields, and typed run inputs (D36 P1.3).
     flowLaunchInputs: async id => id === 'quick-fix'
@@ -805,7 +805,7 @@ export function installDevMock() {
       if (!ids.length) return null;
       return ids[mockRunCursor++ % ids.length];
     },
-    // Comparison records (CONFIGS-COMPARE P2): kept in memory so the launch,
+    // Comparison records (DECISIONS.md D27): kept in memory so the launch,
     // rematch and select-compare paths all run in the browser preview.
     beginCompare: async (_pid) => ({ id: 'cmp-mock-' + Date.now().toString(36) }),
     saveCompare: async (_pid, rec) => {
@@ -856,7 +856,7 @@ export function installDevMock() {
     // No shell to open a file with in a browser; the link is still exercised.
     openRunArtifact: async (_pid, _runId, rel) => { console.info('[devMock] would open', rel); },
 
-    // --- The loop (LOOP-PLAN §14) ---
+    // --- The loop (DESIGN-SPEC.md §8) ---
     loopStatus: async () => structuredClone(mockLoop),
     loopStart: async (_pid, opts = {}) => {
       const pinned = mockSettings.workers.loop;
@@ -892,7 +892,7 @@ export function installDevMock() {
     // them. It is in the mock because it is the entry with no pile of its own —
     // the panel has to show it or it is invisible and permanent at once.
     // The board reads `blockers` and `boardBlockers` beside the tasks
-    // (LOOP-BOARD B2). The real backend computes them in core/blockers.js from
+    // (DECISIONS.md D45). The real backend computes them in core/blockers.js from
     // the whole backlog; the mock STATES them, because the point of a fixture is
     // to show the shapes a person has to be able to read — a missing dependency,
     // a question, an unreadable file, a project with no reviewer.
@@ -1002,7 +1002,7 @@ export function installDevMock() {
       return { removed: removed.id, title: removed.title, status: removed.status };
     },
 
-    // --- The backlog chat (LOOP-BOARD E) ---
+    // --- The backlog chat (DECISIONS.md D45) ---
     // In-memory threads and a canned turn, so the drawer previews as itself:
     // a tool call rendered as one collapsed line, then an answer, then a task
     // the model queued shown as the card it became. There is no model here —

@@ -121,7 +121,7 @@ flow:
   - verify -> output
 `;
 
-test('parseFlow: the REFACTOR-PLAN example', () => {
+test('parseFlow: the FLOW_LANG.md example', () => {
   const flow = parseFlow(EXAMPLE);
   assert.equal(flow.id, 'default-pipeline');
   assert.equal(flow.name, 'Default pipeline');

@@ -1,4 +1,4 @@
-// MODES-COMPARE Phase 5 — comparison logic (T11/T12), pure over run snapshots so
+// DECISIONS.md D27 — comparison logic (T11/T12), pure over run snapshots so
 // it tests without a DOM (same split as nodeFeedData.js / runProgress.js).
 //
 // A comparison is two ORDINARY runs launched from one prompt and shown side by
@@ -94,7 +94,7 @@ export function judgeAlternatives(snapshots) {
   return alts.some(a => !a.text) ? null : alts;
 }
 
-// --- "What differed" header (CONFIGS-COMPARE P2) ------------------------------
+// --- "What differed" header (DECISIONS.md D27) ------------------------------
 //
 // Both runs carry their fully RESOLVED flow.json snapshot, so what actually
 // differed between two runs is computable after the fact — for any pair,

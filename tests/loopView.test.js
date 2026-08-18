@@ -1,4 +1,4 @@
-// The Loop view's projections (LOOP-PLAN §14).
+// The Loop view's projections (DESIGN-SPEC.md §8).
 //
 // Pure functions, tested without a renderer, for the same reason
 // nodeFeedData.js and runDocument.js are: every interesting decision in that

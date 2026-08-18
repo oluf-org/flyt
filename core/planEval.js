@@ -248,7 +248,7 @@ export function parseStitchDirectives(text) {
   return { fixTasks, errors };
 }
 
-// Follow-up triage (FOLLOWUP-PLAN FU3): one strict-JSON classification of the
+// Follow-up triage (DECISIONS.md D21): one strict-JSON classification of the
 // user's feedback on a finished run. Total: never throws, invalid content comes
 // back as { ok: false, errors } so the runner can degrade gracefully.
 //
@@ -302,7 +302,7 @@ export function parseTriage(text, extraTemplateIds = []) {
   };
 }
 
-// prompt-refiner questions (MODES-COMPARE T5). The refiner MAY end its brief
+// prompt-refiner questions (DECISIONS.md D27). The refiner MAY end its brief
 // with ONE ```json { "questions": [{ id, text, why }] } block — but only when
 // an ambiguity would materially change the deliverable. Total: no block, an
 // empty list, or malformed JSON all come back as null ("no questions —
@@ -316,7 +316,7 @@ export function parseRefineQuestions(text) {
 }
 
 // The question shape, shared by every role that may park the run at the input
-// gate (HOME-CONTEXT §4 — `orient` asks the same way `refine` does, and the cap
+// gate (DECISIONS.md D38 — `orient` asks the same way `refine` does, and the cap
 // is the same three, because every question costs the user a round-trip).
 // `text` accepts the synonym `question`; invalid entries are dropped rather
 // than failing the whole block.
@@ -338,7 +338,7 @@ export function normalizeQuestions(raw) {
 }
 
 // Prose without its trailing contract block — the `orient` twin of
-// stripRefineQuestions (D38 §3.3). The context file a person reads should not
+// stripRefineQuestions (D38). The context file a person reads should not
 // end in the JSON the machine reads.
 export function stripJsonBlock(text) {
   return String(text ?? '').replace(/\n*```(?:json)?\s*\{[\s\S]*?```\s*$/i, '').trimEnd();
@@ -351,7 +351,7 @@ export function stripRefineQuestions(text) {
   return String(text ?? '').replace(/\n*```(?:json)?\s*\{[\s\S]*?"questions"[\s\S]*?```\s*$/i, '').trimEnd();
 }
 
-// The fan-out lane plan (FANOUT P3.3): one strict-JSON roster, chosen from the
+// The fan-out lane plan (DECISIONS.md D37): one strict-JSON roster, chosen from the
 // FIXED preset enum. Total — never throws; invalid content comes back as
 // { ok: false, errors } so runFanout can re-ask once and then fall back to the
 // authored lanes (P3.7).
@@ -436,7 +436,7 @@ export function parseLanePlan(text, { presetIds = [], minLanes = 2, maxLanes = 6
   return { ok: true, errors: [], plan: { mission, subject, focus, ignore, lanes } };
 }
 
-// The orientation contract (HOME-CONTEXT §3.2 / D38): what the workspace we are
+// The orientation contract (DECISIONS.md D38): what the workspace we are
 // standing in IS, and what relationship it has to the repository we are about
 // to read. Prose first, then exactly one fenced JSON block.
 //
@@ -492,7 +492,7 @@ export function parseOrientation(text) {
   };
 }
 
-// feedback-review verdict (FOLLOWUP-PLAN FU6): closes every follow-up turn.
+// feedback-review verdict (DECISIONS.md D21): closes every follow-up turn.
 // null when the output carries no structured verdict. `more-work` may declare
 // additional node specs; invalid specs are dropped with their errors reported
 // (the runner escalates when more-work arrives with nothing materializable).

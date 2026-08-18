@@ -1,4 +1,4 @@
-// src/loopBoardData.js (LOOP-BOARD §D6): the board's projections.
+// src/loopBoardData.js (DECISIONS.md D45): the board's projections.
 //
 // The invariant the routing tests are really guarding: every task lands in
 // EXACTLY ONE column. A task in two is one you count twice; a task in none has

@@ -8,7 +8,7 @@ import React, { useEffect, useRef, useState } from 'react';
 // Chrome-style: tabs shrink to a floor, then the strip scrolls (CSS).
 export default function TabStrip({ tabs, activeId, live, saveState, onSelect, onClose, onReorder, onNewTab, onRename, onAdopt, onReveal }) {
   const dragId = useRef(null);
-  // Inline rename (LANDER-PLAN §6): double-click a tab's label to rename the
+  // Inline rename (DECISIONS.md D25): double-click a tab's label to rename the
   // project. Commit on Enter/blur, cancel on Esc; a blank name is ignored.
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState('');

@@ -186,7 +186,7 @@ const NAV = [
   { key: 'library', label: 'Library', hint: 'Node Library  (Ctrl+3)' },
   { key: 'models', label: 'Models', hint: 'Models  (Ctrl+4)' },
   { key: 'runs', label: 'Runs', hint: 'Runs  (Ctrl+5)' },
-  // The unattended half (LOOP-PLAN §14): the backlog, what the supervisor is
+  // The unattended half (DESIGN-SPEC.md §8): the backlog, what the supervisor is
   // doing with it, and what it has spent.
   { key: 'loop', label: 'Loop', hint: 'Loop  (Ctrl+6)' }
 ];
@@ -230,7 +230,7 @@ export default function App() {
   // the first snapshot lands.
   const [chatRunId, setChatRunId] = useState(null);
   const [chatSeed, setChatSeed] = useState('');
-  // COMPARE (MODES-COMPARE T11/T12): a compare launch fires two ordinary runs
+  // Comparison runs (DECISIONS.md D27): a compare launch fires two ordinary runs
   // from one prompt. `compareRunIds` = [a, b] takes over the home surface (the
   // split-view CompareRun) when set; `compareOn` is the composer's A/B toggle
   // and `compareB` slot B's flow+mode selection — both persisted per tab.
@@ -260,14 +260,14 @@ export default function App() {
   const [models, setModels] = useState([]);
   const [flowViewMode, setFlowViewMode] = useState('canvas'); // 'canvas' | 'yaml'
   const [pickerOpen, setPickerOpen] = useState(false); // the add-node panel over the canvas
-  // CONFIGS-COMPARE P1: the Configs panel (anchored at the modes chip) and the
+  // DECISIONS.md D27: the Configs panel (anchored at the modes chip) and the
   // Inspector's config edit target (null = editing the Flow, today's behavior).
   const [configsOpen, setConfigsOpen] = useState(false);
   const [configEditId, setConfigEditId] = useState(null);
   // Per-flow config summaries with diff badges (flow:listConfigs), for the
   // composer/compare pickers and the run panel's mode dropdown.
   const [configsByFlow, setConfigsByFlow] = useState({});
-  // CONFIGS-COMPARE P2: this project's comparison records (newest first — the
+  // DECISIONS.md D27: this project's comparison records (newest first — the
   // Runs list ⚖ badge and the reopen path read them) and the pending rematch
   // (a finished run about to be re-fired against a picked config).
   const [comparisons, setComparisons] = useState([]);
@@ -290,10 +290,10 @@ export default function App() {
 
   // Unified run entry (the run panel): workflow dropdown + user input.
   const [runFlowId, setRunFlowId] = useState('');
-  // MODES-COMPARE T4: the picked mode of the selected flow (null = default).
+  // DECISIONS.md D27: the picked mode of the selected flow (null = default).
   // Persisted per tab beside runFlowId; layered as a launch override at start.
   const [runModeId, setRunModeId] = useState(null);
-  // MODES-COMPARE T10: exposed run-input values, per flow: { flowId: { nodeId:
+  // DECISIONS.md D27: exposed run-input values, per flow: { flowId: { nodeId:
   // { field: value } } }. The current flow's bucket IS the override map sent at
   // start; last-used values persist per flow per tab.
   const [runInputs, setRunInputs] = useState({});
@@ -446,7 +446,7 @@ export default function App() {
   const refreshTemplates = useCallback(async () => {
     setTemplates(await window.flyt.listNodeTemplates());
   }, []);
-  // The tool library is files (TOOLS-PLAN §4.1), so what a node may be granted
+  // The tool library is files (DESIGN-SPEC.md §5), so what a node may be granted
   // is a snapshot, not a constant: install it before templates load, or a
   // grant naming a user-authored tool would be filtered out as unknown.
   const [tools, setTools] = useState([]);
@@ -455,7 +455,7 @@ export default function App() {
     setTools(list);
     setKnownTools(list.filter(t => t.enabled).map(t => t.id));
     // The records too, so a picker can offer only what a node type may hold
-    // (an aiStep: read-effect tools only — TOOLS-PLAN §6.4).
+    // (an aiStep: read-effect tools only — DESIGN-SPEC.md §5).
     setToolCatalog(list);
     return list;
   }, []);
@@ -470,16 +470,16 @@ export default function App() {
   // whether a key exists (drives the lander's no-key hint). Re-read when Settings
   // closes so adding a key clears the hint without a restart.
   const [hasKey, setHasKey] = useState(false);
-  // Claude-subscription usage notice (SUBSCRIPTION-AUTH-GUIDE): when runs can
+  // Claude-subscription usage notice (DESIGN-SPEC.md §6): when runs can
   // draw on the user's Claude plan, the lander says so next to the composer.
   const [claudeSubActive, setClaudeSubActive] = useState(false);
   const [activeModels, setActiveModels] = useState([]);
-  // BRICKS P0.2–P0.3: what the catalogs said each model costs and can read,
+  // DECISIONS.md D36: what the catalogs said each model costs and can read,
   // the named sets built from them, and which providers are connected. Every
   // model picker in the app reads these through ModelMetaProvider rather than
   // taking four more props at six call sites.
   const [modelMeta, setModelMeta] = useState({ modelFacts: {}, modelSets: {}, providers: {}, providerPriority: null, catalog: [] });
-  // Tool-call approval (APPROVAL-MODES §3). The saved default seeds the chip;
+  // Tool-call approval (DESIGN-SPEC.md §5). The saved default seeds the chip;
   // changing it in the chatbox saves it back, so the picker beside Run and the
   // Settings control are two views of one value — with the per-run capture
   // happening main-side at start, from whatever the chip shows at that moment.
@@ -931,7 +931,7 @@ export default function App() {
     if (payload) setTabs(payload.tabs);
   };
 
-  // Rename a project from the tab strip (LANDER-PLAN §6). Display-name only —
+  // Rename a project from the tab strip (DECISIONS.md D25). Display-name only —
   // the appdata directory keeps its creation slug, so run paths and the tab id
   // never churn. Main persists the override so it survives restarts (T17).
   const renameTab = async (id, name) => {
@@ -1280,7 +1280,7 @@ export default function App() {
     });
   };
 
-  // --- Configs (CONFIGS-COMPARE P1) ------------------------------------------
+  // --- Configs (DECISIONS.md D27) ------------------------------------------
   // A config IS a mode in the open flow's modes: block. Panel edits ride the
   // same changeFlow path as canvas edits — undoable, debounce-autosaved,
   // re-linted — so the Configs panel and the YAML editor stay two views of the
@@ -1461,7 +1461,7 @@ export default function App() {
     });
   }, [runFlowId]);
 
-  // The launch payload (MODES-COMPARE): a picked mode + exposed run-input
+  // The launch payload (DECISIONS.md D27): a picked mode + exposed run-input
   // overrides. Null when neither is set — an ordinary default run. Shared by the
   // single-run path and each compare slot.
   const launchForSelection = (modeId, overrides = null) => {
@@ -1515,7 +1515,7 @@ export default function App() {
     }
   };
 
-  // The lander's front door (LANDER-PLAN.md §5): the composer text becomes the
+  // The lander's front door (DECISIONS.md D25): the composer text becomes the
   // run's User Input on the currently-selected workflow. CHAT-RUN: the view no
   // longer hands off to the Runs section — home becomes the chat surface and
   // the flow unfolds below the message. activeRunId still points at the run so
@@ -1714,7 +1714,7 @@ export default function App() {
     }
   }, [chatRunId]);
 
-  // Answer a run parked at the refiner's awaiting_input gate (MODES-COMPARE T6):
+  // Answer a run parked at the refiner's awaiting_input gate (DECISIONS.md D27):
   // a distinct IPC from follow-up — it closes the in-flight question and re-runs
   // the refine node, rather than opening a new turn.
   const chatAnswerInput = useCallback(async text => {
@@ -2208,7 +2208,7 @@ export default function App() {
                   <button className="ghost mini" onClick={duplicateFlow} title="Duplicate this workflow">Duplicate</button>
                 </>
               )}
-              {/* Configs (CONFIGS-COMPARE P1): the modes chip toggles the
+              {/* Configs (DECISIONS.md D27): the modes chip toggles the
                   Configs panel — one card per config with its diff-against-
                   Default badges. YAML editing stays fully supported (the
                   panel and the YAML are two views of the same modes: block). */}
@@ -2463,7 +2463,7 @@ export default function App() {
             >
               {flowsList.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
-            {/* Mode picker (MODES-COMPARE T4): only when the selected flow ships
+            {/* Mode picker (DECISIONS.md D27): only when the selected flow ships
                 modes. "Default" runs the flow's stored configuration. P1: each
                 option carries its diff-against-Default badges as a tooltip. */}
             {(flowsList.find(f => f.id === runFlowId)?.modes?.length > 0) && (
@@ -2487,7 +2487,7 @@ export default function App() {
                 })}
               </select>
             )}
-            {/* Exposed run inputs (MODES-COMPARE T10). */}
+            {/* Exposed run inputs (DECISIONS.md D27). */}
             <LaunchInputs
               inputs={launchInputSpec}
               values={runInputs[runFlowId]}

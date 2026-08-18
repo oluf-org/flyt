@@ -1,4 +1,4 @@
-// core/blockers.js (LOOP-BOARD §B): why a task is not moving, as one sentence
+// core/blockers.js (DECISIONS.md D45): why a task is not moving, as one sentence
 // with a remedy where one exists.
 //
 // One case per kind, because the taxonomy IS the deliverable — a kind with no

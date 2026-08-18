@@ -110,7 +110,7 @@ export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace, docVie
       <button className="ghost mini" onClick={onOpenFolder} title="Open this run's folder — every artifact as plain files">
         Open run folder
       </button>
-      {/* Save as config (CONFIGS-COMPARE P1): a finished run that ran with a
+      {/* Save as config (DECISIONS.md D27): a finished run that ran with a
           launch configuration can promote it to a named config on its flow —
           tweak at launch → it works → one click makes it named & comparable. */}
       {onSaveConfig
@@ -124,7 +124,7 @@ export default function RunBar({ snapshot, onOpenFolder, onOpenWorkspace, docVie
           Save as config
         </button>
       )}
-      {/* Rematch (CONFIGS-COMPARE P2): re-fire this run's prompt against a
+      {/* Rematch (DECISIONS.md D27): re-fire this run's prompt against a
           different config of the same flow and open the two side by side. */}
       {onRematch && isTerminal(snapshot.meta?.stage) && snapshot.meta?.flowId && (
         <button

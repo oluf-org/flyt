@@ -1,6 +1,6 @@
 // read_tool_result: pull more of an earlier tool result back into context —
 // all of it, or one narrowed slice — without re-running the call
-// (TOOLS-PLAN §13).
+// (DESIGN-SPEC.md §5).
 //
 // Every call writes runs/<id>/tools/<seq>-<tool>.json and the model gets a
 // bounded preview plus a handle ("@tool:14"). This is how the handle is

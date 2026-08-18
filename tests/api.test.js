@@ -1,4 +1,4 @@
-// The command surface and its HTTP front door (LOOP-PLAN §4.2, §13).
+// The command surface and its HTTP front door (DESIGN-SPEC.md §8).
 //
 // The point of these is that the CLI, the server and the renderer reach ONE
 // implementation. So they exercise the map directly, then over HTTP, and assert
@@ -223,7 +223,7 @@ test('the event stream carries engine events to an attached client', async () =>
   });
 });
 
-// --- the benchmark and the archive (LOOP-PLAN §12.1) -----------------------
+// --- the benchmark and the archive (DESIGN-SPEC.md §8) -----------------------
 
 test('the score and the archive are reachable from the same map', async () => {
   const { api, engine, dataRoot } = makeApi();

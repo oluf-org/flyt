@@ -115,7 +115,7 @@ These are **example / standard nodes**. They are the reference set that AI shoul
 
 They appear in the editor's ＋ Add node picker (via `TYPE_META`) and have first-class support in the inspector.
 
-> **Library templates vs. engine types.** Nodes 1–6 below are **Node Library templates** (`nodes/<id>.json` — the nine seeded templates). `orchestrator` (§7), along with `input` and `output`, are **engine/DSL node *types*, not Node Library templates**: they are built-in structural nodes added from the picker directly, not instantiated from the library. See `PRODUCT-SPEC.md` §5.
+> **Library templates vs. engine types.** Template nodes are stored in `nodes/<id>.json`. `orchestrator`, along with `input`, `output`, `fanout`, `loop`, and sub-flow call sites, are structural engine/DSL nodes added directly rather than instantiated from the library. See `DESIGN-SPEC.md` §3.
 
 ### 1. Start / Plan-Start Node
 
@@ -340,7 +340,7 @@ call" was protecting. The planner may put three architecture readers on a repo
 when architecture is what was asked for; it may not invent a fourth kind of
 reader.
 
-**Divergence is the point (D36 B6).** Each lane's assembled prompt carries the
+**Divergence is the point (D36).** Each lane's assembled prompt carries the
 shared goal, its own lane instructions, and the **labels + one-line intents of
 its siblings**, plus the instruction to surface at least one finding no other
 lane is positioned to reach. "Find something the others will not" is only
@@ -385,7 +385,7 @@ it logs `fanout_plan_failed`, runs the **authored** lanes, and says so in
 `.brief.md`.
 
 Lanes inherit the fan-out's `toolCeiling` exactly as generated children inherit
-an orchestrator's (§6.3), never pause at approval gates, and are stamped with
+an orchestrator's (`DESIGN-SPEC.md` §5), never pause at approval gates, and are stamped with
 `laneId` (plus `lanePreset`) so a resumed run matches children back to their
 lanes and never re-plans. The peek's grant is the *intersection* of the node's
 own read-only tools with `read_file` / `search_references` / `glob`, capped at
@@ -431,7 +431,7 @@ canonically `type: subflow`) · icon `⧉`
 addressable as `<call>.<inner-node-id>`. The primary output is the sub-flow's
 result.
 
-**Behavior:** an **inline splice**, not a nested run (D36 B1). At run start the
+**Behavior:** an **inline splice**, not a nested run (D36). At run start the
 referenced flow is resolved and its nodes are spliced into the run graph as
 children of the call site, ids namespaced `<callId>__<innerId>`. There is one
 run folder, one snapshot and one canvas; gates, resume, the scheduler and the
@@ -443,14 +443,14 @@ The inner `input` node is not spliced: its consumers are re-sourced to the call
 site's own sources, so upstream context reaches them normally rather than
 through a placeholder with no output. The inner `output` node IS the call site.
 
-**Gates inside a sub-flow pause the run** (Q-B1, resolved). An orchestrator or
+**Gates inside a sub-flow pause the run** (D36). An orchestrator or
 fan-out forces its children autonomous because a MODEL invented them; a
 sub-flow's nodes were authored by a human who put that gate there on purpose,
 so `requiresApproval` survives the splice. With an inline splice there is one
 run, so there is nothing separate to park into — and the runner already knows
 whether anyone is watching, via the run's `approvalMode`.
 
-**Parameterisation (B4):** `mode:` picks one of the referenced flow's saved
+**Parameterisation (D27/D36):** `mode:` picks one of the referenced flow's saved
 configs, `overrides:` tweaks its inner nodes ad hoc. No new concept — a mode is
 already "a per-node override map applied at a point in time" (D27), and a call
 site is just another such point.
@@ -460,7 +460,7 @@ every container) run at lint time and again at run start. A run whose splice
 would exceed 400 nodes fails at start with a clear error rather than degrading
 the canvas silently.
 
-**Versioning honesty (P3.7):** a sub-flow is referenced by id and resolved at
+**Versioning honesty (D36):** a sub-flow is referenced by id and resolved at
 run start — editing the inner flow changes every caller. That is intended (a
 brick you improve improves everywhere) and a real hazard, so the run snapshot
 records the spliced graph verbatim. Pinning by version is deliberately not
@@ -474,8 +474,8 @@ built; revisit if it bites.
 
 **Output ports:** `tasks` — a strict fenced JSON array of backlog task records.
 
-**Behavior:** turns analysis into QUEUED WORK. Prose rationale first, then ONE
-```json block matching `core/backlog.js` field-for-field:
+**Behavior:** turns analysis into QUEUED WORK. Prose rationale first, then one
+fenced JSON block matching `core/backlog.js` field-for-field:
 
 ```json
 [{ "title": "...", "goal": "...", "doneWhen": ["..."], "value": 1-5,
@@ -512,7 +512,7 @@ relation is `empty`, name the files the task will CREATE and say so.
 **Behavior:** the doorway into the loop D35 already built. It adds **no**
 autonomy — every decision, edit and merge belongs to the supervisor, with its
 budget ceilings, gates, heartbeats and canary. This node enqueues via
-`Backlog.add` (never by writing files — §5.2's rule about the canonical
+`Backlog.add` (never by writing files — `DESIGN-SPEC.md` §8's rule about the canonical
 directory outside every worktree), starts or JOINS the project's supervisor
 (one queue, one picker: two over one backlog would race), and waits.
 
@@ -522,11 +522,11 @@ waiting and marks it as a gate; a **failed** task is reported, not fatal.
 The report is rewritten on every change, not only at the end, so a run that
 waits three days says what it is waiting for the whole time.
 
-**State is files (B12).** `runs/<id>/loop/<nodeId>.json` holds the queued ids
+**State is files (D36).** `runs/<id>/loop/<nodeId>.json` holds the queued ids
 and the policy; the rest is re-derived from the backlog. After an app restart
 the run reattaches by reading them — nothing is re-enqueued, nothing re-run.
 
-**Budget (P4.6, Q-B4 answered):** one ledger is enough. `budgetUsd` rides on
+**Budget (D35/D36):** one ledger is enough. `budgetUsd` rides on
 the tasks this node enqueues, so the existing three ceilings — per task,
 rolling window, project — apply unchanged. A separate worktree budget would be
 a fourth ceiling that agrees with the other three until the day it does not.
@@ -654,7 +654,7 @@ the rest of the flow executes, so the planner/work nodes never see the original
 loose prompt. **Auxiliary port `questions`:** clarifying questions, present only
 when an ambiguity would *materially* change the deliverable.
 
-**Behavior (MODES-COMPARE T5/T6):** the refiner resolves ordinary ambiguity
+**Behavior (D27):** the refiner resolves ordinary ambiguity
 itself by stating an assumption inline and proceeding. It asks a question only
 when it cannot responsibly pick for the user — and when it does, it ends its
 brief with ONE fenced JSON block:
@@ -891,34 +891,15 @@ All the above node kinds support `data.requiresApproval`. Evaluation nodes that 
 
 ---
 
-## Current Implementation Status (updated 2026-07-14)
+## Implementation sources
 
-- **This catalog now lives in the Node Library** (`nodes/<id>.json`, managed on
-  the Nodes page, seeded from `src/flowTypes.js` `SEED_NODE_TEMPLATES`).
-  Workflow nodes are template instances (`templateId` + per-workflow
-  `overrides`); `resolveFlow()` merges them at edit/run time. Plan-eval may
-  reference any library template id in addition to the built-in names above.
-- Strict contracts + parsers: `core/planEval.js` (plan-eval, step-eval verdict, stitch fixTasks)
-- Runner: dynamic topological walk with real materialization (library
-  templates preferred), minimal-context resolution, honest aiStep failure
-  handling, bounded step-eval retry / escalation, and stitch fix tasks via
-  `create_task`: `core/flowRunner.js`
-- Editor support: instance/override inspector in `src/Inspector.jsx` + library palette in `App.jsx`
-- Mock outputs that exercise the pattern (incl. structured verdicts): `core/adapters/mock.js`
-- Shipped flow: `flows/default-pipeline.flow.yaml` (the classic pipeline as library nodes)
+- `nodes/*.json` — shipped template records
+- `src/flowTypes.js` — template resolution and renderer metadata
+- `core/planEval.js` — structured contract parsers
+- `core/flowRunner.js` — execution and materialization
+- `FLOW_LANG.md` — structural node syntax and lint rules
 
-See the code and run a flow using these roles/templates to observe the produced artifacts.
-
----
-
-## Future Evolution
-
-- True parallel scheduling for declared groups.
-- Richer template parameters.
-- More categories and templates as real usage reveals needs.
-- Optional streaming of partial results from long eval nodes.
-
-All changes must preserve the file contract and the inspectability guarantees.
+Treat the files above as the implementation when this prose and code differ. Update this contract in the same change that alters a role, port, or structured output.
 
 ---
 

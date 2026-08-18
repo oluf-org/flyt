@@ -1,4 +1,4 @@
-// Deriving a project name from the first prompt (LANDER-PLAN.md L5, Q-L4).
+// Deriving a project name from the first prompt (DECISIONS.md D25, Q-L4).
 // When a run starts from the projectless lander, the app auto-creates a project
 // named from what the user typed — no folder picker, no naming dialog. The
 // heuristic is a cheap synchronous slug so it never delays the run; an

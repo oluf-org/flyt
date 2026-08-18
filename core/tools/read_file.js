@@ -41,7 +41,7 @@ export default {
     }
   },
   run(args, ctx) {
-    // The reference library (LOOP-PLAN §16.1): a second, read-only root beside
+    // The reference library (DESIGN-SPEC.md §8): a second, read-only root beside
     // the workspace. It is a separate path rather than a mounted directory
     // precisely so no write tool can reach it — none of them know the prefix,
     // and there is no write path in ReferenceLibrary to reach if they did.
@@ -51,7 +51,7 @@ export default {
       const content = ctx.references.read(args.path, { offset });
       if (content == null) throw new Error(`Reference "${args.path}" not found. Use search_references to find a path.`);
       // Which reference this actually is. The workspace read below has been
-      // audited against the run's subject since HOME-CONTEXT P1; reading a
+      // audited against the run's subject since DECISIONS.md D38; reading a
       // DIFFERENT reference was not, and the library holds other people's
       // repositories. Watched a lane read one for its entire life and report
       // confident findings about it under a brief naming another.
@@ -76,7 +76,7 @@ export default {
     }
     const host = fileHost(ctx);
     // A node pointed at a subject repository just read a path out of THIS
-    // project instead (HOME-CONTEXT §0.1). Not blocked — comparing the subject
+    // project instead (DECISIONS.md D38). Not blocked — comparing the subject
     // against home is legitimate, and a lane may do it on purpose — but it is
     // one plausible tool call away from a confident finding about the wrong
     // repository, so it must not be invisible in the run log.

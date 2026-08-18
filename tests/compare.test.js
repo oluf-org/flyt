@@ -1,4 +1,4 @@
-// MODES-COMPARE Phase 5 — comparison logic (T11/T12). Pure over run snapshots:
+// DECISIONS.md D27 — comparison logic (T11/T12). Pure over run snapshots:
 // pane state, composer channels, broadcast targets, the pair record shape, and
 // judge prep. The React split-view (CompareRun.jsx) is a thin view over this.
 import test from 'node:test';
@@ -132,7 +132,7 @@ test('judgeAlternatives needs both answers, then labels them A/B', () => {
   assert.equal(judgeAlternatives([a, snap('b', 'execution')]), null);
 });
 
-// --- diffResolvedFlows (CONFIGS-COMPARE P2) -----------------------------------
+// --- diffResolvedFlows (DECISIONS.md D27) -----------------------------------
 // The "what differed" header is computed from the two runs' RESOLVED flow.json
 // snapshots, so it stays accurate no matter how the live flow changed since.
 

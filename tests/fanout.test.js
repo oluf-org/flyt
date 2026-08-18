@@ -1,4 +1,4 @@
-// Fan-out lanes (BRICKS P2 / D36 B5–B6): lane normalization and the
+// Fan-out lanes (DECISIONS.md D36): lane normalization and the
 // cross-lane brief as pure functions, then the node end to end — lanes
 // materialized inside the box, run in parallel, aggregated per lane, with
 // each lane told who its siblings are and none of them told what the others
@@ -45,7 +45,7 @@ test('a lane with no id gets one from its label, then its preset, then its posit
   assert.equal(normalizeLane({}, 3).id, 'lane-4');
 });
 
-// --- the two prompt layers (FANOUT P1) --------------------------------------
+// --- the two prompt layers (DECISIONS.md D37) --------------------------------------
 
 test('a preset carries a role prompt as well as instructions, and they compose preset-first', () => {
   const lane = normalizeLane({ preset: 'architecture', system: 'Also name the build system.' });
@@ -119,7 +119,7 @@ test('the preamble is prepended to every lane, and does not replace the preset',
   assert.equal(lanes[1].system, 'PREAMBLE-MARKER', 'a lane with no role prompt still gets the mission');
 });
 
-// --- staffing the roster (FANOUT P2) ----------------------------------------
+// --- staffing the roster (DECISIONS.md D37) ----------------------------------------
 
 const POOL = ['m/one', 'm/two', 'm/three'];
 
@@ -472,7 +472,7 @@ test("lanes inherit the fan-out's tool grant when they declare none", async () =
 
 test('a granted aiStep actually reaches its tools', async () => {
   // Regression: trackedRunAgent spread the worker flat while runAgent expects
-  // it nested, so an aiStep with a read-only grant (TOOLS-PLAN 6.4) called
+  // it nested, so an aiStep with a read-only grant (DESIGN-SPEC.md §5) called
   // provider `undefined` and failed the node. Nothing exercised it until
   // fan-out lanes began inheriting a grant.
   const store = makeStore();
@@ -494,7 +494,7 @@ test('a granted aiStep actually reaches its tools', async () => {
   assert.equal(sawTools, true, 'the grant reached the model call');
 });
 
-// --- the lane planner, end to end (FANOUT P3 / D37) -------------------------
+// --- the lane planner, end to end (DECISIONS.md D37) -------------------------------
 //
 // The property under test throughout: the planner may CHOOSE and DUPLICATE
 // presets, and nothing it says may change what a preset IS, or let two lanes of

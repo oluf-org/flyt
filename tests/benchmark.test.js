@@ -1,4 +1,4 @@
-// The benchmark (LOOP-PLAN §12.1).
+// The benchmark (DESIGN-SPEC.md §8).
 //
 // What is under test is whether the SCORE can be trusted, which is a different
 // question from whether the loop works. Three properties carry that:

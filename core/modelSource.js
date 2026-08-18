@@ -1,4 +1,4 @@
-// Multi-provider settings model + model-source resolution (PROVIDERS-PLAN
+// Multi-provider settings model + model-source resolution (DESIGN-SPEC.md §6
 // §1–§2). Pure functions, no Electron imports — the main process wires them to
 // settings.json and the adapter registry, and the unit tests exercise them
 // directly.
@@ -10,7 +10,7 @@
 //   activeModels:    [{ id, source: 'auto' | providerId, enabled: bool, pinned: bool }]
 //   workers:         { executor: { provider, model } }   (unchanged)
 
-// Subscription providers (SUBSCRIPTION-AUTH-GUIDE): connected not by a saved
+// Subscription providers (DESIGN-SPEC.md §6): connected not by a saved
 // key but by the vendor CLI's own sign-in (Claude Code / Codex CLI), gated
 // behind an explicit opt-in in Settings. They sit right after their API-key
 // sibling in the default priority: a saved key wins, the subscription is the
@@ -31,7 +31,7 @@ export const DEFAULT_PINNED_MODELS = [
   { id: 'deepseek/deepseek-v4-pro', source: 'auto', enabled: true, pinned: true }
 ];
 
-// Curated per-provider model lists (PROVIDERS-PLAN §4): anthropic/openai/kimi
+// Curated per-provider model lists (DESIGN-SPEC.md §6): anthropic/openai/kimi
 // model endpoints are inconsistent, so a short static list + the free-text
 // field covers it. OpenRouter keeps its live catalog fetch. `keyKind` on a
 // Kimi entry marks which endpoint the id is valid on.
@@ -68,7 +68,7 @@ export const CURATED_MODELS = {
 };
 
 // One cheap model per provider for the Settings "Test" button: proves the key
-// works in Settings rather than three nodes into a run (PROVIDERS-PLAN §4).
+// works in Settings rather than three nodes into a run (DESIGN-SPEC.md §6).
 export const TEST_MODELS = {
   anthropic: 'claude-haiku-4-5',
   'claude-code': 'claude-haiku-4-5',
@@ -81,7 +81,7 @@ export const TEST_MODELS = {
 
 // Load-time normalization + migration. The legacy single `openrouterApiKey`
 // field moves into providers.openrouter.apiKey once and is deleted
-// (PROVIDERS-PLAN §1). Missing collections get their defaults; unknown entries
+// (DESIGN-SPEC.md §6). Missing collections get their defaults; unknown entries
 // are dropped rather than carried.
 export function migrateSettings(raw) {
   const s = { ...(raw ?? {}) };
@@ -133,11 +133,11 @@ export function migrateSettings(raw) {
   }
   s.subscriptions = subs;
 
-  // BRICKS P0.2–P0.3: catalog facts learned at fetch time, and named model
+  // DECISIONS.md D36: catalog facts learned at fetch time, and named model
   // sets. Both are additive — settings written before D36 simply have none.
   s.modelFacts = normalizeModelFacts(s.modelFacts);
   s.modelSets = normalizeModelSets(s.modelSets);
-  // The loop's band→model map (LOOP-PLAN §8). Normalized here so a hand-edited
+  // The loop's band→model map (DESIGN-SPEC.md §8). Normalized here so a hand-edited
   // settings.json cannot put a non-string, an empty id, or a band that is not a
   // band into the one structure the supervisor reads per attempt.
   s.loopModels = normalizeLoopModels(s.loopModels);
@@ -155,7 +155,7 @@ export function normalizeLoopModels(raw) {
   return out;
 }
 
-// --- Model facts (BRICKS P0.2) ----------------------------------------------
+// --- Model facts (DECISIONS.md D36) ----------------------------------------------
 // The OpenRouter catalog already answers "what does this cost, how much can it
 // read, can it call tools" — the app used to render those into a <datalist>
 // and throw them away. Picking a model for a lane is a cost decision, so the
@@ -227,7 +227,7 @@ export function normalizeModelFacts(raw) {
   return out;
 }
 
-// --- Model sets (BRICKS P0.3 / D36 B13) -------------------------------------
+// --- Model sets (DECISIONS.md D36) -------------------------------------
 // A named, reusable list of model ids: one thing to pick in a fan-out, a mode
 // or a comparison, instead of N pickers. Shape:
 //   modelSets: { <setId>: { name, models: [id, ...] } }
@@ -268,11 +268,11 @@ export function resolveModelSet(modelSets, setId, activeModels = []) {
   return set.models.filter(id => usable.has(id));
 }
 
-// --- Starter set (BRICKS P0.1) ----------------------------------------------
+// --- Starter set (DECISIONS.md D36) ----------------------------------------------
 // The four models a first-time user needs before the app can do anything
 // interesting: something cheap to iterate with, something strong to reason
 // with, something with room to read a whole repo, and one that is none of
-// those — the wildcard the fan-out lanes exist for (D36 B5/B6).
+// those — the wildcard the fan-out lanes exist for (D36/B6).
 export const STARTER_ROLES = [
   { id: 'fast', label: 'Fast & cheap', hint: 'drafts, routing, cheap iterations' },
   { id: 'reasoner', label: 'Strong reasoner', hint: 'planning, hard analysis, judging' },
@@ -349,7 +349,7 @@ export function proposeStarterSet(catalog = []) {
   return picks;
 }
 
-// The resolution rule (PROVIDERS-PLAN §2), as a closure over the live
+// The resolution rule (DESIGN-SPEC.md §6), as a closure over the live
 // settings. A pinned source with a key wins; otherwise walk the priority list,
 // skipping providers with no key and providers that can't serve the id, and
 // take the first hit. No match fails fast with a settings-pointing error, in

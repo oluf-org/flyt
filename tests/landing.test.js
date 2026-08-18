@@ -1,4 +1,4 @@
-// Isolation, gates and landing (LOOP-PLAN §6, §7).
+// Isolation, gates and landing (DESIGN-SPEC.md §8).
 //
 // These run against REAL git repositories in a temp dir, because the thing
 // being tested is whether a commit ends up on the base branch or not, and a

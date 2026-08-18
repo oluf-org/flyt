@@ -1,5 +1,5 @@
 // Unit tests for the subscription (CLI-delegation) providers
-// (SUBSCRIPTION-AUTH-GUIDE): the pure parts of the two adapters — argv
+// (DESIGN-SPEC.md §6): the pure parts of the two adapters — argv
 // construction, stream-JSON reduction, credential detection, executable
 // resolution — plus their integration into the provider registry, the
 // priority walk, the default-worker tables, and the safety-model pick.

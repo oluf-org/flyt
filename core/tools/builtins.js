@@ -1,7 +1,7 @@
 // The built-in tools: the modules whose run() lives in source, and the seed
 // definitions the ToolStore writes to tools/<id>.json on first launch.
 //
-// Built-ins are files too (TOOLS-PLAN §4.1) — seeded exactly as
+// Built-ins are files too (DESIGN-SPEC.md §5) — seeded exactly as
 // SEED_NODE_TEMPLATES seeds nodes/. They are read-only in the UI (you may
 // disable one, or clone it to edit): the run() lives here, so an editable
 // definition would lie about what executes. The module is therefore the source
@@ -17,7 +17,7 @@ import searchReferences from './search_references.js';
 import writeTaskMd from './write_task_md.js';
 import readToolResult from './read_tool_result.js';
 import glob from './glob.js';
-// LOOP-BOARD Phase A: what an agent needs to build this app from inside it —
+// DECISIONS.md D45: what an agent needs to build this app from inside it —
 // a surgical edit, the project's own gates, the queue it lives in, the run that
 // failed last time, the network, and a way to ask instead of guessing.
 import editFile from './edit_file.js';
@@ -53,7 +53,7 @@ export const builtinDefinition = tool => ({
   source: { kind: 'builtin', importedFrom: null, importedAt: null },
   // A built-in is trusted BY DEFAULT because its run() is in this source tree —
   // but a built-in whose RESULTS come from outside it (web_fetch) says so, and
-  // the tier follows the content, not the code (TOOLS-PLAN §12.2).
+  // the tier follows the content, not the code (DESIGN-SPEC.md §5).
   trust: tool.trust ?? 'trusted',
   parameters: tool.parameters,
   keywords: tool.keywords ?? [],

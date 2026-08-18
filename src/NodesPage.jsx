@@ -24,7 +24,7 @@ export default function NodesPage({ templates, tools = [], selectedId, models, a
   // What this template may be granted, from the tool library (tools/<id>.json)
   // — falling back to the shipped built-ins before the first IPC round trip.
   // An AI step gets read-effect tools only: anything else is dropped at run
-  // time (TOOLS-PLAN §6.4), so offering it here would be a lie.
+  // time (DESIGN-SPEC.md §5), so offering it here would be a lie.
   const grantable = tools
     .filter(t => t.enabled && (draft?.baseType === 'agentTask' || (t.effects ?? []).every(e => e === 'read')))
     .map(t => t.id);

@@ -27,7 +27,7 @@ export default function RunsList({ runs, activeRunId, onOpen, onRename, onDelete
   const inputRef = useRef(null);
   const cancelled = useRef(false);
 
-  // CONFIGS-COMPARE P2 — manual select-compare: tick any two runs (even from
+  // DECISIONS.md D27 — manual select-compare: tick any two runs (even from
   // different prompts — inspection is still useful) and open them side by side.
   // Selection is capped at two; picking a third drops the oldest.
   const [selectMode, setSelectMode] = useState(false);

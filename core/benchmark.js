@@ -1,4 +1,4 @@
-// The benchmark (LOOP-PLAN §12.1).
+// The benchmark (DESIGN-SPEC.md §8).
 //
 // Without this file, "improve yourself" degrades into churn that cannot be
 // distinguished from progress. The loop already reports what it did — tasks

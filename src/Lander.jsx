@@ -1,4 +1,4 @@
-// The lander — the chat-first home of every project tab (LANDER-PLAN.md).
+// The lander — the chat-first home of every project tab (DECISIONS.md D25).
 // A chat window you already know how to use: a greeting, an autofocused
 // composer, Enter to run. The differentiators (workflows, the canvas, the
 // unfold) are revealed by later phases, never front-loaded here.
@@ -7,7 +7,7 @@
 // the selection persists per tab (App's run-flow state, carried in the tab
 // bundle), and a first-launch line points to Settings when no key is configured.
 //
-// Phase 5 resolved the open questions (LANDER-PLAN §6):
+// Phase 5 resolved the open questions (DECISIONS.md D25):
 //   Q-L1 — the rail stays visible on the lander (hiding chrome on the home page
 //          would make the other sections feel like a different app).
 //   Q-L2 — a purpose-built picker (there was no existing dropdown component).
@@ -18,7 +18,7 @@
 // the chip); the constellation is aria-hidden; focus order is composer → chip →
 // run → recents.
 //
-// MODES-COMPARE T11 adds the Compare toggle: the workflow chip splits into two
+// DECISIONS.md D27 adds the Compare toggle: the workflow chip splits into two
 // slots (A / B), each an independent flow+mode selection, and one prompt fires
 // two runs shown side by side. The picker is extracted to WorkflowPicker so a
 // slot and the single-run chip share exactly one keyboard-correct listbox.
@@ -33,7 +33,7 @@ import LaunchInputs from './LaunchInputs.jsx';
 // One workflow chip + its listbox popover. Owns only its open/close and roving
 // focus; the selection and the pick handler come from the parent, so a slot and
 // the single-run chip are the same control with different wiring.
-// `configs` (CONFIGS-COMPARE P1) is flow:listConfigs output keyed by flow id —
+// `configs` (DECISIONS.md D27) is flow:listConfigs output keyed by flow id —
 // each config's diff-against-Default badges render under its name, so
 // "Low · Fable vs Low · GPT-5" is scannable instead of a flat list of names.
 function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef, configs = {}, flowsOnly = false }) {
@@ -325,7 +325,7 @@ export default function Lander({
           </div>
         )}
 
-        {/* Claude-subscription notice (SUBSCRIPTION-AUTH-GUIDE): the user
+        {/* Claude-subscription notice (DESIGN-SPEC.md §6): the user
             opted in, but each run should still say where its usage lands. */}
         {claudeSubActive && (
           <div className="lander-hint lander-hint-warn">

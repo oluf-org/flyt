@@ -1,4 +1,4 @@
-// search_references: find how someone else already solved this (LOOP-PLAN §16).
+// search_references: find how someone else already solved this (DESIGN-SPEC.md §8).
 //
 // The reference library is a set of read-only clones of repositories that
 // solved problems this harness keeps hitting — a headless server/client split,
@@ -67,7 +67,7 @@ export default {
         + 'Run `flyt ref update` to clone it, or proceed without prior art.');
     }
     // The library is shared and pinned, so an unscoped search over it is a
-    // search of OTHER people's repositories too (HOME-CONTEXT §0.2): a lane
+    // search of OTHER people's repositories too (DECISIONS.md D38): a lane
     // reading repo X matches a line in `opencode`, reads it, and cites it as a
     // finding about X. When this run was handed a subject, that is the default
     // scope; "*" is how you opt out, deliberately and visibly.

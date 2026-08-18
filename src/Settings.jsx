@@ -6,7 +6,7 @@ import { FactChips } from './ModelPicker.jsx';
 import { proposeStarterSet, modelSetId, MODEL_SET_MAX } from '../core/modelSource.js';
 import ReposPanel from './ReposPanel.jsx';
 
-// Settings page (PROVIDERS-PLAN §5): two tabs behind a slim rail.
+// Settings page (DESIGN-SPEC.md §6): two tabs behind a slim rail.
 //   Providers — five compact cards (keys, test, Kimi key-kind), overview-first:
 //               a collapsed card is one line — name, status pill, model count.
 //   Models    — provider-priority chips, the curated active-models list with
@@ -287,7 +287,7 @@ function ProvidersTab({ s, save, onKeySaved }) {
   );
 }
 
-// --- Subscription provider card (SUBSCRIPTION-AUTH-GUIDE) -------------------
+// --- Subscription provider card (DESIGN-SPEC.md §6) -------------------
 // The vendor CLI is the authentication authority: this card never takes a
 // key. It shows sign-in state, carries the usage warning, and gates the
 // provider behind an explicit enable toggle. Advanced: a credential-home
@@ -761,7 +761,7 @@ function ModelsTab({ s, save }) {
   );
 }
 
-// --- Starter set (BRICKS P0.1) ----------------------------------------------
+// --- Starter set (DECISIONS.md D36) ----------------------------------------------
 // A key on its own does nothing. This proposes four models covering the four
 // roles the app actually needs — cheap, strong, long-context, wildcard — and
 // activates them in one click. It disappears once anything is active; it is
@@ -812,7 +812,7 @@ function StarterSetSection({ catalog, active, fetching, anyProvider, onActivate 
   );
 }
 
-// --- Model sets (BRICKS P0.3 / D36 B13) -------------------------------------
+// --- Model sets (DECISIONS.md D36) -------------------------------------
 // A named list of active models: one thing to pick in a fan-out, a mode, or a
 // comparison, instead of N pickers. Prerequisite for lanes (P2) being pleasant
 // to author, and useful on its own as a filter in every model picker.
@@ -902,7 +902,7 @@ function ModelSetsSection({ sets, active, facts, save }) {
   );
 }
 
-// --- Judge model (CONFIGS-COMPARE P3) ---------------------------------------
+// --- Judge model (DECISIONS.md D27) ---------------------------------------
 // Which model judges two runs side by side. Unset = the default worker (the
 // same fallback triage uses); any active model can be pinned instead, and a
 // free-text id covers everything else — it resolves at call time, exactly

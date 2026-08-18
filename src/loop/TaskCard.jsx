@@ -4,7 +4,7 @@ import { allowedMoves } from '../loopBoardData.js';
 import BlockerNote from './BlockerNote.jsx';
 import { LEVELS } from './ModelBands.jsx';
 
-// One task on the board (LOOP-BOARD §D3).
+// One task on the board (DECISIONS.md D45).
 //
 // Collapsed it is one line high: id · title · level · attempts · value/effort ·
 // where it came from · and the blocker SENTENCE if there is one. Expanded it
@@ -250,7 +250,7 @@ function InlineEdit({ task, busy, onMove }) {
 const splitList = v => String(v ?? '').split(',').map(s => s.trim()).filter(Boolean);
 
 /**
- * Answering a question an agent asked (`ask_human`, LOOP-BOARD §A6).
+ * Answering a question an agent asked (`ask_human`, DECISIONS.md D45).
  *
  * The answer goes into the task body and the task requeues, so the next attempt
  * starts with the answer that the last three attempts were guessing at. Options

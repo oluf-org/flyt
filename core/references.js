@@ -1,4 +1,4 @@
-// The reference library (LOOP-PLAN §16).
+// The reference library (DESIGN-SPEC.md §8).
 //
 // Zero new dependencies, and no vendored code (D24). These repositories are
 // read as RECIPES: proven answers to problems this harness is about to hit,

@@ -94,7 +94,7 @@ function isImplicit(node) {
     && (node.kind ?? KIND_OF[node.type]) === KIND_OF[node.type];
 }
 
-// The `modes:` block (MODES-COMPARE T2): each mode is name + a per-node
+// The `modes:` block (DECISIONS.md D27): each mode is name + a per-node
 // override map, plus the optional P1 scalars `description` (picker/card copy)
 // and `derivedFrom` (lineage metadata only — no resolution inheritance).
 // Emitted in the flow object's own key order (insertion order, which parse
@@ -134,7 +134,7 @@ export function serializeFlow(flow) {
   }
   lines.push('');
 
-  // Typed run inputs (D36 B7) go back out as the `inputs:` block they came in
+  // Typed run inputs (D36) go back out as the `inputs:` block they came in
   // as. The parser SYNTHESISES a node from that block, so without reversing it
   // here a flow with declared inputs would be rewritten on first save as a raw
   // `type: inputs` node — and stop being the file its author wrote.

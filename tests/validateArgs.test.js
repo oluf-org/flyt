@@ -1,5 +1,5 @@
 // validateArgs: the JSON Schema 2020-12 subset tool arguments are checked
-// against (TOOLS-PLAN §4.4). Table-driven, because the point of hand-rolling a
+// against (DESIGN-SPEC.md §5). Table-driven, because the point of hand-rolling a
 // validator (D24) is that its behavior is pinned rather than assumed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

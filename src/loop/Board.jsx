@@ -3,7 +3,7 @@ import TaskCard from './TaskCard.jsx';
 import WorkerCard from './WorkerCard.jsx';
 import BlockerNote from './BlockerNote.jsx';
 
-// The columns (LOOP-BOARD §D2).
+// The columns (DECISIONS.md D45).
 //
 // Layout only. Which column a task belongs to, what moves it has, what its
 // blocker sentence says, where the keyboard cursor goes — all of that is

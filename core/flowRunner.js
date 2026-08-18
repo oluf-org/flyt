@@ -275,7 +275,7 @@ const DEFAULT_SYSTEM = {
     'At most 3 questions; fewer is better; usually none. Every question you ask',
     'stalls the run and costs the user a round-trip — ask only when you truly must.'
   ].join('\n'),
-  // HOME-CONTEXT / D38. The cheapest node in the flow, and the one that aims
+  // DECISIONS.md D38. The cheapest node in the flow, and the one that aims
   // every expensive node after it: what is THIS project, and what relationship
   // does it have to the thing we are about to read? "What should we learn from
   // this repo" has no answer until you know whether we are empty, building the
@@ -389,7 +389,7 @@ const DEFAULT_SYSTEM = {
   ].join('\n')
 };
 
-// The follow-up triage prompt (FOLLOWUP-PLAN FU3): not a node role — a direct
+// The follow-up triage prompt (DECISIONS.md D21): not a node role — a direct
 // call made by followUp() before any node exists. It sees a digest of the run
 // (FU9) and classifies the user's reply into question / fix / feature.
 const TRIAGE_SYSTEM = [
@@ -435,7 +435,7 @@ const INVESTIGATE_SYSTEM = [
   'no output yet, say so plainly instead of guessing. No headers, no jargon.'
 ].join('\n');
 
-// The summarizeOutputs prompt (OUTPUT-VIEW-PLAN B4/D7): not a node role — a
+// The summarizeOutputs prompt (DESIGN-SPEC.md §7): not a node role — a
 // direct call that condenses one or more node outputs into the summary node's
 // fixed shape: one bold TL;DR line, then 3-6 bullets, grounded only in the
 // sources it's given (D8 offers it on anything with output; multi-source
@@ -453,7 +453,7 @@ const SUMMARIZE_SYSTEM = [
   'note genuinely missing information rather than guessing.'
 ].join('\n');
 
-// The fan-out peek (FANOUT P3.1): not a node role — a direct read-only agent
+// The fan-out peek (DECISIONS.md D37): not a node role — a direct read-only agent
 // call made before the lane planner, over a hard cap of PEEK_MAX_CALLS tool
 // calls. It answers ONE question: what am I actually looking at? A Rust
 // workspace or a monorepo of notebooks; four services or one script. It is
@@ -487,11 +487,11 @@ const PEEK_MAX_TOKENS = 700 + REASONING_HEADROOM;
 // what actually runs.
 const PEEK_TOOLS = ['glob', 'read_file', 'search_references'];
 
-// The lane planner (FANOUT P3.2 / D37): not a node role — a direct call that
+// The lane planner (DECISIONS.md D37): not a node role — a direct call that
 // chooses a fan-out's roster from the brief, the way TRIAGE_SYSTEM classifies a
 // follow-up before any node exists.
 //
-// This is the part of D36 §7b that FANOUT reverses: a fan-out DOES now make a
+// This is the part of D36 that DECISIONS.md D37 reverses: a fan-out DOES now make a
 // planning call. What makes that safe is the enum below. The planner SELECTS
 // and DUPLICATES presets; it never authors one. A model that can pick lanes but
 // cannot define them cannot turn the adversarial read into a flattering one —
@@ -533,7 +533,7 @@ const LANE_PLAN_SYSTEM = [
   'briefs have neither, and inventing them is worse than leaving them out.'
 ].join('\n');
 
-// --- the workspace context file (D38 §3.3) ----------------------------------
+// --- the workspace context file (D38) ----------------------------------
 //
 // One HTML comment carries everything staleness needs: when it was written,
 // against which commit, about which subject, and a hash of the body as written.
@@ -570,7 +570,7 @@ function gitHead(root) {
   } catch { return null; }
 }
 
-// The orientation in ≤ORIENT_SUMMARY_WORDS words (D38 §P6), for the port that
+// The orientation in ≤ORIENT_SUMMARY_WORDS words (D38), for the port that
 // reaches EVERY lane of a fan-out.
 //
 // Capped in code rather than by instruction, deliberately. This is the field
@@ -596,7 +596,7 @@ export function orientSummary(orientation, prose) {
 }
 
 // The subject repository a node was pointed at, stamped by materializeInputs
-// when a `repo` input feeds it (HOME-CONTEXT P1). `strict: false` marks a node
+// when a `repo` input feeds it (DECISIONS.md D38). `strict: false` marks a node
 // that reads the workspace by design — `orient` — so its home reads are not
 // reported as mis-addressed.
 export function subjectOf(node) {
@@ -635,7 +635,7 @@ export const WORKER_NODE_TYPES = new Set(['aiStep', 'agentTask', 'orchestrator',
 export function resolveWorker(node, config) {
   const w = node?.data?.worker;
   if (w?.provider && w?.model) return { provider: w.provider, model: w.model };
-  // A run started at an effort LEVEL (LOOP-PLAN §8), or pinned to a model,
+  // A run started at an effort LEVEL (DESIGN-SPEC.md §8), or pinned to a model,
   // routes every unpinned node through it. Below an explicitly authored worker
   // on purpose: a flow that names its model meant it, and a band is a default,
   // not an override.
@@ -760,7 +760,7 @@ export class FlowRunner {
     // start with a clear error rather than silently running an empty box.
     this.flowStore = flowStore;
     this.gates = new Map(); // runId -> resolve(bool) for a pending approval
-    // MODES-COMPARE T6: runId -> resolve(answersText) for a refine node parked
+    // DECISIONS.md D27: runId -> resolve(answersText) for a refine node parked
     // at the awaiting_input gate. A separate map from `gates` because the
     // answer is free text, not an approve/reject boolean.
     this.inputGates = new Map();
@@ -853,7 +853,7 @@ export class FlowRunner {
     const ctl = this.trackAbort(runId);
     try {
       // The deadline default is the runner's, so a per-call timeout in params
-      // still wins (LOOP-PLAN §11.5).
+      // still wins (DESIGN-SPEC.md §8).
       //
       // callForAnswer, not callModel: a turn that comes back with nothing but
       // reasoning gets one nudged retry at a larger budget before anyone calls
@@ -890,7 +890,7 @@ export class FlowRunner {
   }
 
   // An aiStep with a grant runs through the agent loop instead of a bare model
-  // call (TOOLS-PLAN §6.4): a planner that can check the time or read a page
+  // call (DESIGN-SPEC.md §5): a planner that can check the time or read a page
   // plans better. Only read-effect tools may be granted here — the linter's
   // `readonly-tools` rule — and runAgent with an empty tool list IS
   // trackedCallModel, so every existing aiStep takes exactly its old path.
@@ -902,7 +902,7 @@ export class FlowRunner {
       // the way core/nodes/executor.js has always passed it. Spreading it flat
       // here left `worker` undefined inside the agent loop, so every model call
       // it made resolved to provider `undefined` — which meant a read-only tool
-      // grant on an aiStep (TOOLS-PLAN §6.4) failed the node the moment it was
+      // grant on an aiStep (DESIGN-SPEC.md §5) failed the node the moment it was
       // used. Nothing in the suite exercised it until fan-out lanes started
       // inheriting a grant (D36 P2), which is how it surfaced.
       const { apiKey, system, prompt, onText, onRetry, retry, maxIterations, ...worker } = params;
@@ -914,7 +914,7 @@ export class FlowRunner {
         // A node that searches a repository needs more rounds than one that
         // checks the time (core/agent.js MAX_ITERATIONS). A caller may cap
         // itself BELOW the configured ceiling — the fan-out peek does, because
-        // a peek that keeps going is just a slow lane (FANOUT P3.1).
+        // a peek that keeps going is just a slow lane (DECISIONS.md D37).
         maxIterations: maxIterations ?? this.config.maxToolIterations ?? null,
         ctx: {
           store: this.store, runId, nodeId, workspace: this.workspaceFor(runId),
@@ -930,7 +930,7 @@ export class FlowRunner {
           // actually changed. Lazily borrowed the same way `backlog` is.
           pool: this.pool ?? null,
           // The repository this node was pointed at, when it was pointed at one
-          // (HOME-CONTEXT P1.3/P1.4). Scopes `search_references` and makes a
+          // (DECISIONS.md D38). Scopes `search_references` and makes a
           // read of the wrong root visible.
           ...(subject?.repo ? { subject } : {})
         }
@@ -964,7 +964,7 @@ export class FlowRunner {
     return readOnly;
   }
 
-  // The workspace copy of an orientation (D38 §3.3): `.flyt/context.md`,
+  // The workspace copy of an orientation (D38): `.flyt/context.md`,
   // per-project, version-controllable and hand-editable — exactly what `.flyt/`
   // is for (D15, D22, D29). It is what makes "the first run gives you that
   // context" true across runs: the next orientation seeds from it and becomes a
@@ -1610,7 +1610,7 @@ export class FlowRunner {
     return { ok: true };
   }
 
-  // CONFIGS-COMPARE P3 (T13's end state): judge two finished runs against
+  // DECISIONS.md D27 (T13's end state): judge two finished runs against
   // each other. One direct compare-role call over both runs' final outputs —
   // A is runIdA, B is runIdB, and the judge is blind to which config produced
   // which (provenance goes to the logs/record, not the prompt). Returns the
@@ -1704,7 +1704,7 @@ export class FlowRunner {
     for (const id of taskIds) this.store.deleteTaskOutput(runId, id);
   }
 
-  // --- Follow-up turns (FOLLOWUP-PLAN): reply to a finished run and the flow
+  // --- Follow-up turns (DECISIONS.md D21): reply to a finished run and the flow
   // GROWS — a triage step classifies the feedback, a continuation subgraph is
   // appended after the finished output, and the normal walk executes it.
   // Completed nodes are never re-run (FU1); prior outputs reach the new nodes
@@ -2091,7 +2091,7 @@ export class FlowRunner {
   // workspace (an absolute path to a bound project folder, already validated +
   // .flyt/-provisioned by the caller) is recorded in meta.json so the run,
   // its tools, and the UI all know which real repo it operates on (D15).
-  // approvalMode (APPROVAL-MODES §1) is captured PER RUN, at start, and stored
+  // approvalMode (DESIGN-SPEC.md §5) is captured PER RUN, at start, and stored
   // in meta.json. It is not read live from settings, because a run that began
   // under "ask permission" must not silently become unattended halfway through
   // when the user flips the global default for the next one.
@@ -2099,7 +2099,7 @@ export class FlowRunner {
   //   'smart'  — screen each call (core/safetyCheck.js); pause only on risk.
   //   'always' — never pause. The dangerous one.
   start(flow, { userInput = '', workspace = null, approvalMode = null, modeId = null, overrides = null, compareGroup = null, inputs = null, loopTaskId = null } = {}) {
-    // Pre-run gate (REFACTOR-PLAN §4): refuse to start a structurally invalid
+    // Pre-run gate (FLOW_LANG.md): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
     const gate = lintFlow(flow, {
@@ -2117,7 +2117,7 @@ export class FlowRunner {
         + gate.errors.map(e => `- [${e.rule}] ${e.message}`).join('\n'));
     }
     const templates = this.nodeStore?.listFull() ?? [];
-    // Launch overrides (MODES-COMPARE T1): a chosen mode's saved override
+    // Launch overrides (DECISIONS.md D27): a chosen mode's saved override
     // bundle, then ad-hoc run inputs on top (run input > mode). Validate the
     // effective map against the resolved-without-overrides flow BEFORE applying
     // it, so an unknown node or an illegal field rejects the start cleanly.
@@ -2138,7 +2138,7 @@ export class FlowRunner {
     }
     const resolved = resolveFlow(flow, templates, hasLaunch ? launchOverrides : null);
     const flowCopy = JSON.parse(JSON.stringify({ ...resolved, builtin: undefined }));
-    // Sub-flows are spliced HERE (D36 B1/P3.7): the run's flow.json is the
+    // Sub-flows are spliced HERE (D36/P3.7): the run's flow.json is the
     // spliced graph, so the snapshot always shows what actually ran, and every
     // downstream part of the engine — scheduler, canvas, resume, gates — sees
     // an ordinary graph and needs to know nothing about sub-flows.
@@ -2187,7 +2187,7 @@ export class FlowRunner {
       // this records the intent behind that snapshot.
       ...(modeId ? { modeId, modeName: mode?.name ?? modeId } : {}),
       ...(hasLaunch ? { launchOverrides } : {}),
-      // Compare provenance (CONFIGS-COMPARE P2): both runs of a launch-compare
+      // Compare provenance (DECISIONS.md D27): both runs of a launch-compare
       // or rematch carry the shared group id + their A/B label, so the pairing
       // is discoverable from either side even before the record is read.
       ...(compareGroup?.id
@@ -2278,7 +2278,7 @@ export class FlowRunner {
       if (!target) continue;
       const have = Array.isArray(target.data?.tools) ? target.data.tools : [];
       const granted = [...new Set([...have, 'search_references', 'read_file'])];
-      // Which repository this node was POINTED AT (HOME-CONTEXT P1). Everything
+      // Which repository this node was POINTED AT (DECISIONS.md D38). Everything
       // downstream of the addressing problem reads it from here: the fan-out
       // preamble's addressing block, the default scope of `search_references`,
       // and the `tool_target_unexpected` log line. A node that reads the
@@ -2636,7 +2636,7 @@ export class FlowRunner {
     // the real workspace unapproved. Tasks recorded before the flag existed fall
     // back to their node.
     //
-    // The run's approvalMode (APPROVAL-MODES §1) overrides the node flag in both
+    // The run's approvalMode (DESIGN-SPEC.md §5) overrides the node flag in both
     // directions, because it is the more recent and more explicit statement of
     // intent — the user chose it for THIS run, in the chatbox, seconds ago:
     //   'always' — nothing is gated, whatever the node says.
@@ -2795,7 +2795,7 @@ export class FlowRunner {
       if (!await this.runPendingTasks(runId, opts.taskIdByNode, flow)) return { ok: false };
     }
     // A refine node that asked clarifying questions parks the whole run at the
-    // awaiting_input gate until the user answers (MODES-COMPARE T6).
+    // awaiting_input gate until the user answers (DECISIONS.md D27).
     if (outcome?.questions?.length) return this.handleNodeQuestions(runId, flow, node, outcome.questions);
     if (outcome?.stepEval) return this.handleStepEval(runId, flow, node, outcome.stepEval, opts);
     // A feedback-edge verdict is handled exactly like a step-eval verdict — the
@@ -2898,7 +2898,7 @@ export class FlowRunner {
   // Role-agnostic since D38: `refine` asks about the request, `orient` asks
   // about the workspace, and both park identically. Returns { ok, requeue? }.
   async handleNodeQuestions(runId, flow, node, questions) {
-    // Nobody is there to answer (APPROVAL-MODES: 'always' IS "the agent runs
+    // Nobody is there to answer (DESIGN-SPEC.md §5: 'always' IS "the agent runs
     // unattended"). A flow that can park forever is not usable from the loop,
     // and the loop is where these flows are meant to end up — so the questions
     // are recorded and the run proceeds on the node's stated assumptions. They
@@ -2940,7 +2940,7 @@ export class FlowRunner {
     return { ok: true, requeue: [node.id] };
   }
 
-  // Answer a run parked at the awaiting_input gate (MODES-COMPARE T6). Distinct
+  // Answer a run parked at the awaiting_input gate (DECISIONS.md D27). Distinct
   // from run:followUp — this closes an in-flight question, it does not open a
   // new turn. Works whether the walk is still parked on the live promise or the
   // app restarted (persisted-state path, mirroring resumeFromGate).
@@ -3191,7 +3191,7 @@ export class FlowRunner {
         ...(Array.isArray(node.data?.tools) ? { tools: node.data.tools } : {}),
         // The ceiling rides along for the same reason the grant does: the
         // executor runs from tasks.json alone and never sees the node. Absent
-        // ⇒ the ceiling is the grant (TOOLS-PLAN §6.1), so a task written
+        // ⇒ the ceiling is the grant (DESIGN-SPEC.md §5), so a task written
         // before ceilings existed keeps exactly its envelope.
         ...(node.data?.toolCeiling ? { toolCeiling: node.data.toolCeiling } : {}),
         // Skills ride on the task for the same reason tools do: the executor
@@ -3265,15 +3265,15 @@ export class FlowRunner {
       const parts = this.upstreamContext(runId, flow, node, taskIdByNode);
       const retryGuidance = this.store.readNodeOutput(runId, `retry-for-${node.id}`);
       // A refine node re-running after the awaiting_input gate gets the user's
-      // answers to the questions it asked (MODES-COMPARE T6).
+      // answers to the questions it asked (DECISIONS.md D27).
       // Both roles that may park at the input gate re-run with the user's
-      // answers in context (MODES-COMPARE T6, D38 §4).
+      // answers in context (DECISIONS.md D27, D38).
       const gateAnswers = (role === 'refine' || role === 'orient')
         ? this.store.readNodeOutput(runId, `${node.id}.answers`) : null;
       // Planning roles learn from prior runs' retrospectives (historyDigest),
       // matching the classic pipeline's planner behavior.
       const history = (role === 'plan' || role === 'plan-start') ? this.store.historyDigest() : '';
-      // The orientation seed (D38 §3.1): assembled facts about this workspace,
+      // The orientation seed (D38): assembled facts about this workspace,
       // so the cheapest node in the flow does not spend its first four tool
       // calls rediscovering that package.json exists. A starting point, not the
       // answer — the node holds tools precisely so it can go past it.
@@ -3564,7 +3564,7 @@ export class FlowRunner {
         usage: result.usage,
         durationMs: result.durationMs,
         // A granted aiStep runs through the agent loop and can call tools
-        // (TOOLS-PLAN §6.4), so its retrospective carries them like any other.
+        // (DESIGN-SPEC.md §5), so its retrospective carries them like any other.
         toolCalls: result.toolCalls ?? []
       });
       this.store.writeRetrospective(runId, node.id, retro);
@@ -3759,7 +3759,7 @@ export class FlowRunner {
       this.store.appendLog(runId, { event: 'node_resume', node: node.id, type: 'orchestrator', children: children.length });
     }
 
-    // The scoped sub-walk + aggregation live in core/nodes/expand.js (BRICKS
+    // The scoped sub-walk + aggregation live in core/nodes/expand.js (DECISIONS.md D36
     // P2.0): same wave semantics as the outer scheduler, bounded to the box.
     // Deciding WHICH children exist — everything above — is the part that is
     // actually the orchestrator's; running them is not.
@@ -3778,7 +3778,7 @@ export class FlowRunner {
     return {};
   }
 
-  // The ordered model pool a PLANNED roster is staffed from (FANOUT P2).
+  // The ordered model pool a PLANNED roster is staffed from (DECISIONS.md D37).
   // Explicit lane workers are pinned before this list is consulted; what is
   // left is: the node's own worker, then the model-priority ranking for this
   // kind of reading, then whatever else is active, then the configured default
@@ -3823,7 +3823,7 @@ export class FlowRunner {
     return pool;
   }
 
-  // The peek (FANOUT P3.1): one bounded read-only look at the subject, so the
+  // The peek (DECISIONS.md D37): one bounded read-only look at the subject, so the
   // lane planner knows whether it is dividing up a Rust workspace or a folder
   // of notebooks. Capped at PEEK_MAX_CALLS tool calls and a small token budget.
   //
@@ -3889,7 +3889,7 @@ export class FlowRunner {
     return null;
   }
 
-  // The planning call (FANOUT P3.2–P3.4). Returns { plan, pool, reason } —
+  // The planning call (DECISIONS.md D37). Returns { plan, pool, reason } —
   // `plan` null when the roster could not be planned, with `reason` saying why
   // so `.brief.md` can be honest about running the authored fallback.
   /**
@@ -4021,7 +4021,7 @@ export class FlowRunner {
     return { plan, pool, reason: '' };
   }
 
-  // The Fan-out container (BRICKS P2 / D36 B5–B6, planning added by D37): N
+  // The Fan-out container (DECISIONS.md D36, planning added by D37): N
   // deliberately diverged takes on ONE brief.
   //
   // The author writes a lane list, or points at a model set, and by default
@@ -4098,7 +4098,7 @@ export class FlowRunner {
     } else {
       const goal = node.data?.goal?.trim() ?? '';
       // The repository the lanes are pointed at, when a repo input feeds this
-      // node: it buys every lane the addressing block (HOME-CONTEXT P1.1).
+      // node: it buys every lane the addressing block (DECISIONS.md D38).
       //
       // Inherited when this node has none of its own, because a repo input
       // feeds ONE node and it is rarely the fan-out. In `learn-from-repo` the
@@ -4187,7 +4187,7 @@ export class FlowRunner {
           title: lane.label,
           goal,
           instructions: laneBrief(lane, lanes, { goal }),
-          // The lane's ROLE prompt (FANOUT §1): the shared preamble plus the
+          // The lane's ROLE prompt (DECISIONS.md D37): the shared preamble plus the
           // preset's fixed text. It replaces DEFAULT_SYSTEM[role], which is the
           // point — one report format imposed on every lane is why four lanes
           // used to come back reading alike. A lane with neither a preset nor a
@@ -4211,7 +4211,7 @@ export class FlowRunner {
           ...child.data,
           laneId: lane.id,
           // A lane inherits the subject the fan-out was pointed at, so its own
-          // tool calls are scoped and audited the same way (HOME-CONTEXT P1).
+          // tool calls are scoped and audited the same way (DECISIONS.md D38).
           ...(subjectRepo ? { subjectRepo } : {}),
           // Stamped so a resumed run can rebuild the roster from its children
           // without re-planning: under `plan: auto` the authored lane list is
@@ -4287,7 +4287,7 @@ export class FlowRunner {
     return {};
   }
 
-  // The Sub-flow call site (BRICKS P3 / D36 B1): a flow used as a node.
+  // The Sub-flow call site (DECISIONS.md D36): a flow used as a node.
   //
   // By the time this runs there is nothing to resolve — start() spliced the
   // referenced flow's nodes into the run graph as this node's children, so
@@ -4356,7 +4356,7 @@ export class FlowRunner {
     return {};
   }
 
-  // The Loop node (BRICKS P4.2 / D36 B10–B12): enqueue, then wait for terminal.
+  // The Loop node (DECISIONS.md D36): enqueue, then wait for terminal.
   //
   // This adds no autonomy. Everything that actually decides, edits and merges
   // is the loop D35 already built — budget ceilings, gates, heartbeats, the
@@ -4610,7 +4610,7 @@ export class FlowRunner {
       // this fallback used to forward a fixed subset, which quietly dropped
       // exactly the three fields a fan-out lane is made of (D36 P2.1). Both
       // paths now carry the same set — `system` joined them for the same
-      // reason (FANOUT P1.3): a lane's role prompt IS the lane.
+      // reason (DECISIONS.md D37): a lane's role prompt IS the lane.
       instructions, worker, tools, system
     } = overrides;
     return createNodeFromTemplate(templateId, {
@@ -4740,7 +4740,7 @@ export class FlowRunner {
     }
 
     // A generated node inherits its owner's ceiling, narrowed by its own
-    // (TOOLS-PLAN §6.3). This is the hole that would otherwise open the moment
+    // (DESIGN-SPEC.md §5). This is the hole that would otherwise open the moment
     // planning became tool-aware: a node that decides what other nodes may do
     // must not be able to decide they may do more than IT may.
     const ownerCeiling = ownerNode.data?.toolCeiling ?? null;
@@ -4796,7 +4796,7 @@ export class FlowRunner {
       }
     }
 
-    // Placement + persistence are shared with every other container (BRICKS
+    // Placement + persistence are shared with every other container (DECISIONS.md D36
     // P2.0): inside a box the children are gridded and the box sized to fit;
     // outside one the run's display copy is re-laid-out so generated nodes
     // slot into clean dependency layers instead of overlapping the authored

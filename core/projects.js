@@ -2,7 +2,7 @@
 // and a tab is an open project. Runs are per-project; flows and Node Library
 // templates stay global for v1 (T2).
 //
-// Three kinds of project (LANDER-PLAN.md L5/L6):
+// Three kinds of project (DECISIONS.md D25):
 //   - 'folder'   — a real repo bound to a tab; its absolute path is its id,
 //   - 'appdata'  — an app-managed project under <appData>/projects/<slug>/,
 //                  auto-created by the projectless lander from the first prompt;
@@ -204,7 +204,7 @@ export class ProjectRegistry {
   /**
    * A project this process can DRIVE but that is not a tab.
    *
-   * The benchmark (LOOP-PLAN §12.1) works a throwaway clone: it needs a store,
+   * The benchmark (DESIGN-SPEC.md §8) works a throwaway clone: it needs a store,
    * a runner, a backlog and a ledger for that directory, and every command in
    * `core/api.js` resolves those through this registry. What it must not do is
    * join the user's session — a tab for a directory that will be deleted in
@@ -250,7 +250,7 @@ export class ProjectRegistry {
     return entry;
   }
 
-  // Adopt an appdata project into a real folder (LANDER-PLAN §2.1 / Phase 6):
+  // Adopt an appdata project into a real folder (DECISIONS.md D25):
   // "Move to folder…". The project's files migrate into the repo — its runs to
   // the folder's runs store, its workspace contents into the folder itself — and
   // the tab converts from an appdata project to a bound folder in place (same

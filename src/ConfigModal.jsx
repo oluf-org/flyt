@@ -5,7 +5,7 @@
 // and the "Run inputs" block — into one deliberate, opened-when-wanted place, so
 // the common path (type a prompt, hit Run on the default) stays uncluttered.
 //
-// A config is still just a named override bundle on the flow (CONFIGS-COMPARE):
+// A config is still just a named override bundle on the flow (DECISIONS.md D27):
 // "Default" is the flow as authored (modeId = null); each named config is a
 // `modes:` entry. Selecting one sets the run's launch target. The per-node
 // controls are the flow's exposed run inputs (`expose:` in the DSL), layered on

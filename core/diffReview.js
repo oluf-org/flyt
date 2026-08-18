@@ -1,4 +1,4 @@
-// The reviewer (LOOP-PLAN §7.2): a second model reads the diff before it lands.
+// The reviewer (DESIGN-SPEC.md §8): a second model reads the diff before it lands.
 //
 // Gates prove the suite is green. They cannot tell you the change is *right* —
 // that it did what the task asked, that it did not quietly widen its own scope,

@@ -1,147 +1,82 @@
 # Flyt
 
-**Read [GOALS.md](./GOALS.md) first.** It is the authoritative source of project intent, principles, current architecture, maturity, and non-functional requirements — especially performance, responsiveness, and feel.
+Flyt is a desktop app for building and running inspectable AI workflows. A user picks a flow, enters a request, and watches the work move through a live canvas. The same engine also powers the headless CLI and the autonomous Loop.
 
-**For the node catalog / flowchart patterns:** See [FLOW_NODES.md](./FLOW_NODES.md). It defines the standard nodes (Plan, Plan Evaluation, template-based generated nodes with categories, Stitch, Final Evaluation, …), the contracts AI should use when generating nodes, and the reflective planning + execution pattern.
+## What ships
 
-An easy-to-use desktop app for AI workflows: build workflows from a library of
-reusable AI node templates, pick a workflow from a dropdown, type what you
-want, and watch it execute transparently on a live canvas.
+- **Projects** bind a tab to a workspace folder.
+- **Node templates** define reusable behavior, models, tools, and skills.
+- **Flows** connect templates and structural nodes in an AI-authorable `.flow.yaml` format.
+- **Runs** stream output, preserve artifacts, support approval gates, and can resume without repeating completed nodes.
+- **Composition** includes typed inputs, fan-out lanes, sub-flows, and a flow-to-backlog Loop handoff.
+- **Loop** works a file-backed backlog in isolated git worktrees, runs declared gates, requests review, tracks spend, and lands verified changes.
 
-**One mental model:**
+The built-in `mock` provider works without credentials. Real models can be connected in Settings with provider API keys or explicitly enabled vendor CLI runtimes.
 
-1. **Node Library** — reusable AI node templates (Code, Documentation, Test, …), managed on the Nodes page, stored as `nodes/<id>.json`.
-2. **Workflows** — DAGs composed by picking templates from the library and wiring them on the canvas. Each workflow is a text-based, AI-authorable DSL file (`flows/<id>.flow.yaml`, spec: [FLOW_LANG.md](./FLOW_LANG.md)) with canvas positions in a `flows/<id>.layout.json` sidecar written only by the app. Workflow nodes are template *instances*; small per-workflow overrides (model, instructions, tools, approval) never write back to the template.
-3. **Run** — one entry point: select a workflow, type your request (it becomes the workflow's User Input node), press Run. One engine: `core/flowRunner.js`.
-
-The classic pipeline (plan → *human approval* → route → execute → verify)
-ships as the editable **Default pipeline** workflow built from library nodes.
-
-## Run it
+## Run locally
 
 ```sh
 npm install
-npm start        # build renderer + launch Electron
-npm run dev      # hot-reload dev mode (Vite + Electron)
-npm test         # headless test suite (node --test)
+npm run dev       # Vite hot reload + Electron
+npm start         # production renderer build + Electron
+npm test          # headless test suite
 ```
 
-Works out of the box with the built-in **mock** provider (no API key). To use
-real models, add an OpenRouter key in the in-app Settings, or edit
-`config.json` (see the `anthropicExample` block).
+Build installers with `npm run dist`, or use `dist:win`, `dist:mac`, and `dist:linux` for one platform.
 
-## Drive it without the window
+## Headless use
 
-`flyt` is the headless front door: the same engine, no Electron. Every command
-takes `--json`, and machine-readable output goes to stdout while human text
-goes to stderr — so an agent never has to separate them.
+`flyt` exposes the same command surface as the desktop app. Machine-readable commands accept `--json`; structured output goes to stdout and human diagnostics go to stderr.
 
 ```sh
-npx flyt flows                                     # what can be run
-npx flyt run learn-from-repo --in repo=<url>       # start one and wait
-npx flyt runs                                      # what has been run
+npx flyt flows
+npx flyt run learn-from-repo --in repo=<url> --in goal="What should we adopt?"
+npx flyt runs
+npx flyt why
+npx flyt doctor --flow <id>
+npx flyt probe <model>
 ```
 
-### When something goes wrong
+`flyt why` inspects an existing run, `probe` tests one model at a realistic budget, and `doctor` checks provider and flow configuration without starting a full run.
 
-Three commands answer the three questions, without re-running anything (D40):
+## Files and storage
+
+Durable state is plain files:
+
+```text
+nodes/<id>.json                 reusable node templates
+tools/<id>.json                 tool definitions
+flows/<id>.flow.yaml            flow structure
+flows/<id>.layout.json          app-managed canvas positions
+runs/<runId>/                   run snapshot, outputs, logs, calls, and tool artifacts
+<workspace>/.flyt/              project config, skills, context, and optionally run data
+```
+
+In development, global stores use the checkout. Packaged builds seed writable stores under Electron's user-data directory. Project run data follows the **Project storage** setting: inside `.flyt/` or in app data keyed by workspace path.
+
+To promote a flow created in an installed build into the repository defaults:
 
 ```sh
-npx flyt why                    # the latest run: where it stopped, and what to try
-npx flyt probe <model>          # call one model once — does it work at our budget?
-npx flyt doctor --flow <id>     # providers, priority, library, and the models a flow pins
+npm run flow -- adopt
+npm run flow -- adopt <id> --as <stable-id>
+npm run flow -- lint <file>
 ```
 
-`flyt why` reads the per-call black box every run now writes (`log.jsonl`
-`model_call` events, and `calls/<node>.jsonl` per node): finish reason, the
-content-vs-reasoning token split, request size and timing. It works on a run
-that is still going, and inspecting a live run is safe — a run holds a liveness
-lease so a second process never mistakes it for a crashed one.
+## Repository map
 
-`flyt probe` is the fastest way to answer "is this model usable here?". It
-sends one representative call at the budget a node would really get and reports
-what came back — including whether the model spent its whole budget reasoning
-and returned nothing, which is what an "empty response" almost always is.
+- `core/` — orchestration, stores, adapters, tools, diagnostics, and the supervisor
+- `electron/` — desktop shell and IPC binding
+- `src/` — React renderer
+- `flows/`, `nodes/`, `tools/` — shipped file-backed libraries
+- `benchmark/` — independent Loop benchmark cases and probes
+- `tests/` — headless contracts and regression tests
 
-## Architecture
+## Living documentation
 
-The core design constraint is **file-based state as the single source of
-truth**. Modules never call each other; they communicate only by reading and
-writing files:
+- [`GOALS.md`](./GOALS.md) — product intent, principles, and boundaries
+- [`DESIGN-SPEC.md`](./DESIGN-SPEC.md) — current architecture and safety contracts
+- [`DECISIONS.md`](./DECISIONS.md) — concise durable decisions and unresolved choices
+- [`FLOW_LANG.md`](./FLOW_LANG.md) — flow DSL grammar and lint rules
+- [`FLOW_NODES.md`](./FLOW_NODES.md) — node roles, ports, and structured output contracts
 
-```
-nodes/<id>.json        Node Library: one reusable AI node template per file
-flows/<id>.flow.yaml   workflow definitions (DSL: template instances + overrides)
-flows/<id>.layout.json canvas positions (app-written sidecar; presentation only)
-runs/<runId>/
-  prompt.md            the user request (the User Input node's content)
-  flow.json            the resolved workflow this run executes (self-contained snapshot)
-  plan.md              planning output (human-approved before routing)
-  tasks.json           self-describing executor tasks with worker assignment
-  tasks/<task-id>.md   executor output per task (streamed while running)
-  nodes/<node-id>.md   per-node outputs (streamed while running)
-  retrospectives/*.json  structured retrospective per node
-  meta.json            run position (stage, per-node status, errors)
-  log.jsonl            append-only audit log of every action
-```
-
-Because state is plain files, every step is inspectable ("Open run folder" in
-the UI), reproducible, and resumable — approval gates survive an app restart.
-
-In a dev checkout those directories are the checkout's own. In an **installed
-build** they live in the app's user-data folder, because the packaged copy is
-inside a read-only archive (D28) — Settings → Flow files shows the path and
-reveals it. To promote a flow you designed in the installed app into one the
-app ships with:
-
-```
-npm run flow -- adopt                  # list flows in the installed app
-npm run flow -- adopt <id> [--as <new-id>]   # copy it into flows/ as a default
-```
-
-Adopt re-ids the flow to a slug of its name, brings the layout sidecar along,
-and lints it. The slug matters: the installer excludes `flows/flow-*` (the ids
-the app mints for new flows), so a stable id is what makes a flow ship.
-
-### Layout
-
-- `core/` — model-agnostic orchestration. No Electron imports; runnable headless.
-  - `state.js` — `RunStore`, the file-based state contract everything shares
-  - `nodestore.js` — `NodeStore`, the Node Library (seeds itself from the FLOW_NODES.md catalog)
-  - `flowstore.js` — `FlowStore`, workflow definitions + the shipped Default pipeline (reads/writes the `.flow.yaml` DSL + `.layout.json` sidecar; legacy `.json` flows still load and migrate on save)
-  - `flowlang/` — the Flow DSL: parse / serialize / lint / migrate + `npm run flow` CLI (spec: `FLOW_LANG.md`)
-  - `flowRunner.js` — THE execution engine: topological walk, parallel waves, per-node approval gates, retrospectives, materialization of AI-generated nodes
-  - `planEval.js` — strict JSON contracts for plan-eval / step-eval / stitch outputs
-  - `nodes/executor.js` + `agent.js` + `tools/` — the agent executor for `agentTask` nodes
-  - `adapters/` — unified `callModel()` worker interface; one file per provider (`anthropic`, `openrouter`, `mock`)
-  - `retrospective.js` — the structured retrospective schema (`status`, `problems`, `resolution`, `confidence`, `recommendation`)
-- `electron/` — thin shell: window + IPC that forwards to `core/`
-- `src/` — React renderer; a pure view over file-state snapshots (React Flow canvas, Nodes page, inspector, run panel)
-  - `flowTypes.js` — the shared template/instance model: seed catalog, `resolveFlow()` (template defaults + per-workflow overrides → runtime nodes)
-- `config.json` — default worker + per-category workers; model changes are config changes
-
-### Contracts every node obeys
-
-1. Tasks are self-describing: goal, inputs, constraints, dependsOn, worker — no hidden state.
-2. Every executed node emits a retrospective; retrospective recommendations
-   from past runs are fed into future planning (`historyDigest`).
-3. Templates constrain *how* (model, tools, instructions, skills); the task
-   defines *what*. No hand-written prompts in templates.
-4. Every model call is logged (`log.jsonl`) with worker, node, and outcome.
-
-### Skills — per-project expertise
-
-A node template attaches skills **by name**; the bound project supplies them as
-`.flyt/skills/<name>.md`, committed alongside its code. At run time each name
-is resolved against the run's workspace and appended to that node's prompt, so
-one template ("Code (general)", say) follows whichever project it is pointed at.
-A name the project doesn't define is skipped and recorded in `log.jsonl`
-(`skills_injected` / `skill_missing`) — never silently. Skills add instructions
-only; what an agent may *do* stays governed by the template's tool allowlist and
-the approval gates.
-
-### Deliberate extension points (not built yet)
-
-- Model registry / more providers (`core/adapters/index.js#registerProvider`)
-- Adaptive re-planning from retrospectives (write a module that reads
-  `retrospectives/` and rewrites `plan.md` / `tasks.json`)
+Implementation plans are intentionally not kept as living documentation after they land. Git history preserves them; current work belongs in `.flyt/backlog/`.

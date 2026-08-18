@@ -1,4 +1,4 @@
-// Composer launch controls (MODES-COMPARE T10). When the selected flow exposes
+// Composer launch controls (DECISIONS.md D27). When the selected flow exposes
 // run inputs (`expose:` in the DSL), these compact controls appear under the
 // composer. Their values become the per-node override map at run:start, layered
 // on top of the chosen mode (precedence: run input > mode > node > template).

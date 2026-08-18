@@ -3,7 +3,7 @@ import LiveStream from '../LiveStream.jsx';
 import { workerView, nowLine } from '../loopLive.js';
 import { flightRow, humanDuration } from '../loopViewData.js';
 
-// A worker in flight, watchable (LOOP-BOARD §C2/§C3).
+// A worker in flight, watchable (DECISIONS.md D45).
 //
 // Collapsed, this is today's `flightRow` — glyph, id, stage, model, age, idle,
 // interventions — which was already good, plus ONE new line: what it is doing

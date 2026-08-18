@@ -1,5 +1,5 @@
 // Tool-result previews: what the MODEL sees when the full result is on disk
-// (TOOLS-PLAN §13). The full, untruncated result lives in
+// (DESIGN-SPEC.md §5). The full, untruncated result lives in
 // runs/<id>/tools/<seq>-<tool>.json; the context gets a bounded preview plus a
 // handle it can pass to read_tool_result.
 //

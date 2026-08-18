@@ -1,4 +1,4 @@
-// CONFIGS-COMPARE P3 — the comparison judge (MODES-COMPARE T13's end state).
+// DECISIONS.md D27 — the comparison judge.
 // One direct model call, made outside any run: the flow's `compare` role
 // applied to two finished runs' final outputs, framed as A vs B. This module
 // is the pure half — the prompt contract, the user-message builder, and the
