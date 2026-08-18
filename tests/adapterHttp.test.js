@@ -840,3 +840,26 @@ test('a throwing onCall never takes the call down with it', async () => {
   });
   assert.equal(r.text, 'fine');
 });
+
+test("a band's worker still says 'auto', and that is not a vote against tools", async () => {
+  const { supportsToolsFor, toolProtocol } = await import('../core/agent.js');
+  // 'auto' is a DEFERRAL, not a provider: the priority walk names the real one
+  // at call time. Both checks compared against the resolved name, so a worker
+  // carrying 'auto' answered "no native tools" — and every task the LOOP runs
+  // carries 'auto', because that is how an effort band is expressed.
+  //
+  // Watched the cost twice: a task planned seven sub-tasks on kimi-k3, ran all
+  // seven on the text protocol, made ZERO tool calls, marked all seven done,
+  // and produced no diff. The reviewer correctly rejected an empty change, and
+  // nothing anywhere said the tools had been switched off.
+  const band = { provider: 'auto', model: 'moonshotai/kimi-k3' };
+  assert.equal(supportsToolsFor(band, {}), true);
+  assert.equal(toolProtocol({ ...band, supportsTools: true }), 'native');
+
+  // A catalogue that explicitly says no is still believed, for 'auto' too.
+  assert.equal(supportsToolsFor(band, { modelCapabilities: { 'moonshotai/kimi-k3': false } }), false);
+
+  // The providers with no native path keep the text one.
+  assert.equal(toolProtocol({ provider: 'anthropic', model: 'x', supportsTools: true }), 'text');
+  assert.equal(toolProtocol({ provider: 'mock', model: 'mock-large', supportsTools: true }), 'text');
+});

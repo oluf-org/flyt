@@ -218,8 +218,28 @@ async function gateToolCall(ctx, name, args) {
 // kimi — all backed by the shared factory in http.js); anthropic and mock stay
 // on the text protocol.
 const NATIVE_TOOL_PROVIDERS = new Set(['openrouter', 'openai', 'kimi']);
+
+/**
+ * 'auto' is not a provider, it is a DEFERRAL — the priority walk names the real
+ * one at call time. Both checks below compared against the resolved name, so a
+ * worker still carrying 'auto' answered "no native tools" and "not tool
+ * capable", and every task the LOOP runs carries 'auto', because that is how an
+ * effort band is expressed.
+ *
+ * The cost was the whole point of the system. Watched a task plan seven
+ * sub-tasks on `moonshotai/kimi-k3`, run all seven on the text protocol, make
+ * ZERO tool calls, mark all seven `done`, and produce no diff — twice, across
+ * two nights, with the reviewer correctly rejecting an empty change each time.
+ * Nothing in the run said the tools had been switched off.
+ *
+ * `auto` resolves through providers that are OpenAI-compatible (the shared
+ * factory in http.js), so it belongs with them; anthropic and mock are named
+ * explicitly by anything that wants them and never arrive as 'auto'.
+ */
+const nativeCapable = provider => NATIVE_TOOL_PROVIDERS.has(provider) || provider === 'auto';
+
 export const toolProtocol = worker =>
-  (NATIVE_TOOL_PROVIDERS.has(worker?.provider) && worker?.supportsTools) ? 'native' : 'text';
+  (nativeCapable(worker?.provider) && worker?.supportsTools) ? 'native' : 'text';
 
 /**
  * Does this model call tools natively?
@@ -239,7 +259,8 @@ export function supportsToolsFor(worker, config = {}) {
   const model = worker?.model;
   const known = config.modelCapabilities?.[model] ?? config.modelFacts?.[model]?.supportsTools;
   if (typeof known === 'boolean') return known;
-  return worker?.provider === 'openrouter';
+  // 'auto' is an unresolved OpenRouter-backed pick, not a different answer.
+  return worker?.provider === 'openrouter' || worker?.provider === 'auto';
 }
 
 export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal = null, maxIterations = null, maxTokens = null }) {
