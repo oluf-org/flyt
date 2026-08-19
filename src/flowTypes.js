@@ -134,6 +134,15 @@ export const ROLE_PORTS = {
     { id: 'prompt', label: 'refined prompt', description: 'The user request rewritten into a precise, self-contained brief.' },
     { id: 'questions', label: 'questions', description: 'Clarifying questions (JSON) — present only when an ambiguity would materially change the work.' }
   ],
+  // The interrogation node. `spec` is the deliverable; `transcript` is the
+  // evidence for it — every question asked and every answer given, in order,
+  // so the spec can be argued with rather than merely believed.
+  interrogate: [
+    { id: 'spec', label: 'spec', description: 'The settled specification: goal, non-goals, constraints, deliverable, acceptance, open questions.' },
+    { id: 'transcript', label: 'transcript', description: 'The interrogation itself — every round of questions and the answers given.' },
+    { id: 'open', label: 'open', description: 'What is still unsettled: assumptions taken and questions the rounds ran out before asking.' },
+    { id: 'questions', label: 'questions', description: 'The current round of questions (JSON), while the run is parked at the input gate.' }
+  ],
   // The orientation node (D38). `summary` is capped in code, not by
   // instruction: it reaches every lane of a fan-out, and a detailed shared
   // prior collapses the divergence a fan-out exists to produce (D36 point 4).
@@ -236,8 +245,33 @@ export const AI_ROLES = [
   // Orientation (D38): what THIS workspace is and how it relates to the subject
   // a flow is about to read. Holds read-only tools and, like refine, may park
   // the run with clarifying questions.
-  'orient'
+  'orient',
+  // Interrogation (D41): the refiner's opposite. Asks the person several
+  // bounded rounds of questions and only then writes the specification.
+  'interrogate'
 ];
+
+// --- Interrogation rounds ----------------------------------------------------
+//
+// How many times ONE node may park the run to ask. `refine` and `orient` get
+// exactly one round each — for them a question is an exception, and a second
+// one means the first was asked badly. `interrogate` is the node whose whole
+// job is the asking, so it gets several; the ceiling is low on purpose, because
+// the failure mode of an interrogation is not asking too little, it is becoming
+// a questionnaire nobody finishes.
+export const DEFAULT_QUESTION_ROUNDS = 3;
+export const MAX_QUESTION_ROUNDS = 5;
+export function normalizeRounds(value) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(n, MAX_QUESTION_ROUNDS);
+}
+// The rounds a node actually gets: its own `maxRounds`, else one per role.
+export function questionRoundsFor(node) {
+  const role = node?.data?.role ?? node?.role ?? null;
+  if (role !== 'interrogate') return 1;
+  return normalizeRounds(node?.data?.maxRounds ?? node?.maxRounds) ?? DEFAULT_QUESTION_ROUNDS;
+}
 
 // The four (minimum) categories used by plan-eval nodes to drive model selection
 // and template choice. Extend only after updating FLOW_NODES.md and config examples.
@@ -702,6 +736,18 @@ export const SEED_NODE_TEMPLATES = [
     description: 'Surveys the workspace this run is standing in and says what it is, and what relationship it has to the subject the flow is about to read. Everything downstream is aimed by its answer.'
   },
   {
+    // D41. The refiner's opposite number, and the reason both exist: `refine`
+    // is told to resolve ambiguity itself and ask only when it must, which is
+    // right when the request is already clear and wrong when it is an idea. Put
+    // a half-formed idea through the refiner and it does not ask — it invents
+    // the missing half as an assumption and hands the flow a confident brief
+    // for work nobody wanted. This node asks first and writes second.
+    id: 'interrogate', name: 'Interrogate', category: null, icon: '?',
+    baseType: 'aiStep', role: 'interrogate', effort: 'medium',
+    maxRounds: DEFAULT_QUESTION_ROUNDS,
+    description: 'Interrogates the person behind the request over several bounded rounds — goal, non-goals, constraints, acceptance — then writes the specification their answers settled.'
+  },
+  {
     id: 'plan-start', name: 'Plan', category: null, icon: '▶',
     baseType: 'aiStep', role: 'plan-start', effort: 'high',
     description: 'Produces tasks.md with well-defined tasks and explicit per-file context descriptions.'
@@ -785,6 +831,7 @@ export function normalizeTemplate(tpl) {
     ...(Number(tpl.maxToolIterations) > 0
       ? { maxToolIterations: Math.floor(Number(tpl.maxToolIterations)) }
       : {}),
+    ...(normalizeRounds(tpl.maxRounds) ? { maxRounds: normalizeRounds(tpl.maxRounds) } : {}),
     evalType: tpl.evalType in EVAL_TYPES ? tpl.evalType : DEFAULT_EVAL_TYPE,
     ...(typeof tpl.language === 'string' && tpl.language.trim() ? { language: tpl.language.trim() } : {}),
     worker: tpl.worker?.provider && tpl.worker?.model
@@ -851,6 +898,9 @@ export function resolveInstance(node, tpl) {
     effort,
     ...(Number(ov.maxToolIterations ?? t?.maxToolIterations) > 0
       ? { maxToolIterations: Math.floor(Number(ov.maxToolIterations ?? t.maxToolIterations)) }
+      : {}),
+    ...(normalizeRounds(ov.maxRounds ?? t?.maxRounds)
+      ? { maxRounds: normalizeRounds(ov.maxRounds ?? t.maxRounds) }
       : {}),
     ...(t?.role === 'evaluation' ? { evalType } : {}),
     ...(role === 'translate' ? { language: ov.language ?? t?.language ?? 'English' } : {}),
@@ -969,6 +1019,9 @@ export function overridableFields(node) {
   if (d.category != null || d.role === 'execute') fields.add('category');
   if (d.evalType != null || d.role === 'evaluation') fields.add('evalType');
   if (d.role === 'translate' || d.language != null) fields.add('language');
+  // How many rounds an interrogation gets is the one knob a person actually
+  // wants per launch: three for a real idea, one when they already know.
+  if (d.role === 'interrogate') fields.add('maxRounds');
   // `tools` is the grant. agentTask nodes hold any of them; an aiStep may hold
   // read-effect ones (a planner that can check the time or read a page plans
   // better — DESIGN-SPEC.md §5), which the linter polices by effect.

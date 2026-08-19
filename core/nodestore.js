@@ -35,25 +35,61 @@ export class NodeStore {
 
   // Node rework migration: the per-category work templates and the separate
   // evaluation templates were combined (work / evaluation / combine / split).
-  // Retired seed files are removed and any missing current seed is written —
-  // stored flows referencing the old ids are rewritten at load time
-  // (LEGACY_TEMPLATE_MAP in core/flowstore.js). User-created templates (ids
-  // outside the seed sets) are never touched. Idempotent.
+  // Retired seed files are removed; stored flows referencing the old ids are
+  // rewritten at load time (LEGACY_TEMPLATE_MAP in core/flowstore.js).
+  // User-created templates (ids outside the seed sets) are never touched.
+  // Idempotent.
+  //
+  // A NEW seed then has to reach a library that has already migrated, without
+  // resurrecting one the user deliberately deleted — and "is the file absent?"
+  // cannot tell those apart. So the library records which seed ids it has ever
+  // installed. Absent from that record means new: write it. Present but
+  // missing on disk means deleted: leave it alone. The record is seeded from
+  // whatever is on disk the first time it is written, so an existing library
+  // adopts its current shape as the baseline rather than being handed the
+  // whole catalog again.
+  //
+  // Before this, a seed added after the rework shipped in code and appeared in
+  // no existing library at all: `migrateSeeds` only wrote missing seeds when it
+  // had just retired something, which by definition never happens twice.
   migrateSeeds() {
-    let retired = false;
     for (const id of RETIRED_SEED_IDS) {
-      if (fs.existsSync(this.templatePath(id))) {
-        fs.rmSync(this.templatePath(id), { force: true });
-        retired = true;
-      }
+      if (fs.existsSync(this.templatePath(id))) fs.rmSync(this.templatePath(id), { force: true });
     }
-    // Only a library that actually held the old set gets the new seeds — an
-    // already-migrated library keeps the user's deletions.
-    if (!retired) return false;
+    const installed = this.readInstalledSeeds();
+    let added = false;
     for (const tpl of SEED_NODE_TEMPLATES) {
-      if (!fs.existsSync(this.templatePath(tpl.id))) this.save(tpl);
+      if (installed.has(tpl.id)) continue;
+      installed.add(tpl.id);
+      if (!fs.existsSync(this.templatePath(tpl.id))) { this.save(tpl); added = true; }
     }
-    return true;
+    this.writeInstalledSeeds(installed);
+    return added;
+  }
+
+  // The seed ids this library has already been offered. First call adopts the
+  // ids currently on disk, so nothing pre-existing is treated as new.
+  readInstalledSeeds() {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.installedSeedsPath(), 'utf8'));
+      if (Array.isArray(raw?.ids)) return new Set(raw.ids.filter(id => typeof id === 'string'));
+    } catch { /* absent or unreadable: fall through to the on-disk baseline */ }
+    return new Set(fs.readdirSync(this.rootDir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => f.slice(0, -5)));
+  }
+
+  writeInstalledSeeds(ids) {
+    const dir = path.dirname(this.installedSeedsPath());
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(this.installedSeedsPath(),
+        JSON.stringify({ ids: [...ids].sort() }, null, 2));
+    } catch { /* a library we cannot write to still works; it just re-offers seeds */ }
+  }
+
+  installedSeedsPath() {
+    return path.join(this.rootDir, '_system', 'seeded.json');
   }
 
   templatePath(id) {

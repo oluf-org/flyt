@@ -229,7 +229,7 @@ test('pickDefaultWorker: single-provider users get that provider\'s best option'
   const codeHigh = { type: 'agentTask', data: { role: 'execute', category: 'Code general', effort: 'high' } };
   assert.deepEqual(
     pickDefaultWorker(codeHigh, { providerKeys: { anthropic: 'k' } }),
-    { provider: 'anthropic', model: 'claude-opus-4-5' });
+    { provider: 'anthropic', model: 'claude-opus-5' });
   assert.deepEqual(
     pickDefaultWorker(codeHigh, { providerKeys: { openai: 'k' } }),
     { provider: 'openai', model: 'gpt-5.2' });
@@ -278,7 +278,7 @@ test('resolveWorker: explicit worker > categoryWorkers > priority defaults > exe
 
 test('the seed library is the combined set', () => {
   const ids = SEED_NODE_TEMPLATES.map(t => t.id).sort();
-  assert.deepEqual(ids, ['combine', 'compare', 'evaluation', 'general-analysis', 'orient', 'plan-start', 'prompt-refiner', 'split', 'translation', 'work']);
+  assert.deepEqual(ids, ['combine', 'compare', 'evaluation', 'general-analysis', 'interrogate', 'orient', 'plan-start', 'prompt-refiner', 'split', 'translation', 'work']);
 });
 
 test('NodeStore.migrateSeeds retires the old set and writes the combined one, once', () => {
@@ -294,4 +294,34 @@ test('NodeStore.migrateSeeds retires the old set and writes the combined one, on
   ns.remove('split');
   new NodeStore(dir);
   assert.equal(ns.get('split'), null);
+});
+
+// D41. A seed added AFTER the rework has to reach a library that already
+// migrated. Before the installed-seeds record, `migrateSeeds` only wrote
+// missing seeds in the same construction that retired an old one — which
+// happens exactly once per library, so every later seed shipped in code and
+// appeared in nobody's library.
+test('a seed added after the rework reaches an already-migrated library', () => {
+  const dir = tmp();
+  // A library holding today's seed set, already migrated (no retired ids).
+  for (const tpl of SEED_NODE_TEMPLATES) {
+    fs.writeFileSync(path.join(dir, `${tpl.id}.json`), JSON.stringify(tpl));
+  }
+  new NodeStore(dir);
+  // Now a NEW seed appears in code. Simulate it by removing the record's
+  // knowledge of one id, which is exactly the state a new seed is in.
+  const recordPath = path.join(dir, '_system', 'seeded.json');
+  const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+  record.ids = record.ids.filter(id => id !== 'compare');
+  fs.writeFileSync(recordPath, JSON.stringify(record));
+  fs.rmSync(path.join(dir, 'compare.json'));
+
+  const ns = new NodeStore(dir);
+  assert.ok(ns.get('compare'), 'a seed the library has never been offered is installed');
+
+  // And a deletion still sticks: the id is in the record now, so removing the
+  // file must not bring it back on the next construction.
+  ns.remove('compare');
+  new NodeStore(dir);
+  assert.equal(new NodeStore(dir).get('compare'), null, 'a deleted seed stays deleted');
 });

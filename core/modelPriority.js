@@ -15,8 +15,13 @@
 //     strong multilingual — preferred for translation and heavy evaluation.
 //   - Kimi K2.7-code is the budget agentic coder (5-7x cheaper than frontier
 //     closed models at competitive SWE-bench); K2.6 is its general model.
-//   - OpenRouter mirrors the same frontier models, so a user with only an
-//     OpenRouter key still reaches the per-task best pick.
+//   - OpenRouter carries those AND the open-weight challengers, which is why
+//     its table is no longer a mirror of the others: see the note on it below.
+//
+// These rankings are a judgement about models, and models move. When one goes
+// stale it does so silently — an id that no longer exists still routes, because
+// OpenRouter resolves near-misses — so treat the tables as dated, not as facts,
+// and re-check them the way the openrouter note describes.
 //
 // Two layers, per the rework spec:
 //   PROVIDER_MODEL_PRIORITY — per provider: ranked model ids per kind × effort,
@@ -34,38 +39,38 @@ export const PROVIDER_MODEL_PRIORITY = {
   anthropic: {
     code: {
       low: ['claude-haiku-4-5', 'claude-sonnet-5'],
-      medium: ['claude-sonnet-5', 'claude-opus-4-5'],
-      high: ['claude-opus-4-5', 'claude-sonnet-5']
+      medium: ['claude-sonnet-5', 'claude-opus-5'],
+      high: ['claude-opus-5', 'claude-sonnet-5']
     },
     docs: {
       low: ['claude-haiku-4-5'],
       medium: ['claude-sonnet-5', 'claude-haiku-4-5'],
-      high: ['claude-sonnet-5', 'claude-opus-4-5']
+      high: ['claude-sonnet-5', 'claude-opus-5']
     },
     planning: {
       low: ['claude-sonnet-5', 'claude-haiku-4-5'],
-      medium: ['claude-sonnet-5', 'claude-opus-4-5'],
-      high: ['claude-opus-4-5', 'claude-sonnet-5']
+      medium: ['claude-sonnet-5', 'claude-opus-5'],
+      high: ['claude-opus-5', 'claude-sonnet-5']
     },
     evaluation: {
       low: ['claude-haiku-4-5', 'claude-sonnet-5'],
       medium: ['claude-sonnet-5'],
-      high: ['claude-opus-4-5', 'claude-sonnet-5']
+      high: ['claude-opus-5', 'claude-sonnet-5']
     },
     analysis: {
       low: ['claude-haiku-4-5', 'claude-sonnet-5'],
       medium: ['claude-sonnet-5'],
-      high: ['claude-opus-4-5', 'claude-sonnet-5']
+      high: ['claude-opus-5', 'claude-sonnet-5']
     },
     translation: {
       low: ['claude-haiku-4-5'],
       medium: ['claude-sonnet-5', 'claude-haiku-4-5'],
-      high: ['claude-sonnet-5', 'claude-opus-4-5']
+      high: ['claude-sonnet-5', 'claude-opus-5']
     },
     general: {
       low: ['claude-haiku-4-5'],
       medium: ['claude-sonnet-5'],
-      high: ['claude-opus-4-5', 'claude-sonnet-5']
+      high: ['claude-opus-5', 'claude-sonnet-5']
     }
   },
   openai: {
@@ -183,43 +188,70 @@ export const PROVIDER_MODEL_PRIORITY = {
       high: ['gpt-5.2', 'gpt-5.2-codex']
     }
   },
-  // OpenRouter mirrors the frontier models under vendor-prefixed ids, so it
-  // simply inherits the cross-provider ranking.
+  // OpenRouter is not a mirror of the other tables (revised 2026-08-19).
+  //
+  // It was written as one — the same frontier ids with a vendor prefix — and
+  // that is how it went stale in two directions at once. Half the ids no longer
+  // exist in the catalog: `anthropic/claude-opus-4-5` and
+  // `anthropic/claude-haiku-4-5` carry the DASHED Anthropic-API spelling where
+  // OpenRouter uses dots, and `openai/o4` is simply gone. OpenRouter fuzzily
+  // resolves the first two, so nothing failed loudly; what broke quietly is
+  // everything keyed on the id — a model the catalog does not contain has no
+  // price and no context length here, so its spend is unpriced and its context
+  // unchecked.
+  //
+  // The second direction is the point of using OpenRouter at all. It carries
+  // the open-weight and challenger models the direct providers do not, and in
+  // mid-2026 those changed the arithmetic: DeepSeek V4 Pro sits around 80%
+  // SWE-Verified at $0.66/$1.98 per million against Sonnet 5's $2/$10 — the
+  // work most nodes do, at roughly a fifth of the price. So this table is now
+  // value-first and the frontier is the HIGH tier, where paying five times more
+  // buys something: the run that must not be re-run.
+  //
+  //   low     $0.14/$0.28   deepseek-v4-flash — routing, triage, summaries
+  //   medium  $0.66/$1.98   deepseek-v4-pro   — the workhorse
+  //   high    $5/$25        claude-opus-5     — the judgement calls
+  //
+  // Every id here was checked against the live catalog. Re-check before
+  // editing: `flyt probe <provider/model>` calls it once and says what came
+  // back, which is the only test that matters for a model id.
   openrouter: {
     code: {
-      low: ['anthropic/claude-haiku-4-5', 'openai/gpt-5-mini'],
-      medium: ['anthropic/claude-sonnet-5', 'openai/gpt-5.2', 'moonshotai/kimi-k2.7'],
-      high: ['anthropic/claude-opus-4-5', 'openai/gpt-5.2']
+      low: ['deepseek/deepseek-v4-flash-0731', 'openai/gpt-5.6-luna'],
+      medium: ['deepseek/deepseek-v4-pro-0813', 'moonshotai/kimi-k2.7-code', 'anthropic/claude-sonnet-5'],
+      high: ['anthropic/claude-opus-5', 'anthropic/claude-sonnet-5']
     },
     docs: {
-      low: ['anthropic/claude-haiku-4-5', 'openai/gpt-5-mini'],
-      medium: ['anthropic/claude-sonnet-5', 'openai/gpt-5'],
-      high: ['anthropic/claude-sonnet-5', 'openai/gpt-5.2']
+      low: ['deepseek/deepseek-v4-flash-0731', 'openai/gpt-5.6-luna'],
+      medium: ['deepseek/deepseek-v4-pro-0813', 'google/gemini-3.7-flash'],
+      high: ['anthropic/claude-sonnet-5', 'deepseek/deepseek-v4-pro-0813']
     },
     planning: {
-      low: ['anthropic/claude-sonnet-5', 'openai/gpt-5'],
-      medium: ['anthropic/claude-sonnet-5', 'openai/gpt-5.2'],
-      high: ['anthropic/claude-opus-4-5', 'openai/o4']
+      low: ['deepseek/deepseek-v4-pro-0813', 'deepseek/deepseek-v4-flash-0731'],
+      medium: ['deepseek/deepseek-v4-pro-0813', 'z-ai/glm-5.2'],
+      high: ['anthropic/claude-opus-5', 'openai/gpt-5.6-terra']
     },
     evaluation: {
-      low: ['anthropic/claude-haiku-4-5', 'openai/gpt-5-mini'],
-      medium: ['anthropic/claude-sonnet-5', 'openai/gpt-5.2'],
-      high: ['openai/o4', 'anthropic/claude-opus-4-5']
+      low: ['deepseek/deepseek-v4-flash-0731', 'openai/gpt-5.6-luna'],
+      medium: ['deepseek/deepseek-v4-pro-0813', 'z-ai/glm-5.2'],
+      // An evaluation that waves through bad work costs more than the model
+      // did, so this is the one kind where the top tier is not a luxury.
+      high: ['anthropic/claude-opus-5', 'openai/gpt-5.6-terra']
     },
     analysis: {
-      low: ['anthropic/claude-haiku-4-5', 'openai/gpt-5-mini'],
-      medium: ['anthropic/claude-sonnet-5', 'openai/gpt-5.2'],
-      high: ['anthropic/claude-opus-4-5', 'openai/o4']
+      low: ['deepseek/deepseek-v4-flash-0731', 'minimax/minimax-m3'],
+      medium: ['deepseek/deepseek-v4-pro-0813', 'z-ai/glm-5.2'],
+      high: ['anthropic/claude-opus-5', 'anthropic/claude-sonnet-5']
     },
     translation: {
-      low: ['openai/gpt-5-mini', 'anthropic/claude-haiku-4-5'],
-      medium: ['openai/gpt-5', 'anthropic/claude-sonnet-5'],
-      high: ['openai/gpt-5.2', 'anthropic/claude-sonnet-5']
+      low: ['google/gemini-3.7-flash', 'deepseek/deepseek-v4-flash-0731'],
+      medium: ['google/gemini-3.7-flash', 'openai/gpt-5.6-luna'],
+      high: ['openai/gpt-5.6-terra', 'anthropic/claude-sonnet-5']
     },
     general: {
-      low: ['anthropic/claude-haiku-4-5', 'openai/gpt-5-mini'],
-      medium: ['anthropic/claude-sonnet-5', 'openai/gpt-5'],
-      high: ['anthropic/claude-opus-4-5', 'openai/gpt-5.2']
+      low: ['deepseek/deepseek-v4-flash-0731', 'openai/gpt-5.6-luna'],
+      medium: ['deepseek/deepseek-v4-pro-0813', 'anthropic/claude-sonnet-5'],
+      high: ['anthropic/claude-opus-5', 'anthropic/claude-sonnet-5']
     }
   }
 };
@@ -287,6 +319,8 @@ const ROLE_KIND = {
   'feedback-review': 'evaluation', 'verify': 'evaluation', 'stitch': 'evaluation',
   'combine': 'evaluation', 'evaluation': 'evaluation',
   'analyze': 'analysis',
+  // D41. An interrogation is planning work: it decides what the thing IS.
+  'interrogate': 'planning',
   'translate': 'translation'
 };
 const CATEGORY_KIND = {

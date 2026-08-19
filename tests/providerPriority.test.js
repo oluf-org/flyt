@@ -36,7 +36,7 @@ test('the provider order chooses the provider; that provider\'s ranking chooses 
   // best for this kind and effort — the two concerns compose in one direction.
   const r = planDefaultRoute(codeNode, { providerKeys: allKeys, providerPriority: ['openrouter', 'anthropic'] });
   assert.equal(r.provider, 'openrouter');
-  assert.equal(r.model, 'anthropic/claude-sonnet-5'); // openrouter's top code/medium pick
+  assert.equal(r.model, 'deepseek/deepseek-v4-pro-0813'); // openrouter's top code/medium pick
   assert.equal(r.order, 'settings-priority');
 });
 

@@ -33,6 +33,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt log <runId> [--quiet]          the run's event log (--event a,b --node n --tail N)
   flyt approve|reject|stop <runId>    answer a gate or stop a run
   flyt answer <runId> "<text>"        reply to a node that stopped to ask
+                                      (waits for the run, and shows the next round)
   flyt why [<runId>]                  why a run failed or stalled (default: latest)
   flyt probe <model>...               call a model once and report what came back
   flyt doctor [--flow <id>] [--probe] providers, priority, library — and the models a flow pins
@@ -77,6 +78,7 @@ Options
   --token <t>       bearer token for serve (default: generated and printed)
   --approval <m>    ask | smart | always   (default: the saved setting)
   --gates approve   auto-approve node gates while waiting (unattended)
+  --answer <text>   reply to a question the run asks; repeatable, one per round
   --timeout <sec>   how long to wait for a run to settle (default 1800)
   --goal <text>     what a queued task must achieve
   --value/--effort  1-5, feeding the picker's score (default 3 each)
@@ -179,8 +181,9 @@ function levelModels(flag) {
 // Poll a run to a terminal stage. Files are the source of truth (principle #1),
 // so polling them is not a workaround — it is reading the same state the canvas
 // reads, and it survives this process dying halfway.
-async function waitForRun(api, projectId, runId, { timeoutSec, autoApprove }) {
+async function waitForRun(api, projectId, runId, { timeoutSec, autoApprove, answers = [] }) {
   const deadline = Date.now() + timeoutSec * 1000;
+  const queued = [...answers];
   let lastStage = null;
   for (;;) {
     const snap = await api.invoke('run:snapshot', { projectId, runId });
@@ -192,9 +195,37 @@ async function waitForRun(api, projectId, runId, { timeoutSec, autoApprove }) {
       say('  gate — approving (--gates approve)');
       await api.invoke('run:approve', { projectId, runId });
     }
+    // The input gate. Previously this fell through to the poll, so a run that
+    // stopped to ask a question sat here for the full 30-minute timeout and
+    // then reported `timeout` — the one stage where the run is healthy, waiting
+    // on the caller, and says nothing about it. Now the questions come back to
+    // whoever started the run, which is the entire point of asking them.
+    if (stage === 'awaiting_input') {
+      if (!queued.length) return { stage, snapshot: snap };
+      const next = queued.shift();
+      say(`  question — answering (--answer, ${queued.length} left)`);
+      await api.invoke('run:answerInput', { projectId, runId, text: next });
+      lastStage = null;
+    }
     if (Date.now() > deadline) return { stage: 'timeout', snapshot: snap };
     await sleep(500);
   }
+}
+
+// The questions a parked run is asking, as the person on the terminal should
+// see them: numbered, with the reason and any candidate answers, and ending in
+// the exact command that answers them.
+function renderQuestionGate(runId, meta) {
+  const questions = meta?.pendingQuestions ?? [];
+  const lines = [`"${meta?.pendingNodeId ?? 'a node'}" stopped to ask you ${
+    questions.length === 1 ? 'a question' : `${questions.length} questions`}:`, ''];
+  for (const [i, q] of questions.entries()) {
+    lines.push(`  ${i + 1}. ${q.text}`);
+    if (q.why) lines.push(`     why: ${q.why}`);
+    if (q.options?.length) lines.push(`     options: ${q.options.join(' | ')}`);
+  }
+  lines.push('', `Answer all of them in one reply:`, `  flyt answer ${runId} "<your answer>"`);
+  return lines.join('\n');
 }
 
 // --- commands --------------------------------------------------------------
@@ -683,9 +714,31 @@ async function main() {
       const runId = positional[1];
       const text = String(flags.text ?? positional.slice(2).join(' ') ?? '').trim();
       if (!runId || !text) return die('flyt answer <runId> "<your answer>"');
-      return out(await api.invoke('run:answerInput', {
-        projectId: openProject(api, engine), runId, text
-      }));
+      const projectId = openProject(api, engine);
+      await api.invoke('run:answerInput', { projectId, runId, text });
+      // Answering resumes the run, so this command waits on it exactly as
+      // `flyt run` does: an interrogation is several rounds, and a reply that
+      // returned `{ok:true}` and dropped the caller left them polling
+      // `flyt snapshot` to find out whether they were asked again.
+      const { stage, snapshot } = await waitForRun(api, projectId, runId, {
+        timeoutSec: Number(flags.timeout ?? 1800),
+        autoApprove: flags.gates === 'approve'
+      });
+      if (asJson) {
+        return out({
+          ok: stage === 'done', runId, stage,
+          ...(stage === 'awaiting_input' ? { questions: snapshot.meta?.pendingQuestions ?? [] } : {}),
+          snapshot
+        });
+      }
+      if (stage === 'awaiting_input') {
+        say(`run ${runId}: waiting on you`);
+        return out(renderQuestionGate(runId, snapshot.meta));
+      }
+      say(`run ${runId}: ${stage}`);
+      const outputs = Object.values(snapshot.nodeOutputs ?? {});
+      process.exitCode = stage === 'done' ? 0 : 1;
+      return out(outputs.length ? outputs[outputs.length - 1] : `(no output; stage ${stage})`);
     }
 
     // --- Diagnostics (D40) ---------------------------------------------------
@@ -763,15 +816,32 @@ async function main() {
       say(`run ${runId} started`);
       const { stage, snapshot } = await waitForRun(api, projectId, runId, {
         timeoutSec: Number(flags.timeout ?? 1800),
-        autoApprove: flags.gates === 'approve'
+        autoApprove: flags.gates === 'approve',
+        // `--answer` pre-loads replies, one per round of questions, so an
+        // interrogation can be driven from a script or by an agent without a
+        // terminal — and without pretending nobody was there to ask.
+        answers: [].concat(flags.answer ?? []).map(String)
       });
       // A run that did not finish is explained where it failed, without being
       // asked (D40). The alternative is handing back an exit code and a stage
       // name and making the reader — a person at 1am, or an agent with no
       // memory of this session — go and find the next command themselves.
-      const explained = stage === 'done' ? null : await api.invoke('run:explain', { projectId, runId });
-      if (asJson) out({ ok: stage === 'done', runId, stage, snapshot, ...(explained ? { why: explained } : {}) });
-      else {
+      // A run parked on a question is not a failure and has no cause to
+      // explain — it is waiting for the caller. Diagnosing it would bury the
+      // question under machinery.
+      const asking = stage === 'awaiting_input';
+      const explained = (stage === 'done' || asking)
+        ? null : await api.invoke('run:explain', { projectId, runId });
+      if (asJson) {
+        out({
+          ok: stage === 'done', runId, stage, snapshot,
+          ...(asking ? { questions: snapshot.meta?.pendingQuestions ?? [] } : {}),
+          ...(explained ? { why: explained } : {})
+        });
+      } else if (asking) {
+        say(`run ${runId}: waiting on you`);
+        console.log(renderQuestionGate(runId, snapshot.meta));
+      } else {
         say(`run ${runId}: ${stage}`);
         // The deliverable, not the machinery: whatever the last node produced.
         const outputs = Object.values(snapshot.nodeOutputs ?? {});

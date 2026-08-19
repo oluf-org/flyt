@@ -71,11 +71,19 @@ export default function ChatRun({
   const live = Boolean(loaded && !isTerminal(stage));
   const paused = Boolean(meta?.paused);
   const gated = stage === 'awaiting_approval';
-  // The refiner's input gate (DECISIONS.md D27): the run is parked with
-  // clarifying questions answered from the composer — not an approve/reject
-  // dialog, so it gets an inline card, not the blocking ApprovalModal.
+  // The input gate (DECISIONS.md D27): the run is parked with clarifying
+  // questions answered from the composer — not an approve/reject dialog, so it
+  // gets an inline card, not the blocking ApprovalModal.
   const awaitingInput = stage === 'awaiting_input';
   const questions = awaitingInput ? (meta?.pendingQuestions ?? []) : [];
+  // WHICH node is asking. Three roles park here — the refiner, the orientation
+  // (D38) and the interrogation (D41) — and the card announced all three as
+  // "the refiner", so the one piece of context the reader needs in order to
+  // answer well was the thing the card got wrong.
+  const askingNode = awaitingInput
+    ? (snapshot?.flow?.nodes ?? []).find(n => n.id === meta?.pendingNodeId) ?? null
+    : null;
+  const askingTitle = askingNode?.data?.title || askingNode?.id || 'This run';
   const parked = gated || awaitingInput;
   // Gate copy shared by the dialog and the minimized dock (gated ⇒ meta non-null).
   const gate = gated ? gateCopy(meta) : null;
@@ -368,20 +376,37 @@ export default function ChatRun({
             </button>
           )}
 
-          {/* The refiner's input gate (T6): questions docked above the composer,
-              answered inline. Not blocking like an approval gate — the user
-              reads the run, then types one reply covering the questions. */}
+          {/* The input gate (T6): questions docked above the composer, answered
+              inline. Not blocking like an approval gate — the user reads the
+              run, then types one reply covering the questions. */}
           {awaitingInput && (
             <div className="input-gate" role="status">
               <div className="input-gate-head">
-                <span className="input-gate-glyph" aria-hidden>✍</span>
-                <strong>The refiner needs a quick answer to continue</strong>
+                <span className="input-gate-glyph" aria-hidden>{askingNode?.data?.icon || '✍'}</span>
+                <strong>{askingTitle} needs an answer to continue</strong>
               </div>
               <ol className="input-gate-questions">
                 {questions.map((q, i) => (
                   <li key={q.id ?? i}>
                     <span className="input-gate-q">{q.text}</span>
                     {q.why && <span className="input-gate-why">{q.why}</span>}
+                    {/* Candidate answers are clickable because that is the whole
+                        point of naming them: a fork the asker already framed
+                        should cost a click, not a sentence. Clicking appends
+                        rather than replaces, so several picks make one reply. */}
+                    {q.options?.length > 0 && (
+                      <span className="input-gate-options">
+                        {q.options.map((o, oi) => (
+                          <button
+                            key={oi} type="button" className="input-gate-option"
+                            onClick={() => {
+                              setText(t => (t.trim() ? `${t.trimEnd()}\n${q.text} — ${o}` : `${q.text} — ${o}`));
+                              taRef.current?.focus();
+                            }}
+                          >{o}</button>
+                        ))}
+                      </span>
+                    )}
                   </li>
                 ))}
               </ol>
@@ -420,7 +445,7 @@ export default function ChatRun({
               value={text}
               onChange={e => setText(e.target.value)}
               onKeyDown={onKeyDown}
-              aria-label={awaitingInput ? 'Answer the refiner’s question' : 'Reply to the run'}
+              aria-label={awaitingInput ? `Answer the question from ${askingTitle}` : 'Reply to the run'}
               disabled={!loaded || gated || (live && !awaitingInput)}
               rows={2}
             />

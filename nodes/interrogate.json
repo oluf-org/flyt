@@ -1,0 +1,20 @@
+{
+  "id": "interrogate",
+  "name": "Interrogate",
+  "description": "Interrogates the person behind the request over several bounded rounds — goal, non-goals, constraints, acceptance — then writes the specification their answers settled.",
+  "category": null,
+  "icon": "?",
+  "baseType": "aiStep",
+  "role": "interrogate",
+  "effort": "medium",
+  "maxRounds": 3,
+  "evalType": "step",
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "toolCeiling": null,
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false,
+  "outputs": null
+}

@@ -321,20 +321,68 @@ export function parseRefineQuestions(text) {
 // `text` accepts the synonym `question`; invalid entries are dropped rather
 // than failing the whole block.
 export const MAX_QUESTIONS = 3;
-export function normalizeQuestions(raw) {
+// The interrogation node exists to ask, so its per-round cap is wider than the
+// refiner's — but only a little. A round of ten questions is a form, and a form
+// is what a person abandons; six is the most one reply can carry honestly.
+export const MAX_INTERROGATION_QUESTIONS = 6;
+export function normalizeQuestions(raw, max = MAX_QUESTIONS) {
   const out = [];
   for (const [i, q] of (Array.isArray(raw) ? raw : []).entries()) {
-    if (out.length >= MAX_QUESTIONS) break;
+    if (out.length >= max) break;
     if (!q || typeof q !== 'object') continue;
     const qText = isStr(q.text) ? q.text.trim() : (isStr(q.question) ? q.question.trim() : '');
     if (!qText) continue;
+    // `options` is the ask_human idea carried to the gate: a question whose
+    // candidate answers are named is a click, not an essay, and the reply comes
+    // back in the vocabulary the asker used.
+    const options = (Array.isArray(q.options) ? q.options : [])
+      .map(o => (isStr(o) ? o.trim() : '')).filter(Boolean).slice(0, 6);
     out.push({
       id: isStr(q.id) && ID_RE.test(q.id.trim()) ? q.id.trim() : `q${i + 1}`,
       text: qText,
-      ...(isStr(q.why) ? { why: q.why.trim() } : {})
+      ...(isStr(q.why) ? { why: q.why.trim() } : {}),
+      ...(options.length ? { options } : {})
     });
   }
   return out;
+}
+
+// --- The interrogation contract ---------------------------------------------
+//
+// The inverse of the refiner. `refine` is told to resolve ambiguity itself and
+// ask only when it must; `interrogate` is told the opposite — the questions ARE
+// the deliverable's route, and it runs several bounded rounds against a person
+// before it writes the spec. So it needs a status the refiner does not have:
+// "still asking" vs "settled", because the node cannot be released on the
+// absence of a questions array alone (a model that simply forgot the fence
+// would otherwise read as a finished specification).
+export function parseInterrogation(text) {
+  const obj = extractJson(text);
+  if (!obj || typeof obj !== 'object') {
+    return { ok: false, errors: ['no ```json block with { "status", "questions" } found'] };
+  }
+  const status = isStr(obj.status) && ['asking', 'settled'].includes(obj.status.trim())
+    ? obj.status.trim() : null;
+  if (!status) {
+    return { ok: false, errors: ['"status" must be "asking" or "settled"'] };
+  }
+  const questions = normalizeQuestions(obj.questions, MAX_INTERROGATION_QUESTIONS);
+  if (status === 'asking' && !questions.length) {
+    return { ok: false, errors: ['"status": "asking" with no usable question — say "settled" instead'] };
+  }
+  const list = key => (Array.isArray(obj[key]) ? obj[key] : [])
+    .map(v => (isStr(v) ? v.trim() : '')).filter(Boolean);
+  return {
+    ok: true,
+    interrogation: {
+      status,
+      confidence: isStr(obj.confidence) && ['low', 'medium', 'high'].includes(obj.confidence.trim())
+        ? obj.confidence.trim() : 'low',
+      questions: status === 'asking' ? questions : [],
+      assumptions: list('assumptions'),
+      unknowns: list('unknowns')
+    }
+  };
 }
 
 // Prose without its trailing contract block — the `orient` twin of

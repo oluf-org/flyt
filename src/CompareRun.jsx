@@ -333,6 +333,13 @@ export default function CompareRun({
                           <li key={q.id ?? qi}>
                             <span className="input-gate-q">{q.text}</span>
                             {q.why && <span className="input-gate-why">{q.why}</span>}
+                            {q.options?.length > 0 && (
+                              <span className="input-gate-options">
+                                {q.options.map((o, oi) => (
+                                  <span key={oi} className="input-gate-option is-static">{o}</span>
+                                ))}
+                              </span>
+                            )}
                           </li>
                         ))}
                       </ol>

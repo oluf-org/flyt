@@ -4202,6 +4202,32 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
   display: block; margin-top: 2px;
   color: var(--dim); font-size: 11.5px; font-style: italic;
 }
+/* Candidate answers, when the asker named them (D41). Chips rather than a
+   select: they are a shortcut into the reply box, not a control that decides
+   anything, and several of them can be picked to build one answer. */
+.input-gate-options {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-top: 6px;
+}
+.input-gate-option {
+  padding: 3px 9px;
+  font: inherit; font-size: 11.5px; line-height: 1.5;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+.input-gate-option:hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.input-gate-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The comparison panes show the same options as context; there is one shared
+   composer there, so a per-pane chip would have nowhere honest to write. */
+.input-gate-option.is-static { cursor: default; color: var(--dim); }
+
 .input-gate-hint { color: var(--faint); font-size: 11.5px; }
 
 /* ---------- Comparison (DECISIONS.md D27) ---------- */

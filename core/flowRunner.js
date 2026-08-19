@@ -62,14 +62,23 @@ import { createWriteLedger } from './writeLedger.js';
 import { executeTool, grantContext, resolveTools, toolLibraryForLint } from './tools/index.js';
 import { narrowCeiling } from '../src/toolGrants.js';
 import { checkToolCall } from './safetyCheck.js';
-import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, parseRefineQuestions, parseLanePlan, parseOrientation, stripRefineQuestions, stripJsonBlock, extractJson } from './planEval.js';
+import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, parseRefineQuestions, parseLanePlan, parseOrientation, parseInterrogation, stripRefineQuestions, stripJsonBlock, extractJson } from './planEval.js';
 import { JUDGE_SYSTEM, buildJudgePrompt, parseJudgeVerdict } from './judge.js';
 import { deriveRunName } from './state.js';
 import {
   createNodeFromTemplate, getTemplate, resolveFlow, resolveInstance, primaryPort,
   effectiveRole, isFeedbackEdge, forwardEdges, EFFORT_MAX_TOKENS, effortBudget, REASONING_HEADROOM, LEGACY_TEMPLATE_MAP,
-  validateOverrideMap, mergeOverrideMaps
+  validateOverrideMap, mergeOverrideMaps, questionRoundsFor
 } from '../src/flowTypes.js';
+
+// The roles that may park the whole run to ask the person a question, and the
+// counter that decides when one has asked enough. `answeredInputs` records one
+// entry per completed round (it always appended, never deduplicated), so the
+// rounds a node has already had are just how many times its id appears.
+export const ASKING_ROLES = ['refine', 'orient', 'interrogate'];
+export function countAnsweredRounds(meta, nodeId) {
+  return (meta?.answeredInputs ?? []).filter(id => id === nodeId).length;
+}
 import { pickDefaultWorker, planDefaultRoute, providerModelsFor, taskKindOf, PROVIDER_ORDER } from './modelPriority.js';
 import { homeSeed, projectGates } from './homeSeed.js';
 import { taskNodeStatus } from '../src/runGraph.js';
@@ -282,6 +291,55 @@ const DEFAULT_SYSTEM = {
     '{ "questions": [{ "id": "<short-slug>", "text": "<the question>", "why": "<what changes depending on the answer>" }] }',
     'At most 3 questions; fewer is better; usually none. Every question you ask',
     'stalls the run and costs the user a round-trip — ask only when you truly must.'
+  ].join('\n'),
+  // D41. Everything the refiner's prompt says about restraint is inverted here,
+  // deliberately. The refiner is right for a request that is already a request;
+  // this node is for an IDEA, where the missing half is the whole job and an
+  // assumption quietly taken is the failure. Watched with the refiner on this
+  // very feature: it asked nothing, assumed the deliverable was a written
+  // interview template, and produced a confident brief for work nobody wanted.
+  interrogate: [
+    'ROLE: interrogate',
+    'You are the Interrogation node. Someone has given you an IDEA, not a',
+    'specification. Your job is to interrogate them until it becomes one, over a',
+    'small number of rounds, and only then to write it down.',
+    'ASK. Do not resolve a real ambiguity by assuming it — that is the failure',
+    'this node exists to prevent. A confident specification for work nobody',
+    'asked for is worse than an honest question.',
+    'But interrogate like a good colleague, not a form:',
+    '- Ask what you cannot get any other way. Never ask what the request, the',
+    '  context you were given, or an obvious convention already answers.',
+    '- Take the load-bearing forks first: what this is FOR, who or what consumes',
+    '  it, what would make it wrong, what is deliberately out of scope. Detail',
+    '  follows a settled shape; asked before it, detail is noise.',
+    '- Name the candidate answers whenever the question is a choice. A question',
+    '  with options is answered in a click; an open one costs a paragraph.',
+    '- Say what you would do by default, so silence is still an answer.',
+    '- Each round, go deeper on what the last answers opened up. Re-asking one',
+    '  question in different words is how an interrogation loses the person.',
+    'STOP EARLY when the answers have settled the shape. Rounds are a ceiling,',
+    'not a quota, and an unnecessary round is a person deciding this tool is not',
+    'worth using.',
+    'EVERY TURN, write the specification as it stands right now, in Markdown —',
+    'never a bare list of questions, because a person can only judge a question',
+    'against what you currently believe. Mark anything unsettled inline as TBD:',
+    '# Specification',
+    '## Goal — ## Non-goals — ## Constraints — ## Deliverable — ## Acceptance',
+    '## Assumptions — what you settled yourself, and on what basis.',
+    'Then end with EXACTLY ONE ```json block and nothing after it:',
+    '{',
+    '  "status": "asking" | "settled",',
+    '  "confidence": "low" | "medium" | "high",',
+    '  "questions": [{ "id": "<slug>", "text": "<the question>", "why": "<what changes with the answer>", "options": ["<candidate>", "..."] }],',
+    '  "assumptions": ["<what you settled without asking, and why that was safe>"],',
+    '  "unknowns": ["<what is still unsettled and could not be asked>"]',
+    '}',
+    '"asking" parks the run and puts your questions in front of the person; at',
+    'most 6 per round, and 6 is a lot. "settled" ends the interrogation and hands',
+    'the specification downstream — say it as soon as it is true.',
+    'On your LAST round you will be told so. Then stop asking, take the remaining',
+    'forks yourself, record each one under "assumptions" AND in the spec, and',
+    'settle. An interrogation that ends still asking has produced nothing.'
   ].join('\n'),
   // DECISIONS.md D38. The cheapest node in the flow, and the one that aims
   // every expensive node after it: what is THIS project, and what relationship
@@ -569,6 +627,31 @@ export function contextIsStale(stamp, { subject = null, head = null, days = 30, 
   const written = Date.parse(stamp.written ?? '');
   if (!Number.isFinite(written)) return true;
   return now - written > days * 24 * 60 * 60 * 1000;
+}
+
+// The questions a parked node is asking, as the Markdown a person reads in the
+// run feed and on the CLI. One renderer for all three asking roles, so a
+// question written with candidate answers looks the same wherever it surfaces
+// — options included, because "pick one of these" is the difference between a
+// reply that takes ten seconds and one that takes a paragraph.
+export function renderQuestions(questions) {
+  return (questions ?? []).map((q, i) => [
+    `${i + 1}. ${q.text}`,
+    q.why ? `   (why: ${q.why})` : '',
+    q.options?.length ? `   options: ${q.options.join(' · ')}` : ''
+  ].filter(Boolean).join('\n')).join('\n\n');
+}
+
+// What a specification did NOT settle. Written as its own port because it is
+// the part a reader must not have to infer: an assumption taken because nobody
+// was there to ask reads exactly like a decision, unless something says so.
+export function renderOpenItems({ assumptions = [], unknowns = [], confidence = 'low' } = {}) {
+  const lines = [`Confidence: ${confidence}`];
+  lines.push('', '## Assumptions taken');
+  lines.push(assumptions.length ? assumptions.map(a => `- ${a}`).join('\n') : '- (none)');
+  lines.push('', '## Still unknown');
+  lines.push(unknowns.length ? unknowns.map(u => `- ${u}`).join('\n') : '- (none)');
+  return lines.join('\n');
 }
 
 function gitHead(root) {
@@ -3062,11 +3145,14 @@ export class FlowRunner {
 
   // A node emitted clarifying questions: park the run at the awaiting_input
   // gate (sibling of awaiting_approval) until the user answers from the
-  // composer, then re-run the node with the answers as context. One round only
-  // — the re-run carries answeredInputs so it can't park again.
+  // composer, then re-run the node with the answers as context.
   //
   // Role-agnostic since D38: `refine` asks about the request, `orient` asks
-  // about the workspace, and both park identically. Returns { ok, requeue? }.
+  // about the workspace, and both park identically. Since D41 the number of
+  // rounds is the node's, not the gate's: `refine`/`orient` still get exactly
+  // one, `interrogate` gets several, and `answeredInputs` is COUNTED rather
+  // than tested for membership — it already appended one entry per round, so
+  // the record needed no new shape. Returns { ok, requeue? }.
   async handleNodeQuestions(runId, flow, node, questions) {
     // Nobody is there to answer (DESIGN-SPEC.md §5: 'always' IS "the agent runs
     // unattended"). A flow that can park forever is not usable from the loop,
@@ -3095,14 +3181,29 @@ export class FlowRunner {
     // cancelled end state is already written; just unwind.
     if (answers == null && this.stopRequests.has(runId)) return { ok: false };
     const text = String(answers ?? '').trim() || '(the user provided no answer — proceed on your stated assumptions)';
-    this.store.writeNodeOutput(runId, `${node.id}.answers`, text);
+    // Multi-round (D41): the transcript is the node's second deliverable, so a
+    // later round must not overwrite what an earlier one established. One round
+    // per section, in order, headed by the questions that produced it — a spec
+    // whose interrogation reads back as a conversation can be argued with.
+    const prior = this.store.readNodeOutput(runId, `${node.id}.answers`) ?? '';
+    const round = countAnsweredRounds(this.store.readMeta(runId), node.id) + 1;
+    const section = [
+      `### Round ${round}`,
+      questions.map((q, i) => `**Q${i + 1}.** ${q.text}`).join('\n'),
+      '',
+      text
+    ].join('\n');
+    this.store.writeNodeOutput(runId, `${node.id}.answers`,
+      prior.trim() ? `${prior.trimEnd()}\n\n${section}` : section);
+    // One write, not two. Clearing the pending question and leaving the stage
+    // at awaiting_input — even for the microseconds between two writes — is a
+    // readable state in which the run says it is asking something and has no
+    // question to show. A snapshot taken there renders an empty gate.
     const meta = this.store.readMeta(runId);
-    this.store.writeMeta(runId, {
-      ...meta,
+    this.store.setStage(runId, 'execution', {
       answeredInputs: [...(meta.answeredInputs ?? []), node.id],
       pendingNodeId: null, pendingGateKind: null, pendingQuestions: null
     });
-    this.store.setStage(runId, 'execution');
     this.store.appendLog(runId, { event: 'input_answered', node: node.id, chars: text.length });
     this.notify(runId);
     // Requeue the refine node: the walk re-runs it, now with the answers in
@@ -3467,8 +3568,18 @@ export class FlowRunner {
       // answers to the questions it asked (DECISIONS.md D27).
       // Both roles that may park at the input gate re-run with the user's
       // answers in context (DECISIONS.md D27, D38).
-      const gateAnswers = (role === 'refine' || role === 'orient')
+      const gateAnswers = ASKING_ROLES.includes(role)
         ? this.store.readNodeOutput(runId, `${node.id}.answers`) : null;
+      // D41. An interrogation has to know where it stands in its own budget:
+      // "you have one round left" is what turns a node that would keep asking
+      // into one that settles. Told plainly rather than implied, because a
+      // model cannot count rounds it cannot see.
+      const roundsUsed = role === 'interrogate'
+        ? countAnsweredRounds(this.store.readMeta(runId), node.id) : 0;
+      const roundsAllowed = role === 'interrogate' ? questionRoundsFor(node) : 0;
+      const roundNotice = role !== 'interrogate' ? '' : (roundsUsed + 1 >= roundsAllowed
+        ? `INTERROGATION BUDGET: this is your LAST round (${roundsUsed + 1} of ${roundsAllowed}). Do not ask again — settle the remaining forks yourself, record them as assumptions, and emit "status": "settled".`
+        : `INTERROGATION BUDGET: round ${roundsUsed + 1} of at most ${roundsAllowed}. Settle earlier than that if the answers already carry the shape.`);
       // Planning roles learn from prior runs' retrospectives (historyDigest),
       // matching the classic pipeline's planner behavior.
       const history = (role === 'plan' || role === 'plan-start') ? this.store.historyDigest() : '';
@@ -3483,7 +3594,10 @@ export class FlowRunner {
         node.data?.instructions?.trim() ? `EXTRA INSTRUCTIONS (from the node template / workflow):\n${node.data.instructions.trim()}` : '',
         seed ? `WHAT IS ALREADY KNOWN ABOUT THIS WORKSPACE (assembled, not judged — verify anything load-bearing):\n${seed}` : '',
         parts.length ? `CONTEXT:\n${parts.join('\n\n')}` : '',
-        gateAnswers ? `USER ANSWERS TO YOUR CLARIFYING QUESTIONS (incorporate these and do NOT ask again):\n${gateAnswers}` : '',
+        gateAnswers ? (role === 'interrogate'
+          ? `THE INTERROGATION SO FAR (your questions and the answers given — build on these; never ask any of it again):\n${gateAnswers}`
+          : `USER ANSWERS TO YOUR CLARIFYING QUESTIONS (incorporate these and do NOT ask again):\n${gateAnswers}`) : '',
+        roundNotice,
         history ? `LESSONS FROM PREVIOUS RUNS (retrospective recommendations):\n${history}` : '',
         retryGuidance ? `RETRY GUIDANCE (a previous attempt was rejected — fix this):\n${retryGuidance}` : ''
       ].filter(Boolean).join('\n\n');
@@ -3673,13 +3787,14 @@ export class FlowRunner {
         // consume it as the run request, so strip the trailing questions fence.
         const brief = stripRefineQuestions(outText);
         if (brief && brief !== outText) this.store.writeNodeOutput(runId, node.id, brief);
-        // On an answer re-run the node already asked once (T6's one-round cap):
+        // On an answer re-run the node already asked once (T6's one-round cap,
+        // which D41 expresses as questionRoundsFor(node) === 1 for this role):
         // parse questions, but a re-run must never park again.
-        const answered = (this.store.readMeta(runId).answeredInputs ?? []).includes(node.id);
+        const answered = countAnsweredRounds(this.store.readMeta(runId), node.id)
+          >= questionRoundsFor(node);
         const parsed = answered ? null : parseRefineQuestions(outText);
         if (parsed?.questions?.length) {
-          this.store.writeNodeOutput(runId, `${node.id}.questions`,
-            parsed.questions.map((q, i) => `${i + 1}. ${q.text}${q.why ? `\n   (why: ${q.why})` : ''}`).join('\n\n'));
+          this.store.writeNodeOutput(runId, `${node.id}.questions`, renderQuestions(parsed.questions));
           outcome.questions = parsed.questions;
           this.store.appendLog(runId, { event: 'refine_questions', node: node.id, count: parsed.questions.length });
         } else {
@@ -3688,6 +3803,72 @@ export class FlowRunner {
           }
           this.store.appendLog(runId, { event: 'refine_done', node: node.id });
         }
+      }
+      if (role === 'interrogate') {
+        // The spec is the deliverable, so the contract block is stripped from
+        // the primary port the way the refiner's questions are.
+        const spec = stripJsonBlock(outText);
+        if (spec && spec !== outText) this.store.writeNodeOutput(runId, node.id, spec);
+
+        let parsed = parseInterrogation(outText);
+        if (!parsed.ok) {
+          const fixed = await this.reAsk(runId, node, worker, apiKey, system, userMsg, outText, parsed.errors);
+          if (fixed != null) {
+            const reparsed = parseInterrogation(fixed);
+            if (reparsed.ok) {
+              parsed = reparsed;
+              this.store.writeNodeOutput(runId, node.id, stripJsonBlock(fixed) || fixed);
+            }
+          }
+        }
+        // Degrade, never fail (§6). An interrogation whose contract will not
+        // parse twice has still WRITTEN a specification — the prose is the
+        // deliverable and it stands. What it loses is the right to ask again,
+        // which is the safe direction to fail in: the run proceeds on what is
+        // on the page instead of parking on a question nobody can read.
+        const interrogation = parsed.ok ? parsed.interrogation : {
+          status: 'settled', confidence: 'low', questions: [], assumptions: [],
+          unknowns: ['The interrogation contract could not be parsed, so this specification was settled without a further round.']
+        };
+        if (!parsed.ok) {
+          problems.push('interrogation emitted no parseable status JSON; settled on the specification as written');
+          this.store.appendLog(runId, { event: 'interrogation_failed', node: node.id, errors: parsed.errors });
+        }
+
+        const used = countAnsweredRounds(this.store.readMeta(runId), node.id);
+        const allowed = questionRoundsFor(node);
+        const unattended = this.approvalMode(runId) === 'always';
+        const asking = interrogation.status === 'asking' && interrogation.questions.length > 0;
+        // Out of rounds, or nobody there to answer. Either way the fork is
+        // taken by the run rather than by a person, so it is recorded as an
+        // assumption and stays visible in the artifact and the log (§4) —
+        // never silently folded into the spec as though it had been settled.
+        const spent = used >= allowed;
+        if (asking && (unattended || spent)) {
+          for (const q of interrogation.questions) {
+            interrogation.assumptions.push(`ASSUMED: ${q.text} — answered by the run's own judgement, nobody was asked.`);
+          }
+          this.store.appendLog(runId, {
+            event: 'interrogation_assumed', node: node.id,
+            questions: interrogation.questions.map(q => q.text), rounds: used, allowed,
+            reason: unattended ? 'unattended run' : `round budget spent (${used} of ${allowed})`
+          });
+          interrogation.questions = [];
+        } else if (asking) {
+          this.store.writeNodeOutput(runId, `${node.id}.questions`, renderQuestions(interrogation.questions));
+          outcome.questions = interrogation.questions;
+        }
+
+        this.store.writeNodeOutput(runId, `${node.id}.transcript`,
+          this.store.readNodeOutput(runId, `${node.id}.answers`)
+            || '(no round of questions was answered — this specification was written from the request alone)');
+        this.store.writeNodeOutput(runId, `${node.id}.open`,
+          renderOpenItems(interrogation));
+        this.store.appendLog(runId, {
+          event: 'interrogation', node: node.id, status: interrogation.status,
+          confidence: interrogation.confidence, rounds: used, allowed,
+          asking: outcome.questions?.length ?? 0, assumptions: interrogation.assumptions.length
+        });
       }
       if (role === 'orient') {
         // The prose IS the deliverable — it is the context file every
@@ -3721,7 +3902,8 @@ export class FlowRunner {
           this.store.appendLog(runId, { event: 'orientation_failed', node: node.id, errors: parsed.errors });
         }
 
-        const answered = (this.store.readMeta(runId).answeredInputs ?? []).includes(node.id);
+        const answered = countAnsweredRounds(this.store.readMeta(runId), node.id)
+          >= questionRoundsFor(node);
         const unattended = this.approvalMode(runId) === 'always';
         // Unattended, a question is a fork taken blind, not a question — it is
         // recorded as an explicit assumption so the run afterwards shows which
@@ -3733,8 +3915,7 @@ export class FlowRunner {
             reason: unattended ? 'unattended run' : 'one-round cap: already asked once'
           });
         } else if (orientation.questions.length) {
-          this.store.writeNodeOutput(runId, `${node.id}.questions`,
-            orientation.questions.map((q, i) => `${i + 1}. ${q.text}${q.why ? `\n   (why: ${q.why})` : ''}`).join('\n\n'));
+          this.store.writeNodeOutput(runId, `${node.id}.questions`, renderQuestions(orientation.questions));
           outcome.questions = orientation.questions;
         }
 

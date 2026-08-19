@@ -16,5 +16,9 @@ flows/
 .flyt/skills/*
 !.flyt/skills/reference-transfer.md
 !.flyt/skills/skill-authoring.md
+# The node library's record of which seeds it has already been offered
+# (core/nodestore.js). Per-library runtime state, like a run folder: it names
+# whatever templates that particular library holds, including the user's own.
+nodes/_system/seeded.json
 # Pre-D29 name; kept so a stale directory in an old checkout stays ignored.
 .llmflow/
