@@ -2255,7 +2255,13 @@ button.ghost.mini { padding: 3px 8px; font-size: 11.5px; }
 }
 .model-row select { flex: none; max-width: 190px; }
 
-.launch-input.wide { grid-column: 1 / -1; }
+/* A free-text run input is the subject of the run, so it takes the whole row.
+   This said `grid-column: 1 / -1` while its container is `display: flex` — a
+   rule with no effect in the box it lives in, so the required "what is your
+   idea" field rendered at the 150px min-width beside a 678px composer, with
+   its own placeholder clipped. The flex declaration is the one that works
+   here; the grid one is kept for the modal that lays these out as a grid. */
+.launch-input.wide { flex: 1 0 100%; grid-column: 1 / -1; }
 .launch-input .required { color: var(--err); }
 .launch-input-hint {
   font-size: 10px; line-height: 1.4; color: var(--faint); margin-top: 3px;

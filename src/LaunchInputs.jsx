@@ -6,13 +6,30 @@
 // its control.
 import { WorkerPicker } from './Inspector.jsx';
 import { useModelMeta } from './ModelPicker.jsx';
-import { EFFORT_LEVELS, DEFAULT_EFFORT, WORK_CATEGORIES } from './flowTypes.js';
+import { EFFORT_LEVELS, DEFAULT_EFFORT, WORK_CATEGORIES, MAX_QUESTION_ROUNDS } from './flowTypes.js';
 
 const FIELD_LABEL = {
   worker: 'model', effort: 'effort', minNodes: 'min nodes', maxNodes: 'max nodes',
-  category: 'task type', language: 'language', system: 'system prompt', instructions: 'instructions'
+  category: 'task type', language: 'language', system: 'system prompt', instructions: 'instructions',
+  maxRounds: 'rounds of questions', maxToolIterations: 'tool rounds'
 };
 const fieldLabel = f => FIELD_LABEL[f] ?? f;
+
+// The numeric overrides, and the bounds each one actually has.
+//
+// They were not a group, so each new one had to be remembered here or it fell
+// through to the bare text input at the bottom of the switch — which is what
+// happened to `maxRounds`: a control with no label, no bounds, and a string
+// where the engine wanted a number. The engine coerces, so nothing failed
+// loudly; typing "a few" just silently meant the default. A field with a range
+// should render as its range.
+const NUMERIC_FIELDS = {
+  minNodes: { min: 1, max: 50 },
+  maxNodes: { min: 1, max: 50 },
+  maxToolIterations: { min: 1, max: 100 },
+  // MAX_QUESTION_ROUNDS: the ceiling exists to protect the person answering.
+  maxRounds: { min: 1, max: MAX_QUESTION_ROUNDS }
+};
 
 function Control({ inp, value, onChange, models, activeModels }) {
   const cur = value ?? inp.current;
@@ -48,14 +65,20 @@ function Control({ inp, value, onChange, models, activeModels }) {
       );
     case 'minNodes':
     case 'maxNodes':
+    case 'maxToolIterations':
+    case 'maxRounds': {
+      const { min, max } = NUMERIC_FIELDS[inp.field];
       return (
         <input
-          type="number" min={1} max={50}
+          type="number" min={min} max={max}
           value={cur ?? ''}
           placeholder={String(inp.current ?? '')}
-          onChange={e => onChange(e.target.value === '' ? null : Math.max(1, Number(e.target.value)))}
+          onChange={e => onChange(e.target.value === ''
+            ? null
+            : Math.min(max, Math.max(min, Math.round(Number(e.target.value)))))}
         />
       );
+    }
     case 'language':
       return (
         <input
