@@ -283,8 +283,18 @@ test('a spinning planner is interrupted and fails with its reason, not requeued'
   }));
 
   setScript(({ onText, signal }) => {
-    // The real thing: the same sentence, forever, with no tool call.
-    for (let i = 0; i < 400; i++) onText?.("I'll inspect the repository structure first.\n");
+    // The real thing: the same sentence, forever, with no tool call — streamed
+    // the way every adapter streams, as the WHOLE turn so far rather than the
+    // new piece (core/adapters/http.js renderTurn, mock.js). This fake used to
+    // emit one repeated chunk instead, which is not a shape any provider
+    // produces, and it hid a defect it should have caught: the detector was
+    // being fed the cumulative buffer and re-counting every line on every
+    // emission, so a healthy long plan tripped it purely for being long.
+    let turn = '';
+    for (let i = 0; i < 400; i++) {
+      turn += "I'll inspect the repository structure first.\n";
+      onText?.(turn);
+    }
     // A spinning planner does not stop on its own, so the abort has to reach it.
     // Honoring `signal` is what every real adapter does — fetch passes it
     // straight through, the CLI adapters kill the child — so a fake that
@@ -321,4 +331,49 @@ test('a spinning planner is interrupted and fails with its reason, not requeued'
   assert.match(store.readMeta(runId).error, /Planning was interrupted/);
   // The partial stream survives as evidence.
   assert.match(store.readNodeOutput(runId, 'plan') ?? '', /inspect the repository/);
+});
+
+// A long HEALTHY plan, streamed the way a real adapter streams it.
+//
+// This is the other half of the spin detector, and the half that was broken:
+// the cumulative buffer was fed to a detector that expected the new piece, so
+// every line was re-counted on every emission and `distinct / recent` collapsed
+// as the answer grew. A real planning call died at 77 seconds reporting
+// "560,242 lines with only 49 distinct ones" for an answer nowhere near that
+// size — a detector written explicitly NOT to judge by elapsed time, judging by
+// elapsed time. A plan that says something new in every line must survive being
+// long.
+test('a long plan that keeps saying new things is not a spin', async () => {
+  const { makeStore, setScript, testConfig, waitForStage } = await import('./helpers.js');
+  const { FlowRunner } = await import('../core/flowRunner.js');
+
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig({
+    planner: { spin: { minLines: 10, minMs: 0, minNovelty: 0.25 } }
+  }));
+
+  setScript(({ onText }) => {
+    let turn = '';
+    for (let i = 0; i < 400; i++) {
+      turn += `- task ${i}: a distinct step nobody has written yet\n`;
+      onText?.(turn);
+    }
+    onText?.(turn, { final: true });
+    return turn;
+  });
+
+  const flow = {
+    id: 'f', name: 'F',
+    nodes: [
+      { id: 'in', type: 'input', data: { text: 'plan something large' }, position: { x: 0, y: 0 } },
+      { id: 'plan', type: 'aiStep', data: { role: 'plan' }, position: { x: 0, y: 0 } },
+      { id: 'out', type: 'output', data: {}, position: { x: 0, y: 0 } }
+    ],
+    edges: [{ id: 'a', source: 'in', target: 'plan' }, { id: 'b', source: 'plan', target: 'out' }]
+  };
+
+  const runId = runner.start(flow, {});
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.equal((store.readLog(runId) ?? []).find(e => e.event === 'planner_spin'), undefined,
+    'four hundred distinct lines is a long plan, not a stuck one');
 });

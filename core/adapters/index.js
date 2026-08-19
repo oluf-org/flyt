@@ -244,9 +244,18 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
     // an onText, so this must stay undefined when the caller wanted none —
     // making every call stream in order to measure it would change what is sent
     // on the wire to answer a question about cost.
+    //
+    // onText carries the WHOLE turn so far, not the new piece (http.js
+    // renderTurn). So the size of the generation is the largest snapshot seen,
+    // never the sum of them: summing counts a 10k answer delivered in 200
+    // emissions as a million characters, and this number prices a ledger line.
     let streamedChars = 0;
     const watched = onText
-      ? (text, opts) => { streamedChars += String(text ?? '').length; deadline.touch(); return onText(text, opts); }
+      ? (text, opts) => {
+        streamedChars = Math.max(streamedChars, String(text ?? '').length);
+        deadline.touch();
+        return onText(text, opts);
+      }
       : undefined;
     try {
       // Extra fields (rest — e.g. kimi's keyKind, stamped by the main process)

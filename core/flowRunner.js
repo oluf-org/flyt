@@ -3625,9 +3625,27 @@ export class FlowRunner {
       const spin = planning ? createSpinDetector({ thresholds: this.config.planner?.spin ?? {} }) : null;
       const spinCtl = spin ? new AbortController() : null;
       let spinTripped = null;
+      // `onText` carries the whole turn so far (http.js renderTurn), and the
+      // detector takes an incremental chunk. Feeding it the cumulative buffer
+      // re-counted every line on every emission, so a healthy long plan looked
+      // like a spin purely for being long: novelty is distinct-over-recent, and
+      // recent filled with duplicates of lines the model wrote exactly once.
+      // Watched it kill a real planning call at 77 seconds, reporting "560,242
+      // lines with only 49 distinct ones" for an answer that was never
+      // anywhere near that size — the detector written to avoid judging by
+      // elapsed time was, in effect, judging by elapsed time.
+      let seenText = '';
+      const newlyStreamed = text => {
+        const s = String(text ?? '');
+        // A re-render that is not an extension (reasoning interleaving) is
+        // pushed whole rather than guessed at.
+        const next = s.startsWith(seenText) ? s.slice(seenText.length) : s;
+        seenText = s;
+        return next;
+      };
       const onText = spin
         ? (text, opts) => {
-            const state = spin.push(text);
+            const state = spin.push(newlyStreamed(text));
             if (state.tripped && !spinTripped) {
               spinTripped = state;
               this.store.appendLog(runId, {
