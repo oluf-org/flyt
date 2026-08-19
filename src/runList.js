@@ -78,6 +78,11 @@ const STAGE_LABEL = {
   prompt: 'Queued',
   planning: 'Planning',
   awaiting_approval: 'Needs approval',
+  // A run parked on a question is not running, and reading "Running" is how it
+  // gets left alone: the list is where you scan for what needs you, and the one
+  // stage that literally cannot proceed without you looked identical to the
+  // ones that are working. Seen on a real list of ninety runs.
+  awaiting_input: 'Needs an answer',
   routing: 'Routing',
   execution: 'Running',
   verification: 'Verifying'
@@ -93,6 +98,8 @@ export function runStatus(run) {
   if (stage === 'cancelled') return { kind: 'interrupted', label: 'Stopped' };
   if (isTerminal(stage)) return { kind: stage, label: TERMINAL_LABEL[stage] ?? 'Done' };
   if (run?.interrupted) return { kind: 'interrupted', label: 'Interrupted' };
-  if (stage === 'awaiting_approval') return { kind: 'waiting', label: STAGE_LABEL[stage] };
+  if (stage === 'awaiting_approval' || stage === 'awaiting_input') {
+    return { kind: 'waiting', label: STAGE_LABEL[stage] };
+  }
   return { kind: 'running', label: STAGE_LABEL[stage] ?? 'Running' };
 }

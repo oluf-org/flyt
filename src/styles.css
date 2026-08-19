@@ -4230,6 +4230,38 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 
 .input-gate-hint { color: var(--faint); font-size: 11.5px; }
 
+/* The standalone gate: the runs page has no composer, so this one carries its
+   own reply field — and therefore has to guarantee that field is reachable.
+   An interrogation asks up to six questions with candidate answers on each,
+   which unbounded is a card taller than the window with its Answer button
+   below the fold. So the QUESTIONS scroll and the reply does not: the head
+   says who is asking, the field is always on screen, and the reading in
+   between is as long as it needs to be. */
+.input-gate.standalone {
+  width: min(760px, calc(100% - 48px));
+  margin: 10px auto;
+  display: flex; flex-direction: column;
+  max-height: min(52vh, 520px);
+}
+.input-gate.standalone .input-gate-questions {
+  overflow-y: auto;
+  min-height: 0;
+  margin-bottom: 10px;
+  padding-right: 6px;
+  gap: 11px;
+}
+.input-gate-reply {
+  flex: none;
+  display: flex; align-items: flex-end; gap: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  padding-top: 10px;
+}
+.input-gate-reply .chat-input {
+  flex: 1; min-width: 0;
+  resize: none;
+}
+.input-gate-reply .primary { flex: none; }
+
 /* ---------- Comparison (DECISIONS.md D27) ---------- */
 
 /* Launch UX (T11): the composer's Compare toggle + the A/B slot chips. */

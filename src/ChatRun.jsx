@@ -22,6 +22,7 @@
 // main process raises an OS notification + taskbar flash so a parked run is
 // never silently stuck (app:approvalGate IPC).
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import InputGate from './InputGate.jsx';
 import FlowCanvas from './FlowCanvas.jsx';
 import RunBar from './RunBar.jsx';
 import RunControls from './RunControls.jsx';
@@ -380,38 +381,15 @@ export default function ChatRun({
               inline. Not blocking like an approval gate — the user reads the
               run, then types one reply covering the questions. */}
           {awaitingInput && (
-            <div className="input-gate" role="status">
-              <div className="input-gate-head">
-                <span className="input-gate-glyph" aria-hidden>{askingNode?.data?.icon || '✍'}</span>
-                <strong>{askingTitle} needs an answer to continue</strong>
-              </div>
-              <ol className="input-gate-questions">
-                {questions.map((q, i) => (
-                  <li key={q.id ?? i}>
-                    <span className="input-gate-q">{q.text}</span>
-                    {q.why && <span className="input-gate-why">{q.why}</span>}
-                    {/* Candidate answers are clickable because that is the whole
-                        point of naming them: a fork the asker already framed
-                        should cost a click, not a sentence. Clicking appends
-                        rather than replaces, so several picks make one reply. */}
-                    {q.options?.length > 0 && (
-                      <span className="input-gate-options">
-                        {q.options.map((o, oi) => (
-                          <button
-                            key={oi} type="button" className="input-gate-option"
-                            onClick={() => {
-                              setText(t => (t.trim() ? `${t.trimEnd()}\n${q.text} — ${o}` : `${q.text} — ${o}`));
-                              taRef.current?.focus();
-                            }}
-                          >{o}</button>
-                        ))}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ol>
-              <span className="input-gate-hint">One reply covering these is fine — the run picks up right after.</span>
-            </div>
+            <InputGate
+              questions={questions}
+              askedBy={askingTitle}
+              icon={askingNode?.data?.icon || '✍'}
+              onPick={(q, o) => {
+                setText(t => (t.trim() ? `${t.trimEnd()}\n${q.text} — ${o}` : `${q.text} — ${o}`));
+                taRef.current?.focus();
+              }}
+            />
           )}
 
           {/* The minimized gate docks above the composer — outside the scroll

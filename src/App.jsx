@@ -26,6 +26,7 @@ import TabStrip, { NewTabPage } from './TabStrip.jsx';
 import TabDeck from './TabDeck.jsx';
 import Lander from './Lander.jsx';
 import ChatRun from './ChatRun.jsx';
+import InputGate from './InputGate.jsx';
 import CompareRun from './CompareRun.jsx';
 import ApprovalModePicker from './ApprovalModePicker.jsx';
 import LaunchInputs from './LaunchInputs.jsx';
@@ -1903,6 +1904,15 @@ export default function App() {
   useEffect(() => { setPickerOpen(false); }, [activeFlowId, flowViewMode, activeActivity]);
 
   const stage = snapshot?.meta?.stage;
+  // Who is asking, when a run is parked on a question. Three roles park at the
+  // input gate — the refiner, the orientation, the interrogation — and the card
+  // used to name all of them "the refiner".
+  const askingNode = stage === 'awaiting_input'
+    ? (snapshot?.flow?.nodes ?? []).find(n => n.id === snapshot?.meta?.pendingNodeId) ?? null
+    : null;
+  const askingNodeTitle = askingNode?.data?.title || askingNode?.id || 'This run';
+  const askingNodeIcon = askingNode?.data?.icon || '✍';
+
   // A bound tab IS the workspace (T19): its runs always target the tab's
   // folder, so the per-run picker only survives in the unbound scratch tab.
   const activeTabInfo = tabs.find(t => t.id === activeTab) ?? null;
@@ -2364,6 +2374,20 @@ export default function App() {
                 {resuming ? 'Resuming…' : 'Resume'}
               </button>
             </div>
+          )}
+          {/* A run parked on a question, answered from the RUNS page (D41).
+              The chat and comparison views had this; this surface did not — so
+              a run you open here, or one started headlessly, showed
+              `awaiting_input` in its sidebar and offered nowhere to reply. It
+              carries its own field because there is no composer on this page. */}
+          {runView && stage === 'awaiting_input' && (
+            <InputGate
+              standalone
+              questions={snapshot?.meta?.pendingQuestions ?? []}
+              askedBy={askingNodeTitle}
+              icon={askingNodeIcon}
+              onAnswer={text => window.flyt.answerInput(activeTab, activeRunId, text)}
+            />
           )}
           {runView && stage === 'awaiting_approval' && (
             <div className={'approval-bar' + (snapshot?.meta?.pendingToolCall?.risk === 'danger' ? ' danger' : '')}>

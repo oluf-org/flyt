@@ -162,6 +162,8 @@ test('stage becomes a status the list can show', () => {
   assert.deepEqual(runStatus({ stage: 'failed' }), { kind: 'failed', label: 'Failed' });
   assert.deepEqual(runStatus({ stage: 'rejected' }), { kind: 'rejected', label: 'Rejected' });
   assert.deepEqual(runStatus({ stage: 'awaiting_approval' }), { kind: 'waiting', label: 'Needs approval' });
+  // A run parked on a question is waiting on the person, not working (D41).
+  assert.deepEqual(runStatus({ stage: 'awaiting_input' }), { kind: 'waiting', label: 'Needs an answer' });
   assert.deepEqual(runStatus({ stage: 'execution' }), { kind: 'running', label: 'Running' });
   assert.deepEqual(runStatus({ stage: 'planning' }), { kind: 'running', label: 'Planning' });
   assert.equal(runStatus({ stage: 'unknown' }).kind, 'running');
