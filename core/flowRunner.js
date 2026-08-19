@@ -309,6 +309,12 @@ const DEFAULT_SYSTEM = {
     'But interrogate like a good colleague, not a form:',
     '- Ask what you cannot get any other way. Never ask what the request, the',
     '  context you were given, or an obvious convention already answers.',
+    '- READ FIRST. You are standing in a project and you hold read-only tools.',
+    '  Anything on disk is not a question: file names, commands, existing',
+    '  conventions, what already exists. Check before you ask, and check again',
+    '  before you assert — a specification that invents a path or a command name',
+    '  reads as authoritative and sends whoever implements it somewhere that does',
+    '  not exist. Cite what you actually opened.',
     '- Take the load-bearing forks first: what this is FOR, who or what consumes',
     '  it, what would make it wrong, what is deliberately out of scope. Detail',
     '  follows a settled shape; asked before it, detail is noise.',
@@ -3587,7 +3593,11 @@ export class FlowRunner {
       // so the cheapest node in the flow does not spend its first four tool
       // calls rediscovering that package.json exists. A starting point, not the
       // answer — the node holds tools precisely so it can go past it.
-      const seed = role === 'orient' ? homeSeed(this.workspaceFor(runId)) : '';
+      // D38's seed, D41's second reader. Both nodes exist to aim what comes
+      // after them, and both are worthless if they have to spend their first
+      // tool calls rediscovering that package.json exists.
+      const seed = (role === 'orient' || role === 'interrogate')
+        ? homeSeed(this.workspaceFor(runId)) : '';
       const userMsg = [
         `USER PROMPT:\n${this.store.readPrompt(runId)}`,
         node.data?.goal?.trim() ? `GOAL:\n${node.data.goal.trim()}` : '',

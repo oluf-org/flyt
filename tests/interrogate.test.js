@@ -8,6 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FlowRunner, countAnsweredRounds, renderQuestions, renderOpenItems } from '../core/flowRunner.js';
 import { parseInterrogation, MAX_INTERROGATION_QUESTIONS } from '../core/planEval.js';
+import { answered, describeEmptyTurn } from '../core/agent.js';
 import {
   SEED_NODE_TEMPLATES, questionRoundsFor, normalizeRounds, nodePorts,
   MAX_QUESTION_ROUNDS, DEFAULT_QUESTION_ROUNDS, resolveInstance
@@ -248,6 +249,32 @@ test('a flow may narrow the rounds on its instance', () => {
     SEED_NODE_TEMPLATES.find(t => t.id === 'interrogate'));
   assert.equal(resolved.data.maxRounds, 1);
   assert.equal(questionRoundsFor(resolved), 1);
+});
+
+// --- the answer-only round (found by running it) -----------------------------
+//
+// The interrogation is the first aiStep to hold tools AND owe a contract, which
+// is how it surfaced this: on its last round the loop withdraws the tools so the
+// model will write, and a model that asks for them anyway used to count as an
+// answered turn — returning empty text and failing the node as "the provider
+// returned no content", with the provider and the model id both fine.
+
+test('a tool call is an answer while tools remain, and not on the answer-only round', () => {
+  const toolTurn = { text: '', message: { tool_calls: [{ id: '1' }] } };
+  assert.equal(answered(toolTurn), true, 'mid-loop, a tool call is the loop continuing');
+  assert.equal(answered(toolTurn, { requireText: true }), false,
+    'with the tools withdrawn, a tool call has produced nothing');
+  assert.equal(answered({ text: 'the spec' }, { requireText: true }), true);
+});
+
+test('the empty-turn diagnostic names the round budget, not the provider', () => {
+  const msg = describeEmptyTurn(
+    { provider: 'openrouter', model: 'deepseek/deepseek-v4-pro-0813' },
+    { emptyTurn: { finishReason: 'tool_calls', discardedToolCalls: 4, maxTokens: 12288, retriedWith: 24576 } });
+  assert.match(msg, /final answer-only round requesting 4 more tool call/);
+  assert.match(msg, /maxToolIterations/);
+  assert.ok(!/Check the provider status/.test(msg),
+    'the provider was not the problem and must not be named as one');
 });
 
 test('renderOpenItems says "none" rather than leaving a reader to infer it', () => {

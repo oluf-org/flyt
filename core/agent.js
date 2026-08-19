@@ -55,6 +55,23 @@ const EMPTY_TURN_NUDGE = [
 // syntax this harness does not parse (see toolCallShaped). It does not need
 // room or encouragement — it needs to know which shape reaches us, and that the
 // last thing it emitted reached nobody.
+// What a model is told when it spends its ANSWER-ONLY round asking for tools.
+//
+// Seen live, and it costs the whole node: an interrogation read 24 files over
+// seven rounds, reached its last one with the tools withdrawn and the notice
+// delivered, and still came back with four tool calls and zero characters of
+// content — reasoning_tokens 0, so it did not think about it either. The loop
+// counted the tool calls as a turn, returned empty text, and the node failed as
+// "the provider returned no content". The provider was fine. The model simply
+// kept doing what the last seven rounds had rewarded.
+const WITHDRAWN_TOOLS_NUDGE = [
+  'You just requested tool calls, but you have none left — they were DISCARDED and',
+  'nothing ran. No further tool call will reach anything, in any format.',
+  'Everything you already read is above, in this conversation. Write the complete',
+  'final answer now from that, as ordinary text, starting immediately. Where you',
+  'did not read far enough to be sure, say so plainly instead of asking again.'
+].join(' ');
+
 const UNPARSED_TOOL_NUDGE = [
   'Your previous turn was only a tool call written in a format I cannot read, so no tool ran',
   'and nothing was returned to you. Do not repeat it.',
@@ -99,9 +116,13 @@ export function toolCallShaped(text) {
   return /^<(tool|tool_call|tool_calls|function_calls|invoke)\b[\s\S]*>$/.test(s);
 }
 
-const answered = res =>
+// A tool call IS a usable turn on any round that still has tools — that is the
+// loop continuing. On the final round it is not: the tools were withdrawn
+// precisely so the model would write, so a turn that asks for more of them has
+// produced nothing and the loop must say so rather than returning empty text.
+export const answered = (res, { requireText = false } = {}) =>
   (Boolean(String(res?.text ?? '').trim()) && !toolCallShaped(res.text))
-  || Boolean(res?.message?.tool_calls?.length);
+  || (!requireText && Boolean(res?.message?.tool_calls?.length));
 
 /**
  * callModel, with one recovery attempt when a turn comes back empty.
@@ -110,35 +131,39 @@ const answered = res =>
  * empty turn — with `emptyTurn` describing both attempts, so the caller can
  * fail with evidence instead of the bare word "empty".
  */
-export async function callForAnswer(params, onEmpty) {
+export async function callForAnswer(params, onEmpty, { requireText = false } = {}) {
   const first = await callModel(params);
-  if (answered(first)) return first;
+  if (answered(first, { requireText })) return first;
 
   const budget = Math.min(RECOVERY_MAX_TOKENS, Math.max(2 * (params.maxTokens ?? 4096), 8192));
-  // Two different silences, and telling the model the wrong one wastes the one
+  // Three different silences, and telling the model the wrong one wastes the one
   // retry it gets: a turn that thought and never wrote needs room and a push to
-  // write, while a turn that tried to call a tool in a syntax we do not speak
-  // needs to be told which syntax we DO speak.
+  // write; a turn that tried to call a tool in a syntax we do not speak needs to
+  // be told which syntax we DO speak; and a turn that asked for tools it no
+  // longer has needs to be told the calls were thrown away.
   const unparsedToolCall = toolCallShaped(first.text);
+  const discardedToolCalls = requireText ? (first.message?.tool_calls?.length ?? 0) : 0;
   const diagnosis = {
     finishReason: first.finishReason ?? null,
     reasoningChars: String(first.reasoning ?? '').length,
     usage: first.usage ?? null,
     maxTokens: params.maxTokens ?? 4096,
     retriedWith: budget,
-    ...(unparsedToolCall ? { unparsedToolCall: String(first.text).trim().slice(0, 200) } : {})
+    ...(unparsedToolCall ? { unparsedToolCall: String(first.text).trim().slice(0, 200) } : {}),
+    ...(discardedToolCalls ? { discardedToolCalls } : {})
   };
   onEmpty?.(diagnosis);
 
   // The nudge goes in as the model's own next instruction, in whichever calling
   // shape this call used.
-  const nudge = unparsedToolCall ? UNPARSED_TOOL_NUDGE : EMPTY_TURN_NUDGE;
+  const nudge = discardedToolCalls ? WITHDRAWN_TOOLS_NUDGE
+    : unparsedToolCall ? UNPARSED_TOOL_NUDGE : EMPTY_TURN_NUDGE;
   const retry = params.messages
     ? { ...params, maxTokens: budget, messages: [...params.messages, { role: 'user', content: nudge }] }
     : { ...params, maxTokens: budget, prompt: `${params.prompt}\n\n${nudge}` };
 
   const second = await callModel(retry);
-  if (answered(second)) return { ...second, recoveredFromEmptyTurn: diagnosis };
+  if (answered(second, { requireText })) return { ...second, recoveredFromEmptyTurn: diagnosis };
   return {
     ...first,
     emptyTurn: {
@@ -179,6 +204,15 @@ export function describeEmptyTurn(worker, result) {
     bits.push(`the turn was a tool call in a format this harness does not parse (${d.unparsedToolCall})`);
     bits.push('The model is not using the tool interface it was given — check that this model supports '
       + 'native tool calling, or that the text protocol\'s fenced `tool` block reached its prompt.');
+    return bits.join('; ').replace('; —', ' —');
+  }
+  // Ran out of tool rounds and spent the last one asking for more. Nothing is
+  // wrong with the provider or the model id, and saying so sends the reader to
+  // check two things that are both fine.
+  if (d.discardedToolCalls) {
+    bits.push(`it spent its final answer-only round requesting ${d.discardedToolCalls} more tool call(s), which were discarded`);
+    bits.push('The node ran out of tool rounds before it wrote anything. Raise its '
+      + '`maxToolIterations`, narrow what it has to read, or give it a model that stops reading when told to.');
     return bits.join('; ').replace('; —', ' —');
   }
   bits.push(d.finishReason === 'length' || d.reasoningChars
@@ -407,7 +441,9 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
     // means that becomes an adapter change alone.
     const res = await callForAnswer(
       { ...worker, apiKey, messages, ...(last ? {} : { tools: oaTools }), onText, onRetry, onCall, retry, timeout, signal, ...(maxTokens ? { maxTokens } : {}) },
-      d => onEmptyTurn?.({ ...d, round: i + 1, of: rounds })
+      d => onEmptyTurn?.({ ...d, round: i + 1, of: rounds }),
+      // The final round has no tools, so only text can end it.
+      { requireText: last }
     );
     usage = addUsage(usage, res.usage);
     lastText = res.text || lastText;

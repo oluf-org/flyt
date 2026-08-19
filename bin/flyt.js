@@ -212,6 +212,34 @@ async function waitForRun(api, projectId, runId, { timeoutSec, autoApprove, answ
   }
 }
 
+// What the run PRODUCED, for a terminal that gets one thing printed.
+//
+// `Object.values(nodeOutputs).at(-1)` was standing in for this, and it is not
+// the same question. A node writes sidecars beside its deliverable — a
+// refiner's questions, an interrogation's transcript and open items — and they
+// land in the same map under `<node>_<port>` keys. So the last value in the map
+// is whichever sidecar sorted last: an interrogation that had just written a
+// full specification printed its own transcript of questions instead, which
+// reads exactly like the run having produced nothing but chatter.
+//
+// The flow already says where the result is. Take the output node's content;
+// failing that, the last real NODE's output, never a sidecar.
+function runDeliverable(snapshot) {
+  const outputs = snapshot?.nodeOutputs ?? {};
+  const nodes = snapshot?.flow?.nodes ?? [];
+  const key = id => (outputs[id] != null ? outputs[id] : outputs[String(id).replace(/\./g, '_')]);
+  const fromOutputNodes = nodes.filter(n => n.type === 'output').map(n => key(n.id)).filter(Boolean);
+  if (fromOutputNodes.length) return fromOutputNodes.join('\n\n');
+  const produced = nodes
+    .filter(n => n.type !== 'output' && n.type !== 'input')
+    .map(n => key(n.id)).filter(Boolean);
+  if (produced.length) return produced[produced.length - 1];
+  // No flow in the snapshot (an older record, or a run that died before
+  // resolution): fall back to the map, but still skip the sidecars.
+  const plain = Object.entries(outputs).filter(([k]) => !k.includes('_')).map(([, v]) => v);
+  return plain.length ? plain[plain.length - 1] : null;
+}
+
 // The questions a parked run is asking, as the person on the terminal should
 // see them: numbered, with the reason and any candidate answers, and ending in
 // the exact command that answers them.
@@ -695,16 +723,21 @@ async function main() {
       }).join('\n'));
     }
 
-    case 'approve':
-      return out(await api.invoke('run:approve', { projectId: openProject(api, engine), runId: positional[1] }));
-
-    case 'reject':
-      return out(await api.invoke('run:reject', {
-        projectId: openProject(api, engine), runId: positional[1], reason: String(flags.reason ?? '')
-      }));
-
-    case 'stop':
-      return out(await api.invoke('run:stop', { projectId: openProject(api, engine), runId: positional[1] }));
+    // These three commands answer a gate and return nothing meaningful — the
+    // engine's ack is `undefined`, and printing it said `undefined`, which
+    // reads as a failure at 1am. Say what happened and where the run went.
+    case 'approve': case 'reject': case 'stop': {
+      const projectId = openProject(api, engine);
+      const runId = positional[1];
+      if (!runId) return die(`flyt ${command} <runId>`);
+      await api.invoke(`run:${command}`, {
+        projectId, runId,
+        ...(command === 'reject' ? { reason: String(flags.reason ?? '') } : {})
+      });
+      const stage = (await api.invoke('run:snapshot', { projectId, runId }))?.meta?.stage ?? 'unknown';
+      const done = { approve: 'approved', reject: 'rejected', stop: 'stopped' }[command];
+      return out(asJson ? { ok: true, runId, action: done, stage } : `${runId} ${done} — now ${stage}`);
+    }
 
     // A node that stops to ASK could not be answered from here, only approved
     // or killed — so a headless run that asked one question sat until it timed
@@ -736,9 +769,8 @@ async function main() {
         return out(renderQuestionGate(runId, snapshot.meta));
       }
       say(`run ${runId}: ${stage}`);
-      const outputs = Object.values(snapshot.nodeOutputs ?? {});
       process.exitCode = stage === 'done' ? 0 : 1;
-      return out(outputs.length ? outputs[outputs.length - 1] : `(no output; stage ${stage})`);
+      return out(runDeliverable(snapshot) ?? `(no output; stage ${stage})`);
     }
 
     // --- Diagnostics (D40) ---------------------------------------------------
@@ -843,9 +875,7 @@ async function main() {
         console.log(renderQuestionGate(runId, snapshot.meta));
       } else {
         say(`run ${runId}: ${stage}`);
-        // The deliverable, not the machinery: whatever the last node produced.
-        const outputs = Object.values(snapshot.nodeOutputs ?? {});
-        console.log(outputs.length ? outputs[outputs.length - 1] : `(no output; stage ${stage})`);
+        console.log(runDeliverable(snapshot) ?? `(no output; stage ${stage})`);
         if (explained) say(`\n${renderWhy(explained)}\n\nfull detail: flyt why ${runId} --json`);
       }
       // A parked or failed run is a non-zero exit, so a script or an agent can

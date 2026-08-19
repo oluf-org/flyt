@@ -7,11 +7,16 @@
   "baseType": "aiStep",
   "role": "interrogate",
   "effort": "medium",
+  "maxToolIterations": 8,
   "maxRounds": 3,
   "evalType": "step",
   "worker": null,
   "instructions": "",
-  "tools": null,
+  "tools": [
+    "glob",
+    "read_file",
+    "search_references"
+  ],
   "toolCeiling": null,
   "skills": [],
   "requiresApproval": false,

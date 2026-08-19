@@ -742,9 +742,18 @@ export const SEED_NODE_TEMPLATES = [
     // a half-formed idea through the refiner and it does not ask — it invents
     // the missing half as an assumption and hands the flow a confident brief
     // for work nobody wanted. This node asks first and writes second.
+    // It reads before it asks, for the reason `orient` does: a question the
+    // repository already answers is a round spent, and the person answering it
+    // knows the answer was on disk. Watched it, live — two good rounds, and
+    // then a specification whose assumptions invented a command name, a config
+    // filename and four field names, every one of them checkable here.
+    // Bounded like orient's: enough to check what it is about to assert, not
+    // enough to audit the project before the first question.
     id: 'interrogate', name: 'Interrogate', category: null, icon: '?',
     baseType: 'aiStep', role: 'interrogate', effort: 'medium',
     maxRounds: DEFAULT_QUESTION_ROUNDS,
+    tools: ['glob', 'read_file', 'search_references'],
+    maxToolIterations: 8,
     description: 'Interrogates the person behind the request over several bounded rounds — goal, non-goals, constraints, acceptance — then writes the specification their answers settled.'
   },
   {
