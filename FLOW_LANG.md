@@ -65,6 +65,9 @@ Template instances (`use:`) accept these overrides: `title`, `worker`
 `category`, `contextSpec`, `skills`, and — on agentTask templates only —
 `tools` (registry: `write_file`, `create_task`, `write_task_md`).
 
+`effect` / `effectScope` declare what "done" actually requires of the node —
+the deliverable contract. See below.
+
 `skills` names expertise the **bound project** supplies as
 `.flyt/skills/<name>.md`; it is appended to that node's prompt at run time,
 so the same flow adapts to whichever project it runs against. See
@@ -77,6 +80,51 @@ nodes exist mainly so older flows keep loading.
 
 `input` / `output` are implicit: referencing them in `flow` declares them.
 Declare an input explicitly only to attach default `text:` to it.
+
+### The deliverable contract (`effect`, `effectScope`)
+
+What a node must produce before it may be called done. Model output is
+evidence, not proof that the requested effect happened — a task that returns a
+confident description of a change it never made is a failure, not a completion.
+
+| `effect` | Completing the node requires |
+|---|---|
+| `artifact` | a non-empty deliverable; no repository change |
+| `workspace-change` | a non-empty change in the bound project, inside `effectScope` |
+| `either` | one or the other |
+| `none` | nothing — structural/control nodes |
+
+```yaml
+  implement:
+    use: work
+    category: Code general
+    effect: workspace-change
+    effectScope: [src/**, tests/**]   # a note elsewhere does not satisfy it
+  write-up:
+    use: work
+    category: Code design
+    effect: artifact                  # deliberately describes, does not implement
+```
+
+`effect` is optional. Absent, it is **inferred** conservatively at run time:
+
+- a code category (`Code general`, `Code design`, `Test-creation`) ⇒ `workspace-change`;
+- an analysis/evaluation/planning role ⇒ `artifact`;
+- an agentTask whose **authored** `tools` grant names a file writer ⇒ `workspace-change`;
+- anything else ⇒ `artifact`.
+
+The default (unrestricted) tool grant is not evidence of intent — it contains
+every tool in the library, so inferring from it would silently re-define every
+existing flow's unrestricted nodes. Only an authored grant counts.
+
+A change is measured against a baseline captured before the node's first tool
+call, read-only, honoring `.gitignore`: a write that is completely reverted is
+not a change, an untracked new source file is. When the workspace cannot be
+fingerprinted at all the node is accepted on its artifact and the run records
+`effect_unverified`, leaving Loop's empty-diff check at landing as the backstop.
+
+A node that fails its contract records `effect_missing`, keeps its text as
+evidence, and does **not** release its downstream dependents.
 
 ### Fan-out lanes (`type: fanout`)
 

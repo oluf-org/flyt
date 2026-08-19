@@ -23,11 +23,49 @@
 // will happen. The merge is never squashed precisely so reverting it is one
 // clean operation.
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 const GIT_TIMEOUT_MS = 2 * 60 * 1000;
+
+// --- Attempt identity (WR-02) ------------------------------------------------
+//
+// Worktree paths and cleanup calls used to be keyed by `taskId` alone. That is
+// a cross-attempt destructive race: `work:start` removed any existing tree for
+// the task and `work:discard` later removed "the tree for that id", so if
+// attempt A was cancelled, attempt B started, and A's asynchronous cleanup
+// finished late, A deleted B's ACTIVE worktree and erased valid in-progress
+// work.
+//
+// The fix is ownership. Every claim/run mints an `attemptId`; the pool records
+// who owns a path; and every destructive operation is compare-and-delete —
+// it states which attempt it believes it is cleaning up, and refuses to touch
+// a path whose current owner is somebody else.
+//
+// Owner records live in `<baseDir>/.owners/`, beside the worktrees and outside
+// every repository and every worktree — the same rule the backlog follows. The
+// leading dot keeps the directory out of the taskId namespace.
+const OWNERS_DIR = '.owners';
+
+// How long an unreleased owner record stays "live" without a heartbeat. The
+// supervisor touches its in-flight attempts each tick; anything older than this
+// with no release is a crashed process's leftover, and a new attempt may clear
+// it. Generous, because the cost of being wrong is deleting real work.
+export const OWNER_LIVE_MS = 10 * 60 * 1000;
+
+// Collision-resistant and roughly sortable: the timestamp makes `ls` readable
+// and orders attempts, the random suffix makes two attempts minted in the same
+// millisecond distinct.
+export function newAttemptId(taskId = 'task', { now = Date.now() } = {}) {
+  return `${taskId}-${now.toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+}
+
+// The outcomes of a destructive worktree operation. Named rather than boolean
+// because "I did not delete it" has four very different meanings, and the one
+// that matters most — somebody else owns this now — must never be silent.
+export const CLEANUP_OUTCOMES = ['removed', 'already-removed', 'owner-mismatch', 'live-owner'];
 
 export class GitError extends Error {
   constructor(message, { code = 1, stderr = '' } = {}) {
@@ -83,10 +121,24 @@ export const branchFor = (taskId, title) => `flyt/${taskId}-${slugify(title)}`;
  */
 export function defaultWorktreeRoot(repoRoot, { home = os.homedir() } = {}) {
   const resolved = path.resolve(repoRoot);
-  // The basename is for a human reading `ls`; the hash keeps two checkouts of
+  const root = path.join(home, '.flyt', 'worktrees');
+  // The basename is for a human reading `ls`; the digest keeps two checkouts of
   // the same name apart.
-  const key = `${path.basename(resolved)}-${Buffer.from(resolved).toString('base64url').slice(-8)}`;
-  return path.join(home, '.flyt', 'worktrees', key);
+  //
+  // This used to be `base64url(path).slice(-8)`, which is not a digest of the
+  // path — it is the ENCODING OF THE LAST SIX BYTES of it. Every checkout whose
+  // path ended the same way therefore got the identical key, so two unrelated
+  // projects both called `api` shared one worktree root and their attempts
+  // collided on `<baseDir>/<taskId>`: a cross-project version of exactly the
+  // race attempt ownership exists to prevent. A real hash of the whole path
+  // does what the old comment claimed.
+  const key = `${path.basename(resolved)}-${crypto.createHash('sha1').update(resolved).digest('hex').slice(0, 10)}`;
+  // Migration: a checkout that already has worktrees under the old key keeps
+  // using them. Relocating silently would orphan every in-flight attempt and
+  // leave its git registrations pointing at a directory nothing looks in.
+  const legacy = path.join(root, `${path.basename(resolved)}-${Buffer.from(resolved).toString('base64url').slice(-8)}`);
+  try { if (fs.existsSync(legacy)) return legacy; } catch { /* unreadable home */ }
+  return path.join(root, key);
 }
 
 // Is `dir` inside `root`? Used to enforce the invariant rather than describe it.
@@ -114,6 +166,66 @@ export class WorktreePool {
 
   dirFor(taskId) { return path.join(this.baseDir, String(taskId)); }
 
+  // --- Attempt ownership (WR-02) -------------------------------------------
+
+  #ownerPath(taskId) {
+    return path.join(this.baseDir, OWNERS_DIR, `${String(taskId).replace(/[^A-Za-z0-9._-]/g, '_')}.json`);
+  }
+
+  /** The current owner record for a task's worktree path, or null. */
+  owner(taskId) {
+    try { return JSON.parse(fs.readFileSync(this.#ownerPath(taskId), 'utf8')); }
+    catch { return null; }
+  }
+
+  #writeOwner(taskId, record, { exclusive = false } = {}) {
+    const file = this.#ownerPath(taskId);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(record, null, 2), exclusive ? { flag: 'wx' } : undefined);
+    return record;
+  }
+
+  #clearOwner(taskId) {
+    try { fs.rmSync(this.#ownerPath(taskId), { force: true }); } catch { /* already gone */ }
+  }
+
+  /**
+   * Is this owner record a live attempt, or a crashed process's leftover?
+   *
+   * Released records are never live. An unreleased one is live only while its
+   * heartbeat is recent — a supervisor touches its in-flight attempts each
+   * tick, so a record that has gone quiet for OWNER_LIVE_MS belonged to
+   * something that is no longer running.
+   */
+  isLive(record, { now = Date.now() } = {}) {
+    if (!record || record.releasedAt) return false;
+    const beat = Date.parse(record.heartbeatAt ?? record.createdAt ?? '');
+    if (!Number.isFinite(beat)) return false;
+    return now - beat < OWNER_LIVE_MS;
+  }
+
+  /** Keep a live attempt's record fresh. Called from the supervisor's tick. */
+  touchAttempt(taskId, attemptId, { now = Date.now() } = {}) {
+    const record = this.owner(taskId);
+    if (!record || record.attemptId !== attemptId || record.releasedAt) return false;
+    this.#writeOwner(taskId, { ...record, heartbeatAt: new Date(now).toISOString() });
+    return true;
+  }
+
+  /**
+   * Mark an attempt finished WITHOUT deleting anything.
+   *
+   * Releasing and cleaning up are separate on purpose: a parked attempt keeps
+   * its tree for forensics but must not block the next attempt, and a cleanup
+   * that arrives later still has to prove it owns what it deletes.
+   */
+  releaseAttempt(taskId, attemptId, { now = Date.now() } = {}) {
+    const record = this.owner(taskId);
+    if (!record || record.attemptId !== attemptId) return false;
+    this.#writeOwner(taskId, { ...record, releasedAt: new Date(now).toISOString() });
+    return true;
+  }
+
   async defaultBranch() {
     // Whatever this repo calls it. Assuming "main" breaks on every repo that
     // never renamed, and silently — onto a branch that does not exist.
@@ -137,28 +249,152 @@ export class WorktreePool {
    * a task is picked, other tasks have landed, and starting from a stale commit
    * guarantees a conflict at merge time for no reason.
    */
-  async create(taskId, title, { base = null } = {}) {
+  async create(taskId, title, { base = null, attemptId = null, projectId = null, runId = null, now = Date.now() } = {}) {
     fs.mkdirSync(this.baseDir, { recursive: true });
     const dir = this.dirFor(taskId);
     const branch = branchFor(taskId, title);
     const from = base ?? await this.defaultBranch();
     if (fs.existsSync(dir)) throw new GitError(`A worktree for ${taskId} already exists at ${dir}.`);
-    await git(['worktree', 'add', '-b', branch, dir, from], { cwd: this.repoRoot });
-    return { taskId, dir, branch, base: from };
+    const attempt = attemptId ?? newAttemptId(taskId, { now });
+    // The owner record is written BEFORE the checkout, so two concurrent
+    // creates cannot both believe they own this path: the second one's
+    // exclusive write fails and it never runs `git worktree add`. If the
+    // checkout then fails, the reservation is rolled back rather than left
+    // behind to block the next attempt.
+    const record = {
+      projectId, taskId: String(taskId), attemptId: attempt, runId,
+      path: dir, branch, base: from,
+      createdAt: new Date(now).toISOString(),
+      heartbeatAt: new Date(now).toISOString(),
+      releasedAt: null
+    };
+    try {
+      this.#writeOwner(taskId, record, { exclusive: true });
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+      const held = this.owner(taskId);
+      throw new GitError(
+        `A worktree for ${taskId} is already owned by attempt ${held?.attemptId ?? 'unknown'}`
+        + `${held?.runId ? ` (run ${held.runId})` : ''}. Discard that attempt before starting another.`);
+    }
+    try {
+      await git(['worktree', 'add', '-b', branch, dir, from], { cwd: this.repoRoot });
+    } catch (err) {
+      this.#clearOwner(taskId);
+      throw err;
+    }
+    return { taskId, dir, branch, base: from, attemptId: attempt };
   }
 
-  // Force, because the whole point is that a failed task is thrown away — an
-  // agent that left the tree dirty must not be able to keep it alive.
-  async remove(taskId, { deleteBranch = false } = {}) {
+  /**
+   * Throw away ONE attempt's worktree.
+   *
+   * Force, because the whole point is that a failed task is thrown away — an
+   * agent that left the tree dirty must not be able to keep it alive.
+   *
+   * Compare-and-delete: the caller states which attempt it believes it is
+   * cleaning up, and this refuses to touch a path owned by a different one.
+   * That is the whole fix for the cross-attempt race — a cancelled attempt's
+   * cleanup arriving after the next attempt has started is now a recorded
+   * `owner-mismatch` that mutates nothing, instead of a silent rm -rf of live
+   * work.
+   *
+   * `attemptId: null` is the unscoped call: a hand-driven `flyt work discard`,
+   * or a tree that predates ownership. It proceeds — "no attempt id" is a
+   * caller asserting deliberate intent, and a person who typed `discard` means
+   * it. `guardLive` is how the automated paths ask for the other behavior; see
+   * `reclaim`, which is the one that must never disturb live work.
+   *
+   * @returns {{outcome, taskId, attemptId?, owner?, dir, branch?}} never throws
+   *          on a mismatch; the outcome IS the answer.
+   */
+  async remove(taskId, { deleteBranch = false, attemptId = null, guardLive = false, now = Date.now() } = {}) {
     const dir = this.dirFor(taskId);
-    if (!fs.existsSync(dir)) return false;
+    const record = this.owner(taskId);
+
+    // A WRONG attempt id is the actual bug: something believes it owns a path
+    // that has since been handed to a newer attempt. Refuse, always.
+    if (attemptId && record && record.attemptId !== attemptId) {
+      return { outcome: 'owner-mismatch', taskId: String(taskId), attemptId, owner: record.attemptId, dir };
+    }
+    if (guardLive && !attemptId && this.isLive(record, { now })) {
+      return { outcome: 'live-owner', taskId: String(taskId), owner: record.attemptId, runId: record.runId ?? null, dir };
+    }
+    if (!fs.existsSync(dir)) {
+      // Idempotent: cleaning up the same completed attempt twice is a no-op,
+      // not an error. Clear any record so the path is free for the next start.
+      if (record && (!attemptId || record.attemptId === attemptId)) this.#clearOwner(taskId);
+      return { outcome: 'already-removed', taskId: String(taskId), attemptId: attemptId ?? record?.attemptId ?? null, dir };
+    }
+
     let branch = null;
     if (deleteBranch) {
       try { branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: dir }); } catch { /* unreadable */ }
     }
     await git(['worktree', 'remove', '--force', dir], { cwd: this.repoRoot });
     if (branch) { try { await git(['branch', '-D', branch], { cwd: this.repoRoot }); } catch { /* already gone */ } }
-    return true;
+    if (record && (!attemptId || record.attemptId === attemptId)) this.#clearOwner(taskId);
+    return { outcome: 'removed', taskId: String(taskId), attemptId: attemptId ?? record?.attemptId ?? null, dir, branch };
+  }
+
+  /**
+   * Clear a path a new attempt wants, refusing to disturb a live owner.
+   *
+   * What `work:start` needs and `remove` deliberately does not give it: "this
+   * task's slot must be free, and if somebody is genuinely still working in it,
+   * tell me who instead of deleting their tree."
+   */
+  async reclaim(taskId, { now = Date.now() } = {}) {
+    const record = this.owner(taskId);
+    if (this.isLive(record, { now })) {
+      return { outcome: 'live-owner', taskId: String(taskId), owner: record.attemptId, runId: record.runId ?? null, dir: this.dirFor(taskId) };
+    }
+    // Abandoned or released: the old attempt's id is the one we are cleaning
+    // up. `guardLive` too, so a record that goes live between the check above
+    // and the delete below is still refused rather than raced.
+    return this.remove(taskId, { deleteBranch: true, attemptId: record?.attemptId ?? null, guardLive: true, now });
+  }
+
+  /**
+   * Owner records and git worktrees that no longer belong together (WR-02).
+   *
+   * Run at startup: a process that died mid-attempt leaves one of three
+   * things — a record with no directory, a directory with no record, or a
+   * git worktree registration pointing at neither. Reported rather than
+   * cleaned automatically, because "delete this directory" is exactly the
+   * decision that must not be guessed at.
+   */
+  reconcile({ now = Date.now() } = {}) {
+    const orphans = [];
+    let records = [];
+    try {
+      records = fs.readdirSync(path.join(this.baseDir, OWNERS_DIR))
+        .filter(f => f.endsWith('.json'))
+        .map(f => { try { return JSON.parse(fs.readFileSync(path.join(this.baseDir, OWNERS_DIR, f), 'utf8')); } catch { return null; } })
+        .filter(Boolean);
+    } catch { /* no owners directory yet */ }
+
+    const owned = new Set(records.map(r => r.path));
+    for (const r of records) {
+      if (!fs.existsSync(r.path)) {
+        orphans.push({ kind: 'record-without-worktree', taskId: r.taskId, attemptId: r.attemptId, path: r.path });
+      } else if (!this.isLive(r, { now })) {
+        orphans.push({
+          kind: r.releasedAt ? 'released-worktree' : 'abandoned-worktree',
+          taskId: r.taskId, attemptId: r.attemptId, path: r.path, runId: r.runId ?? null
+        });
+      }
+    }
+    let dirs = [];
+    try {
+      dirs = fs.readdirSync(this.baseDir, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== OWNERS_DIR)
+        .map(d => path.join(this.baseDir, d.name));
+    } catch { /* nothing created yet */ }
+    for (const dir of dirs) {
+      if (!owned.has(dir)) orphans.push({ kind: 'worktree-without-record', taskId: path.basename(dir), path: dir });
+    }
+    return orphans;
   }
 
   // Which files the task actually touched, committed or not. This is what the

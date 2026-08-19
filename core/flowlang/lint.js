@@ -35,6 +35,9 @@ const COMMON_OVERRIDES = [
   'toolCeiling',
   // Combined-node options (node rework)
   'effort', 'evalType', 'language',
+  // The deliverable contract (WR-01): the same node can be "write the change"
+  // in one mode and "describe the change" in another.
+  'effect', 'effectScope',
   // A whole-cloth system-prompt override (MODES-COMPARE T8: planner tiering as
   // data, not a code fork). resolveInstance carries it to data.system.
   'system'

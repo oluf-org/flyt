@@ -8,6 +8,7 @@
 // Both paths share the same registry, the same validation, the same
 // executeTool wrapper, and the same iteration cap.
 import { callModel } from './adapters/index.js';
+import { classifyAdapterError, mayFallThrough } from './adapters/failures.js';
 import { executeTool, isDestructive } from './tools/index.js';
 
 // How many tool-calling rounds a node gets before it must answer. Eight is
@@ -263,7 +264,56 @@ export function supportsToolsFor(worker, config = {}) {
   return worker?.provider === 'openrouter' || worker?.provider === 'auto';
 }
 
-export async function runAgent({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal = null, maxIterations = null, maxTokens = null }) {
+/**
+ * Run one agent turn, falling through to another provider when the RUNTIME —
+ * not the request — is what failed (WR-05).
+ *
+ * `fallback` is `{ source, candidates: [target, ...], onFallback }`. `source` is
+ * the REQUESTED source ('auto', or a pinned provider id) — not the resolved
+ * one: by the time a worker reaches here an auto route has already been
+ * resolved to a concrete provider, so reading the provider off the worker would
+ * make every call look pinned and no fallback would ever fire. An
+ * infrastructure failure — the vendor CLI missing, or refusing to launch —
+ * says nothing about the prompt or the model, so trying the next connected
+ * provider is reasonable. Anything else fails where it stands: a bad model id,
+ * an expired key or a rate limit will fail identically elsewhere, and quietly
+ * spending on a second provider to prove it is the opposite of helpful.
+ *
+ * Bounded by the candidate list and unable to revisit a provider, so this can
+ * never become a loop over the whole priority list.
+ */
+export async function runAgent(opts) {
+  const { fallback = null } = opts;
+  const candidates = fallback?.candidates ?? [];
+  if (!candidates.length) return runAgentOnce(opts);
+
+  let lastErr;
+  const attempts = [{ worker: opts.worker, apiKey: opts.apiKey }, ...candidates.map(t => ({
+    worker: { ...opts.worker, provider: t.provider, model: t.model, ...(t.keyKind ? { keyKind: t.keyKind } : {}) },
+    apiKey: t.apiKey ?? null
+  }))];
+  for (let i = 0; i < attempts.length; i++) {
+    const { worker, apiKey } = attempts[i];
+    try {
+      return await runAgentOnce({ ...opts, worker, apiKey, fallback: null });
+    } catch (err) {
+      lastErr = err;
+      const failure = classifyAdapterError(err, { provider: worker.provider, model: worker.model, executable: err?.executable });
+      const next = attempts[i + 1];
+      // A stop is never a provider failure and is never retried anywhere.
+      if (!next || err?.aborted || err?.name === 'AbortError') throw err;
+      if (!mayFallThrough(failure.code, fallback.source ?? 'auto')) throw err;
+      fallback.onFallback?.({
+        from: { provider: worker.provider, model: worker.model },
+        to: { provider: next.worker.provider, model: next.worker.model },
+        code: failure.code, detail: failure.detail, remedy: failure.remedy
+      });
+    }
+  }
+  throw lastErr;
+}
+
+async function runAgentOnce({ worker, apiKey, system, prompt, tools = [], ctx, onText, onRetry, onCall, onEmptyTurn, retry, timeout, signal = null, maxIterations = null, maxTokens = null }) {
   const started = Date.now();
   if (!tools.length) {
     const r = await callForAnswer(

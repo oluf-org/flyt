@@ -90,6 +90,25 @@ test('executor: an agentTask runs a command in the real repo and captures its ou
   assert.match(bashCall.result.stdout, /BUILD_OK/); // command output captured to the audit log
 });
 
+test('executor: agentTask honors config.maxToolIterations', async () => {
+  const store = makeStore();
+  const runId = store.createRun('bounded executor tools');
+  const proj = tmpDir();
+  fs.writeFileSync(path.join(proj, 'sample.txt'), 'ok');
+  store.writeMeta(runId, { ...store.readMeta(runId), workspace: new Workspace(proj).ensure().root });
+  store.writeTasks(runId, { tasks: [{
+    id: 'task-1', title: 'Read repeatedly', goal: 'Exercise the configured cap.',
+    inputs: ['prompt.md'], constraints: [], tools: ['read_file'],
+    worker: { provider: 'script', model: 'test-model' }, status: 'pending'
+  }] });
+
+  setScript(() => '```tool\n' + JSON.stringify({ tool: 'read_file', args: { path: 'sample.txt' } }) + '\n```');
+
+  await runExecutorTask(store, runId, 'task-1', testConfig({ maxToolIterations: 2 }));
+  const calls = logEvents(store, runId).filter(e => e.event === 'tool_call' && e.tool === 'read_file');
+  assert.equal(calls.length, 2, 'the executor uses the configured cap instead of runAgent\'s fallback');
+});
+
 test('bash: falls back to the run sandbox when no workspace is bound', async () => {
   const store = makeStore();
   const runId = store.createRun('no workspace');

@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { abortError } from './http.js';
+import { withFailureCode } from './failures.js';
 
 const isWin = process.platform === 'win32';
 
@@ -120,6 +121,56 @@ export function neutralCwd() {
   return neutralDir;
 }
 
+// --- Preflight ---------------------------------------------------------------
+
+/**
+ * Can this CLI plausibly launch, without paying for a model call? (WR-05)
+ *
+ * Cheap and filesystem-only: resolve the executable, then check it is a real
+ * file we are allowed to execute. It exists so a broken runtime is discovered
+ * in Settings — or before an auto route commits to a provider — rather than
+ * three nodes into a run, which is exactly how `spawn EPERM` came to look like
+ * a model failure.
+ *
+ * Never spawns anything: the point is to be safe to call often.
+ *
+ * @returns {{ok, code?, executable?, detail?}} `code` is a FAILURE_CODES entry.
+ */
+export function preflightCli({ override = null, names, npmPkg = null, npmEntry = null }) {
+  const found = resolveCli({ override, names, npmPkg, npmEntry });
+  if (!found) {
+    return {
+      ok: false, code: 'runtime-missing',
+      detail: override
+        ? `The configured path does not resolve to a runnable CLI: ${override}`
+        : `No ${names[0]} executable on PATH.`
+    };
+  }
+  // For a `viaNode` launch the thing that must exist is the script, not the
+  // interpreter — this process is already running the interpreter.
+  const target = found.viaNode ? found.args[0] : found.command;
+  try {
+    if (!fs.statSync(target).isFile()) {
+      return { ok: false, code: 'runtime-missing', executable: target, detail: `${target} is not a file.` };
+    }
+  } catch {
+    return { ok: false, code: 'runtime-missing', executable: target, detail: `${target} does not exist.` };
+  }
+  try {
+    // X_OK is meaningless on Windows (it reports R_OK), so this catches the
+    // POSIX "exists but not executable" case and is a harmless read check
+    // elsewhere. A blocked-by-policy Windows binary still only shows up at
+    // spawn time — which is why the spawn path classifies EPERM as well.
+    fs.accessSync(target, found.viaNode ? fs.constants.R_OK : fs.constants.X_OK);
+  } catch {
+    return {
+      ok: false, code: 'runtime-permission', executable: target,
+      detail: `${target} exists but is not executable by this user.`
+    };
+  }
+  return { ok: true, executable: target, viaNode: Boolean(found.viaNode) };
+}
+
 // --- Spawn + collect ---------------------------------------------------------
 // Run the CLI once: prompt on stdin, JSONL on stdout (onLine per parsed-ish
 // line), stderr collected for error messages. Honors the runner's AbortSignal
@@ -142,7 +193,9 @@ export function spawnCliCall({ command, args, stdinText = '', env = process.env,
     const onAbort = () => { killTree(); fail(abortError()); };
     const timer = setTimeout(() => {
       killTree();
-      fail(new Error(`CLI call timed out after ${Math.round(timeoutMs / 1000)}s (${path.basename(command)})`));
+      fail(withFailureCode(
+        new Error(`CLI call timed out after ${Math.round(timeoutMs / 1000)}s (${path.basename(command)})`),
+        'timeout', { executable: command }));
     }, timeoutMs);
     const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); };
     const done = settle(resolve);
@@ -150,9 +203,20 @@ export function spawnCliCall({ command, args, stdinText = '', env = process.env,
     signal?.addEventListener('abort', onAbort, { once: true });
 
     child.on('error', err => {
-      fail(err.code === 'ENOENT'
-        ? new Error(`Could not launch "${command}" — is the CLI installed and on PATH?`)
-        : err);
+      // A launch failure is a RUNTIME failure, not a model failure, and the two
+      // need different answers: auto routing may try the next provider for
+      // this, diagnostics can name the setting to change, and neither is
+      // possible if every error arrives as a bare Error (WR-05). The real
+      // `spawn EPERM` that started this work looked identical to a bad prompt.
+      if (err?.code === 'ENOENT') {
+        const e = new Error(`Could not launch "${command}" — is the CLI installed and on PATH?`);
+        fail(withFailureCode(e, 'runtime-missing', { executable: command }));
+      } else if (err?.code === 'EPERM' || err?.code === 'EACCES') {
+        const e = new Error(`Could not launch "${command}" — the executable exists but was refused (${err.code}).`);
+        fail(withFailureCode(e, 'runtime-permission', { executable: command }));
+      } else {
+        fail(withFailureCode(err, 'runtime-permission', { executable: command }));
+      }
     });
 
     let buf = '';

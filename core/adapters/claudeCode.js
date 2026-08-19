@@ -13,7 +13,7 @@
 // limits. The main process gates this provider behind an explicit opt-in with
 // a warning (Settings → Providers → Claude subscription).
 import {
-  resolveCli, spawnCliCall, cliEnv, neutralCwd, claudeCredentialStatus
+  resolveCli, spawnCliCall, cliEnv, neutralCwd, claudeCredentialStatus, preflightCli
 } from './cliDelegate.js';
 import { abortError } from './http.js';
 
@@ -26,6 +26,12 @@ export function resolveClaudeCli(override = null) {
     npmPkg: '@anthropic-ai/claude-code',
     npmEntry: 'cli.js'
   });
+}
+
+// Can the Claude CLI launch at all? Filesystem-only, so Settings and `doctor`
+// can ask without paying for a model call (WR-05).
+export function preflightClaudeCli(override = null) {
+  return preflightCli({ override, names: ['claude'], npmPkg: '@anthropic-ai/claude-code', npmEntry: 'cli.js' });
 }
 
 // Fixed argv: only the model id and the system prompt vary, and stdin carries

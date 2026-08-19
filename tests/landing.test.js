@@ -139,7 +139,10 @@ test('each task gets its own worktree, outside the repo, and throwing it away is
   assert.ok(!fs.existsSync(path.join(root, 'new.js')));
   assert.match(await pool.diff('t-0001', { base: 'main' }), /\+export const x = 1;/);
 
-  assert.equal(await pool.remove('t-0001', { deleteBranch: true }), true);
+  // Cleanup reports a named outcome now, not a boolean: "I did not delete it"
+  // has four meanings and the one that matters — somebody else owns this — must
+  // never be silent (WR-02).
+  assert.equal((await pool.remove('t-0001', { deleteBranch: true })).outcome, 'removed');
   assert.ok(!fs.existsSync(wt.dir), 'a failed task is thrown away by deleting a directory');
 });
 

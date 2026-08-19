@@ -14,6 +14,7 @@ import RunResult from './RunResult.jsx';
 import RunsList from './RunsList.jsx';
 import NodeFocus from './NodeFocus.jsx';
 import { isTerminal } from './runProgress.js';
+import { projectActivity } from './activityStatus.js';
 import { resolveFlow, namedFlow, UNTITLED_FLOW, isInstance, isStructuralNode, setKnownTools, setToolCatalog } from './flowTypes.js';
 import { comparePair } from './compareRun.js';
 import { layoutPositions, shrinkOrchBox } from './flowLayout.js';
@@ -345,6 +346,41 @@ export default function App() {
   const activeTabRef = useRef(null);
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
   const [tabLive, setTabLive] = useState({}); // id -> count of live runs (strip dots)
+  // Rich activity stays at app-shell scope, separate from whichever run panel
+  // happens to be open, so navigation cannot make background work disappear.
+  const activityRunsRef = useRef(new Map()); // projectId -> Map(runId, record)
+  const [tabActivity, setTabActivity] = useState({});
+  const recomputeActivity = useCallback((projectId, now = Date.now()) => {
+    const runs = activityRunsRef.current.get(projectId);
+    const summary = projectActivity(runs ? [...runs.values()] : [], now);
+    setTabActivity(prev => ({ ...prev, [projectId]: summary }));
+  }, []);
+  const captureRunActivity = useCallback((projectId, payload) => {
+    if (!projectId || !payload?.runId) return;
+    let runs = activityRunsRef.current.get(projectId);
+    if (!runs) activityRunsRef.current.set(projectId, runs = new Map());
+    const previous = runs.get(payload.runId);
+    let next = null;
+    if (payload.full) next = payload.full;
+    else if (previous?.snapshot && (payload.base == null || payload.base === previous.rev)) {
+      next = mergeSnapshot(previous.snapshot, payload.patch);
+    }
+    if (!next) {
+      window.flyt.getSnapshot(projectId, payload.runId).then(snapshot => {
+        runs.set(payload.runId, {
+          runId: payload.runId, snapshot, rev: snapshot.rev ?? payload.rev ?? 0,
+          updatedAt: Date.now(), live: !isTerminal(snapshot.meta?.stage)
+        });
+        recomputeActivity(projectId);
+      }).catch(() => {});
+      return;
+    }
+    runs.set(payload.runId, {
+      runId: payload.runId, snapshot: next, rev: payload.rev ?? previous?.rev ?? 0,
+      updatedAt: Date.now(), live: !isTerminal(next.meta?.stage)
+    });
+    recomputeActivity(projectId);
+  }, [recomputeActivity]);
   const [newTabOpen, setNewTabOpen] = useState(false); // the ＋ page (T15)
   const [recents, setRecents] = useState([]);
   const [tabNotice, setTabNotice] = useState(null); // restore-time dropped-folder notice (T17)
@@ -522,6 +558,7 @@ export default function App() {
   useEffect(() => {
     return window.flyt.onRunUpdate(payload => {
       const { runId } = payload;
+      captureRunActivity(payload.projectId ?? activeTabRef.current, payload);
       // Scoped pushes (T7): a background project's run must never patch the
       // foreground tab's snapshot. Same guard shape as the rev matching below.
       if (payload.projectId && payload.projectId !== activeTabRef.current) return;
@@ -549,7 +586,7 @@ export default function App() {
       }
       setSnapshot({ ...mergeSnapshot(cur, payload.patch), rev: payload.rev });
     });
-  }, [refreshRunsSoon]);
+  }, [refreshRunsSoon, captureRunActivity]);
 
   useEffect(() => {
     if (!activeRunId) { setSnapshot(null); return; }
@@ -917,9 +954,11 @@ export default function App() {
     if (id === activeTabRef.current) await leaveCurrentTab();
     const payload = await window.flyt.closeProject(id);
     bundles.current.delete(id);
+    activityRunsRef.current.delete(id);
     mruRef.current = mruRef.current.filter(x => x !== id);
     setTabs(payload.tabs);
     setTabLive(prev => { const next = { ...prev }; delete next[id]; return next; });
+    setTabActivity(prev => { const next = { ...prev }; delete next[id]; return next; });
     if (payload.active !== activeTabRef.current) {
       await enterTab(payload.active, payload.tabs.find(t => t.id === payload.active)?.state);
     }
@@ -1013,7 +1052,32 @@ export default function App() {
   // Live-run indicators for every tab, active or not (T9's featherweight push).
   useEffect(() => window.flyt.onProjectActivity?.(({ projectId, live }) => {
     setTabLive(prev => ({ ...prev, [projectId]: live.length }));
-  }), []);
+    let runs = activityRunsRef.current.get(projectId);
+    if (!runs) activityRunsRef.current.set(projectId, runs = new Map());
+    const previouslyLive = new Set([...runs].filter(([, record]) => record.live).map(([runId]) => runId));
+    const liveIds = new Set(live);
+    for (const [runId, record] of runs) runs.set(runId, { ...record, live: liveIds.has(runId) });
+    recomputeActivity(projectId);
+    // The featherweight activity channel intentionally carries ids only. Fetch
+    // once when membership changes; active-project run:update patches then keep
+    // the safe presentation current without a second backend protocol.
+    for (const runId of live) {
+      if (previouslyLive.has(runId) && runs.get(runId)?.snapshot) continue;
+      window.flyt.getSnapshot(projectId, runId).then(snapshot => {
+        runs.set(runId, { runId, snapshot, rev: snapshot.rev ?? 0, updatedAt: Date.now(), live: true });
+        recomputeActivity(projectId);
+      }).catch(() => {});
+    }
+  }), [recomputeActivity]);
+
+  // Freshness changes even during silence. Re-project retained snapshots once
+  // a second so a quiet worker can become visibly stalled in persistent chrome.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      for (const projectId of activityRunsRef.current.keys()) recomputeActivity(projectId);
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [recomputeActivity]);
 
   // --- Ctrl+Tab (T14 + 4.2): quick tap = instant MRU flip; holding ≥150ms
   // deals the deck; further presses advance; releasing Ctrl commits; Esc
@@ -1774,6 +1838,13 @@ export default function App() {
           .then(res => {
             if (worker?.model && res?.ok && !res.worker) {
               setRunToast(`Retried on the original model — this app build can't re-point a step yet. Restart ${APP_NAME} to use ${worker.model}.`);
+            } else if (worker?.model && res?.ok && res.effectiveWorker
+              && res.effectiveWorker.model !== worker.model) {
+              // The backend resolved somewhere else — a pinned source with no
+              // key, an id no connected provider can serve. Say where it will
+              // actually run (WR-03): claiming "retried on B" when the engine
+              // resolved C is the failure this echo exists to prevent.
+              setRunToast(`Retry will run on ${res.effectiveWorker.provider}/${res.effectiveWorker.model}, not ${worker.model}.`);
             }
             return res;
           }),
@@ -1889,6 +1960,7 @@ export default function App() {
   // A run is identified by its name everywhere it's named; the id stays the
   // fallback for a run the list hasn't loaded yet.
   const activeRunName = runs.find(r => r.id === activeRunId)?.name ?? activeRunId;
+  const activeProjectActivity = activeTab ? tabActivity[activeTab] ?? null : null;
   const crumb =
     homeView ? ['Home'] :
     modelsView ? ['Models'] :
@@ -1908,6 +1980,7 @@ export default function App() {
           tabs={tabs}
           activeId={activeTab}
           live={tabLive}
+          activity={tabActivity}
           saveState={saveState}
           onSelect={switchTab}
           onClose={closeTab}
@@ -1939,6 +2012,22 @@ export default function App() {
           </>}
         </nav>
         {runView && stage && <span className="stage-chip">{stage.replace(/_/g, ' ')}</span>}
+        {activeProjectActivity && activeProjectActivity.phase !== 'idle'
+          && (activeProjectActivity.active || activeProjectActivity.ageMs < 15_000) && (
+          <div
+            className="shell-activity"
+            data-phase={activeProjectActivity.phase}
+            role="status"
+            aria-live="polite"
+            aria-label={activeProjectActivity.ariaLabel}
+            title={activeProjectActivity.ariaLabel}
+          >
+            <span className="shell-activity-dot" aria-hidden="true" />
+            <span className="shell-activity-phase">{activeProjectActivity.phaseLabel}</span>
+            {activeProjectActivity.detail && <span className="shell-activity-detail mono">{activeProjectActivity.detail}</span>}
+            <span className="shell-activity-fresh">{activeProjectActivity.freshness}</span>
+          </div>
+        )}
         <div className="toolbar-spacer" />
         <button type="button" className="theme-toggle" onClick={toggleTheme} title="Toggle appearance">
           <span>{theme === 'light' ? '☾' : '☀'}</span>

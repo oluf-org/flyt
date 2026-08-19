@@ -81,7 +81,13 @@ function retroBrief(retro) {
     confidence: retro.confidence ?? null,
     recommendation: retro.recommendation || null,
     problems: (retro.problems ?? []).filter(Boolean),
-    model: retro.model ?? null
+    model: retro.model ?? null,
+    // The deliverable contract and what was observed (WR-01). Carried so the
+    // feed can say "this owed a change to the project and produced none"
+    // rather than only showing the sentence — and so a SUCCESSFUL node can
+    // show what it actually changed. Already bounded and secret-free where
+    // the executor wrote it.
+    effect: retro.effect ?? null
   };
 }
 

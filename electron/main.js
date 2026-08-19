@@ -15,7 +15,8 @@ import { callModel } from '../core/adapters/index.js';
 import {
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
   CURATED_MODELS, TEST_MODELS,
-  catalogFromOpenRouter, factsFromCatalog, normalizeModelSets
+  catalogFromOpenRouter, factsFromCatalog, normalizeModelSets,
+  popularityFromOpenRouter, normalizeModelPopularity
 } from '../core/modelSource.js';
 // Subscription (CLI-delegation) plumbing: sign-in detection + binary
 // resolution. Presence checks only — no token is ever read (DESIGN-SPEC.md §6).
@@ -625,17 +626,18 @@ ipcMain.handle('flow:toYaml', (_e, flow) => {
   try { return serializeFlow(flow); }
   catch (e) { throw new Error('serialize: ' + e.message); }
 });
-ipcMain.handle('flow:saveFromYaml', (_e, id, yamlText) => {
-  if (typeof yamlText !== 'string') throw new Error('yamlText must be a string');
-  const parsed = parseFlow(yamlText); // validates + produces canonical model (no pos)
-  // Preserve any existing layout positions for nodes that survive the edit.
-  let layout = {};
+
 // --- Tool Library (tools/<id>.json) ---
 // Read-only over IPC in P1: the renderer uses it to validate grants against
 // what actually exists instead of a hardcoded array. Authoring arrives with
 // the Tools page (DESIGN-SPEC.md §5).
 ipcMain.handle('tool:folder', () => ({ dir: toolLibrary.rootDir, packaged: app.isPackaged }));
 
+ipcMain.handle('flow:saveFromYaml', (_e, id, yamlText) => {
+  if (typeof yamlText !== 'string') throw new Error('yamlText must be a string');
+  const parsed = parseFlow(yamlText); // validates + produces canonical model (no pos)
+  // Preserve any existing layout positions for nodes that survive the edit.
+  let layout = {};
   try {
     layout = JSON.parse(fs.readFileSync(flows.layoutPath(id), 'utf8')) || {};
   } catch {}
@@ -800,6 +802,43 @@ ipcMain.handle('models:list', async (_e, provider = 'openrouter') => {
   persistSettings();
   rebuildRuntimeConfig();
   return models;
+});
+
+const MODEL_POPULARITY_CACHE_MS = 6 * 60 * 60 * 1000;
+
+// Public OpenRouter adoption data, kept separate from the model catalog so a
+// rankings outage or rate limit never makes models disappear. The endpoint's
+// default window is the trailing 30 completed UTC days.
+ipcMain.handle('models:rankings', async (_e, force = false) => {
+  const cached = normalizeModelPopularity(settings.modelPopularity);
+  const fetchedMs = Date.parse(cached?.fetchedAt ?? '');
+  if (!force && cached && Number.isFinite(fetchedMs) && Date.now() - fetchedMs < MODEL_POPULARITY_CACHE_MS) {
+    return { ...cached, stale: false };
+  }
+  if (!settings.providers?.openrouter?.apiKey) {
+    if (cached) return { ...cached, stale: true, warning: 'Connect OpenRouter to refresh popularity.' };
+    throw new Error('No OpenRouter API key saved. Add one in Settings to load popularity data.');
+  }
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/datasets/rankings-daily?period=day', {
+      headers: { 'Authorization': `Bearer ${settings.providers.openrouter.apiKey}` }
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`OpenRouter rankings ${res.status}: ${body.slice(0, 300)}`);
+    }
+    const ranking = {
+      ...popularityFromOpenRouter(await res.json()),
+      fetchedAt: new Date().toISOString()
+    };
+    if (!ranking.creators.length) throw new Error('OpenRouter rankings returned no model creators.');
+    settings.modelPopularity = ranking;
+    persistSettings();
+    return { ...ranking, stale: false };
+  } catch (err) {
+    if (cached) return { ...cached, stale: true, warning: String(err?.message ?? err) };
+    throw err;
+  }
 });
 
 // The Settings "Test" button (DESIGN-SPEC.md §6): one tiny call through the

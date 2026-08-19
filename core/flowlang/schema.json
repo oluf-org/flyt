@@ -3,76 +3,151 @@
   "$id": "https://flyt.dev/flow.schema.json",
   "title": "Flow DSL (*.flow.yaml), version 1",
   "type": "object",
-  "required": ["version", "id", "name", "flow"],
+  "required": [
+    "version",
+    "id",
+    "name",
+    "flow"
+  ],
   "additionalProperties": false,
   "properties": {
-    "version": { "const": 1 },
-    "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
-    "name": { "type": "string", "minLength": 1 },
-    "description": { "type": "string" },
+    "version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]+$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string"
+    },
     "nodes": {
       "type": "object",
-      "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
-      "additionalProperties": { "$ref": "#/$defs/node" }
+      "propertyNames": {
+        "pattern": "^[a-zA-Z0-9_-]+$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/node"
+      }
     },
     "flow": {
       "type": "array",
-      "items": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)?(\\s*->\\s*[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)?)+$" }
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)?(\\s*->\\s*[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)?)+$"
+      }
     },
     "modes": {
       "type": "object",
-      "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
-      "additionalProperties": { "$ref": "#/$defs/mode" }
+      "propertyNames": {
+        "pattern": "^[a-zA-Z0-9_-]+$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/mode"
+      }
     },
     "inputs": {
       "description": "Typed run inputs (D36). Each becomes an output port of a node called `inputs`, addressable as `inputs.<name>`.",
       "type": "object",
-      "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
-      "additionalProperties": { "$ref": "#/$defs/runInput" }
+      "propertyNames": {
+        "pattern": "^[a-zA-Z0-9_-]+$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/runInput"
+      }
     }
   },
   "$defs": {
     "runInput": {
       "type": "object",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type": { "enum": ["text", "url", "repo", "choice", "file", "model", "modelSet"] },
-        "label": { "type": "string" },
-        "description": { "type": "string" },
-        "placeholder": { "type": "string" },
-        "required": { "type": "boolean" },
+        "type": {
+          "enum": [
+            "text",
+            "url",
+            "repo",
+            "choice",
+            "file",
+            "model",
+            "modelSet"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "placeholder": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
         "default": {},
-        "options": { "type": "array", "items": { "type": "string" } }
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "mode": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "description": { "type": "string" },
-        "derivedFrom": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "derivedFrom": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
         "overrides": {
           "type": "object",
-          "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
-          "additionalProperties": { "type": "object" }
+          "propertyNames": {
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          },
+          "additionalProperties": {
+            "type": "object"
+          }
         }
       }
     },
     "contextSpec": {
       "type": "object",
-      "required": ["files"],
+      "required": [
+        "files"
+      ],
       "additionalProperties": false,
       "properties": {
         "files": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["path"],
+            "required": [
+              "path"
+            ],
             "properties": {
-              "path": { "type": "string", "minLength": 1 },
-              "description": { "type": "string" }
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              }
             }
           }
         }
@@ -81,44 +156,122 @@
     "toolCeiling": {
       "description": "The hard limit a node's tool grant lives inside: a toolset id (repo-write), a selector (effects:read, provider:mcp, trust:trusted, *), a tool id, or a list of any of those. Absent means the ceiling is exactly the static grant.",
       "oneOf": [
-        { "type": "string", "minLength": 1 },
-        { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       ]
     },
     "worker": {
       "type": "object",
-      "required": ["provider", "model"],
+      "required": [
+        "provider",
+        "model"
+      ],
       "additionalProperties": false,
       "properties": {
-        "provider": { "type": "string" },
-        "model": { "type": "string" }
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
       }
     },
     "lane": {
       "description": "One take on the fan-out's shared brief (D36). A bare string is shorthand for a preset lane. `worker` accepts a plain model id as well as the {provider, model} object.",
       "oneOf": [
-        { "enum": ["standard", "architecture", "wildcard", "adversarial", "contrarian"] },
+        {
+          "enum": [
+            "standard",
+            "architecture",
+            "wildcard",
+            "adversarial",
+            "contrarian"
+          ]
+        },
         {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
-            "label": { "type": "string" },
-            "intent": { "type": "string", "description": "One line, shown to the OTHER lanes so each knows who else is on the brief." },
-            "preset": { "enum": ["standard", "architecture", "wildcard", "adversarial", "contrarian"] },
-            "instructions": { "type": "string" },
-            "system": { "type": "string", "description": "This lane's role prompt, composed after the preset's (DECISIONS.md D37). Replaces the template role's default system prompt." },
-            "emphasis": { "type": "string", "maxLength": 280, "description": "At most one sentence narrowing this lane inside its preset; appended to the role prompt as \"THIS LANE SPECIFICALLY: …\"." },
-            "template": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
-        "waitFor": { "enum": ["all", "any", "none"], "description": "Loop node: wait for every queued task to settle, for the first, or not at all." },
-        "budgetUsd": { "type": "number", "minimum": 0 },
-        "parallelism": { "type": "integer", "minimum": 1 },
-        "maxTasks": { "type": "integer", "minimum": 1 },
-            "tools": { "type": "array", "items": { "type": "string" } },
+            "id": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]+$"
+            },
+            "label": {
+              "type": "string"
+            },
+            "intent": {
+              "type": "string",
+              "description": "One line, shown to the OTHER lanes so each knows who else is on the brief."
+            },
+            "preset": {
+              "enum": [
+                "standard",
+                "architecture",
+                "wildcard",
+                "adversarial",
+                "contrarian"
+              ]
+            },
+            "instructions": {
+              "type": "string"
+            },
+            "system": {
+              "type": "string",
+              "description": "This lane's role prompt, composed after the preset's (DECISIONS.md D37). Replaces the template role's default system prompt."
+            },
+            "emphasis": {
+              "type": "string",
+              "maxLength": 280,
+              "description": "At most one sentence narrowing this lane inside its preset; appended to the role prompt as \"THIS LANE SPECIFICALLY: …\"."
+            },
+            "template": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_-]+$"
+            },
+            "waitFor": {
+              "enum": [
+                "all",
+                "any",
+                "none"
+              ],
+              "description": "Loop node: wait for every queued task to settle, for the first, or not at all."
+            },
+            "budgetUsd": {
+              "type": "number",
+              "minimum": 0
+            },
+            "parallelism": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxTasks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "worker": {
               "oneOf": [
-                { "type": "string", "minLength": 1 },
-                { "$ref": "#/$defs/worker" }
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "$ref": "#/$defs/worker"
+                }
               ]
             }
           }
@@ -127,126 +280,411 @@
     },
     "templateNode": {
       "type": "object",
-      "required": ["use"],
+      "required": [
+        "use"
+      ],
       "additionalProperties": false,
       "properties": {
-        "use": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
-        "parent": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
-        "expose": { "type": "array", "items": { "type": "string" } },
-        "title": { "type": "string" },
-        "instructions": { "type": "string" },
-        "goal": { "type": "string" },
-        "category": { "type": "string" },
-        "effort": { "enum": ["low", "medium", "high"] },
-        "evalType": { "enum": ["plan", "step", "final"] },
-        "language": { "type": "string" },
-        "system": { "type": "string" },
-        "contextSpec": { "$ref": "#/$defs/contextSpec" },
-        "worker": { "$ref": "#/$defs/worker" },
-        "tools": { "type": "array", "items": { "type": "string" } },
-        "toolCeiling": { "$ref": "#/$defs/toolCeiling" },
-        "skills": { "type": "array", "items": { "type": "string" } },
-        "requiresApproval": { "type": "boolean" },
-        "approveToolCalls": { "type": "boolean" }
+        "use": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "parent": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "expose": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "type": "string"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "goal": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "effort": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "evalType": {
+          "enum": [
+            "plan",
+            "step",
+            "final"
+          ]
+        },
+        "language": {
+          "type": "string"
+        },
+        "system": {
+          "type": "string"
+        },
+        "contextSpec": {
+          "$ref": "#/$defs/contextSpec"
+        },
+        "worker": {
+          "$ref": "#/$defs/worker"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "toolCeiling": {
+          "$ref": "#/$defs/toolCeiling"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requiresApproval": {
+          "type": "boolean"
+        },
+        "approveToolCalls": {
+          "type": "boolean"
+        },
+        "effect": {
+          "type": "string",
+          "enum": [
+            "artifact",
+            "workspace-change",
+            "either",
+            "none"
+          ],
+          "description": "What completing this node requires: a non-empty deliverable (artifact), a change in the bound project (workspace-change), either, or nothing (none). Absent means inferred from role/category/tools."
+        },
+        "effectScope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional path globs a required workspace change must land inside, e.g. [\"src/**\"]."
+        }
       }
     },
     "rawNode": {
       "type": "object",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
-        "type": { "enum": ["input", "output", "aiStep", "agentTask", "orchestrator", "fanout", "loop"] },
-        "kind": { "enum": ["user", "ai"] },
-        "parent": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
-        "expose": { "type": "array", "items": { "type": "string" } },
-        "title": { "type": "string" },
-        "role": { "type": "string" },
-        "system": { "type": "string" },
-        "text": { "type": "string" },
-        "goal": { "type": "string" },
-        "category": { "type": "string" },
-        "effort": { "enum": ["low", "medium", "high"] },
-        "evalType": { "enum": ["plan", "step", "final"] },
-        "language": { "type": "string" },
-        "minNodes": { "type": "integer", "minimum": 1 },
-        "maxNodes": { "type": "integer", "minimum": 1 },
-        "lanes": { "type": "array", "items": { "$ref": "#/$defs/lane" } },
-        "modelSet": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
-        "modelSetPreset": { "enum": ["standard", "architecture", "wildcard", "adversarial", "contrarian"] },
-        "plan": { "enum": ["auto", "off"], "description": "Fan-out (DECISIONS.md D37): 'auto' peeks at the subject and plans the roster from the brief before materializing lanes. Default 'off' — the authored lanes run exactly as written." },
-        "minLanes": { "type": "integer", "minimum": 1 },
-        "maxLanes": { "type": "integer", "minimum": 1 },
-        "template": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
-        "waitFor": { "enum": ["all", "any", "none"], "description": "Loop node: wait for every queued task to settle, for the first, or not at all." },
-        "budgetUsd": { "type": "number", "minimum": 0 },
-        "parallelism": { "type": "integer", "minimum": 1 },
-        "maxTasks": { "type": "integer", "minimum": 1 },
-        "contextSpec": { "$ref": "#/$defs/contextSpec" },
-        "worker": { "$ref": "#/$defs/worker" },
-        "tools": { "type": "array", "items": { "type": "string" } },
-        "toolCeiling": { "$ref": "#/$defs/toolCeiling" },
-        "skills": { "type": "array", "items": { "type": "string" } },
-        "constraints": { "type": "array" },
+        "type": {
+          "enum": [
+            "input",
+            "output",
+            "aiStep",
+            "agentTask",
+            "orchestrator",
+            "fanout",
+            "loop"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "user",
+            "ai"
+          ]
+        },
+        "parent": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "expose": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "system": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "goal": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "effort": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "evalType": {
+          "enum": [
+            "plan",
+            "step",
+            "final"
+          ]
+        },
+        "language": {
+          "type": "string"
+        },
+        "minNodes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxNodes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lanes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lane"
+          }
+        },
+        "modelSet": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "modelSetPreset": {
+          "enum": [
+            "standard",
+            "architecture",
+            "wildcard",
+            "adversarial",
+            "contrarian"
+          ]
+        },
+        "plan": {
+          "enum": [
+            "auto",
+            "off"
+          ],
+          "description": "Fan-out (DECISIONS.md D37): 'auto' peeks at the subject and plans the roster from the brief before materializing lanes. Default 'off' — the authored lanes run exactly as written."
+        },
+        "minLanes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxLanes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "template": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "waitFor": {
+          "enum": [
+            "all",
+            "any",
+            "none"
+          ],
+          "description": "Loop node: wait for every queued task to settle, for the first, or not at all."
+        },
+        "budgetUsd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "parallelism": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxTasks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "contextSpec": {
+          "$ref": "#/$defs/contextSpec"
+        },
+        "worker": {
+          "$ref": "#/$defs/worker"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "toolCeiling": {
+          "$ref": "#/$defs/toolCeiling"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "constraints": {
+          "type": "array"
+        },
         "box": {
           "type": "object",
-          "required": ["w", "h"],
+          "required": [
+            "w",
+            "h"
+          ],
           "properties": {
-            "w": { "type": "number" },
-            "h": { "type": "number" }
+            "w": {
+              "type": "number"
+            },
+            "h": {
+              "type": "number"
+            }
           }
         },
         "outputs": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id"],
+            "required": [
+              "id"
+            ],
             "properties": {
-              "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
-              "label": { "type": "string" },
-              "description": { "type": "string" }
+              "id": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_-]+$"
+              },
+              "label": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
             }
           }
         },
-        "requiresApproval": { "type": "boolean" },
-        "approveToolCalls": { "type": "boolean" }
+        "requiresApproval": {
+          "type": "boolean"
+        },
+        "approveToolCalls": {
+          "type": "boolean"
+        },
+        "effect": {
+          "type": "string",
+          "enum": [
+            "artifact",
+            "workspace-change",
+            "either",
+            "none"
+          ],
+          "description": "What completing this node requires: a non-empty deliverable (artifact), a change in the bound project (workspace-change), either, or nothing (none). Absent means inferred from role/category/tools."
+        },
+        "effectScope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional path globs a required workspace change must land inside, e.g. [\"src/**\"]."
+        }
       }
     },
     "subflowNode": {
       "description": "A flow used as a node (D36). Its nodes are spliced into the run graph as children of this call site at run start.",
       "type": "object",
-      "required": ["flow"],
+      "required": [
+        "flow"
+      ],
       "additionalProperties": false,
       "properties": {
-        "flow": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+        "flow": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
         "runInput": {
-      "type": "object",
-      "required": ["type"],
-      "additionalProperties": false,
-      "properties": {
-        "type": { "enum": ["text", "url", "repo", "choice", "file", "model", "modelSet"] },
-        "label": { "type": "string" },
-        "description": { "type": "string" },
-        "placeholder": { "type": "string" },
-        "required": { "type": "boolean" },
-        "default": {},
-        "options": { "type": "array", "items": { "type": "string" } }
-      }
-    },
-    "mode": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "description": "Which saved config of the referenced flow this call site runs." },
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "text",
+                "url",
+                "repo",
+                "choice",
+                "file",
+                "model",
+                "modelSet"
+              ]
+            },
+            "label": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "placeholder": {
+              "type": "string"
+            },
+            "required": {
+              "type": "boolean"
+            },
+            "default": {},
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "mode": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Which saved config of the referenced flow this call site runs."
+        },
         "overrides": {
           "type": "object",
           "description": "Ad-hoc per-inner-node overrides, applied on top of the chosen mode.",
-          "propertyNames": { "pattern": "^[a-zA-Z0-9_-]+$" },
-          "additionalProperties": { "type": "object" }
+          "propertyNames": {
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          },
+          "additionalProperties": {
+            "type": "object"
+          }
         },
-        "parent": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
-        "expose": { "type": "array", "items": { "type": "string" } }
+        "parent": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "expose": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "node": {
       "oneOf": [
-        { "$ref": "#/$defs/templateNode" },
-        { "$ref": "#/$defs/subflowNode" },
-        { "$ref": "#/$defs/rawNode" }
+        {
+          "$ref": "#/$defs/templateNode"
+        },
+        {
+          "$ref": "#/$defs/subflowNode"
+        },
+        {
+          "$ref": "#/$defs/rawNode"
+        }
       ]
     }
   }

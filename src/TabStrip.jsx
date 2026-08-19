@@ -6,7 +6,7 @@ import React, { useEffect, useRef, useState } from 'react';
 // saveState, live-run micro-indicator, hover ×, middle-click close, drag
 // reorder, ＋ → the recents/folder-picker page (T15). Overflow is
 // Chrome-style: tabs shrink to a floor, then the strip scrolls (CSS).
-export default function TabStrip({ tabs, activeId, live, saveState, onSelect, onClose, onReorder, onNewTab, onRename, onAdopt, onReveal }) {
+export default function TabStrip({ tabs, activeId, live, activity = {}, saveState, onSelect, onClose, onReorder, onNewTab, onRename, onAdopt, onReveal }) {
   const dragId = useRef(null);
   // Inline rename (DECISIONS.md D25): double-click a tab's label to rename the
   // project. Commit on Enter/blur, cancel on Esc; a blank name is ignored.
@@ -72,6 +72,8 @@ export default function TabStrip({ tabs, activeId, live, saveState, onSelect, on
       {tabs.map(t => {
         const active = t.id === activeId;
         const liveN = live[t.id] ?? 0;
+        const status = activity[t.id] ?? null;
+        const showActivity = liveN > 0 || (status && status.phase !== 'idle' && status.ageMs < 15_000);
         const dirty = active && saveState !== 'saved';
         const editing = editingId === t.id;
         return (
@@ -99,12 +101,17 @@ export default function TabStrip({ tabs, activeId, live, saveState, onSelect, on
             onMouseDown={e => { if (e.button === 1) e.preventDefault(); }}
             onAuxClick={e => { if (e.button === 1) onClose(t.id); }}
           >
-            {liveN > 0 && (
+            {showActivity && (
               <span
                 className="tab-live"
-                title={liveN === 1 ? 'A run is executing' : `${liveN} runs are executing`}
-                aria-label={`${liveN} live run${liveN === 1 ? '' : 's'}`}
-              />
+                data-phase={status?.phase ?? 'thinking'}
+                role="status"
+                title={status?.ariaLabel ?? (liveN === 1 ? 'A run is executing' : `${liveN} runs are executing`)}
+                aria-label={status?.ariaLabel ?? `${liveN} live run${liveN === 1 ? '' : 's'}`}
+              >
+                <span className="tab-live-dot" aria-hidden="true" />
+                {active && <span className="tab-live-text">{status?.shortLabel ?? `${liveN} running`}</span>}
+              </span>
             )}
             {editing ? (
               <input

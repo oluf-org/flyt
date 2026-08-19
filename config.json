@@ -84,5 +84,6 @@
       "model": "claude-sonnet-5"
     }
   },
-  "maxToolIterations": 14
+  "maxToolIterationsComment": "Agent work often needs a discovery pass, an edit pass, and verification. Fourteen calls repeatedly exhausted the budget during discovery and let nodes report success with no diff; forty keeps a firm ceiling while leaving enough room to create, test, and correct a focused change.",
+  "maxToolIterations": 40
 }

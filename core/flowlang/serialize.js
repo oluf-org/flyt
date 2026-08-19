@@ -14,7 +14,7 @@ import { DSL_VERSION } from './parse.js';
 const FIELD_ORDER = [
   'title', 'role', 'category', 'evalType', 'effort', 'language', 'minNodes', 'maxNodes',
   'system', 'instructions', 'goal', 'contextSpec',
-  'text', 'worker', 'toolCeiling', 'tools', 'skills', 'constraints', 'outputs', 'requiresApproval', 'approveToolCalls'
+  'text', 'worker', 'effect', 'effectScope', 'toolCeiling', 'tools', 'skills', 'constraints', 'outputs', 'requiresApproval', 'approveToolCalls'
 ];
 const fieldRank = k => {
   const i = FIELD_ORDER.indexOf(k);

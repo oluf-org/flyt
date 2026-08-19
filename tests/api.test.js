@@ -276,3 +276,87 @@ test('the score and the archive are reachable from the same map', async () => {
     err instanceof ApiError && err.code === 'no_repo');
   assert.equal(engine.registry.listOpen().length, 2);
 });
+
+// --- Attempt-scoped worktree lifecycle (WR-02) -------------------------------
+
+// Worktrees default to the user's real home directory, which a test must never
+// write into — and two temp repos with the same basename would land in the same
+// root. Every worktree test gets its own.
+function wtApi() {
+  const dataRoot = tmp();
+  const engine = createEngine({ projectRoot, dataRoot, userDataDir: dataRoot });
+  engine.settings.workers = { executor: { provider: 'mock', model: 'mock-large' } };
+  engine.rebuildRuntimeConfig();
+  engine.runtimeConfig.worktreeRoot = path.join(dataRoot, 'worktrees');
+  return { engine, api: createApi(engine), dataRoot };
+}
+
+async function gitProject(api, dataRoot, name = 'repo-wt') {
+  const repo = path.join(dataRoot, name);
+  fs.mkdirSync(repo, { recursive: true });
+  await git(['init', '-b', 'main'], { cwd: repo });
+  await git(['config', 'user.email', 't@localhost'], { cwd: repo });
+  await git(['config', 'user.name', 'T'], { cwd: repo });
+  fs.writeFileSync(path.join(repo, 'a.txt'), '1');
+  await git(['add', '-A'], { cwd: repo });
+  await git(['commit', '-m', 'initial'], { cwd: repo });
+  const { id: projectId } = await api.invoke('project:open', { folder: repo });
+  return { repo, projectId };
+}
+
+test('work:start mints an attempt, and a stale discard cannot delete the next one', async () => {
+  const { api, dataRoot } = wtApi();
+  const { projectId } = await gitProject(api, dataRoot);
+  await api.invoke('task:add', { projectId, title: 'Do the thing', body: 'Because.' });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+
+  // Attempt A: started, works, then cancelled — its cleanup is deferred.
+  const a = await api.invoke('work:start', { projectId, taskId: task.id });
+  assert.ok(a.attemptId, 'work:start returns the attempt it created');
+  fs.writeFileSync(path.join(a.dir, 'a.txt'), 'from A');
+
+  // The run is torn down: the attempt releases, but its discard is still in
+  // flight when the next attempt begins.
+  await api.invoke('work:discard', { projectId, taskId: task.id, attemptId: a.attemptId });
+
+  // Attempt B takes the slot and does real work.
+  const b = await api.invoke('work:start', { projectId, taskId: task.id });
+  assert.notEqual(b.attemptId, a.attemptId);
+  fs.writeFileSync(path.join(b.dir, 'b.txt'), 'from B');
+
+  // A's cleanup finally lands — and must not touch B.
+  const late = await api.invoke('work:discard', { projectId, taskId: task.id, attemptId: a.attemptId });
+  assert.equal(late.outcome, 'owner-mismatch');
+  assert.equal(late.removed, false);
+  assert.ok(fs.existsSync(path.join(b.dir, 'b.txt')), "attempt B's work survived");
+});
+
+test('work:start refuses to start over a live attempt and says who holds it', async () => {
+  const { api, dataRoot } = wtApi();
+  const { projectId } = await gitProject(api, dataRoot, 'repo-wt2');
+  await api.invoke('task:add', { projectId, title: 'Long one', body: 'Because.' });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+
+  const a = await api.invoke('work:start', { projectId, taskId: task.id, runId: 'run-a' });
+  await assert.rejects(() => api.invoke('work:start', { projectId, taskId: task.id }), err =>
+    err instanceof ApiError && err.status === 409 && err.code === 'attempt_live'
+    && err.message.includes(a.attemptId));
+  // Nothing was disturbed.
+  assert.ok(fs.existsSync(a.dir));
+});
+
+test('work:touch keeps an attempt live, and work:reconcile reports orphans', async () => {
+  const { api, dataRoot } = wtApi();
+  const { projectId } = await gitProject(api, dataRoot, 'repo-wt3');
+  await api.invoke('task:add', { projectId, title: 'Beating', body: 'Because.' });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+
+  const a = await api.invoke('work:start', { projectId, taskId: task.id });
+  assert.equal((await api.invoke('work:touch', { projectId, taskId: task.id, attemptId: a.attemptId })).touched, true);
+  // Somebody else's beat is refused.
+  assert.equal((await api.invoke('work:touch', { projectId, taskId: task.id, attemptId: 'not-mine' })).touched, false);
+
+  // A live attempt is not an orphan.
+  const { orphans } = await api.invoke('work:reconcile', { projectId });
+  assert.equal(orphans.some(o => o.taskId === task.id), false);
+});

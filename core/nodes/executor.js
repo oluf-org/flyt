@@ -8,7 +8,8 @@ import { recordToolUsage } from '../feedback.js';
 import { runRetrospectiveTurn, retroWorker, retroEnabled } from '../retroTurn.js';
 import { Workspace } from '../workspace.js';
 import { loadSkills, withSkillsSection } from '../skills.js';
-import { resolveCallTarget } from '../modelSource.js';
+import { resolveCallTarget, autoFallbackTargets } from '../modelSource.js';
+import { effectContractFor, captureWorkspaceSignature, evaluateTaskEffect, describeEffect, EffectMissingError } from '../effect.js';
 import { effortBudget } from '../../src/flowTypes.js';
 
 // onText (optional): the caller's streaming sink for partial model output (V1
@@ -72,8 +73,16 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   // that tools were called, so the native and text paths were indistinguishable
   // after the fact and "did native actually run?" could only be inferred from
   // the catalogue (V1 task 11).
+  // Requested vs effective, in one record (WR-03/WR-04). `task.worker` is what
+  // this task is pointed at — including a manual retry override, which is the
+  // whole point: a retry re-pointed at another model has to be visible in the
+  // artifacts as having actually gone there. `resolvedWorker` is where an
+  // 'auto' provider landed after the priority walk. Never a key.
+  const sameTarget = task.worker.provider === worker.provider && task.worker.model === worker.model;
   store.appendLog(runId, {
     event: 'node_start', node: `executor:${taskId}`, worker: task.worker,
+    ...(sameTarget ? {} : { resolvedWorker: { provider: worker.provider, model: worker.model } }),
+    ...(task.originalWorker ? { originalWorker: task.originalWorker, retryOverride: true } : {}),
     protocol: tools.length ? toolProtocol(worker) : 'none'
   });
 
@@ -90,6 +99,20 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   }
 
   // Assemble the task's full context from files — no hidden state.
+  //
+  // An input the plan EXPLICITLY declared required, and which does not exist,
+  // stops the task before a model is invoked (WR-06). Runs used to log
+  // `context_input_missing`, hand the executor a "[NOT FOUND]" placeholder, and
+  // let it work from an assumption — which is how downstream tasks came to run
+  // on documentation that was never written.
+  //
+  // `requiredInputs` is a NEW, opt-in declaration, deliberately not derived
+  // from the legacy `inputs` list. `inputs` has always been best-effort — a
+  // fan-out lane or an authored flow lists upstream ids that may legitimately
+  // produce no file — so promoting all of them to required would re-define
+  // every flow ever written and fail work that is not wrong.
+  const requiredInputs = new Set(task.requiredInputs ?? []);
+  const missingRequired = [];
   const contextParts = [];
   for (const input of task.inputs) {
     if (input === 'prompt.md') contextParts.push(`--- prompt.md ---\n${store.readPrompt(runId)}`);
@@ -111,10 +134,40 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
       }
       if (out != null) contextParts.push(`--- ${m ? m[0] + ' output' : input} ---\n${out}`);
       else {
+        const required = requiredInputs.has(input);
         contextParts.push(`--- ${input} ---\n[NOT FOUND: this declared input does not exist in the run yet. State any assumptions you make.]`);
-        store.appendLog(runId, { event: 'context_input_missing', node: `executor:${taskId}`, input });
+        store.appendLog(runId, {
+          event: 'context_input_missing', node: `executor:${taskId}`, input, required
+        });
+        if (required) missingRequired.push(input);
       }
     }
+  }
+
+  // A required input that does not exist is a graph error, not something for
+  // the model to work around (WR-06). Failing HERE costs nothing; failing after
+  // the call costs a model call and produces a confident deliverable built on
+  // an assumption, which downstream tasks then treat as fact.
+  if (missingRequired.length) {
+    const problem = `Required input(s) not available: ${missingRequired.join(', ')}. `
+      + 'Nothing in this run produces them, so this task cannot start.';
+    const retro = makeRetrospective({
+      node: `executor:${taskId}`,
+      status: 'failed',
+      problems: [problem],
+      resolution: 'The task was not started; no model was called.',
+      confidence: 0,
+      recommendation: `Task "${task.title}" declares input(s) nothing produces — `
+        + 'fix the plan (add a producer, or mark them optional) and re-run.',
+      model: task.worker
+    });
+    const doc = store.readTasks(runId);
+    const t = doc.tasks.find(x => x.id === taskId);
+    if (t) t.status = 'failed';
+    store.writeTasks(runId, doc);
+    task.status = 'failed';
+    store.writeRetrospective(runId, `executor-${taskId}`, retro);
+    return retro;
   }
   const ctx = {
     store, runId, taskId, workspace,
@@ -171,11 +224,64 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     contextParts.length ? `CONTEXT:\n${contextParts.join('\n\n')}` : ''
   ].filter(Boolean).join('\n\n');
 
+  // --- The effect contract (WR-01) -----------------------------------------
+  // What this task owes: a document, a change in the bound project, either, or
+  // nothing. Authored on the node and stamped onto the task when one was
+  // declared; otherwise inferred from the task's role/category and the tools it
+  // was actually granted. Resolved HERE, in the one place that has both the
+  // authored intent and the resolved tool records.
+  const contract = effectContractFor({
+    type: 'agentTask',
+    role: task.role, category: task.category,
+    // `task.tools` absent means the full registry, not a chosen grant — the
+    // difference decides whether the grant counts as evidence of intent.
+    tools, toolsAuthored: Array.isArray(task.tools),
+    effect: task.effect, effectScope: task.effectScope
+  });
+  // The baseline is taken before a single tool runs, so "what changed" means
+  // what THIS task changed rather than what it inherited. Read-only: capturing
+  // it must never itself be a workspace effect.
+  const beforeSig = contract.mode === 'artifact' || contract.mode === 'none'
+    ? null
+    : captureWorkspaceSignature(workspace?.root ?? wsPath ?? null);
+  store.appendLog(runId, {
+    event: 'effect_contract', node: `executor:${taskId}`,
+    effect: contract.mode, inferred: contract.inferred,
+    ...(contract.scope ? { scope: contract.scope } : {}),
+    ...(beforeSig && beforeSig.kind === 'none' ? { unmeasurable: beforeSig.reason } : {})
+  });
+
   let retro;
   let status;
+  let effect = null;
   try {
     const result = await runAgent({
       worker, apiKey, system, prompt: userMsg, tools, ctx, onText, onRetry,
+      // Auto routes may fall through when the RUNTIME cannot start — a missing
+      // or unlaunchable vendor CLI (WR-05). `autoFallbackTargets` returns an
+      // empty list for a pinned source, so a pin can never be silently spent
+      // somewhere else; and the activity is logged, so a fallback shows as
+      // "Codex could not start; trying OpenRouter" rather than as a stale
+      // fatal error sitting next to a live attempt.
+      fallback: {
+        // The REQUESTED source, not the resolved provider: `worker` below has
+        // already been resolved to a concrete provider, so reading the source
+        // off it would make every auto route look pinned.
+        source: task.worker.provider,
+        candidates: autoFallbackTargets(task.worker, config, {
+          tried: [{ provider: target.provider, model: target.model }]
+        }),
+        onFallback: info => store.appendLog(runId, {
+          event: 'route_fallback', node: `executor:${taskId}`,
+          from: info.from, to: info.to, code: info.code,
+          detail: info.detail, remedy: info.remedy
+        })
+      },
+      // agentTask is the code-writing path. It must honor the same host-level
+      // tool budget as aiStep (FlowRunner.callAgent), otherwise changing
+      // config.maxToolIterations affects planners but leaves every executor
+      // stuck on runAgent's small fallback cap.
+      maxIterations: config.maxToolIterations ?? null,
       // An executor writes a deliverable and reasons its way there, so it needs
       // the same reasoning headroom every other node gets (D40). Without one it
       // fell through to the adapter's bare 4096 — enough budget for a thinking
@@ -193,7 +299,41 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     }
     // Authoritative write: onText may have left the last turn's partial text
     // (or a tool block) in this file, and this is what replaces it.
+    //
+    // Written BEFORE the effect is judged, and deliberately: when a required
+    // change is missing the prose is still the best evidence of what the model
+    // believed it did, and a reader needs it to decide whether to retry, re-aim
+    // or rewrite the task. It is kept as evidence — never as a completion.
     store.writeTaskOutput(runId, taskId, result.text.trim());
+
+    // Did the task actually do what it owed? A confident paragraph is not a
+    // repository change, and treating it as one is how a green node ends up
+    // sitting on top of an empty diff (WR-01).
+    effect = evaluateTaskEffect({
+      contract,
+      artifactText: result.text,
+      before: beforeSig,
+      after: beforeSig ? captureWorkspaceSignature(workspace?.root ?? wsPath ?? null) : null
+    });
+    if (!effect.ok) {
+      store.appendLog(runId, {
+        event: 'effect_missing', node: `executor:${taskId}`,
+        effect: contract.mode, inferred: contract.inferred, reason: effect.reason,
+        toolCalls: result.toolCalls.length,
+        writes: result.toolCalls.filter(c => c.ok && (c.tool === 'create_file' || c.tool === 'edit_file')).length,
+        ...(effect.outOfScopePaths?.length ? { outOfScope: effect.outOfScopePaths.slice(0, 20) } : {})
+      });
+      throw new EffectMissingError(effect);
+    }
+    if (effect.unverified) {
+      // Accepted on the artifact because the workspace could not be measured.
+      // Said out loud rather than silently: landing's empty-diff check is the
+      // only thing standing behind this one.
+      store.appendLog(runId, {
+        event: 'effect_unverified', node: `executor:${taskId}`,
+        effect: contract.mode, reason: effect.observed?.undetectable ?? 'workspace effect could not be measured'
+      });
+    }
     status = 'done';
     const failedCalls = result.toolCalls.filter(c => !c.ok);
     // A command that exits non-zero is a RESULT, not a tool failure: bash hands
@@ -284,6 +424,13 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     const stopped = Boolean(err?.aborted || err?.name === 'AbortError' || signal?.aborted);
     status = stopped ? 'pending' : 'failed';
     const aborted = stopped || Boolean(err?.toolRejected);
+    // A task that wrote nothing is a DIFFERENT failure from a model that errored
+    // (WR-01). The deliverable it did produce stays on disk as evidence, and the
+    // recommendation says what is actually wrong — "retry with a different
+    // worker" is unhelpful advice when the model answered fine and simply never
+    // touched the repository.
+    const effectMissing = Boolean(err?.effectMissing);
+    if (effectMissing) effect = err.effect;
     retro = makeRetrospective({
       node: `executor:${taskId}`,
       status: 'failed',
@@ -292,13 +439,18 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
         ? 'The run was stopped; the task returns to the queue unfinished.'
         : aborted
           ? 'A tool call was rejected at the approval gate; task aborted by the human.'
-          : 'Task marked failed; pipeline escalates to human.',
+          : effectMissing
+            ? 'The model produced a deliverable but not the effect this task requires; the text is kept as evidence, not as a completion.'
+            : 'Task marked failed; pipeline escalates to human.',
       confidence: 0,
       recommendation: stopped
         ? `Task "${task.title}" was stopped mid-flight — resume or restart the run to re-run it.`
         : aborted
           ? `Task "${task.title}" was aborted — a destructive tool call was rejected at the approval gate.`
-          : `Task "${task.title}" failed — inspect log.jsonl and retry with a different worker.`,
+          : effectMissing
+            ? `Task "${task.title}" reported completion without producing the required ${effect?.required === 'workspace-change' ? 'change to the project' : 'deliverable'}`
+              + ` — read tasks/${taskId}.md for what it claimed, then retry it with clearer instructions or a worker that uses its tools.`
+            : `Task "${task.title}" failed — inspect log.jsonl and retry with a different worker.`,
       model: task.worker
     });
     // Flag human rejections and stops so the runner keeps the stage those
@@ -309,6 +461,19 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   // Persist the status change against a FRESH read of tasks.json: a
   // create_task tool call during this run may have appended tasks that the
   // doc read at the top of this function doesn't contain.
+  // The effect contract and what was observed ride on the retrospective, so the
+  // run feed, diagnostics and the retro reader all read one recorded fact
+  // rather than each re-deriving it (WR-01 telemetry).
+  if (effect) {
+    retro.effect = {
+      required: effect.required, ok: effect.ok, inferred: contract.inferred,
+      ...(contract.scope ? { scope: contract.scope } : {}),
+      ...(effect.reason ? { reason: effect.reason } : {}),
+      ...(effect.unverified ? { unverified: true } : {}),
+      changedPaths: (effect.changedPaths ?? []).slice(0, 20),
+      summary: describeEffect(effect)
+    };
+  }
   const freshDoc = store.readTasks(runId);
   const freshTask = freshDoc.tasks.find(t => t.id === taskId);
   if (freshTask) freshTask.status = status;

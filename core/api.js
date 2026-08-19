@@ -674,20 +674,42 @@ export function createApi(engine) {
     // The supervisor will drive these in sequence; exposing them as commands
     // means the same steps are drivable by hand, by the CLI and (later) by the
     // loop, without a second implementation of any of it.
-    'work:start': async ({ projectId, taskId }) => {
+    'work:start': async ({ projectId, taskId, runId = null }) => {
       const backlog = backlogFor(projectId);
       const task = backlog.get(taskId);
       if (!task) throw new ApiError(`No task "${taskId}".`, { status: 404, code: 'no_task' });
       const pool = poolFor(projectId);
       // A leftover tree from a crashed attempt must not wedge the task forever.
       // A failed attempt is thrown away by deleting a directory (§6.1), so
-      // finding one here means nobody got to throw it away — and the right
-      // answer is to start clean from the current base, not to refuse.
-      await pool.remove(taskId, { deleteBranch: true }).catch(() => {});
-      const wt = await pool.create(taskId, task.title);
-      backlog.update(taskId, { status: 'running' });
+      // finding one here usually means nobody got to throw it away — and the
+      // right answer is to start clean from the current base.
+      //
+      // "Usually", not "always": `reclaim` refuses to clear a slot whose owner
+      // is still ALIVE, and says who holds it. Deleting a live attempt's tree
+      // is how in-progress work disappears (WR-02), and a start that collides
+      // with a running attempt is a scheduling bug to report, not a directory
+      // to remove.
+      const cleared = await pool.reclaim(taskId);
+      if (cleared.outcome === 'live-owner') {
+        throw new ApiError(
+          `Task "${taskId}" already has a live attempt (${cleared.owner}`
+          + `${cleared.runId ? `, run ${cleared.runId}` : ''}). Stop or discard it before starting another.`,
+          { status: 409, code: 'attempt_live' });
+      }
+      const wt = await pool.create(taskId, task.title, { projectId, runId });
+      backlog.update(taskId, { status: 'running', attemptId: wt.attemptId });
       return wt;
     },
+    // Keep a live attempt's ownership record fresh (WR-02). Without a beat, a
+    // genuinely long task looks abandoned to the next `work:start`, which is
+    // the failure mode this whole mechanism exists to prevent — so the loop
+    // says "still mine" on every tick.
+    'work:touch': ({ projectId, taskId, attemptId }) =>
+      ({ touched: poolFor(projectId).touchAttempt(taskId, attemptId) }),
+    // Owner records and worktrees that no longer belong together. Reported,
+    // never auto-deleted: "remove this directory" is precisely the decision
+    // that must not be guessed at.
+    'work:reconcile': ({ projectId }) => ({ orphans: poolFor(projectId).reconcile() }),
     'work:verify': async ({ projectId, taskId }) => {
       const task = backlogFor(projectId).get(taskId);
       return verifyTask({ pool: poolFor(projectId), taskId, task: task ?? {} });
@@ -698,15 +720,24 @@ export function createApi(engine) {
     // task's status alone, which is what the supervisor wants — it has already
     // decided (queued a rung up, or parked) and a status written here would
     // overwrite that decision.
-    'work:discard': async ({ projectId, taskId, status = 'queued' }) => {
-      const removed = await poolFor(projectId).remove(taskId, { deleteBranch: true });
-      backlogFor(projectId).release(taskId, { status });
-      return { removed };
+    'work:discard': async ({ projectId, taskId, status = 'queued', attemptId = null }) => {
+      // `attemptId` is what stops a late cleanup from deleting the NEXT
+      // attempt's worktree (WR-02). Callers that know which attempt they are
+      // discarding must say so; the outcome comes back either way, so a
+      // mismatch is visible rather than silently successful.
+      const pool = poolFor(projectId);
+      const result = await pool.remove(taskId, { deleteBranch: true, attemptId });
+      // A cleanup that touched nothing because somebody else owns the path must
+      // not drop that owner's lease along with it.
+      if (result.outcome !== 'owner-mismatch' && result.outcome !== 'live-owner') {
+        backlogFor(projectId).release(taskId, { status });
+      }
+      return { removed: result.outcome === 'removed', ...result };
     },
     // The whole sequence: gates → mechanical checks → review → merge → canary.
     // Every outcome that is not "landed" carries guidance, because a task that
     // fails without telling the next attempt why is just re-rolling dice.
-    'work:land': async ({ projectId, taskId, dryRun = false, push = null, baselineOutput = null, reviewer = null }) => {
+    'work:land': async ({ projectId, taskId, dryRun = false, push = null, baselineOutput = null, reviewer = null, attemptId = null }) => {
       const entry = proj(projectId);
       const backlog = backlogFor(projectId);
       const pool = poolFor(projectId);
@@ -743,7 +774,10 @@ export function createApi(engine) {
         // At the top of the ladder the task parks for a human instead.
         backlog.escalate(taskId, { reason: 'failed', note: result.guidance ?? result.stage });
       }
-      if (result.landed) await pool.remove(taskId, { deleteBranch: false });
+      // Landed: this attempt's tree is finished with. Scoped to the attempt
+      // that produced the merge, so a slow landing cannot clean up after a
+      // restart that has already begun.
+      if (result.landed) await pool.remove(taskId, { deleteBranch: false, attemptId: attemptId ?? pool.owner(taskId)?.attemptId ?? null });
       return result;
     },
 
@@ -835,6 +869,19 @@ export function createApi(engine) {
           `A loop is already working this backlog in another process (pid ${elsewhere.pid}). Stop that one first, or watch it here.`,
           { status: 409, code: 'already_running' });
       }
+      // Startup reconciliation (WR-02): a previous process that died mid-attempt
+      // leaves owner records with no worktree, worktrees with no record, or
+      // trees whose attempt never released. Reported into the loop log so a
+      // watcher sees them, never auto-deleted — `flyt work reconcile` lists
+      // them and a person decides. A pool that cannot be built (not a repo)
+      // simply has nothing to reconcile.
+      try {
+        const orphans = poolFor(projectId).reconcile();
+        for (const o of orphans) {
+          engine.emitLoop?.(projectId, `· orphaned worktree (${o.kind}): ${o.taskId} at ${o.path}`);
+        }
+      } catch { /* no pool: nothing to reconcile */ }
+
       const sup = new Supervisor({
         invoke, projectId,
         backlog: backlogFor(projectId),

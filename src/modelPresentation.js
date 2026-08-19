@@ -55,9 +55,12 @@ export function titleCaseSlug(value) {
 export function presentModel(model, fallbackProvider = null) {
   const id = String(model?.id ?? model ?? '').trim();
   const slash = id.indexOf('/');
-  const rawCreator = slash > 0
+  // Some catalog entries prefix their provider with `~`. It is metadata, not a
+  // distinct creator, so strip it before aliases and grouping are applied.
+  const rawCreator = (slash > 0
     ? id.slice(0, slash)
-    : (DIRECT_CREATORS[fallbackProvider] ?? fallbackProvider ?? inferDirectCreator(id));
+    : (DIRECT_CREATORS[fallbackProvider] ?? fallbackProvider ?? inferDirectCreator(id)))
+    .replace(/^~/, '');
   const modelPart = slash > 0 ? id.slice(slash + 1) : id;
   const providerCreator = DIRECT_CREATORS[rawCreator] ?? rawCreator;
   const creatorKey = CREATOR_ALIASES[providerCreator] ?? providerCreator;
@@ -78,4 +81,20 @@ export function groupModels(models) {
   return [...groups.values()]
     .map(group => ({ ...group, models: group.models.sort((a, b) => a.presentation.name.localeCompare(b.presentation.name)) }))
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function popularGroupKeys(popularity, availableGroups, limit = 8) {
+  const totals = new Map();
+  for (const creator of popularity?.creators ?? []) {
+    let tokens;
+    try { tokens = BigInt(creator.totalTokens); } catch { continue; }
+    const key = presentModel({ id: `${creator.key}/_popularity` }).creatorKey;
+    totals.set(key, (totals.get(key) ?? 0n) + tokens);
+  }
+  const available = new Set((availableGroups ?? []).map(group => group.key));
+  return [...totals.entries()]
+    .filter(([key]) => available.has(key))
+    .sort((a, b) => a[1] === b[1] ? a[0].localeCompare(b[0]) : (a[1] > b[1] ? -1 : 1))
+    .slice(0, limit)
+    .map(([key]) => key);
 }

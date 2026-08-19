@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FactChips, formatContext, formatUsdPerM } from './ModelPicker.jsx';
 import { routeFor } from './providerMirror.js';
-import { groupModels, presentModel } from './modelPresentation.js';
+import { groupModels, popularGroupKeys, presentModel } from './modelPresentation.js';
 
 const CURATED_PROVIDERS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi'];
 
@@ -49,6 +49,15 @@ function priceText(model) {
   const output = formatUsdPerM(model.outUsdPerM);
   if (!input && !output) return null;
   return `${input ?? '—'} input · ${output ?? '—'} output`;
+}
+
+function rankingDate(popularity) {
+  const raw = popularity?.endDate ?? popularity?.asOf;
+  if (!raw) return null;
+  const date = new Date(raw.length === 10 ? `${raw}T00:00:00Z` : raw);
+  return Number.isNaN(date.getTime()) ? raw : date.toLocaleDateString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC'
+  });
 }
 
 function Stat({ value, label }) {
@@ -124,12 +133,19 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
   const [fetching, setFetching] = useState(false);
   const [savingId, setSavingId] = useState(null);
   const [error, setError] = useState('');
+  const [popularity, setPopularity] = useState(null);
+  const [popularityError, setPopularityError] = useState('');
   const loadedOpenRouter = useRef(false);
+  const loadedRankings = useRef(false);
 
   useEffect(() => {
     let alive = true;
     window.flyt.getSettings()
-      .then(value => { if (alive) setSettings(value); })
+      .then(value => {
+        if (!alive) return;
+        setSettings(value);
+        if (value.modelPopularity) setPopularity(value.modelPopularity);
+      })
       .catch(err => { if (alive) setError(String(err?.message ?? err)); });
     Promise.all(CURATED_PROVIDERS.map(provider =>
       window.flyt.listModels(provider)
@@ -143,7 +159,18 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
     return () => { alive = false; };
   }, []);
 
-  const fetchOpenRouter = async () => {
+  const fetchPopularity = async (force = false) => {
+    setPopularityError('');
+    try {
+      const result = await window.flyt.modelRankings(force);
+      setPopularity(result);
+      if (result.warning) setPopularityError(result.warning);
+    } catch (err) {
+      setPopularityError(String(err?.message ?? err));
+    }
+  };
+
+  const fetchOpenRouter = async (refreshRanking = false) => {
     if (!settings?.providers?.openrouter?.hasKey) return;
     setFetching(true);
     setError('');
@@ -155,6 +182,7 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
       });
       // The main process persists the latest catalog facts as it fetches.
       setSettings(await window.flyt.getSettings());
+      if (refreshRanking) await fetchPopularity(true);
       onChanged?.();
     } catch (err) {
       setError(String(err?.message ?? err));
@@ -166,7 +194,13 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
   useEffect(() => {
     if (!settings?.providers?.openrouter?.hasKey || loadedOpenRouter.current) return;
     loadedOpenRouter.current = true;
-    fetchOpenRouter();
+    fetchOpenRouter(false);
+  }, [settings?.providers?.openrouter?.hasKey]);
+
+  useEffect(() => {
+    if (!settings?.providers?.openrouter?.hasKey || loadedRankings.current) return;
+    loadedRankings.current = true;
+    fetchPopularity(false);
   }, [settings?.providers?.openrouter?.hasKey]);
 
   const active = settings?.activeModels ?? [];
@@ -192,6 +226,13 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
     });
   }, [models, query]);
   const groups = useMemo(() => groupModels(filtered), [filtered]);
+  const popularKeys = useMemo(() => popularGroupKeys(popularity, groups), [popularity, groups]);
+  const popularKeySet = useMemo(() => new Set(popularKeys), [popularKeys]);
+  const popularGroups = useMemo(() => {
+    const byKey = new Map(groups.map(group => [group.key, group]));
+    return popularKeys.map(key => byKey.get(key)).filter(Boolean);
+  }, [groups, popularKeys]);
+  const otherGroups = useMemo(() => groups.filter(group => !popularKeySet.has(group.key)), [groups, popularKeySet]);
   const pinnedModels = useMemo(() => models
     .filter(model => pinnedIds.has(model.id))
     .map(model => ({ ...model, presentation: presentModel(model, model.provider) })), [models, pinnedIds]);
@@ -230,6 +271,44 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
     setCustom('');
   };
 
+  const renderCreator = group => {
+    const hasPinned = group.models.some(model => pinnedIds.has(model.id));
+    const open = Boolean(query.trim()) || Boolean(expanded[group.key]);
+    return (
+      <section className={'model-creator' + (open ? ' is-open' : '')} key={group.key}>
+        <button
+          type="button"
+          className="model-creator-head"
+          aria-expanded={open}
+          aria-controls={`creator-${group.key}`}
+          onClick={() => setExpanded(value => ({ ...value, [group.key]: !open }))}
+        >
+          <span className="model-creator-mark" aria-hidden="true">{group.name.slice(0, 1)}</span>
+          <span>
+            <strong>{group.name}</strong>
+            <small>{group.models.length} model{group.models.length === 1 ? '' : 's'}</small>
+          </span>
+          {hasPinned && <span className="model-creator-pinned">★ pinned</span>}
+          <span className="model-creator-caret" aria-hidden="true">{open ? '−' : '+'}</span>
+        </button>
+        {open && (
+          <div className="model-creator-body" id={`creator-${group.key}`}>
+            {group.models.map(model => (
+              <ModelRow
+                key={model.id}
+                model={model}
+                pinned={pinnedIds.has(model.id)}
+                routedBy={routes.get(model.id)}
+                saving={savingId === model.id}
+                onPin={() => togglePin(model)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+    );
+  };
+
   if (!settings) {
     return <main className="models-page"><div className="models-loading">{error || 'Loading model catalog…'}</div></main>;
   }
@@ -247,7 +326,7 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
         </div>
         <div className="models-hero-actions">
           {settings.providers?.openrouter?.hasKey && (
-            <button type="button" onClick={fetchOpenRouter} disabled={fetching}>
+            <button type="button" onClick={() => fetchOpenRouter(true)} disabled={fetching}>
               {fetching ? 'Refreshing…' : 'Refresh catalog'}
             </button>
           )}
@@ -297,43 +376,41 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
           </label>
         </div>
 
-        {groups.map(group => {
-          const hasPinned = group.models.some(model => pinnedIds.has(model.id));
-          const open = Boolean(query.trim()) || (expanded[group.key] ?? hasPinned);
-          return (
-            <section className="model-creator" key={group.key}>
-              <button
-                type="button"
-                className="model-creator-head"
-                aria-expanded={open}
-                aria-controls={`creator-${group.key}`}
-                onClick={() => setExpanded(value => ({ ...value, [group.key]: !open }))}
-              >
-                <span className="model-creator-mark" aria-hidden="true">{group.name.slice(0, 1)}</span>
-                <span>
-                  <strong>{group.name}</strong>
-                  <small>{group.models.length} model{group.models.length === 1 ? '' : 's'}</small>
-                </span>
-                {hasPinned && <span className="model-creator-pinned">★ pinned</span>}
-                <span className="model-creator-caret" aria-hidden="true">{open ? '−' : '+'}</span>
-              </button>
-              {open && (
-                <div className="model-creator-body" id={`creator-${group.key}`}>
-                  {group.models.map(model => (
-                    <ModelRow
-                      key={model.id}
-                      model={model}
-                      pinned={pinnedIds.has(model.id)}
-                      routedBy={routes.get(model.id)}
-                      saving={savingId === model.id}
-                      onPin={() => togglePin(model)}
-                    />
-                  ))}
+        {query.trim() ? (
+          <div className="models-creator-grid">{groups.map(renderCreator)}</div>
+        ) : (
+          <>
+            {popularGroups.length > 0 && (
+              <section className="models-creator-section" aria-labelledby="popular-creators-title">
+                <div className="models-subsection-heading">
+                  <div>
+                    <h3 id="popular-creators-title">Popular on OpenRouter</h3>
+                    <p>Top creators by public token usage over the trailing 30 days.</p>
+                  </div>
+                  <small>
+                    Source: OpenRouter (openrouter.ai/rankings){rankingDate(popularity) ? `, as of ${rankingDate(popularity)}` : ''}
+                    {popularity?.stale ? ' · cached' : ''}
+                  </small>
                 </div>
-              )}
-            </section>
-          );
-        })}
+                <div className="models-creator-grid">{popularGroups.map(renderCreator)}</div>
+              </section>
+            )}
+            {otherGroups.length > 0 && (
+              <section className="models-creator-section" aria-labelledby={popularGroups.length ? 'other-creators-title' : undefined}>
+                {popularGroups.length > 0 && (
+                  <div className="models-subsection-heading compact">
+                    <div><h3 id="other-creators-title">All other creators</h3></div>
+                    <small>Alphabetical</small>
+                  </div>
+                )}
+                <div className="models-creator-grid">{otherGroups.map(renderCreator)}</div>
+              </section>
+            )}
+            {popularityError && settings.providers?.openrouter?.hasKey && (
+              <p className="models-popularity-note">Popularity could not be refreshed; the catalog remains available alphabetically. {popularityError}</p>
+            )}
+          </>
+        )}
         {groups.length === 0 && <p className="models-empty">No models match “{query}”.</p>}
       </section>
 

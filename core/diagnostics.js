@@ -19,6 +19,7 @@
 // nothing here prints.
 import { callModel } from './adapters/index.js';
 import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
+import { planDefaultRoute, TASK_KINDS } from './modelPriority.js';
 import { effortBudget, DEFAULT_EFFORT } from '../src/flowTypes.js';
 
 // --- explainRun -----------------------------------------------------------
@@ -248,6 +249,14 @@ function signalsFrom(log) {
     toolCalls: count('tool_call'),
     transientRetries: count('model_retry'),
     emptyTurns: count('model_empty_turn'),
+    // Tasks that answered but did not do the thing they owed (WR-01). A run
+    // whose count here is non-zero spent money producing descriptions of work
+    // rather than work, which is the single most useful number for "why did
+    // this run cost that much and change nothing".
+    effectMissing: count('effect_missing'),
+    // Accepted on the artifact because the workspace could not be measured —
+    // the one case where landing's empty-diff check is the only backstop.
+    effectUnverified: count('effect_unverified'),
     truncatedOutputs: count('output_truncated'),
     nodeRestarts: count('node_restart'),
     // Cost, when the provider reported it. Summed from the calls themselves so
@@ -433,12 +442,38 @@ export async function doctor(engine, { probe = false, models = [], project = nul
     }
   }
 
+  // Where an UNPINNED node of each task kind would actually go, computed by the
+  // same function the runner uses (WR-04). This is the check that catches
+  // "Settings says OpenRouter first but my code nodes keep going to Anthropic":
+  // the preview and the run now read one policy, so if they ever disagree
+  // again, this line is where it shows.
+  const routes = TASK_KINDS.map(kind => {
+    const node = kind === 'planning' ? { type: 'orchestrator', data: {} }
+      : kind === 'code' ? { type: 'agentTask', data: { role: 'execute', category: 'Code general' } }
+      : { type: 'aiStep', data: { role: kind === 'analysis' ? 'analyze' : kind === 'evaluation' ? 'evaluation' : kind === 'translation' ? 'translate' : 'custom' } };
+    const plan = planDefaultRoute(node, engine.runtimeConfig ?? {});
+    return {
+      kind, provider: plan.provider, model: plan.model,
+      order: plan.order, reason: plan.reason
+    };
+  });
+  if (routes.every(r => !r.provider) && providers.some(p => p.connected && p.id !== 'mock')) {
+    findings.push({
+      level: 'warn',
+      message: 'A provider is connected but no task kind resolves to a default model — '
+        + 'unpinned nodes will fall back to the configured executor default.'
+    });
+  }
+
   const report = {
     settingsPath: engine.settingsPath,
     dataRoot: engine.dataRoot,
     ...(project ? { project } : {}),
     providers,
     priority,
+    // The effective default route per task kind, so `flyt doctor`, the node
+    // start log and the adapter call all quote the same answer.
+    routes,
     references,
     findings
   };

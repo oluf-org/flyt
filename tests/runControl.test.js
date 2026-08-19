@@ -283,9 +283,15 @@ test('restartNode re-points the failed step at a different model, for this run o
   assert.match(store.readMeta(runId).error, /unknown variant/, 'the run records the provider’s own words');
   assert.deepEqual(store.readRetrospectives(runId).a.problems, ['Codex CLI failed: unknown variant `priority`']);
 
+  // The re-pin echoes back the EFFECTIVE worker as well as the requested one
+  // (WR-03): the UI may only claim "retried on B" when the backend resolved B.
   assert.deepEqual(
     runner.restartNode(runId, 'a', '', { provider: 'script', model: 'better-model' }),
-    { ok: true, worker: { provider: 'script', model: 'better-model' } });
+    {
+      ok: true,
+      worker: { provider: 'script', model: 'better-model' },
+      effectiveWorker: { provider: 'script', model: 'better-model' }
+    });
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
 
   assert.deepEqual(seen, ['test-model', 'better-model'], 'the retry ran on the new model');
@@ -313,7 +319,10 @@ test('restartNode clears a pin back to the default, and refuses one on a node wi
   assert.throws(() => runner.restartNode(runId, 'in', '', { provider: 'script', model: 'x' }),
     /does not call a model/, 'an input node has no worker to change');
 
-  assert.deepEqual(runner.restartNode(runId, 'a', '', { provider: null, model: null }), { ok: true });
+  // Clearing a pin also asked about the model, so it reports where the node
+  // will now resolve — the configured default (WR-03).
+  assert.deepEqual(runner.restartNode(runId, 'a', '', { provider: null, model: null }),
+    { ok: true, effectiveWorker: { provider: 'script', model: 'test-model' } });
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
   assert.deepEqual(seen, ['pinned', 'test-model'], 'clearing the pin falls back to the configured default');
   assert.equal(store.readFlow(runId).nodes.find(n => n.id === 'a').data.worker, undefined);

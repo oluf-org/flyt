@@ -7,6 +7,7 @@ import {
   migrateSettings, createResolver, resolveCallTarget,
   DEFAULT_PRIORITY, DEFAULT_PINNED_MODELS, CURATED_MODELS,
   usdPerMillion, catalogFromOpenRouter, factsFromCatalog, normalizeModelFacts,
+  popularityFromOpenRouter, normalizeModelPopularity,
   normalizeModelSets, modelSetId, resolveModelSet, MODEL_SET_MAX,
   proposeStarterSet, STARTER_ROLES
 } from '../core/modelSource.js';
@@ -89,6 +90,45 @@ test('the OpenRouter payload keeps the facts the pickers show', () => {
   assert.equal(list[1].name, 'tiny/model', 'a missing name falls back to the id');
   assert.equal(list[1].supportsTools, false);
   assert.equal(list[1].inUsdPerM, null);
+});
+
+test('OpenRouter daily rankings aggregate model rows by creator with integer precision', () => {
+  const ranking = popularityFromOpenRouter({
+    data: [
+      { date: '2026-08-16', model_permaslug: 'anthropic/claude-a', total_tokens: '9007199254740993' },
+      { date: '2026-08-17', model_permaslug: 'anthropic/claude-b', total_tokens: '7' },
+      { date: '2026-08-17', model_permaslug: '~google/gemini', total_tokens: '12' },
+      { date: '2026-08-17', model_permaslug: 'other', total_tokens: '999999' },
+      { date: '2026-08-17', model_permaslug: 'broken', total_tokens: '4' },
+      { date: '2026-08-17', model_permaslug: 'openai/gpt', total_tokens: 'not-a-number' }
+    ],
+    meta: { as_of: '2026-08-18T02:00:00Z', start_date: '2026-07-19', end_date: '2026-08-17' }
+  });
+  assert.deepEqual(ranking, {
+    creators: [
+      { key: 'anthropic', totalTokens: '9007199254741000' },
+      { key: 'google', totalTokens: '12' }
+    ],
+    asOf: '2026-08-18T02:00:00Z', startDate: '2026-07-19', endDate: '2026-08-17'
+  });
+});
+
+test('stored popularity is normalized and malformed caches are discarded', () => {
+  const normalized = normalizeModelPopularity({
+    creators: [
+      { key: ' Anthropic ', totalTokens: '10' },
+      { key: 'anthropic', totalTokens: '2' },
+      { key: '', totalTokens: '8' },
+      { key: 'openai', totalTokens: '-1' }
+    ],
+    endDate: '2026-08-17', fetchedAt: '2026-08-18T08:00:00Z'
+  });
+  assert.deepEqual(normalized, {
+    creators: [{ key: 'anthropic', totalTokens: '12' }],
+    asOf: null, startDate: null, endDate: '2026-08-17', fetchedAt: '2026-08-18T08:00:00Z'
+  });
+  assert.equal(normalizeModelPopularity({ creators: [] }), null);
+  assert.equal(migrateSettings({ modelPopularity: { creators: [] } }).modelPopularity, null);
 });
 
 test('facts omit what the catalog did not say — unknown must not read as free', () => {

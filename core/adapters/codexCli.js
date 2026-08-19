@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  resolveCli, spawnCliCall, cliEnv, neutralCwd, codexCredentialStatus
+  resolveCli, spawnCliCall, cliEnv, neutralCwd, codexCredentialStatus, preflightCli
 } from './cliDelegate.js';
 import { abortError } from './http.js';
 
@@ -26,6 +26,12 @@ export function resolveCodexCli(override = null) {
   });
   if (found || override) return found;
   return null;
+}
+
+// Can the Codex CLI launch at all? This is the check that would have caught
+// the real `spawn EPERM` in Settings instead of mid-run (WR-05).
+export function preflightCodexCli(override = null) {
+  return preflightCli({ override, names: ['codex'], npmPkg: '@openai/codex', npmEntry: 'bin/codex.js' });
 }
 
 export function buildCodexArgs({ model, cwd, lastMessageFile }) {

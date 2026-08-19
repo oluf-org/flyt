@@ -253,6 +253,16 @@ const mockSettings = {
     'moonshotai/kimi-k3': { name: 'Kimi K3', contextLength: 262144, supportsTools: true, inUsdPerM: 0.6, outUsdPerM: 2.5 },
     'openai/gpt-5.2': { name: 'GPT-5.2', contextLength: 400000, supportsTools: true, inUsdPerM: 1.25, outUsdPerM: 10 }
   },
+  modelPopularity: {
+    creators: [
+      { key: 'deepseek', totalTokens: '16000000000000' },
+      { key: 'anthropic', totalTokens: '15300000000000' },
+      { key: 'openai', totalTokens: '8100000000000' },
+      { key: 'moonshotai', totalTokens: '4200000000000' }
+    ],
+    asOf: '2026-08-17T02:00:00Z', startDate: '2026-07-19', endDate: '2026-08-17',
+    fetchedAt: '2026-08-18T08:00:00Z'
+  },
   modelSets: {},
   // The loop's band→model map (DESIGN-SPEC.md §8), empty by default: the shipped
   // state is "ask for an effort band", and naming models is the deliberate act.
@@ -723,6 +733,7 @@ export function installDevMock() {
       }
       return mockCurated[provider] ?? [];
     },
+    modelRankings: async () => ({ ...structuredClone(mockSettings.modelPopularity), stale: false }),
     testProvider: async provider => (
       provider === 'mock' || mockSettings.providers[provider]?.hasKey
         ? { ok: true }

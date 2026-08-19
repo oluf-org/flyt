@@ -9,6 +9,7 @@
     "build": "vite build",
     "start": "npm run build && electron .",
     "test": "node --test \"tests/**/*.test.js\"",
+    "verify:workflow": "node --test tests/workflowReliability.test.js",
     "flow": "node core/flowlang/cli.js",
     "flyt": "node bin/flyt.js",
     "serve": "node bin/flyt.js serve",

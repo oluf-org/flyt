@@ -32,6 +32,9 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { callModel, abortError, isAbortError } from './adapters/index.js';
 import { runAgent, callForAnswer, describeEmptyTurn, toolProtocol, supportsToolsFor } from './agent.js';
+import { recordAttempt, settleAttempt } from '../src/attempts.js';
+import { plannerLimits, validatePlan, createSpinDetector } from './planContract.js';
+import { classifyAdapterError } from './adapters/failures.js';
 import { makeRetrospective } from './retrospective.js';
 import { recordToolUsage } from './feedback.js';
 import { resolveCallTarget } from './modelSource.js';
@@ -67,7 +70,7 @@ import {
   effectiveRole, isFeedbackEdge, forwardEdges, EFFORT_MAX_TOKENS, effortBudget, REASONING_HEADROOM, LEGACY_TEMPLATE_MAP,
   validateOverrideMap, mergeOverrideMaps
 } from '../src/flowTypes.js';
-import { pickDefaultWorker, providerModelsFor, taskKindOf, PROVIDER_ORDER } from './modelPriority.js';
+import { pickDefaultWorker, planDefaultRoute, providerModelsFor, taskKindOf, PROVIDER_ORDER } from './modelPriority.js';
 import { homeSeed, projectGates } from './homeSeed.js';
 import { taskNodeStatus } from '../src/runGraph.js';
 import { layoutPositions, containerLayout } from '../src/flowLayout.js';
@@ -632,6 +635,88 @@ export const WORKER_NODE_TYPES = new Set(['aiStep', 'agentTask', 'orchestrator',
 //      node's task kind + effort level walk the general provider preference,
 //      restricted to providers with a saved key,
 //   4. otherwise the configured executor default.
+/**
+ * The one worker-precedence rule, as a pure function (WR-03).
+ *
+ * The defect this closes: the retry UI sent a chosen worker to `restartNode`,
+ * which wrote it into the run's `flow.json` — but an `agentTask` executes from
+ * the already-materialized entry in `tasks.json`, and resetting a task's status
+ * did not touch its persisted worker. So the UI said "retried on B" while the
+ * executor called A again, and the retry reproduced the original failure.
+ *
+ * Precedence, highest first:
+ *   1. a manual retry override recorded for this run;
+ *   2. an explicit worker on the run's flow node;
+ *   3. the worker persisted on the materialized task;
+ *   4. category / level / provider-priority routing.
+ *
+ * The override sits ABOVE the persisted task worker precisely because that is
+ * the one the old code silently kept using.
+ */
+export function effectiveWorkerFor({ override = null, flowNode = null, task = null, config = {} } = {}) {
+  if (override?.provider && override?.model) {
+    return { worker: { provider: override.provider, model: override.model }, via: 'retry-override' };
+  }
+  const authored = flowNode?.data?.worker;
+  if (authored?.provider && authored?.model) {
+    return { worker: { provider: authored.provider, model: authored.model }, via: 'node' };
+  }
+  if (task?.worker?.provider && task?.worker?.model) {
+    return { worker: { provider: task.worker.provider, model: task.worker.model }, via: 'task' };
+  }
+  const route = resolveWorkerRoute(flowNode ?? {}, config);
+  return { worker: route.worker, via: route.via };
+}
+
+/**
+ * The same resolution as `resolveWorker`, but showing its work (WR-04).
+ *
+ * One record naming the requested route, the effective route, WHY that rung of
+ * the precedence ladder won, and (for a default pick) which providers were
+ * considered and why each was skipped. The renderer preview, the node-start
+ * log, diagnostics and the actual adapter call all read this rather than each
+ * re-deriving the answer and occasionally disagreeing.
+ *
+ * Never contains a key: this record is logged verbatim.
+ */
+export function resolveWorkerRoute(node, config) {
+  const w = node?.data?.worker;
+  if (w?.provider && w?.model) {
+    return {
+      worker: { provider: w.provider, model: w.model },
+      via: 'node', reason: 'the node names this worker explicitly', candidates: null
+    };
+  }
+  if (config.levelWorker?.provider && config.levelWorker?.model) {
+    const { provider, model, routing } = config.levelWorker;
+    return {
+      worker: { provider, model, ...(routing ? { routing } : {}) },
+      via: 'level', reason: 'the run was started at an effort band or pinned to a model', candidates: null
+    };
+  }
+  const cat = node?.data?.category;
+  const pref = cat ? config.categoryWorkers?.[cat] : null;
+  if (pref?.provider && pref?.model) {
+    return {
+      worker: { provider: pref.provider, model: pref.model },
+      via: 'category', reason: `configured worker for category "${cat}"`, candidates: null
+    };
+  }
+  const plan = planDefaultRoute(node, config);
+  if (plan.provider) {
+    return {
+      worker: { provider: plan.provider, model: plan.model },
+      via: plan.order, reason: plan.reason, candidates: plan.candidates,
+      kind: plan.kind, effort: plan.effort
+    };
+  }
+  const d = config.workers.executor;
+  return {
+    worker: { provider: d.provider, model: d.model },
+    via: 'executor-default', reason: plan.reason, candidates: plan.candidates
+  };
+}
+
 export function resolveWorker(node, config) {
   const w = node?.data?.worker;
   if (w?.provider && w?.model) return { provider: w.provider, model: w.model };
@@ -851,6 +936,11 @@ export class FlowRunner {
   // other caller of callModel is untouched.
   async trackedCallModel(runId, params, nodeId = null) {
     const ctl = this.trackAbort(runId);
+    // An extra signal a caller may fire for its OWN reason — the planner-spin
+    // detector is the one that does. Combined rather than replacing the run's,
+    // so a user stop still reaches the call either way.
+    const extra = params.abortSignal ?? null;
+    const signal = extra ? AbortSignal.any([ctl.signal, extra]) : ctl.signal;
     try {
       // The deadline default is the runner's, so a per-call timeout in params
       // still wins (DESIGN-SPEC.md §8).
@@ -859,8 +949,9 @@ export class FlowRunner {
       // reasoning gets one nudged retry at a larger budget before anyone calls
       // it a failure (core/agent.js). Every path through this method wants
       // that — a planner, a judge and a lane all fail the same way without it.
+      const { abortSignal, ...rest } = params;
       return await callForAnswer({
-        timeout: this.config.timeout, ...params, signal: ctl.signal,
+        timeout: this.config.timeout, ...rest, signal,
         onCall: this.callLogger(runId, nodeId)
       }, this.emptyTurnLogger(runId, nodeId));
     } finally {
@@ -897,6 +988,11 @@ export class FlowRunner {
   async trackedRunAgent(runId, nodeId, params, tools, subject = null) {
     if (!tools.length) return this.trackedCallModel(runId, params, nodeId);
     const ctl = this.trackAbort(runId);
+    // An extra signal a caller may fire for its OWN reason — the planner-spin
+    // detector is the one that does. Combined rather than replacing the run's,
+    // so a user stop still reaches the call either way.
+    const extra = params.abortSignal ?? null;
+    const signal = extra ? AbortSignal.any([ctl.signal, extra]) : ctl.signal;
     try {
       // runAgent takes the worker NESTED (`{ worker, apiKey, system, ... }`),
       // the way core/nodes/executor.js has always passed it. Spreading it flat
@@ -905,12 +1001,12 @@ export class FlowRunner {
       // grant on an aiStep (DESIGN-SPEC.md §5) failed the node the moment it was
       // used. Nothing in the suite exercised it until fan-out lanes started
       // inheriting a grant (D36 P2), which is how it surfaced.
-      const { apiKey, system, prompt, onText, onRetry, retry, maxIterations, ...worker } = params;
+      const { apiKey, system, prompt, onText, onRetry, retry, maxIterations, abortSignal, ...worker } = params;
       return await runAgent({
         worker, apiKey, system, prompt, onText, onRetry, retry,
         onCall: this.callLogger(runId, nodeId),
         onEmptyTurn: this.emptyTurnLogger(runId, nodeId),
-        timeout: this.config.timeout, tools, signal: ctl.signal,
+        timeout: this.config.timeout, tools, signal,
         // A node that searches a repository needs more rounds than one that
         // checks the time (core/agent.js MAX_ITERATIONS). A caller may cap
         // itself BELOW the configured ceiling — the fan-out peek does, because
@@ -1324,6 +1420,12 @@ export class FlowRunner {
     // resolve a worker at all; pinning one on an input node would be a silent
     // no-op, so say so instead.
     let repinned = null;
+    // The manual retry override (WR-03). Recorded in the run's meta as well as
+    // on the flow node, because an `agentTask` does not execute from the flow
+    // node — it executes from its materialized entry in tasks.json, and writing
+    // only the node is exactly why "retry on B" used to call A again. The map
+    // is the authoritative, inspectable, clearable statement of retry intent.
+    const workerOverrides = { ...(meta.workerOverrides ?? {}) };
     if (worker) {
       if (!WORKER_NODE_TYPES.has(target.type)) {
         throw new Error(`Node "${nodeId}" (${target.type}) does not call a model — it has no worker to change.`);
@@ -1332,8 +1434,10 @@ export class FlowRunner {
       if (worker.provider && worker.model) {
         repinned = { provider: String(worker.provider), model: String(worker.model) };
         target.data.worker = repinned;
+        workerOverrides[nodeId] = repinned;
       } else {
         delete target.data.worker; // back to category / priority / default resolution
+        delete workerOverrides[nodeId]; // clearing a pin restores normal routing
       }
       this.store.writeFlow(runId, flow);
     }
@@ -1346,12 +1450,34 @@ export class FlowRunner {
     // A gated node being re-run must ask again — its old approval described
     // the attempt the user just sent back.
     const approvedGates = (meta.approvedGates ?? []).filter(id => !reset.has(id));
+    // The retry SUPERSEDES the attempt it replaces (WR-05). Without this the
+    // old terminal error stays in the foreground while the new attempt runs,
+    // which is exactly what happened when a failed Codex planning attempt kept
+    // showing next to a live OpenRouter retry. The failure is not erased — it
+    // is demoted to history and remains inspectable.
+    // The tasks are reset FIRST, because resetting is what applies the override
+    // (or restores the planned worker when a pin is cleared) to the task this
+    // node already materialized. Reading the effective worker before that would
+    // report the worker being replaced rather than the one about to run.
+    this.resetTasksForNodes(runId, flow, reset, { overrides: workerOverrides, targetNodeId: nodeId });
+    //
+    // What the retry will ACTUALLY run on, resolved through the same precedence
+    // the executor uses. Computed once because both the attempt record and the
+    // echo returned to the UI need it, and they must not disagree (WR-03).
+    const targetTask = target.type === 'agentTask'
+      ? (this.store.readTasks(runId)?.tasks ?? []).find(t => t.id === target.data?.taskId) ?? null
+      : null;
+    const effective = effectiveWorkerFor({
+      override: workerOverrides[nodeId] ?? null, flowNode: target, task: targetTask, config: this.config
+    });
+    const attempts = recordAttempt(meta.attempts ?? {}, nodeId, {
+      status: 'active', worker: effective.worker
+    });
     this.store.writeMeta(runId, {
-      ...meta, nodeStatus, approvedGates,
+      ...meta, nodeStatus, approvedGates, workerOverrides, attempts,
       stage: 'execution', error: null, interrupted: false, paused: false,
       currentNodeId: null, currentTaskId: null
     });
-    this.resetTasksForNodes(runId, flow, reset);
     // Stale outputs of reset nodes must never reach a downstream prompt
     // (upstreamContext tolerates missing files, so deleting is the safe side).
     // Stale retry guidance goes too — the restart IS the fresh attempt.
@@ -1366,13 +1492,25 @@ export class FlowRunner {
     }
     this.store.appendLog(runId, {
       event: 'node_restart', node: nodeId, reset: [...reset], guidance: Boolean(text),
-      ...(worker ? { worker: repinned } : {})
+      ...(worker ? { worker: repinned } : {}),
+      // Requested vs effective, in one record and with no key (WR-03/WR-04).
+      ...(repinned ? { requestedWorker: repinned } : {}),
+      effectiveWorker: effective.worker, via: effective.via
     });
     this.notify(runId);
     this.launch(runId, flow, true);
     // The re-pin echoes back only when there was one — plain restarts keep the
     // { ok: true } every existing caller matches on.
-    return repinned ? { ok: true, worker: repinned } : { ok: true };
+    //
+    // `effectiveWorker` rides along whenever the caller ASKED about the model
+    // (a re-pin, or an explicit clear), because that is exactly when the UI
+    // must confirm against what the backend resolved rather than against what
+    // it requested. A plain "run it again" asked nothing and gets the same
+    // answer it always did.
+    if (!worker) return { ok: true };
+    return repinned
+      ? { ok: true, worker: repinned, effectiveWorker: effective.worker }
+      : { ok: true, effectiveWorker: effective.worker };
   }
 
   // Fork a run at a node: copy the run directory wholesale, prune the copy's
@@ -1681,12 +1819,23 @@ export class FlowRunner {
   // 'pending' so the relaunched walk re-claims them, and their stale outputs
   // are deleted. createdBy names either a task id (executor-spawned) or a node
   // id (stitch/fix-task created), so both are matched.
-  resetTasksForNodes(runId, flow, resetNodes) {
+  // `overrides` is the run's manual retry map (WR-03). Resetting a task's
+  // status was never enough: an `agentTask` executes from its persisted
+  // tasks.json worker, so a retry re-pointed at another model kept calling the
+  // one that had just failed. `targetNodeId` scopes the override to the node
+  // the user actually re-pointed — descendants a task spawned keep their own
+  // routing unless somebody asks otherwise, which is the conservative default.
+  resetTasksForNodes(runId, flow, resetNodes, { overrides = null, targetNodeId = null } = {}) {
     const doc = this.store.readTasks(runId);
     if (!doc?.tasks?.length) return;
     const taskIds = new Set(flow.nodes
       .filter(n => resetNodes.has(n.id) && n.type === 'agentTask')
       .map(n => n.data?.taskId).filter(Boolean));
+    // The task belonging to the re-pointed node, before descendants are folded
+    // in below — only this one takes the override.
+    const targetTaskId = targetNodeId
+      ? flow.nodes.find(n => n.id === targetNodeId && n.type === 'agentTask')?.data?.taskId ?? null
+      : null;
     for (let grew = true; grew;) {
       grew = false;
       for (const t of doc.tasks) {
@@ -1697,8 +1846,24 @@ export class FlowRunner {
       }
     }
     let changed = false;
+    const override = targetTaskId ? overrides?.[targetNodeId] ?? null : null;
     for (const t of doc.tasks) {
       if (taskIds.has(t.id) && t.status !== 'pending') { t.status = 'pending'; changed = true; }
+      if (t.id !== targetTaskId) continue;
+      if (override?.provider && override?.model) {
+        // The original planned worker is preserved for audit rather than
+        // overwritten: "what did the plan choose, and what did I re-point it
+        // to" must both survive the retry.
+        if (!t.originalWorker && t.worker) t.originalWorker = { ...t.worker };
+        t.worker = { provider: override.provider, model: override.model };
+        changed = true;
+      } else if (t.originalWorker) {
+        // The pin was cleared: restore the planned worker so normal
+        // category/provider-priority resolution applies again.
+        t.worker = { ...t.originalWorker };
+        delete t.originalWorker;
+        changed = true;
+      }
     }
     if (changed) this.store.writeTasks(runId, doc);
     for (const id of taskIds) this.store.deleteTaskOutput(runId, id);
@@ -3174,7 +3339,8 @@ export class FlowRunner {
           return src.type === 'agentTask' ? `${taskIdByNode.get(srcId)} output` : srcId;
         })
         .filter(Boolean), ...specFiles];
-      const worker = resolveWorker(node, this.config);
+      const route = resolveWorkerRoute(node, this.config);
+      const worker = route.worker;
       const task = {
         id: taskId,
         title: node.data?.title || 'Task',
@@ -3189,6 +3355,20 @@ export class FlowRunner {
         // Tool availability comes from the node template (overridable per
         // workflow); undefined = the full registry.
         ...(Array.isArray(node.data?.tools) ? { tools: node.data.tools } : {}),
+        // The effect contract (WR-01). The AUTHORED intent travels with the
+        // task when there is one; role/category travel regardless, because the
+        // executor runs from tasks.json alone and never sees the node, and
+        // without them it could only infer from the tool grant. The mode itself
+        // is resolved in the executor, where the resolved tool records are.
+        ...(node.data?.effect ? { effect: node.data.effect } : {}),
+        ...(node.data?.effectScope ? { effectScope: node.data.effectScope } : {}),
+        // Inputs the plan declared REQUIRED (WR-06). Opt-in and explicit: the
+        // `inputs` list above stays best-effort, so only what a planner
+        // actually promised is enforced before the model is called.
+        ...(node.data?.requiredInputs?.length ? { requiredInputs: node.data.requiredInputs } : {}),
+        ...(node.data?.outputs?.length ? { outputs: node.data.outputs } : {}),
+        ...(node.data?.role ? { role: node.data.role } : {}),
+        ...(node.data?.category ? { category: node.data.category } : {}),
         // The ceiling rides along for the same reason the grant does: the
         // executor runs from tasks.json alone and never sees the node. Absent
         // ⇒ the ceiling is the grant (DESIGN-SPEC.md §5), so a task written
@@ -3212,7 +3392,13 @@ export class FlowRunner {
       // Record the node -> task mapping in the run's flow copy for the UI.
       node.data = { ...node.data, taskId };
       this.store.writeFlow(runId, flow);
-      this.store.appendLog(runId, { event: 'node_start', node: node.id, type: 'agentTask', taskId, worker });
+      this.store.appendLog(runId, {
+        event: 'node_start', node: node.id, type: 'agentTask', taskId, worker,
+        // How this worker was chosen (WR-04). Without it, "the run used a model
+        // I did not pick" has no answer in the artifacts — and the log, the
+        // renderer's preview and the actual call could disagree silently.
+        route: { via: route.via, reason: route.reason, ...(route.candidates ? { candidates: route.candidates } : {}) }
+      });
       this.setNodeStatus(runId, node.id, 'queued');
       return;
     }
@@ -3220,7 +3406,8 @@ export class FlowRunner {
     if (node.type === 'aiStep') {
       // The 'evaluation' meta-role resolves through the node's evalType.
       const role = effectiveRole(node.data?.role ?? 'custom', node.data?.evalType);
-      const worker = resolveCallTarget(resolveWorker(node, this.config), this.config);
+      const route = resolveWorkerRoute(node, this.config);
+      const worker = resolveCallTarget(route.worker, this.config);
       const apiKey = worker.apiKey;
       // Read-only tools on a planning node (§6.4). Resolved before node_start
       // so the log records HOW this node will call them, the same way an
@@ -3231,7 +3418,14 @@ export class FlowRunner {
       }
       this.store.appendLog(runId, {
         event: 'node_start', node: node.id, type: 'aiStep', role,
+        // The EFFECTIVE provider/model — after an 'auto' source has walked the
+        // priority list — beside how it was chosen (WR-04). The requested route
+        // rides along whenever it differs, so a run that resolved somewhere
+        // other than where you expected says so in one line.
         worker: { provider: worker.provider, model: worker.model },
+        ...(route.worker.provider !== worker.provider || route.worker.model !== worker.model
+          ? { requested: { provider: route.worker.provider, model: route.worker.model } } : {}),
+        route: { via: route.via, reason: route.reason, ...(route.candidates ? { candidates: route.candidates } : {}) },
         ...(stepTools.length ? { protocol: toolProtocol(worker), tools: stepTools.map(t => t.name) } : {}),
         ...(node.data?.effort ? { effort: node.data.effort } : {})
       });
@@ -3291,12 +3485,39 @@ export class FlowRunner {
 
       // Incremental output: stream the partial text into the node's output file
       // so the inspector and the live panel show work as it happens.
-      const onText = this.streamInto(runId, t => this.store.writeNodeOutput(runId, node.id, t));
+      const writeStream = this.streamInto(runId, t => this.store.writeNodeOutput(runId, node.id, t));
+
+      // Planner liveness (WR-06). A planning node that streams the same
+      // sentence forever without calling a tool is spending money to stand
+      // still — and the general heartbeat only caught it after ~6 minutes of
+      // byte-identical work. This watches for a lack of NOVEL visible work, not
+      // for elapsed time, so a quiet reasoning call is never its business.
+      const planning = ['plan', 'plan-start', 'plan-eval', 'split'].includes(role);
+      const spin = planning ? createSpinDetector({ thresholds: this.config.planner?.spin ?? {} }) : null;
+      const spinCtl = spin ? new AbortController() : null;
+      let spinTripped = null;
+      const onText = spin
+        ? (text, opts) => {
+            const state = spin.push(text);
+            if (state.tripped && !spinTripped) {
+              spinTripped = state;
+              this.store.appendLog(runId, {
+                event: 'planner_spin', node: node.id, reason: state.reason, ...state.metrics
+              });
+              // Stop paying for it. The partial stream stays on disk as the
+              // evidence, and the node fails with the reason rather than
+              // hanging until the six-minute heartbeat notices.
+              spinCtl.abort();
+            }
+            return writeStream(text, opts);
+          }
+        : writeStream;
 
       let result;
       try {
         result = await this.trackedRunAgent(runId, node.id, {
           ...worker, apiKey, system, prompt: userMsg, onText,
+          ...(spinCtl ? { abortSignal: spinCtl.signal } : {}),
           // Effort level sets the response budget; medium keeps the default.
           maxTokens: effortBudget(node.data?.effort),
           onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
@@ -3328,7 +3549,12 @@ export class FlowRunner {
         // so a later restart re-runs it; the partial streamed text on disk is
         // an honest partial. The abort error unwinds the walk (fail() mutes
         // itself under stopRequests).
-        if (isAbortError(err) || this.stopRequests.has(runId)) {
+        // A planner interrupted for spinning is NOT a user stop: it must fail
+        // with its reason and keep its partial stream as evidence, not requeue
+        // as though somebody had pressed pause (WR-06).
+        if (spinTripped && isAbortError(err) && !this.stopRequests.has(runId)) {
+          err = new Error(`Planning was interrupted: ${spinTripped.reason}.`);
+        } else if (isAbortError(err) || this.stopRequests.has(runId)) {
           this.store.appendLog(runId, { event: 'node_aborted', node: node.id, role });
           this.setNodeStatus(runId, node.id, 'pending');
           throw isAbortError(err) ? err : abortError(`Node ${node.id} stopped`);
@@ -4582,6 +4808,19 @@ export class FlowRunner {
       if (current && this.store.readMeta(runId).nodeStatus?.[current] === 'active') {
         this.setNodeStatus(runId, current, 'failed');
       }
+      // Close this node's open attempt with a classified reason (WR-05), so the
+      // failure sits in attempt history rather than as a free-floating run
+      // error that a later retry has to compete with.
+      if (current) {
+        const failure = classifyAdapterError(err, { provider: 'the provider' });
+        const after = this.store.readMeta(runId);
+        this.store.writeMeta(runId, {
+          ...after,
+          attempts: settleAttempt(after.attempts ?? {}, current, {
+            status: 'failed', error: failure.detail, code: failure.code
+          })
+        });
+      }
       this.notify(runId);
     } catch { /* the run is gone — there is nothing left to report to */ }
   }
@@ -4672,6 +4911,43 @@ export class FlowRunner {
       ].join('\n'));
       this.store.appendLog(runId, { event: 'materialize_failed', fromNode: planEvalNode.id, errors: parsed.errors });
       return { ok: false, errors: parsed.errors, created: [] };
+    }
+
+    // The plan parses — but is it a plan worth running? (WR-06)
+    //
+    // Shape validity was the only bar, so a focused change could be split into
+    // nine tasks, two of them claiming to produce the same file and one
+    // requiring an input nothing wrote. Every one of those is cheaper to catch
+    // here than three model calls later, and the errors feed the SAME bounded
+    // re-ask the malformed-JSON path already uses.
+    const limits = plannerLimits(this.config);
+    const available = [
+      'prompt.md', 'plan.md',
+      ...flow.nodes.map(n => n.id),
+      ...(this.store.readTasks(runId)?.tasks ?? []).map(t => t.id)
+    ];
+    const verdict = validatePlan(parsed.plan.nodes, {
+      limits, available,
+      allowExceed: planEvalNode.data?.allowLargePlan === true,
+      contractBytes: Buffer.byteLength(String(evalOutputText ?? ''), 'utf8')
+    });
+    this.store.appendLog(runId, {
+      event: 'plan_validated', fromNode: planEvalNode.id,
+      ok: verdict.ok, ...verdict.metrics,
+      ...(verdict.warnings.length ? { warnings: verdict.warnings.slice(0, 10) } : {})
+    });
+    if (!verdict.ok) {
+      this.store.writeNodeOutput(runId, 'plan-eval-errors', [
+        '# Plan rejected',
+        '',
+        'The plan parsed but did not satisfy the planning contract; no nodes were materialized.',
+        '',
+        ...verdict.errors.map(e => `- ${e}`)
+      ].join('\n'));
+      this.store.appendLog(runId, {
+        event: 'plan_rejected', fromNode: planEvalNode.id, errors: verdict.errors.slice(0, 10)
+      });
+      return { ok: false, errors: verdict.errors, created: [] };
     }
     return this.materializeParsedNodes(runId, flow, planEvalNode, parsed.plan);
   }

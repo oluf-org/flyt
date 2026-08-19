@@ -241,6 +241,39 @@ export const AI_ROLES = [
 
 // The four (minimum) categories used by plan-eval nodes to drive model selection
 // and template choice. Extend only after updating FLOW_NODES.md and config examples.
+// --- The deliverable/effect contract (WR-01) --------------------------------
+//
+// What a node owes before it may call itself done. The modes and their
+// normalization live HERE rather than in core/effect.js because both the
+// renderer (authoring, node inspector) and the engine need them, and
+// core/effect.js reaches for node:fs and node:child_process to measure a
+// workspace — importing that into the renderer bundle would break the build.
+// core/effect.js imports these; the measurement stays on the engine side.
+//
+//   artifact         a non-empty deliverable; no repository change required.
+//   workspace-change a non-empty change in the bound project, within scope.
+//   either           one or the other.
+//   none             structural/control nodes that claim no deliverable.
+export const EFFECT_MODES = ['artifact', 'workspace-change', 'either', 'none'];
+
+export function normalizeEffect(value) {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (EFFECT_MODES.includes(v)) return v;
+  // Spellings a plan or a hand-edited flow will produce.
+  if (['workspace', 'change', 'code', 'diff'].includes(v)) return 'workspace-change';
+  if (['text', 'output', 'markdown', 'doc'].includes(v)) return 'artifact';
+  return null;
+}
+
+// The optional path globs a required change must land inside, so a task cannot
+// satisfy "change the application" by writing an unrelated note.
+export function normalizeEffectScope(value) {
+  const list = Array.isArray(value) ? value
+    : typeof value === 'string' && value.trim() ? [value] : [];
+  const out = list.map(s => String(s ?? '').trim()).filter(Boolean);
+  return out.length ? out : null;
+}
+
 export const NODE_CATEGORIES = [
   'Code general',
   'Code design',
@@ -761,6 +794,12 @@ export function normalizeTemplate(tpl) {
     // ceiling is the static grant, which is what keeps every pre-ceiling flow
     // at exactly its present envelope (DESIGN-SPEC.md §5).
     toolCeiling: normalizeCeiling(tpl.toolCeiling),
+    // The deliverable contract (WR-01): what "done" requires of this node —
+    // an artifact, a change in the bound project, either, or nothing. Absent
+    // means inferred from role/category/tools at execution time, which is what
+    // keeps every flow authored before the contract existed working unchanged.
+    ...(normalizeEffect(tpl.effect) ? { effect: normalizeEffect(tpl.effect) } : {}),
+    ...(normalizeEffectScope(tpl.effectScope) ? { effectScope: normalizeEffectScope(tpl.effectScope) } : {}),
     skills: Array.isArray(tpl.skills) ? tpl.skills.map(String) : [],
     requiresApproval: Boolean(tpl.requiresApproval),
     approveToolCalls: Boolean(tpl.approveToolCalls),
@@ -795,6 +834,10 @@ export function resolveInstance(node, tpl) {
   // downstream rather than materialized here, so a flow file stays honest
   // about what its author actually wrote (DESIGN-SPEC.md §5).
   const toolCeiling = normalizeCeiling(ov.toolCeiling) ?? t?.toolCeiling ?? null;
+  // Same narrowest-wins precedence as the ceiling: the instance's own, else
+  // the template's, else absent (⇒ inferred downstream).
+  const effect = normalizeEffect(ov.effect) ?? t?.effect ?? null;
+  const effectScope = normalizeEffectScope(ov.effectScope) ?? t?.effectScope ?? null;
   const workGate = isWork && (tools ?? []).includes('bash');
   const data = {
     templateId: node.templateId,
@@ -814,6 +857,8 @@ export function resolveInstance(node, tpl) {
     ...(category ? { category } : {}),
     ...(tools ? { tools } : {}),
     ...(toolCeiling ? { toolCeiling } : {}),
+    ...(effect ? { effect } : {}),
+    ...(effectScope ? { effectScope } : {}),
     ...((ov.skills ?? t?.skills)?.length ? { skills: ov.skills ?? t.skills } : {}),
     requiresApproval: ov.requiresApproval ?? t?.requiresApproval ?? false,
     approveToolCalls: ov.approveToolCalls ?? (workGate ? true : t?.approveToolCalls ?? false),
@@ -922,6 +967,10 @@ export function overridableFields(node) {
   // `toolCeiling` is the hard limit the grant lives inside. On an orchestrator
   // it is the envelope its generated children inherit (§6.3).
   if (type === 'agentTask' || type === 'aiStep' || isContainerType(type)) fields.add('toolCeiling');
+  // The deliverable contract is overridable wherever a node actually claims a
+  // deliverable: the same node can be "write the change" in one mode and
+  // "describe the change" in another, and that is a config decision (WR-01).
+  if (type === 'agentTask' || type === 'aiStep') { fields.add('effect'); fields.add('effectScope'); }
   return fields;
 }
 

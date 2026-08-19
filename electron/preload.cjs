@@ -53,6 +53,7 @@ const api = {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
   listModels: (provider) => ipcRenderer.invoke('models:list', provider),
+  modelRankings: (force = false) => ipcRenderer.invoke('models:rankings', force),
   testProvider: (provider) => ipcRenderer.invoke('provider:test', provider),
   listFlows: () => ipcRenderer.invoke('flow:list'),
   loadFlow: (id) => ipcRenderer.invoke('flow:load', id),

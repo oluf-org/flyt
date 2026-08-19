@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groupModels, presentModel, titleCaseSlug } from '../src/modelPresentation.js';
+import { groupModels, popularGroupKeys, presentModel, titleCaseSlug } from '../src/modelPresentation.js';
 
 test('provider-qualified ids become a creator and a clean model name', () => {
   assert.deepEqual(presentModel('openai/gpt-5.2'), {
@@ -34,4 +34,28 @@ test('creator aliases share one group', () => {
   assert.equal(groups.length, 1);
   assert.equal(groups[0].name, 'Kimi');
   assert.equal(groups[0].models.length, 2);
+});
+
+test('a leading tilde on a provider-qualified id does not create a new group', () => {
+  const groups = groupModels([
+    { id: 'openai/gpt-5.2' },
+    { id: '~openai/gpt-5.2-chat' }
+  ]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].name, 'OpenAI');
+  assert.deepEqual(groups[0].models.map(model => model.presentation.modelPart), ['gpt-5.2', 'gpt-5.2-chat']);
+});
+
+test('popularity combines creator aliases, ignores absent groups, and caps the result', () => {
+  const groups = groupModels([
+    { id: 'moonshotai/kimi-k3' }, { id: 'openai/gpt-5' }, { id: 'anthropic/claude' }
+  ]);
+  const keys = popularGroupKeys({ creators: [
+    { key: 'openai', totalTokens: '10' },
+    { key: 'moonshotai', totalTokens: '6' },
+    { key: 'kimi', totalTokens: '7' },
+    { key: 'missing', totalTokens: '1000' },
+    { key: 'anthropic', totalTokens: '8' }
+  ] }, groups, 2);
+  assert.deepEqual(keys, ['kimi', 'openai']);
 });

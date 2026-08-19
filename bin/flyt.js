@@ -58,7 +58,8 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt work start <taskId>            worktree + branch for a task
   flyt work verify <taskId>           run the gates in it (the harness runs them)
   flyt work land <taskId> [--dry-run|--push]  gates -> review -> merge -> canary
-  flyt work discard <taskId>          throw the worktree away
+  flyt work discard <taskId> [--attempt <id>]  throw the worktree away
+  flyt work reconcile                 list orphaned worktrees and owner records
   flyt ref list                       the reference library (§16)
   flyt ref update [<name>]            shallow-clone or refresh it
   flyt ref grep <pattern> [--repo r]  search it
@@ -528,8 +529,32 @@ async function main() {
         }
         case 'diff':
           return out(await api.invoke('work:diff', { projectId, taskId }));
-        case 'discard':
-          return out(await api.invoke('work:discard', { projectId, taskId }));
+        case 'discard': {
+          // `--attempt` scopes the discard to one attempt, so a cleanup that
+          // arrives late cannot delete a newer attempt's worktree (WR-02).
+          // Without it this is an explicit "throw it away", which is what a
+          // person typing `discard` means.
+          const r = await api.invoke('work:discard', { projectId, taskId, attemptId: flags.attempt ?? null });
+          if (asJson) return out(r);
+          if (r.outcome === 'owner-mismatch') {
+            process.exitCode = 1;
+            return out(`nothing removed — this worktree now belongs to attempt ${r.owner}`);
+          }
+          if (r.outcome === 'live-owner') {
+            process.exitCode = 1;
+            return out(`nothing removed — attempt ${r.owner} is still live`);
+          }
+          return out(r.outcome === 'removed' ? `removed ${r.dir}` : 'already removed');
+        }
+        case 'reconcile': {
+          // Orphaned owner records and worktrees, reported never deleted:
+          // "remove this directory" is exactly the decision not to guess at.
+          const { orphans } = await api.invoke('work:reconcile', { projectId });
+          if (asJson) return out({ orphans });
+          if (!orphans.length) return out('no orphaned worktrees');
+          for (const o of orphans) say(`${o.kind}	${o.taskId}	${o.path}`);
+          return out(`${orphans.length} orphan(s) — discard the ones you no longer want`);
+        }
         case 'land': {
           const r = await api.invoke('work:land', { projectId, taskId, dryRun: Boolean(flags['dry-run']), push: flags.push ? true : null });
           if (asJson) return out(r);
@@ -834,6 +859,19 @@ function renderDoctor(r) {
     L.push(`  ${p.connected ? '✓' : '·'} ${p.id} (${p.kind})`
       + (p.subscription?.detail ? ` — ${p.subscription.detail}` : '')
       + credit);
+  }
+  // Where an unpinned node of each kind actually goes (WR-04). The whole point
+  // is that this is computed by the same function the runner uses, so what is
+  // printed here is what will run.
+  if (r.routes?.length) {
+    L.push('', 'default route for an unpinned node:');
+    for (const rt of r.routes) {
+      L.push(`  ${rt.kind.padEnd(12)} ${rt.provider ? `${rt.provider}/${rt.model}` : '— no connected provider'}`);
+    }
+    const order = r.routes.find(rt => rt.order)?.order;
+    if (order) {
+      L.push(`  (order: ${order === 'settings-priority' ? 'your Settings provider priority' : 'built-in default, no Settings order'})`);
+    }
   }
   if (r.references.length) {
     L.push('', 'reference library:');

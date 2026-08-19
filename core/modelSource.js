@@ -136,6 +136,7 @@ export function migrateSettings(raw) {
   // DECISIONS.md D36: catalog facts learned at fetch time, and named model
   // sets. Both are additive — settings written before D36 simply have none.
   s.modelFacts = normalizeModelFacts(s.modelFacts);
+  s.modelPopularity = normalizeModelPopularity(s.modelPopularity);
   s.modelSets = normalizeModelSets(s.modelSets);
   // The loop's band→model map (DESIGN-SPEC.md §8). Normalized here so a hand-edited
   // settings.json cannot put a non-string, an empty id, or a band that is not a
@@ -189,6 +190,59 @@ export function catalogFromOpenRouter(payload) {
       inUsdPerM: usdPerMillion(m.pricing?.prompt),
       outUsdPerM: usdPerMillion(m.pricing?.completion)
     }));
+}
+
+// OpenRouter's rankings dataset is model-shaped rather than creator-shaped:
+// one row per top model per UTC bucket. Reduce it here so the renderer gets a
+// compact, deterministic creator ranking and never has to add decimal strings
+// with lossy floating-point arithmetic.
+export function popularityFromOpenRouter(payload) {
+  const totals = new Map();
+  for (const row of payload?.data ?? []) {
+    const slug = typeof row?.model_permaslug === 'string' ? row.model_permaslug.trim() : '';
+    const slash = slug.indexOf('/');
+    if (slash <= 0 || slug === 'other') continue;
+    const creator = slug.slice(0, slash).replace(/^~/, '').trim().toLowerCase();
+    if (!creator) continue;
+    let tokens;
+    try { tokens = BigInt(row.total_tokens); } catch { continue; }
+    if (tokens < 0n) continue;
+    totals.set(creator, (totals.get(creator) ?? 0n) + tokens);
+  }
+  const creators = [...totals.entries()]
+    .sort((a, b) => a[1] === b[1] ? a[0].localeCompare(b[0]) : (a[1] > b[1] ? -1 : 1))
+    .map(([key, totalTokens]) => ({ key, totalTokens: totalTokens.toString() }));
+  const meta = payload?.meta && typeof payload.meta === 'object' ? payload.meta : {};
+  return {
+    creators,
+    asOf: typeof meta.as_of === 'string' ? meta.as_of : null,
+    startDate: typeof meta.start_date === 'string' ? meta.start_date : null,
+    endDate: typeof meta.end_date === 'string' ? meta.end_date : null
+  };
+}
+
+export function normalizeModelPopularity(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.creators)) return null;
+  const totals = new Map();
+  for (const entry of raw.creators) {
+    const key = typeof entry?.key === 'string' ? entry.key.trim().replace(/^~/, '').toLowerCase() : '';
+    if (!key) continue;
+    let tokens;
+    try { tokens = BigInt(entry.totalTokens); } catch { continue; }
+    if (tokens < 0n) continue;
+    totals.set(key, (totals.get(key) ?? 0n) + tokens);
+  }
+  if (!totals.size) return null;
+  const creators = [...totals.entries()]
+    .sort((a, b) => a[1] === b[1] ? a[0].localeCompare(b[0]) : (a[1] > b[1] ? -1 : 1))
+    .map(([key, totalTokens]) => ({ key, totalTokens: totalTokens.toString() }));
+  return {
+    creators,
+    asOf: typeof raw.asOf === 'string' ? raw.asOf : null,
+    startDate: typeof raw.startDate === 'string' ? raw.startDate : null,
+    endDate: typeof raw.endDate === 'string' ? raw.endDate : null,
+    fetchedAt: typeof raw.fetchedAt === 'string' ? raw.fetchedAt : null
+  };
 }
 
 // One catalog entry reduced to the facts a picker shows. Absent fields are
@@ -381,6 +435,57 @@ export function createResolver({ hasKey, canServe, priority }) {
 // A worker whose provider is 'auto' (picked from the active-models list) is
 // resolved through the main process's resolver — priority walk, pin override,
 // key + keyKind stamping. Anything else keeps the legacy lookup.
+// How many providers an auto route may try after the first one fails. Bounded
+// on purpose (WR-05): unattended fallback that walks the whole priority list is
+// a way to spend a budget on a misconfiguration, and each attempt is a real
+// call on a real bill.
+export const MAX_AUTO_FALLBACKS = 2;
+
+/**
+ * The next providers an AUTO-routed call may try after an infrastructure
+ * failure (WR-05).
+ *
+ * "Pinned means pinned": a worker naming its own provider gets an empty list.
+ * An explicit source must fail with a remedy rather than silently spend
+ * somewhere the user did not choose — possibly on a different bill. Only a
+ * worker that said `auto` asked to be routed, and only that one may be
+ * re-routed.
+ *
+ * `tried` prevents cycling back onto a provider that has already failed.
+ */
+export function autoFallbackTargets(worker, config, { tried = [], limit = MAX_AUTO_FALLBACKS } = {}) {
+  if (worker?.provider !== 'auto') return [];
+  const modelId = worker.model;
+  const priority = config?.providerPriority ?? DEFAULT_PRIORITY;
+  // Excluded by BOTH names: the id in the priority list, and the concrete
+  // provider/model the resolver returns. They are normally the same, but a
+  // resolver that maps two list entries onto one target would otherwise hand
+  // back the target that just failed and burn an attempt re-proving it.
+  const seen = new Set();
+  const seenTargets = new Set();
+  for (const t of tried) {
+    if (typeof t === 'string') seen.add(t);
+    else if (t?.provider) { seen.add(t.provider); seenTargets.add(`${t.provider}/${t.model}`); }
+  }
+  const out = [];
+  for (const provider of priority) {
+    if (out.length >= limit) break;
+    if (seen.has(provider)) continue;
+    // The same connected/can-serve rules source resolution uses — asked of the
+    // resolver rather than re-implemented, so eligibility cannot drift.
+    let target;
+    try { target = config?.resolveModelSource?.(modelId, provider); }
+    catch { continue; } // not connected, or cannot serve this id
+    if (!target?.provider) continue;
+    const key = `${target.provider}/${target.model}`;
+    if (seenTargets.has(key)) continue;
+    seen.add(provider);
+    seenTargets.add(key);
+    out.push(target);
+  }
+  return out;
+}
+
 export function resolveCallTarget(worker, config) {
   if (worker?.provider === 'auto' && typeof config?.resolveModelSource === 'function') {
     return config.resolveModelSource(worker.model);

@@ -258,6 +258,13 @@ export function createEngine({
       if (hasKey(p)) runtimeConfig.providerKeys[p] = 'subscription';
     }
     runtimeConfig.resolveModelSource = resolveModelSource;
+    // ONE routing policy (WR-04). The auto-source resolver already walked this
+    // list; the default-worker picker did not, and started from its own
+    // hard-coded table instead — so reordering providers in Settings moved some
+    // calls and left others where they were. Both read this now, so the order
+    // shown in Settings is the order that runs. Rebuilt on every settings
+    // change, which is what lets a reorder take effect without a restart.
+    runtimeConfig.providerPriority = [...(settings.providerPriority ?? DEFAULT_PRIORITY)];
     runtimeConfig.kimiKeyKind = settings.providers?.kimi?.keyKind ?? 'platform';
     runtimeConfig.modelCapabilities = settings.modelCapabilities ?? {};
     // Catalogue facts double as capability data when modelCapabilities is empty
@@ -322,6 +329,7 @@ export function createEngine({
       // sets built out of them. Facts are catalog data, not secrets — every
       // picker in the app renders them.
       modelFacts: settings.modelFacts ?? {},
+      modelPopularity: settings.modelPopularity ?? null,
       modelSets: settings.modelSets ?? {},
       // What the Loop view's per-band pickers show. Model ids, never keys.
       loopModels: settings.loopModels ?? {},

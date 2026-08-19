@@ -321,19 +321,75 @@ export function providerModelsFor(provider, kind, effort, { kimiKeyKind } = {}) 
   return PROVIDER_MODEL_PRIORITY[provider]?.[k]?.[e] ?? [];
 }
 
+/**
+ * Plan the route for an unpinned node, showing the work (WR-04).
+ *
+ * The defect this closes: `createResolver` walked the user's
+ * `settings.providerPriority` when resolving an auto source, while this picker
+ * started from its own hard-coded `PROVIDER_ORDER`. Reordering providers in
+ * Settings therefore changed some calls and the renderer's preview, but left
+ * unpinned default workers on the built-in order — two silent winners for one
+ * question.
+ *
+ * The two concerns compose in one direction only:
+ *
+ *   the USER'S provider priority answers "which connected provider first";
+ *   the per-provider model rankings answer "which of that provider's models
+ *   for this task kind and effort".
+ *
+ * `PROVIDER_ORDER`'s per-kind cross-provider preference is now only the
+ * fallback for a config that states no user order — Settings must be truthful,
+ * so a per-kind table cannot quietly outrank what the user arranged.
+ *
+ * Returns the considered candidates and why each was skipped, so the renderer
+ * preview, `flyt doctor`, the node-start log and the actual call can all read
+ * ONE record instead of each re-deriving the answer.
+ */
+export function planDefaultRoute(node, config) {
+  const keys = config?.providerKeys ?? {};
+  const kind = taskKindOf(node);
+  const effort = clampEffort(node?.data?.effort);
+  const userOrder = Array.isArray(config?.providerPriority)
+    ? config.providerPriority.filter(p => typeof p === 'string' && p.trim())
+    : null;
+  const order = userOrder?.length
+    ? userOrder
+    : (PROVIDER_ORDER[kind]?.[effort] ?? PROVIDER_ORDER.general[DEFAULT_EFFORT]);
+  const source = userOrder?.length ? 'settings-priority' : 'default-order';
+
+  const candidates = [];
+  for (const provider of order) {
+    if (!keys[provider]) {
+      candidates.push({ provider, skipped: 'not connected' });
+      continue;
+    }
+    const models = providerModelsFor(provider, kind, effort, { kimiKeyKind: config?.kimiKeyKind });
+    if (!models.length) {
+      candidates.push({ provider, skipped: `no ranked model for ${kind}/${effort}` });
+      continue;
+    }
+    candidates.push({ provider, model: models[0], chosen: true });
+    return {
+      provider, model: models[0], kind, effort, order: source, candidates,
+      reason: `highest-ranked ${kind}/${effort} model on the first connected provider in ${
+        source === 'settings-priority' ? 'your Settings order' : 'the default order'}`
+    };
+  }
+  return {
+    provider: null, model: null, kind, effort, order: source, candidates,
+    reason: Object.keys(keys).length
+      ? 'no connected provider offers a model for this task kind and effort'
+      : 'no provider is connected'
+  };
+}
+
 // The default worker for a node, or null when no connected provider has an
 // entry (the caller then falls back to the configured executor default).
-// config needs: providerKeys (provider -> key), optional kimiKeyKind.
+// config needs: providerKeys (provider -> key), optional providerPriority
+// (the user's order) and kimiKeyKind.
 export function pickDefaultWorker(node, config) {
   const keys = config?.providerKeys;
   if (!keys || !Object.keys(keys).length) return null;
-  const kind = taskKindOf(node);
-  const effort = clampEffort(node?.data?.effort);
-  const order = PROVIDER_ORDER[kind]?.[effort] ?? PROVIDER_ORDER.general[DEFAULT_EFFORT];
-  for (const provider of order) {
-    if (!keys[provider]) continue;
-    const models = providerModelsFor(provider, kind, effort, { kimiKeyKind: config?.kimiKeyKind });
-    if (models.length) return { provider, model: models[0] };
-  }
-  return null;
+  const route = planDefaultRoute(node, config);
+  return route.provider ? { provider: route.provider, model: route.model } : null;
 }

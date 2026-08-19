@@ -184,6 +184,7 @@ export class Supervisor {
     this.running = false;
     this.stopping = null;      // why we are winding down, if we are
     this.inFlight = new Map(); // taskId -> Heartbeat
+    this.attempts = new Map(); // taskId -> attemptId (WR-02 ownership)
     this.history = [];         // finished attempts, for the report
     this.parked = [];          // things waiting on a person
     this.noEscalate = false;   // set when the soft cap trips
@@ -344,6 +345,10 @@ export class Supervisor {
 
     try {
       const wt = await this.invoke('work:start', { projectId: this.projectId, taskId: task.id });
+      // The attempt this supervisor owns. Every destructive call it makes later
+      // names it, so a cleanup that arrives after the task was restarted cannot
+      // delete the newer attempt's worktree (WR-02).
+      this.attempts.set(task.id, wt.attemptId ?? null);
       const runId = await this.invoke('flow:run', {
         projectId: this.projectId,
         flowId: this.config.loop?.flowId ?? 'default-pipeline',
@@ -406,6 +411,14 @@ export class Supervisor {
     this.#publish();
     for (const [taskId, hb] of [...this.inFlight]) {
       try {
+        // Say "still mine" before doing anything else with this task. A long
+        // reasoning call is not an abandoned attempt, and the ownership record
+        // is what the next `work:start` reads to tell the two apart (WR-02).
+        const attemptId = this.attempts.get(taskId);
+        if (attemptId) {
+          await this.invoke('work:touch', { projectId: this.projectId, taskId, attemptId })
+            .catch(() => { /* a missed beat is not a reason to stop polling */ });
+        }
         await this.#pollTask(taskId, hb);
         hb.pollErrors = 0;
       } catch (err) {
@@ -727,6 +740,9 @@ export class Supervisor {
     // there is.
     const landed = await this.invoke('work:land', {
       projectId: this.projectId, taskId, baselineOutput: this.lastCanaryOutput ?? null,
+      // Which attempt is being landed: a slow landing must not clean up after a
+      // restart that has already begun (WR-02).
+      attemptId: this.attempts.get(taskId) ?? null,
       // The dry-run posture (§6.4): gates and a reviewer run, nothing merges.
       // This was decided in `loop:start` and then never travelled — `work:land`
       // defaults it to false, so a loop started with --dry-run merged anyway.
@@ -762,8 +778,23 @@ export class Supervisor {
   // escalation was immediately undone by the cleanup that followed it and the
   // ladder never climbed after a failed landing.
   async #discard(taskId) {
-    try { await this.invoke('work:discard', { projectId: this.projectId, taskId, status: null }); }
-    catch { /* nothing to discard */ }
+    const attemptId = this.attempts.get(taskId) ?? null;
+    try {
+      const r = await this.invoke('work:discard', { projectId: this.projectId, taskId, status: null, attemptId });
+      // A refusal is a fact worth saying out loud. Swallowing every error here
+      // is what let a stale cleanup look identical to a successful one, and
+      // "owner-mismatch" specifically means this supervisor just tried to clean
+      // up a worktree that now belongs to a newer attempt (WR-02).
+      if (r?.outcome === 'owner-mismatch') {
+        this.log(`· ${taskId} cleanup skipped: worktree now belongs to attempt ${r.owner}`);
+      } else if (r?.outcome === 'live-owner') {
+        this.log(`· ${taskId} cleanup skipped: attempt ${r.owner} is still live`);
+      }
+    } catch (err) {
+      this.log(`· ${taskId} cleanup failed: ${String(err?.message ?? err).slice(0, 160)}`);
+    } finally {
+      this.attempts.delete(taskId);
+    }
   }
 
   #park(taskId, reason) {
