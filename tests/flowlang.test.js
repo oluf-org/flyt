@@ -230,6 +230,29 @@ test('round-trip: every shipped .flow.yaml is byte-stable', () => {
   }
 });
 
+test('learn-from-repo returns the research, proposed work, and queue outcome', () => {
+  const file = path.join(flowsDir, 'learn-from-repo.flow.yaml');
+  const flow = parseFlow(fs.readFileSync(file, 'utf8'));
+  const finalSources = flow.edges
+    .filter(edge => edge.target === 'output')
+    .map(edge => edge.source);
+  assert.deepEqual(finalSources, ['synthesise', 'plan', 'work'],
+    'the final result must not collapse back to the queue status alone');
+  const byId = new Map(flow.nodes.map(node => [node.id, node]));
+  assert.equal(byId.get('orient').overrides.maxToolIterations, 6);
+  assert.equal(byId.get('read').data.maxLanes, 4,
+    'the shipped research flow must keep synthesis context bounded');
+  assert.equal(byId.get('read').data.maxToolIterations, 10);
+  assert.equal(byId.get('plan').overrides.maxToolIterations, 10,
+    'the evidence planner must not inherit the much wider host default');
+  assert.deepEqual(byId.get('synthesise').overrides.skills, ['reference-transfer']);
+  assert.equal(byId.get('synthesise').templateId, 'general-analysis',
+    'research synthesis must not invoke combine/stitch task materialization');
+  assert.deepEqual(byId.get('plan').overrides.skills, ['skill-authoring']);
+  assert.equal(byId.get('plan').overrides.worker.model, 'deepseek/deepseek-v4-pro-0813',
+    'the evidence planner must use a model observed to finish answer-only turns');
+});
+
 test('round-trip: multiline strings and odd titles survive', () => {
   const flow = {
     id: 'odd', name: 'Odd: strings & things',

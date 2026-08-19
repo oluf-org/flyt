@@ -80,6 +80,30 @@ test('it reads, and a missing file is an answer rather than an error', () => {
   assert.equal(lib.read('reference:opencode/src'), null);
 });
 
+test('citation verification binds an exact line and excerpt to the clone commit', () => {
+  const lib = seeded();
+  const good = lib.verifyCitation({
+    ref: 'reference:opencode/src/server/server.ts',
+    line: 2,
+    excerpt: 'HttpRouter.serve(routes)'
+  });
+  assert.deepEqual(good, {
+    ok: true,
+    ref: 'reference:opencode/src/server/server.ts',
+    line: 2,
+    commit: 'abc1234567'
+  });
+  assert.match(lib.verifyCitation({
+    ref: 'reference:opencode/src/server/server.ts', line: 1, excerpt: 'HttpRouter.serve'
+  }).error, /excerpt was not found/);
+  assert.match(lib.verifyCitation({
+    ref: 'reference:opencode/src/server/missing.ts', line: 1, excerpt: 'anything'
+  }).error, /does not exist/);
+  assert.match(lib.verifyCitation({
+    ref: 'reference:opencode/src/server/server.ts', line: 99, excerpt: 'anything'
+  }).error, /not line 99/);
+});
+
 test('there is no write path into a clone — read-only is a fact about the code, not a flag', () => {
   const lib = seeded();
   // The property that makes this safe to hand a model: nothing to bypass. No

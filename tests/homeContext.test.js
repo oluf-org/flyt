@@ -315,6 +315,27 @@ test('orient writes the context, the stance and a capped summary', async () => {
   assert.equal(logged.relation, 'similar');
 });
 
+test('an aiStep may narrow its tool rounds below the host-wide ceiling', async () => {
+  const dir = tmpProject({ 'README.md': '# Home' });
+  const store = makeStore();
+  let calls = 0;
+  setScript(({ system, prompt }) => {
+    if (roleOf(system) !== 'orient') return 'ok';
+    calls += 1;
+    if (calls === 2) return STANCE();
+    return '```tool\n{"tool":"read_file","args":{"path":"README.md"}}\n```';
+  });
+  const runner = new FlowRunner(store, testConfig({ maxToolIterations: 40 }));
+  const runId = runner.start(flowWithOrient({ maxToolIterations: 2 }), {
+    userInput: 'learn from it', workspace: dir
+  });
+  await waitForStage(store, runId, ['done', 'failed']);
+
+  assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
+  assert.equal(calls, 2, 'the node override, not the host ceiling, controls this survey');
+  assert.equal(JSON.parse(store.readNodeOutput(runId, 'orient.stance')).relation, 'similar');
+});
+
 test('an unparseable stance degrades to "adjacent" rather than failing the run', async () => {
   const dir = tmpProject({ 'package.json': '{}' });
   const store = makeStore();

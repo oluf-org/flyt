@@ -5,7 +5,8 @@ description: |
   Point it at any repository and a question. The fan-out reads the brief, picks
   how many readers it needs and what each one is for, then runs them in parallel
   — each told to look somewhere the others will not. Their findings are merged,
-  and the result becomes queued work the loop can pick up.
+  and the result becomes queued work the loop can pick up. The final artifact
+  keeps the merged findings, proposed tasks, and queue outcome together.
 
 inputs:
   repo:
@@ -27,8 +28,11 @@ nodes:
       Say what THIS project is and what relationship it has to the repository we
       are about to read: are we empty, building the same kind of thing, solving
       overlapping problems, or is there no real overlap? Read enough of both to
-      argue it. Everything after you is aimed by your answer.
+      argue it. Everything after you is aimed by your answer. This is a bounded
+      survey, not the repository analysis: inspect the project manifests and
+      guidance plus at most two load-bearing files from each side, then stop.
     worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 }
+    maxToolIterations: 6
   read:
     type: fanout
     title: Read it, however many ways it takes
@@ -43,12 +47,14 @@ nodes:
       - { id: wildcard, preset: wildcard, worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 } }
       - { id: adversarial, preset: standard, worker: { provider: auto, model: moonshotai/kimi-k3 } }
       - { id: contrarian, preset: contrarian, worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 } }
-    maxLanes: 6
+    maxLanes: 4
+    maxToolIterations: 10
     plan: auto
     template: general-analysis
   synthesise:
-    use: combine
+    use: general-analysis
     title: Merge the reads
+    effort: high
     instructions: |
       Several independent readings of one repository follow, each with a
       different slant. Merge them into one account: what is agreed, what only
@@ -60,7 +66,8 @@ nodes:
       what was read. Use it: separate what is relevant here from what is not,
       say plainly where a finding describes something we have already solved,
       and drop what does not apply to us rather than carrying it forward.
-    worker: { provider: auto, model: moonshotai/kimi-k3 }
+    worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 }
+    skills: [reference-transfer]
     requiresApproval: false
   plan:
     use: backlog-plan
@@ -93,7 +100,15 @@ nodes:
       task saying "extract the evaluator from code_quality_manager.py" sends
       someone hunting through a workspace that has never contained it, and the
       only honest thing they can report is that the task is impossible.
-    worker: { provider: auto, model: moonshotai/kimi-k3 }
+
+      Every referenced file must also have a structured evidence entry in the
+      task JSON: the claim being transferred, its full `reference:<name>/<path>`,
+      an exact line number, and a short exact excerpt from that line. Re-open
+      the file before emitting the plan. The Loop verifies these fields against
+      the pinned clone and will queue nothing if any citation is stale or wrong.
+    worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 }
+    skills: [skill-authoring]
+    maxToolIterations: 10
   work:
     type: loop
     title: Queue it
@@ -109,5 +124,7 @@ flow:
   - synthesise -> plan
   - orient -> plan
   - plan.tasks -> work
+  - synthesise -> output
+  - plan -> output
   - work -> output
   - input -> inputs

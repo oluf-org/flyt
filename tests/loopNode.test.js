@@ -12,7 +12,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { FlowRunner } from '../core/flowRunner.js';
 import { Backlog } from '../core/backlog.js';
-import { parseBacklogPlan, resolveDependsOn } from '../core/nodes/backlogPlan.js';
+import {
+  parseBacklogPlan, resolveDependsOn, validateBacklogEvidence
+} from '../core/nodes/backlogPlan.js';
+import { ReferenceLibrary } from '../core/references.js';
 import {
   enqueuePlan, tallyTasks, isSettled, renderLoopReport, spendFor,
   readLoopState, writeLoopState, WAIT_POLICIES
@@ -26,6 +29,20 @@ const PLAN = [
   { title: 'Document the retry', goal: 'The README says what the retry does.', doneWhen: ['README mentions the backoff'], dependsOn: ['Add a retry to the fetcher'] }
 ];
 const fenced = obj => 'Here is what I would do.\n\n```json\n' + JSON.stringify(obj) + '\n```';
+
+function evidenceFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-plan-evidence-'));
+  const repo = path.join(root, 'subject');
+  fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'src', 'retry.js'),
+    'export function retry() {\n  return requestWithBackoff()\n}\n');
+  fs.writeFileSync(path.join(repo, '.flyt-reference.json'), JSON.stringify({
+    name: 'subject', url: 'https://example.invalid/subject', commit: 'abc123456789'
+  }));
+  return new ReferenceLibrary(root, {
+    repos: [{ name: 'subject', url: 'https://example.invalid/subject', about: 'retry behavior' }]
+  });
+}
 
 // --- the contract (P4.1 / B9) -----------------------------------------------
 
@@ -82,6 +99,61 @@ test('an unknown level is an error rather than a silent default', () => {
   assert.match(r.errors.join(' '), /level: must be one of/);
 });
 
+test('reference claims require structured evidence that verifies against this run', () => {
+  const ref = 'reference:subject/src/retry.js';
+  const task = {
+    ...PLAN[0],
+    goal: `Port the backoff from ${ref}.`,
+    evidence: [{
+      claim: 'the request is retried with backoff', ref, line: 2,
+      excerpt: 'requestWithBackoff()'
+    }]
+  };
+  const parsed = parseBacklogPlan(fenced([task]));
+  assert.equal(parsed.ok, true, JSON.stringify(parsed.errors));
+  const checked = validateBacklogEvidence(parsed.tasks, {
+    references: evidenceFixture(),
+    allowedReferences: [{ name: 'subject', commit: 'abc123456789' }]
+  });
+  assert.equal(checked.ok, true, JSON.stringify(checked.errors));
+  assert.equal(checked.tasks[0].evidence[0].commit, 'abc123456789');
+});
+
+test('missing, stale, and out-of-run reference evidence is rejected', () => {
+  const ref = 'reference:subject/src/retry.js';
+  const base = { ...PLAN[0], goal: `Port the backoff from ${ref}.` };
+  const noEvidence = parseBacklogPlan(fenced([base]));
+  const missing = validateBacklogEvidence(noEvidence.tasks, {
+    references: evidenceFixture(), allowedReferences: ['subject']
+  });
+  assert.equal(missing.ok, false);
+  assert.match(missing.errors.join(' '), /mentioned without a matching evidence entry/);
+
+  const stale = parseBacklogPlan(fenced([{
+    ...base,
+    evidence: [{ claim: 'uses backoff', ref, line: 1, excerpt: 'requestWithBackoff()' }]
+  }]));
+  const staleResult = validateBacklogEvidence(stale.tasks, {
+    references: evidenceFixture(), allowedReferences: ['subject']
+  });
+  assert.equal(staleResult.ok, false);
+  assert.match(staleResult.errors.join(' '), /excerpt was not found/);
+
+  const foreign = validateBacklogEvidence(stale.tasks, {
+    references: evidenceFixture(), allowedReferences: ['another-repo']
+  });
+  assert.match(foreign.errors.join(' '), /not a reference repository recorded by this run/);
+
+  const valid = parseBacklogPlan(fenced([{
+    ...base,
+    evidence: [{ claim: 'uses backoff', ref, line: 2, excerpt: 'requestWithBackoff()' }]
+  }]));
+  const moved = validateBacklogEvidence(valid.tasks, {
+    references: evidenceFixture(), allowedReferences: [{ name: 'subject', commit: 'different-commit' }]
+  });
+  assert.match(moved.errors.join(' '), /this run pinned different-commit/);
+});
+
 // --- enqueue (P4.5) ---------------------------------------------------------
 
 test('enqueue writes claimable tasks, with provenance and resolved dependsOn', () => {
@@ -130,6 +202,26 @@ test('a task learned from another repository says which one', () => {
   const b2 = tmpBacklog();
   const id2 = enqueuePlan(b2, tasks, { runId: 'r', nodeId: 'l', references: ['opencode'] })[0];
   assert.deepEqual(b2.get(id2).references, ['opencode']);
+});
+
+test('verified evidence is carried into the claimable task body', () => {
+  const backlog = tmpBacklog();
+  const task = {
+    ...PLAN[0],
+    evidence: [{
+      claim: 'requests use backoff', ref: 'reference:subject/src/retry.js',
+      line: 2, excerpt: 'requestWithBackoff()', commit: 'abc123456789'
+    }]
+  };
+  const id = enqueuePlan(backlog, [task], {
+    runId: 'run-evidence', nodeId: 'loop', references: ['subject']
+  })[0];
+  const queued = backlog.get(id);
+  assert.match(queued.body, /## Reference evidence/);
+  assert.match(queued.body, /reference:subject\/src\/retry\.js:2/);
+  assert.match(queued.body, /abc123456789/);
+  assert.match(queued.body, /requestWithBackoff/);
+  assert.equal(queued.evidence, undefined, 'evidence prose does not become nested YAML frontmatter');
 });
 
 test('resolveDependsOn drops names that were never enqueued', () => {
@@ -270,6 +362,9 @@ test('waitFor: none is fire-and-forget — the run does not wait, and no supervi
   assert.equal(started, 0, 'nothing to wait for means nothing to start');
   assert.equal(backlog.list().length, 2, 'the work is still queued for whoever picks it up');
   assert.equal(backlog.list()[0].status, 'queued');
+  assert.ok(store.readLog(runId).some(e => e.event === 'backlog_evidence_verified'
+    && e.tasks === 2 && e.citations === 0),
+  'a successful evidence gate is visible even when the plan has no external claims');
 });
 
 test('maxTasks caps what a plan can queue in one go', async () => {
@@ -297,6 +392,26 @@ test('a plan that violates the contract fails the node and enqueues nothing', as
   assert.equal(meta.nodeStatus.work, 'failed');
   assert.equal(backlog.list().length, 0, 'a bad plan must not half-queue');
   assert.match(store.readNodeOutput(runId, 'work.errors'), /Backlog contract violations/);
+});
+
+test('the loop rejects unverified reference evidence before enqueue', async () => {
+  const store = makeStore();
+  const backlog = tmpBacklog();
+  const ref = 'reference:subject/src/retry.js';
+  const plan = [{
+    ...PLAN[0], goal: `Port the backoff from ${ref}.`,
+    evidence: [{ claim: 'uses backoff', ref, line: 2, excerpt: 'requestWithBackoff()' }]
+  }];
+  setScript(({ system }) => (roleOf(system) === 'plan-backlog' ? fenced(plan) : 'ok'));
+  const runner = runnerWith(store, backlog);
+  runner.references = evidenceFixture();
+  const runId = runner.start(chainFlow(), { userInput: 'brief' });
+  await waitForStage(store, runId, ['done', 'failed']);
+
+  assert.equal(store.readMeta(runId).stage, 'failed');
+  assert.equal(backlog.list().length, 0);
+  assert.match(store.readNodeOutput(runId, 'work.errors'), /Backlog evidence violations/);
+  assert.match(store.readNodeOutput(runId, 'work.errors'), /not a reference repository recorded by this run/);
 });
 
 test('a parked task holds the node open and shows as awaiting input, then settles', async () => {

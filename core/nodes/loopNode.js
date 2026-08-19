@@ -61,6 +61,7 @@ export function enqueuePlan(backlog, tasks, { runId, nodeId, budgetUsd = null, r
       gates: t.gates,
       blastRadius: t.blastRadius,
       ...(t.notes ? { notes: t.notes } : {}),
+      ...(t.evidence?.length ? { evidence: t.evidence } : {}),
       ...(budgetUsd != null ? { budgetUsd } : {}),
       createdBy: 'flow',
       // P4.5: which run and which node put this here. The task parser

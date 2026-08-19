@@ -34,7 +34,7 @@ const COMMON_OVERRIDES = [
   // holds none itself but sets the envelope its children inherit (§6.3).
   'toolCeiling',
   // Combined-node options (node rework)
-  'effort', 'evalType', 'language',
+  'effort', 'maxToolIterations', 'evalType', 'language',
   // The deliverable contract (WR-01): the same node can be "write the change"
   // in one mode and "describe the change" in another.
   'effect', 'effectScope',

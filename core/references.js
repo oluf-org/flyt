@@ -311,6 +311,43 @@ export class ReferenceLibrary {
     } catch { return null; }
   }
 
+  // Verify a planner's citation without trusting the planner for either the
+  // path, line number, excerpt, or commit. A short excerpt must occur on the
+  // exact cited line; nearby text is not accepted because that would let stale
+  // line numbers look current. The repository commit comes from clone metadata.
+  verifyCitation({ ref, line, excerpt } = {}) {
+    const address = String(ref ?? '').trim();
+    const match = /^reference:([^/]+)\/(.+)$/.exec(address);
+    if (!match) return { ok: false, error: `"${address}" is not a full reference:<repo>/<path> address` };
+    const lineNumber = Number(line);
+    if (!Number.isInteger(lineNumber) || lineNumber < 1) {
+      return { ok: false, error: `line ${line} is not a positive integer` };
+    }
+    const abs = this.resolve(address);
+    let text;
+    try {
+      const stat = fs.statSync(abs);
+      if (!stat.isFile()) return { ok: false, error: `reference file "${address}" does not exist` };
+      if (stat.size > MAX_FILE_BYTES) {
+        return { ok: false, error: `reference file "${address}" is too large to verify safely` };
+      }
+      text = fs.readFileSync(abs, 'utf8');
+    } catch {
+      return { ok: false, error: `reference file "${address}" does not exist` };
+    }
+    const lines = text.split(/\r?\n/);
+    if (lineNumber > lines.length) {
+      return { ok: false, error: `"${address}" has ${lines.length} line(s), not line ${lineNumber}` };
+    }
+    const normalize = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+    const wanted = normalize(excerpt);
+    const actual = normalize(lines[lineNumber - 1]);
+    if (!wanted || !actual.includes(wanted)) {
+      return { ok: false, error: `excerpt was not found on ${address}:${lineNumber}` };
+    }
+    return { ok: true, ref: address, line: lineNumber, commit: this.meta(match[1])?.commit ?? null };
+  }
+
   // Every text file in a clone, relative to the library root.
   *walk(name, { dir = null, base = null } = {}) {
     const root = base ?? this.dirFor(name);

@@ -8,5 +8,13 @@ settings.json
 # own. A flow the app SHIPS is tracked explicitly: `git add -f flows/<id>.flow.yaml`.
 flows/
 .flyt/
+# This repository intentionally ships the two project-local skills exercised by
+# learn-from-repo; all other runtime state under .flyt remains ignored.
+!.flyt/
+.flyt/*
+!.flyt/skills/
+.flyt/skills/*
+!.flyt/skills/reference-transfer.md
+!.flyt/skills/skill-authoring.md
 # Pre-D29 name; kept so a stale directory in an old checkout stays ignored.
 .llmflow/

@@ -318,6 +318,11 @@
             "high"
           ]
         },
+        "maxToolIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
         "evalType": {
           "enum": [
             "plan",
@@ -434,6 +439,11 @@
             "medium",
             "high"
           ]
+        },
+        "maxToolIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
         },
         "evalType": {
           "enum": [

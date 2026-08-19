@@ -97,11 +97,18 @@ export function parseTask(text, id) {
 // The body a new task gets: the goal, and the acceptance if one was given.
 // Prose lives in the body rather than the frontmatter because that is the half
 // a model needs to read in full and a human needs to skim.
-function buildBody({ goal = '', doneWhen = [], notes = '' }) {
+function buildBody({ goal = '', doneWhen = [], notes = '', evidence = [] }) {
   const parts = [];
   if (goal) parts.push(`## Goal\n\n${String(goal).trim()}`);
   if (doneWhen?.length) parts.push(`## Done when\n\n${doneWhen.map(d => `- ${d}`).join('\n')}`);
   if (notes) parts.push(`## Notes\n\n${String(notes).trim()}`);
+  if (evidence?.length) {
+    parts.push('## Reference evidence\n\n' + evidence.map(item => [
+      `- **${String(item.claim).trim()}**`,
+      `  - Source: \`${item.ref}:${item.line}\`${item.commit ? ` at \`${String(item.commit).slice(0, 12)}\`` : ''}`,
+      `  - Excerpt: \`${String(item.excerpt).trim().replace(/`/g, '\\`')}\``
+    ].join('\n')).join('\n'));
+  }
   return parts.join('\n\n');
 }
 
@@ -207,7 +214,7 @@ export class Backlog {
     const fields = {
       ...DEFAULTS(),
       ...Object.fromEntries(Object.entries(input).filter(([k, v]) =>
-        v !== undefined && !['id', 'goal', 'doneWhen', 'notes', 'body'].includes(k))),
+        v !== undefined && !['id', 'goal', 'doneWhen', 'notes', 'evidence', 'body'].includes(k))),
       createdAt: now,
       updatedAt: now
     };

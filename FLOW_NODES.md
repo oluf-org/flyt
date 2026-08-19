@@ -375,8 +375,10 @@ wants to hear it when a syntax error is why the build is broken. No lane is ever
 dropped for colliding with an ignore item.
 
 **Planning keys:** `plan` (`auto` | `off`, default `off`), `minLanes` (default
-2), `maxLanes` (default 6). Each lane is a full read of the subject on a metered
-API, so an unbounded roster is the same liability as an unbounded loop. Two
+2), `maxLanes` (default 6), and `maxToolIterations` (the agent-round limit for
+each materialized lane). Each lane is a full read of the subject on a metered
+API, so an unbounded roster is the same liability as an unbounded loop. The
+planner's shape-only peek has its own hard ceiling of three rounds. Two
 lanes sharing a preset are **always staffed on different models**; when the pool
 runs dry the roster is truncated and each drop logged as
 `fanout_lane_unstaffed`, because three identical role prompts on one model is
@@ -480,7 +482,10 @@ fenced JSON block matching `core/backlog.js` field-for-field:
 ```json
 [{ "title": "...", "goal": "...", "doneWhen": ["..."], "value": 1-5,
    "effort": 1-5, "level": "low|medium|high|xhigh|max", "gates": ["npm test"],
-   "blastRadius": ["src/x.js"], "dependsOn": ["title of another task here"] }]
+   "blastRadius": ["src/x.js"], "dependsOn": ["title of another task here"],
+   "evidence": [{ "claim": "behavior being transferred",
+     "ref": "reference:repo/full/path.js", "line": 42,
+     "excerpt": "exact text from that line" }] }]
 ```
 
 Validated by `core/nodes/backlogPlan.js`. A task with no `goal`, or with no
@@ -490,6 +495,14 @@ another task in the same plan by title; ids do not exist until `Backlog.add()`
 allocates them, so the reference is resolved after enqueue. Fields outside the
 contract are dropped rather than written into the frontmatter forever, which is
 also why a plan cannot declare its own work already `landed`.
+
+Tasks that mention `reference:<name>/<path>` must include a matching structured
+evidence entry. At the Loop hand-off, the repository name must belong to the
+current run, the path and line must exist in the pinned clone, and the excerpt
+must occur on that exact line. Any miss rejects the whole hand-off before
+`Backlog.add()` runs, so a plan cannot partially queue verified and unverified
+work. Verified evidence, including the machine-read commit, is written into the
+task body for the worker that eventually claims it.
 
 Ships gated (`requiresApproval: true`): handing a machine a night of work is
 exactly the decision a human should see first.

@@ -318,6 +318,20 @@ test('a fan-out materializes one child per lane inside its box and aggregates pe
   assert.match(store.readNodeOutput(runId, 'out'), /findings from Adversarial/);
 });
 
+test('materialized lanes inherit the fan-out agent-round budget', async () => {
+  const store = makeStore();
+  setScript(() => 'done');
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(fanoutFlow({
+    goal: 'Read it.', lanes: ['standard', 'wildcard'], maxToolIterations: 7
+  }), { userInput: 'brief' });
+  await waitForStage(store, runId, ['done', 'failed']);
+
+  const children = store.readFlow(runId).nodes.filter(n => n.data?.managedBy === 'fan');
+  assert.equal(children.length, 2);
+  assert.deepEqual(children.map(n => n.data.maxToolIterations), [7, 7]);
+});
+
 test('each lane is briefed on its siblings and sees none of their output', async () => {
   const store = makeStore();
   const prompts = [];

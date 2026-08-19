@@ -48,7 +48,7 @@ import {
   renderBrief, LANE_PRESETS, LANE_PRESET_IDS
 } from './nodes/fanout.js';
 import { spliceAllSubflows, SubflowError } from './nodes/subflow.js';
-import { parseBacklogPlan } from './nodes/backlogPlan.js';
+import { parseBacklogPlan, validateBacklogEvidence } from './nodes/backlogPlan.js';
 import {
   INPUTS_NODE_ID, validateInputValues, renderInputValue
 } from './nodes/runInputs.js';
@@ -251,7 +251,12 @@ const DEFAULT_SYSTEM = {
     '  reads as a file in THIS project. Whoever picks the task up will be standing',
     '  here, not there: "port the retry logic from `reference:their-repo/core/run.py`"',
     '  is claimable, "extract the logic from core/run.py" is a task about a file we',
-    '  do not have.'
+    '  do not have.',
+    '- For every referenced file, add an evidence entry to the task JSON:',
+    '  { "claim": "the behavior being transferred", "ref": "reference:<name>/<full/path>",',
+    '    "line": 42, "excerpt": "short exact text from that line" }.',
+    '  The Loop node verifies the repository, path, line, and excerpt before it',
+    '  queues anything. A search hit you did not open is not evidence.'
   ].join('\n'),
   translate: [
     'ROLE: translate',
@@ -476,7 +481,7 @@ const PEEK_SYSTEM = [
 // The peek's ceiling: enough calls to list a tree and open a manifest, not
 // enough to start reading source. §4 costs the whole feature at 10-15% overhead
 // on the strength of this number.
-const PEEK_MAX_CALLS = 6;
+const PEEK_MAX_CALLS = 3;
 // 200 words is the ANSWER the peek is asked for; 700 tokens is roughly that,
 // and was being sent as the whole completion budget. On a reasoning model that
 // buys a peek cut off mid-thought having written nothing — `flyt why` caught
@@ -3518,6 +3523,13 @@ export class FlowRunner {
         result = await this.trackedRunAgent(runId, node.id, {
           ...worker, apiKey, system, prompt: userMsg, onText,
           ...(spinCtl ? { abortSignal: spinCtl.signal } : {}),
+          // Read-only aiSteps normally inherit the host-wide tool ceiling. A
+          // flow may narrow one node below it: orientation should inspect just
+          // enough of both projects to aim the expensive readers, not become a
+          // full repository audit before fan-out even starts.
+          ...(Number(node.data?.maxToolIterations) > 0
+            ? { maxIterations: Math.floor(Number(node.data.maxToolIterations)) }
+            : {}),
           // Effort level sets the response budget; medium keeps the default.
           maxTokens: effortBudget(node.data?.effort),
           onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
@@ -3530,18 +3542,21 @@ export class FlowRunner {
         if (!String(result.text ?? '').trim()) {
           throw new Error(describeEmptyTurn(worker, result));
         }
-        // A truncated deliverable is not an empty one, so it is not a failure —
-        // but it IS half an answer being handed downstream as though it were
-        // whole, and nothing said so. The node keeps its output and the run
-        // keeps going; the log carries the fact that the budget, not the model,
-        // decided where this stopped.
+        // A truncated deliverable must never be handed downstream as though it
+        // were whole. A live synthesis ended after 406 characters, mid-heading,
+        // and was still marked done; its planner then spent against an invalid
+        // premise. Keep the partial artifact for diagnosis, but fail the node
+        // visibly so a larger budget/model can be chosen before work is queued.
         if (result.finishReason === 'length') {
+          const partial = String(result.text ?? '').trim();
+          if (partial) this.store.writeNodeOutput(runId, node.id, partial);
           this.store.appendLog(runId, {
             event: 'output_truncated', node: node.id, role,
             model: `${worker.provider}/${worker.model}`,
             maxTokens: EFFORT_MAX_TOKENS[node.data?.effort] ?? null,
-            chars: String(result.text).length
+            chars: partial.length
           });
+          throw new Error(`The model response was cut off at the token budget (finish_reason "length") after ${partial.length} characters; the partial artifact was preserved and downstream nodes were not run.`);
         }
       } catch (err) {
         // RUN-CONTROL stop: an aborted call is not a node failure — no failed
@@ -4436,6 +4451,12 @@ export class FlowRunner {
         child.data = {
           ...child.data,
           laneId: lane.id,
+          // A fan-out authors its lane nodes. Its per-agent round budget must
+          // therefore follow them; otherwise a bounded container silently
+          // expands back to the host-wide default when its children start.
+          ...(Number(node.data?.maxToolIterations) > 0
+            ? { maxToolIterations: Math.floor(Number(node.data.maxToolIterations)) }
+            : {}),
           // A lane inherits the subject the fan-out was pointed at, so its own
           // tool calls are scoped and audited the same way (DECISIONS.md D38).
           ...(subjectRepo ? { subjectRepo } : {}),
@@ -4632,20 +4653,38 @@ export class FlowRunner {
         ].join('\n'));
         throw failNode('the upstream plan violated the backlog task contract', parsed.errors);
       }
+      const runReferences = this.store.readMeta(runId)?.references ?? [];
+      const evidence = validateBacklogEvidence(parsed.tasks, {
+        references: this.references,
+        allowedReferences: runReferences
+      });
+      if (!evidence.ok) {
+        this.store.writeNodeOutput(runId, `${node.id}.errors`, [
+          '# Backlog evidence violations', '',
+          'External claims could not be verified against the repositories pinned by this run; nothing was enqueued.', '',
+          ...evidence.errors.map(e => `- ${e}`)
+        ].join('\n'));
+        throw failNode('the upstream plan contained unverifiable reference evidence', evidence.errors);
+      }
+      this.store.appendLog(runId, {
+        event: 'backlog_evidence_verified', node: node.id,
+        tasks: evidence.tasks.length,
+        citations: evidence.tasks.reduce((n, task) => n + (task.evidence?.length ?? 0), 0)
+      });
       const maxTasks = Number(node.data?.maxTasks) > 0 ? Math.floor(Number(node.data.maxTasks)) : null;
-      const tasks = maxTasks ? parsed.tasks.slice(0, maxTasks) : parsed.tasks;
+      const tasks = maxTasks ? evidence.tasks.slice(0, maxTasks) : evidence.tasks;
       const taskIds = enqueuePlan(host.backlog, tasks, {
         runId, nodeId: node.id,
         budgetUsd: Number.isFinite(Number(node.data?.budgetUsd)) ? Number(node.data.budgetUsd) : null,
         // What this run read to arrive at these tasks. Without it a task
         // learned from another repository names files the claiming agent
         // cannot find, and the loop parks a backlog it could have worked.
-        references: this.store.readMeta(runId)?.references ?? []
+        references: runReferences
       });
       state = writeLoopState(runDir, node.id, {
         nodeId: node.id, runId, taskIds, waitFor,
         startedAt: new Date().toISOString(),
-        ...(maxTasks && parsed.tasks.length > maxTasks ? { dropped: parsed.tasks.length - maxTasks } : {})
+        ...(maxTasks && evidence.tasks.length > maxTasks ? { dropped: evidence.tasks.length - maxTasks } : {})
       });
       this.store.appendLog(runId, { event: 'loop_node_enqueued', node: node.id, tasks: taskIds });
     }

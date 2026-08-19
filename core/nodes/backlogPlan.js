@@ -40,12 +40,67 @@ array of backlog tasks:
     "level": "low|medium|high|xhigh|max",
     "gates": ["npm test"],
     "blastRadius": ["src/thing.js"],
-    "dependsOn": ["title of another task in this list"]
+    "dependsOn": ["title of another task in this list"],
+    "evidence": [{
+      "claim": "the specific behavior this task transfers",
+      "ref": "reference:repo/full/path/to/file.js",
+      "line": 42,
+      "excerpt": "a short exact excerpt from that line"
+    }]
   }
 ]
 
 Every task must be claimable on its own: a title, a goal, and at least one
-checkable "done when". A task nobody can verify is not a task.`;
+checkable "done when". A task nobody can verify is not a task. When a task
+mentions a reference repository, every referenced file needs a matching
+evidence entry. Evidence is checked against the pinned clone before enqueue.`;
+
+const evidenceList = (v, at, errors) => {
+  if (v == null) return [];
+  if (!Array.isArray(v)) {
+    errors.push(`${at}.evidence: must be an array of { claim, ref, line, excerpt } objects`);
+    return [];
+  }
+  const out = [];
+  v.forEach((item, i) => {
+    const where = `${at}.evidence[${i}]`;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      errors.push(`${where}: must be an object`);
+      return;
+    }
+    if (!isStr(item.claim)) errors.push(`${where}.claim: required non-empty string`);
+    if (!isStr(item.ref) || !/^reference:[a-zA-Z0-9][a-zA-Z0-9._-]*\/.+/.test(item.ref.trim())) {
+      errors.push(`${where}.ref: must be a full reference:<repo>/<path> address`);
+    }
+    if (!Number.isInteger(item.line) || item.line < 1) {
+      errors.push(`${where}.line: must be a positive integer`);
+    }
+    if (!isStr(item.excerpt)) errors.push(`${where}.excerpt: required exact text from the cited line`);
+    if (isStr(item.claim) && isStr(item.ref) && Number.isInteger(item.line) && item.line > 0 && isStr(item.excerpt)) {
+      out.push({
+        claim: item.claim.trim(),
+        ref: item.ref.trim(),
+        line: item.line,
+        excerpt: item.excerpt.trim()
+      });
+    }
+  });
+  return out;
+};
+
+// Find addresses that will be handed to the future task worker. This is kept
+// deliberately narrower than a Markdown parser: reference paths cannot contain
+// whitespace, and punctuation that commonly closes prose is not part of a path.
+export function referencedFiles(task) {
+  const text = [task.goal, ...(task.doneWhen ?? []), task.notes]
+    .filter(Boolean).join('\n');
+  const found = new Set();
+  const re = /reference:[a-zA-Z0-9][a-zA-Z0-9._-]*\/[^\s`"'<>()[\]{},;]+/g;
+  for (const match of text.matchAll(re)) {
+    found.add(match[0].replace(/[.:!?]+$/, ''));
+  }
+  return [...found];
+}
 
 // text -> { ok, tasks[], errors[] }. Never throws: a violated contract is a
 // result the caller reports, not an exception it has to catch.
@@ -94,6 +149,7 @@ export function parseBacklogPlan(text) {
       gates: strList(t.gates, at, 'gates', errors),
       blastRadius: strList(t.blastRadius, at, 'blastRadius', errors),
       dependsOn: strList(t.dependsOn, at, 'dependsOn', errors),
+      evidence: evidenceList(t.evidence, at, errors),
       ...(isStr(t.notes) ? { notes: t.notes.trim() } : {})
     });
   });
@@ -111,6 +167,62 @@ export function parseBacklogPlan(text) {
   }
 
   return { ok: errors.length === 0, tasks, errors };
+}
+
+// Validate external evidence at the final hand-off boundary. Parsing proves
+// the JSON has the right shape; this proves that a claimed source is part of
+// THIS run, that its file exists in the pinned clone, and that the cited line
+// contains the excerpt the planner says it does.
+//
+// Returns enriched copies so the backlog body records the commit verified by
+// the machine rather than asking the model to copy a SHA correctly.
+export function validateBacklogEvidence(tasks, { references = null, allowedReferences = [] } = {}) {
+  const errors = [];
+  const allowed = new Map((allowedReferences ?? [])
+    .map(r => typeof r === 'string' ? [r, null] : [r?.name, r?.commit ?? null])
+    .filter(([name]) => Boolean(name)));
+
+  const checked = tasks.map(task => {
+    const cited = referencedFiles(task);
+    const evidence = task.evidence ?? [];
+    for (const ref of cited) {
+      if (!evidence.some(item => item.ref === ref)) {
+        errors.push(`tasks["${task.title}"].evidence: "${ref}" is mentioned without a matching evidence entry`);
+      }
+    }
+
+    const verified = evidence.map((item, i) => {
+      const repo = /^reference:([^/]+)\//.exec(item.ref)?.[1] ?? null;
+      const where = `tasks["${task.title}"].evidence[${i}]`;
+      if (!repo || !allowed.has(repo)) {
+        errors.push(`${where}.ref: "${item.ref}" was not a reference repository recorded by this run`);
+        return item;
+      }
+      if (!references?.verifyCitation) {
+        errors.push(`${where}: no reference library is available to verify "${item.ref}"`);
+        return item;
+      }
+      let result;
+      try { result = references.verifyCitation(item); }
+      catch (err) {
+        errors.push(`${where}: ${String(err?.message ?? err)}`);
+        return item;
+      }
+      if (!result?.ok) {
+        errors.push(`${where}: ${result?.error ?? `could not verify "${item.ref}"`}`);
+        return item;
+      }
+      const pinnedCommit = allowed.get(repo);
+      if (pinnedCommit && result.commit !== pinnedCommit) {
+        errors.push(`${where}: reference "${repo}" is at commit ${result.commit ?? 'unknown'}, but this run pinned ${pinnedCommit}`);
+        return item;
+      }
+      return { ...item, ...(result.commit ? { commit: result.commit } : {}) };
+    });
+    return { ...task, evidence: verified };
+  });
+
+  return { ok: errors.length === 0, tasks: checked, errors };
 }
 
 // Rewrite title-based dependsOn into the real ids Backlog.add allocated.

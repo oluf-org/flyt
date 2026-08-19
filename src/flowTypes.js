@@ -782,6 +782,9 @@ export function normalizeTemplate(tpl) {
     // Combined-node options (node rework). effort is universal; evalType only
     // means anything on the 'evaluation' meta-role; language on 'translate'.
     effort: EFFORT_LEVELS.includes(tpl.effort) ? tpl.effort : DEFAULT_EFFORT,
+    ...(Number(tpl.maxToolIterations) > 0
+      ? { maxToolIterations: Math.floor(Number(tpl.maxToolIterations)) }
+      : {}),
     evalType: tpl.evalType in EVAL_TYPES ? tpl.evalType : DEFAULT_EVAL_TYPE,
     ...(typeof tpl.language === 'string' && tpl.language.trim() ? { language: tpl.language.trim() } : {}),
     worker: tpl.worker?.provider && tpl.worker?.model
@@ -846,6 +849,9 @@ export function resolveInstance(node, tpl) {
     title: ov.title ?? t?.name ?? node.templateId,
     role,
     effort,
+    ...(Number(ov.maxToolIterations ?? t?.maxToolIterations) > 0
+      ? { maxToolIterations: Math.floor(Number(ov.maxToolIterations ?? t.maxToolIterations)) }
+      : {}),
     ...(t?.role === 'evaluation' ? { evalType } : {}),
     ...(role === 'translate' ? { language: ov.language ?? t?.language ?? 'English' } : {}),
     worker: ov.worker ?? t?.worker ?? null,
@@ -931,7 +937,10 @@ export function exposedFields(node) {
 // The one whitelist of fields a launch override (and therefore a mode override
 // and an exposed run input) may set. Everything universal to AI nodes plus the
 // per-kind fields, which `overridableFields` gates by node type/role.
-export const LAUNCH_OVERRIDE_COMMON = ['worker', 'effort', 'instructions', 'system', 'requiresApproval', 'approveToolCalls'];
+export const LAUNCH_OVERRIDE_COMMON = [
+  'worker', 'effort', 'maxToolIterations', 'instructions', 'system',
+  'requiresApproval', 'approveToolCalls'
+];
 
 // The set of fields that may be overridden on ONE node, keyed off its resolved
 // shape (type + data.role/category/evalType). Structural input/output nodes

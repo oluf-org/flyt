@@ -494,6 +494,23 @@ test('an aiStep whose model returns an empty response fails instead of succeedin
   assert.ok(empty[0].retriedWith > empty[0].maxTokens, 'the recovery attempt must raise the budget');
 });
 
+test('an aiStep whose output is truncated preserves the partial but fails before downstream work', async () => {
+  const store = makeStore();
+  const runner = new FlowRunner(store, testConfig());
+  setScript(() => ({ text: '# Report\n\n## Cut off', finishReason: 'length', usage: null }));
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }), node('step', 'aiStep', { role: 'execute' }), node('out', 'output')],
+    [edge('in', 'step'), edge('step', 'out')]);
+  const runId = runner.start(flow);
+
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'failed');
+  assert.equal(store.readMeta(runId).nodeStatus.step, 'failed');
+  assert.equal(store.readMeta(runId).nodeStatus.out, 'pending');
+  assert.equal(store.readNodeOutput(runId, 'step'), '# Report\n\n## Cut off');
+  assert.match(store.readMeta(runId).error, /finish_reason "length"/);
+  assert.ok(readLog(store, runId).some(e => e.event === 'output_truncated' && e.node === 'step'));
+});
+
 test('an agentTask whose agent returns an empty response fails instead of succeeding', async () => {
   const store = makeStore();
   const runner = new FlowRunner(store, testConfig());
