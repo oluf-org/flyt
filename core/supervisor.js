@@ -151,7 +151,7 @@ export class Supervisor {
    */
   constructor({
     invoke, projectId, backlog, ledger, store = null, config = {},
-    parallelism = 1, pollMs = POLL_MS, log = () => {}, now = () => Date.now(),
+    parallelism = 1, only = null, pollMs = POLL_MS, log = () => {}, now = () => Date.now(),
     // Where the status goes so that something OTHER than this process can read
     // it (§11.1: the record is owned by the supervisor and kept outside the
     // worktree). Without it the loop is only observable from the terminal that
@@ -175,6 +175,8 @@ export class Supervisor {
     this.ledger = ledger;
     this.config = config;
     this.parallelism = Math.max(1, parallelism);
+    // The task ids this session may claim, or null for the whole backlog.
+    this.only = Array.isArray(only) && only.length ? only.map(String) : null;
     this.pollMs = pollMs;
     this.log = log;
     this.now = now;
@@ -263,7 +265,7 @@ export class Supervisor {
 
         if (this.inFlight.size >= this.parallelism) { await this.#tick(); continue; }
 
-        const task = this.backlog.take('supervisor');
+        const task = this.backlog.take('supervisor', { only: this.only });
         if (!task) {
           // Nothing ready. If work is in flight it may unblock something, so
           // keep polling; otherwise the loop is genuinely done.

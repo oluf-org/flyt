@@ -788,7 +788,7 @@ export function createApi(engine) {
     // the same backlog would have two pickers racing for the same tasks.
     'loop:start': async ({
       projectId, parallelism = 1, maxTasks = null, dryRun = false,
-      worker = null, reviewer = null, models = null, caps = null
+      worker = null, reviewer = null, models = null, caps = null, only = null
     }) => {
       proj(projectId);
       // The model every task runs on, when one has been named. `workers.loop`
@@ -904,6 +904,8 @@ export function createApi(engine) {
           }
         },
         parallelism,
+        // Work only these tasks this session (the picker's order is unchanged).
+        only: Array.isArray(only) ? only.map(String).filter(Boolean) : null,
         log: msg => engine.emitLoop?.(projectId, msg),
         writeStatus: status => writeLoopStatus(projectId, status),
         stopRequested: () => takeLoopStop(projectId)
@@ -918,6 +920,7 @@ export function createApi(engine) {
       sup.run({ maxTasks: maxTasks ?? Infinity }).catch(err => engine.emitLoop?.(projectId, `loop failed: ${err.message}`));
       return {
         started: true, parallelism, levels: useLevels,
+        ...(sup.only ? { only: sup.only } : {}),
         model: pinned?.model ?? null,
         models: byLevel,
         reviewer: (sessionReviewer ?? reviewWorker(runtimeConfig))?.model ?? null,

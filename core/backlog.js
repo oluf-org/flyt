@@ -456,8 +456,19 @@ export class Backlog {
 
   // Pick and claim in one step, walking down the ready list so a task another
   // worker just took doesn't end the attempt.
+  // `only` narrows what may be claimed to a named set of task ids, WITHOUT
+  // changing the order the picker would otherwise take them in. It is a filter
+  // over `ready()`, so every rule still applies — a task in the set that is
+  // blocked, parked or already claimed is still not taken.
+  //
+  // The gap it closes: the loop could only ever be pointed at "the backlog".
+  // Trying it on one task first — the obvious way to decide whether you trust
+  // it — meant reordering or parking everything else, which is editing the
+  // queue to work around the tool.
   take(by = 'supervisor', opts = {}) {
+    const only = Array.isArray(opts.only) && opts.only.length ? new Set(opts.only) : null;
     for (const candidate of this.ready()) {
+      if (only && !only.has(candidate.id)) continue;
       const claimed = this.claim(candidate.id, by, opts);
       if (claimed) return claimed;
     }

@@ -353,3 +353,40 @@ test('an agent queues follow-up work mid-run, through the real tool loop', async
   assert.equal(queued[0].status, 'queued', 'and it is ready for a future run to pick up');
   assert.equal(ctx.backlog.ready()[0].id, queued[0].id);
 });
+
+// --- `--only`: work a named subset, without editing the queue to arrange it ---
+//
+// The gap: the loop could only be pointed at "the backlog". Trying it on one
+// task first — the obvious way to decide whether you trust it — meant parking
+// or reordering everything else, which is editing the queue to work around the
+// tool.
+
+test('take({ only }) claims from the named set, in the picker\'s usual order', () => {
+  const b = newBacklog();
+  const low = b.add({ title: 'low value', goal: 'g', value: 1, effort: 1 });
+  const high = b.add({ title: 'high value', goal: 'g', value: 5, effort: 1 });
+
+  // Unfiltered, the picker takes the higher-scoring one.
+  const first = b.take('supervisor', { only: [low.id] });
+  assert.equal(first.id, low.id, 'the filter narrows what may be claimed');
+
+  // The one it skipped is untouched — not parked, not blocked, still queued.
+  assert.equal(b.get(high.id).status, 'queued');
+  assert.equal(b.get(high.id).claimedBy, null);
+});
+
+test('take({ only }) does not override the rules that make a task claimable', () => {
+  const b = newBacklog();
+  const t = b.add({ title: 'parked', goal: 'g' });
+  b.update(t.id, { status: 'parked', blockedReason: 'waiting on a human' });
+  assert.equal(b.take('supervisor', { only: [t.id] }), null,
+    'naming a task does not make an unclaimable one claimable');
+});
+
+test('take({ only }) with no match takes nothing rather than falling back', () => {
+  const b = newBacklog();
+  b.add({ title: 'a real task', goal: 'g' });
+  assert.equal(b.take('supervisor', { only: ['t-9999'] }), null);
+  // And an empty/absent filter is the whole backlog, as before.
+  assert.ok(b.take('supervisor', { only: [] }));
+});

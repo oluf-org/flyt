@@ -45,8 +45,9 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task rm <id>... [--all]        take tasks out of the queue for good
   flyt task take                      claim the top-scoring ready task
   flyt loop start [--parallel N] [--model <id> | --models low=a,high=b] [--reviewer <id>]
-                  [--cap-usd 6] [--soft-usd 4] [--task-usd 1.5]
+                  [--cap-usd 6] [--soft-usd 4] [--task-usd 1.5] [--only t-0001,t-0002]
                                       work the backlog until empty, capped or stopped
+                                      (--only: just these tasks, same picker order)
   flyt loop stop|status               stop it, or see what it is doing
   flyt report                         what landed, what needs you, what it cost
   flyt spend [--since 24h]            the ledger
@@ -419,6 +420,10 @@ async function main() {
           projectId,
           parallelism: Number(flags.parallel ?? 1),
           maxTasks: flags.tasks ? Number(flags.tasks) : null,
+          // `--only t-0026,t-0031` — work exactly these, in the picker's usual
+          // order. How you try the loop on one task before trusting it with a
+          // night, without reordering the queue to arrange it.
+          only: [].concat(flags.only ?? []).flatMap(v => String(v).split(',')).map(t => t.trim()).filter(Boolean),
           dryRun: Boolean(flags['dry-run']),
           worker: namedWorker(flags.model),
           // `--models low=cheap,high=strong` — a model per effort band, so the
