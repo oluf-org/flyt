@@ -51,7 +51,7 @@ const ARTIFACT_ROLES = new Set([
   'plan', 'plan-start', 'split', 'plan-eval', 'step-eval', 'final-eval',
   'feedback-review', 'verify', 'stitch', 'combine', 'compare', 'evaluation',
   'analyze', 'translate', 'summarize', 'orient', 'triage',
-  // D41: an interrogation owes a specification, never a repository change.
+  // D46: an interrogation owes a specification, never a repository change.
   'interrogate'
 ]);
 

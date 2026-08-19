@@ -78,7 +78,7 @@ export default function ChatRun({
   const awaitingInput = stage === 'awaiting_input';
   const questions = awaitingInput ? (meta?.pendingQuestions ?? []) : [];
   // WHICH node is asking. Three roles park here — the refiner, the orientation
-  // (D38) and the interrogation (D41) — and the card announced all three as
+  // (D38) and the interrogation (D46) — and the card announced all three as
   // "the refiner", so the one piece of context the reader needs in order to
   // answer well was the thing the card got wrong.
   const askingNode = awaitingInput

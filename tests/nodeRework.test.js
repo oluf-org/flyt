@@ -296,7 +296,7 @@ test('NodeStore.migrateSeeds retires the old set and writes the combined one, on
   assert.equal(ns.get('split'), null);
 });
 
-// D41. A seed added AFTER the rework has to reach a library that already
+// D46. A seed added AFTER the rework has to reach a library that already
 // migrated. Before the installed-seeds record, `migrateSeeds` only wrote
 // missing seeds in the same construction that retired an old one — which
 // happens exactly once per library, so every later seed shipped in code and

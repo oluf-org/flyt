@@ -292,7 +292,7 @@ const DEFAULT_SYSTEM = {
     'At most 3 questions; fewer is better; usually none. Every question you ask',
     'stalls the run and costs the user a round-trip — ask only when you truly must.'
   ].join('\n'),
-  // D41. Everything the refiner's prompt says about restraint is inverted here,
+  // D46. Everything the refiner's prompt says about restraint is inverted here,
   // deliberately. The refiner is right for a request that is already a request;
   // this node is for an IDEA, where the missing half is the whole job and an
   // assumption quietly taken is the failure. Watched with the refiner on this
@@ -3154,7 +3154,7 @@ export class FlowRunner {
   // composer, then re-run the node with the answers as context.
   //
   // Role-agnostic since D38: `refine` asks about the request, `orient` asks
-  // about the workspace, and both park identically. Since D41 the number of
+  // about the workspace, and both park identically. Since D46 the number of
   // rounds is the node's, not the gate's: `refine`/`orient` still get exactly
   // one, `interrogate` gets several, and `answeredInputs` is COUNTED rather
   // than tested for membership — it already appended one entry per round, so
@@ -3187,7 +3187,7 @@ export class FlowRunner {
     // cancelled end state is already written; just unwind.
     if (answers == null && this.stopRequests.has(runId)) return { ok: false };
     const text = String(answers ?? '').trim() || '(the user provided no answer — proceed on your stated assumptions)';
-    // Multi-round (D41): the transcript is the node's second deliverable, so a
+    // Multi-round (D46): the transcript is the node's second deliverable, so a
     // later round must not overwrite what an earlier one established. One round
     // per section, in order, headed by the questions that produced it — a spec
     // whose interrogation reads back as a conversation can be argued with.
@@ -3576,7 +3576,7 @@ export class FlowRunner {
       // answers in context (DECISIONS.md D27, D38).
       const gateAnswers = ASKING_ROLES.includes(role)
         ? this.store.readNodeOutput(runId, `${node.id}.answers`) : null;
-      // D41. An interrogation has to know where it stands in its own budget:
+      // D46. An interrogation has to know where it stands in its own budget:
       // "you have one round left" is what turns a node that would keep asking
       // into one that settles. Told plainly rather than implied, because a
       // model cannot count rounds it cannot see.
@@ -3593,7 +3593,7 @@ export class FlowRunner {
       // so the cheapest node in the flow does not spend its first four tool
       // calls rediscovering that package.json exists. A starting point, not the
       // answer — the node holds tools precisely so it can go past it.
-      // D38's seed, D41's second reader. Both nodes exist to aim what comes
+      // D38's seed, D46's second reader. Both nodes exist to aim what comes
       // after them, and both are worthless if they have to spend their first
       // tool calls rediscovering that package.json exists.
       const seed = (role === 'orient' || role === 'interrogate')
@@ -3798,7 +3798,7 @@ export class FlowRunner {
         const brief = stripRefineQuestions(outText);
         if (brief && brief !== outText) this.store.writeNodeOutput(runId, node.id, brief);
         // On an answer re-run the node already asked once (T6's one-round cap,
-        // which D41 expresses as questionRoundsFor(node) === 1 for this role):
+        // which D46 expresses as questionRoundsFor(node) === 1 for this role):
         // parse questions, but a re-run must never park again.
         const answered = countAnsweredRounds(this.store.readMeta(runId), node.id)
           >= questionRoundsFor(node);

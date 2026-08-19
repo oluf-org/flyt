@@ -586,7 +586,8 @@ those tasks reach the loop and spend real money. Orientation is the right place
 to say it because it is the cheapest step in the flow — one call, before N lane
 reads.
 
-**It may ask.** Same gate as the refiner (`awaiting_input`), same one-round cap,
+**It may ask.** Same gate as the refiner (`awaiting_input`), same one-round cap
+(the per-node round budget of D46 leaves both of these at one),
 same discipline: resolve ordinary ambiguity yourself as a stated assumption, ask
 only about a fork you cannot responsibly pick. The case that earns a question is
 an empty workspace whose prompt does not say what is being built. **Unattended
@@ -682,6 +683,67 @@ to `nodes/<id>.answers.md`, the node re-runs with them in context, and it
 proceeds without asking again (**one round, hard cap**). A malformed or absent
 block means "no questions — proceed". The refiner is the first node of every
 default pipeline (below).
+
+### 9b. Interrogation Node (D46)
+
+**Visual:** icon `?`, label "Interrogate", sub "interrogate · spec + questions"
+**kind:** `ai`
+**Type/role:** `aiStep` with `role: "interrogate"` (Node Library template
+`interrogate`)
+
+**Input:** an idea, not a request. That is the whole distinction from the
+refiner above, and it is worth stating plainly: the refiner is *told* to
+resolve ambiguity itself and ask only when it must, which is right for a
+request that is already a request and wrong for an idea. Put a half-formed
+idea through the refiner and it does not ask — it invents the missing half as
+an assumption and hands the flow a confident brief for work nobody wanted.
+
+**Ports:**
+
+| Port | What it carries |
+|---|---|
+| `spec` (primary) | the settled specification: goal, non-goals, constraints, deliverable, acceptance, assumptions |
+| `transcript` | every round of questions and the answers given, in order |
+| `open` | what is still unsettled — assumptions taken, and questions the rounds ran out before asking |
+| `questions` | the current round, while the run is parked at the gate |
+
+**Behavior:** every turn it writes the specification as it currently stands
+(never a bare list of questions — a person can only judge a question against
+what the asker believes) and ends with ONE fenced JSON block:
+
+```json
+{
+  "status": "asking",
+  "confidence": "low",
+  "questions": [{ "id": "shape", "text": "Node or flow?", "why": "changes the whole build",
+                  "options": ["a node", "a flow", "both"] }],
+  "assumptions": ["..."],
+  "unknowns": ["..."]
+}
+```
+
+`"asking"` parks the run at the same `awaiting_input` gate the refiner uses, at
+most **6 questions per round**. `"settled"` ends the interrogation and releases
+the spec downstream. `status` is required, and `"asking"` with no usable
+question is rejected rather than coerced — otherwise a model that simply forgot
+the fence would read as a finished specification.
+
+**Rounds belong to the node (D46).** `refine` and `orient` get exactly one round
+each: for them a question is an exception, and a second one means the first was
+asked badly. `interrogate` gets `maxRounds` (default 3, hard ceiling 5). Each
+re-run carries the whole transcript, and on the last round the node is *told* it
+is the last — an interrogation that ends still asking has produced nothing.
+Out of rounds, or unattended (`approvalMode: always`), the remaining questions
+are recorded as explicit assumptions in `open` and the log rather than dropped.
+
+**It reads before it asks.** The template holds `glob`, `read_file` and
+`search_references` under a bounded `maxToolIterations`, and receives the same
+workspace seed `orient` does. Without them it burns rounds asking what the
+repository already answers, and then invents paths and command names in its
+assumptions — observed, on the first tooled-up run of this very node.
+
+Shipped in the `spec-an-idea` flow: idea → interrogation → specification →
+backlog plan → queued tasks.
 
 ---
 

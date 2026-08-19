@@ -319,7 +319,7 @@ const ROLE_KIND = {
   'feedback-review': 'evaluation', 'verify': 'evaluation', 'stitch': 'evaluation',
   'combine': 'evaluation', 'evaluation': 'evaluation',
   'analyze': 'analysis',
-  // D41. An interrogation is planning work: it decides what the thing IS.
+  // D46. An interrogation is planning work: it decides what the thing IS.
   'interrogate': 'planning',
   'translate': 'translation'
 };

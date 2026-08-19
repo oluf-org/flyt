@@ -2375,7 +2375,7 @@ export default function App() {
               </button>
             </div>
           )}
-          {/* A run parked on a question, answered from the RUNS page (D41).
+          {/* A run parked on a question, answered from the RUNS page (D46).
               The chat and comparison views had this; this surface did not — so
               a run you open here, or one started headlessly, showed
               `awaiting_input` in its sidebar and offered nowhere to reply. It

@@ -1,4 +1,4 @@
-// The input gate (DECISIONS.md D27, D38, D41): a run parked with clarifying
+// The input gate (DECISIONS.md D27, D38, D46): a run parked with clarifying
 // questions, answered inline.
 //
 // One component because there are now four places a run can be looked at, and

@@ -46,6 +46,10 @@ The scheduler recomputes readiness after each wave and runs independent `aiStep`
 Supported composition includes:
 
 - typed run inputs represented by a visible `inputs` node;
+- clarifying-question nodes that park the run at an input gate, for as many
+  rounds as the node declares — one for the refiner and the orientation, where
+  a question is an exception; several for the interrogation, whose contract is
+  to ask before it specifies;
 - template instances with local overrides;
 - bounded orchestrator containers;
 - fan-out lanes that share a brief but not each other's output;
@@ -99,6 +103,12 @@ Model output streams into run artifacts and reaches the renderer as incremental 
 Completed nodes survive a crash. On startup, interrupted work is reconciled to a non-running state and the user chooses Resume. Completed nodes are reconstructed from persisted status and are not re-executed. A tool approval whose call stack died is failed honestly rather than pretending the pending call still exists.
 
 Failures retain the thrown error, node status, model-call record, and partial output. A failed node can be retried, optionally with another model. `flyt why`, `probe`, and `doctor` expose the same evidence without requiring the desktop UI.
+
+A run parked on a question is answerable from every surface that can show it —
+the composer, the runs page, a comparison pane, and the CLI — because a
+question you cannot answer from where you are standing is a run that reads as
+stuck. Unattended, the questions are recorded as explicit assumptions instead
+of parking forever.
 
 Follow-up turns append a visible continuation to the run graph. Existing completed work remains immutable; new question, fix, or feature paths use prior artifacts through explicit edges.
 

@@ -246,7 +246,7 @@ export const AI_ROLES = [
   // a flow is about to read. Holds read-only tools and, like refine, may park
   // the run with clarifying questions.
   'orient',
-  // Interrogation (D41): the refiner's opposite. Asks the person several
+  // Interrogation (D46): the refiner's opposite. Asks the person several
   // bounded rounds of questions and only then writes the specification.
   'interrogate'
 ];
@@ -736,7 +736,7 @@ export const SEED_NODE_TEMPLATES = [
     description: 'Surveys the workspace this run is standing in and says what it is, and what relationship it has to the subject the flow is about to read. Everything downstream is aimed by its answer.'
   },
   {
-    // D41. The refiner's opposite number, and the reason both exist: `refine`
+    // D46. The refiner's opposite number, and the reason both exist: `refine`
     // is told to resolve ambiguity itself and ask only when it must, which is
     // right when the request is already clear and wrong when it is an idea. Put
     // a half-formed idea through the refiner and it does not ask — it invents

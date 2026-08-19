@@ -65,6 +65,11 @@ Template instances (`use:`) accept these overrides: `title`, `worker`
 `category`, `contextSpec`, `skills`, and — on agentTask templates only —
 `tools` (registry: `write_file`, `create_task`, `write_task_md`).
 
+`maxRounds` (1–5) is how many times an interrogation node may park the run to
+ask (D46). It is a ceiling, not a quota — the node settles as soon as the
+answers carry the shape — and it means nothing on any other role, where a
+question is an exception and one round is the whole budget.
+
 `effect` / `effectScope` declare what "done" actually requires of the node —
 the deliverable contract. See below.
 

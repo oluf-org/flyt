@@ -1,4 +1,4 @@
-// DECISIONS.md D41 — the interrogation node. The refiner's opposite number:
+// DECISIONS.md D46 — the interrogation node. The refiner's opposite number:
 // where `refine` resolves ambiguity itself and asks only when it must, this
 // node asks first, over several bounded rounds, and writes the specification
 // its answers settled. The gate it parks at is the same one (D27's
