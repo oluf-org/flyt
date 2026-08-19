@@ -657,7 +657,15 @@ export class Supervisor {
     if (!this.ledger || !this.store || !hb?.runId) return recorded;
     let live = 0;
     try {
-      for (const e of spendFromRun(this.store, hb.runId, { prices: this.config.loop?.prices ?? {} })) {
+      // The LEDGER's price table, not `config.loop.prices` directly. That map is
+      // a hand-written override and it ships empty, so every in-flight call
+      // priced to null and `live` stayed 0 no matter what the run was spending
+      // — which made the per-task and rolling ceilings inert in exactly the
+      // situation they exist for. Watched a task spend $23 across three
+      // attempts under `--task-usd 2 --cap-usd 4`, with the caps reading zero
+      // the whole way. The ledger builds its table from the model catalog
+      // (pricesFromCatalog) and still honours the override where it speaks.
+      for (const e of spendFromRun(this.store, hb.runId, { prices: this.ledger.prices ?? {} })) {
         live += e.usd ?? 0;
       }
     } catch { /* a run with nothing readable yet has cost nothing yet */ }

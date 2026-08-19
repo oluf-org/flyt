@@ -75,15 +75,42 @@ export function spendFromRun(store, runId, { prices = {} } = {}) {
   const entries = [];
   let retros = {};
   try { retros = store.snapshot(runId)?.retrospectives ?? {}; } catch { return entries; }
-  // A node's retrospective carries the usage of the calls that FINISHED. A call
-  // that was aborted mid-stream — by the liveness watchdog, a stop, a timeout —
-  // finishes nothing, reports no usage, and used to leave no trace here at all,
-  // so the ledger scored it at zero and every cap was blind to it. The call
-  // trace is where that call's own record lives; take the failed ones from
-  // there, priced from the characters they actually streamed.
-  entries.push(...abortedSpend(store, runId, prices));
+
+  // The CALL TRACE is the record of what was actually spent, and the
+  // retrospective is a summary of the calls that finished tidily. Reading only
+  // the summary is why four runs out of nine in one session reached the ledger
+  // with nothing at all: a node that FAILS writes no retrospective, so every
+  // successful, fully-billed call it made on the way down was invisible.
+  //
+  // So: per node, the trace wins where it has anything to say, and the
+  // retrospective is the fallback for a node with no trace (an executor task,
+  // an older run). Never both — that would double every finished node.
+  const traced = new Set();
+  for (const node of callTraceNodes(store, runId)) {
+    const records = readTrace(store, runId, node);
+    const usable = records.filter(r => r?.usage);
+    if (!usable.length) continue;
+    traced.add(node);
+    for (const rec of usable) {
+      const { usd, estimated } = costOf({
+        usage: rec.usage, provider: rec.provider, model: rec.model, prices
+      });
+      entries.push({
+        node,
+        provider: rec.provider ?? null,
+        model: rec.model ?? null,
+        usage: rec.usage,
+        usd,
+        // A record the provider never priced is an estimate however it got
+        // here; `rec.estimated` marks the ones we derived ourselves.
+        estimated: estimated || rec.estimated === true,
+        ...(rec.ok === false ? { aborted: true, ...(rec.error ? { error: String(rec.error).slice(0, 200) } : {}) } : {})
+      });
+    }
+  }
+
   for (const [node, retro] of Object.entries(retros)) {
-    if (!retro?.usage) continue;
+    if (!retro?.usage || traced.has(node)) continue;
     const { usd, estimated } = costOf({
       usage: retro.usage,
       provider: retro.model?.provider,
@@ -102,35 +129,12 @@ export function spendFromRun(store, runId, { prices = {} } = {}) {
   return entries;
 }
 
-// The failed/aborted calls in a run's call traces, as ledger entries. Only
-// records that carry an estimate are included: a call that failed before
-// generating anything cost nothing to generate, and inventing a line for it
-// would make the ledger noisier without making it truer.
-function abortedSpend(store, runId, prices) {
-  const out = [];
-  let nodes = [];
-  try { nodes = store.callTraceNodes?.(runId) ?? []; } catch { return out; }
-  for (const node of nodes) {
-    let records = [];
-    try { records = store.readCallTrace(runId, node) ?? []; } catch { continue; }
-    for (const rec of records) {
-      if (rec?.ok !== false || !rec.usage) continue;
-      const { usd } = costOf({ usage: rec.usage, provider: rec.provider, model: rec.model, prices });
-      out.push({
-        node,
-        provider: rec.provider ?? null,
-        model: rec.model ?? null,
-        usage: rec.usage,
-        usd,
-        // Always estimated: the provider never told us, which is why we are here.
-        estimated: true,
-        aborted: true,
-        ...(rec.error ? { error: String(rec.error).slice(0, 200) } : {})
-      });
-    }
-  }
-  return out;
-}
+const callTraceNodes = (store, runId) => {
+  try { return store.callTraceNodes?.(runId) ?? []; } catch { return []; }
+};
+const readTrace = (store, runId, node) => {
+  try { return store.readCallTrace?.(runId, node) ?? []; } catch { return []; }
+};
 
 export class Ledger {
   constructor(rootDir, { prices = {} } = {}) {

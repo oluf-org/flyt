@@ -5040,6 +5040,11 @@ export class FlowRunner {
       // end state stop() already recorded must stand — no 'failed' clobbering.
       if (this.stopRequests.has(runId) || isAbortError(err)) {
         this.store.appendLog(runId, { event: 'flow_unwound_after_stop', error: String(err?.message ?? err).slice(0, 300) });
+        // A stopped run spent everything it spent before you stopped it. This
+        // path returned before the ledger was written, so pressing Stop was a
+        // way to make a run's cost disappear — and stopping a run that is going
+        // badly is exactly when a person presses it.
+        this.#recordSpend(runId);
         this.notify(runId);
         return;
       }
