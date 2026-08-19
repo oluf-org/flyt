@@ -104,8 +104,13 @@ test('executor: agentTask honors config.maxToolIterations', async () => {
 
   setScript(() => '```tool\n' + JSON.stringify({ tool: 'read_file', args: { path: 'sample.txt' } }) + '\n```');
 
-  await runExecutorTask(store, runId, 'task-1', testConfig({ maxToolIterations: 2 }));
+  await runExecutorTask(store, runId, 'task-1', testConfig({ maxToolIterations: 3 }));
   const calls = logEvents(store, runId).filter(e => e.event === 'tool_call' && e.tool === 'read_file');
+  // The cap counts ROUNDS, and the last round is answer-only on both protocols
+  // - the tools come off and the model is told to write from what it already
+  // read. So three rounds buy two tool calls. The text path used to spend all
+  // three on tools and then return whatever prose surrounded the discarded
+  // block, which is the asymmetry this number now pins.
   assert.equal(calls.length, 2, 'the executor uses the configured cap instead of runAgent\'s fallback');
 });
 

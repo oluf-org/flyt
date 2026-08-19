@@ -11,6 +11,7 @@
   "worker": null,
   "instructions": "If your task includes running tests or commands: read every exit code. A non-zero exit means FAILURE — fix the cause and run it again. Never report the task complete while a suite is failing; say so plainly instead.",
   "tools": null,
+  "toolCeiling": null,
   "skills": [],
   "requiresApproval": false,
   "approveToolCalls": false,

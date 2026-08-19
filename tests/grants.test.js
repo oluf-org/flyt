@@ -28,7 +28,7 @@ const ids = r => r.tools.slice().sort();
 test('selectors resolve by what a tool IS, not by a list someone maintains', () => {
   // effects:read is a SUBSET test — a tool that also writes can never sneak in.
   const readOnly = [...expandRefs('effects:read', ctx).ids].sort();
-  assert.deepEqual(readOnly, ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_references', 'why_blocked']);
+  assert.deepEqual(readOnly, ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_files', 'search_references', 'why_blocked']);
   assert.ok(!readOnly.includes('write_file'));
 
   // Trust follows the SOURCE, and for the two web tools the source of the
@@ -74,7 +74,7 @@ test('the store\'s catalog is the shape the linter reads', () => {
 });
 
 test('toolsets compose, exclude wins, and a cycle degrades instead of hanging', () => {
-  assert.deepEqual([...expandRefs('read-only', ctx).ids].sort(), ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_references', 'why_blocked']);
+  assert.deepEqual([...expandRefs('read-only', ctx).ids].sort(), ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_files', 'search_references', 'why_blocked']);
   // repo-write includes read-only and every write tool, minus bash.
   const repoWrite = [...expandRefs('repo-write', ctx).ids].sort();
   assert.ok(repoWrite.includes('write_file') && repoWrite.includes('read_file'));
@@ -112,7 +112,7 @@ test('MIGRATION: absent a ceiling, the ceiling IS the static grant', () => {
 });
 
 test('an absent grant means everything the ceiling allows', () => {
-  assert.deepEqual(ids(resolveGrant({ grant: null, ceiling: 'read-only', ctx })), ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_references', 'why_blocked']);
+  assert.deepEqual(ids(resolveGrant({ grant: null, ceiling: 'read-only', ctx })), ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_files', 'search_references', 'why_blocked']);
   assert.deepEqual(ids(resolveGrant({ grant: null, ceiling: 'none', ctx })), []);
 });
 
@@ -134,7 +134,7 @@ test('an orchestrator child narrows its parent, and can never widen it', () => {
   // Declares nothing → inherits verbatim, so the canvas still reads "repo-write".
   assert.equal(narrowCeiling('repo-write', null, ctx), 'repo-write');
   // Narrows → keeps only what both allow.
-  assert.deepEqual(narrowCeiling('repo-write', 'read-only', ctx).sort(), ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_references', 'why_blocked']);
+  assert.deepEqual(narrowCeiling('repo-write', 'read-only', ctx).sort(), ['glob', 'list_tasks', 'read_file', 'read_run', 'read_task', 'read_tool_result', 'search_files', 'search_references', 'why_blocked']);
   // Tries to widen → the parent still wins; bash never appears.
   const widened = narrowCeiling('repo-write', 'repo-full', ctx);
   assert.ok(!widened.includes('bash'), 'a child cannot decide it may do more than its parent');

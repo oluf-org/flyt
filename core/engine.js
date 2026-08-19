@@ -26,7 +26,7 @@ import { ProjectRegistry } from './projects.js';
 import { Backlog } from './backlog.js';
 import { FeedbackStore } from './feedback.js';
 import { WorktreePool } from './worktree.js';
-import { Ledger } from './ledger.js';
+import { Ledger, pricesFromCatalog } from './ledger.js';
 import { ReferenceLibrary, DEFAULT_REFERENCES } from './references.js';
 import { configDirFor } from './workspace.js';
 import { setKnownTools } from '../src/flowTypes.js';
@@ -532,7 +532,8 @@ export function createEngine({
     const root = entry.folder ?? entry.appDir;
     if (!root) return null;
     ledgers.set(projectId, l = new Ledger(path.join(configDirFor(root), 'ledger'),
-      { prices: runtimeConfig.loop?.prices ?? {} }));
+      // The catalog prices everything; loop.prices overrides where it speaks.
+      { prices: pricesFromCatalog(runtimeConfig.modelFacts, runtimeConfig.loop?.prices) }));
     return l;
   }
 

@@ -509,18 +509,35 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
   // DECISIONS.md D37) needs the bound to hold on both protocols.
   const rounds = Math.max(1, Number(maxIterations ?? MAX_ITERATIONS));
   for (let i = 0; i < rounds; i++) {
+    // The last round is answer-only here too. The native path has said so since
+    // it was written; this one never did, so a text-protocol model reaching its
+    // cap emitted one more tool block into the void and the loop returned
+    // whatever prose happened to surround it — "Let me read the next file", or
+    // the placeholder below. Same notice, and the protocol instructions come
+    // off with it: telling a model it may call tools and then discarding the
+    // call is how you get the call.
+    const last = i === rounds - 1;
     const res = await callForAnswer(
-      { ...worker, apiKey, system: fullSystem, prompt: transcript, onText, onRetry, onCall, retry, timeout, signal, ...(maxTokens ? { maxTokens } : {}) },
+      {
+        ...worker, apiKey,
+        system: last ? system : fullSystem,
+        prompt: last ? `${transcript}\n\n${LAST_ROUND_NOTICE}` : transcript,
+        onText, onRetry, onCall, retry, timeout, signal, ...(maxTokens ? { maxTokens } : {})
+      },
       d => onEmptyTurn?.({ ...d, round: i + 1, of: rounds })
     );
     usage = addUsage(usage, res.usage);
     lastText = res.text;
-    const match = res.text.match(TOOL_BLOCK);
+    const match = last ? null : res.text.match(TOOL_BLOCK);
     if (!match) {
+      // A dangling tool block on the answer-only round is a call nobody will
+      // run, so it never belongs in the deliverable.
+      const text = last ? res.text.replace(TOOL_BLOCK, '').trim() : res.text.trim();
       return {
-        text: res.text.trim(), toolCalls, usage,
+        text, toolCalls, usage,
         finishReason: res.finishReason ?? null,
         rounds: i + 1,
+        ...(last ? { capped: true } : {}),
         ...(res.emptyTurn ? { emptyTurn: res.emptyTurn } : {}),
         ...(res.recoveredFromEmptyTurn ? { recoveredFromEmptyTurn: res.recoveredFromEmptyTurn } : {})
       };

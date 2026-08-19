@@ -17,6 +17,7 @@ import searchReferences from './search_references.js';
 import writeTaskMd from './write_task_md.js';
 import readToolResult from './read_tool_result.js';
 import glob from './glob.js';
+import searchFiles from './search_files.js';
 // DECISIONS.md D45: what an agent needs to build this app from inside it —
 // a surgical edit, the project's own gates, the queue it lives in, the run that
 // failed last time, the network, and a way to ask instead of guessing.
@@ -32,7 +33,7 @@ import webSearch from './web_search.js';
 import askHuman from './ask_human.js';
 
 export const BUILTIN_MODULES = [
-  readFile, glob, createFile, writeFile, editFile, bash, createTask, enqueueTask,
+  readFile, glob, searchFiles, createFile, writeFile, editFile, bash, createTask, enqueueTask,
   searchReferences, writeTaskMd, readToolResult,
   runGate, listTasks, readTask, whyBlocked, updateTask, readRun, webFetch, webSearch, askHuman
 ];

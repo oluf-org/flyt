@@ -7,9 +7,16 @@
   "baseType": "aiStep",
   "role": "orient",
   "effort": "medium",
+  "evalType": "step",
   "worker": null,
   "instructions": "",
-  "tools": ["glob", "read_file", "search_references"],
+  "tools": [
+    "glob",
+    "search_files",
+    "read_file",
+    "search_references"
+  ],
+  "toolCeiling": null,
   "skills": [],
   "requiresApproval": false,
   "approveToolCalls": false,

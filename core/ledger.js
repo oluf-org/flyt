@@ -23,6 +23,27 @@ import path from 'node:path';
 export const CAP_KINDS = ['task', 'soft', 'hard'];
 
 /**
+ * The price table, from the model catalog the app already keeps.
+ *
+ * `config.loop.prices` is a hand-written `{ "provider/model": { in, out } }`
+ * fallback, and it ships empty — so a call the provider never priced was
+ * recorded as unknown, which reads as zero in every total. Meanwhile
+ * `settings.modelFacts` holds `inUsdPerM`/`outUsdPerM` for the whole catalog,
+ * refreshed from the provider. Same numbers, already fetched.
+ *
+ * The hand-written table still wins where it names a model: it is the override,
+ * and an operator who wrote one meant it.
+ */
+export function pricesFromCatalog(modelFacts = {}, overrides = {}) {
+  const out = {};
+  for (const [id, f] of Object.entries(modelFacts ?? {})) {
+    if (!Number.isFinite(f?.inUsdPerM) && !Number.isFinite(f?.outUsdPerM)) continue;
+    out[id] = { in: Number(f.inUsdPerM) || 0, out: Number(f.outUsdPerM) || 0 };
+  }
+  return { ...out, ...(overrides ?? {}) };
+}
+
+/**
  * What one call cost.
  *
  * Preference order, and the order matters: what the provider SAYS it charged,
@@ -54,6 +75,13 @@ export function spendFromRun(store, runId, { prices = {} } = {}) {
   const entries = [];
   let retros = {};
   try { retros = store.snapshot(runId)?.retrospectives ?? {}; } catch { return entries; }
+  // A node's retrospective carries the usage of the calls that FINISHED. A call
+  // that was aborted mid-stream — by the liveness watchdog, a stop, a timeout —
+  // finishes nothing, reports no usage, and used to leave no trace here at all,
+  // so the ledger scored it at zero and every cap was blind to it. The call
+  // trace is where that call's own record lives; take the failed ones from
+  // there, priced from the characters they actually streamed.
+  entries.push(...abortedSpend(store, runId, prices));
   for (const [node, retro] of Object.entries(retros)) {
     if (!retro?.usage) continue;
     const { usd, estimated } = costOf({
@@ -72,6 +100,36 @@ export function spendFromRun(store, runId, { prices = {} } = {}) {
     });
   }
   return entries;
+}
+
+// The failed/aborted calls in a run's call traces, as ledger entries. Only
+// records that carry an estimate are included: a call that failed before
+// generating anything cost nothing to generate, and inventing a line for it
+// would make the ledger noisier without making it truer.
+function abortedSpend(store, runId, prices) {
+  const out = [];
+  let nodes = [];
+  try { nodes = store.callTraceNodes?.(runId) ?? []; } catch { return out; }
+  for (const node of nodes) {
+    let records = [];
+    try { records = store.readCallTrace(runId, node) ?? []; } catch { continue; }
+    for (const rec of records) {
+      if (rec?.ok !== false || !rec.usage) continue;
+      const { usd } = costOf({ usage: rec.usage, provider: rec.provider, model: rec.model, prices });
+      out.push({
+        node,
+        provider: rec.provider ?? null,
+        model: rec.model ?? null,
+        usage: rec.usage,
+        usd,
+        // Always estimated: the provider never told us, which is why we are here.
+        estimated: true,
+        aborted: true,
+        ...(rec.error ? { error: String(rec.error).slice(0, 200) } : {})
+      });
+    }
+  }
+  return out;
 }
 
 export class Ledger {

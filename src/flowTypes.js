@@ -47,7 +47,7 @@ export const namedFlow = flow => (flow.name?.trim() ? flow : { ...flow, name: UN
 // (tools/<id>.json, core/toolstore.js), so this array is the BUILT-IN
 // fallback: what every build ships and what a host without a library — the
 // test suite, a renderer before its first IPC round trip — validates against.
-export const AGENT_TOOLS = ['read_file', 'glob', 'create_file', 'write_file', 'bash', 'create_task', 'enqueue_task', 'search_references', 'write_task_md', 'read_tool_result'];
+export const AGENT_TOOLS = ['read_file', 'glob', 'search_files', 'create_file', 'write_file', 'bash', 'create_task', 'enqueue_task', 'search_references', 'write_task_md', 'read_tool_result'];
 
 // The live snapshot, installed by the renderer from the main process's
 // ToolStore (`tool:list`). Grants are filtered against this, so a template can
@@ -382,9 +382,17 @@ export const WORK_CATEGORIES = NODE_CATEGORIES;
 // half the agent knows a reference exists, cannot grep it, and falls back to
 // guessing paths in the wrong tree. Read-effect and confined to the read-only
 // library, so it widens nothing either.
+//
+// `search_files` is on every list for the reason `glob` is, one level in: glob
+// finds files by NAME and read_file opens a path you already know, so locating
+// a symbol inside a large file meant reading it in windows until the budget ran
+// out. Watched exactly that — a task spent forty rounds and fifty-eight reads
+// on three large files, wrote nothing, and named the missing tool in its own
+// failure report ("grep for the exact function name"). Read-effect and
+// workspace-confined, so it widens nothing.
 export const WORK_TOOLS = {
-  'Test-creation': ['read_file', 'glob', 'search_references', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md', 'read_tool_result'],
-  default: ['read_file', 'glob', 'search_references', 'create_file', 'write_file', 'write_task_md', 'read_tool_result']
+  'Test-creation': ['read_file', 'glob', 'search_files', 'search_references', 'create_file', 'write_file', 'bash', 'create_task', 'write_task_md', 'read_tool_result'],
+  default: ['read_file', 'glob', 'search_files', 'search_references', 'create_file', 'write_file', 'write_task_md', 'read_tool_result']
 };
 
 // The Evaluation node's evalType option -> the concrete runtime role.
@@ -732,7 +740,7 @@ export const SEED_NODE_TEMPLATES = [
     // see a project rather than guess at one.
     id: 'orient', name: 'Orient', category: null, icon: '⌖',
     baseType: 'aiStep', role: 'orient', effort: 'medium',
-    tools: ['glob', 'read_file', 'search_references'],
+    tools: ['glob', 'search_files', 'read_file', 'search_references'],
     description: 'Surveys the workspace this run is standing in and says what it is, and what relationship it has to the subject the flow is about to read. Everything downstream is aimed by its answer.'
   },
   {
@@ -752,7 +760,7 @@ export const SEED_NODE_TEMPLATES = [
     id: 'interrogate', name: 'Interrogate', category: null, icon: '?',
     baseType: 'aiStep', role: 'interrogate', effort: 'medium',
     maxRounds: DEFAULT_QUESTION_ROUNDS,
-    tools: ['glob', 'read_file', 'search_references'],
+    tools: ['glob', 'search_files', 'read_file', 'search_references'],
     maxToolIterations: 8,
     description: 'Interrogates the person behind the request over several bounded rounds — goal, non-goals, constraints, acceptance — then writes the specification their answers settled.'
   },

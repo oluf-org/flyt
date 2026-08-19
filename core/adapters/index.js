@@ -233,7 +233,21 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
     const deadline = startDeadline({ provider, signal, idleMs, hardMs });
     // Streaming keeps the deadline alive: each emission proves the connection
     // is moving, so only silence is counted against it.
-    const watched = onText ? (text, opts) => { deadline.touch(); return onText(text, opts); } : undefined;
+    // Streamed characters are counted whether or not the caller wanted them,
+     // because they are the only evidence of what a call that never returned
+     // actually generated — and a generation you were billed for and cannot see
+     // is exactly the spend a ceiling has to bound. A runaway planner produced
+     // 560,242 lines here, was killed by the liveness watchdog, and recorded no
+     // usage, no cost and no ledger line at all: the most expensive call of the
+     // night was the one the ledger scored at zero.
+    // Whether a call streams at all is decided by whether the ADAPTER is handed
+    // an onText, so this must stay undefined when the caller wanted none —
+    // making every call stream in order to measure it would change what is sent
+    // on the wire to answer a question about cost.
+    let streamedChars = 0;
+    const watched = onText
+      ? (text, opts) => { streamedChars += String(text ?? '').length; deadline.touch(); return onText(text, opts); }
+      : undefined;
     try {
       // Extra fields (rest — e.g. kimi's keyKind, stamped by the main process)
       // pass straight through to the adapter; callers never handle them.
@@ -253,7 +267,7 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
       // so a fired deadline arrives here as an AbortError that must not be read
       // as a deliberate stop — but the caller's own signal outranks both, since
       // a stop landing during a timeout is still a stop.
-      const ctx = { provider, model, maxTokens, system, prompt, messages, tools, attempt, started, ...rest };
+      const ctx = { provider, model, maxTokens, system, prompt, messages, tools, attempt, started, streamedChars, ...rest };
       if (signal?.aborted) {
         const aborted = isAbortError(err) ? err : abortError();
         report(onCall, ctx, null, aborted);
@@ -297,6 +311,11 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
 // request enormous?" (promptChars), "did it even get to answer?" (contentChars),
 // "how long did we wait?" (ms). A reporter that throws must never take the call
 // down with it — this is instrumentation, not behavior.
+// Four characters to a token is the crude industry rule of thumb, and crude is
+// the honest precision here: this only ever prices a call the provider never
+// reported on, and every number derived from it is labelled `estimated`.
+export const CHARS_PER_TOKEN = 4;
+
 export function callRecord(ctx, result, error) {
   const msgs = ctx.messages ?? null;
   const promptChars = msgs
@@ -313,7 +332,26 @@ export function callRecord(ctx, result, error) {
     ms: Date.now() - ctx.started,
     ...(ctx.attempt ? { attempts: ctx.attempt + 1 } : {}),
     ...(error
-      ? { ok: false, error: String(error?.message ?? error).slice(0, 400) }
+      ? {
+        ok: false,
+        error: String(error?.message ?? error).slice(0, 400),
+        // What it generated before it died, and the token estimate that follows
+        // from it. Marked `estimated` at every step so nothing downstream can
+        // mistake a guess for a measurement (core/ledger.js costOf) — but a
+        // marked guess is the difference between a cap that binds and one that
+        // cannot see the spend it exists to stop.
+        ...(ctx.streamedChars
+          ? {
+            streamedChars: ctx.streamedChars,
+            estimated: true,
+            usage: {
+              prompt_tokens: Math.round(promptChars / CHARS_PER_TOKEN),
+              completion_tokens: Math.round(ctx.streamedChars / CHARS_PER_TOKEN),
+              estimated: true
+            }
+          }
+          : {})
+      }
       : {
         ok: true,
         finishReason: result?.finishReason ?? null,
