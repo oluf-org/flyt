@@ -134,6 +134,15 @@ Routing has one policy. The user's provider priority decides which connected pro
 
 Planning is bounded and validated. Generated plans declare each task's effect, outputs, required and optional inputs, and dependencies; a plan is validated for size, producer existence, duplicate outputs and cycles before anything is materialized, with one corrective re-ask. A required input nothing produces fails before a model is called; an optional one degrades quietly. A planner streaming repetitive text with no tool call and no contract progress is interrupted on lack of novel work rather than on elapsed time.
 
+Spend is read from each run's call trace — every settled model call, including
+the calls of a node that failed and of a run that was stopped — and priced from
+the provider's reported cost, falling back to the model catalog's per-token
+prices and then to an explicit override table. A node's retrospective is a
+summary of the calls that finished tidily, so it is the fallback for a node
+with no trace rather than the source. The ceilings consult the same table the
+ledger uses: a price table that is empty makes every ceiling inert, which is a
+failure mode with no symptom until the bill arrives.
+
 Per-task and rolling soft/hard spend ceilings bound unattended work. Stalls are based on lack of progress, not only wall time. Approval, budget, missing-model, dependency, lease, and gate problems park work with an actionable reason instead of blocking the whole queue.
 
 The benchmark runs fixed cases against throwaway clones and keeps `landed` separate from independently `verified`. Reference repositories are read-only shallow clones outside the workspace; agents may search them but cannot write through the reference library.
@@ -149,6 +158,8 @@ Current architectural gaps worth preserving as explicit choices:
 - shell execution is controlled but not securely sandboxed;
 - pending tool calls cannot be reconstructed after process death;
 - MCP/HTTP-imported tools, a full Tools management page, and code mode are not implemented;
+- a killed call's spend is estimated from what it streamed, so it is bounded
+  evidence rather than a measurement;
 - model routing is configured rather than learned;
 - sub-flow references follow the latest library version at the next run start; and
 - large-graph layout and rendering are not a current target.

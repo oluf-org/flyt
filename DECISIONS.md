@@ -63,6 +63,7 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D43 | Backlog tasks may be removed through the backlog API, and task ids are monotonic so deletion cannot silently reuse history. | Current |
 | D44 | A repository-reading inherits its subject explicitly, diverse lanes should avoid correlated staffing where possible, and all model spend must reach the ledger. | Current |
 | D45 | The Loop UI is a six-column board driven by shared blocker rules. Loop workers receive surgical edit, gate, backlog, run-inspection, web, and human-question tools through a bounded ceiling. | Current |
+| D47 | Spend is measured from the call trace — every settled call, whatever became of the run or the node — and priced from the model catalog. A ceiling that cannot see a cost cannot bind it. | Current |
 | D46 | Clarifying questions are a node's contract, not the gate's: the number of rounds a node may park for belongs to the node. Asking is a first-class deliverable path — the interrogation node asks before it specifies — and a parked run must be answerable from every surface that can show it. | Current |
 
 Decision numbers D30–D34 were never promoted from retired plan drafts and are intentionally unused.
