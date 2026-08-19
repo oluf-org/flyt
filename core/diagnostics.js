@@ -63,11 +63,24 @@ export function explainRun(store, runId) {
   const nodes = [...new Set([...blocked.map(b => b.id), ...nodeErrors.map(e => e.node), ...inFlight.map(f => f.node)])]
     .map(id => explainNode(store, runId, log, id, nodeStatus[id] ?? 'unknown', nodeErrors, inFlight));
 
+  // A run parked on a question has not failed and is not still working: it is
+  // waiting for the person now typing `flyt why`. Saying only "awaiting_input"
+  // and the call stats tells them nothing they did not already know — the one
+  // thing they need is the question, and the fact that they are the answer.
+  const asking = meta.stage === 'awaiting_input'
+    ? {
+      node: meta.pendingNodeId ?? null,
+      title: nodeTitle(store, runId, meta.pendingNodeId) ?? meta.pendingNodeId ?? null,
+      questions: Array.isArray(meta.pendingQuestions) ? meta.pendingQuestions : []
+    }
+    : null;
+
   return {
     runId,
     stage: meta.stage,
     flow: meta.flowName ?? meta.flowId ?? null,
     error: meta.error ?? null,
+    ...(asking ? { asking } : {}),
     startedAt: meta.createdAt ?? null,
     updatedAt: meta.updatedAt ?? null,
     // A run nobody stopped and nothing failed is simply still working; saying
@@ -82,8 +95,19 @@ export function explainRun(store, runId) {
   };
 }
 
+// The node's own title from the resolved run graph — "What are we actually
+// building?" is a better answer to "who is asking" than the node id.
+function nodeTitle(store, runId, nodeId) {
+  if (!nodeId) return null;
+  try {
+    return store.readFlow(runId)?.nodes?.find(n => n.id === nodeId)?.data?.title ?? null;
+  } catch { return null; }
+}
+
 function verdictFor(meta, nodes) {
   if (meta.stage === 'failed') return 'failed';
+  // Not "still running": nothing is running, and nothing will until you answer.
+  if (meta.stage === 'awaiting_input') return 'waiting for your answer';
   if (meta.stage === 'cancelled') return 'stopped by hand';
   if (meta.stage === 'done') return 'completed';
   if (nodes.some(n => n.inFlight || n.status === 'active')) return 'still running';

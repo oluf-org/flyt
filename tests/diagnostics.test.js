@@ -194,3 +194,42 @@ test('modelsInFlow finds lane workers, not just node workers', () => {
   };
   assert.deepEqual(modelsInFlow(flow).sort(), ['deepseek/x', 'moonshotai/k', 'other/z']);
 });
+
+// --- a run parked on a question -------------------------------------------
+//
+// `flyt why` is the command for "why did this stall". On a run parked at the
+// input gate it used to print the stage and the call stats and nothing else —
+// telling the person who ran it exactly what they already knew, and not the one
+// thing that would unstick it: the question, and that they are the answer.
+
+test('explain names the question, who asked it, and that nothing is running', () => {
+  const store = makeStore();
+  const runId = store.createRun('an idea worth interrogating');
+  store.writeFlow(runId, {
+    id: 'f', name: 'F',
+    nodes: [{ id: 'ask', type: 'aiStep', data: { role: 'interrogate', title: 'What are we actually building?' } }],
+    edges: []
+  });
+  store.setStage(runId, 'awaiting_input', {
+    pendingNodeId: 'ask',
+    pendingGateKind: 'input',
+    pendingQuestions: [
+      { id: 'shape', text: 'Node or flow?', why: 'changes the whole build', options: ['a node', 'a flow'] },
+      { id: 'scope', text: 'Who consumes the spec?' }
+    ]
+  });
+
+  const r = explainRun(store, runId);
+  assert.equal(r.verdict, 'waiting for your answer', 'not "still running" — nothing is');
+  assert.equal(r.asking.node, 'ask');
+  assert.equal(r.asking.title, 'What are we actually building?', 'the title, not the node id');
+  assert.deepEqual(r.asking.questions.map(q => q.text), ['Node or flow?', 'Who consumes the spec?']);
+  assert.deepEqual(r.asking.questions[0].options, ['a node', 'a flow']);
+});
+
+test('a run that is not parked carries no question block', () => {
+  const store = makeStore();
+  const runId = store.createRun('an ordinary run');
+  store.setStage(runId, 'done');
+  assert.equal(explainRun(store, runId).asking, undefined);
+});

@@ -20,6 +20,7 @@ import { createEngine } from '../core/engine.js';
 import { createApi, ApiError } from '../core/api.js';
 import { createServer } from '../core/server.js';
 import { defaultUserDataDir } from '../core/brand.js';
+import { renderQuestions } from '../core/flowRunner.js';
 
 const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -905,6 +906,15 @@ const ms = n => (n == null ? '?' : n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${
 function renderWhy(r) {
   const L = [`run ${r.runId} — ${r.verdict}${r.flow ? ` (${r.flow})` : ''}`];
   if (r.error) L.push(`  error: ${r.error}`);
+  // The question comes first, above the machinery. A run stalled on a question
+  // is not diagnosed by its call stats; it is answered.
+  if (r.asking) {
+    L.push('');
+    L.push(`  "${r.asking.title ?? r.asking.node}" is waiting for you:`);
+    for (const line of renderQuestions(r.asking.questions).split('\n')) L.push(`    ${line}`);
+    L.push('');
+    L.push(`  flyt answer ${r.runId} "<your answer>"`);
+  }
   const s = r.signals;
   L.push(`  ${s.modelCalls} model call(s) over ${ms(s.modelMs)}, ${s.toolCalls} tool call(s)`
     + `${s.usd ? `, $${s.usd}` : ''}`);
