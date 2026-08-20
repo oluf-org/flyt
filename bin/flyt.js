@@ -341,10 +341,36 @@ async function main() {
         case 'run': {
           const id = positional[2];
           if (!id) return die('flyt tools run <id> --arg url=https://example.com');
+          // The schema decides what a `--arg` value MEANS.
+          //
+          // A command line has only strings, so `--arg limit=3` used to fail
+          // with "expected integer, got string" — for the most obvious thing
+          // anyone would type, human or model, and with `--arg-json limit=3` as
+          // the undiscoverable fix. The tool already declares the type; using
+          // it costs one lookup and removes a whole class of wasted turn.
+          // Anything the schema does not call numeric or boolean stays a
+          // string, and `--arg-json` still wins for arrays and objects.
+          const shown = await api.invoke('tool:show', { id }).catch(() => null);
+          const props = shown?.parameters?.properties ?? {};
+          const coerce = (key, raw) => {
+            const types = [].concat(props[key]?.type ?? []);
+            if (types.includes('integer') || types.includes('number')) {
+              const n = Number(raw);
+              return raw.trim() !== '' && Number.isFinite(n) ? n : raw;
+            }
+            if (types.includes('boolean')) {
+              if (/^(true|yes|1)$/i.test(raw)) return true;
+              if (/^(false|no|0)$/i.test(raw)) return false;
+            }
+            return raw;
+          };
           const args = {};
           for (const pair of [].concat(flags.arg ?? [])) {
             const eq = String(pair).indexOf('=');
-            if (eq > 0) args[String(pair).slice(0, eq)] = String(pair).slice(eq + 1);
+            if (eq > 0) {
+              const key = String(pair).slice(0, eq);
+              args[key] = coerce(key, String(pair).slice(eq + 1));
+            }
           }
           for (const pair of [].concat(flags['arg-json'] ?? [])) {
             const eq = String(pair).indexOf('=');

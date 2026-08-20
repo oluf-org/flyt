@@ -1,14 +1,15 @@
 // The web tools (LOOP-BOARD §A5): the HTML reducer, the fetch's bounds and
-// trust labelling, and search's shipped-disabled state.
+// trust labelling, and search's fallback path.
 //
 // Nothing here reaches the network. `fetch` is stubbed at the global, which is
 // the whole surface web_fetch uses — a suite that needs the internet to pass is
-// a suite that fails on a train.
+// a suite that fails on a train. The keyless DuckDuckGo path is stubbed at the
+// Python bridge, so no interpreter (or scrapling) is required by this suite.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { executeTool } from '../core/tools/index.js';
 import { htmlToText, decodeEntities } from '../core/tools/html2md.js';
-import { providerFor } from '../core/tools/web_search.js';
+import { providerFor, pythonBridge } from '../core/tools/web_search.js';
 import { makeStore } from './helpers.js';
 
 const ctxWith = (extra = {}) => {
@@ -31,6 +32,16 @@ async function withFetch(impl, fn) {
   const real = globalThis.fetch;
   globalThis.fetch = impl;
   try { return await fn(); } finally { globalThis.fetch = real; }
+}
+
+async function withBridges(overrides, fn) {
+  const oldFor = pythonBridge.pythonFor;
+  const oldRun = pythonBridge.runPythonScript;
+  Object.assign(pythonBridge, overrides);
+  try { return await fn(); } finally {
+    pythonBridge.pythonFor = oldFor;
+    pythonBridge.runPythonScript = oldRun;
+  }
 }
 
 // --- the reducer -----------------------------------------------------------
@@ -151,14 +162,76 @@ test('web_fetch: a network failure is an error naming the URL, not a stack trace
 
 // --- web_search ------------------------------------------------------------
 
-test('web_search: with no key it returns a readable refusal rather than failing', async () => {
-  const rec = await executeTool('web_search', { query: 'anything' }, ctxWith());
-  // A successful CALL with `available: false` — a failed call would cost the
-  // agent a turn deciding whether to retry something that can never work.
-  assert.equal(rec.ok, true);
-  assert.equal(rec.result.available, false);
-  assert.match(rec.result.reason, /No search provider is configured/);
-  assert.match(rec.result.remedy, /web_fetch/);
+test('web_search: with no key it calls keyless DuckDuckGo and decodes/joins results', async () => {
+  const ctx = ctxWith();
+  await withBridges({
+    pythonFor: () => ({ bin: '/fake/python' }),
+    runPythonScript: async (script, payload, opts) => {
+      assert.equal(opts.bin, '/fake/python');
+      assert.equal(opts.timeoutMs, 30_000);
+      assert.equal(payload.url, 'https://html.duckduckgo.com/html/?q=flyt%20flow%20orchestration');
+      assert.match(script, /result__a::text/);
+      return {
+        ok: true,
+        results: [
+          { title: 'A', url: 'https://html.duckduckgo.com/l/?uddg=https%3A%2F%2Fa.example%2Fx', snippet: ['one', 'two'] },
+          { title: 'B', url: 'https://html.duckduckgo.com/l/?uddg=' },
+          { title: 'C', url: null, snippet: 'no url' }
+        ]
+      };
+    }
+  }, async () => {
+    const rec = await executeTool('web_search', { query: 'flyt flow orchestration' }, ctx);
+    assert.equal(rec.ok, true);
+    assert.equal(rec.result.available, true);
+    assert.equal(rec.result.provider, 'duckduckgo');
+    assert.equal(rec.result.trust, 'untrusted');
+    assert.deepEqual(rec.result.results, [
+      { title: 'A', url: 'https://a.example/x', snippet: 'one two' }
+    ]);
+    assert.match(rec.result.note, /written by other people/);
+  });
+});
+
+test('web_search: a configured provider that errors falls back to DuckDuckGo with a visible note', async () => {
+  const ctx = ctxWith({ config: { providerKeys: { brave: 'broken-key' } } });
+  await withBridges({
+    pythonFor: () => ({ bin: '/fake/python' }),
+    runPythonScript: async () => ({
+      ok: true,
+      results: [{ title: 'Fallback', url: 'https://fallback.example', snippet: 'fb' }]
+    })
+  }, async () => {
+    await withFetch(async () => { throw new Error('upstream exploded'); }, async () => {
+      const rec = await executeTool('web_search', { query: 'anything' }, ctx);
+      assert.equal(rec.ok, true);
+      assert.equal(rec.result.available, true);
+      assert.equal(rec.result.provider, 'duckduckgo');
+      // Both sentences: the degradation is visible AND the untrusted-content
+      // warning survives it. A fallback that quietly drops the second line
+      // loses the only thing telling the model whose writing this is.
+      assert.match(rec.result.note, /^brave failed: Search failed: upstream exploded\./);
+      assert.match(rec.result.note, /written by other people/);
+      assert.equal(rec.result.degradedFrom, 'brave');
+      assert.deepEqual(rec.result.results, [
+        { title: 'Fallback', url: 'https://fallback.example', snippet: 'fb' }
+      ]);
+    });
+  });
+});
+
+test('web_search: keyless path without Python returns available false with the scrapling remedy', async () => {
+  const ctx = ctxWith();
+  await withBridges({
+    pythonFor: () => ({ bin: null }),
+    runPythonScript: async () => { throw new Error('should not be called'); }
+  }, async () => {
+    const rec = await executeTool('web_search', { query: 'anything' }, ctx);
+    assert.equal(rec.ok, true);
+    assert.equal(rec.result.available, false);
+    assert.match(rec.result.reason, /Python/i);
+    assert.equal(rec.result.remedy, 'Run `flyt python setup --packages scrapling,markdownify`.');
+  });
 });
 
 test('web_search: a configured key is found, and a subscription sentinel is not one', () => {
