@@ -219,3 +219,41 @@ test('a checkout that already has worktrees under the old key keeps using them',
   fs.mkdirSync(legacy, { recursive: true });
   assert.equal(defaultWorktreeRoot(repo, { home }), legacy);
 });
+
+// Idempotent cleanup that fails on the second half of an interrupted cleanup is
+// not idempotent. `git worktree prune` — or a hand-removed `.git` file — leaves
+// a DIRECTORY git no longer calls a worktree: `worktree remove` then fails, the
+// owner record survives, and the next `work:start` refuses the task with
+// "already has a live attempt" for a tree git has already forgotten.
+test('a directory git no longer calls a worktree is still cleaned up, record and all', async () => {
+  const pool = await poolFor();
+  const wt = await pool.create('t-0001', 'A task');
+  assert.ok(fs.existsSync(wt.dir));
+  assert.ok(pool.owner('t-0001'));
+
+  // Exactly what an interrupted cleanup leaves: the files, without git's idea
+  // of them.
+  fs.rmSync(path.join(wt.dir, '.git'), { force: true });
+  await git(['worktree', 'prune'], { cwd: pool.repoRoot });
+
+  // deleteBranch, exactly as `reclaim` asks for it — the path `work:start`
+  // actually takes when it clears a slot.
+  const result = await pool.remove('t-0001', { attemptId: wt.attemptId, deleteBranch: true });
+  assert.equal(result.outcome, 'removed');
+  assert.equal(fs.existsSync(wt.dir), false, 'the leftover directory has to go');
+  assert.equal(pool.owner('t-0001'), null, 'and so does the record that blocks the next attempt');
+
+  // And the slot is genuinely free again, which is the whole point.
+  const next = await pool.create('t-0001', 'A task');
+  assert.ok(fs.existsSync(next.dir));
+});
+
+test('a git failure that is not "already gone" still surfaces', async () => {
+  const pool = await poolFor();
+  const wt = await pool.create('t-0002', 'A task');
+  // A repo root that is not a repository fails for a real reason, and a real
+  // reason must not be swallowed by the leftover path.
+  pool.repoRoot = path.join(pool.repoRoot, 'nope-not-a-repo');
+  await assert.rejects(() => pool.remove('t-0002', { attemptId: wt.attemptId }));
+  assert.ok(fs.existsSync(wt.dir), 'nothing is deleted on an error nobody understood');
+});

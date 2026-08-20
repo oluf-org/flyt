@@ -329,9 +329,35 @@ export class WorktreePool {
 
     let branch = null;
     if (deleteBranch) {
-      try { branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: dir }); } catch { /* unreadable */ }
+      try { branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: dir }); }
+      catch {
+        // Unreadable — a half-removed worktree has no .git to ask. The owner
+        // record wrote the branch down when the attempt started, which is
+        // exactly what it is for; without this fallback the branch survives a
+        // cleanup that reported success, and the next `create` fails with
+        // "a branch named ... already exists".
+        branch = record?.branch ?? null;
+      }
     }
-    await git(['worktree', 'remove', '--force', dir], { cwd: this.repoRoot });
+    try {
+      await git(['worktree', 'remove', '--force', dir], { cwd: this.repoRoot });
+    } catch (err) {
+      // A DIRECTORY git no longer calls a worktree — `git worktree prune` ran,
+      // or the metadata was removed by hand — is still this attempt's leftover
+      // and still has to be cleaned up. Throwing here left the owner record in
+      // place, and the next `work:start` refused the task with "already has a
+      // live attempt" for a tree git had already forgotten. Idempotent cleanup
+      // that fails on the second half of an interrupted cleanup is not
+      // idempotent.
+      //
+      // Narrow on purpose: any other git failure is a real one and must
+      // surface. Ownership was already checked above, and the path is inside
+      // the pool's own base directory, so removing it here is the same
+      // authority the git call was being asked for.
+      if (!/is not a working tree|No such file or directory|does not exist/i.test(String(err?.message ?? err))) throw err;
+      fs.rmSync(dir, { recursive: true, force: true });
+      try { await git(['worktree', 'prune'], { cwd: this.repoRoot }); } catch { /* nothing to prune */ }
+    }
     if (branch) { try { await git(['branch', '-D', branch], { cwd: this.repoRoot }); } catch { /* already gone */ } }
     if (record && (!attemptId || record.attemptId === attemptId)) this.#clearOwner(taskId);
     return { outcome: 'removed', taskId: String(taskId), attemptId: attemptId ?? record?.attemptId ?? null, dir, branch };
