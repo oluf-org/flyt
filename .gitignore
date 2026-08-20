@@ -8,14 +8,17 @@ settings.json
 # own. A flow the app SHIPS is tracked explicitly: `git add -f flows/<id>.flow.yaml`.
 flows/
 .flyt/
-# This repository intentionally ships the two project-local skills exercised by
-# learn-from-repo; all other runtime state under .flyt remains ignored.
+# Skills are shareable project configuration and are meant to travel with the
+# repository (D15) — so the whole directory is tracked, not an allowlist of
+# individual files. The allowlist was two filenames, which meant every skill
+# written after it was invisible to a Loop worker: the supervisor works in a
+# git worktree, a worktree is a checkout, and an untracked file is not in a
+# checkout. The task attached the expertise, the run logged `skill_missing`,
+# and nobody looked. All other runtime state under .flyt stays ignored.
 !.flyt/
 .flyt/*
 !.flyt/skills/
-.flyt/skills/*
-!.flyt/skills/reference-transfer.md
-!.flyt/skills/skill-authoring.md
+!.flyt/skills/**
 # The node library's record of which seeds it has already been offered
 # (core/nodestore.js). Per-library runtime state, like a run folder: it names
 # whatever templates that particular library holds, including the user's own.

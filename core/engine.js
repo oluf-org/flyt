@@ -135,16 +135,73 @@ export function createEngine({
   //     safetyModel: 'auto' | modelId,
   //     projects: { open, active, recents, tabState } }  // D22 — tab session (T17)
   const settingsPath = path.join(userDataDir, 'settings.json');
+
+  /**
+   * Read the profile, telling "there isn't one" apart from "I could not read
+   * it".
+   *
+   * Those two used to share a `catch` that returned defaults — and the very
+   * next line persists, so an unreadable settings.json was silently REPLACED by
+   * an empty one on the next launch. Every API key, every pinned model, every
+   * worker assignment, gone, with nothing in the log and the original
+   * overwritten. A file that cannot be parsed is the one moment where writing
+   * over it is the worst available move.
+   *
+   * So a file that exists and will not parse is moved aside with a timestamp
+   * and reported. The user starts from defaults either way, but the thing they
+   * spent an afternoon configuring is still on disk beside the new one.
+   */
   const loadSettings = () => {
-    try { return migrateSettings(JSON.parse(fs.readFileSync(settingsPath, 'utf8'))); }
-    catch { return migrateSettings({}); }
+    let raw;
+    try {
+      raw = fs.readFileSync(settingsPath, 'utf8');
+    } catch (err) {
+      // ENOENT is a fresh profile, which is not a problem and needs no noise.
+      if (err?.code !== 'ENOENT') {
+        warn(`could not read ${settingsPath} (${err.message}) — starting from defaults, and NOT overwriting it`);
+        return { settings: migrateSettings({}), readable: false };
+      }
+      return { settings: migrateSettings({}), readable: true };
+    }
+    try {
+      return { settings: migrateSettings(JSON.parse(raw)), readable: true };
+    } catch (err) {
+      const aside = `${settingsPath}.${new Date().toISOString().replace(/[:.]/g, '-')}.corrupt`;
+      try { fs.renameSync(settingsPath, aside); }
+      catch { /* if it cannot even be moved, refusing to write is still right */ }
+      warn(`${settingsPath} is not valid JSON (${err.message}) — kept as ${aside}, starting from defaults`);
+      return { settings: migrateSettings({}), readable: true };
+    }
   };
   // Mutated in place by callers and then persisted — never reassigned, so a
   // consumer holding this reference stays correct.
-  const settings = loadSettings();
+  const { settings, readable: settingsReadable } = loadSettings();
+
+  /**
+   * Write the profile, atomically.
+   *
+   * Every front door boots an engine, and every boot persists. Several `flyt`
+   * invocations at once — a loop in one terminal, a status check in another —
+   * were each doing a non-atomic 90 KB overwrite, so a reader could catch a
+   * half-written file and take the branch above. Write-then-rename makes a
+   * reader see either the old file or the new one, never the middle.
+   *
+   * A profile we could not READ is never written over: whatever is there is
+   * more valuable than what this process has in memory, which is nothing.
+   */
   const persistSettings = () => {
+    if (!settingsReadable) return false;
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    const tmp = `${settingsPath}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(settings, null, 2));
+      fs.renameSync(tmp, settingsPath);
+      return true;
+    } catch (err) {
+      try { fs.rmSync(tmp, { force: true }); } catch { /* nothing to clean up */ }
+      warn(`could not save settings to ${settingsPath}: ${err.message}`);
+      return false;
+    }
   };
   persistSettings(); // seal the migration (legacy openrouterApiKey is gone after this)
 

@@ -5,6 +5,7 @@ import { lintText, lintFlow, RUNTIME_RULES } from '../core/flowlang/lint.js';
 import { SEED_NODE_TEMPLATES, normalizeTemplate } from '../src/flowTypes.js';
 import { builtinDefinitions } from '../core/tools/builtins.js';
 import { normalizeTool } from '../src/toolTypes.js';
+import { SEED_TOOLSETS, normalizeToolset } from '../core/toolsets.js';
 
 const templates = SEED_NODE_TEMPLATES.map(normalizeTemplate);
 
@@ -383,4 +384,41 @@ test('lint: a fan-out written in the DSL parses and passes', () => {
   ].join('\n');
   const { ok, errors } = lintText(text, { templates: TEMPLATES, modelSets: SETS });
   assert.ok(ok, 'errors: ' + JSON.stringify(errors));
+});
+
+// A grant is written in the same vocabulary as a ceiling (TOOLS.md): an id, a
+// toolset name, or a selector. The rule only knew ids, so the documented way to
+// grant a toolbox without enumerating it was refused at author time and
+// resolved perfectly at run time — and a linter that refuses what the runner
+// accepts teaches people to skip the linter.
+test('a grant may name a toolset or a selector, exactly as a ceiling may', () => {
+  const flow = {
+    id: 'f', name: 'F',
+    nodes: [
+      { id: 'in', type: 'input', data: {} },
+      { id: 'w', type: 'agentTask', data: { title: 'W', goal: 'g', tools: ['loop'], toolCeiling: 'loop' } },
+      { id: 'r', type: 'agentTask', data: { title: 'R', goal: 'g', tools: ['effects:read', 'read-only'] } },
+      { id: 'out', type: 'output', data: {} }
+    ],
+    edges: [{ source: 'in', target: 'w' }, { source: 'w', target: 'r' }, { source: 'r', target: 'out' }]
+  };
+  const res = lintFlow(flow, { library: { tools: builtinDefinitions().map(normalizeTool), sets: SEED_TOOLSETS.map(normalizeToolset) } });
+  assert.deepEqual(res.errors.filter(e => e.rule === 'unknown-tool'), [],
+    'the runner resolves all of these; the linter must not refuse them');
+});
+
+test('a grant entry that names nothing is still an error, and says which kind', () => {
+  const flow = {
+    id: 'f', name: 'F',
+    nodes: [
+      { id: 'in', type: 'input', data: {} },
+      { id: 'w', type: 'agentTask', data: { title: 'W', goal: 'g', tools: ['no_such_tool', 'no-such-set', 'effects:nonsense'] } },
+      { id: 'out', type: 'output', data: {} }
+    ],
+    edges: [{ source: 'in', target: 'w' }, { source: 'w', target: 'out' }]
+  };
+  const errors = lintFlow(flow, { library: { tools: builtinDefinitions().map(normalizeTool), sets: SEED_TOOLSETS.map(normalizeToolset) } }).errors.filter(e => e.rule === 'unknown-tool');
+  assert.equal(errors.length, 3);
+  assert.ok(errors.some(e => /tool "no_such_tool" is not in the tool library/.test(e.message)));
+  assert.ok(errors.some(e => /"effects:nonsense" is not a valid selector/.test(e.message)));
 });

@@ -89,6 +89,35 @@ export function lintFlow(flow, { templates = null, rules = null, library = null,
     return { type: resolved.type, tools: d.tools ?? null, ceiling: d.toolCeiling ?? null, approveToolCalls: Boolean(d.approveToolCalls) };
   };
 
+  /**
+   * A grant entry that names nothing.
+   *
+   * A grant is written in the same vocabulary as a ceiling (TOOLS.md): a tool
+   * id, a toolset name, or a selector like `effects:read`. This rule only knew
+   * ids, so `tools: [loop]` — the documented way to grant the loop's toolbox
+   * without enumerating nineteen ids that go stale — was refused at author time
+   * and resolved perfectly at run time. A linter that refuses what the runner
+   * accepts teaches people to skip the linter.
+   *
+   * With a library bound, the expansion the RUNNER uses decides, and its own
+   * problem kinds give the message. Without one, there is nothing to check
+   * against, so nothing is claimed.
+   */
+  const grantRefFindings = (n, list) => {
+    if (!ctx) {
+      return list
+        .filter(t => !knownTools().includes(t))
+        .map(t => finding('unknown-tool', 'error',
+          `node "${n.id}": tool "${t}" is not in the tool library (${knownTools().join(', ')})`, { nodeId: n.id }));
+    }
+    return expandRefs(list, ctx).problems.map(p => finding('unknown-tool', 'error',
+      p.kind === 'unknown-set' ? `node "${n.id}": toolset "${p.ref}" does not exist`
+        : p.kind === 'unknown-selector' ? `node "${n.id}": "${p.ref}" is not a valid selector`
+          : p.kind === 'cycle' ? `node "${n.id}": toolset "${p.ref}" includes itself`
+            : `node "${n.id}": tool "${p.ref}" is not in the tool library (${knownTools().join(', ')})`,
+      { nodeId: n.id }));
+  };
+
   // unknown-template / invalid-override / unknown-tool / orphan-approval
   for (const n of flow.nodes ?? []) {
     if (n.templateId) {
@@ -110,22 +139,10 @@ export function lintFlow(flow, { templates = null, rules = null, library = null,
           }
         }
       }
-      if (Array.isArray(ov.tools) && on('unknown-tool')) {
-        for (const t of ov.tools) {
-          if (!knownTools().includes(t)) {
-            out.push(finding('unknown-tool', 'error', `node "${n.id}": tool "${t}" is not in the tool library (${knownTools().join(', ')})`, { nodeId: n.id }));
-          }
-        }
-      }
+      if (Array.isArray(ov.tools) && on('unknown-tool')) out.push(...grantRefFindings(n, ov.tools));
     } else {
       const d = n.data ?? {};
-      if (Array.isArray(d.tools) && on('unknown-tool')) {
-        for (const t of d.tools) {
-          if (!knownTools().includes(t)) {
-            out.push(finding('unknown-tool', 'error', `node "${n.id}": tool "${t}" is not in the tool library (${knownTools().join(', ')})`, { nodeId: n.id }));
-          }
-        }
-      }
+      if (Array.isArray(d.tools) && on('unknown-tool')) out.push(...grantRefFindings(n, d.tools));
       if ((n.type === 'input' || n.type === 'output') && d.requiresApproval && on('orphan-approval')) {
         out.push(finding('orphan-approval', 'warning', `node "${n.id}": requiresApproval has no effect on ${n.type} nodes`, { nodeId: n.id }));
       }

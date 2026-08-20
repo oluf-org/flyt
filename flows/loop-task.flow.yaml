@@ -1,0 +1,66 @@
+version: 1
+id: loop-task
+name: Work one backlog task
+description: |
+  What the Loop runs for a claimed task. The task file is already the plan —
+  someone wrote a goal, acceptance criteria, a blast radius and the gates it is
+  judged by — so this flow does not plan it again. It reads, it changes the
+  repository, and it runs the project's own gates before it says it is done.
+
+  The default pipeline was doing this job and is the wrong shape for it: its
+  plan-eval must emit a strict JSON block before any tool-holding node exists,
+  so a cheap model that answers in prose materializes nothing, makes zero tool
+  calls, and produces a run that reports "done" having touched no file. That is
+  a whole task's budget spent describing work instead of doing it. Here the node
+  that holds the tools is authored, not generated, so there is no call that can
+  fail on the way to the work.
+
+  Two things on that node are load-bearing. `toolCeiling: loop` is what an
+  unattended worker gets (D45) — the repo, the shell, the queue it lives in, the
+  run that failed last time, and a way to ask a human; not the web, which a task
+  that genuinely needs it must ask for itself. And `tools: [loop]` is named
+  rather than left to the template: the Work node derives its grant from the
+  task type (WORK_TOOLS), and every one of those lists is a writer without a
+  shell — no bash, no run_gate, no edit_file. A task whose acceptance is "npm
+  test is green" cannot run npm test with that grant, and would report success
+  having never tried.
+
+  `effect: workspace-change` states the deliverable contract. Loop rejects an
+  empty diff at landing anyway; declaring it here means the node fails where the
+  work was, keeping its text as evidence, instead of looking finished until it
+  is judged.
+
+nodes:
+  work:
+    use: work
+    title: Do the task
+    category: Code general
+    instructions: |
+      You are working ONE backlog task, alone, unattended. The brief above is
+      the task file exactly as it was written, plus how it will be judged.
+
+      Read before you write. The acceptance criteria in "Done when" are the
+      contract — not a summary of it, and not a starting point to improve on.
+      Meet them and stop. Work outside the task's blast radius is how an
+      unattended change becomes unreviewable.
+
+      Verify with the project's own gates, yourself, before you finish. You have
+      run_gate; the harness will run exactly the same commands afterwards and a
+      reviewer reads the diff. Finding a failure now costs one more turn.
+      Finding it after landing costs the task.
+
+      Where the task hands you evidence — a command to run, a URL, a file and a
+      line — use the thing you were given rather than looking for your own. It
+      was checked. Yours has not been.
+
+      Two honest failures are worth more than one confident sentence: if a gate
+      is red, say which and why rather than reporting success; if the task
+      cannot be done here at all, use the TASK-IMPOSSIBLE line described above
+      instead of inventing work that looks like progress.
+    effect: workspace-change
+    toolCeiling: loop
+    tools: [loop]
+
+flow:
+  - input -> work
+  - work -> output

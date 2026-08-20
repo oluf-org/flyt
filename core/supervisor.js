@@ -19,11 +19,29 @@
 // read — the backlog entry, the ledger line, the run's own artifacts — so a
 // supervisor killed at 2pm and restarted at 2:01pm resumes from what is on disk
 // rather than from what it remembered.
+import fs from 'node:fs';
+import path from 'node:path';
 import { Heartbeat, detectStall, nextIntervention, DEFAULT_THRESHOLDS } from './heartbeat.js';
 import { escalate as escalateLevel, levelFor, workerForLevelMap } from './levels.js';
 import { spendFromRun } from './ledger.js';
 import { unrunnableGates } from './gates.js';
 import { whyNothingReady } from './blockers.js';
+import { CONFIG_DIR } from './brand.js';
+import { skillPath } from './skills.js';
+
+// Which of a task's declared skills a checkout does not actually contain.
+// Deliberately a plain existence check against the worktree rather than a
+// resolve through Workspace: the question is "is the file in this checkout",
+// and the answer has to survive the directory not being a bound workspace yet.
+function missingSkills(dir, names) {
+  if (!dir || !names?.length) return [];
+  return names.filter(raw => {
+    const name = String(raw ?? '').trim();
+    if (!name) return false;
+    try { return !fs.existsSync(path.join(dir, skillPath(name))); }
+    catch { return false; }
+  });
+}
 
 const POLL_MS = 5000;
 
@@ -351,6 +369,16 @@ export class Supervisor {
       // names it, so a cleanup that arrives after the task was restarted cannot
       // delete the newer attempt's worktree (WR-02).
       this.attempts.set(task.id, wt.attemptId ?? null);
+      // A worktree is a CHECKOUT, so a skill file that is untracked — or merely
+      // .gitignored, which is how the skills directory started out — is simply
+      // not there. The task attached the expertise, the run logged
+      // `skill_missing` into log.jsonl, and nobody looked. Missing expertise
+      // must not park a task (a worker without it still works, just worse), but
+      // it must be said out loud in the place a person is actually watching.
+      for (const name of missingSkills(wt.dir, task.skills)) {
+        this.log(`  ${task.id} declares skill "${name}" and the worktree has no ${CONFIG_DIR}/skills/${name}.md`
+          + ' — untracked, ignored, or misspelled. The worker runs without it.');
+      }
       const runId = await this.invoke('flow:run', {
         projectId: this.projectId,
         flowId: this.config.loop?.flowId ?? 'default-pipeline',

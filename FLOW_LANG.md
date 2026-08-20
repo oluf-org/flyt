@@ -61,9 +61,16 @@ custom syntax; everything else is plain YAML.
 ### Nodes
 
 Template instances (`use:`) accept these overrides: `title`, `worker`
-(`{ provider, model }`), `instructions`, `requiresApproval`, `goal`,
-`category`, `contextSpec`, `skills`, and — on agentTask templates only —
-`tools` (registry: `write_file`, `create_task`, `write_task_md`).
+(`{ provider, model }`), `instructions`, `requiresApproval`, `approveToolCalls`,
+`goal`, `category`, `contextSpec`, `skills`, `effect`, `effectScope`,
+`toolCeiling` and `tools`.
+
+`tools` is the grant and `toolCeiling` is the envelope it must fit inside. Both
+are written in the same vocabulary (`TOOLS.md`): a tool id, a toolset name
+(`read-only`, `repo-full`, `loop`, `web`), or a selector (`effects:read`,
+`uses:network`). Prefer the set name — a list of ids goes stale the moment the
+library gains a tool, and `flyt tools show <id>` says which sets a tool is in.
+An absent `tools` with a ceiling present means everything the ceiling allows.
 
 `maxRounds` (1–5) is how many times an interrogation node may park the run to
 ask (D46). It is a ceiling, not a quota — the node settles as soon as the
@@ -464,7 +471,7 @@ scalars, or multi-document files — the linter reports these as parse errors.
 | `unreachable` | error | node not reachable from an input node |
 | `no-input` / `no-output` | error | missing entry/exit node |
 | `invalid-override` | error | override key not valid for the template (e.g. `tools` on non-agentTask) |
-| `unknown-tool` | error | tool not in the registry |
+| `unknown-tool` | error | a `tools` entry names no tool, toolset or valid selector |
 | `dead-end` | warning | node output never reaches an output node |
 | `duplicate-edge` | warning | same edge stated twice |
 | `orphan-approval` | warning | `requiresApproval` on an input/output node |
