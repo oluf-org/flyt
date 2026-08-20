@@ -201,7 +201,10 @@ async function keylessDuckDuckGo(query, limit, ctx) {
     return {
       query,
       available: false,
-      reason: `Keyless DuckDuckGo search failed: ${pythonResult.error || 'the Python search step failed'}`,
+      // The stderr is the actual explanation for a traceback; without it the
+      // reason was "the Python step exited 1", which names no cause at all.
+      reason: `Keyless DuckDuckGo search failed: ${pythonResult.error || 'the Python search step failed'}${
+        pythonResult.stderr ? ` — ${String(pythonResult.stderr).slice(-400)}` : ''}`,
       remedy: DUCKDUCKGO_REMEDY
     };
   }

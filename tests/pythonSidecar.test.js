@@ -120,6 +120,25 @@ test('the payload travels on stdin, and the script owns its own verdict', async 
   assert.equal(refused.ok, false, 'ok:false from the script must survive exit code 0');
 });
 
+// `-I` (isolated) implies `-E`, which makes Python ignore every PYTHON*
+// variable — including the PYTHONIOENCODING the bridge sets. On Windows the
+// child then writes through the console codepage, and the first non-ASCII
+// character in a result kills it with UnicodeEncodeError and an exit code of 1.
+// A web search worked six times and failed on the seventh, when a snippet
+// happened to contain an em dash.
+test('a result with non-ASCII characters survives isolated mode', async () => {
+  const real = resolvePython({ env: process.env });
+  if (!real.bin) return;
+  const script = [
+    'import json',
+    'print(json.dumps({"ok": True, "s": "em\\u2014dash and \\u00fcn\\u00efcode"}, ensure_ascii=False))'
+  ].join('\n');
+  const result = await runPythonScript(script, {}, { bin: real.bin, timeoutMs: 20_000 });
+  assert.equal(result.ok, true, `${result.error ?? ''} ${result.stderr ?? ''}`);
+  assert.match(result.s, /em\u2014dash/, 'the em dash is the whole point');
+  assert.match(result.s, /\u00fcn\u00efcode/);
+});
+
 test('a script that will not finish is killed at the timeout', async () => {
   const real = resolvePython({ env: process.env });
   if (!real.bin) return;

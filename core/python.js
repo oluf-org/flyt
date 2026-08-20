@@ -106,6 +106,29 @@ export const pythonFor = ctx => resolvePython({
 export const NO_PYTHON_REMEDY =
   'Run `flyt python setup` to build Flyt managed Python environment, or set FLYT_PYTHON to an interpreter that already has the packages installed.';
 
+/**
+ * Force UTF-8 on the child's streams, in the script rather than the environment.
+ *
+ * `-I` (isolated) implies `-E`, which makes Python ignore every PYTHON*
+ * variable — including the PYTHONIOENCODING this used to set. So on Windows the
+ * child wrote through the console codepage, and the first non-ASCII character
+ * in a result killed it with UnicodeEncodeError and an exit code of 1. A web
+ * search worked six times and failed on the seventh, when a snippet happened to
+ * contain a dash.
+ *
+ * Setting it here survives isolation, and costs one line of the caller's script
+ * budget. The environment variable stays as belt and braces for a caller that
+ * spawns without `-I`.
+ */
+const UTF8_PREAMBLE = [
+  'import sys as _sys',
+  'try:',
+  '    _sys.stdout.reconfigure(encoding="utf-8", errors="replace")',
+  '    _sys.stderr.reconfigure(encoding="utf-8", errors="replace")',
+  'except Exception:',
+  '    pass'
+].join('\n');
+
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 8_000_000;
 
@@ -142,12 +165,8 @@ export function runPythonScript(script, payload = {}, {
       // resolved and the packages installed beside it — not whatever the
       // working directory happens to contain, which for a Loop worker is a
       // worktree full of a model's files.
-      child = spawn(bin, ['-I', '-c', script], {
+      child = spawn(bin, ['-I', '-c', `${UTF8_PREAMBLE}\n${script}`], {
         cwd,
-        // PYTHONIOENCODING so a page in any script comes back as UTF-8 rather
-        // than as whatever the console codepage is; unbuffered so a timeout
-        // kill does not lose what the script already wrote. Both survive `-I`
-        // because they are set on the child rather than inherited.
         env: { ...env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' },
         windowsHide: true
       });
