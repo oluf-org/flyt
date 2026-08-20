@@ -80,6 +80,32 @@ test('an unavailable tool is not a bad tool', () => {
   assert.match(broke.reasons[0], /connection reset/);
 });
 
+// A refused page comes back with `text: ''` beside a `status: 403` and a
+// `challenge: true`. Taking the empty conventional key reported "returned 0
+// characters" about a result that had told the caller exactly what happened.
+test('an empty text field does not shadow the rest of the result', () => {
+  assert.match(textOf({ text: '', status: 403, challenge: true }), /403/);
+  assert.match(textOf({ text: '', content: 'the real answer' }), /the real answer/);
+  assert.equal(textOf({ text: 'present' }), 'present', 'a field with something in it still wins');
+});
+
+// A throw is still an answer, and for "what does this do when the page says no"
+// it is the only answer there is. It stays a failure — this is not a way to
+// pass by crashing informatively — but a message that names the status has told
+// the caller something actionable, and the card should say which happened.
+test('a thrown call has its message judged, and still fails', () => {
+  const kase = { expect: { contains: ['403'], absent: [], minChars: 0, maxMs: 0 } };
+
+  const informative = judge(kase, { ok: false, error: 'https://x.test returned 403 FORBIDDEN.', ms: 40 });
+  assert.equal(informative.pass, false, 'crashing informatively is still crashing');
+  assert.equal(informative.threw, true);
+  assert.ok(informative.reasons.some(r => /does name what was expected/.test(r)));
+
+  const useless = judge(kase, { ok: false, error: 'request failed', ms: 40 });
+  assert.equal(useless.pass, false);
+  assert.ok(useless.reasons.some(r => /does not name 403/.test(r)));
+});
+
 test('every expectation in the case file is checked, and the reason names which failed', () => {
   const kase = { expect: { contains: ['Einstein'], absent: ['Cookie banner'], minChars: 100, maxMs: 50 } };
   const bad = judge(kase, { ok: true, ms: 900, result: { text: 'short. Cookie banner.' } }, 'text');

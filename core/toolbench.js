@@ -90,8 +90,12 @@ export function textOf(result, field = null) {
     return typeof found === 'string' ? found : JSON.stringify(found ?? '');
   }
   if (typeof result === 'string') return result;
+  // A conventional key only counts when it has something in it. A refused page
+  // comes back with `text: ''` beside a `status: 403` and a `challenge: true`,
+  // and taking the empty string reported "returned 0 characters" about a result
+  // that had told the caller exactly what happened.
   for (const key of ['text', 'content', 'markdown', 'body']) {
-    if (typeof result[key] === 'string') return result[key];
+    if (typeof result[key] === 'string' && result[key].length) return result[key];
   }
   // A search-shaped result: the answer is the list, not a field on it.
   if (Array.isArray(result.results)) return JSON.stringify(result.results);
@@ -108,7 +112,21 @@ export function judge(kase, record, field = null) {
     if (/^Unknown tool/.test(String(record.error ?? ''))) {
       return { pass: false, unavailable: true, chars: 0, reasons: ["not in this build's tool library"] };
     }
-    return { pass: false, chars: 0, reasons: [`the call failed: ${record.error ?? 'no reason given'}`] };
+    // A THROW is still an answer, and for "what does this do when the page says
+    // no" it is the only answer there is. So the expectations are checked
+    // against the error text: a tool that names the status in its message has
+    // told the caller something actionable, and one that says "request failed"
+    // has not. The failure is still recorded — this is not a way to pass by
+    // crashing informatively — but `contains` gets its say.
+    const said = String(record.error ?? '');
+    const missing = kase.expect.contains.filter(n => !said.toLowerCase().includes(String(n).toLowerCase()));
+    return {
+      pass: false, chars: 0, threw: true,
+      reasons: [`the call threw: ${said || 'no reason given'}`,
+        ...(kase.expect.contains.length
+          ? [missing.length ? `and the message does not name ${missing.join(', ')}` : 'though the message does name what was expected']
+          : [])]
+    };
   }
   // A tool that reports its own unavailability is neither a pass nor a crash:
   // it is a machine that is not set up, and saying so is the whole point of
