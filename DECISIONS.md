@@ -48,6 +48,9 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D16 | Safety is layered: workspace path confinement, per-run approval mode, deterministic command screening, fail-closed model review, and explicit dangerous opt-out. | Current |
 | D18 | Users connect their own providers through API keys or explicit vendor-CLI opt-in. A hosted capped-key subscription is not a current commitment. | Current; replaces hosted-subscription wording |
 | D23 | Vendor CLI runtimes own subscription sign-in, token storage, refresh, and invocation. Flyt never copies or reimplements their OAuth credentials. | Current |
+| D48 | A capability that exists only outside JavaScript is borrowed through ONE bounded bridge (`core/python.js`), not per tool. The tool supplies script text so what runs is reviewable, arguments travel as JSON on stdin, the interpreter is resolved and reportable rather than assumed, the environment lives outside every repository, and a missing interpreter or package is a result with a remedy. D24 keeps the parser dependency-free; it does not require reimplementing every library in the world. | Current |
+| D49 | A tool must be callable outside a run (`flyt tools run`), and that door narrows authority rather than widening it: a write, shell or destructive tool refuses without an explicit confirmation. A capability that cannot be tried cannot be authored. | Current |
+| D50 | "Which tool is better" is a measurement against fixed cases (`benchmark/tools/*.json`, `flyt tools bench`), never a model's impression. A tool that is not installed is reported unavailable and kept out of the totals: not set up is not the same as worse. | Current |
 
 ## Delivery and operations
 
@@ -65,6 +68,7 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D45 | The Loop UI is a six-column board driven by shared blocker rules. Loop workers receive surgical edit, gate, backlog, run-inspection, web, and human-question tools through a bounded ceiling. | Current |
 | D47 | Spend is measured from the call trace — every settled call, whatever became of the run or the node — and priced from the model catalog. A ceiling that cannot see a cost cannot bind it. | Current |
 | D46 | Clarifying questions are a node's contract, not the gate's: the number of rounds a node may park for belongs to the node. Asking is a first-class deliverable path — the interrogation node asks before it specifies — and a parked run must be answerable from every surface that can show it. | Current |
+| D51 | A review rejection is a correction, not a rebuild. It is the one failure where the gates already passed, so the reviewed commit is recorded and the next attempt starts from it. Red gates and an empty diff are not inherited. | Current |
 
 Decision numbers D30–D34 were never promoted from retired plan drafts and are intentionally unused.
 
