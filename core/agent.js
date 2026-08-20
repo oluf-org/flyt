@@ -22,6 +22,37 @@ const MAX_ITERATIONS = 8;
 // returns whatever partial text happened to exist — usually "Let me read the
 // files in sections", which is not an answer. With it, the model spends its
 // final turn writing the best answer it can from what it already read.
+/**
+ * Where the agent is in its tool budget, said out loud before it runs out.
+ *
+ * The cap was invisible until the round it bit. A worker would spend forty
+ * rounds reading — the whole budget, one narrowing `sed -n` range at a time —
+ * and meet LAST_ROUND_NOTICE with the tools already withdrawn, at which point
+ * the only thing left to do is write a confident summary of the change it never
+ * made. Watched that three times in one evening, on three different models, on
+ * tasks all three were capable of.
+ *
+ * A bounded agent that cannot see its bound will spend it. Two notices, at two
+ * thirds and at six sevenths, are enough to change the strategy while there is
+ * still budget to act on the change — and few enough not to become noise the
+ * model learns to skip.
+ */
+export const BUDGET_MARKS = [2 / 3, 6 / 7];
+
+export function budgetNotice(used, total) {
+  const left = total - used;
+  return [
+    `BUDGET: ${used} of ${total} tool rounds used, ${left} left.`,
+    'On the last one the tools are withdrawn and only text is accepted, so anything you have not',
+    'done by then will not get done.',
+    left <= 2
+      ? 'Make the change now, with what you already know.'
+      : 'Stop exploring and start producing: make the smallest complete version of the change, then'
+        + ' verify it. Re-reading something you have already opened is the most expensive way left'
+        + ' to spend this.'
+  ].join(' ');
+}
+
 const LAST_ROUND_NOTICE = [
   'You have no tool calls left. Do not request another one — any further tool',
   'call will be discarded.',
@@ -429,11 +460,18 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
   let lastText = '';
 
   const rounds = Math.max(1, Number(maxIterations ?? MAX_ITERATIONS));
+  // Rounds at which the agent is told how much of its budget is gone. Computed
+  // once so the marks cannot drift, and shifted off as they are used.
+  const warnAt = BUDGET_MARKS.map(f => Math.floor(rounds * f)).filter(n => n > 0 && n < rounds - 1);
   for (let i = 0; i < rounds; i++) {
     // The final round is answer-only: the tools are withdrawn AND the model is
     // told why, so it writes instead of asking for another search it cannot get.
     const last = i === rounds - 1;
     if (last) messages.push({ role: 'user', content: LAST_ROUND_NOTICE });
+    else if (warnAt.length && i + 1 >= warnAt[0]) {
+      messages.push({ role: 'user', content: budgetNotice(i, rounds) });
+      warnAt.shift();
+    }
     // onText rides along, but today's adapters decline to stream a tool-enabled
     // call (the loop needs the raw tool_calls message back, which only the
     // non-streaming response carries) — so this path stays silent until an
@@ -508,6 +546,9 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
   // the loop still terminated. A caller that budgets itself (the fan-out peek,
   // DECISIONS.md D37) needs the bound to hold on both protocols.
   const rounds = Math.max(1, Number(maxIterations ?? MAX_ITERATIONS));
+  // Same budget notices as the native path. A text-protocol model runs out of
+  // rounds the same way and had the same blind spot.
+  const warnAt = BUDGET_MARKS.map(f => Math.floor(rounds * f)).filter(n => n > 0 && n < rounds - 1);
   for (let i = 0; i < rounds; i++) {
     // The last round is answer-only here too. The native path has said so since
     // it was written; this one never did, so a text-protocol model reaching its
@@ -521,11 +562,14 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
       {
         ...worker, apiKey,
         system: last ? system : fullSystem,
-        prompt: last ? `${transcript}\n\n${LAST_ROUND_NOTICE}` : transcript,
+        prompt: last
+          ? `${transcript}\n\n${LAST_ROUND_NOTICE}`
+          : (warnAt.length && i + 1 >= warnAt[0] ? `${transcript}\n\n${budgetNotice(i, rounds)}` : transcript),
         onText, onRetry, onCall, retry, timeout, signal, ...(maxTokens ? { maxTokens } : {})
       },
       d => onEmptyTurn?.({ ...d, round: i + 1, of: rounds })
     );
+    if (warnAt.length && i + 1 >= warnAt[0] && !last) warnAt.shift();
     usage = addUsage(usage, res.usage);
     lastText = res.text;
     const match = last ? null : res.text.match(TOOL_BLOCK);

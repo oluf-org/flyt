@@ -863,3 +863,58 @@ test("a band's worker still says 'auto', and that is not a vote against tools", 
   assert.equal(toolProtocol({ provider: 'anthropic', model: 'x', supportsTools: true }), 'text');
   assert.equal(toolProtocol({ provider: 'mock', model: 'mock-large', supportsTools: true }), 'text');
 });
+
+// A bounded agent that cannot see its bound will spend it.
+//
+// The cap used to be invisible until the round it bit: a worker spent forty
+// rounds reading, met the last-round notice with the tools already withdrawn,
+// and wrote a confident summary of the change it never made. Three times in one
+// evening, on three different models, on tasks all three were capable of.
+test('the agent is told how much of its tool budget is gone, before it is gone', async () => {
+  const store = { appendLog: () => {}, writeTaskSpec: () => 'tasks/task-1.spec.md' };
+  const seenPrompts = [];
+  stubFetch(({ body, n }) => {
+    seenPrompts.push(JSON.stringify(body.messages ?? body));
+    // Always ask for another tool, so only the cap can end the loop — which is
+    // the situation the notices exist for.
+    return jsonRes({
+      choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+          role: 'assistant', content: 'still reading',
+          tool_calls: [{ id: `c${n}`, type: 'function', function: { name: 'write_task_md', arguments: JSON.stringify({ content: `# ${n}` }) } }]
+        }
+      }]
+    });
+  });
+
+  const { getTools } = await import('../core/tools/index.js');
+  await runAgent({
+    worker: { provider: 'openrouter', model: 'tool-model', supportsTools: true },
+    apiKey: 'k', system: 'SYS', prompt: 'P',
+    tools: getTools(['write_task_md']),
+    ctx: { store, runId: 'r1', taskId: 'task-1' },
+    maxIterations: 7
+  });
+
+  const warned = seenPrompts.filter(p => p.includes('BUDGET:'));
+  assert.ok(warned.length >= 1, 'the budget has to be said out loud while there is still budget to act on');
+  assert.ok(warned.some(p => /tool rounds used/.test(p)));
+  // Not on the first round: a notice that arrives before any work has happened
+  // is noise, and noise is what a model learns to skip.
+  assert.ok(!seenPrompts[0].includes('BUDGET:'));
+  // The final round gets its own notice instead: the budget message tells a
+  // model to act, and on that round it no longer can.
+  assert.match(seenPrompts[seenPrompts.length - 1], /no tool calls left/);
+  restoreFetch();
+});
+
+test('budgetNotice changes its advice as the budget runs out', async () => {
+  const { budgetNotice, BUDGET_MARKS } = await import('../core/agent.js');
+  assert.equal(BUDGET_MARKS.length, 2, 'two notices: enough to change course, few enough not to be noise');
+  assert.match(budgetNotice(26, 40), /14 left/);
+  assert.match(budgetNotice(26, 40), /Stop exploring/);
+  assert.match(budgetNotice(38, 40), /Make the change now/);
+  assert.doesNotMatch(budgetNotice(38, 40), /Stop exploring/,
+    'telling someone with two rounds left to "start producing" is advice they cannot take');
+});
