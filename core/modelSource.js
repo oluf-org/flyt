@@ -18,17 +18,22 @@
 export const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'];
 export const PROVIDER_IDS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'];
 export const KEYED_PROVIDERS = PROVIDER_IDS.filter(p => p !== 'mock' && !SUBSCRIPTION_PROVIDERS.includes(p));
-export const DEFAULT_PRIORITY = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'];
+// OpenRouter is first because the app's value-first defaults live there: it is
+// the only connected source that can serve the free and low-cost shortlist.
+// Users can still reorder this in Settings, and an existing saved order wins.
+export const DEFAULT_PRIORITY = ['openrouter', 'anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'mock'];
 
 // The compact pickers should be useful before somebody curates a personal
-// list. These are deliberately one strong, recognizable model per major lab.
-// Bare ids take the direct provider route when it is connected; DeepSeek is an
-// OpenRouter id because the app has no first-party DeepSeek adapter.
+// list. Keep the value-first OpenRouter roster visible by default: free models
+// first, then inexpensive workhorses and stronger escalation choices.
 export const DEFAULT_PINNED_MODELS = [
-  { id: 'gpt-5.2', source: 'auto', enabled: true, pinned: true },
-  { id: 'claude-sonnet-5', source: 'auto', enabled: true, pinned: true },
-  { id: 'kimi-k2.7-code', source: 'auto', enabled: true, pinned: true },
-  { id: 'deepseek/deepseek-v4-pro', source: 'auto', enabled: true, pinned: true }
+  { id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', source: 'openrouter', enabled: true, pinned: true },
+  { id: 'z-ai/glm-5.2:free', source: 'openrouter', enabled: true, pinned: true },
+  { id: '~deepseek/deepseek-v4-flash-latest', source: 'openrouter', enabled: true, pinned: true },
+  { id: 'deepseek/deepseek-v4-pro-0813', source: 'openrouter', enabled: true, pinned: true },
+  { id: 'z-ai/glm-5.3', source: 'openrouter', enabled: true, pinned: true },
+  { id: 'x-ai/grok-4.6', source: 'openrouter', enabled: true, pinned: true },
+  { id: 'moonshotai/kimi-k3', source: 'openrouter', enabled: true, pinned: true }
 ];
 
 // Curated per-provider model lists (DESIGN-SPEC.md §6): anthropic/openai/kimi
@@ -76,7 +81,7 @@ export const TEST_MODELS = {
   codex: 'gpt-5.1-codex-mini',
   kimiPlatform: 'kimi-k2.6',
   kimiCode: 'kimi-for-coding',
-  openrouter: 'openai/gpt-4o-mini'
+  openrouter: '~deepseek/deepseek-v4-flash-latest'
 };
 
 // Load-time normalization + migration. The legacy single `openrouterApiKey`

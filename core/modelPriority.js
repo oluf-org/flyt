@@ -188,7 +188,7 @@ export const PROVIDER_MODEL_PRIORITY = {
       high: ['gpt-5.2', 'gpt-5.2-codex']
     }
   },
-  // OpenRouter is not a mirror of the other tables (revised 2026-08-19).
+  // OpenRouter is not a mirror of the other tables (revised 2026-08-20).
   //
   // It was written as one — the same frontier ids with a vendor prefix — and
   // that is how it went stale in two directions at once. Half the ids no longer
@@ -208,50 +208,48 @@ export const PROVIDER_MODEL_PRIORITY = {
   // value-first and the frontier is the HIGH tier, where paying five times more
   // buys something: the run that must not be re-run.
   //
-  //   low     $0.14/$0.28   deepseek-v4-flash — routing, triage, summaries
-  //   medium  $0.66/$1.98   deepseek-v4-pro   — the workhorse
-  //   high    $5/$25        claude-opus-5     — the judgement calls
+  //   low     free           Nemotron / GLM 5.2 — routing and summaries
+  //   medium  $0.065/$0.14  DeepSeek V4 Flash — routine work
+  //   high    $1.19/$3.56   DeepSeek V4 Pro — difficult work
   //
   // Every id here was checked against the live catalog. Re-check before
   // editing: `flyt probe <provider/model>` calls it once and says what came
   // back, which is the only test that matters for a model id.
   openrouter: {
     code: {
-      low: ['deepseek/deepseek-v4-flash-0731', 'openai/gpt-5.6-luna'],
-      medium: ['deepseek/deepseek-v4-pro-0813', 'moonshotai/kimi-k2.7-code', 'anthropic/claude-sonnet-5'],
-      high: ['anthropic/claude-opus-5', 'anthropic/claude-sonnet-5']
+      low: ['nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'z-ai/glm-5.2:free', '~deepseek/deepseek-v4-flash-latest'],
+      medium: ['~deepseek/deepseek-v4-flash-latest', 'z-ai/glm-5.3', 'deepseek/deepseek-v4-pro-0813', 'moonshotai/kimi-k3'],
+      high: ['deepseek/deepseek-v4-pro-0813', 'z-ai/glm-5.3', 'x-ai/grok-4.6', 'moonshotai/kimi-k3']
     },
     docs: {
-      low: ['deepseek/deepseek-v4-flash-0731', 'openai/gpt-5.6-luna'],
-      medium: ['deepseek/deepseek-v4-pro-0813', 'google/gemini-3.7-flash'],
-      high: ['anthropic/claude-sonnet-5', 'deepseek/deepseek-v4-pro-0813']
+      low: ['z-ai/glm-5.2:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', '~deepseek/deepseek-v4-flash-latest'],
+      medium: ['~deepseek/deepseek-v4-flash-latest', 'z-ai/glm-5.3', 'deepseek/deepseek-v4-pro-0813'],
+      high: ['z-ai/glm-5.3', 'deepseek/deepseek-v4-pro-0813', 'moonshotai/kimi-k3']
     },
     planning: {
-      low: ['deepseek/deepseek-v4-pro-0813', 'deepseek/deepseek-v4-flash-0731'],
-      medium: ['deepseek/deepseek-v4-pro-0813', 'z-ai/glm-5.2'],
-      high: ['anthropic/claude-opus-5', 'openai/gpt-5.6-terra']
+      low: ['z-ai/glm-5.2:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', '~deepseek/deepseek-v4-flash-latest'],
+      medium: ['~deepseek/deepseek-v4-flash-latest', 'z-ai/glm-5.3', 'deepseek/deepseek-v4-pro-0813'],
+      high: ['deepseek/deepseek-v4-pro-0813', 'z-ai/glm-5.3', 'x-ai/grok-4.6', 'moonshotai/kimi-k3']
     },
     evaluation: {
-      low: ['deepseek/deepseek-v4-flash-0731', 'openai/gpt-5.6-luna'],
-      medium: ['deepseek/deepseek-v4-pro-0813', 'z-ai/glm-5.2'],
-      // An evaluation that waves through bad work costs more than the model
-      // did, so this is the one kind where the top tier is not a luxury.
-      high: ['anthropic/claude-opus-5', 'openai/gpt-5.6-terra']
+      low: ['z-ai/glm-5.2:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', '~deepseek/deepseek-v4-flash-latest'],
+      medium: ['~deepseek/deepseek-v4-flash-latest', 'z-ai/glm-5.3', 'deepseek/deepseek-v4-pro-0813'],
+      high: ['deepseek/deepseek-v4-pro-0813', 'z-ai/glm-5.3', 'x-ai/grok-4.6']
     },
     analysis: {
-      low: ['deepseek/deepseek-v4-flash-0731', 'minimax/minimax-m3'],
-      medium: ['deepseek/deepseek-v4-pro-0813', 'z-ai/glm-5.2'],
-      high: ['anthropic/claude-opus-5', 'anthropic/claude-sonnet-5']
+      low: ['nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'z-ai/glm-5.2:free', '~deepseek/deepseek-v4-flash-latest'],
+      medium: ['~deepseek/deepseek-v4-flash-latest', 'z-ai/glm-5.3', 'deepseek/deepseek-v4-pro-0813'],
+      high: ['deepseek/deepseek-v4-pro-0813', 'z-ai/glm-5.3', 'x-ai/grok-4.6', 'moonshotai/kimi-k3']
     },
     translation: {
-      low: ['google/gemini-3.7-flash', 'deepseek/deepseek-v4-flash-0731'],
-      medium: ['google/gemini-3.7-flash', 'openai/gpt-5.6-luna'],
-      high: ['openai/gpt-5.6-terra', 'anthropic/claude-sonnet-5']
+      low: ['z-ai/glm-5.2:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', '~deepseek/deepseek-v4-flash-latest'],
+      medium: ['~deepseek/deepseek-v4-flash-latest', 'z-ai/glm-5.3', 'moonshotai/kimi-k3'],
+      high: ['z-ai/glm-5.3', 'moonshotai/kimi-k3', 'deepseek/deepseek-v4-pro-0813']
     },
     general: {
-      low: ['deepseek/deepseek-v4-flash-0731', 'openai/gpt-5.6-luna'],
-      medium: ['deepseek/deepseek-v4-pro-0813', 'anthropic/claude-sonnet-5'],
-      high: ['anthropic/claude-opus-5', 'anthropic/claude-sonnet-5']
+      low: ['nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'z-ai/glm-5.2:free', '~deepseek/deepseek-v4-flash-latest'],
+      medium: ['~deepseek/deepseek-v4-flash-latest', 'z-ai/glm-5.3', 'deepseek/deepseek-v4-pro-0813', 'moonshotai/kimi-k3'],
+      high: ['deepseek/deepseek-v4-pro-0813', 'z-ai/glm-5.3', 'x-ai/grok-4.6', 'moonshotai/kimi-k3']
     }
   }
 };
@@ -261,39 +259,39 @@ export const PROVIDER_MODEL_PRIORITY = {
 // providers always lands on the best option those providers offer.
 export const PROVIDER_ORDER = {
   code: {
-    low: ['anthropic', 'openai', 'kimi', 'openrouter'],
-    medium: ['anthropic', 'kimi', 'openai', 'openrouter'],
-    high: ['anthropic', 'openai', 'kimi', 'openrouter']
+    low: ['openrouter', 'anthropic', 'openai', 'kimi'],
+    medium: ['openrouter', 'anthropic', 'kimi', 'openai'],
+    high: ['openrouter', 'anthropic', 'openai', 'kimi']
   },
   docs: {
-    low: ['anthropic', 'openai', 'kimi', 'openrouter'],
-    medium: ['anthropic', 'openai', 'kimi', 'openrouter'],
-    high: ['anthropic', 'openai', 'kimi', 'openrouter']
+    low: ['openrouter', 'anthropic', 'openai', 'kimi'],
+    medium: ['openrouter', 'anthropic', 'openai', 'kimi'],
+    high: ['openrouter', 'anthropic', 'openai', 'kimi']
   },
   planning: {
-    low: ['anthropic', 'openai', 'kimi', 'openrouter'],
-    medium: ['anthropic', 'openai', 'kimi', 'openrouter'],
-    high: ['openai', 'anthropic', 'kimi', 'openrouter']
+    low: ['openrouter', 'anthropic', 'openai', 'kimi'],
+    medium: ['openrouter', 'anthropic', 'openai', 'kimi'],
+    high: ['openrouter', 'openai', 'anthropic', 'kimi']
   },
   evaluation: {
-    low: ['anthropic', 'openai', 'kimi', 'openrouter'],
-    medium: ['anthropic', 'openai', 'kimi', 'openrouter'],
-    high: ['openai', 'anthropic', 'kimi', 'openrouter']
+    low: ['openrouter', 'anthropic', 'openai', 'kimi'],
+    medium: ['openrouter', 'anthropic', 'openai', 'kimi'],
+    high: ['openrouter', 'openai', 'anthropic', 'kimi']
   },
   analysis: {
-    low: ['anthropic', 'openai', 'kimi', 'openrouter'],
-    medium: ['anthropic', 'openai', 'kimi', 'openrouter'],
-    high: ['anthropic', 'openai', 'kimi', 'openrouter']
+    low: ['openrouter', 'anthropic', 'openai', 'kimi'],
+    medium: ['openrouter', 'anthropic', 'openai', 'kimi'],
+    high: ['openrouter', 'anthropic', 'openai', 'kimi']
   },
   translation: {
-    low: ['openai', 'anthropic', 'kimi', 'openrouter'],
-    medium: ['openai', 'anthropic', 'kimi', 'openrouter'],
-    high: ['openai', 'anthropic', 'kimi', 'openrouter']
+    low: ['openrouter', 'openai', 'anthropic', 'kimi'],
+    medium: ['openrouter', 'openai', 'anthropic', 'kimi'],
+    high: ['openrouter', 'openai', 'anthropic', 'kimi']
   },
   general: {
-    low: ['anthropic', 'openai', 'kimi', 'openrouter'],
-    medium: ['anthropic', 'openai', 'kimi', 'openrouter'],
-    high: ['anthropic', 'openai', 'kimi', 'openrouter']
+    low: ['openrouter', 'anthropic', 'openai', 'kimi'],
+    medium: ['openrouter', 'anthropic', 'openai', 'kimi'],
+    high: ['openrouter', 'anthropic', 'openai', 'kimi']
   }
 };
 

@@ -36,7 +36,7 @@ test('the provider order chooses the provider; that provider\'s ranking chooses 
   // best for this kind and effort — the two concerns compose in one direction.
   const r = planDefaultRoute(codeNode, { providerKeys: allKeys, providerPriority: ['openrouter', 'anthropic'] });
   assert.equal(r.provider, 'openrouter');
-  assert.equal(r.model, 'deepseek/deepseek-v4-pro-0813'); // openrouter's top code/medium pick
+  assert.equal(r.model, '~deepseek/deepseek-v4-flash-latest'); // OpenRouter's cheap code/medium pick
   assert.equal(r.order, 'settings-priority');
 });
 
@@ -65,7 +65,17 @@ test('subscription providers participate in the same order as keyed ones', () =>
 test('with no Settings order the built-in per-kind table still applies', () => {
   const r = planDefaultRoute(codeNode, { providerKeys: allKeys });
   assert.equal(r.order, 'default-order');
-  assert.equal(r.provider, 'anthropic');
+  assert.equal(r.provider, 'openrouter');
+});
+
+test('the OpenRouter value ladder uses free, cheap, then stronger shortlisted models', () => {
+  const at = effort => planDefaultRoute(
+    { type: 'agentTask', data: { role: 'execute', category: 'Code general', effort } },
+    { providerKeys: { openrouter: 'k' } }
+  ).model;
+  assert.equal(at('low'), 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free');
+  assert.equal(at('medium'), '~deepseek/deepseek-v4-flash-latest');
+  assert.equal(at('high'), 'deepseek/deepseek-v4-pro-0813');
 });
 
 test('explicit node/category/level precedence survives the unification', () => {

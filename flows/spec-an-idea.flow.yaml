@@ -50,10 +50,10 @@ nodes:
 flow:
   - input -> inputs
   - inputs.idea -> interrogate
-  - interrogate -> plan
-  - interrogate.open -> plan
   - plan.tasks -> work
   - interrogate -> output
   - interrogate.transcript -> output
   - plan -> output
   - work -> output
+  - inputs -> interrogate
+  - interrogate -> plan
