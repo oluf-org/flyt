@@ -1,0 +1,23 @@
+{
+  "name": "web-refused",
+  "description": "What a tool does when a page says no. The question is not whether it gets the content — nothing does — but whether the caller is told something it can act on. Judged against the WHOLE result rather than a text field, because the useful answer here is a status and a flag, not prose: a tool that throws has told the model only that something went wrong, and a tool that returns an empty success has told it something false.",
+  "tools": [
+    { "id": "web_fetch", "as": "web_fetch" },
+    { "id": "scrape_page", "as": "scrapling", "args": { "mode": "fetcher" } },
+    { "id": "extract_page", "as": "trafilatura" }
+  ],
+  "cases": [
+    {
+      "id": "forbidden",
+      "about": "An explicit 403 with an empty body. A useful answer names the status and says what to try next.",
+      "args": { "url": "https://httpbin.org/status/403" },
+      "expect": { "contains": ["403"], "maxMs": 30000 }
+    },
+    {
+      "id": "not-found",
+      "about": "A 404 is a fact about the URL, and the caller should be able to tell it apart from a network failure.",
+      "args": { "url": "https://httpbin.org/status/404" },
+      "expect": { "contains": ["404"], "maxMs": 30000 }
+    }
+  ]
+}

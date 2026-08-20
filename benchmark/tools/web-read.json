@@ -1,34 +1,35 @@
 {
   "name": "web-read",
-  "description": "Reading a page off the internet. The cases are chosen so the differences between a plain HTTP GET and a real scraper are visible rather than asserted: a static page both should manage, a page whose content only exists after JavaScript runs, a page that answers 403 to an obvious robot, and a page with enough furniture around the article to show whether boilerplate is being stripped.",
+  "description": "Reading a page off the internet. Four cases chosen so the differences between these tools are visible rather than asserted: a static page everything should manage; a page whose content only exists after JavaScript runs; a page that answers 403 to an obvious robot; and a real article with navigation, sidebars and footers around it, where `absent` is the boilerplate check. A tool that is not installed here is reported as unavailable and kept out of the totals — not set up is not the same as worse.",
   "tools": [
     { "id": "web_fetch", "as": "web_fetch", "field": "text" },
-    { "id": "scrape_page", "as": "scrapling", "field": "text" }
+    { "id": "scrape_page", "as": "scrapling", "field": "text", "args": { "mode": "fetcher" } },
+    { "id": "scrape_page", "as": "scrapling-browser", "field": "text", "args": { "mode": "dynamic" } },
+    { "id": "extract_page", "as": "trafilatura", "field": "text" }
   ],
   "cases": [
     {
       "id": "static",
       "about": "The floor. Anything that cannot do this is broken, not slow.",
       "args": { "url": "https://example.com" },
-      "expect": { "contains": ["Example Domain"], "minChars": 80, "maxMs": 20000 }
+      "expect": { "contains": ["Example Domain"], "minChars": 80, "maxMs": 30000 }
     },
     {
       "id": "javascript",
-      "about": "The quotes are rendered by a script. A plain GET sees the shell and nothing in it.",
+      "about": "The quotes are rendered by a script. A plain GET sees the shell and nothing in it; only a real browser sees the quotes.",
       "args": { "url": "https://quotes.toscrape.com/js/" },
       "expect": { "contains": ["Albert Einstein"], "minChars": 200, "maxMs": 60000 }
     },
     {
-      "id": "refused",
-      "about": "An explicit 403. What matters is whether the tool SAYS so rather than returning an empty success.",
-      "args": { "url": "https://httpbin.org/status/403" },
-      "expect": { "contains": ["403"], "maxMs": 30000 }
-    },
-    {
       "id": "article",
-      "about": "A real page with navigation, sidebars and footers around the text. `absent` is the boilerplate check.",
+      "about": "A real page with navigation, sidebars and footers around the text. The `contains` proves the article arrived; the `absent` entries are Wikipedia's chrome, so a tool that passes both is extracting the article rather than the page.",
       "args": { "url": "https://en.wikipedia.org/wiki/Web_scraping" },
-      "expect": { "contains": ["Web scraping"], "minChars": 2000, "maxMs": 45000 }
+      "expect": {
+        "contains": ["Web scraping"],
+        "absent": ["Jump to content", "Privacy policy", "Create account"],
+        "minChars": 2000,
+        "maxMs": 60000
+      }
     }
   ]
 }
