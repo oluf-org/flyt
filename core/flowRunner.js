@@ -48,7 +48,7 @@ import {
   addressingBlock, renderBrief, LANE_PRESETS, LANE_PRESET_IDS
 } from './nodes/fanout.js';
 import { spliceAllSubflows, SubflowError } from './nodes/subflow.js';
-import { parseBacklogPlan, validateBacklogEvidence } from './nodes/backlogPlan.js';
+import { parseBacklogPlan, validateBacklogEvidence, BACKLOG_PLAN_ROLE } from './nodes/backlogPlan.js';
 import {
   INPUTS_NODE_ID, validateInputValues, renderInputValue
 } from './nodes/runInputs.js';
@@ -57,7 +57,7 @@ import {
   readLoopState, writeLoopState, renderLoopReport, spendFor
 } from './nodes/loopNode.js';
 import { Workspace } from './workspace.js';
-import { loadSkills, withSkillsSection } from './skills.js';
+import { loadSkills, withSkillsSection, listSkills, availableSkillsSection } from './skills.js';
 import { createWriteLedger } from './writeLedger.js';
 import { executeTool, grantContext, resolveTools, toolLibraryForLint } from './tools/index.js';
 import { narrowCeiling } from '../src/toolGrants.js';
@@ -233,13 +233,22 @@ const DEFAULT_SYSTEM = {
     '[{ "title": "short imperative title", "goal": "what must be true when this',
     'is done", "doneWhen": ["a checkable criterion"], "value": 1-5, "effort": 1-5,',
     '"level": "low|medium|high|xhigh|max", "gates": ["npm test"], "blastRadius":',
-    '["src/thing.js"], "dependsOn": ["title of another task in this list"] }]',
+    '["src/thing.js"], "skills": ["a skill this project has"],',
+    '"dependsOn": ["title of another task in this list"] }]',
     'Rules that matter more than coverage:',
     '- Every task must be claimable ALONE. No "see above", no shared context.',
     '- Every task needs at least one "done when" someone else could check.',
     '- Prefer few real tasks to many plausible ones. A task nobody can verify is',
     '  not a task, and a backlog full of those is worse than an empty one.',
     '- dependsOn names another task by its exact title in this same list.',
+    // The task is claimed weeks later by a worker with none of this context.
+    // What it may TOUCH is blastRadius; what it must KNOW is skills, and
+    // without it every worker rediscovers the same convention by trial and
+    // error — expensively, because unattended is exactly where nobody is
+    // watching to say "we do it this way here".
+    '- skills names expertise the worker will need, from the list below. Attach',
+    '  one when the job cannot be done right without it. Never invent a name: a',
+    '  skill this project does not have resolves to nothing and says nothing.',
     // D38 P6. These fields describe THIS project, and this node used to hold no
     // tools at all — so every path and every gate command was invented, and the
     // loop was what found out. With a read grant they are checkable claims.
@@ -3562,6 +3571,16 @@ export class FlowRunner {
         node.data?.skills);
       if (role === 'translate') {
         system += `\n\nTARGET LANGUAGE: ${node.data?.language?.trim() || 'English'}`;
+      }
+      // A planner deciding what a future worker needs has to be shown what
+      // this project HAS. Told to name skills without the menu, it either
+      // names none (which is what happened) or invents one that resolves to
+      // nothing at run time — and both failures are silent.
+      if (role === BACKLOG_PLAN_ROLE) {
+        const menu = availableSkillsSection(listSkills(this.workspaceFor(runId)));
+        if (menu) system += `
+
+${menu}`;
       }
       // Feedback channel (node rework): a node wired back to an upstream node
       // via a feedback edge judges that node's work with a structured verdict.

@@ -79,3 +79,50 @@ export function withSkillsSection(system, found) {
   const section = skillsSection(found);
   return section ? `${system}\n\n${section}` : system;
 }
+
+/**
+ * The skill names this project actually has, with their first heading line.
+ *
+ * Written for the planner rather than for execution: a node that decides what a
+ * FUTURE worker will need has to know what expertise exists, and inventing a
+ * name produces a task whose `skills` list silently resolves to nothing. The
+ * one-line summary comes from the file's first heading or first non-empty line,
+ * so the list reads as a menu rather than as six bare slugs.
+ *
+ * Never throws — a project with no skills directory has no skills, which is a
+ * fact and not an error.
+ */
+export function listSkills(workspace, { limit = 40 } = {}) {
+  if (!workspace) return [];
+  let dir;
+  try { dir = workspace.resolve(`${workspace.configDirName}/skills`); }
+  catch { return []; }
+  let names;
+  try { names = fs.readdirSync(dir).filter(n => n.endsWith('.md')); }
+  catch { return []; }
+  const out = [];
+  for (const file of names.slice(0, limit)) {
+    const name = file.slice(0, -3);
+    if (!SAFE_NAME.test(name)) continue;
+    let summary = '';
+    try {
+      const text = fs.readFileSync(`${dir}/${file}`, 'utf8');
+      const line = text.split(/\r?\n/).map(l => l.trim()).find(l => l && !l.startsWith('---'));
+      summary = (line ?? '').replace(/^#+\s*/, '').slice(0, 120);
+    } catch { /* unreadable: the name is still worth listing */ }
+    out.push({ name, summary });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// The menu, as a system-prompt section. Empty when the project has none, so a
+// caller can append unconditionally.
+export function availableSkillsSection(skills) {
+  if (!skills?.length) return '';
+  return [
+    'SKILLS THIS PROJECT HAS — names you may put in a task\'s `skills` list.',
+    'Attach one when the job needs that knowledge to be done right. A name that',
+    'is not on this list resolves to nothing at run time, so do not invent one.',
+    ...skills.map(s => `- ${s.name}${s.summary ? ` — ${s.summary}` : ''}`)
+  ].join('\n');
+}

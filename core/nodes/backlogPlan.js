@@ -40,6 +40,7 @@ array of backlog tasks:
     "level": "low|medium|high|xhigh|max",
     "gates": ["npm test"],
     "blastRadius": ["src/thing.js"],
+    "skills": ["a skill this project has"],
     "dependsOn": ["title of another task in this list"],
     "evidence": [{
       "claim": "the specific behavior this task transfers",
@@ -51,7 +52,9 @@ array of backlog tasks:
 ]
 
 Every task must be claimable on its own: a title, a goal, and at least one
-checkable "done when". A task nobody can verify is not a task. When a task
+checkable "done when". A task nobody can verify is not a task. blastRadius is
+what the task may TOUCH; skills is what its worker must KNOW, named from the
+skills this project actually has — an invented name resolves to nothing. When a task
 mentions a reference repository, every referenced file needs a matching
 evidence entry. Evidence is checked against the pinned clone before enqueue.`;
 
@@ -148,6 +151,12 @@ export function parseBacklogPlan(text) {
       ...(level ? { level } : {}),
       gates: strList(t.gates, at, 'gates', errors),
       blastRadius: strList(t.blastRadius, at, 'blastRadius', errors),
+      // Expertise the future worker needs (core/backlog.js `skills`). Not
+      // validated against the project's skills directory here: the planner is
+      // SHOWN the menu, and a name that misses resolves to nothing and is
+      // logged as a miss at run time, which is a better failure than refusing
+      // a whole plan over one slug.
+      skills: strList(t.skills, at, 'skills', errors),
       dependsOn: strList(t.dependsOn, at, 'dependsOn', errors),
       evidence: evidenceList(t.evidence, at, errors),
       ...(isStr(t.notes) ? { notes: t.notes.trim() } : {})

@@ -10,7 +10,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { FlowRunner } from '../core/flowRunner.js';
 import { Workspace } from '../core/workspace.js';
-import { loadSkills, skillsSection, withSkillsSection, skillPath } from '../core/skills.js';
+import {
+  loadSkills, skillsSection, withSkillsSection, skillPath, listSkills, availableSkillsSection
+} from '../core/skills.js';
 import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'llm-flow-skill-'));
@@ -329,4 +331,35 @@ test('run-level skills are a union with the node\'s own, never a replacement', a
   const resolved = JSON.parse(fs.readFileSync(path.join(store.runDir(runId), 'flow.json'), 'utf8'));
   assert.deepEqual(resolved.nodes.find(n => n.id === 'step').data.skills, ['from-template', 'house-rules'],
     'declared first, added second, and no duplicates');
+});
+
+// --- the planner's menu ------------------------------------------------------
+//
+// A planner told to name the skills a future worker needs, but not shown which
+// skills exist, has two ways to fail and both are silent: name none, or invent
+// a slug that resolves to nothing at run time.
+
+test('listSkills reports what the project has, with a one-line summary', () => {
+  const ws = wsWithSkills({
+    'tool-authoring': '# Authoring a Flyt tool\n\nUse this when...',
+    'house-style': 'Tabs, never spaces.',
+    'not-a-skill.txt': 'ignored'
+  });
+  const found = listSkills(ws);
+  assert.deepEqual(found.map(s => s.name), ['house-style', 'tool-authoring'], 'alphabetical, .md only');
+  assert.equal(found.find(s => s.name === 'tool-authoring').summary, 'Authoring a Flyt tool',
+    'the heading is the summary, without its hashes');
+});
+
+test('a project with no skills directory has no skills, which is not an error', () => {
+  const ws = new Workspace(tmpDir()).ensure();
+  assert.deepEqual(listSkills(ws), []);
+  assert.equal(listSkills(null).length, 0);
+  assert.equal(availableSkillsSection([]), '', 'nothing to show adds nothing to the prompt');
+});
+
+test('the menu tells the planner not to invent a name', () => {
+  const section = availableSkillsSection([{ name: 'house-style', summary: 'Tabs, never spaces.' }]);
+  assert.match(section, /- house-style — Tabs, never spaces\./);
+  assert.match(section, /do not invent one/i);
 });
