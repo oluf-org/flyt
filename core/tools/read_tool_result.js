@@ -16,6 +16,20 @@ export default {
   title: 'Read an earlier tool result',
   description: 'Read the full result of an earlier tool call by its handle (e.g. "@tool:14"), optionally narrowed to one part with a jsonPath like "$.stdout" or "$.items[0].name". Use this instead of repeating a call whose result was truncated.',
   effects: ['read'],
+  // The one tool that must not be previewed again on its way out.
+  //
+  // It already bounds itself: `maxChars` (default 10,000, ceiling 100,000) is a
+  // deliberate, caller-chosen limit. The registry then applied the DEFAULT
+  // 2,000-char preview on top, so the tool invented to read more than a preview
+  // could never return more than a preview. Watched a run ask for 20,000
+  // characters twice, get about a thousand each time, and give up on the whole
+  // mechanism in favour of a dozen `bash sed` calls over the same file.
+  //
+  // Still archived (`artifact: true`, the default): reading a result stays as
+  // auditable as producing one, which is a deliberate choice and not an
+  // oversight — the log should record what the model actually pulled into its
+  // context, not only what the original call returned.
+  result: { preview: 'json', maxPreviewChars: 100_000, artifact: true },
   scope: 'run',
   risk: 'safe',
   autoExecute: true,

@@ -22,6 +22,9 @@ export default {
     'nothing you read there is part of this project until you write it yourself.'
   ].join(' '),
   effects: ['read'],
+  // Same reason as search_files: a truncated result set is indistinguishable
+  // from an empty one.
+  result: { preview: 'json', maxPreviewChars: 12_000, artifact: true },
   scope: 'workspace',
   risk: 'safe',
   keywords: ['reference', 'search', 'grep', 'example', 'prior art', 'how did', 'opencode'],

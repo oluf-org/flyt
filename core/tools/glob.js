@@ -30,6 +30,9 @@ export default {
     'Returned paths are ready to hand to read_file. Build output, node_modules and .git are skipped.'
   ].join(' '),
   effects: ['read'],
+  // A list of paths is cheap per entry and useless partially: the file you
+  // needed is as likely to be the twenty-first as the first.
+  result: { preview: 'json', maxPreviewChars: 12_000, artifact: true },
   scope: 'workspace',
   risk: 'safe',
   autoExecute: true,

@@ -120,12 +120,12 @@ Follow-up turns append a visible continuation to the run graph. Existing complet
 
 The Loop is a project-scoped supervisor over `.flyt/backlog/`. Tasks are individual Markdown files with structured frontmatter. The board and CLI derive blockers from the same `core/blockers.js` rules.
 
-A task declares what it may touch (`blastRadius`), how it is judged (`gates`), what it was learned from (`references`) and what its worker needs to know (`skills`). The last is resolved from the bound project's `.flyt/skills/` exactly as a template's list is and is merged into the run's resolved flow, so `runs/<id>/flow.json` records what was attached. A skill on a template says work of this kind is always done this way; a skill on a task says this particular job needs this knowledge. Neither can widen a tool grant.
+A task declares what it may touch (`blastRadius`), how it is judged (`gates`), what it was learned from (`references`) and what its worker needs to know (`skills`). A worktree is a checkout, so a skill file that is untracked is simply absent from it; the supervisor reports a declared skill the worktree lacks rather than leaving it in the run log. The last is resolved from the bound project's `.flyt/skills/` exactly as a template's list is and is merged into the run's resolved flow, so `runs/<id>/flow.json` records what was attached. A skill on a template says work of this kind is always done this way; a skill on a task says this particular job needs this knowledge. Neither can widen a tool grant.
 
 For each claimable task the supervisor:
 
 1. claims the task and creates a git worktree outside the repository, minting an `attemptId` that owns it;
-2. starts a normal Flyt run with the Loop tool ceiling;
+2. starts a normal Flyt run of `flows/loop-task.flow.yaml` — one authored work node holding the Loop ceiling. The task file is already the plan, so the run does not plan it again, and the node that holds the tools exists before any model is called. Its grant names the `loop` set rather than inheriting the Work template's task-type grant, every one of which is a writer without a shell; `config.loop.flowId` points it elsewhere;
 3. records heartbeats, model calls, tool feedback, and spend;
 4. runs the task's declared gates itself;
 5. requests an independent diff review;

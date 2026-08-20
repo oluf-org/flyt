@@ -45,6 +45,10 @@ export default {
     'read-only reference library, and glob when you want file names rather than contents.'
   ].join(' '),
   effects: ['read'],
+  // A search whose results are cut to the 2,000-char default returns a handful
+  // of hits with their context shortened to nothing, which reads as "there is
+  // almost nothing here" rather than as "you were shown almost nothing".
+  result: { preview: 'json', maxPreviewChars: 12_000, artifact: true },
   scope: 'workspace',
   risk: 'safe',
   autoExecute: true,

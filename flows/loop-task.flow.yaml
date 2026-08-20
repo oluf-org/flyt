@@ -53,6 +53,15 @@ nodes:
       line — use the thing you were given rather than looking for your own. It
       was checked. Yours has not been.
 
+      Your tool calls are bounded, and reading is what runs out first. A call is
+      cheap on its own and expensive in aggregate: every one resends the whole
+      conversation so far, so forty small reads cost far more than their
+      contents. Use read_file for a file and search_files for a pattern, once
+      each — not a series of narrowing bash `sed -n` ranges over something you
+      have already opened. Stop reading at the point where you can name the
+      change you are about to make, and make it. A run that explores until the
+      budget is gone has produced nothing, however well it understood the code.
+
       Two honest failures are worth more than one confident sentence: if a gate
       is red, say which and why rather than reporting success; if the task
       cannot be done here at all, use the TASK-IMPOSSIBLE line described above

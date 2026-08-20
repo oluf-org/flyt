@@ -19,6 +19,20 @@ export default {
   effects: ['read'],
   risk: 'safe',
   autoExecute: true,
+  // A file read is the one result where the model needs the WHOLE thing, and
+  // this tool declared no budget — so it took the 2,000-char default, which
+  // after the per-string share is about a thousand characters of file. Every
+  // real source file came back as a stub plus a handle, and an agent that
+  // cannot read a file with read_file reads it with `bash sed -n '40,194p'`
+  // instead: a dozen calls, each resending the whole growing conversation, to
+  // see one 194-line test. 24,000 leaves roughly 300 lines of code intact,
+  // which covers most files whole; the tool's own 200,000-char cap and the
+  // `nextOffset` marker still bound and continue the rest.
+  //
+  // The preview bound is also the injection bound (core/tools/preview.js), and
+  // that is why this is raised rather than removed — but what it bounds here is
+  // a file out of the user's own checkout, not a page off the internet.
+  result: { preview: 'json', maxPreviewChars: 24_000, artifact: true },
   keywords: ['read', 'file', 'open', 'source', 'contents'],
   examples: ['read src/app.js', 'show me what is in the config file'],
   parameters: {

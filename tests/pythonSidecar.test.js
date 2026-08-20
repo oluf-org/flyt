@@ -201,3 +201,48 @@ test('tool:problems reports definitions the library holds but cannot bind', asyn
   const after = await api.invoke('tool:problems', {});
   assert.ok(after.unbound.some(u => u.id === 'ghost_tool' && /does not ship/.test(u.reason)));
 });
+
+// --- what the model actually receives --------------------------------------
+//
+// The full result is archived and the model gets a bounded preview (§5). The
+// bound is per tool, and a tool that declares none takes the 2,000-char
+// default — which for read_file, after the per-string share, is about a
+// thousand characters of file. Every real source file came back as a stub, so
+// an agent read files with `bash sed` instead: a dozen calls over one 194-line
+// test, each resending the whole growing conversation.
+
+import { previewResult } from '../core/tools/preview.js';
+import { getTools } from '../core/tools/index.js';
+
+const budgetOf = id => getTools([id])[0]?.result ?? {};
+
+test('read_file returns an ordinary source file whole, not as a stub', () => {
+  // ~7 KB: smaller than most modules in this repository.
+  const content = Array.from({ length: 200 }, (_, i) => `  const line${i} = doSomething(${i}); // a comment of ordinary length`).join('\n');
+  const result = { path: 'core/tools/example.js', content, bytes: Buffer.byteLength(content), target: 'workspace' };
+
+  const { value, truncated } = previewResult(result, budgetOf('read_file'));
+  assert.equal(truncated, false, 'a 7 KB file must not need a handle to be read');
+  assert.equal(value.content, content);
+
+  // And the old default is what it used to get, so this stays a regression test
+  // rather than an assertion about a number nobody chose.
+  assert.equal(previewResult(result, {}).truncated, true);
+});
+
+// The tool whose entire job is to read MORE than a preview must not be cut back
+// to a preview on its way out.
+test('read_tool_result is not re-truncated by the bound it exists to escape', () => {
+  const budget = budgetOf('read_tool_result');
+  const value = { handle: '@tool:1', tool: 'bash', value: 'x'.repeat(20_000) };
+  assert.equal(previewResult(value, budget).truncated, false,
+    'a caller asking for 20,000 characters and getting 1,000 abandons the mechanism');
+});
+
+test('every read tool declares what it is willing to show', () => {
+  for (const id of ['read_file', 'search_files', 'search_references', 'glob', 'read_tool_result']) {
+    const budget = budgetOf(id);
+    assert.ok(budget.maxPreviewChars > 2000,
+      `${id} takes the default preview budget, which is too small for what it returns`);
+  }
+});
