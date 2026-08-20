@@ -278,7 +278,22 @@ export class WorktreePool {
         + `${held?.runId ? ` (run ${held.runId})` : ''}. Discard that attempt before starting another.`);
     }
     try {
-      await git(['worktree', 'add', '-b', branch, dir, from], { cwd: this.repoRoot });
+      // `-B`, not `-b`: point the task's branch at `from`, whether or not it
+      // already exists.
+      //
+      // A leftover branch from a previous attempt is now the NORMAL case, not
+      // an anomaly — resuming a reviewed commit starts from that attempt's own
+      // branch (api.js work:start). With `-b`, git refused, and on Windows it
+      // refused with "cannot change to <dir>: No such file or directory" after
+      // cleaning up the directory it had half-created, which reads as a
+      // filesystem problem and is not one. Three loop starts died on that.
+      //
+      // Resetting is what the old delete-then-create did anyway, and the base
+      // is chosen by the caller: the default branch for a fresh attempt, the
+      // reviewed commit for a correction. Neither loses work — the reviewed
+      // commit IS the branch tip in the resume case, and a fresh attempt is
+      // meant to start from the base.
+      await git(['worktree', 'add', '-B', branch, dir, from], { cwd: this.repoRoot });
     } catch (err) {
       this.#clearOwner(taskId);
       throw err;

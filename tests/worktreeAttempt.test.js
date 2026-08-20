@@ -257,3 +257,24 @@ test('a git failure that is not "already gone" still surfaces', async () => {
   await assert.rejects(() => pool.remove('t-0002', { attemptId: wt.attemptId }));
   assert.ok(fs.existsSync(wt.dir), 'nothing is deleted on an error nobody understood');
 });
+
+// A leftover branch from a previous attempt is the NORMAL case once a review
+// rejection resumes from that attempt's commit. `git worktree add -b` refuses
+// it, and on Windows it refuses with "cannot change to <dir>: No such file or
+// directory" after cleaning up the directory it half-created — which reads as a
+// filesystem problem and is not one. Three loop starts died on that.
+test('a task branch left over from a previous attempt does not stop the next one', async () => {
+  const pool = await poolFor();
+  const first = await pool.create('t-0001', 'A task');
+  fs.writeFileSync(path.join(first.dir, 'work.js'), 'export const from = "first";\n');
+  await pool.commit('t-0001', 'the first attempt');
+  const reviewed = await git(['rev-parse', 'HEAD'], { cwd: first.dir });
+
+  // The tree goes; the branch deliberately stays, which is what carries the
+  // reviewed commit into the next attempt.
+  await pool.remove('t-0001', { attemptId: first.attemptId, deleteBranch: false });
+
+  const second = await pool.create('t-0001', 'A task', { base: reviewed.trim() });
+  assert.ok(fs.existsSync(path.join(second.dir, 'work.js')), 'the reviewed work has to be there to correct');
+  assert.equal((await git(['rev-parse', 'HEAD'], { cwd: second.dir })).trim(), reviewed.trim());
+});
