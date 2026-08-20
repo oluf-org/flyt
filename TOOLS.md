@@ -109,8 +109,25 @@ receives a bounded preview plus a handle it can re-open with `read_tool_result`.
 So a 200 KB page survives on disk instead of being destroyed by truncation. Set
 `artifact: false` only for a result that is meaningless to re-read.
 
-Pick `maxPreviewChars` for the job: 2000 for a page or a search, 4000 for
-command output where the tail is the answer.
+**Pick `maxPreviewChars` deliberately.** A tool that declares no `result` takes
+the 2,000-char default, and after the per-string share that is about a thousand
+characters — which for a file read is a stub. `read_file` had no budget for a
+long time, and the consequence was that agents read files with
+`bash sed -n '40,194p'` instead: a dozen calls over one 194-line test, each
+resending the whole growing conversation. What is shipped now:
+
+| tool | budget | why |
+|---|---|---|
+| `read_file` | 24,000 | ~300 lines, so most source files arrive whole |
+| `read_tool_result` | 100,000 | it already bounds itself; cutting it again defeats it |
+| `search_files`, `search_references`, `glob` | 12,000 | a truncated result set reads as an empty one |
+| `bash` | 4,000 | the tail is usually the answer |
+| `web_fetch`, `web_search` | 2,000 | untrusted text, and the bound is the injection bound |
+
+The two considerations pull against each other. A bigger preview means fewer
+wasted turns; it also means more context resent on every subsequent turn, which
+is quadratic. Raise it for results the model needs whole, and leave it low for
+results that arrive from outside this repository.
 
 ## `parameters`
 
@@ -224,6 +241,42 @@ flyt tools run write_file --arg path=x.txt --arg content=hi --yes
 flyt tools problems
 flyt python status --packages scrapling
 ```
+
+## Comparing it
+
+When two tools do the same job, "which is better" should be a measurement
+rather than an impression. A suite in `benchmark/tools/<name>.json` names the
+tools and the cases, and `flyt tools bench <name>` runs every tool against every
+case and prints what happened.
+
+```json
+{
+  "name": "web-read",
+  "tools": [
+    { "id": "web_fetch",  "as": "web_fetch",  "field": "text" },
+    { "id": "scrape_page", "as": "scrapling", "field": "text", "args": { "mode": "fetcher" } }
+  ],
+  "cases": [
+    { "id": "javascript",
+      "about": "the content only exists after a script runs",
+      "args": { "url": "https://quotes.toscrape.com/js/" },
+      "expect": { "contains": ["Albert Einstein"], "minChars": 200, "maxMs": 60000 } }
+  ]
+}
+```
+
+`field` says where the text lives in that tool's result, because two tools that
+do the same job return different shapes. Per-tool `args` are defaults the case
+may override. `expect` takes `contains`, `absent` (the boilerplate check),
+`minChars` and `maxMs`.
+
+One distinction is load-bearing: **a tool that is not set up here has not lost.**
+An unknown tool, or one returning `available: false`, is reported as
+unavailable and kept out of the totals — otherwise a suite naming next month's
+tool reads as a clean sweep for this month's.
+
+The benchmark directory is protected from Loop tasks (`core/gates.js` PROTECTED)
+for the usual reason: a suite an agent can edit is not a measurement of it.
 
 `--arg k=v` for strings, `--arg-json k=<json>` for numbers, arrays and objects.
 `--yes` is required for a write/shell/destructive tool: the one-shot door

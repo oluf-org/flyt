@@ -1,0 +1,34 @@
+{
+  "name": "web-read",
+  "description": "Reading a page off the internet. The cases are chosen so the differences between a plain HTTP GET and a real scraper are visible rather than asserted: a static page both should manage, a page whose content only exists after JavaScript runs, a page that answers 403 to an obvious robot, and a page with enough furniture around the article to show whether boilerplate is being stripped.",
+  "tools": [
+    { "id": "web_fetch", "as": "web_fetch", "field": "text" },
+    { "id": "scrape_page", "as": "scrapling", "field": "text" }
+  ],
+  "cases": [
+    {
+      "id": "static",
+      "about": "The floor. Anything that cannot do this is broken, not slow.",
+      "args": { "url": "https://example.com" },
+      "expect": { "contains": ["Example Domain"], "minChars": 80, "maxMs": 20000 }
+    },
+    {
+      "id": "javascript",
+      "about": "The quotes are rendered by a script. A plain GET sees the shell and nothing in it.",
+      "args": { "url": "https://quotes.toscrape.com/js/" },
+      "expect": { "contains": ["Albert Einstein"], "minChars": 200, "maxMs": 60000 }
+    },
+    {
+      "id": "refused",
+      "about": "An explicit 403. What matters is whether the tool SAYS so rather than returning an empty success.",
+      "args": { "url": "https://httpbin.org/status/403" },
+      "expect": { "contains": ["403"], "maxMs": 30000 }
+    },
+    {
+      "id": "article",
+      "about": "A real page with navigation, sidebars and footers around the text. `absent` is the boilerplate check.",
+      "args": { "url": "https://en.wikipedia.org/wiki/Web_scraping" },
+      "expect": { "contains": ["Web scraping"], "minChars": 2000, "maxMs": 45000 }
+    }
+  ]
+}

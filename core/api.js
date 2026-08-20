@@ -23,6 +23,7 @@ import { costOf } from './ledger.js';
 import { executeTool, getTools, registerDefinition } from './tools/index.js';
 import { isDestructive } from '../src/toolTypes.js';
 import { pythonStatus, setupPython } from './python.js';
+import { loadToolSuite, runToolSuite, SUITE_DIR } from './toolbench.js';
 
 // Why a one-shot call to this tool needs the caller to say so. Reads off the
 // record rather than a name list, for the same reason isDestructive() does.
@@ -426,6 +427,58 @@ export function createApi(engine) {
         .filter(r => !r.ok)
         .map(({ id, reason }) => ({ id, reason }));
       return { files: toolLibrary.problems ?? [], unbound };
+    },
+
+    /**
+     * Run a tool suite: the same fixed cases through several tools, measured.
+     *
+     * "Which one is better" deserves an answer somebody can argue with, and the
+     * agent benchmark does not answer it — that one scores whether a TASK
+     * landed, which is a different axis. This calls the tools and prints what
+     * happened; every opinion in the result was written into the suite file.
+     */
+    'tool:bench': async ({ projectId = null, suite, confirm = false, onProgress = null }) => {
+      const entry = projectId ? proj(projectId) : null;
+      const file = path.isAbsolute(String(suite))
+        ? String(suite)
+        : path.join(engine.projectRoot, SUITE_DIR, String(suite).endsWith('.json') ? String(suite) : `${suite}.json`);
+      const loaded = loadToolSuite(file);
+
+      // Same posture as tool:run — a suite that names a write or shell tool is
+      // a suite that runs one, and the caller says so or it does not run.
+      const gated = loaded.tools.filter(t => isDestructive(toolLibrary.get(t.id) ?? {}));
+      if (gated.length && confirm !== true) {
+        throw new ApiError(
+          `This suite calls ${gated.map(t => t.id).join(', ')}, which change things outside the call. Pass confirm:true (\`--yes\`) to run it.`,
+          { status: 400, code: 'needs_confirm' });
+      }
+
+      const ctx = {
+        config: runtimeConfig,
+        references: engine.references ?? null,
+        ...(entry ? { backlog: engine.backlogFor(projectId) } : {}),
+        ...(entry?.folder ? { workspace: new Workspace(entry.folder) } : {})
+      };
+      return runToolSuite(loaded, {
+        call: (id, args) => executeTool(id, args, ctx),
+        onProgress: typeof onProgress === 'function' ? onProgress : () => {}
+      });
+    },
+
+    'tool:suites': () => {
+      const dir = path.join(engine.projectRoot, SUITE_DIR);
+      let names;
+      try { names = fs.readdirSync(dir).filter(n => n.endsWith('.json')); }
+      catch { return { dir, suites: [] }; }
+      return {
+        dir,
+        suites: names.map(n => {
+          try {
+            const s = loadToolSuite(path.join(dir, n));
+            return { file: n, name: s.name, description: s.description, cases: s.cases.length, tools: s.tools.map(t => t.as) };
+          } catch (err) { return { file: n, error: String(err?.message ?? err) }; }
+        })
+      };
     },
 
     // --- The Python sidecar (core/python.js) -----------------------------------

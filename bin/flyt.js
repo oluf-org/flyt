@@ -31,6 +31,8 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt tools show <id>                one tool, schema included
   flyt tools run <id> --arg k=v       call it once, right now (--yes for write/shell)
   flyt tools problems                 definitions the library could not bind
+  flyt tools suites                   the tool suites in benchmark/tools/
+  flyt tools bench <suite>            the same cases through several tools, measured
   flyt python status [--packages a,b] the sidecar interpreter, and what it has
   flyt python setup --packages a,b    build/repair the managed environment
   flyt run <flow> --input "<text>"    start a run and wait for it to settle
@@ -319,6 +321,23 @@ async function main() {
         }
         case 'problems':
           return out(await api.invoke('tool:problems', {}));
+        case 'suites':
+          return out(await api.invoke('tool:suites', {}));
+        // The same fixed cases through several tools, measured. Answers "which
+        // one is better at this job" with something a person can argue with,
+        // which is not a question a model should be asked from its impressions.
+        case 'bench': {
+          const name = positional[2];
+          if (!name) return die('flyt tools bench <suite> — see `flyt tools suites`');
+          const card = await api.invoke('tool:bench', {
+            projectId: openProject(api, engine),
+            suite: name,
+            confirm: Boolean(flags.yes),
+            onProgress: p => say(`  ${p.tool} / ${p.case}`)
+          });
+          const { renderToolCard } = await import('../core/toolbench.js');
+          return out(asJson ? card : renderToolCard(card));
+        }
         case 'run': {
           const id = positional[2];
           if (!id) return die('flyt tools run <id> --arg url=https://example.com');
@@ -346,7 +365,7 @@ async function main() {
           return out(record.result);
         }
         default:
-          return die(`flyt tools list|show <id>|run <id>|problems`);
+          return die('flyt tools list|show <id>|run <id>|problems|suites|bench <suite>');
       }
     }
 
