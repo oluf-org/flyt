@@ -7,10 +7,11 @@
 // whole thing again — watched a correct 244-line implementation discarded
 // because it also left behind an empty file called `1`.
 //
-// So a review rejection records the commit that was reviewed, and the next
-// attempt starts from it with the objection attached. Every other failure —
-// red gates, an empty diff — clears it, because those say the attempt is wrong
-// in a way a fresh start may fix.
+// So a rejection at review OR at gates records the commit that was judged, and
+// the next attempt starts from it with the objection attached — a reviewer's
+// sentence, or the assertion the suite named. An empty diff and a stall clear
+// it: there is nothing there worth inheriting, and inheriting nothing is just a
+// slower fresh start.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -124,4 +125,30 @@ test('the brief tells the worker its work is already there, and only then', asyn
   assert.equal(after.resumeFrom, 'c'.repeat(40));
   assert.equal(after.blockedReason, 'a stray file at the repo root',
     'the objection and the commit travel together, or the correction has nothing to correct');
+});
+
+// The landing sequence names the commit it judged on both failing stages, so
+// api.js can decide which of them is worth inheriting.
+test('a judged failure names the commit it judged, at gates as well as at review', async () => {
+  const { landTask } = await import('../core/landing.js');
+  const { api, engine, projectId, folder } = await repo();
+  const backlog = engine.backlogFor(projectId);
+  const task = backlog.add({ title: 'Judged', goal: 'g', gates: ['git --version'] });
+  const wt = await api.invoke('work:start', { projectId, taskId: task.id });
+  try {
+    fs.writeFileSync(path.join(wt.dir, 'work.txt'), 'the attempt\n');
+    await engine.poolFor(projectId).commit(task.id, 'an attempt');
+    const head = (await git(['rev-parse', 'HEAD'], { cwd: wt.dir })).trim();
+
+    const failed = await landTask({
+      pool: engine.poolFor(projectId), repoRoot: folder, taskId: task.id, task,
+      base: 'main', config: engine.runtimeConfig,
+      // A gate that fails, without needing a suite.
+      verify: async () => ({ ok: false, results: [{ command: 'git --version', status: 'fail', output: 'nope' }], failure: { command: 'git --version', output: 'nope' } })
+    });
+    assert.equal(failed.stage, 'gates');
+    assert.equal(failed.attemptCommit, head, 'the work exists and the next attempt should be able to find it');
+  } finally {
+    await api.invoke('work:discard', { projectId, taskId: task.id });
+  }
 });

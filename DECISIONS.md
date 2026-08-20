@@ -68,7 +68,7 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D45 | The Loop UI is a six-column board driven by shared blocker rules. Loop workers receive surgical edit, gate, backlog, run-inspection, web, and human-question tools through a bounded ceiling. | Current |
 | D47 | Spend is measured from the call trace — every settled call, whatever became of the run or the node — and priced from the model catalog. A ceiling that cannot see a cost cannot bind it. | Current |
 | D46 | Clarifying questions are a node's contract, not the gate's: the number of rounds a node may park for belongs to the node. Asking is a first-class deliverable path — the interrogation node asks before it specifies — and a parked run must be answerable from every surface that can show it. | Current |
-| D51 | A review rejection is a correction, not a rebuild. It is the one failure where the gates already passed, so the reviewed commit is recorded and the next attempt starts from it. Red gates and an empty diff are not inherited. | Current |
+| D51 | A rejection at review or at gates is a correction, not a rebuild: both judge work that exists and both name something specific, so the judged commit is recorded and the next attempt starts from it. An empty diff and a stall are not inherited. | Current |
 
 Decision numbers D30–D34 were never promoted from retired plan drafts and are intentionally unused.
 

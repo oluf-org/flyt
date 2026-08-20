@@ -82,10 +82,24 @@ export async function landTask({
   const steps = [];
   const record = (step, result) => { steps.push({ step, ...result }); return result; };
 
+  // The commit this attempt is being judged on. `work:land` commits the
+  // worktree before calling in, so there is one from here onward, and every
+  // failure below can name it — which is what lets the NEXT attempt start from
+  // the work instead of from the base branch (api.js work:land, `resumeFrom`).
+  let attemptCommit = null;
+  try { attemptCommit = (await git(['rev-parse', 'HEAD'], { cwd: pool.dirFor(taskId) })).trim(); }
+  catch { /* no sha is a smaller loss than a failed landing report */ }
+  const withCommit = result => (attemptCommit ? { ...result, attemptCommit } : result);
+
   // 1. Gates, in the worktree.
   const gateRun = record('gates', await verifyTask({ pool, taskId, task, log }));
   if (!gateRun.ok) {
-    return { landed: false, stage: 'gates', steps, guidance: gateFailureGuidance(gateRun) };
+    // Red gates are a correction case too, and the most specific one there is:
+    // the output names the assertion. Watched two tasks arrive with the module
+    // written, the tool registered, and one pinned test list not updated — and
+    // both were thrown away and rebuilt from nothing on a dearer model. The
+    // gate output travels with the task; so should the work it is about.
+    return withCommit({ landed: false, stage: 'gates', steps, guidance: gateFailureGuidance(gateRun) });
   }
 
   // 2. Mechanical checks — free, and not a model's judgment call.
@@ -139,14 +153,10 @@ export async function landTask({
     // correct 244-line implementation discarded over an empty file called `1`.
     // Naming the reviewed commit is what lets the next attempt start from the
     // work instead of from nothing.
-    let reviewed = null;
-    try { reviewed = (await git(['rev-parse', 'HEAD'], { cwd: pool.dirFor(taskId) })).trim(); }
-    catch { /* no sha is a smaller loss than a failed landing report */ }
-    return {
+    return withCommit({
       landed: false, stage: 'review', steps, review,
-      ...(reviewed ? { reviewedCommit: reviewed } : {}),
       guidance: [review.reason, ...review.changes].filter(Boolean).join(' ')
-    };
+    });
   }
 
   if (dryRun) {

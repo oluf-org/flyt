@@ -956,14 +956,22 @@ export function createApi(engine) {
         backlog.escalate(taskId, { reason: 'failed', note: result.guidance ?? result.stage });
         // Where the next attempt should start.
         //
-        // Only for a REVIEW rejection: that is the one failure where the gates
-        // already passed, so the work is known to be sound and the objection is
-        // specific. A gate failure or an empty diff says the attempt is wrong in
-        // a way a fresh start may fix, and inheriting it would inherit the
-        // problem. Cleared on every other outcome so a stale sha can never be
+        // A rejection at REVIEW or at GATES is a correction case: something
+        // specific is wrong with work that otherwise exists, and the objection
+        // travels with the task either way — a reviewer's sentence, or the
+        // assertion the suite named. Rebuilding from the base branch throws
+        // away everything nobody objected to and pays a dearer model to write
+        // it again; two tasks arrived with the module written, the tool
+        // registered and one pinned test list not updated, and both were
+        // discarded whole.
+        //
+        // NOT for an empty diff or a stalled attempt: there is nothing there
+        // worth inheriting, and inheriting nothing is just a slower fresh
+        // start. Cleared on every other outcome so a stale sha can never be
         // resumed from.
+        const correctable = result.stage === 'review' || result.stage === 'gates';
         backlog.update(taskId, {
-          resumeFrom: result.stage === 'review' && result.reviewedCommit ? result.reviewedCommit : null
+          resumeFrom: correctable && result.attemptCommit ? result.attemptCommit : null
         });
       }
       // Landed: this attempt's tree is finished with. Scoped to the attempt
