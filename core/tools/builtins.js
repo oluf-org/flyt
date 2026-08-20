@@ -30,12 +30,13 @@ import updateTask from './update_task.js';
 import readRun from './read_run.js';
 import webFetch from './web_fetch.js';
 import webSearch from './web_search.js';
+import scrapePage from './scrape_page.js';
 import askHuman from './ask_human.js';
 
 export const BUILTIN_MODULES = [
   readFile, glob, searchFiles, createFile, writeFile, editFile, bash, createTask, enqueueTask,
   searchReferences, writeTaskMd, readToolResult,
-  runGate, listTasks, readTask, whyBlocked, updateTask, readRun, webFetch, webSearch, askHuman
+  runGate, listTasks, readTask, whyBlocked, updateTask, readRun, webFetch, webSearch, scrapePage, askHuman
 ];
 
 export const builtinModule = id => BUILTIN_MODULES.find(t => t.name === id) ?? null;

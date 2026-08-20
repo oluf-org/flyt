@@ -36,7 +36,7 @@ test('selectors resolve by what a tool IS, not by a list someone maintains', () 
   // rather than a synonym for the whole library.
   assert.deepEqual([...expandRefs('trust:trusted', ctx).ids].sort(),
     library.filter(t => t.trust === 'trusted').map(t => t.id).sort());
-  assert.deepEqual([...expandRefs('trust:untrusted', ctx).ids].sort(), ['web_fetch', 'web_search']);
+  assert.deepEqual([...expandRefs('trust:untrusted', ctx).ids].sort(), ['scrape_page', 'web_fetch', 'web_search']);
   assert.deepEqual([...expandRefs('provider:mcp', ctx).ids], []);
   assert.equal(expandRefs('*', ctx).ids.size, library.length);
 
@@ -47,8 +47,11 @@ test('selectors resolve by what a tool IS, not by a list someone maintains', () 
     ['ask_human', 'create_file', 'create_task', 'edit_file', 'enqueue_task', 'update_task', 'write_file', 'write_task_md']);
   // The web set was declared and empty for its whole life; DECISIONS.md D45
   // filled it, and the membership test is what picks its members out.
-  assert.deepEqual([...expandRefs('uses:network', ctx).ids].sort(), ['web_fetch', 'web_search']);
-  assert.deepEqual([...expandRefs('web', ctx).ids].sort(), ['web_fetch', 'web_search']);
+  assert.deepEqual([...expandRefs('uses:network', ctx).ids].sort(), ['scrape_page', 'web_fetch', 'web_search']);
+  // And the `web` SET is that selector, so a tool that reaches the network
+  // joins it by being what it is — which is the whole point of writing a
+  // ceiling in set names rather than in ids that go stale.
+  assert.deepEqual([...expandRefs('web', ctx).ids].sort(), ['scrape_page', 'web_fetch', 'web_search']);
   assert.ok(![...expandRefs('web', ctx).ids].includes('read_file'),
     'the web set is "anything that can reach the network", not "everything that only reads"');
 

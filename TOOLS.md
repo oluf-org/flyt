@@ -218,6 +218,12 @@ const result = await runPythonScript(SCRIPT, { url }, { bin, timeoutMs: 60_000, 
 if (!result.ok) return { available: true, ok: false, error: result.error, stderr: result.stderr };
 ```
 
+Export the bridge as `pythonBridge` and call through it
+(`pythonBridge.runPythonScript(...)`). ES module bindings cannot be reassigned
+from outside, so this indirection is the only thing that lets a test stub the
+sidecar — and a sidecar tool that cannot be stubbed is one whose tests have to
+reach the network to say anything. `web_search` and `scrape_page` both do this.
+
 Rules for a sidecar:
 
 - The **script text lives in this repository**, so what runs is reviewable. The
@@ -230,6 +236,9 @@ Rules for a sidecar:
   rather than silently falling through to a different Python.
 - A missing package is a result with a remedy that names
   `flyt python setup --packages <name>`.
+- Do not print non-ASCII without thinking about it: the bridge forces UTF-8 on
+  the child's streams because `-I` makes Python ignore `PYTHONIOENCODING`, and
+  before that the first em dash in a result killed the process.
 - The environment lives **outside every repository**, so a Loop worker in a
   throwaway worktree uses the same interpreter as the desktop app.
 
