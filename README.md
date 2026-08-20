@@ -39,6 +39,18 @@ npx flyt probe <model>
 
 `flyt why` inspects an existing run, `probe` tests one model at a realistic budget, and `doctor` checks provider and flow configuration without starting a full run.
 
+The tool library has the same headless surface, so a capability can be tried before a run pays to discover it:
+
+```sh
+npx flyt tools                              # the library, with effects and risk
+npx flyt tools show web_fetch               # one tool, schema included
+npx flyt tools run web_fetch --arg url=https://example.com --json
+npx flyt tools bench web-read               # the same cases through several tools
+npx flyt python status --packages scrapling # the sidecar interpreter, and what it has
+```
+
+A write or shell tool refuses from this door unless you pass `--yes`: the one-shot call narrows authority relative to a run and never widens it. [`TOOLS.md`](./TOOLS.md) is the authoring contract.
+
 ## Files and storage
 
 Durable state is plain files:
@@ -68,7 +80,7 @@ npm run flow -- lint <file>
 - `electron/` — desktop shell and IPC binding
 - `src/` — React renderer
 - `flows/`, `nodes/`, `tools/` — shipped file-backed libraries
-- `benchmark/` — independent Loop benchmark cases and probes
+- `benchmark/` — independent Loop benchmark cases and probes, plus `benchmark/tools/` suites that measure one tool against another
 - `tests/` — headless contracts and regression tests
 
 ## Living documentation
@@ -78,5 +90,6 @@ npm run flow -- lint <file>
 - [`DECISIONS.md`](./DECISIONS.md) — concise durable decisions and unresolved choices
 - [`FLOW_LANG.md`](./FLOW_LANG.md) — flow DSL grammar and lint rules
 - [`FLOW_NODES.md`](./FLOW_NODES.md) — node roles, ports, and structured output contracts
+- [`TOOLS.md`](./TOOLS.md) — the tool contract: effects, trust, grants, and the Python sidecar
 
 Implementation plans are intentionally not kept as living documentation after they land. Git history preserves them; current work belongs in `.flyt/backlog/`.
