@@ -62,6 +62,14 @@ nodes:
       change you are about to make, and make it. A run that explores until the
       budget is gone has produced nothing, however well it understood the code.
 
+      Leave nothing behind. Everything in this workspace when you stop becomes
+      the diff a reviewer reads: a scratch script you wrote to inspect
+      something, an output file, an empty `1` from a mistyped `2>&1`. Each one
+      is a file outside the blast radius that a reviewer is right to reject, and
+      rejecting it costs the whole attempt. Put throwaway files somewhere else
+      entirely, or delete them before you finish — `git status` before your last
+      message will tell you what you are actually handing over.
+
       Two honest failures are worth more than one confident sentence: if a gate
       is red, say which and why rather than reporting success; if the task
       cannot be done here at all, use the TASK-IMPOSSIBLE line described above
