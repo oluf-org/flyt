@@ -638,9 +638,26 @@ export class Supervisor {
    * left is parked are not the same report.
    */
   #whyNothingReady() {
+    // `--only` narrows what the loop may take, so it must narrow the
+    // EXPLANATION too. Without this the answer came from the whole backlog: a
+    // run over two named tasks that had both parked reported "nothing ready — 1
+    // task blocked: t-0008 (waiting on t-0006, which does not exist)", naming a
+    // task nobody had asked it to work. Three restarts went looking at t-0008.
+    const tasks = (this.backlog.list() ?? [])
+      .filter(t => !this.only || this.only.includes(t.id));
+    if (this.only && !tasks.length) {
+      return `no task matched --only ${this.only.join(', ')}`;
+    }
+    if (this.only) {
+      const stuck = tasks.filter(t => t.status !== 'queued');
+      if (stuck.length === tasks.length) {
+        return `none of --only ${this.only.join(', ')} is claimable: ${
+          stuck.map(t => `${t.id} is ${t.status}${t.blockedReason ? ` (${String(t.blockedReason).slice(0, 120)})` : ''}`).join('; ')}`;
+      }
+    }
     try {
       return whyNothingReady({
-        tasks: this.backlog.list() ?? [],
+        tasks,
         problems: this.backlog.problems ?? [],
         config: this.config,
         // The loop is running by definition when this is asked, so a

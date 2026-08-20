@@ -789,3 +789,34 @@ test('the last green canary becomes the next task\'s test-count baseline', async
   assert.equal(lands[0].args.baselineOutput, null, 'the first task has nothing to compare against, honestly');
   assert.equal(lands[1].args.baselineOutput, '# tests 42');
 });
+
+// `--only` narrows what the loop may take, so it has to narrow the EXPLANATION
+// too. A run over two named tasks that had both parked reported "nothing ready
+// — 1 task(s) blocked: t-0008 (Waiting on t-0006, which does not exist.)",
+// naming a task nobody had asked it to work. Three restarts went looking at
+// t-0008 before anyone read the backlog directory.
+test('a --only loop explains the tasks it was told to work, not the rest of the backlog', async () => {
+  const backlog = new Backlog(tmp());
+  const mine = backlog.add({ title: 'Mine', goal: 'g' });
+  const other = backlog.add({ title: 'Someone else', goal: 'g' });
+  backlog.update(mine.id, { status: 'parked', blockedReason: 'a stale attempt record' });
+  backlog.update(other.id, { dependsOn: ['t-9999'] });
+
+  const status = await new Supervisor({
+    ...fakeEngine({ backlog }), projectId: 'p', backlog, pollMs: 1, only: [mine.id]
+  }).run();
+
+  assert.match(status.stopping, new RegExp(mine.id), 'the task it was told to work must be named');
+  assert.match(status.stopping, /parked/);
+  assert.match(status.stopping, /stale attempt record/, 'and the reason it is stuck');
+  assert.doesNotMatch(status.stopping, new RegExp(other.id), 'a task nobody asked about is not the answer');
+});
+
+test('an --only naming nothing says so rather than reporting an empty backlog', async () => {
+  const backlog = new Backlog(tmp());
+  backlog.add({ title: 'Real', goal: 'g' });
+  const status = await new Supervisor({
+    ...fakeEngine({ backlog }), projectId: 'p', backlog, pollMs: 1, only: ['t-9999']
+  }).run();
+  assert.match(status.stopping, /no task matched --only t-9999/);
+});
