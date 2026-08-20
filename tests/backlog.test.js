@@ -390,3 +390,40 @@ test('take({ only }) with no match takes nothing rather than falling back', () =
   // And an empty/absent filter is the whole backlog, as before.
   assert.ok(b.take('supervisor', { only: [] }));
 });
+
+// A supervisor killed between writing the lock and recording the claim leaves a
+// task whose FILE says queued and unclaimed and whose lock says held. The
+// picker skipped it in silence for a full hour while `flyt task ready` listed
+// it as ready and the loop reported "nothing ready", blaming a different task's
+// missing dependency. Two tasks did exactly that after a stop.
+test('a lock left behind by a dead claimer does not poison a queued task', () => {
+  const backlog = newBacklog();
+  const task = backlog.add({ title: 'Orphaned', goal: 'g' });
+  const lock = path.join(backlog.rootDir, `${task.id}.lock`);
+
+  // The lock exists; the task file never learned about it.
+  fs.writeFileSync(lock, JSON.stringify({ by: 'a supervisor that died', at: new Date().toISOString() }));
+  assert.equal(backlog.get(task.id).status, 'queued');
+  assert.equal(backlog.get(task.id).claimedBy, null);
+
+  // Immediately: still believed, because claim() writes the lock before it
+  // records the claim and a live claim looks identical for that instant.
+  assert.equal(backlog.claim(task.id, 'next'), null);
+
+  // Once the write window has passed, the task file wins.
+  const stolen = backlog.claim(task.id, 'next', { now: Date.now() + 60_000 });
+  assert.ok(stolen, 'a queued, unclaimed task must not stay unclaimable for an hour');
+  assert.equal(stolen.claimedBy, 'next');
+  assert.equal(stolen.stolen, true, 'a silent steal is how two workers end up in one worktree');
+});
+
+test('a lock held by a live claim is still respected', () => {
+  const backlog = newBacklog();
+  const task = backlog.add({ title: 'Held', goal: 'g' });
+  const held = backlog.claim(task.id, 'first');
+  assert.equal(held.claimedBy, 'first');
+
+  // Well past the orphan grace, well inside the lease: the task file says
+  // claimed, so there is nothing orphaned about it.
+  assert.equal(backlog.claim(task.id, 'second', { now: Date.now() + 10 * 60_000 }), null);
+});

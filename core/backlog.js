@@ -36,6 +36,10 @@ export const TASK_STATUSES = [
 
 const TERMINAL = new Set(['landed', 'failed']);
 const DEFAULT_LEASE_MS = 60 * 60 * 1000; // an hour: long tasks are the point (§1)
+// How long a lock whose task file says "queued, unclaimed" is believed. Only
+// covers the window between writing the lock and recording the claim, which is
+// one local file write.
+const ORPHAN_LOCK_MS = 15 * 1000;
 
 // Frontmatter fields, with their defaults. Anything not listed here is still
 // preserved on write — a field a later phase adds must not be erased by an
@@ -362,8 +366,24 @@ export class Backlog {
     } catch (err) {
       if (err?.code !== 'EEXIST') throw err;
       const age = now - (statMtime(lockPath) ?? now);
-      if (age < leaseMs) return null; // someone else holds it, legitimately
-      fs.writeFileSync(lockPath, payload); // lease expired: take it over
+      // An ORPHANED lock: the task file says queued and unclaimed, so whoever
+      // wrote this lock never got as far as recording the claim, or died
+      // between the two. The task file is the source of truth for whether a
+      // task is held; the lock is only the atomicity primitive.
+      //
+      // Without this, a supervisor killed mid-claim leaves a task that looks
+      // ready in `flyt task ready`, is skipped in silence by the picker, and
+      // stays that way for a full hour — while the loop reports "nothing
+      // ready" and blames some other task's missing dependency. Two of them
+      // did exactly that after a stop.
+      //
+      // The grace period is what keeps this safe against the real race: claim()
+      // writes the lock and then updates the file, so for a moment a live claim
+      // also looks orphaned. Seconds are plenty for a local file write, and far
+      // short of the lease.
+      const orphaned = task.status === 'queued' && !task.claimedBy && age >= ORPHAN_LOCK_MS;
+      if (age < leaseMs && !orphaned) return null; // someone else holds it, legitimately
+      fs.writeFileSync(lockPath, payload); // lease expired, or the lock was left behind
       stolen = true;
     }
     const claimed = this.update(task.id, { status: 'claimed', claimedBy: by, claimedAt: new Date(now).toISOString() });
