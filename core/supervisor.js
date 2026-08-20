@@ -543,7 +543,14 @@ export class Supervisor {
       // was any good, and this is the path where the most of it goes.
       this.#recordSpend(taskId, hb, 'stopped at its cap');
       await this.#discard(taskId);
-      this.#park(taskId, `Spent $${taskSpend.usd.toFixed(2)} against a $${caps.taskUsd} per-task cap.`);
+      // Say that it is a LIFETIME total, and name the way out. This counts
+      // every attempt the task has ever made, which is the safe reading — but
+      // it also means a task that once cost $3 can never be given a cheap
+      // one-line correction under a $1 cap, and the message read as though the
+      // correction itself had been expensive.
+      this.#park(taskId, `Spent $${taskSpend.usd.toFixed(2)} across ${
+        (this.backlog.get(taskId)?.attempts ?? 0) + 1} attempt(s) against a $${caps.taskUsd} per-task cap.`
+        + ' That cap covers the whole history of this task, not this attempt alone — raise --task-usd to work it again.');
       return;
     }
 
