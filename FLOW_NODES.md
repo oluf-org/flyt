@@ -406,7 +406,10 @@ and reports on it as if it were the subject. Three things close that:
   (`[from reference:<name> — a read-only clone, NOT this project]`);
 - `search_references` defaults its `repo:` to the subject, because the library is
   shared and an unscoped search returns other people's repositories. `repo: "*"`
-  opts out, deliberately.
+  opts out, deliberately; and
+- `glob` accepts `dir: "reference:<name>[/subdirectory]"` and returns addresses
+  that can be passed straight to `read_file`, so discovering a reference tree
+  does not require guessing paths or falling back to workspace files.
 
 A bare workspace read is **logged, not blocked** (`tool_target_unexpected`): a
 lane comparing subject to home is legitimate, so this is visibility rather than a
@@ -503,6 +506,12 @@ must occur on that exact line. Any miss rejects the whole hand-off before
 `Backlog.add()` runs, so a plan cannot partially queue verified and unverified
 work. Verified evidence, including the machine-read commit, is written into the
 task body for the worker that eventually claims it.
+
+A Loop node may set `requireEvidence: true` for a reference-transfer workflow.
+Then every proposed task needs at least one verified citation from a repository
+pinned by that run, even if the task edits only local files. This keeps a weak
+analogy from becoming durable work merely by omitting the external path from its
+goal.
 
 Ships gated (`requiresApproval: true`): handing a machine a night of work is
 exactly the decision a human should see first.

@@ -31,7 +31,7 @@ nodes:
       argue it. Everything after you is aimed by your answer. This is a bounded
       survey, not the repository analysis: inspect the project manifests and
       guidance plus at most two load-bearing files from each side, then stop.
-    worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 }
+    worker: { provider: auto, model: "~deepseek/deepseek-v4-flash-latest" }
     maxToolIterations: 6
   read:
     type: fanout
@@ -40,13 +40,14 @@ nodes:
       Read the repository you have been given and answer the question in the
       brief. Ground every claim in a file and a line you actually opened:
       search first, then read the specific place. Say plainly what you could
-      not determine rather than filling the gap.
-    tools: [search_references, read_file]
+      not determine rather than filling the gap. Use glob on the reference root
+      when broad search results hide the repository's actual source layout.
+    tools: [glob, search_references, read_file]
     lanes:
-      - { id: architecture, label: Architecture, intent: "how the thing is put together, and why", preset: standard, worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 } }
-      - { id: wildcard, preset: wildcard, worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 } }
-      - { id: adversarial, preset: standard, worker: { provider: auto, model: moonshotai/kimi-k3 } }
-      - { id: contrarian, preset: contrarian, worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 } }
+      - { id: architecture, label: Architecture, intent: "how the thing is put together, and why", preset: standard, worker: { provider: auto, model: "~deepseek/deepseek-v4-flash-latest" } }
+      - { id: wildcard, preset: wildcard, worker: { provider: auto, model: "~deepseek/deepseek-v4-flash-latest" } }
+      - { id: adversarial, preset: standard, worker: { provider: auto, model: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free" } }
+      - { id: contrarian, preset: contrarian, worker: { provider: auto, model: "~deepseek/deepseek-v4-flash-latest" } }
     maxLanes: 4
     maxToolIterations: 10
     plan: auto
@@ -54,7 +55,7 @@ nodes:
   synthesise:
     use: general-analysis
     title: Merge the reads
-    effort: high
+    effort: medium
     instructions: |
       Several independent readings of one repository follow, each with a
       different slant. Merge them into one account: what is agreed, what only
@@ -62,11 +63,15 @@ nodes:
       citations. Where two lanes disagree, say so rather than picking a winner
       silently.
 
+      This is a synthesis, not an inventory. Keep the complete report under
+      1,800 words. Group related findings, retain only evidence that changes a
+      decision, and never emit a claim-by-claim table or restate every lane.
+
       The orientation above says what THIS project is and how it relates to
       what was read. Use it: separate what is relevant here from what is not,
       say plainly where a finding describes something we have already solved,
       and drop what does not apply to us rather than carrying it forward.
-    worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 }
+    worker: { provider: auto, model: "~deepseek/deepseek-v4-flash-latest" }
     skills: [reference-transfer]
     requiresApproval: false
   plan:
@@ -106,18 +111,27 @@ nodes:
       an exact line number, and a short exact excerpt from that line. Re-open
       the file before emitting the plan. The Loop verifies these fields against
       the pinned clone and will queue nothing if any citation is stale or wrong.
-    worker: { provider: auto, model: deepseek/deepseek-v4-pro-0813 }
+
+      This flow is specifically a transfer from a reference repository. Every
+      queued task therefore needs at least one verified evidence entry, even
+      when its blast radius contains only files in this project. If the reading
+      did not produce evidence strong enough for a task, return no proposal
+      instead of converting a general impression into backlog work.
+    worker: { provider: auto, model: "~deepseek/deepseek-v4-flash-latest" }
     skills: [skill-authoring]
     maxToolIterations: 10
   work:
     type: loop
     title: Queue it
     maxTasks: 6
+    requireEvidence: true
     waitFor: none
 
 flow:
   - inputs.repo -> orient
   - inputs.goal -> orient
+  - inputs.repo -> read
+  - inputs.goal -> read
   - orient.summary -> read
   - read -> synthesise
   - orient -> synthesise

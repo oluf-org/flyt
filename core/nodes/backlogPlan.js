@@ -176,7 +176,11 @@ export function parseBacklogPlan(text) {
 //
 // Returns enriched copies so the backlog body records the commit verified by
 // the machine rather than asking the model to copy a SHA correctly.
-export function validateBacklogEvidence(tasks, { references = null, allowedReferences = [] } = {}) {
+export function validateBacklogEvidence(tasks, {
+  references = null,
+  allowedReferences = [],
+  requireEvidence = false
+} = {}) {
   const errors = [];
   const allowed = new Map((allowedReferences ?? [])
     .map(r => typeof r === 'string' ? [r, null] : [r?.name, r?.commit ?? null])
@@ -185,9 +189,27 @@ export function validateBacklogEvidence(tasks, { references = null, allowedRefer
   const checked = tasks.map(task => {
     const cited = referencedFiles(task);
     const evidence = task.evidence ?? [];
+    if (requireEvidence && allowed.size && !evidence.length) {
+      errors.push(`tasks["${task.title}"].evidence: at least one verified citation is required by this hand-off`);
+    }
+    const prose = [task.goal, ...(task.doneWhen ?? []), task.notes]
+      .filter(Boolean).join('\n');
     for (const ref of cited) {
       if (!evidence.some(item => item.ref === ref)) {
         errors.push(`tasks["${task.title}"].evidence: "${ref}" is mentioned without a matching evidence entry`);
+      }
+    }
+    // A malformed or prose-only attribution must not bypass the evidence
+    // boundary. A real run produced two OpenCode-derived tasks with zero
+    // citations by spelling one path as `<reference>opencode/...` and naming
+    // the other source only as prose; both were queued as "verified". If the
+    // task names a repository this run read, it owes at least one verified
+    // citation into that repository.
+    for (const name of allowed.keys()) {
+      const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (!new RegExp(`(^|[^a-zA-Z0-9._-])${escaped}([^a-zA-Z0-9._-]|$)`, 'i').test(prose)) continue;
+      if (!evidence.some(item => item.ref.startsWith(`reference:${name}/`))) {
+        errors.push(`tasks["${task.title}"].evidence: reference repository "${name}" is mentioned without a verified file citation`);
       }
     }
 

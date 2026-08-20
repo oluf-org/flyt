@@ -1,4 +1,5 @@
-// glob: list files in the workspace by pattern (DECISIONS.md D38).
+// glob: list files in the workspace or one read-only reference by pattern
+// (DECISIONS.md D38).
 //
 // The gap this closes: `read_file` can open a path you already know and
 // `search_references` can only reach the read-only library, so a node asked to
@@ -23,11 +24,10 @@ export default {
   name: 'glob',
   title: 'List files',
   description: [
-    'List files in the workspace (the bound project) matching a glob pattern like "src/**/*.js",',
-    '"*.md" or "**/package.json". Use it to see what is actually here before reading anything —',
-    'paths come back workspace-relative and ready to hand to read_file. Build output, node_modules',
-    'and .git are skipped. This lists THIS project, never the read-only reference library; use',
-    'search_references for that.'
+    'List files matching a glob pattern like "src/**/*.js", "*.md" or "**/package.json".',
+    'By default this lists the bound workspace. To list a read-only reference repository, pass',
+    'dir: "reference:<repo>" or a subdirectory such as "reference:opencode/packages/opencode/src".',
+    'Returned paths are ready to hand to read_file. Build output, node_modules and .git are skipped.'
   ].join(' '),
   effects: ['read'],
   scope: 'workspace',
@@ -46,7 +46,7 @@ export default {
       },
       dir: {
         type: 'string',
-        description: 'Optional subdirectory to search under, e.g. "src". Defaults to the workspace root.'
+        description: 'Optional workspace subdirectory ("src") or read-only reference root/subdirectory ("reference:opencode" or "reference:opencode/packages/app"). Defaults to the workspace root.'
       },
       limit: {
         type: 'integer', minimum: 1, maximum: MAX_LIMIT,
@@ -59,12 +59,29 @@ export default {
     }
   },
   run(args, ctx) {
-    const host = fileHost(ctx);
-    const base = host.resolve(args.dir ? String(args.dir) : '.');
-    if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) {
-      throw new Error(`Directory "${args.dir ?? '.'}" does not exist in the workspace.`);
+    const requestedDir = args.dir ? String(args.dir).replace(/\\/g, '/').replace(/\/+$/, '') : '';
+    const reference = requestedDir.startsWith('reference:');
+    let base;
+    let prefix;
+    let target;
+    if (reference) {
+      if (!ctx?.references) throw new Error('No reference library is available in this run.');
+      const match = /^reference:([^/]+)(?:\/(.*))?$/.exec(requestedDir);
+      if (!match) throw new Error(`Invalid reference directory "${requestedDir}".`);
+      base = ctx.references.resolve(requestedDir);
+      prefix = requestedDir;
+      target = 'reference';
+    } else {
+      const host = fileHost(ctx);
+      base = host.resolve(requestedDir || '.');
+      prefix = requestedDir.replace(/^\.?\/*|\/*$/g, '');
+      target = host.target;
     }
-    const prefix = args.dir ? String(args.dir).replace(/\\/g, '/').replace(/^\.?\/*|\/*$/g, '') : '';
+    if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) {
+      throw new Error(reference
+        ? `Reference directory "${requestedDir}" does not exist.`
+        : `Directory "${args.dir ?? '.'}" does not exist in the workspace.`);
+    }
     const re = globToRegExp(String(args.pattern ?? ''));
     const limit = Math.min(MAX_LIMIT, Math.max(1, Number(args.limit ?? DEFAULT_LIMIT)));
     const includeDirs = args.includeDirs === true;
@@ -99,7 +116,8 @@ export default {
       ...(args.dir ? { dir: args.dir } : {}),
       // Named so a model cannot mistake this listing for the subject repository
       // it may also be holding (DECISIONS.md D38).
-      target: host.target,
+      target,
+      ...(reference ? { readOnly: true } : {}),
       count: matches.length,
       ...(truncated ? { truncated: true } : {}),
       paths: matches

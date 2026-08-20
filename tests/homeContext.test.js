@@ -11,6 +11,7 @@ import { FlowRunner, contextIsStale, readContextStamp, orientSummary, ORIENT_SUM
 import { homeSeed, projectGates, SEED_BUDGET } from '../core/homeSeed.js';
 import { parseOrientation, stripJsonBlock } from '../core/planEval.js';
 import { Workspace } from '../core/workspace.js';
+import { ReferenceLibrary } from '../core/references.js';
 import { globToRegExp } from '../core/tools/glob.js';
 import { sharedPreamble } from '../core/nodes/fanout.js';
 import { executeTool } from '../core/tools/index.js';
@@ -313,6 +314,29 @@ test('orient writes the context, the stance and a capped summary', async () => {
   assert.match(store.readNodeOutput(runId, 'orient.summary'), /Relation to the subject: similar/);
   const logged = store.readLog(runId).find(l => l.event === 'orientation');
   assert.equal(logged.relation, 'similar');
+});
+
+test('glob lists a read-only reference with paths ready for read_file', async () => {
+  const root = tmpProject();
+  const repo = path.join(root, 'opencode');
+  fs.mkdirSync(path.join(repo, 'packages', 'app', 'src'), { recursive: true });
+  fs.mkdirSync(path.join(repo, 'node_modules', 'junk'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'packages', 'app', 'src', 'index.ts'), 'export {};');
+  fs.writeFileSync(path.join(repo, 'packages', 'app', 'README.md'), '# App');
+  fs.writeFileSync(path.join(repo, 'node_modules', 'junk', 'index.ts'), 'ignored');
+  const references = new ReferenceLibrary(root, { repos: [{ name: 'opencode', url: 'x', about: '' }] });
+
+  const listed = await executeTool('glob', {
+    pattern: '**/*.ts', dir: 'reference:opencode/packages/app'
+  }, { references });
+  assert.equal(listed.ok, true, listed.error ?? '');
+  assert.equal(listed.result.target, 'reference');
+  assert.equal(listed.result.readOnly, true);
+  assert.deepEqual(listed.result.paths, ['reference:opencode/packages/app/src/index.ts']);
+
+  const opened = await executeTool('read_file', { path: listed.result.paths[0] }, { references });
+  assert.equal(opened.ok, true, opened.error ?? '');
+  assert.match(opened.result.content, /export/);
 });
 
 test('an aiStep may narrow its tool rounds below the host-wide ceiling', async () => {
@@ -621,15 +645,30 @@ test('the readers inherit the subject even when the repo input fed a different n
   // way: five lanes read this project and a different reference, and the merge
   // then discarded the actual subject as irrelevant.
   const store = makeStore();
-  setScript(call => (roleOf(call.system) === 'subject-peek' ? 'shape' : 'findings'));
+  const searched = [];
+  let peekCalled = false;
+  let peekSystem = '';
+  setScript(call => {
+    if (roleOf(call.system) !== 'subject-peek') return 'findings';
+    peekSystem = call.system;
+    if (!peekCalled) {
+      peekCalled = true;
+      return '```tool\n{"tool":"search_references","args":{"pattern":"package.json"}}\n```';
+    }
+    return 'A small JavaScript repository.';
+  });
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
      // Stamped by materializeInputs on the node the repo input feeds.
      node('orient', 'aiStep', { goal: 'Where are we standing?', role: 'orient', subjectRepo: 'their-repo', subjectStrict: false }),
-     node('fan', 'fanout', { title: 'Read it', goal: 'Read it.', tools: ['read_file'], lanes: ['standard', 'wildcard'] }),
+     node('fan', 'fanout', { title: 'Read it', goal: 'Read it.', plan: 'auto', tools: ['read_file', 'search_references'], lanes: ['standard', 'wildcard'] }),
      node('out', 'output')],
     [edge('in', 'orient'), edge('orient', 'fan'), edge('fan', 'out')]);
   const runner = new FlowRunner(store, testConfig());
+  runner.references = {
+    catalog: () => [{ name: 'their-repo', cloned: true, about: '' }, { name: 'other-repo', cloned: true, about: '' }],
+    search: (_pattern, opts) => { searched.push(opts.repo); return { results: [], truncated: false }; }
+  };
   const runId = runner.start(flow, { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
 
@@ -638,4 +677,7 @@ test('the readers inherit the subject even when the repo input fed a different n
     assert.equal(f.nodes.find(n => n.id === id).data.subjectRepo, 'their-repo',
       'the node that does the reading is not the node that was handed the URL');
   }
+  assert.equal(searched[0], 'their-repo', 'the pre-lane peek inherits the run subject too');
+  assert.match(peekSystem, /THE SUBJECT IS NOT THIS PROJECT/);
+  assert.match(peekSystem, /reference:their-repo/);
 });

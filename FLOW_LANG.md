@@ -290,12 +290,17 @@ nodes:
     budgetUsd: 5               # per enqueued task
     parallelism: 2
     maxTasks: 10
+    requireEvidence: true      # every task needs a verified citation from this run
 flow:
   - input -> plan
   - plan.tasks -> work -> output
 ```
 
 `waitFor: none` is fire-and-forget: the tasks are queued and the run moves on.
+`requireEvidence: true` is for reference-transfer flows: when the run has pinned
+repositories, every task must carry at least one citation that verifies against
+one of those exact commits. A task with only a plausible resemblance to what was
+read is rejected before it reaches the backlog.
 A **parked** task does not fail the node and does not end the wait — D35 rule 7
 says a gate parks a task and never blocks the loop, so the node surfaces the
 park (its card shows `Waiting on you`, and the node reads as a gate on the

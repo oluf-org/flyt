@@ -1,7 +1,7 @@
 {
   "id": "glob",
   "title": "List files",
-  "description": "List files in the workspace (the bound project) matching a glob pattern like \"src/**/*.js\", \"*.md\" or \"**/package.json\". Use it to see what is actually here before reading anything — paths come back workspace-relative and ready to hand to read_file. Build output, node_modules and .git are skipped. This lists THIS project, never the read-only reference library; use search_references for that.",
+  "description": "List files matching a glob pattern like \"src/**/*.js\", \"*.md\" or \"**/package.json\". By default this lists the bound workspace. To list a read-only reference repository, pass dir: \"reference:<repo>\" or a subdirectory such as \"reference:opencode/packages/opencode/src\". Returned paths are ready to hand to read_file. Build output, node_modules and .git are skipped.",
   "provider": "builtin",
   "enabled": true,
   "effects": [
@@ -29,7 +29,7 @@
       },
       "dir": {
         "type": "string",
-        "description": "Optional subdirectory to search under, e.g. \"src\". Defaults to the workspace root."
+        "description": "Optional workspace subdirectory (\"src\") or read-only reference root/subdirectory (\"reference:opencode\" or \"reference:opencode/packages/app\"). Defaults to the workspace root."
       },
       "limit": {
         "type": "integer",

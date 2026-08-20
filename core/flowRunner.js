@@ -45,7 +45,7 @@ import {
 import {
   resolveLanes, laneBrief, laneInventory, DEFAULT_LANE_TEMPLATE,
   normalizeLane, normalizeLaneWorker, uniqueLaneIds, sharedPreamble, applyPreamble, assignWorkers,
-  renderBrief, LANE_PRESETS, LANE_PRESET_IDS
+  addressingBlock, renderBrief, LANE_PRESETS, LANE_PRESET_IDS
 } from './nodes/fanout.js';
 import { spliceAllSubflows, SubflowError } from './nodes/subflow.js';
 import { parseBacklogPlan, validateBacklogEvidence } from './nodes/backlogPlan.js';
@@ -4284,7 +4284,7 @@ export class FlowRunner {
   //
   // Total, except for a stop: no grant, or a failed call, degrades to a blind
   // planner (which is simply P3-without-P3.1, and still better than no planner).
-  async fanoutPeek(runId, node, worker, apiKey, brief) {
+  async fanoutPeek(runId, node, worker, apiKey, brief, subjectRepo = '') {
     const grant = this.aiStepTools(runId, node).filter(t => PEEK_TOOLS.includes(t.name));
     if (!grant.length) {
       this.store.appendLog(runId, { event: 'fanout_peek_skipped', node: node.id, reason: 'no read-only tool grant to look with' });
@@ -4296,10 +4296,12 @@ export class FlowRunner {
     }
     try {
       const res = await this.trackedRunAgent(runId, node.id, {
-        ...target, apiKey, system: PEEK_SYSTEM, prompt: brief,
+        ...target, apiKey,
+        system: subjectRepo ? `${PEEK_SYSTEM}\n\n${addressingBlock(subjectRepo)}` : PEEK_SYSTEM,
+        prompt: brief,
         maxTokens: PEEK_MAX_TOKENS, maxIterations: PEEK_MAX_CALLS,
         onRetry: this.retryLogger(runId, node.id), retry: this.config.retry
-      }, grant, subjectOf(node));
+      }, grant, subjectRepo ? { repo: subjectRepo, strict: true } : subjectOf(node));
       const text = String(res.text ?? '').trim();
       this.store.appendLog(runId, {
         event: 'fanout_peek', node: node.id,
@@ -4398,7 +4400,11 @@ export class FlowRunner {
       parts.length ? `WHAT FEEDS THIS NODE:\n${parts.join('\n\n')}` : ''
     ].filter(Boolean).join('\n\n');
 
-    const peek = await this.fanoutPeek(runId, node, worker, apiKey, brief);
+    // The repo input normally feeds orientation, not the fan-out. Inherit the
+    // one run subject before the peek: waiting until lane materialization made
+    // the map-building call search every reference and read this workspace.
+    const subjectRepo = String(node.data?.subjectRepo ?? this.#runSubject(flow) ?? '');
+    const peek = await this.fanoutPeek(runId, node, worker, apiKey, brief, subjectRepo);
 
     const userMsg = [
       brief,
@@ -4865,7 +4871,8 @@ export class FlowRunner {
       const runReferences = this.store.readMeta(runId)?.references ?? [];
       const evidence = validateBacklogEvidence(parsed.tasks, {
         references: this.references,
-        allowedReferences: runReferences
+        allowedReferences: runReferences,
+        requireEvidence: node.data?.requireEvidence === true
       });
       if (!evidence.ok) {
         this.store.writeNodeOutput(runId, `${node.id}.errors`, [

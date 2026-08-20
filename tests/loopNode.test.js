@@ -154,6 +154,47 @@ test('missing, stale, and out-of-run reference evidence is rejected', () => {
   assert.match(moved.errors.join(' '), /this run pinned different-commit/);
 });
 
+test('a prose-only or malformed repository attribution cannot bypass evidence', () => {
+  const parsed = parseBacklogPlan(fenced([{
+    ...PLAN[0],
+    goal: 'Adopt the <reference>opencode/src/session/prompt.ts context pattern.',
+    notes: 'This comes from OpenCode but includes no exact line.'
+  }]));
+  const checked = validateBacklogEvidence(parsed.tasks, {
+    references: evidenceFixture(), allowedReferences: ['opencode']
+  });
+  assert.equal(checked.ok, false);
+  assert.match(checked.errors.join(' '), /repository "opencode" is mentioned without a verified file citation/);
+
+  const local = validateBacklogEvidence(parseBacklogPlan(fenced(PLAN)).tasks, {
+    references: evidenceFixture(), allowedReferences: ['opencode']
+  });
+  assert.equal(local.ok, true, 'a purely local task does not need an invented external citation');
+});
+
+test('a hand-off can require evidence for every task learned from a reference', () => {
+  const parsed = parseBacklogPlan(fenced(PLAN));
+  const required = validateBacklogEvidence(parsed.tasks, {
+    references: evidenceFixture(), allowedReferences: ['subject'], requireEvidence: true
+  });
+  assert.equal(required.ok, false);
+  assert.match(required.errors.join(' '), /at least one verified citation is required/);
+
+  const cited = parseBacklogPlan(fenced([{
+    ...PLAN[0],
+    evidence: [{
+      claim: 'Retries are bounded',
+      ref: 'reference:subject/src/retry.js',
+      line: 2,
+      excerpt: 'requestWithBackoff()'
+    }]
+  }]));
+  const verified = validateBacklogEvidence(cited.tasks, {
+    references: evidenceFixture(), allowedReferences: ['subject'], requireEvidence: true
+  });
+  assert.equal(verified.ok, true, verified.errors.join('\n'));
+});
+
 // --- enqueue (P4.5) ---------------------------------------------------------
 
 test('enqueue writes claimable tasks, with provenance and resolved dependsOn', () => {

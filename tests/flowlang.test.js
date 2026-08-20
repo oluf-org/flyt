@@ -238,19 +238,31 @@ test('learn-from-repo returns the research, proposed work, and queue outcome', (
     .map(edge => edge.source);
   assert.deepEqual(finalSources, ['synthesise', 'plan', 'work'],
     'the final result must not collapse back to the queue status alone');
+  const readInputs = flow.edges
+    .filter(edge => edge.target === 'read')
+    .map(edge => `${edge.source}.${edge.sourceHandle ?? ''}`);
+  assert.ok(readInputs.includes('inputs.repo'), 'the fan-out is explicitly scoped to the subject repository');
+  assert.ok(readInputs.includes('inputs.goal'), 'the fan-out receives the verbatim question, not only orientation\'s summary');
   const byId = new Map(flow.nodes.map(node => [node.id, node]));
   assert.equal(byId.get('orient').overrides.maxToolIterations, 6);
   assert.equal(byId.get('read').data.maxLanes, 4,
     'the shipped research flow must keep synthesis context bounded');
   assert.equal(byId.get('read').data.maxToolIterations, 10);
+  assert.ok(byId.get('read').data.tools.includes('glob'),
+    'reference readers need tree discovery when text search is too broad');
   assert.equal(byId.get('plan').overrides.maxToolIterations, 10,
     'the evidence planner must not inherit the much wider host default');
   assert.deepEqual(byId.get('synthesise').overrides.skills, ['reference-transfer']);
+  assert.equal(byId.get('synthesise').overrides.effort, 'medium',
+    'synthesis must condense the lane reports instead of receiving a 16k-token answer budget');
+  assert.match(byId.get('synthesise').overrides.instructions, /under\s+1,800 words/);
   assert.equal(byId.get('synthesise').templateId, 'general-analysis',
     'research synthesis must not invoke combine/stitch task materialization');
   assert.deepEqual(byId.get('plan').overrides.skills, ['skill-authoring']);
-  assert.equal(byId.get('plan').overrides.worker.model, 'deepseek/deepseek-v4-pro-0813',
-    'the evidence planner must use a model observed to finish answer-only turns');
+  assert.equal(byId.get('plan').overrides.worker.model, '~deepseek/deepseek-v4-flash-latest',
+    'the evidence planner must use the probed value model with a high-effort answer budget');
+  assert.equal(byId.get('work').data.requireEvidence, true,
+    'learn-from-repo must not queue a transfer task without verified source evidence');
 });
 
 test('round-trip: multiline strings and odd titles survive', () => {
