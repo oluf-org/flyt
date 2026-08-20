@@ -427,7 +427,19 @@ export class Supervisor {
       task.body,
       whereItCameFrom(task),
       HOW_IT_LANDS,
-      task.blockedReason ? `\nA PREVIOUS ATTEMPT FAILED:\n${task.blockedReason}` : ''
+      task.blockedReason ? `\nA PREVIOUS ATTEMPT FAILED:\n${task.blockedReason}` : '',
+      // When the last attempt was rejected at REVIEW, its work is already in
+      // this worktree — gates green, one specific objection. Saying so is what
+      // turns "rebuild it" into "fix that". Without this line the worker opens
+      // a checkout it does not recognise as its own and writes the whole thing
+      // again, which is both the expensive answer and the one that loses the
+      // parts nobody objected to.
+      task.resumeFrom
+        ? 'THE PREVIOUS ATTEMPT IS ALREADY HERE. Its commit is checked out in this worktree and its'
+          + ' gates passed; a reviewer read it and asked for the change above. Read the diff'
+          + ' (`git show HEAD`, `git diff HEAD~1`) and CORRECT it. Do not start over — the parts'
+          + ' nobody objected to are the parts you would be throwing away.'
+        : ''
     ].filter(Boolean).join('\n\n');
   }
 

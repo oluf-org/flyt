@@ -130,8 +130,21 @@ export async function landTask({
   }));
   log(`review: ${review.verdict}${review.reason ? ` — ${review.reason}` : ''}`);
   if (review.verdict !== 'approve') {
+    // The commit the reviewer actually read.
+    //
+    // A rejection at this stage means the gates ALREADY PASSED and a reviewer
+    // then found something specific — a stray file, a name, a missing case.
+    // Throwing the whole attempt away and rebuilding it from the base branch on
+    // a bigger model is an expensive answer to "delete this file": watched a
+    // correct 244-line implementation discarded over an empty file called `1`.
+    // Naming the reviewed commit is what lets the next attempt start from the
+    // work instead of from nothing.
+    let reviewed = null;
+    try { reviewed = (await git(['rev-parse', 'HEAD'], { cwd: pool.dirFor(taskId) })).trim(); }
+    catch { /* no sha is a smaller loss than a failed landing report */ }
     return {
       landed: false, stage: 'review', steps, review,
+      ...(reviewed ? { reviewedCommit: reviewed } : {}),
       guidance: [review.reason, ...review.changes].filter(Boolean).join(' ')
     };
   }

@@ -78,6 +78,12 @@ const DEFAULTS = () => ({
   claimedBy: null,
   claimedAt: null,
   blockedReason: null,
+  // The commit a reviewer read and rejected, when the last landing failed at
+  // review. The next attempt starts from it instead of from the base branch, so
+  // a specific objection is a correction rather than a rebuild. Null on every
+  // other outcome — a gate failure or an empty diff is not work worth
+  // inheriting.
+  resumeFrom: null,
   runIds: []
 });
 

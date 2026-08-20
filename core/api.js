@@ -863,9 +863,23 @@ export function createApi(engine) {
           + `${cleared.runId ? `, run ${cleared.runId}` : ''}). Stop or discard it before starting another.`,
           { status: 409, code: 'attempt_live' });
       }
-      const wt = await pool.create(taskId, task.title, { projectId, runId });
-      backlog.update(taskId, { status: 'running', attemptId: wt.attemptId });
-      return wt;
+      // Start from the last reviewed commit when there is one (see work:land):
+      // a reviewer's objection is a correction, not a reason to rebuild. The sha
+      // is verified before it is trusted — a branch that has been gc'd or a
+      // repository that has moved on must degrade to the base branch, not fail
+      // the attempt.
+      let base = null;
+      if (task.resumeFrom) {
+        try {
+          await git(['cat-file', '-e', `${task.resumeFrom}^{commit}`], { cwd: pool.repoRoot });
+          base = task.resumeFrom;
+        } catch {
+          backlog.update(taskId, { resumeFrom: null });
+        }
+      }
+      const wt = await pool.create(taskId, task.title, { projectId, runId, base });
+      backlog.update(taskId, { status: 'running', attemptId: wt.attemptId, ...(base ? { resumedFrom: base } : {}) });
+      return { ...wt, ...(base ? { resumedFrom: base } : {}) };
     },
     // Keep a live attempt's ownership record fresh (WR-02). Without a beat, a
     // genuinely long task looks abandoned to the next `work:start`, which is
@@ -940,6 +954,17 @@ export function createApi(engine) {
         // band: retrying the same capability mostly reproduces the same answer.
         // At the top of the ladder the task parks for a human instead.
         backlog.escalate(taskId, { reason: 'failed', note: result.guidance ?? result.stage });
+        // Where the next attempt should start.
+        //
+        // Only for a REVIEW rejection: that is the one failure where the gates
+        // already passed, so the work is known to be sound and the objection is
+        // specific. A gate failure or an empty diff says the attempt is wrong in
+        // a way a fresh start may fix, and inheriting it would inherit the
+        // problem. Cleared on every other outcome so a stale sha can never be
+        // resumed from.
+        backlog.update(taskId, {
+          resumeFrom: result.stage === 'review' && result.reviewedCommit ? result.reviewedCommit : null
+        });
       }
       // Landed: this attempt's tree is finished with. Scoped to the attempt
       // that produced the merge, so a slow landing cannot clean up after a
