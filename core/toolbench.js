@@ -118,7 +118,13 @@ export function judge(kase, record, field = null) {
     // told the caller something actionable, and one that says "request failed"
     // has not. The failure is still recorded — this is not a way to pass by
     // crashing informatively — but `contains` gets its say.
-    const said = String(record.error ?? '');
+    // Judge what the tool SAID, not the echo of what it was given. Every one of
+    // these messages quotes the URL back, and `httpbin.org/status/403` contains
+    // "403" — so a tool whose whole answer was "could not fetch <url>" scored
+    // as having reported the status. An expectation satisfied only by the echo
+    // of the input is not satisfied.
+    const echoed = Object.values(record.args ?? kase.args ?? {}).filter(v => typeof v === 'string');
+    const said = echoed.reduce((text, value) => text.split(value).join(' '), String(record.error ?? ''));
     const missing = kase.expect.contains.filter(n => !said.toLowerCase().includes(String(n).toLowerCase()));
     return {
       pass: false, chars: 0, threw: true,
@@ -172,7 +178,9 @@ export async function runToolSuite(suite, { call, onProgress = () => {} } = {}) 
       let record;
       try { record = await call(tool.id, args); }
       catch (err) { record = { ok: false, error: String(err?.message ?? err), ms: 0 }; }
-      const verdict = judge(kase, record, tool.field);
+      // The arguments travel with the record so `judge` can tell what a tool
+      // said from what it was given.
+      const verdict = judge({ ...kase, args }, record, tool.field);
       rows.push({
         case: kase.id, tool: tool.as, toolId: tool.id,
         ok: Boolean(record.ok), ms: record.ms ?? 0,

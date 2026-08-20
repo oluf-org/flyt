@@ -106,6 +106,25 @@ test('a thrown call has its message judged, and still fails', () => {
   assert.ok(useless.reasons.some(r => /does not name 403/.test(r)));
 });
 
+// Every one of these messages quotes the URL back, and
+// `httpbin.org/status/403` contains "403" — so a tool whose whole answer was
+// "could not fetch <url>" scored as having reported the status. An expectation
+// satisfied only by the echo of the input is not satisfied.
+test('an expectation met only by the echo of the input is not met', () => {
+  const kase = {
+    args: { url: 'https://httpbin.org/status/403' },
+    expect: { contains: ['403'], absent: [], minChars: 0, maxMs: 0 }
+  };
+
+  const echo = judge(kase, { ok: false, error: 'could not fetch https://httpbin.org/status/403 (returned nothing)', ms: 40 });
+  assert.ok(echo.reasons.some(r => /does not name 403/.test(r)),
+    'quoting the URL back is not a status report');
+
+  const real = judge(kase, { ok: false, error: 'https://httpbin.org/status/403 returned 403 FORBIDDEN', ms: 40 });
+  assert.ok(real.reasons.some(r => /does name what was expected/.test(r)),
+    'and a message that says it outside the URL still counts');
+});
+
 test('every expectation in the case file is checked, and the reason names which failed', () => {
   const kase = { expect: { contains: ['Einstein'], absent: ['Cookie banner'], minChars: 100, maxMs: 50 } };
   const bad = judge(kase, { ok: true, ms: 900, result: { text: 'short. Cookie banner.' } }, 'text');
