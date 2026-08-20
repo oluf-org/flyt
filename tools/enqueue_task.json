@@ -64,6 +64,13 @@
           "type": "string"
         },
         "description": "Paths the work is expected to touch, if you already know them."
+      },
+      "skills": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Names of project skills (.flyt/skills/<name>.md) the worker will need — the conventions this particular job has to follow. Instructions only; naming a skill never grants a tool."
       }
     }
   },

@@ -63,6 +63,11 @@ export default {
         type: 'array',
         items: { type: 'string' },
         description: 'Paths the work is expected to touch, if you already know them.'
+      },
+      skills: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Names of project skills (.flyt/skills/<name>.md) the worker will need — the conventions this particular job has to follow. Instructions only; naming a skill never grants a tool.'
       }
     }
   },
@@ -87,6 +92,10 @@ export default {
       effort: args.effort,
       dependsOn: args.dependsOn ?? [],
       blastRadius: args.blastRadius ?? [],
+      // What the worker will need to KNOW, as distinct from what it may do.
+      // Resolved from the bound project at run time (core/skills.js), so a task
+      // written today still finds the convention the project keeps tomorrow.
+      skills: args.skills ?? [],
       // Provenance: which run and node asked for this. The picker reports it,
       // and a burst of near-identical tasks from one node is exactly the
       // pathology the overseer watches for (§11.6).

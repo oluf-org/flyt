@@ -288,6 +288,14 @@ export function createEngine({
     runtimeConfig.approvalMode = normalizeApprovalMode(settings.approvalMode ?? 'ask');
     // What 'smart' mode screens with. The runner gets a resolver, never a key.
     runtimeConfig.safety = { model: effectiveSafetyModel(), resolveModelSource };
+    // The Python sidecar (core/python.js, TOOLS.md). A tool that borrows a
+    // library which is not JavaScript has to find the interpreter those
+    // packages were installed into, and that is a fact about the INSTALLATION —
+    // which is exactly what this map carries. Without it a sidecar tool would
+    // have to guess `python` on PATH, which on this platform is as likely to be
+    // a Store stub that opens an installer as it is to be a working 3.11.
+    runtimeConfig.userDataDir = userDataDir;
+    runtimeConfig.python = settings.python ?? {};
   }
   rebuildRuntimeConfig();
 

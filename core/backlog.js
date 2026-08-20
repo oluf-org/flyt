@@ -55,6 +55,16 @@ const DEFAULTS = () => ({
   // without this it can only report the task impossible, however good the task
   // is. With it, `reference:<name>/<path>` opens the file.
   references: [],
+  // Expertise this task's worker needs, by name, resolved from the bound
+  // project's .flyt/skills/<name>.md exactly as a template's `skills` list is
+  // (core/skills.js). A skill on a TEMPLATE says "work of this kind is always
+  // done this way"; a skill on a TASK says "this particular job needs this
+  // knowledge" — which is the more common case and had nowhere to live. Without
+  // it, teaching one unattended task a convention meant attaching the skill to
+  // every task the loop runs, so nobody did, and the worker rediscovered the
+  // same API by traceback every time. Instructions only: a skill never widens a
+  // tool grant, here as everywhere else.
+  skills: [],
   budgetUsd: null,
   attempts: 0,
   createdBy: 'human',

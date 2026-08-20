@@ -27,6 +27,12 @@ const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..'
 const USAGE = `flyt — drive Flyt without the desktop app
 
   flyt flows                          list workflows
+  flyt tools [list]                   the tool library
+  flyt tools show <id>                one tool, schema included
+  flyt tools run <id> --arg k=v       call it once, right now (--yes for write/shell)
+  flyt tools problems                 definitions the library could not bind
+  flyt python status [--packages a,b] the sidecar interpreter, and what it has
+  flyt python setup --packages a,b    build/repair the managed environment
   flyt run <flow> --input "<text>"    start a run and wait for it to settle
   flyt run <flow> --in repo=<url>     supply a typed run input (repeatable)
   flyt runs                           list runs in the current project
@@ -39,6 +45,8 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt probe <model>...               call a model once and report what came back
   flyt doctor [--flow <id>] [--probe] providers, priority, library — and the models a flow pins
   flyt task add "<title>" --goal "<what>"   queue a task for a later run
+                  [--done "<criterion>"]... [--gates "npm test"] [--skill <name>]
+                  [--blast <path,path>] [--references <ref,ref>] [--level <l>]
   flyt task list [--status queued]    the backlog
   flyt task show <id>                 one task, in full
   flyt task ready                     what the picker would take, and what is stuck
@@ -291,6 +299,95 @@ async function main() {
       return out(asJson ? flows : flows.map(f => `${f.id}\t${f.name ?? ''}`).join('\n'));
     }
 
+    // The tool library, from the terminal. `flyt tools run` is the missing half
+    // of tool authoring: until it existed the only way to find out whether a
+    // tool worked was to start a run and read the log afterwards, which is a
+    // slow loop for a person and no loop at all for an agent writing one.
+    case 'tools': {
+      const sub = positional[1] ?? 'list';
+      switch (sub) {
+        case 'list': {
+          const tools = await api.invoke('tool:list');
+          return out(asJson ? tools : tools
+            .map(t => `${t.enabled === false ? '·' : ' '} ${t.id}\t${(t.effects ?? []).join(',')}\t${t.risk ?? ''}\t${t.title ?? ''}`)
+            .join('\n'));
+        }
+        case 'show': {
+          const id = positional[2];
+          if (!id) return die('flyt tools show <id>');
+          return out(await api.invoke('tool:show', { id }));
+        }
+        case 'problems':
+          return out(await api.invoke('tool:problems', {}));
+        case 'run': {
+          const id = positional[2];
+          if (!id) return die('flyt tools run <id> --arg url=https://example.com');
+          const args = {};
+          for (const pair of [].concat(flags.arg ?? [])) {
+            const eq = String(pair).indexOf('=');
+            if (eq > 0) args[String(pair).slice(0, eq)] = String(pair).slice(eq + 1);
+          }
+          for (const pair of [].concat(flags['arg-json'] ?? [])) {
+            const eq = String(pair).indexOf('=');
+            if (eq <= 0) continue;
+            const key = String(pair).slice(0, eq);
+            try { args[key] = JSON.parse(String(pair).slice(eq + 1)); }
+            catch (err) { return die(`--arg-json ${key}: not valid JSON (${err.message})`); }
+          }
+          const record = await api.invoke('tool:run', {
+            projectId: openProject(api, engine), id, args,
+            // A write or a shell call needs the caller to say so, here as
+            // everywhere else. `--yes` is that sentence.
+            confirm: Boolean(flags.yes)
+          });
+          if (asJson) return out(record);
+          if (!record.ok) return die(`${id} failed after ${record.ms}ms: ${record.error}`);
+          say(`${id} ok in ${record.ms}ms`);
+          return out(record.result);
+        }
+        default:
+          return die(`flyt tools list|show <id>|run <id>|problems`);
+      }
+    }
+
+    // The Python sidecar (core/python.js). Some tools borrow a library that is
+    // not JavaScript; this is where that environment is built and inspected,
+    // so "the tool says scrapling is missing" has a command that fixes it.
+    case 'python': {
+      const sub = positional[1] ?? 'status';
+      const packages = String(flags.packages ?? '').split(',').map(s => s.trim()).filter(Boolean);
+      switch (sub) {
+        case 'status': {
+          const status = await api.invoke('python:status', { packages });
+          if (asJson) return out(status);
+          const lines = [
+            `interpreter  ${status.bin ?? '(none found)'}`,
+            `resolved by  ${status.source}`,
+            `version      ${status.version ?? '—'}`,
+            `managed dir  ${status.managedDir ?? '—'}`
+          ];
+          for (const [name, version] of Object.entries(status.packages ?? {})) {
+            lines.push(`  ${version ? '✓' : '✗'} ${name} ${version ?? '(not installed)'}`);
+          }
+          if (status.error) lines.push(`\n${status.error}`);
+          if (status.remedy) lines.push(status.remedy);
+          return out(lines.join('\n'));
+        }
+        case 'setup': {
+          if (!packages.length) say('no --packages given: building the environment only');
+          const result = await api.invoke('python:setup', {
+            packages,
+            python: flags.python === true ? null : (flags.python ?? null),
+            log: line => say(`  ${line}`)
+          });
+          return out(asJson ? result : `${result.bin}\n${
+            Object.entries(result.status?.packages ?? {}).map(([n, v]) => `  ${v ? '✓' : '✗'} ${n} ${v ?? ''}`).join('\n')}`);
+        }
+        default:
+          return die('flyt python status|setup [--packages a,b] [--python <path>]');
+      }
+    }
+
     case 'call': {
       const name = positional[1];
       if (!name) return die('flyt call <command> — see `flyt commands`');
@@ -335,7 +432,17 @@ async function main() {
             value: flags.value ? Number(flags.value) : undefined,
             effort: flags.effort ? Number(flags.effort) : undefined,
             level: typeof flags.level === 'string' ? flags.level : undefined,
-            dependsOn: flags.dependsOn ? String(flags.dependsOn).split(',') : undefined
+            dependsOn: flags.dependsOn ? String(flags.dependsOn).split(',') : undefined,
+            gates: flags.gates ? String(flags.gates).split(',').map(g => g.trim()).filter(Boolean) : undefined,
+            // What the worker has to KNOW (core/backlog.js `skills`), as
+            // distinct from what it may do. Comma-separated or repeated.
+            skills: flags.skills || flags.skill
+              ? [].concat(flags.skills ?? [], flags.skill ?? [])
+                .flatMap(v => String(v).split(',')).map(s2 => s2.trim()).filter(Boolean)
+              : undefined,
+            blastRadius: flags.blast ? String(flags.blast).split(',').map(b => b.trim()).filter(Boolean) : undefined,
+            references: flags.references ? String(flags.references).split(',').map(r => r.trim()).filter(Boolean) : undefined,
+            doneWhen: [].concat(flags.done ?? []).map(String).filter(Boolean)
           });
           say(`queued ${task.id}`);
           return out(asJson ? task : `${task.id}\t${task.title}`);

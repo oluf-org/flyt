@@ -276,3 +276,57 @@ test('an agentTask declared input reads the file out of the bound project', asyn
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
   assert.match(sawPrompt, /tabs, never spaces/);
 });
+
+// --- run-level skills (core/backlog.js `skills`) -----------------------------
+//
+// A skill on a TEMPLATE says "work of this kind is always done this way". A
+// skill on a TASK says "this particular job needs this knowledge", and that had
+// nowhere to live: teaching one unattended task a convention meant attaching
+// the skill to every task the loop runs, so nobody did.
+
+test('a run started with skills attaches them to every node that can hold one', async () => {
+  const store = makeStore();
+  const ws = wsWithSkills({ 'house-rules': 'House rule: tabs, never spaces.' });
+  const runner = new FlowRunner(store, testConfig());
+  let sawSystem = null;
+  setScript(({ system }) => { sawSystem = system; return 'done'; });
+
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('step', 'aiStep', { role: 'execute' }),
+     node('out', 'output')],
+    [edge('in', 'step'), edge('step', 'out')]);
+  const runId = runner.start(flow, { workspace: ws.root, skills: ['house-rules'] });
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+
+  assert.match(sawSystem, /tabs, never spaces/, 'the task said its worker needs this and it never arrived');
+  // The resolved flow is the run's self-describing artifact: what was attached
+  // has to be visible there, or two runs cannot be told apart afterwards.
+  const resolved = JSON.parse(fs.readFileSync(path.join(store.runDir(runId), 'flow.json'), 'utf8'));
+  assert.deepEqual(resolved.nodes.find(n => n.id === 'step').data.skills, ['house-rules']);
+});
+
+test('run-level skills are a union with the node\'s own, never a replacement', async () => {
+  const store = makeStore();
+  const ws = wsWithSkills({
+    'house-rules': 'House rule: tabs, never spaces.',
+    'from-template': 'Template rule: cite the file you read.'
+  });
+  const runner = new FlowRunner(store, testConfig());
+  let sawSystem = null;
+  setScript(({ system }) => { sawSystem = system; return 'done'; });
+
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('step', 'aiStep', { role: 'execute', skills: ['from-template'] }),
+     node('out', 'output')],
+    [edge('in', 'step'), edge('step', 'out')]);
+  const runId = runner.start(flow, { workspace: ws.root, skills: ['house-rules', 'from-template'] });
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+
+  assert.match(sawSystem, /tabs, never spaces/);
+  assert.match(sawSystem, /cite the file you read/, 'the template author\'s decision must survive');
+  const resolved = JSON.parse(fs.readFileSync(path.join(store.runDir(runId), 'flow.json'), 'utf8'));
+  assert.deepEqual(resolved.nodes.find(n => n.id === 'step').data.skills, ['from-template', 'house-rules'],
+    'declared first, added second, and no duplicates');
+});

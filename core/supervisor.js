@@ -369,7 +369,12 @@ export class Supervisor {
         // This run belongs to a task, and its spend is recorded against that
         // task when the task ends. Saying so is what keeps the runner from
         // recording the same calls a second time as an unattributed run.
-        loopTaskId: task.id
+        loopTaskId: task.id,
+        // What this task said its worker needs to know (core/backlog.js
+        // `skills`). Unattended work is exactly where rediscovering a
+        // convention by trial and error is most expensive: nobody is watching
+        // to say "we do it this way here", so the task has to.
+        skills: task.skills ?? null
       });
       this.inFlight.set(task.id, new Heartbeat({ taskId: task.id, runId, level, now: this.now(), model: worker?.model ?? null }));
       this.backlog.update(task.id, { runIds: [...(task.runIds ?? []), runId] });

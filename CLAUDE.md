@@ -6,6 +6,7 @@
 2. `DESIGN-SPEC.md` for current architecture and safety contracts.
 3. `DECISIONS.md` for durable choices and unresolved decisions.
 4. `FLOW_LANG.md` and `FLOW_NODES.md` when changing flow syntax, linting, node roles, ports, or structured outputs.
+5. `TOOLS.md` when adding or changing a tool, a toolset, or a Python sidecar.
 
 Current work is tracked in `.flyt/backlog/`. Completed implementation plans are git history, not living documentation. Do not create a new root-level plan for ordinary feature work; use the backlog and promote only durable decisions into `DECISIONS.md`.
 

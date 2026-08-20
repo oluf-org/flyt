@@ -2357,7 +2357,7 @@ export class FlowRunner {
   //   'ask'    — pause before every destructive tool call.
   //   'smart'  — screen each call (core/safetyCheck.js); pause only on risk.
   //   'always' — never pause. The dangerous one.
-  start(flow, { userInput = '', workspace = null, approvalMode = null, modeId = null, overrides = null, compareGroup = null, inputs = null, loopTaskId = null } = {}) {
+  start(flow, { userInput = '', workspace = null, approvalMode = null, modeId = null, overrides = null, compareGroup = null, inputs = null, loopTaskId = null, skills = null } = {}) {
     // Pre-run gate (FLOW_LANG.md): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
@@ -2430,6 +2430,22 @@ export class FlowRunner {
       }
       inputValues = values;
     }
+    // Run-level skills (core/backlog.js `skills`). A task can say what
+    // expertise its worker needs, and the only place that can be honoured is
+    // here: the caller does not know which nodes the flow has, and the nodes do
+    // not know which task they were started for. Merged into the RESOLVED copy
+    // rather than applied at prompt time, so runs/<id>/flow.json records what
+    // was actually attached and a comparison of two runs can see the
+    // difference. Union, never replacement — a template's own skills are its
+    // author's decision and a task may add to them, not overrule them.
+    if (skills?.length) {
+      const extra = skills.map(s => String(s ?? '').trim()).filter(Boolean);
+      for (const node of flowCopy.nodes) {
+        if (!node.data) continue;
+        node.data.skills = [...new Set([...(node.data.skills ?? []), ...extra])];
+      }
+    }
+
     const input = flowCopy.nodes.find(n => n.type === 'input');
     if (input && userInput.trim()) input.data = { ...input.data, text: userInput.trim() };
     const brief = input?.data?.text?.trim() || `Flow: ${flow.name}`;

@@ -68,7 +68,11 @@ Every model and tool interaction leaves evidence. Tool results are stored in ful
 
 ## 5. Tools and safety
 
-Tools are file-backed definitions loaded by `core/toolstore.js`; built-ins bind those definitions to source modules. The current catalog covers workspace reads and edits, shell commands, run/task inspection, backlog operations, reference search, web fetch/search, gate execution, result retrieval, and asking a human.
+Tools are file-backed definitions loaded by `core/toolstore.js`; built-ins bind those definitions to source modules. The current catalog covers workspace reads and edits, shell commands, run/task inspection, backlog operations, reference search, web fetch/search/scrape, gate execution, result retrieval, and asking a human. [`TOOLS.md`](./TOOLS.md) is the authoring contract.
+
+A tool can be called once, outside a run, through `tool:run` (`flyt tools run`). That door deliberately narrows authority rather than widening it: a write, shell or destructive tool refuses unless the caller confirms, and with no run store the full result stays inline. `tool:problems` reports definitions the library holds but cannot bind, which is otherwise a silent failure — a listed tool that looks healthy and cannot run.
+
+A capability that only exists outside JavaScript is reached through one bounded bridge, `core/python.js`. The tool supplies the script text (so what runs is in this repository) and a JSON payload on stdin; the bridge spawns an isolated interpreter, reads JSON off stdout, and bounds it with a timeout and an output cap. The interpreter is resolved and reportable — `FLYT_PYTHON`, the `python.bin` setting, the managed virtualenv under the app's user data directory, then PATH — never assumed, and a declared interpreter that is missing reports itself instead of falling through to a different Python. The environment lives outside every repository, so a Loop worker in a throwaway worktree uses the same one as the desktop app. A missing interpreter or package is a result with a remedy naming `flyt python setup`, not a traceback.
 
 Grants are two-tier:
 
@@ -116,6 +120,8 @@ Follow-up turns append a visible continuation to the run graph. Existing complet
 
 The Loop is a project-scoped supervisor over `.flyt/backlog/`. Tasks are individual Markdown files with structured frontmatter. The board and CLI derive blockers from the same `core/blockers.js` rules.
 
+A task declares what it may touch (`blastRadius`), how it is judged (`gates`), what it was learned from (`references`) and what its worker needs to know (`skills`). The last is resolved from the bound project's `.flyt/skills/` exactly as a template's list is and is merged into the run's resolved flow, so `runs/<id>/flow.json` records what was attached. A skill on a template says work of this kind is always done this way; a skill on a task says this particular job needs this knowledge. Neither can widen a tool grant.
+
 For each claimable task the supervisor:
 
 1. claims the task and creates a git worktree outside the repository, minting an `attemptId` that owns it;
@@ -157,7 +163,7 @@ Current architectural gaps worth preserving as explicit choices:
 - synchronous filesystem access assumes modest run and graph sizes;
 - shell execution is controlled but not securely sandboxed;
 - pending tool calls cannot be reconstructed after process death;
-- MCP/HTTP-imported tools, a full Tools management page, and code mode are not implemented;
+- MCP/HTTP-imported tools, a full Tools management page, and code mode are not implemented; the tool library is reachable from the CLI (`flyt tools`) but has no desktop surface;
 - a killed call's spend is estimated from what it streamed, so it is bounded
   evidence rather than a measurement;
 - model routing is configured rather than learned;

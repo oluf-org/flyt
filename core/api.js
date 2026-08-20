@@ -20,6 +20,20 @@ import { workerForLevel, levelFor, LEVELS } from './levels.js';
 import { blockersAll, boardBlockers } from './blockers.js';
 import { ChatStore, runChatTurn, CHAT_TOOLS } from './chat.js';
 import { costOf } from './ledger.js';
+import { executeTool, getTools, registerDefinition } from './tools/index.js';
+import { isDestructive } from '../src/toolTypes.js';
+import { pythonStatus, setupPython } from './python.js';
+
+// Why a one-shot call to this tool needs the caller to say so. Reads off the
+// record rather than a name list, for the same reason isDestructive() does.
+function describeEffects(tool) {
+  const effects = tool?.effects ?? [];
+  const parts = [];
+  if (effects.includes('destructive')) parts.push('deletes things');
+  if (effects.includes('write')) parts.push('writes to the project');
+  if (effects.includes('shell')) parts.push('runs shell commands');
+  return parts.length ? parts.join(' and ') : 'changes something outside this call';
+}
 
 // A band→model map, cleaned: known band names, non-empty ids, nothing else.
 // Sent by a UI, a CLI flag and config.json alike, so it is normalized once here
@@ -339,6 +353,100 @@ export function createApi(engine) {
 
     // --- Tools & config ----------------------------------------------------
     'tool:list': () => toolLibrary.list(),
+
+    // One tool, in full — schema included. `tool:list` returns summaries, and a
+    // summary is not enough to CALL anything: an agent asked to add or fix a
+    // tool needs the parameter schema, and reading it out of the source tree is
+    // only possible for someone standing in this repository.
+    'tool:show': ({ id }) => {
+      const def = toolLibrary.get(id);
+      if (!def) {
+        throw new ApiError(`No tool "${id}". Known: ${toolLibrary.ids().join(', ')}.`,
+          { status: 404, code: 'no_tool' });
+      }
+      const bound = getTools([def.id])[0] ?? null;
+      // Whether the definition RESOLVED matters as much as what it says: a
+      // file naming a built-in module this build does not ship is listed,
+      // looks healthy, and cannot run.
+      return { ...def, bound: Boolean(bound), ...(bound ? {} : { boundReason: registerDefinition(def).reason ?? 'not bound' }) };
+    },
+
+    /**
+     * Call one tool, once, outside a run.
+     *
+     * The library has always been files you could read and never something you
+     * could TRY. The only way to find out whether a tool worked was to pay for
+     * a run and read the log afterwards, which is a bad loop for a human and an
+     * impossible one for an agent asked to add a tool: it could write the
+     * module, write the definition, and have no way to see the first result.
+     *
+     * Authority is not widened by this door (CLAUDE.md standing rules). A tool
+     * whose effects mutate something outside the run — a write, a shell command
+     * — is exactly what the per-call approval gate exists for, so calling one
+     * from here requires `confirm: true` said out loud by the caller. Read-only
+     * and network tools run straight through, which is what makes this useful
+     * for the case it was built for.
+     */
+    'tool:run': async ({ projectId = null, id, args = {}, confirm = false }) => {
+      const def = toolLibrary.get(id);
+      if (!def) {
+        throw new ApiError(`No tool "${id}". Known: ${toolLibrary.ids().join(', ')}.`,
+          { status: 404, code: 'no_tool' });
+      }
+      if (!def.enabled) {
+        throw new ApiError(`"${id}" is disabled in the tool library, so it cannot be called.`,
+          { status: 400, code: 'tool_disabled' });
+      }
+      if (isDestructive(def) && confirm !== true) {
+        throw new ApiError(
+          `"${id}" ${describeEffects(def)} — that is what the approval gate exists for. Pass confirm:true (\`--yes\` on the CLI) to run it anyway.`,
+          { status: 400, code: 'needs_confirm' });
+      }
+      const entry = projectId ? proj(projectId) : null;
+      // The same ctx shape chat binds (§ 'chat:send'), minus the run store: with
+      // no store the full result stays inline, which is the whole point of a
+      // one-shot call. No `pool`, so nothing here can reach a worktree.
+      const record = await executeTool(id, args ?? {}, {
+        config: runtimeConfig,
+        references: engine.references ?? null,
+        ...(entry ? { backlog: engine.backlogFor(projectId) } : {}),
+        ...(entry?.folder ? { workspace: new Workspace(entry.folder) } : {})
+      });
+      return record;
+    },
+
+    // Which tools the library holds but could not bind, and why. `flyt doctor`
+    // reports providers and models; a definition that silently resolves to
+    // nothing is the same class of problem and was invisible.
+    'tool:problems': () => {
+      const defs = toolLibrary.listFull();
+      const unbound = defs
+        .filter(d => d.enabled)
+        .map(d => ({ id: d.id, ...registerDefinition(d) }))
+        .filter(r => !r.ok)
+        .map(({ id, reason }) => ({ id, reason }));
+      return { files: toolLibrary.problems ?? [], unbound };
+    },
+
+    // --- The Python sidecar (core/python.js) -----------------------------------
+    'python:status': ({ packages = [] }) => pythonStatus({
+      userDataDir: engine.userDataDir,
+      settings: engine.settings,
+      packages: Array.isArray(packages) ? packages : String(packages).split(',').map(s => s.trim()).filter(Boolean)
+    }),
+
+    'python:setup': async ({ packages = [], python = null, log = null }) => {
+      const list = Array.isArray(packages) ? packages : String(packages).split(',').map(s => s.trim()).filter(Boolean);
+      const lines = [];
+      const result = await setupPython({
+        userDataDir: engine.userDataDir,
+        packages: list,
+        baseBin: python,
+        log: line => { lines.push(line); if (typeof log === 'function') log(line); }
+      });
+      return { ...result, log: lines, status: await pythonStatus({ userDataDir: engine.userDataDir, settings: engine.settings, packages: list }) };
+    },
+
     'config:get': () => ({ workers: publicSettings().workers }),
     'settings:get': () => publicSettings(),
 
@@ -383,7 +491,7 @@ export function createApi(engine) {
     // The workspace is bound at run time (D15) — a bound tab IS its workspace
     // (T19), an appdata project has its own managed one (L5), and only an
     // unbound project picks one per run (or none, for mock/no-file flows).
-    'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null, level = null, worker = null, loopTaskId = null }) => {
+    'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null, level = null, worker = null, loopTaskId = null, skills = null }) => {
       const entry = proj(projectId);
       let workspace = null;
       // An explicit workspaceDir WINS, even for a bound project. That is how the
@@ -424,7 +532,13 @@ export function createApi(engine) {
         // supervisor records that run's spend against the task when the task
         // ends, so the runner must not also record it as an unattributed flow
         // run — one call, one ledger line.
-        loopTaskId
+        loopTaskId,
+        // Expertise the CALLER knows this run needs, on top of whatever the
+        // flow's templates already attach (core/backlog.js `skills`). A backlog
+        // task carries it because "this job needs to know how tools are
+        // authored here" is a property of the job, not of the pipeline every
+        // job runs through.
+        skills: Array.isArray(skills) ? skills : null
       });
     },
 
