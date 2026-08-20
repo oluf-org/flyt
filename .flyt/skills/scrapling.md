@@ -29,10 +29,16 @@ page = DynamicFetcher.fetch(url, network_idle=True) # full Playwright Chromium
 - `StealthyFetcher` and `DynamicFetcher` additionally need browsers, and
   `scrapling install` did **not** provide them here — it exited 0 having done
   nothing. What actually worked, verified:
-  `patchright install chromium` (Chromium, for `DynamicFetcher`) and
+  `playwright install chromium` (for `DynamicFetcher`) and
   `pip install "camoufox[geoip]" && python -m camoufox fetch` (Camoufox, for
-  `StealthyFetcher`). Both are a few hundred MB and are installed in Flyt's
-  managed environment; all three fetchers return 200 there today.
+  `StealthyFetcher`). Note `playwright`, not `patchright`: `patchright install
+  chromium` installs a headless-shell build under a different version
+  directory, and `DynamicFetcher` then reports the full Chromium missing —
+  correctly, and confusingly, right after an install that said it succeeded.
+  Both are a few hundred MB and are installed in Flyt's managed environment;
+  all three fetchers return 200 there today, and `DynamicFetcher` renders the
+  ten quotes on https://quotes.toscrape.com/js/ that the plain `Fetcher` cannot
+  see.
 - Without a browser, those two raise a plain `Exception` whose message is a
   box-drawn banner telling you what to install. **Catch it and report the
   remedy, not the traceback** — and note the banner is non-ASCII, so a script
@@ -58,8 +64,9 @@ page.find_by_text(...) / page.find_similar(...) / page.re_first(...)
 page.urljoin(href)
 ```
 
-**`css_first` does not exist.** Neither does `.get()` in the Scrapy sense on a
-list result. Index the list, and guard for empty. A `::text` selector yields
+**`css_first` does not exist** on a `Response`. `.get()` and `.getall()` DO
+exist on the result of `.css(...)` — Scrapy-style — and are the tidiest way to
+take the first match or all of them. Guard for empty either way. A `::text` selector yields
 string-ish values; a bare element selector yields `Selector` objects, so
 `' '.join(page.css('.snippet'))` raises `TypeError: expected str instance,
 Selector found`. Extract text before joining.
