@@ -233,3 +233,48 @@ test('a run that is not parked carries no question block', () => {
   store.setStage(runId, 'done');
   assert.equal(explainRun(store, runId).asking, undefined);
 });
+
+// An agentTask's calls are traced under `executor:<taskId>`, and nothing in the
+// log ties that name back to the flow node that spawned it — the executor path
+// logs `task_claimed`, not `node_start`. So a report built only from flow-node
+// ids explained the input node and had nothing to say about the one that made
+// every model call and every tool call in the run: `flyt why` reported "0 model
+// call(s)" on a run that had just billed forty of them, and then advised
+// re-running it because the evidence supposedly predated the black box.
+test('an executor task\'s calls are counted, attributed and explained', () => {
+  const store = makeStore();
+  const runId = seedRun(store, {
+    meta: {
+      stage: 'failed', flowName: 'Work one backlog task',
+      error: 'Task task-1 failed: required workspace change was not produced',
+      nodeStatus: { work: 'failed' }
+    },
+    log: [
+      { event: 'task_claimed', task: 'task-1', node: 'executor:task-1' },
+      { event: 'node_error', node: 'work', error: 'required workspace change was not produced' },
+      { event: 'tool_call', node: 'executor:task-1', tool: 'read_file', ok: true },
+      { event: 'tool_call', node: 'executor:task-1', tool: 'bash', ok: true }
+    ],
+    calls: {
+      'executor:task-1': [
+        { ok: true, provider: 'openrouter', model: 'deepseek/x', finishReason: 'tool_calls', ms: 1200, usage: { cost: 0.01 } },
+        { ok: true, provider: 'openrouter', model: 'deepseek/x', finishReason: 'stop', contentChars: 400, ms: 800, usage: { cost: 0.02 } }
+      ]
+    }
+  });
+
+  const r = explainRun(store, runId);
+  assert.equal(r.signals.modelCalls, 2, 'the run made calls and the report has to say so');
+  assert.equal(r.signals.usd, 0.03);
+
+  const executor = r.nodes.find(n => /task-1/.test(n.node));
+  assert.ok(executor, 'the name that made the calls belongs in the report');
+  assert.equal(executor.calls.total, 2);
+  assert.equal(executor.calls.toolCalls, 2, 'the trace file flattens the colon; the log does not');
+
+  const work = r.nodes.find(n => n.node === 'work');
+  assert.equal(work.traced, true, 'this run has a black box — it just files under another name');
+  assert.ok(r.suggestions.some(s => /executor/.test(s)),
+    'pointing at the executor entry beats telling someone to re-run a run whose evidence is on disk');
+  assert.ok(!r.suggestions.some(s => /predates the model-call black box/.test(s)));
+});

@@ -60,8 +60,24 @@ export function explainRun(store, runId) {
   const nodeErrors = log.filter(e => e.event === 'node_error')
     .map(e => ({ node: e.node, role: e.role ?? null, error: e.error }));
 
-  const nodes = [...new Set([...blocked.map(b => b.id), ...nodeErrors.map(e => e.node), ...inFlight.map(f => f.node)])]
-    .map(id => explainNode(store, runId, log, id, nodeStatus[id] ?? 'unknown', nodeErrors, inFlight));
+  // Executor tasks are nodes too, as far as evidence goes.
+  //
+  // An agentTask's calls are traced under `executor:<taskId>`, and nothing in
+  // the log ties that name back to the flow node that spawned it — the executor
+  // path logs `task_claimed`, not `node_start`. So a report built only from
+  // flow-node ids explained the input node and the output node and had nothing
+  // whatsoever to say about the one that made forty model calls and every tool
+  // call in the run. `callTraceNodes` already knows every name that made a
+  // call; a failing one belongs in the report whatever it is called.
+  let traceNames = [];
+  try { traceNames = store.callTraceNodes?.(runId) ?? []; } catch { /* no traces to add */ }
+
+  const nodes = [...new Set([
+    ...blocked.map(b => b.id), ...nodeErrors.map(e => e.node), ...inFlight.map(f => f.node),
+    // On a failed run, every name that made a call. Nothing else is going to
+    // explain what the money bought.
+    ...(meta.stage === 'failed' ? traceNames : [])
+  ])].map(id => explainNode(store, runId, log, id, nodeStatus[id] ?? 'unknown', nodeErrors, inFlight, traceNames.length > 0));
 
   // A run parked on a question has not failed and is not still working: it is
   // waiting for the person now typing `flyt why`. Saying only "awaiting_input"
@@ -90,7 +106,7 @@ export function explainRun(store, runId) {
     // Run-wide signals that explain a slow or expensive run even when nothing
     // failed. Kept separate from the per-node view because the answer to "why
     // did this take an hour" is usually a count, not one line.
-    signals: signalsFrom(log),
+    signals: signalsFrom(log, store, runId),
     suggestions: [...new Set(nodes.flatMap(n => n.suggestions))]
   };
 }
@@ -137,14 +153,18 @@ function inFlightFrom(log) {
   }));
 }
 
-function explainNode(store, runId, log, nodeId, status, nodeErrors, inFlight = []) {
+function explainNode(store, runId, log, nodeId, status, nodeErrors, inFlight = [], runHasTraces = false) {
   const calls = store.readCallTrace(runId, nodeId);
   const failed = calls.filter(c => c.ok === false);
   const ok = calls.filter(c => c.ok);
   const last = calls[calls.length - 1] ?? null;
   const empties = log.filter(e => e.event === 'model_empty_turn' && e.node === nodeId);
   const retries = log.filter(e => e.event === 'model_retry' && e.node === nodeId);
-  const toolCalls = log.filter(e => e.event === 'tool_call' && e.node === nodeId);
+  // A trace file flattens `:` out of the node id (state.js safeName), so a
+  // report keyed by the FILE name — which is the only name an executor task
+  // has here — would find none of its own tool calls. Compare flattened.
+  const flat = v => String(v ?? '').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const toolCalls = log.filter(e => e.event === 'tool_call' && flat(e.node) === flat(nodeId));
   const start = log.find(e => e.event === 'node_start' && e.node === nodeId) ?? null;
   const error = nodeErrors.find(e => e.node === nodeId)?.error ?? null;
 
@@ -159,7 +179,13 @@ function explainNode(store, runId, log, nodeId, status, nodeErrors, inFlight = [
   // Runs recorded before the black box existed have no trace, which is not the
   // same fact as "this node made no calls" — and reading it as the latter turns
   // every archived failure into a confident wrong diagnosis.
-  const traced = calls.length > 0 || log.some(e => e.event === 'model_call');
+  //
+  // `runHasTraces` is the third case, and the one that was being reported as
+  // the first: this run HAS a black box, and this node's calls are simply
+  // filed under another name (an agentTask's are traced as
+  // `executor:<taskId>`). Telling someone to re-run a run whose evidence is
+  // sitting on disk is worse than saying nothing.
+  const traced = calls.length > 0 || log.some(e => e.event === 'model_call') || runHasTraces;
 
   const live = inFlight.find(f => f.node === nodeId) ?? null;
 
@@ -196,7 +222,7 @@ function explainNode(store, runId, log, nodeId, status, nodeErrors, inFlight = [
     // violated the backlog task contract" and "0 call(s)". The useful half was
     // on disk the whole time.
     problems: retrospectiveProblems(store, runId, nodeId),
-    suggestions: suggestFor({ status, error, calls, ok, empties, retries, reasoningChars, contentChars, traced })
+    suggestions: suggestFor({ status, error, calls, ok, empties, retries, reasoningChars, contentChars, traced, elsewhere: !calls.length && runHasTraces })
   };
 }
 
@@ -212,7 +238,7 @@ function retrospectiveProblems(store, runId, nodeId) {
   } catch { return []; }
 }
 
-function suggestFor({ status, error, calls, ok, empties, retries, reasoningChars, contentChars, traced }) {
+function suggestFor({ status, error, calls, ok, empties, retries, reasoningChars, contentChars, traced, elsewhere = false }) {
   const out = [];
   if (!traced) {
     out.push('This run predates the model-call black box, so there is no per-call evidence to read — '
@@ -250,8 +276,15 @@ function suggestFor({ status, error, calls, ok, empties, retries, reasoningChars
       + 'The provider is throttling; fewer parallel lanes or a second provider in the priority list would both help.');
   }
   if (!calls.length && status === 'failed') {
-    out.push('This node failed before any model call was made — the cause is upstream of the provider: '
-      + 'a missing key, an unservable model id, or a tool/config error. The node error text says which.');
+    // Unless the run has traces filed under another name — an agentTask's calls
+    // live under `executor:<taskId>`. "It failed before any model call" is a
+    // confident, wrong, and expensive diagnosis to hand someone whose forty
+    // calls are sitting on disk two lines further down the same report.
+    out.push(elsewhere
+      ? 'This node made no calls under its own name. Its work ran as an executor task, whose calls are '
+        + 'traced separately — see the `executor:` entry in this report for the model, the finish reasons and the cost.'
+      : 'This node failed before any model call was made — the cause is upstream of the provider: '
+        + 'a missing key, an unservable model id, or a tool/config error. The node error text says which.');
   }
   if (error && /No connected provider/i.test(error)) {
     out.push('No provider can serve that model id. Check the id against `flyt doctor`, or add a key for a provider that carries it.');
@@ -263,10 +296,28 @@ function suggestFor({ status, error, calls, ok, empties, retries, reasoningChars
   return out;
 }
 
-// Run-wide counts worth surfacing even on a healthy run.
-function signalsFrom(log) {
+/**
+ * Run-wide counts worth surfacing even on a healthy run.
+ *
+ * Model calls come from the CALL TRACES first and the log second, for the same
+ * reason the ledger does (D47): the trace is the record of every settled call,
+ * and the log is a convenience that not every execution path writes. The
+ * executor path — which is to say every run the Loop makes — writes
+ * `calls/<node>.jsonl` and no `model_call` log line, so reading only the log
+ * reported "0 model call(s)" on a run that had just billed forty-one of them,
+ * and `flyt why` went on to explain that the run predated the black box. It
+ * did not; the box was full and nobody opened it.
+ */
+function signalsFrom(log, store = null, runId = null) {
   const count = ev => log.filter(e => e.event === ev).length;
-  const modelCalls = log.filter(e => e.event === 'model_call');
+  const logged = log.filter(e => e.event === 'model_call');
+  const traced = [];
+  try {
+    for (const nodeId of store?.callTraceNodes?.(runId) ?? []) {
+      traced.push(...(store.readCallTrace(runId, nodeId) ?? []));
+    }
+  } catch { /* an unreadable trace leaves the log's account standing */ }
+  const modelCalls = traced.length ? traced : logged;
   return {
     modelCalls: modelCalls.length,
     modelMs: modelCalls.reduce((n, c) => n + (c.ms ?? 0), 0),
