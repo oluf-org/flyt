@@ -819,18 +819,26 @@ test('the burn detector is handed real numbers', async () => {
   backlog.add({ title: 'busy and expensive', goal: 'g' });
   const ledger = new Ledger(path.join(tmp(), 'ledger'));
   // A run that keeps spending while producing byte-identical work.
-  let spent = 0;
+  // Cost climbs once per POLL, not per read: the supervisor reads a run's trace
+  // more than once a tick, and a fake that charges per read measures the
+  // supervisor's internals instead of the passage of the run.
+  let polls = 0;
+  const engine = fakeEngine({ backlog, stages: { default: ['execution'] } });
+  const invoke = async (name, args) => {
+    if (name === 'run:snapshot') polls += 1;
+    return engine.invoke(name, args);
+  };
   const store = {
     snapshot: () => ({ retrospectives: {} }),
     callTraceNodes: () => ['work'],
-    readCallTrace: () => {
-      spent += 0.2;
-      return [{ usage: { cost: spent, prompt_tokens: 1000, completion_tokens: 100 }, provider: 'openrouter', model: 'm', ok: true }];
-    }
+    readCallTrace: () => [{
+      usage: { cost: 0.2 * polls, prompt_tokens: 1000 * polls, completion_tokens: 100 * polls },
+      provider: 'openrouter', model: 'm', ok: true
+    }]
   };
 
   const sup = new Supervisor({
-    ...fakeEngine({ backlog, stages: { default: ['execution'] } }),
+    ...engine, invoke,
     projectId: 'p', backlog, ledger, store, pollMs: 1,
     config: { loop: { caps: { taskUsd: 2 }, thresholds: { silentMs: 1e9, spinMs: 1e9, spinRepeats: 1e9 } } }
   });

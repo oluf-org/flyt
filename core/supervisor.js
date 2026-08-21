@@ -247,7 +247,11 @@ export class Supervisor {
       parked: this.parked.slice(-20),
       completed: this.history.length,
       landed: this.history.filter(h => h.landed).length,
-      spend: this.ledger?.totals({ sinceMs: this.#windowMs() }) ?? null,
+      // Recorded spend PLUS what the runs in flight have already cost. A panel
+      // that shows only settled spend reads $0 through the whole stretch the
+      // money is being spent, which is the one stretch somebody is watching it
+      // for. `live` is broken out so a reader can tell the two apart.
+      spend: this.#spendNow(),
       noEscalate: this.noEscalate
     };
   }
@@ -854,6 +858,14 @@ export class Supervisor {
       + ` — $${remaining.toFixed(2)} left, against $${perAttempt.toFixed(2)} an attempt.`
       + ' Starting one that gets killed partway costs the money and produces nothing;'
       + ' raise --task-usd to work it again.';
+  }
+
+  /** The window total as it stands right now, in-flight runs included. */
+  #spendNow() {
+    const recorded = this.ledger?.totals({ sinceMs: this.#windowMs() });
+    if (!recorded) return null;
+    const live = this.#liveSpend();
+    return { ...recorded, usd: recorded.usd + live, live };
   }
 
   #liveSpend() {
