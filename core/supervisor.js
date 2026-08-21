@@ -46,6 +46,14 @@ function missingSkills(dir, names) {
 
 const POLL_MS = 5000;
 
+// How many polls a deferred restart waits for the walk to unwind before the
+// ladder gives up on that rung. The unwind is normally immediate — stop()
+// aborts the in-flight calls — but an abort that has to travel to a provider
+// can take a few seconds, and a rung is worth more than five seconds of
+// patience. It is not worth unbounded patience: a task nothing can restart
+// still has to reach a decision.
+const RESTART_UNWIND_POLLS = 12;
+
 /**
  * The one thing a task file cannot tell the agent: how this will be judged.
  *
@@ -594,6 +602,40 @@ export class Supervisor {
     const snapshot = await this.invoke('run:snapshot', { projectId: this.projectId, runId: hb.runId });
     const stage = snapshot.meta?.stage;
 
+    // A restart the ladder asked for and could not take yet (see #intervene).
+    // First, because the run is stopped: its bytes are frozen, so observing it
+    // would read as "byte-identical work" and trip the detector that put it
+    // here, and its stage is terminal, so every branch below would treat a run
+    // that is about to relaunch as one that ended.
+    if (hb.pendingRestart) {
+      const { nodeId, guidance, rung, stall } = hb.pendingRestart;
+      try {
+        await this.invoke('run:restartNode', {
+          projectId: this.projectId, runId: hb.runId, nodeId, guidance
+        });
+      } catch (err) {
+        // Still unwinding. A bound, because a restart that never lands must not
+        // hold a task in flight forever: give up on the rung and take the next
+        // one, which is what the ladder does with any rung it cannot use.
+        hb.restartWaits = (hb.restartWaits ?? 0) + 1;
+        if (hb.restartWaits < RESTART_UNWIND_POLLS) return;
+        hb.pendingRestart = null;
+        this.log(`  ${taskId} could not ${rung} ${nodeId}: ${err.message}`, { taskId });
+        if (!hb.interventions.includes('restart')) hb.interventions.push('restart');
+        await this.#intervene(taskId, hb, stall);
+        return;
+      }
+      hb.pendingRestart = null;
+      hb.restartWaits = 0;
+      // A restart is a fresh attempt: the spin counters start over, or the next
+      // poll would trip the same detector instantly and burn the ladder.
+      hb.repeats = 0;
+      hb.gateFailures = [];
+      hb.lastProgressAt = this.now();
+      this.log(`  ${taskId} ${rung}: restarted ${nodeId} with guidance`, { taskId });
+      return;
+    }
+
     // What this task has cost SO FAR — previous attempts from the ledger, plus
     // the run currently in flight read from its own artifacts. The ledger is
     // written when a run ends, so reading only the ledger meant an in-flight
@@ -695,14 +737,23 @@ export class Supervisor {
 
     if (rung === 'nudge' || rung === 'restart') {
       if (currentNode) {
-        await this.invoke('run:restartNode', {
-          projectId: this.projectId, runId: hb.runId, nodeId: currentNode, guidance
-        });
-        // A restart is a fresh attempt: the spin counters start over, or the
-        // next poll would trip the same detector instantly and burn the ladder.
-        hb.repeats = 0;
-        hb.gateFailures = [];
-        hb.lastProgressAt = this.now();
+        // `restartNode` refuses a run that is still walking, and a stall is BY
+        // DEFINITION a live run — so the two cheap rungs were asking the runner
+        // for the one thing it will not do in exactly the state that summons
+        // them. Watched live: nudge threw "run is live — stop or pause it
+        // first", restart threw it five seconds later, and the task reached
+        // escalate having actually tried neither. Worse, the throw skipped the
+        // counter reset below, so the very next poll tripped the same detector
+        // and burned the next rung: three rungs in eleven seconds.
+        //
+        // So the run is stopped first and the restart is taken on a later poll.
+        // The refusal is transient — the walk unwinds a moment after stop() —
+        // and a rung deferred is a rung tried, which is what this ladder is
+        // for.
+        hb.pendingRestart = { nodeId: currentNode, guidance, rung, stall };
+        hb.restartWaits = 0;
+        await this.invoke('run:stop', { projectId: this.projectId, runId: hb.runId });
+        this.log(`  ${taskId} stopping to ${rung} ${currentNode}`, { taskId });
         return;
       }
       // Nothing identifiable to restart. Both node-level rungs are unusable, so

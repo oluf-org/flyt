@@ -247,6 +247,11 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
     if (name === 'run:snapshot') {
       const r = runs.get(args.runId);
       r.polls += 1;
+      // One poll of unwinding, then the walk has let go. The real runner clears
+      // its stop request in the walk's `finally`, so a restart issued in the
+      // same breath as the stop is still refused; one issued a poll later is
+      // not. The supervisor has to survive both.
+      if (r.unwinding === true) r.unwinding = false;
       const plan = stages[args.runId] ?? stages.default ?? ['done'];
       const stage = plan[Math.min(r.polls - 1, plan.length - 1)];
       return {
@@ -288,7 +293,19 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
       }
       return result;
     }
-    if (name === 'run:stop' || name === 'run:restartNode' || name === 'run:approve') return true;
+    // `restartNode` refuses a run that is still walking, and it stays refused
+    // for a moment after `stop()` returns — the real runner clears its stop
+    // request in the walk's `finally`, not in `stop()`. A fake that always said
+    // yes hid the whole defect: the two cheapest rungs of the ladder called
+    // this on a LIVE run, by definition, and got an exception every time.
+    if (name === 'run:stop') { const r = runs.get(args.runId); if (r) r.unwinding = true; return true; }
+    if (name === 'run:restartNode') {
+      const r = runs.get(args.runId);
+      if (!r || r.unwinding !== false) throw new Error('run is live — stop or pause it first');
+      r.unwinding = undefined;   // it walks again
+      return true;
+    }
+    if (name === 'run:approve') return true;
     if (name === 'work:discard') {
       // Modelled, not stubbed. A no-op here hid a real bug for a week: the
       // command releases the lease, and passing a status into it overwrote the
@@ -407,6 +424,50 @@ test('a stalled task is nudged before it is escalated', async () => {
   const task = backlog.get('t-0001');
   assert.ok(['queued', 'parked'].includes(task.status));
   if (task.status === 'queued') assert.equal(task.level, 'medium');
+});
+
+test('a nudge stops the run first, because a stalled run is a live one', async () => {
+  // The defect, watched live: nudge called `run:restartNode` on the spinning
+  // run, the runner refused it -- "run is live -- stop or pause it first" --
+  // and the exception skipped the counter reset, so the next poll tripped the
+  // same detector and burned the next rung. Nudge, restart and escalate went by
+  // in eleven seconds and the two cheap rungs were never actually tried.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'spins', goal: 'g', level: 'low' });
+  const engine = fakeEngine({ backlog, stages: { default: ['running'] } });
+  const sup = new Supervisor({
+    ...engine, projectId: 'p', backlog, pollMs: 1,
+    config: { loop: { thresholds: { spinRepeats: 1, spinMs: 0 } } }
+  });
+
+  await sup.run({ maxTasks: 1 });
+  const names = engine.calls.filter(c => c.name === 'run:stop' || c.name === 'run:restartNode');
+  assert.equal(names[0].name, 'run:stop', 'the run is stopped before the restart is asked for');
+  const restart = engine.calls.find(c => c.name === 'run:restartNode');
+  assert.ok(restart, 'and the restart is taken on a later poll rather than thrown away');
+  assert.match(restart.args.guidance, /SUPERVISOR:/);
+});
+
+test('a restart the runner never accepts gives up its rung instead of holding the task', async () => {
+  // The bound. A run that never lets go must still reach a decision: the ladder
+  // gives up on the rung it cannot use and takes the next one, which is what it
+  // already does with a stall it has nothing to restart.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'never unwinds', goal: 'g', level: 'low' });
+  const engine = fakeEngine({ backlog, stages: { default: ['running'] } });
+  const stuck = async (name, args) => {
+    if (name === 'run:restartNode') throw new Error('run is live — stop or pause it first');
+    return engine.invoke(name, args);
+  };
+  const sup = new Supervisor({
+    invoke: stuck, calls: engine.calls, projectId: 'p', backlog, pollMs: 1,
+    config: { loop: { thresholds: { spinRepeats: 1, spinMs: 0 } } }
+  });
+
+  await sup.run({ maxTasks: 1 });
+  const task = backlog.get('t-0001');
+  assert.ok(['queued', 'parked'].includes(task.status), 'it reached a decision rather than spinning in flight');
+  if (task.status === 'queued') assert.equal(task.level, 'medium', 'and it went up a band');
 });
 
 test('with nothing to restart, the ladder moves down a rung instead of falling off it', async () => {
