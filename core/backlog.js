@@ -254,7 +254,6 @@ export class Backlog {
     for (const id of this.ids()) {
       try {
         const t = this.#readCached(id);
-        if (t === undefined) continue; // changed; next list() re-reads and reports it
         if (t && (!status || t.status === status)) out.push(t);
       } catch (err) {
         this.problems.push({ id, error: String(err.message ?? err) });
@@ -326,6 +325,7 @@ export class Backlog {
       throw new Error(`Unknown status "${patch.status}".`);
     }
     fs.writeFileSync(this.#file(task.id), serializeTask(stripId(next)));
+    this._cache.delete(task.id);
     return next;
   }
 
@@ -368,6 +368,7 @@ export class Backlog {
       throw new Error(`Task "${safe}" is claimed by ${task.claimedBy ?? 'someone'}. Release it before removing it.`);
     }
     fs.rmSync(this.#file(safe));
+    this._cache.delete(safe);
     try { fs.rmSync(this.#lock(safe)); } catch { /* no lock, or already gone */ }
     // Spend the number on the way out. `add` already records what it hands out,
     // so this only matters for a file a human wrote by hand and then removed —
