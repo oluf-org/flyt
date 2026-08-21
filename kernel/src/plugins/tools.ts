@@ -8,11 +8,10 @@
  *
  * @module #kernel/plugins/tools
  */
-import type { Context } from '@deepseek-ai/cordis';
+import { Service, type Context } from '@deepseek-ai/cordis';
 import type { JsonValue, ToolResult } from '../types.js';
 import type { ToolDefinition, ToolsSeam } from '../seams/tools.js';
 import type { PostToolDecision, PreToolDecision, ToolExecution } from '../events.js';
-import { provideSeam } from '../seams/index.js';
 
 /** Cordis plugin name. */
 export const name = 'flyt-tools';
@@ -23,65 +22,100 @@ export function refusal(reason: string): ToolResult {
 }
 
 /**
- * Provide `ctx.tools`.
+ * The registry.
  *
- * @param ctx — the context to provide in.
- * @returns a disposer withdrawing the seam.
+ * A Cordis `Service`, so `this.ctx` inside a method is the CALLER's context
+ * and a registration is owned by the fiber that made it. Real plugins call
+ * `register()` and drop the disposer on the floor — the published
+ * `dsh-skill-badge` does exactly that with its own registry — and a tool that
+ * outlives the plugin that contributed it is a tool nobody can account for.
+ *
+ * Ordinary private fields, never `#private` ones: cordis derives a per-caller
+ * view with `Object.create(this)`, and `#private` state is unreachable through
+ * a derived object.
  */
-export function apply(ctx: Context): () => void {
-  const registered = new Map<string, ToolDefinition>();
+export class ToolRegistry extends Service implements ToolsSeam {
+  private registered = new Map<string, ToolDefinition>();
 
-  const seam: ToolsSeam = {
-    register(tool) {
-      if (!tool?.name) throw new Error('A tool needs a name');
-      if (registered.has(tool.name)) throw new Error(`A tool named "${tool.name}" is already registered`);
+  constructor(ctx: Context) {
+    super(ctx, 'tools');
+  }
+
+  /** Register a tool, owned by the calling plugin's fiber. Emits `tools/change`. */
+  register(tool: ToolDefinition): () => void {
+    if (!tool?.name) throw new Error('A tool needs a name');
+    if (this.registered.has(tool.name)) throw new Error(`A tool named "${tool.name}" is already registered`);
+    const registered = this.registered;
+    const ctx = this.ctx;
+    return ctx.effect(() => {
       registered.set(tool.name, tool);
       ctx.emit('tools/change');
       return () => {
-        if (registered.get(tool.name) === tool) {
-          registered.delete(tool.name);
-          ctx.emit('tools/change');
-        }
+        if (registered.get(tool.name) !== tool) return;
+        registered.delete(tool.name);
+        ctx.emit('tools/change');
       };
-    },
+    }) as () => void;
+  }
 
-    get(toolName) { return registered.get(toolName); },
+  /** One tool by name, or undefined. */
+  get(toolName: string): ToolDefinition | undefined {
+    return this.registered.get(toolName);
+  }
 
-    list() { return [...registered.values()]; },
+  /** Every registered tool, including unclassified ones. */
+  list(): ToolDefinition[] {
+    return [...this.registered.values()];
+  }
 
-    async execute(exec: ToolExecution): Promise<ToolResult> {
-      ctx.emit('tool/call', exec);
+  /**
+   * Run a call through the gate.
+   *
+   * `tools/pre-execute` decides first: a denial returns a refusal result and
+   * the tool body never runs. Everything a plugin contributes reaches
+   * execution through this method and no other.
+   */
+  async execute(exec: ToolExecution): Promise<ToolResult> {
+    const ctx = this.ctx;
+    ctx.emit('tool/call', exec);
 
-      const decision: PreToolDecision = await ctx.waterfall(
-        'tools/pre-execute', exec, async () => ({ decision: 'allow' }),
-      );
-      if (decision.decision !== 'allow') {
-        // `ask` reaching here unanswered is a denial: a surface that cannot ask
-        // has not been given permission, it has failed to obtain it.
-        const reason = decision.decision === 'ask'
-          ? `${decision.reason} (nobody was available to approve it)`
-          : decision.reason;
-        return refusal(reason);
-      }
+    const decision: PreToolDecision = await ctx.waterfall(
+      'tools/pre-execute', exec, async () => ({ decision: 'allow' }),
+    );
+    if (decision.decision !== 'allow') {
+      // `ask` reaching here unanswered is a denial: a surface that cannot ask
+      // has not been given permission, it has failed to obtain it.
+      const reason = decision.decision === 'ask'
+        ? `${decision.reason} (nobody was available to approve it)`
+        : decision.reason;
+      return refusal(reason);
+    }
 
-      const tool = registered.get(exec.call.name);
-      if (!tool) return refusal(`there is no tool named "${exec.call.name}"`);
+    const tool = this.registered.get(exec.call.name);
+    if (!tool) return refusal(`there is no tool named "${exec.call.name}"`);
 
-      let result: ToolResult;
-      try {
-        result = await tool.execute(exec.call.args as JsonValue, exec);
-      } catch (err) {
-        // A throwing tool is a failed call, not a failed run: the model is
-        // told, and gets to decide what to do about it.
-        result = { content: `Error: ${String((err as Error)?.message ?? err)}`, error: String((err as Error)?.message ?? err) };
-      }
+    let result: ToolResult;
+    try {
+      result = await tool.execute(exec.call.args as JsonValue, exec);
+    } catch (err) {
+      // A throwing tool is a failed call, not a failed run: the model is told,
+      // and gets to decide what to do about it.
+      const message = String((err as Error)?.message ?? err);
+      result = { content: `Error: ${message}`, error: message };
+    }
 
-      const settled: PostToolDecision = await ctx.waterfall(
-        'tools/post-execute', exec, result, async () => ({ decision: 'accept', result }),
-      );
-      return settled.decision === 'accept' ? settled.result : refusal(settled.reason);
-    },
-  };
+    const settled: PostToolDecision = await ctx.waterfall(
+      'tools/post-execute', exec, result, async () => ({ decision: 'accept', result }),
+    );
+    return settled.decision === 'accept' ? settled.result : refusal(settled.reason);
+  }
+}
 
-  return provideSeam(ctx, 'tools', seam);
+/**
+ * Provide `ctx.tools`.
+ *
+ * @param ctx — the context to provide in.
+ */
+export function apply(ctx: Context): void {
+  new ToolRegistry(ctx);
 }

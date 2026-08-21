@@ -209,6 +209,32 @@ test('registering announces itself, and unregistering takes the tool with it', a
   } finally { await kernel.dispose(); }
 });
 
+test('a plugin that forgets to return its disposer is still cleaned up after', async () => {
+  // What real plugins do: register and move on. The published dsh-skill-badge
+  // does exactly this with its own registry, so a tool outliving the plugin
+  // that contributed it is not a hypothetical.
+  const kernel = createKernel();
+  try {
+    await kernel.ctx.plugin(flytTools);
+    const fiber = await kernel.ctx.plugin({
+      name: 'a-forgetful-plugin',
+      inject: ['tools'],
+      apply(ctx) {
+        ctx.tools.register({
+          name: 'forgotten', description: '', parameters: {}, classification: CLASSIFIED_READ,
+          async execute() { return { content: 'ran' }; },
+        });
+        // ...and returns nothing.
+      },
+    });
+    assert.ok(kernel.ctx.tools.get('forgotten'));
+
+    await fiber.dispose();
+    assert.equal(kernel.ctx.tools.get('forgotten'), undefined,
+      'the registration was owned by the fiber, not by the plugin remembering to say so');
+  } finally { await kernel.dispose(); }
+});
+
 test('two plugins cannot claim the same tool name', async () => {
   const kernel = createKernel();
   try {

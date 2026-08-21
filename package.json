@@ -27,6 +27,8 @@
     "release": "electron-builder --publish always"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-skill": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-skill-badge": "0.0.1-rc.1",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",

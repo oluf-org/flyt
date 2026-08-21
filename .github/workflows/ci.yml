@@ -22,3 +22,19 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  # The dsh compatibility promise, checked against real published plugins at
+  # pinned versions (D54). It runs inside `npm test` as well; it is called out
+  # as its own job so that a red build says WHICH promise decayed, on a
+  # dependency preview whose APIs are expected to move.
+  compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:kernel
+      - run: node --test tests/dshCompat.test.js
