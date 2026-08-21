@@ -14,6 +14,8 @@ export type * from './types.js';
 export * from './session/jsonl.js';
 export * from './session/projection.js';
 export * as sessionJsonl from './plugins/session-jsonl.js';
+export * as flytTools from './plugins/tools.js';
+export * as flytApprovals from './plugins/approvals.js';
 
 /**
  * Which surface a kernel serves.
