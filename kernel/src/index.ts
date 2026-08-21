@@ -20,6 +20,10 @@ export * as sessionJsonl from './plugins/session-jsonl.js';
 export * as flytTools from './plugins/tools.js';
 export * as flytApprovals from './plugins/approvals.js';
 export * as flytSkills from './plugins/skills.js';
+export * as flytApi from './plugins/commands.js';
+export * as flytStackCommands from './plugins/stack-commands.js';
+export { registerStackCommands } from './plugins/stack-commands.js';
+export type { StackHandle } from './plugins/stack-commands.js';
 
 /**
  * Which surface a kernel serves.

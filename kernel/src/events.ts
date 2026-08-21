@@ -82,6 +82,19 @@ export interface RouteRecord {
   degraded: boolean;
 }
 
+/** What `commands/invoke` says happened. */
+export interface CommandInvocation {
+  name: string;
+  /** Recorded, never inferred: "an agent did this" is the first question asked. */
+  caller: 'human' | 'agent';
+  args: JsonValue;
+  at: string;
+  /** Present when it succeeded. */
+  result?: JsonValue;
+  /** Present when it refused. */
+  error?: string;
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Events {
     /** A turn began. @mode emit */
@@ -110,6 +123,16 @@ declare module '@deepseek-ai/cordis' {
     ): Promise<PostToolDecision>;
     /** The registered tool set changed. @mode emit */
     'tools/change'(): void;
+    /**
+     * A command was invoked, by whoever invoked it.
+     *
+     * The editor's subscription, and the reason an edit a model made animates
+     * the way a dragged one does: both callers arrive here with the same
+     * record (D63). Carries `error` instead of `result` when the command
+     * refused — an edit that was attempted and refused is something a person
+     * watching an agent work needs to see. @mode emit
+     */
+    'commands/invoke'(record: CommandInvocation): void;
     /** A step ended, with what the model settled on. @mode emit */
     'step/end'(step: StepRef, settled: LlmSettled): void;
     /** A turn ended. @mode emit */
@@ -134,6 +157,7 @@ export const KERNEL_EVENTS = [
   'tools/pre-execute',
   'tools/post-execute',
   'tools/change',
+  'commands/invoke',
   'step/end',
   'turn/end',
   'session/append',

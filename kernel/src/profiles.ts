@@ -28,6 +28,7 @@ export const BUILTIN = {
   tools: 'flyt:tools',
   approvals: 'flyt:approvals',
   skills: 'flyt:skills',
+  commands: 'flyt:api',
 } as const;
 
 /** Resolve `flyt:*` specifiers to the bundled plugin modules. */
@@ -37,6 +38,7 @@ export async function builtinImporter(name: string): Promise<unknown> {
     case BUILTIN.tools: return import('./plugins/tools.js');
     case BUILTIN.approvals: return import('./plugins/approvals.js');
     case BUILTIN.skills: return import('./plugins/skills.js');
+    case BUILTIN.commands: return import('./plugins/commands.js');
     default: return import(name);
   }
 }
@@ -48,6 +50,7 @@ const DESKTOP: Entry[] = [
   { id: 'sessions', name: BUILTIN.sessionJsonl },
   { id: 'tools', name: BUILTIN.tools },
   { id: 'skills', name: BUILTIN.skills },
+  { id: 'commands', name: BUILTIN.commands },
   { id: 'approvals', name: BUILTIN.approvals, config: { mode: 'ask' } },
 ];
 
@@ -59,6 +62,7 @@ const CLI: Entry[] = [
   { id: 'sessions', name: BUILTIN.sessionJsonl },
   { id: 'tools', name: BUILTIN.tools },
   { id: 'skills', name: BUILTIN.skills },
+  { id: 'commands', name: BUILTIN.commands },
   { id: 'approvals', name: BUILTIN.approvals, config: { mode: 'ask' } },
 ];
 
@@ -73,6 +77,7 @@ const LOOP_WORKER: Entry[] = [
   { id: 'sessions', name: BUILTIN.sessionJsonl },
   { id: 'tools', name: BUILTIN.tools },
   { id: 'skills', name: BUILTIN.skills },
+  { id: 'commands', name: BUILTIN.commands },
   { id: 'approvals', name: BUILTIN.approvals, config: { mode: 'always' } },
 ];
 
