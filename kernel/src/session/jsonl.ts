@@ -55,10 +55,17 @@ function asRecord(value: unknown): Record<string, any> {
 export class JsonlSession implements SessionHandle {
   readonly runId: string;
   readonly file: string;
-  /** Lines the reader could not parse. Empty for a healthy log. */
+  /**
+   * What the last read found wrong with the file: unparseable lines, and a
+   * torn tail if there was one. Empty for a healthy log, and recomputed on
+   * every read rather than accumulated — it describes the file as it stands,
+   * not the history of how it got there.
+   */
   readonly problems: LogProblem[] = [];
   #head = 0;
   #size = -1;
+  /** The file as of the last read. The log is append-only, so equal size means equal content. */
+  #text = '';
   #readonly: boolean;
 
   constructor(runId: string, file: string, options: { readonly?: boolean } = {}) {
@@ -78,10 +85,11 @@ export class JsonlSession implements SessionHandle {
   #sync(): void {
     let stat: fs.Stats | undefined;
     try { stat = fs.statSync(this.file); } catch { /* no log yet */ }
-    if (!stat) { this.#head = 0; this.#size = -1; return; }
+    if (!stat) { this.#head = 0; this.#size = -1; this.#text = ''; return; }
     if (stat.size === this.#size) return;
 
     const raw = fs.readFileSync(this.file, 'utf8');
+    this.#text = raw;
     const torn = raw.length > 0 && !raw.endsWith('\n');
     const lines = raw.split('\n');
     if (lines[lines.length - 1] === '') lines.pop();
@@ -107,6 +115,7 @@ export class JsonlSession implements SessionHandle {
       fs.truncateSync(this.file, goodBytes);
       this.problems.push({ line: lines.length, reason: 'torn final line, truncated' });
       this.#size = goodBytes;
+      this.#text = raw.slice(0, goodBytes);
     } else {
       if (torn) this.problems.push({ line: lines.length, reason: 'torn final line' });
       this.#size = stat.size;
@@ -143,6 +152,7 @@ export class JsonlSession implements SessionHandle {
     fs.appendFileSync(this.file, line, 'utf8');
     this.#head = written.seq;
     this.#size = (this.#size < 0 ? 0 : this.#size) + Buffer.byteLength(line, 'utf8');
+    this.#text += line;
     return written;
   }
 
@@ -158,11 +168,11 @@ export class JsonlSession implements SessionHandle {
    * await in the middle, and a run folder is local files.
    */
   readSync(after = 0): SessionEvent[] {
+    // One read, not two: #sync() has already loaded the file if it changed,
+    // and an append-only file of the same size is the same file.
     this.#sync();
-    let raw: string;
-    try { raw = fs.readFileSync(this.file, 'utf8'); } catch { return []; }
     const out: SessionEvent[] = [];
-    for (const text of raw.split('\n')) {
+    for (const text of this.#text.split('\n')) {
       if (!text.trim()) continue;
       const parsed = asRecord(parseLine(text));
       if (typeof parsed.seq !== 'number' || typeof parsed.type !== 'string') continue;
