@@ -31,7 +31,15 @@ export const DEFAULT_THRESHOLDS = {
   // the adapter would have rescued, and this sits just above that line.
   spinMs: 6 * 60 * 1000,
   groundhogRepeats: 3,        // identical gate failure
-  outlierFactor: 4            // times the median for this class of task
+  outlierFactor: 4,           // times the median for this class of task
+  // Money spent since the work last changed. Dollars rather than tokens
+  // because dollars are what the provider reports and what the caps are
+  // written in; `burnTokens` still works for a caller that prefers it.
+  //
+  // No default: the honest threshold is a fraction of what THIS task was
+  // allowed to spend, which the supervisor knows and this module does not.
+  burnUsd: null,
+  burnTokens: null
 };
 
 const hash = value => crypto.createHash('sha1').update(String(value ?? '')).digest('hex').slice(0, 16);
@@ -170,6 +178,12 @@ export function detectStall(heartbeat, { thresholds = DEFAULT_THRESHOLDS, median
     return {
       detector: 'silent',
       detail: `No file, tool or node event for ${Math.round(heartbeat.idleMs / 1000)}s.`
+    };
+  }
+  if (t.burnUsd && heartbeat.usdSinceProgress >= t.burnUsd) {
+    return {
+      detector: 'burn',
+      detail: `$${heartbeat.usdSinceProgress.toFixed(2)} spent since anything last changed.`
     };
   }
   if (t.burnTokens && heartbeat.tokensSinceProgress >= t.burnTokens) {

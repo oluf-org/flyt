@@ -398,6 +398,18 @@ export class Supervisor {
   }
 
   async #begin(task) {
+    // Can this task afford another attempt at all?
+    //
+    // Watched live: attempt one spent $0.97 of a $1.20 cap and produced no
+    // workspace change, so the ladder escalated to a MORE expensive band,
+    // spent $0.25 more, and hit the cap mid-run. The task parked having spent
+    // its whole allowance and landed nothing. An attempt that will be killed
+    // partway is the worst of the three outcomes — it costs the money and
+    // produces neither work nor an answer — so a task with no room for one is
+    // parked before it starts, with the numbers that decided it.
+    const shortfall = this.#cannotAfford(task);
+    if (shortfall) { this.#park(task.id, shortfall); return; }
+
     const level = levelFor(task, this.config);
     // Which model this attempt runs on. Three shapes, most specific first:
     //
@@ -565,7 +577,17 @@ export class Supervisor {
     // task always reported $0 and the per-task cap below could never fire: the
     // one ceiling whose job is to stop a single runaway task was decorative.
     const taskSpend = this.#spentOn(taskId, hb);
-    hb.observe(snapshot, { now: this.now(), usd: 0 });
+    // What this poll cost, as a DELTA. The burn detector exists to catch a
+    // polite infinite loop — busy, expensive, producing the same thing every
+    // time — and it was handed a hard-coded zero on every poll, so its counter
+    // could never reach any threshold. A detector that cannot fire is not a
+    // safety net, it is a comment.
+    const usage = this.#liveUsageOf(hb);
+    const usd = Math.max(0, usage.usd - (hb.seenUsd ?? 0));
+    const tokens = Math.max(0, usage.tokens - (hb.seenTokens ?? 0));
+    hb.seenUsd = usage.usd;
+    hb.seenTokens = usage.tokens;
+    hb.observe(snapshot, { now: this.now(), usd, tokens });
     // Which node the ladder's nudge and restart rungs would act on. Without
     // this they silently fall through to escalate, which spends money to solve
     // a problem the cheapest rung might have fixed.
@@ -625,7 +647,16 @@ export class Supervisor {
       return;
     }
 
-    const stall = detectStall(hb, { thresholds: this.config.loop?.thresholds ?? DEFAULT_THRESHOLDS });
+    // A quarter of this task's whole allowance, spent without the work
+    // changing, is a burn. The threshold belongs here rather than in the
+    // detector because only the supervisor knows what this task was allowed.
+    const taskUsd = Number(this.#caps().taskUsd);
+    const thresholds = {
+      ...DEFAULT_THRESHOLDS,
+      ...(Number.isFinite(taskUsd) && taskUsd > 0 ? { burnUsd: taskUsd / 4 } : {}),
+      ...(this.config.loop?.thresholds ?? {})
+    };
+    const stall = detectStall(hb, { thresholds });
     if (stall) await this.#intervene(taskId, hb, stall);
   }
 
@@ -798,6 +829,33 @@ export class Supervisor {
    * task spend $23 under a $2 cap; the window and session ceilings did not,
    * and had the same hole for the same reason.
    */
+  /**
+   * Why this task cannot pay for another attempt, or null if it can.
+   *
+   * The estimate is this task's own history: what its previous attempts cost
+   * on average is the best available guess at what the next one costs, and
+   * escalation only ever makes that bigger. Half of one attempt is the floor —
+   * below that there is not enough left to reach a gate, let alone pass one.
+   */
+  #cannotAfford(task) {
+    const cap = Number(this.#caps().taskUsd);
+    if (!Number.isFinite(cap) || cap <= 0) return null;
+    const spent = this.ledger?.totals({ taskId: task.id })?.usd ?? 0;
+    const remaining = cap - spent;
+    if (remaining <= 0) {
+      return `Spent $${spent.toFixed(2)} of its $${cap} per-task cap over ${task.attempts ?? 0} attempt(s),`
+        + ' with nothing left for another — raise --task-usd to work it again.';
+    }
+    const attempts = Number(task.attempts ?? 0);
+    if (attempts < 1) return null;
+    const perAttempt = spent / attempts;
+    if (perAttempt <= 0 || remaining >= perAttempt / 2) return null;
+    return `Spent $${spent.toFixed(2)} of its $${cap} per-task cap over ${attempts} attempt(s)`
+      + ` — $${remaining.toFixed(2)} left, against $${perAttempt.toFixed(2)} an attempt.`
+      + ' Starting one that gets killed partway costs the money and produces nothing;'
+      + ' raise --task-usd to work it again.';
+  }
+
   #liveSpend() {
     let live = 0;
     for (const hb of this.inFlight.values()) live += this.#liveSpendOf(hb);
@@ -805,15 +863,20 @@ export class Supervisor {
   }
 
   /** What one in-flight run has spent so far, from its call trace. */
-  #liveSpendOf(hb) {
-    if (!this.ledger || !this.store || !hb?.runId) return 0;
-    let live = 0;
+  #liveSpendOf(hb) { return this.#liveUsageOf(hb).usd; }
+
+  /** The same read, with the token count the burn detector counts in. */
+  #liveUsageOf(hb) {
+    if (!this.ledger || !this.store || !hb?.runId) return { usd: 0, tokens: 0 };
+    let usd = 0;
+    let tokens = 0;
     try {
       for (const e of spendFromRun(this.store, hb.runId, { prices: this.ledger.prices ?? {} })) {
-        live += e.usd ?? 0;
+        usd += e.usd ?? 0;
+        tokens += Number(e.usage?.prompt_tokens ?? 0) + Number(e.usage?.completion_tokens ?? 0);
       }
     } catch { /* a run with nothing readable yet has cost nothing yet */ }
-    return live;
+    return { usd, tokens };
   }
 
   /** Recorded spend for this task, plus what the in-flight run has cost. */

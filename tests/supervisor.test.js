@@ -766,6 +766,84 @@ test('the ceiling counts what the run in flight is spending, not only what settl
   assert.ok(status.completed <= 1, 'it did not keep starting tasks under a ceiling that read zero');
 });
 
+test('a task with no room for another attempt is parked before it starts', async () => {
+  const backlog = makeBacklog();
+  const task = backlog.add({ title: 'expensive', goal: 'g' });
+  backlog.update(task.id, { attempts: 1 });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  ledger.record({ taskId: task.id, usd: 0.97, estimated: false });   // what attempt one cost
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog }), projectId: 'p', backlog, ledger, pollMs: 1,
+    config: { loop: { caps: { taskUsd: 1.2 } } }
+  });
+  const status = await sup.run();
+
+  assert.equal(backlog.get(task.id).status, 'parked');
+  assert.equal(status.landed, 0, 'no attempt was bought');
+  const reason = backlog.get(task.id).blockedReason;
+  assert.match(reason, /\$0\.23 left, against \$0\.97 an attempt/);
+  assert.match(reason, /raise --task-usd/);
+});
+
+test('a task with room left is still worked', async () => {
+  const backlog = makeBacklog();
+  const task = backlog.add({ title: 'cheap so far', goal: 'g' });
+  backlog.update(task.id, { attempts: 1 });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  ledger.record({ taskId: task.id, usd: 0.10, estimated: false });
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog }), projectId: 'p', backlog, ledger, pollMs: 1,
+    config: { loop: { caps: { taskUsd: 1.2 } } }
+  });
+  const status = await sup.run();
+  assert.equal(status.landed, 1);
+});
+
+test('a first attempt is never refused for want of history', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'brand new', goal: 'g' });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog }), projectId: 'p', backlog, ledger, pollMs: 1,
+    config: { loop: { caps: { taskUsd: 0.01 } } }
+  });
+  const status = await sup.run();
+  assert.equal(status.landed, 1, 'a task nobody has spent anything on gets its first attempt');
+});
+
+test('the burn detector is handed real numbers', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'busy and expensive', goal: 'g' });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  // A run that keeps spending while producing byte-identical work.
+  let spent = 0;
+  const store = {
+    snapshot: () => ({ retrospectives: {} }),
+    callTraceNodes: () => ['work'],
+    readCallTrace: () => {
+      spent += 0.2;
+      return [{ usage: { cost: spent, prompt_tokens: 1000, completion_tokens: 100 }, provider: 'openrouter', model: 'm', ok: true }];
+    }
+  };
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog, stages: { default: ['execution'] } }),
+    projectId: 'p', backlog, ledger, store, pollMs: 1,
+    config: { loop: { caps: { taskUsd: 2 }, thresholds: { silentMs: 1e9, spinMs: 1e9, spinRepeats: 1e9 } } }
+  });
+  const status = await sup.run({ maxTasks: 1 });
+
+  const hb = status.inFlight[0];
+  assert.ok(!hb, 'the task did not stay in flight forever');
+  const interventions = sup.history.map(h => h.stage);
+  assert.ok(interventions.length, 'it ended, one way or another');
+  assert.ok(sup.parked.length === 0 || /spent since anything last changed/.test(sup.parked[0].reason),
+    `a burn should be named as one: ${sup.parked[0]?.reason}`);
+});
+
 test('the report puts what needs a person above what does not', () => {
   const backlog = makeBacklog();
   const landed = backlog.add({ title: 'shipped', goal: 'g' });
