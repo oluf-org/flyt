@@ -692,6 +692,7 @@ test('a cap named at the start counts what THIS loop spent, not what today did',
     // What `flyt loop start --cap-usd 2` sends: a ceiling for this session.
     config: { loop: { caps: { hardUsd: 2 }, sessionCaps: { hardUsd: 2 } } }
   });
+  await new Promise(r => setTimeout(r, 5));   // the morning's spend is in the past
   const status = await sup.run();
 
   assert.equal(status.landed, 1, 'money spent before the loop started is not this session ceiling');
@@ -722,16 +723,47 @@ test('a session cap this loop DID reach still stops it', async () => {
   for (let i = 0; i < 3; i++) backlog.add({ title: `t${i}`, goal: 'g' });
   const ledger = new Ledger(path.join(tmp(), 'ledger'));
 
+  // Money spent BY this loop, as its first task runs.
+  const engine = fakeEngine({ backlog });
+  const invoke = async (name, args) => {
+    if (name === 'flow:run') ledger.record({ taskId: 'in-this-session', usd: 1.5, estimated: false });
+    return engine.invoke(name, args);
+  };
+
   const sup = new Supervisor({
-    ...fakeEngine({ backlog }), projectId: 'p', backlog, ledger, pollMs: 1,
+    ...engine, invoke, projectId: 'p', backlog, ledger, pollMs: 1,
     config: { loop: { caps: { hardUsd: 1 }, sessionCaps: { hardUsd: 1 } } }
   });
-  sup.startedAtMs = Date.now();
-  ledger.record({ taskId: 'in-this-session', usd: 1.5, estimated: false });
   const status = await sup.run();
 
   assert.match(status.stopping, /hard cap reached \(\$1\.50\)/);
   assert.ok(!/before any task started/.test(status.stopping), 'this one it did reach');
+  assert.equal(status.landed, 1, 'the task in flight finished; the next never started');
+});
+
+test('the ceiling counts what the run in flight is spending, not only what settled', async () => {
+  const backlog = makeBacklog();
+  for (let i = 0; i < 3; i++) backlog.add({ title: `t${i}`, goal: 'g' });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+
+  // A run that is spending right now. Recorded spend arrives only when a run
+  // ends, so before this the window ceiling read $0 for the whole stretch.
+  const store = {
+    snapshot: () => ({ retrospectives: {} }),
+    callTraceNodes: () => ['work'],
+    readCallTrace: () => [{ usage: { cost: 1.5 }, provider: 'openrouter', model: 'a-model', ok: true }]
+  };
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog, stages: { default: ['execution', 'execution', 'done'] } }),
+    projectId: 'p', backlog, ledger, store, pollMs: 1, parallelism: 2,
+    config: { loop: { caps: { hardUsd: 1 } } }
+  });
+  const status = await sup.run();
+
+  assert.match(status.stopping, /hard cap reached/);
+  assert.match(status.stopping, /\$1\.50/, 'the number is the money being spent, not the money already banked');
+  assert.ok(status.completed <= 1, 'it did not keep starting tasks under a ceiling that read zero');
 });
 
 test('the report puts what needs a person above what does not', () => {

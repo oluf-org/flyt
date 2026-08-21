@@ -209,8 +209,13 @@ export class Ledger {
    * The window is rolling, not calendar-daily: a run that starts at 22:00 must
    * not get a fresh allowance at midnight (§9).
    */
-  check({ caps = {}, taskId = null, windowMs = 24 * 60 * 60 * 1000 } = {}) {
-    const window = this.totals({ sinceMs: windowMs });
+  check({ caps = {}, taskId = null, windowMs = 24 * 60 * 60 * 1000, extraUsd = 0 } = {}) {
+    // `extraUsd` is spend that HAS happened and has not been recorded yet —
+    // the in-flight runs. A ceiling that only counts settled runs is a ceiling
+    // that reads zero for the whole stretch it exists to bound.
+    const recorded = this.totals({ sinceMs: windowMs });
+    const live = Number.isFinite(extraUsd) ? Math.max(0, extraUsd) : 0;
+    const window = { ...recorded, usd: recorded.usd + live, live };
     const task = taskId ? this.totals({ taskId }) : null;
     const hits = [];
     if (caps.hardUsd != null && window.usd >= caps.hardUsd) hits.push('hard');

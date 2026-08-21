@@ -372,13 +372,17 @@ export class Supervisor {
     const caps = this.#caps();
     const standing = Object.fromEntries(Object.entries(caps).filter(([k]) => !(k in session)));
 
-    const byWindow = this.ledger.check({ caps: standing, taskId, windowMs: this.#windowMs() });
+    // What the runs currently in flight have already spent. Recorded spend
+    // arrives only when a run ends, so without this the window ceiling reads
+    // zero for exactly as long as the money is being spent.
+    const live = this.#liveSpend();
+    const byWindow = this.ledger.check({ caps: standing, taskId, windowMs: this.#windowMs(), extraUsd: live });
     if (!Object.keys(session).length) return byWindow;
 
     // Since the loop started, floored at a millisecond so a check on the first
     // tick still reads the ledger rather than dividing by nothing.
     const sinceStart = Math.max(1, Date.now() - (this.startedAtMs ?? Date.now()));
-    const bySession = this.ledger.check({ caps: session, taskId, windowMs: sinceStart });
+    const bySession = this.ledger.check({ caps: session, taskId, windowMs: sinceStart, extraUsd: live });
 
     const hits = [...new Set([...byWindow.hits, ...bySession.hits])];
     const strongest = bySession.hits.length ? bySession : byWindow;
@@ -785,6 +789,31 @@ export class Supervisor {
     const mapped = workerForLevelMap(level, this.config.loop?.models);
     if (mapped) return { provider: mapped.provider, model: mapped.model };
     return this.config.loop?.worker ?? null;
+  }
+
+  /**
+   * What every run currently in flight has spent but not yet recorded.
+   *
+   * The per-task ceiling has counted live spend since the night it watched a
+   * task spend $23 under a $2 cap; the window and session ceilings did not,
+   * and had the same hole for the same reason.
+   */
+  #liveSpend() {
+    let live = 0;
+    for (const hb of this.inFlight.values()) live += this.#liveSpendOf(hb);
+    return live;
+  }
+
+  /** What one in-flight run has spent so far, from its call trace. */
+  #liveSpendOf(hb) {
+    if (!this.ledger || !this.store || !hb?.runId) return 0;
+    let live = 0;
+    try {
+      for (const e of spendFromRun(this.store, hb.runId, { prices: this.ledger.prices ?? {} })) {
+        live += e.usd ?? 0;
+      }
+    } catch { /* a run with nothing readable yet has cost nothing yet */ }
+    return live;
   }
 
   /** Recorded spend for this task, plus what the in-flight run has cost. */
