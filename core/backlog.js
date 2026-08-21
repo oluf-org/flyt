@@ -51,6 +51,11 @@ const ORPHAN_LOCK_MS = 15 * 1000;
 // cached parse is provably current.
 const CACHE_HIT_FRESH_MS = 1000;
 
+// The frontmatter fields that hold a number. `budgetUsd` is here even though
+// its default is null: "no budget" is a real state, and a string is still not
+// a number.
+const NUMERIC_FIELDS = ['value', 'effort', 'attempts', 'budgetUsd'];
+
 // Frontmatter fields, with their defaults. Anything not listed here is still
 // preserved on write — a field a later phase adds must not be erased by an
 // older reader, and a human's own note in the frontmatter is theirs to keep.
@@ -337,6 +342,24 @@ export class Backlog {
       // An empty scalar is the honest way to say "none", so it clears the list.
       if (next[field] === '' || next[field] === null || next[field] === undefined) { next[field] = []; continue; }
       throw new Error(`"${field}" is a list, and was given ${JSON.stringify(next[field])}.`);
+    }
+    // A number field given a STRING is the same hole one type over, and every
+    // argument that arrives through `flyt call --arg` is a string. Written
+    // through, `attempts: "0"` made `attempts + 1` concatenate: a task reported
+    // being parked "across 01 attempt(s)", and nothing else complained, because
+    // a numeric string survives every comparison and fails only at arithmetic.
+    // Coerced where it is honestly a number, refused where it is not.
+    for (const field of NUMERIC_FIELDS) {
+      if (!(field in patch) || typeof next[field] === 'number') continue;
+      if (next[field] === '' || next[field] === null || next[field] === undefined) {
+        next[field] = DEFAULTS()[field] ?? null;
+        continue;
+      }
+      const n = Number(next[field]);
+      if (!Number.isFinite(n)) {
+        throw new Error(`"${field}" is a number, and was given ${JSON.stringify(next[field])}.`);
+      }
+      next[field] = n;
     }
     fs.writeFileSync(this.#file(task.id), serializeTask(stripId(next)));
     this._cache.delete(this.#file(task.id));

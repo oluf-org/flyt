@@ -428,6 +428,30 @@ test('a lock held by a live claim is still respected', () => {
   assert.equal(backlog.claim(task.id, 'second', { now: Date.now() + 10 * 60_000 }), null);
 });
 
+test('a number field given a string is coerced, or refused, but never written through', () => {
+  // The same hole one type over. Every argument arriving through
+  // `flyt call task:update --arg attempts=0` is a STRING, and written through,
+  // `attempts: "0"` made `attempts + 1` concatenate: a park message read
+  // "across 01 attempt(s)". Nothing else complained, because a numeric string
+  // survives every comparison and fails only at arithmetic.
+  const backlog = new Backlog(fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-backlog-')));
+  const task = backlog.add({ title: 'a task', goal: 'g' });
+
+  assert.strictEqual(backlog.update(task.id, { attempts: '2' }).attempts, 2);
+  assert.strictEqual(backlog.get(task.id).attempts, 2, 'and it is a number on disk too');
+  assert.strictEqual(backlog.get(task.id).attempts + 1, 3, 'the arithmetic that went wrong');
+  assert.strictEqual(backlog.update(task.id, { value: '5', effort: '1' }).value, 5);
+
+  assert.throws(() => backlog.update(task.id, { attempts: 'soon' }),
+    /"attempts" is a number, and was given "soon"/);
+  assert.throws(() => backlog.update(task.id, { budgetUsd: 'lots' }), /"budgetUsd" is a number/);
+  assert.strictEqual(backlog.get(task.id).attempts, 2, 'and the refusal wrote nothing');
+
+  // An empty scalar means "back to the default", which for a budget is no budget.
+  assert.strictEqual(backlog.update(task.id, { attempts: '' }).attempts, 0);
+  assert.strictEqual(backlog.update(task.id, { budgetUsd: '' }).budgetUsd, null);
+});
+
 test('a list field given a scalar is refused, not written', () => {
   // What this prevents: `flyt call task:update --arg dependsOn=` wrote an empty
   // string into a field every reader treats as an array, and task:list then
