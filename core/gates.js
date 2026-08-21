@@ -53,13 +53,72 @@ export function runGate(command, { cwd, timeoutMs = DEFAULT_TIMEOUT_MS, env = pr
   });
 }
 
-// Head and tail: a failing suite puts the summary at the bottom and the first
-// failure at the top, and a middle-out cut loses both.
+// A line that says something FAILED, in the runners this repo actually uses.
+// TAP first, because `npm test` is `node --test`; the rest are the shapes a
+// linter, a compiler and a bare assertion arrive in.
+const FAILURE_LINE = /^(?:not ok\b|\s*(?:FAIL|FAILED|✖|×)\b|\s*(?:AssertionError|TypeError|ReferenceError|SyntaxError|Error):|.*\berror TS\d+:)/;
+
+// How much of one failure to keep. A TAP failure is the `not ok` line plus an
+// indented YAML block holding the assertion, the diff and the stack; forty
+// lines reaches the useful part of that without carrying a whole stack twice.
+const FAILURE_LINES = 40;
+
+/**
+ * Cut a gate's output down to what the next attempt needs to read.
+ *
+ * The old cut was head-and-tail, on the reasoning that a failing suite puts the
+ * first failure at the top and the summary at the bottom. That is true of a
+ * suite with twenty tests. This one has fifteen hundred, `node --test` prints
+ * an `ok` line and a YAML block for every one of them, and a failure at test
+ * 1300 lands squarely in the middle — the part a middle-out cut throws away.
+ *
+ * Watched exactly that: a task failed its gates, the guidance handed to the
+ * retry was ten thousand characters of passing tests, then
+ * `…[255386 characters omitted]…`, then ten thousand more passing tests and
+ * `# fail 1`. The one line naming the assertion was in the omitted part. The
+ * ladder then escalated a band to read the same thing on a dearer model.
+ *
+ * So the failures are found first and kept whole, and the head and tail get
+ * what is left. A cut that loses the reason is not a bounded output; it is a
+ * bounded absence of one.
+ */
 function clip(text) {
   const s = String(text ?? '');
   if (s.length <= OUTPUT_LIMIT) return s;
-  const half = Math.floor(OUTPUT_LIMIT / 2);
-  return `${s.slice(0, half)}\n…[${s.length - OUTPUT_LIMIT} characters omitted]…\n${s.slice(-half)}`;
+
+  const lines = s.split('\n');
+  // Each failure: its own line, plus the indented block under it.
+  const regions = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!FAILURE_LINE.test(lines[i])) continue;
+    if (regions.length && i <= regions[regions.length - 1].end) continue;
+    let end = i;
+    while (end + 1 < lines.length
+      && end - i < FAILURE_LINES
+      && (lines[end + 1] === '' || /^\s/.test(lines[end + 1]))) end += 1;
+    regions.push({ start: i, end });
+  }
+
+  const HEAD = 2_000;
+  const TAIL = 4_000; // the summary, and whatever ran last
+  const budget = OUTPUT_LIMIT - HEAD - TAIL;
+  const kept = [];
+  let used = 0;
+  let dropped = 0;
+  for (const r of regions) {
+    const block = lines.slice(r.start, r.end + 1).join('\n');
+    if (used + block.length > budget) { dropped += 1; continue; }
+    kept.push(block);
+    used += block.length + 1;
+  }
+
+  const parts = [s.slice(0, HEAD)];
+  if (kept.length) {
+    parts.push(`…\n\n${kept.length} failure(s), in full:\n\n${kept.join('\n\n')}`);
+    if (dropped) parts.push(`…and ${dropped} more failure(s), not shown.`);
+  }
+  parts.push(`…[${s.length - OUTPUT_LIMIT} characters omitted]…`, s.slice(-TAIL));
+  return parts.join('\n');
 }
 
 /**
