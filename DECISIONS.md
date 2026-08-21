@@ -32,10 +32,10 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D17 | Preserve completed steps across crashes and require an explicit Resume before project tools run again. | Current |
 | D21 | Follow-ups extend a run with a visible continuation graph; completed prior work is not re-run. | Current |
 | D22 | A project is a workspace tab. Runs and backlog are project-scoped; flows, templates, tools, models, and references remain reusable global libraries. | Current |
-| D24 | Keep the flow DSL and core protocol infrastructure dependency-light and inspectable; the hand-written strict YAML subset is intentional. | Current |
+| D24 | Keep the flow DSL and core protocol infrastructure dependency-light and inspectable; the hand-written strict YAML subset is intentional. | Current; scoped by D53 to the DSL parser and core command surface |
 | D27 | Runtime configuration is a per-node override map. Precedence is run input, mode/call-site override, node override, then template. Comparisons read immutable run snapshots. | Current |
 | D28 | Packaged assets are read-only seeds; all mutable stores resolve through writable data roots. | Current |
-| D29 | Flyt is the brand and `flow` remains the domain noun. `.flow.yaml`, `FlowRunner`, `flowlang`, and flow-named contracts are not unfinished rename work. | Current |
+| D29 | Flyt is the brand and `flow` remains the domain noun. `.flow.yaml`, `FlowRunner`, `flowlang`, and flow-named contracts are not unfinished rename work. | Superseded by D52; holds for v1 code until the Phase 5 cutover |
 | D36 | Typed inputs, fan-out, sub-flows, backlog-plan, and Loop nodes are one composition system. Sub-flows splice into one run graph; the Loop node hands work to the existing supervisor. | Current; implemented |
 | D37 | Adaptive fan-out may select only from fixed lane presets, degrades to the authored roster, and keeps lane outputs isolated until aggregation. | Current |
 | D38 | Repository-learning flows orient to both the home workspace and the subject repository before planning; subject scope and attribution must be explicit. | Current |
@@ -72,6 +72,25 @@ This is a compact register of rules that still shape the product. Detailed inter
 
 Decision numbers D30–D34 were never promoted from retired plan drafts and are intentionally unused.
 
+## Flyt v2 — plugins, stacks and blocks
+
+Adopted 2026-08-21. The working plan is [`.flyt/backlog/v2-plugin-stack-plan.md`](./.flyt/backlog/v2-plugin-stack-plan.md); it retires to git history at the Phase 5 cutover, when `DESIGN-SPEC.md` describes what exists. Phases are tasks `t-0035`–`t-0040`.
+
+| ID | Decision | Status |
+|---|---|---|
+| D52 | Plugin, Stack and Block are the three nouns. A plugin is installable and contributes; a stack is composed and run; a block is a step. Renames happen at cutover in one commit, never opportunistically. | Provisional; supersedes D29 |
+| D53 | Cordis is the plugin kernel and a real dependency. D24's dependency-light rule is scoped to the DSL parser and core command surface, which stay hand-written. TypeScript covers the seams; the boundary is the seam. | Provisional; scopes D24 |
+| D54 | dsh compatibility is a tested contract, not an intention: a CI suite installs real published dsh plugins and asserts they load, register and execute. | Provisional |
+| D55 | The append-only session event log is the canonical durable record; the run folder is a projection materialised beside it. Model-visible means logged. | Provisional |
+| D56 | The block language admits bounded iteration (`Repeat N`, `For each`, `Until`) and structured predicates over declared outputs (`If`). Free expressions, arithmetic and boolean algebra remain out. | Provisional; amends a GOALS boundary |
+| D57 | A third-party tool is classified by conservative inference plus one human confirmation, and classification is not a grant. Inference may only err toward restriction. | Provisional |
+| D58 | A skill may request tools; only a human grants, never above the static ceiling, and never unattended. | Provisional; amends the skills standing rule |
+| D59 | Stack layout is derived from containment. There is no stored layout file and no unparseable arrangement. | Provisional |
+| D60 | Trace is a transient third surface that appears while work runs and persists as that run's record. Work stays calm; Trace holds the detail. | Provisional |
+| D61 | Plugin UI is limited to declared extension points rendered by Flyt over a typed RPC contract, mirroring dsh. No arbitrary renderer code. | Provisional |
+| D62 | v2 ships behind a flag in the shipping app; the old surfaces keep doing real work until `loop-task` runs end to end on the new kernel; cutover is one commit. | Provisional |
+| D63 | Every Build operation is available to an agent through the command surface, and every agent operation renders in the editor. One code path, two callers. | Provisional |
+
 ## Open decisions
 
 These are questions, not commitments:
@@ -86,5 +105,10 @@ These are questions, not commitments:
 8. Do sweep/leaderboard workflows provide enough value to justify N-way run cost and UI complexity?
 9. Should approval show a proposed diff before a write is committed?
 10. Which operational policy should govern unattended auto-merge, reboot startup, parked-queue limits, and benchmark retirement?
+11. Does Flyt publish its own plugins as dsh bundles, making it a contributor to that ecosystem rather than only a consumer?
+12. Session persistence default: JSONL, which stays openable in a text editor, or SQLite, which is faster for long sessions?
+13. Do Flyt profiles become a user-facing concept, or stay internal composition?
+14. Does the Loop board stay a distinct section inside Work, or dissolve into the run list?
+15. Should old runs be converted into session logs so they gain a trace, or read through a compatibility reader only?
 
 Feature-sized work belongs in `.flyt/backlog/`. When one of these questions is resolved, update the relevant row and architecture contract instead of creating a new plan document.

@@ -23,7 +23,7 @@ Flyt makes structured AI work understandable and controllable. The ordinary path
 ## Product boundaries
 
 - Flyt is a local, single-machine application. Distributed or cloud execution is not a current architectural target.
-- The flow language is composition, not general-purpose visual programming. Typed inputs, bounded containers, sub-flows, fan-out, and the Loop handoff are supported; arbitrary expressions and value-driven conditionals are not.
+- The flow language is composition, not general-purpose visual programming. Typed inputs, bounded containers, sub-flows, fan-out, and the Loop handoff are supported. Bounded iteration and structured predicates over declared outputs are supported (D56); arbitrary expressions, arithmetic, and free boolean algebra are not, and are not a direction.
 - Large graphs and unbounded recursion are outside the current UI and execution assumptions.
 - Production-grade process sandboxing is not claimed. File tools are workspace-confined; shell safety comes from approvals, screening, worktree isolation for Loop tasks, and user-chosen risk.
 - General self-modification is not a product promise. Retrospectives, benchmarks, and archives provide evidence; deterministic code and explicit decisions decide what changes.
@@ -40,5 +40,7 @@ A useful Flyt run is:
 - attributable to specific models, prompts, tools, and files;
 - bounded in concurrency, recursion, time, and unattended spend; and
 - independently verifiable when it changes a repository.
+
+A rebuild of the product model onto a plugin kernel is approved and under way; the nouns become plugin, stack and block, and the plan is [`.flyt/backlog/v2-plugin-stack-plan.md`](./.flyt/backlog/v2-plugin-stack-plan.md) (D52-D63). This file keeps describing the shipping product until the Phase 5 cutover.
 
 Durable choices and unresolved product questions live in [`DECISIONS.md`](./DECISIONS.md). Current implementation details live in [`DESIGN-SPEC.md`](./DESIGN-SPEC.md); this file should not become a status log or implementation plan.
