@@ -852,6 +852,52 @@ test('the burn detector is handed real numbers', async () => {
     `a burn should be named as one: ${sup.parked[0]?.reason}`);
 });
 
+test('a park about the wallet keeps what was wrong with the work', async () => {
+  const backlog = makeBacklog();
+  const task = backlog.add({ title: 'nearly right', goal: 'g' });
+  backlog.update(task.id, {
+    attempts: 1,
+    blockedReason: 'The reviewer rejected it: the cache is never invalidated when a task file is deleted.'
+  });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  ledger.record({ taskId: task.id, usd: 0.97, estimated: false });
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog }), projectId: 'p', backlog, ledger, pollMs: 1,
+    config: { loop: { caps: { taskUsd: 1.2 } } }
+  });
+  await sup.run();
+
+  const reason = backlog.get(task.id).blockedReason;
+  assert.match(reason, /\$0\.23 left/, 'it still says why it stopped');
+  assert.match(reason, /the cache is never invalidated/, 'and still says what was wrong with the work');
+
+  // The next attempt's brief quotes blockedReason under "A PREVIOUS ATTEMPT
+  // FAILED". Telling it the predecessor ran out of money would be a lie about
+  // what actually happened.
+  assert.match(reason, /rejected on the work, not the money/);
+});
+
+test('a budget park does not nest inside another budget park', async () => {
+  const backlog = makeBacklog();
+  const task = backlog.add({ title: 'expensive twice', goal: 'g' });
+  backlog.update(task.id, {
+    attempts: 1,
+    blockedReason: 'Spent $0.97 of its $1.2 per-task cap over 1 attempt(s), with nothing left for another — raise --task-usd to work it again.'
+  });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  ledger.record({ taskId: task.id, usd: 0.97, estimated: false });
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog }), projectId: 'p', backlog, ledger, pollMs: 1,
+    config: { loop: { caps: { taskUsd: 1.2 } } }
+  });
+  await sup.run();
+
+  const reason = backlog.get(task.id).blockedReason;
+  assert.equal(reason.match(/per-task cap/g).length, 1, 'one budget message, not two');
+});
+
 test('the report puts what needs a person above what does not', () => {
   const backlog = makeBacklog();
   const landed = backlog.add({ title: 'shipped', goal: 'g' });

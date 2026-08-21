@@ -123,6 +123,12 @@ function formatSpan(ms) {
   return `${Math.max(1, Math.round(n / 1000))}s`;
 }
 
+/** How a budget park introduces the work reason it is preserving. */
+const WORK_REASON_TAIL = ' Its last attempt was rejected on the work, not the money: ';
+
+/** A reason that is about the wallet rather than about the work. */
+const BUDGET_REASON = /per-task cap/;
+
 function whereItCameFrom(task) {
   const refs = (task.references ?? []).filter(Boolean);
   if (!refs.length) return '';
@@ -412,7 +418,7 @@ export class Supervisor {
     // produces neither work nor an answer — so a task with no room for one is
     // parked before it starts, with the numbers that decided it.
     const shortfall = this.#cannotAfford(task);
-    if (shortfall) { this.#park(task.id, shortfall); return; }
+    if (shortfall) { this.#park(task.id, this.#keepingWorkReason(task, shortfall)); return; }
 
     const level = levelFor(task, this.config);
     // Which model this attempt runs on. Three shapes, most specific first:
@@ -645,9 +651,10 @@ export class Supervisor {
       // it also means a task that once cost $3 can never be given a cheap
       // one-line correction under a $1 cap, and the message read as though the
       // correction itself had been expensive.
-      this.#park(taskId, `Spent $${taskSpend.usd.toFixed(2)} across ${
-        (this.backlog.get(taskId)?.attempts ?? 0) + 1} attempt(s) against a $${caps.taskUsd} per-task cap.`
-        + ' That cap covers the whole history of this task, not this attempt alone — raise --task-usd to work it again.');
+      this.#park(taskId, this.#keepingWorkReason(this.backlog.get(taskId),
+        `Spent $${taskSpend.usd.toFixed(2)} across ${
+          (this.backlog.get(taskId)?.attempts ?? 0) + 1} attempt(s) against a $${caps.taskUsd} per-task cap.`
+        + ' That cap covers the whole history of this task, not this attempt alone — raise --task-usd to work it again.'));
       return;
     }
 
@@ -866,6 +873,24 @@ export class Supervisor {
     if (!recorded) return null;
     const live = this.#liveSpend();
     return { ...recorded, usd: recorded.usd + live, live };
+  }
+
+  /**
+   * A park that is about the wallet must not erase what was wrong with the work.
+   *
+   * `blockedReason` is read twice: by a person looking at the parked pile, and
+   * by the NEXT attempt, whose brief quotes it under "A PREVIOUS ATTEMPT
+   * FAILED". Overwriting a review rejection with a budget message loses the
+   * first reader's answer and lies to the second — it tells the next worker its
+   * predecessor ran out of money when what actually happened is that the
+   * reviewer objected to something specific.
+   */
+  #keepingWorkReason(task, budgetMessage) {
+    let prior = String(task?.blockedReason ?? '').trim();
+    const at = prior.indexOf(WORK_REASON_TAIL);
+    if (at >= 0) prior = prior.slice(at + WORK_REASON_TAIL.length);   // do not nest them
+    if (!prior || BUDGET_REASON.test(prior)) return budgetMessage;
+    return budgetMessage + WORK_REASON_TAIL + prior;
   }
 
   #liveSpend() {
