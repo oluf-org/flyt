@@ -107,6 +107,60 @@ test('escalation moves up a rung, and running out of ladder is a human decision'
   assert.match(spent.reason, /A bigger model is not the missing piece/);
 });
 
+test('a rung that runs the same model is not a rung, and is refused as such', () => {
+  // Watched live: `--models medium=cheap` was given, and the map fills
+  // DOWNWARD, so low, medium, high, xhigh and max all resolved to `cheap`.
+  // The loop climbed four rungs on one task, logging "retrying at medium",
+  // then high, then xhigh, then max, running the identical model every time
+  // and spending four attempts to find it out.
+  const models = { medium: 'cheap/model' };
+  const workerAt = level => workerForLevelMap(level, models)?.model ?? null;
+  assert.equal(workerAt('low'), 'cheap/model');
+  assert.equal(workerAt('max'), 'cheap/model', 'one named band answers for all five');
+
+  const refused = escalate({ level: 'low', reason: 'stalled', attempts: 1, workerAt });
+  assert.equal(refused.escalated, false, 'the same model twice is not more capability');
+  assert.equal(refused.exhausted, true, 'out of ladder, which is a human decision');
+  assert.equal(refused.level, null);
+  assert.equal(refused.sameWorker, 'cheap/model');
+  assert.match(refused.reason, /"medium" runs the same model as "low" \(cheap\/model\)/);
+  assert.match(refused.reason, /Name a stronger model for a higher band/);
+});
+
+test('a rung that does change the model is still taken', () => {
+  const workerAt = level => workerForLevelMap(level, { low: 'cheap/model', high: 'strong/model' })?.model ?? null;
+  const up = escalate({ level: 'medium', reason: 'failed', attempts: 2, workerAt });
+  assert.equal(up.escalated, true, 'medium -> high crosses into the strong model');
+  assert.equal(up.level, 'high');
+
+  // And high -> xhigh does not, because the map has nothing above high.
+  const stopped = escalate({ level: 'high', reason: 'failed', attempts: 3, workerAt });
+  assert.equal(stopped.escalated, false);
+  assert.equal(stopped.sameWorker, 'strong/model');
+});
+
+test('with no model named anywhere, the band IS the change and the ladder is real', () => {
+  // The Auto Router path: `workerAt` returns null, so there is nothing to
+  // compare and every rung asks OpenRouter for a more capable band.
+  const workerAt = level => workerForLevelMap(level, {})?.model ?? null;
+  assert.equal(workerAt('low'), null);
+  const up = escalate({ level: 'low', reason: 'failed', attempts: 1, workerAt });
+  assert.equal(up.escalated, true);
+  assert.equal(up.level, 'medium');
+});
+
+test('a task cannot be escalated onto a model it is already running', () => {
+  const backlog = new Backlog(path.join(tmp(), 'backlog'));
+  const task = backlog.add({ title: 'Same model all the way up', goal: 'g', level: 'low' });
+  backlog.claim(task.id, 'worker-a');
+
+  const workerAt = () => 'cheap/model';
+  const result = backlog.escalate(task.id, { reason: 'stalled', note: 'spinning', workerAt });
+  assert.equal(result.status, 'parked', 'parked for a human rather than retried four more times');
+  assert.equal(result.level, 'low', 'and not moved up a band it cannot use');
+  assert.match(result.blockedReason, /runs the same model as "low"/);
+});
+
 // --- the backlog side ------------------------------------------------------
 
 test('a failed task returns to the queue one rung up, and releases its lease', () => {

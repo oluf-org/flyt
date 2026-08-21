@@ -467,11 +467,14 @@ export class Backlog {
    * expensive band there is — "escalate means a bigger model, then a person",
    * and this is where the "then a person" happens.
    */
-  escalate(id, { reason = 'failed', note = '' } = {}) {
+  escalate(id, { reason = 'failed', note = '', workerAt = null } = {}) {
     const task = this.get(id);
     if (!task) throw new Error(`No task "${id}".`);
     const attempts = (task.attempts ?? 0) + 1;
-    const result = escalateLevel({ level: task.level ?? DEFAULT_LEVEL, reason, attempts });
+    // `workerAt` comes from whoever knows which model a band resolves to — the
+    // supervisor — because the backlog has no business reading loop config.
+    // Without it the ladder cannot tell a rung from a repeat.
+    const result = escalateLevel({ level: task.level ?? DEFAULT_LEVEL, reason, attempts, workerAt });
     const blockedReason = [result.reason, note].filter(Boolean).join(' ');
     if (!result.escalated) {
       return { ...this.update(id, { status: 'parked', attempts, blockedReason }), escalation: result };

@@ -721,7 +721,7 @@ export class Supervisor {
       await this.invoke('run:stop', { projectId: this.projectId, runId: hb.runId });
       this.inFlight.delete(taskId);
       this.#recordSpend(taskId, hb);
-      const result = this.backlog.escalate(taskId, { reason: 'stalled', note: stall.detail });
+      const result = this.backlog.escalate(taskId, { reason: 'stalled', note: stall.detail, workerAt: this.#workerAt });
       await this.#discard(taskId);
       this.log(`↑ ${taskId} ${result.escalation.reason}`, { taskId });
       if (!result.escalation.escalated) this.parked.push({ taskId, reason: result.escalation.reason });
@@ -845,6 +845,15 @@ export class Supervisor {
     if (mapped) return { provider: mapped.provider, model: mapped.model };
     return this.config.loop?.worker ?? null;
   }
+
+  /**
+   * Which model a band actually resolves to, for the ladder to compare.
+   *
+   * An arrow function so it can be handed to the backlog without carrying
+   * `this` with it. Null means nothing is named at any band, which is the Auto
+   * Router path — there the band IS the model, so a rung is always a real one.
+   */
+  #workerAt = level => this.#workerFor(level)?.model ?? null;
 
   /**
    * What every run currently in flight has spent but not yet recorded.
@@ -1032,7 +1041,7 @@ export class Supervisor {
         return;
       }
       await this.#discard(taskId);
-      const result = this.backlog.escalate(taskId, { reason: 'failed', note: 'The run itself failed.' });
+      const result = this.backlog.escalate(taskId, { reason: 'failed', note: 'The run itself failed.', workerAt: this.#workerAt });
       this.history.push({ taskId, landed: false, stage: 'run-failed' });
       if (!result.escalation.escalated) this.parked.push({ taskId, reason: result.escalation.reason });
       return;

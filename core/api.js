@@ -16,7 +16,7 @@ import path from 'node:path';
 import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
 import { pushRefs, git } from './worktree.js';
-import { workerForLevel, levelFor, LEVELS } from './levels.js';
+import { workerForLevel, workerForLevelMap, levelFor, LEVELS } from './levels.js';
 import { blockersAll, boardBlockers } from './blockers.js';
 import { ChatStore, runChatTurn, CHAT_TOOLS } from './chat.js';
 import { costOf, totalsWithLive } from './ledger.js';
@@ -965,7 +965,13 @@ export function createApi(engine) {
         // A failed attempt goes back up a rung rather than back at the same
         // band: retrying the same capability mostly reproduces the same answer.
         // At the top of the ladder the task parks for a human instead.
-        backlog.escalate(taskId, { reason: 'failed', note: result.guidance ?? result.stage });
+        // The rung has to be a real one. With models named per band the map
+        // fills downward, so a map naming one band answers for all five and
+        // every rung is the same model — four more attempts by the same
+        // worker, announced as more capability.
+        const workerAt = level =>
+          workerForLevelMap(level, config?.loop?.models)?.model ?? config?.loop?.worker?.model ?? null;
+        backlog.escalate(taskId, { reason: 'failed', note: result.guidance ?? result.stage, workerAt });
         // Where the next attempt should start.
         //
         // A rejection at REVIEW or at GATES is a correction case: something

@@ -112,12 +112,42 @@ export function workerForLevelMap(level, models = {}) {
  *   - 'stalled' — the task is making no headway (§11.2). More capability is the
  *                 cheapest thing to try before parking it.
  *
+ * `workerAt` is how the ladder finds out whether it has a rung to climb. When
+ * models are named per band the map fills DOWNWARD, so `{ medium: cheap }` is
+ * a complete answer for all five levels and every one of them is `cheap`; a
+ * single `--model` pin does the same thing more obviously. Escalating through
+ * that is four more attempts by the same model, announced as more capability —
+ * the failure the 'failed' note above already names, arrived at from the other
+ * direction. Watched live it spent four rungs of a task's budget and read, in
+ * the log, as a ladder being climbed.
+ *
+ * So the rung is checked before it is taken, and a ladder that cannot change
+ * the worker is out of ladder — the outcome that already exists for the top of
+ * it. Omit `workerAt`, or return null from it, which is what the Auto Router
+ * path does: there the band itself IS the change, so the climb is real.
+ *
  * Returns `{ level, escalated, reason }`. `escalated: false` with `level: null`
  * means the ladder is exhausted — a human decision, not another attempt.
  */
-export function escalate({ level, reason = 'failed', attempts = 0 } = {}) {
+export function escalate({ level, reason = 'failed', attempts = 0, workerAt = null } = {}) {
   const current = normalizeLevel(level);
   const next = nextLevel(current);
+  if (next && typeof workerAt === 'function') {
+    const here = workerAt(current);
+    const there = workerAt(next);
+    if (here && there && here === there) {
+      return {
+        level: null,
+        escalated: false,
+        exhausted: true,
+        from: current,
+        sameWorker: there,
+        reason: `"${next}" runs the same model as "${current}" (${there}), so escalating would retry`
+          + ` the same capability after ${attempts} attempt(s). Name a stronger model for a higher`
+          + ' band, or work it yourself.'
+      };
+    }
+  }
   if (!next) {
     return {
       level: null,
