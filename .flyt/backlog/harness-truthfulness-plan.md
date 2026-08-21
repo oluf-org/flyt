@@ -1,8 +1,25 @@
 # Making the harness able to stop, and able to say what happened
 
-Status: **proposed, not started.** Created 2026-08-21, from defects found while
-hand-building Phase 0 (`t-0035`) and watching the Loop work three tasks.
-Tasks `t-0049`–`t-0054`.
+Status: **implemented 2026-08-21.** Created the same day, from defects found
+while hand-building Phase 0 (`t-0035`) and watching the Loop work three tasks.
+Tasks `t-0049`–`t-0054`, all landed.
+
+| Task | Landed as |
+|---|---|
+| `t-0049` | `core/loopLog.js`, `emitLoop` writing a day file, `flyt loop log`, the report's "What the loop said" |
+| `t-0050` | `workSignature()` rebuilt on accomplishment, workspace sampling in `core/supervisor.js`, `medianMs` wired, **D64** |
+| `t-0051` | `liveSpend()` / `totalsWithLive()` in `core/ledger.js`, used by `ledger:totals`, the report and the supervisor |
+| `t-0052` | `checkFlags()` in `bin/flyt.js`, the flag table, and a test that reads the help |
+| `t-0053` | `staleIndexLock()` in `core/diagnostics.js`; `--no-optional-locks` on the polled read landed with `t-0050` |
+| `t-0054` | `COVERAGE` in `tests/dshCompat.test.js`, derived from the kernel's own `declare module` blocks |
+
+One deviation from the sequencing below: `t-0054` was gated behind Phase 1 on
+the grounds that it should arrive "with the seam that needs it". That was
+backwards. The rule exists to catch the seam that gains a provider, so
+encoding it after that seam arrives is encoding it after the moment it was
+supposed to fire. It is in now, listing every declared service and failing on
+one it has never heard of — verified by adding a service and watching it go
+red.
 
 > A planning artifact, not a live `*.task.md`. It exists because the six
 > defects below are four symptoms of two causes, and fixing them one at a time

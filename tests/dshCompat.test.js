@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { createKernel, flytSkills, flytTools, flytApprovals, mount, builtinImporter } from '#kernel';
 
 const require = createRequire(import.meta.url);
@@ -113,13 +114,67 @@ test('the policy band spans third-party tools too', async () => {
   } finally { await kernel.dispose(); }
 });
 
-test('what compat does not promise is stated where it is measured', () => {
-  // A plugin reaching into dsh package internals needs a shim, and that is the
-  // stated limit. This asserts we are honest about which service definitions we
-  // implement, so "it should have worked" has an answer.
-  const implemented = ['skills', 'tools'];
-  const dshServiceDefinitions = fs.existsSync(path.dirname(require.resolve('@deepseek-ai/dsh-skill/package.json')));
-  assert.ok(dshServiceDefinitions);
-  assert.deepEqual(implemented, ['skills', 'tools'],
-    'when a seam gains a dsh-shaped service definition, add it here and add a pinned plugin that uses it');
+// Every service this kernel declares on `ctx`, and what tests it against a
+// real dsh plugin. The rule D54 needs, in the only form that survives contact
+// with a future seam: a service with no entry here fails the suite naming
+// itself, so the task that adds a provider is the task that answers for it.
+//
+// `null` is a real answer, and the honest one for a service whose shape is
+// ours rather than dsh's — that is the "stated limit" the promise carries, not
+// a gap to be quietly tolerated.
+const COVERAGE = {
+  // Registered into by a real published dsh plugin, exercised below.
+  skills: '@deepseek-ai/dsh-skill-badge',
+
+  // Ours. dsh has a `ctx.tools` too, and its ToolRegistry is a much larger
+  // contract (schemastery arguments, canonical output schemas, code-mode
+  // dispatch). A dsh TOOL plugin needs a shim; that is the stated limit.
+  tools: null,
+
+  // Declared, not yet provided. Each becomes a pinned plugin when it gains a
+  // provider — which is what makes that task fail here until it does.
+  sessions: null,
+  llm: null,
+  fs: null,
+  shell: null,
+  agents: null,
+  commands: null,
+  sandbox: null,
+};
+
+test('every service the kernel declares is answered for', () => {
+  // Read from the source rather than a list somebody remembers to update: the
+  // declaration IS the contract, so a seam that gains one is found here.
+  const declared = new Set();
+  const walk = dir => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!entry.name.endsWith('.ts')) continue;
+      const text = fs.readFileSync(full, 'utf8');
+      for (const [, body] of text.matchAll(/declare module '@deepseek-ai\/cordis'\s*\{([\s\S]*?)\n\}/g)) {
+        for (const [, name] of body.matchAll(/^\s{4}(\w+):/gm)) declared.add(name);
+      }
+    }
+  };
+  walk(fileURLToPath(new URL('../kernel/src', import.meta.url)));
+
+  const unanswered = [...declared].filter(name => !(name in COVERAGE)).sort();
+  assert.deepEqual(unanswered, [],
+    'a service on ctx with no COVERAGE entry: pin a real dsh plugin that uses it, or record why none exists');
+
+  const gone = Object.keys(COVERAGE).filter(name => !declared.has(name));
+  assert.deepEqual(gone, [], 'COVERAGE names a service the kernel no longer declares');
 });
+
+test('every service claimed to be covered is covered by something pinned', () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  for (const [service, plugin] of Object.entries(COVERAGE)) {
+    if (!plugin) continue;
+    assert.ok(manifest.devDependencies?.[plugin],
+      `${service} claims ${plugin} covers it, and it is not installed`);
+    assert.ok(PINNED.includes(plugin),
+      `${service} claims ${plugin} covers it, and it is not in the pinned set this suite checks`);
+  }
+});
+
