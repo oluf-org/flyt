@@ -40,6 +40,16 @@ const DEFAULT_LEASE_MS = 60 * 60 * 1000; // an hour: long tasks are the point (�
 // covers the window between writing the lock and recording the claim, which is
 // one local file write.
 const ORPHAN_LOCK_MS = 15 * 1000;
+// list()'s file-read cache (§5.2, and the §16 page seller). The Loop polls
+// `task:list` every three seconds and the read per file is what grows with the
+// backlog; the blocker pass over the result is in-memory and cheap. But mtime
+// has one-second granularity on some filesystems, so a file written twice
+// within the same second can present the SAME mtime (and the same size) with
+// changed content. A same-mtime+same-size entry is therefore trusted as a
+// cache hit only once the mtime is at least a second old — by then any write
+// that could have landed in that rounded second has had its moment, and the
+// cached parse is provably current.
+const CACHE_HIT_FRESH_MS = 1000;
 
 // Frontmatter fields, with their defaults. Anything not listed here is still
 // preserved on write — a field a later phase adds must not be erased by an
@@ -135,6 +145,34 @@ function buildBody({ goal = '', doneWhen = [], notes = '', evidence = [] }) {
 export class Backlog {
   constructor(rootDir) {
     this.rootDir = rootDir;
+    // Parsed-task cache keyed by file path (the Loop polls `task:list` every
+    // three seconds and the per-file read is what grows with the backlog).
+    // list() consults it and re-reads only when the file's mtime or size moved;
+    // see CACHE_HIT_FRESH_MS above for why freshness gates a hit. Isolated to
+    // this instance — each of the four callers (CLI, HTTP server, supervisor,
+    // renderer) owns its own Backlog and so shares no cache state.
+    this._cache = new Map();
+  }
+
+  /** Read a task file through the mtime/size cache: the parsed task, or null
+   * if the file is missing, re-reading whenever the file changed. */
+  #readCached(safe) {
+    const file = this.#file(safe);
+    let st;
+    try { st = fs.statSync(file); }
+    catch { this._cache.delete(file); return null; }
+    const hit = this._cache.get(file);
+    const fresh = Date.now() - st.mtimeMs < CACHE_HIT_FRESH_MS;
+    const same = hit && hit.mtime === st.mtimeMs && hit.size === st.size;
+    if (same && !fresh) return hit.task; // older than the rounding window, provably unchanged
+    try {
+      const task = parseTask(fs.readFileSync(file, 'utf8'), safe);
+      this._cache.set(file, { mtime: st.mtimeMs, size: st.size, task });
+      return task;
+    } catch (err) {
+      if (err?.code === 'ENOENT') { this._cache.delete(file); return null; }
+      throw err;
+    }
   }
 
   #ensure() { fs.mkdirSync(this.rootDir, { recursive: true }); return this.rootDir; }
@@ -204,11 +242,7 @@ export class Backlog {
 
   get(id) {
     const safe = this.#assertId(id);
-    try { return parseTask(fs.readFileSync(this.#file(safe), 'utf8'), safe); }
-    catch (err) {
-      if (err?.code === 'ENOENT') return null;
-      throw err;
-    }
+    return this.#readCached(safe);
   }
 
   // Malformed files are reported, never thrown past: one bad task must not
@@ -219,7 +253,7 @@ export class Backlog {
     this.problems = [];
     for (const id of this.ids()) {
       try {
-        const t = this.get(id);
+        const t = this.#readCached(id);
         if (t && (!status || t.status === status)) out.push(t);
       } catch (err) {
         this.problems.push({ id, error: String(err.message ?? err) });
@@ -291,6 +325,7 @@ export class Backlog {
       throw new Error(`Unknown status "${patch.status}".`);
     }
     fs.writeFileSync(this.#file(task.id), serializeTask(stripId(next)));
+    this._cache.delete(this.#file(task.id));
     return next;
   }
 
@@ -333,6 +368,7 @@ export class Backlog {
       throw new Error(`Task "${safe}" is claimed by ${task.claimedBy ?? 'someone'}. Release it before removing it.`);
     }
     fs.rmSync(this.#file(safe));
+    this._cache.delete(this.#file(safe));
     try { fs.rmSync(this.#lock(safe)); } catch { /* no lock, or already gone */ }
     // Spend the number on the way out. `add` already records what it hands out,
     // so this only matters for a file a human wrote by hand and then removed —
