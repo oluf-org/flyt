@@ -70,6 +70,7 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D46 | Clarifying questions are a node's contract, not the gate's: the number of rounds a node may park for belongs to the node. Asking is a first-class deliverable path — the interrogation node asks before it specifies — and a parked run must be answerable from every surface that can show it. | Current |
 | D51 | A rejection at review or at gates is a correction, not a rebuild: both judge work that exists and both name something specific, so the judged commit is recorded and the next attempt starts from it. An empty diff and a stall are not inherited. | Current |
 | D64 | Progress is the durable record changing — a status, a finished output, the workspace — not a model producing tokens. An unattended loop may only keep paying for work that is changing something. | Current |
+| D65 | An escalation must change something, or it is not one. A rung of the ladder that resolves to the same worker is refused the way the top of the ladder is, and a remedy the runner will not accept in the state that summons it is not a remedy. Ceremony that costs an attempt is worse than admitting there is nothing left to try. | Current; extends D64 |
 
 Decision numbers D30–D34 were never promoted from retired plan drafts and are intentionally unused.
 

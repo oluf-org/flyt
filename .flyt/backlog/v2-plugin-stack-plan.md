@@ -1,6 +1,6 @@
 # Flyt v2 — plugins, stacks and blocks
 
-Status: **approved plan; Phase 0 landed 2026-08-21, Phase 1 next.** Durable choices are promoted to
+Status: **approved plan; Phase 0 landed 2026-08-21, Phase 1 under way.** Durable choices are promoted to
 `DECISIONS.md` as D52–D63 and the standing rules they amend are already updated
 in `CLAUDE.md` and `GOALS.md`. This file is the working plan; when the flag
 flips (Phase 5) it retires to git history and `DESIGN-SPEC.md` describes what
@@ -340,9 +340,28 @@ permission bridge wiring ceiling and approval onto `tools/pre-execute`. Compat
 suite in CI from day one. Nothing user-visible ships; the old app runs untouched.
 
 **Phase 1 — block editor, Work/Build shell, Trace.** `t-0036`, hand-built, flag
-off. Containment-and-snapping editor with derived layout; two surfaces; Trace
-reading the log. `Sequence` and `Parallel` only — the containment model needs to
-be right before it holds four more container types.
+off, **in progress**. Containment-and-snapping editor with derived layout; two
+surfaces; Trace reading the log. `Sequence` and `Parallel` only — the
+containment model needs to be right before it holds four more container types.
+
+Decomposed into eight slices, in dependency order, one commit each:
+
+| Task | Slice | State |
+|---|---|---|
+| `t-0056` | the stack format — containment parsed, `Sequence` and `Parallel` only | landed |
+| `t-0057` | layout derived from containment, never stored | landed |
+| `t-0058` | the four stack edits, over containment | landed |
+| `t-0059` | `flyt-api` provides `ctx.commands`; the edits are commands | landed |
+| `t-0060` | `flyt-stack-runner` provides `ctx.agents` over containment | queued |
+| `t-0061` | Trace renders the session log | queued |
+| `t-0062` | the Work and Build surfaces, behind the flag | queued |
+| `t-0063` | the handoff test: `loop-task` end to end | queued |
+
+The four that landed are the model the surfaces draw: `kernel/src/stack/` holds
+the parser, the derived layout and the edits, all hand-written and
+dependency-free, and `kernel/src/plugins/commands.ts` is the seam through which
+a person and an agent make the same edit. Nothing user-visible ships yet; the
+surfaces are `t-0062`.
 
 > **Handoff test.** `loop-task` runs end to end on the new kernel, authored in
 > the new editor, watched in Trace. Until this passes the app cannot build
