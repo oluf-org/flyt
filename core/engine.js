@@ -40,6 +40,7 @@ import { claudeCredentialStatus, resolveClaudeCli } from './adapters/claudeCode.
 import { codexCredentialStatus, resolveCodexCli } from './adapters/codexCli.js';
 import { supportsToolsFor } from './agent.js';
 import { v2Flag } from './v2.js';
+import { LoopLog } from './loopLog.js';
 
 const PUSH_COALESCE_MS = 80;
 
@@ -439,16 +440,55 @@ export function createEngine({
   // to the one person who most needs the history.
   const LOOP_LOG_MAX = 500;
   const loopLogs = new Map();
-  function emitLoop(projectId, line) {
-    const entry = { projectId, at: new Date().toISOString(), line: String(line) };
+  const loopFiles = new Map();
+
+  /** The day-file store for a project, beside its ledger. */
+  function loopLogFor(projectId) {
+    let store = loopFiles.get(projectId);
+    if (store !== undefined) return store;
+    const entry = registry.get(projectId);
+    const root = entry?.folder ?? entry?.appDir;
+    loopFiles.set(projectId, store = root ? new LoopLog(path.join(configDirFor(root), 'loop')) : null);
+    return store;
+  }
+
+  /**
+   * One line of the loop's account of itself.
+   *
+   * Three destinations, and the file is the one that matters: the ring serves
+   * a viewer attached right now, the event serves one attaching in a second,
+   * and the file serves the person who comes back in the morning after the
+   * process is gone.
+   *
+   * @param projectId — whose loop.
+   * @param line — what happened.
+   * @param meta.taskId — the task it happened to, when the caller knows.
+   */
+  function emitLoop(projectId, line, { taskId = null } = {}) {
+    const entry = { projectId, at: new Date().toISOString(), line: String(line), taskId: taskId ?? null };
     let ring = loopLogs.get(projectId);
     if (!ring) loopLogs.set(projectId, ring = []);
     ring.push(entry);
     if (ring.length > LOOP_LOG_MAX) ring.splice(0, ring.length - LOOP_LOG_MAX);
+    loopLogFor(projectId)?.append(entry);
     log(`[loop] ${line}`);
     if (canEmit()) emit('loop:event', entry);
   }
-  const loopLog = projectId => (loopLogs.get(projectId) ?? []).slice();
+
+  /**
+   * What the loop said, newest last.
+   *
+   * The file wins where there is one: it outlives the process, and this
+   * process's own lines are in it too. The ring is the fallback for a project
+   * whose storage is unwritable, which is exactly the state this used to be in
+   * all the time.
+   */
+  function loopLog(projectId, { date = null, taskId = null, tail = LOOP_LOG_MAX } = {}) {
+    const fromFile = loopLogFor(projectId)?.read({ date, taskId, tail }) ?? [];
+    if (fromFile.length) return fromFile.map(e => ({ projectId, ...e }));
+    const ring = (loopLogs.get(projectId) ?? []).filter(e => !taskId || e.taskId === taskId);
+    return tail && ring.length > tail ? ring.slice(-tail) : ring.slice();
+  }
 
   // The chat's live channel (DECISIONS.md D45), mirroring `loop:event` exactly.
   // Not ring-buffered: a chat turn's transcript is already persisted per turn
@@ -670,7 +710,7 @@ export function createEngine({
     // Providers
     hasKey, subscriptionStatus, resolveModelSource, effectiveSafetyModel,
     // Push
-    pushStateFor, broadcastActivity, pushUpdateFor, emitLoop, loopLog, emitChat,
+    pushStateFor, broadcastActivity, pushUpdateFor, emitLoop, loopLog, loopLogFor, emitChat,
     // A project id that is gone for good (an appdata project adopted into a
     // real folder) takes its push channels with it.
     dropPushState: projectId => pushState.delete(projectId),

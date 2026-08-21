@@ -1113,7 +1113,7 @@ export function createApi(engine) {
         parallelism,
         // Work only these tasks this session (the picker's order is unchanged).
         only: Array.isArray(only) ? only.map(String).filter(Boolean) : null,
-        log: msg => engine.emitLoop?.(projectId, msg),
+        log: (msg, meta) => engine.emitLoop?.(projectId, msg, meta),
         writeStatus: status => writeLoopStatus(projectId, status),
         stopRequested: () => takeLoopStop(projectId)
       });
@@ -1149,7 +1149,16 @@ export function createApi(engine) {
       }
       return { stopped: false, reason: 'no loop running' };
     },
-    'loop:log': ({ projectId }) => engine.loopLog(projectId),
+    // The loop's own account, read back after the process that wrote it is
+    // gone. `date` and `taskId` are how the morning question gets asked:
+    // "what happened to t-0014 last night".
+    'loop:log': ({ projectId, date = null, taskId = null, tail = null }) =>
+      engine.loopLog(projectId, {
+        date: date ? String(date) : null,
+        taskId: taskId ? String(taskId) : null,
+        ...(Number.isFinite(Number(tail)) && Number(tail) > 0 ? { tail: Number(tail) } : {})
+      }),
+    'loop:days': ({ projectId }) => engine.loopLogFor(projectId)?.days() ?? [],
     // This process's supervisor if it has one; otherwise whatever the loop
     // running elsewhere last published. `observed: true` marks the second case,
     // because "what I am doing" and "what I can see someone else doing" are
@@ -1165,7 +1174,8 @@ export function createApi(engine) {
         ?? readLoopStatus(projectId)
         ?? { running: false, stopping: null, inFlight: [], landed: 0, completed: 0 },
       backlog: backlogFor(projectId),
-      ledger: ledgerFor(projectId)
+      ledger: ledgerFor(projectId),
+      loopLog: engine.loopLogFor(projectId)
     }),
 
     // --- The benchmark and the archive (DESIGN-SPEC.md §8) --------------------
@@ -1285,9 +1295,9 @@ export function createApi(engine) {
         report: renderReport({
           status: supervisors.get(projectId)?.status()
             ?? { running: false, stopping: null, inFlight: [], landed: 0, completed: 0 },
-          backlog, ledger
+          backlog, ledger, loopLog: engine.loopLogFor(projectId)
         }),
-        log: msg => engine.emitLoop?.(projectId, msg)
+        log: (msg, meta) => engine.emitLoop?.(projectId, msg, meta)
       });
     },
     'archive:list': ({ projectId }) => listArchive(stateDir(projectId, 'archive')),

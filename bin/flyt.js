@@ -61,6 +61,8 @@ const USAGE = `flyt — drive Flyt without the desktop app
                                       (--only: just these tasks, same picker order)
                                       (the caps are THIS session's spend, from now)
   flyt loop stop|status               stop it, or see what it is doing
+  flyt loop log [--date d] [--task t] what the loop said, after the process is gone
+                [--tail N]
   flyt report                         what landed, what needs you, what it cost
   flyt spend [--since 24h]            the ledger
   flyt bench list                     the benchmark suite and its probes
@@ -620,6 +622,25 @@ async function main() {
           say(`  ${st.inFlight.length} in flight, ${st.landed}/${st.completed} landed`
             + (st.spend ? `, $${st.spend.usd.toFixed(2)}` : ''));
         }
+      }
+      if (sub === 'log') {
+        // What the loop said, read from disk — so the morning question has an
+        // answer after the process that wrote it is gone.
+        const entries = await api.invoke('loop:log', {
+          projectId,
+          date: typeof flags.date === 'string' ? flags.date : null,
+          taskId: typeof flags.task === 'string' ? flags.task : null,
+          tail: flags.tail ?? null
+        });
+        if (asJson) return out(entries);
+        if (!entries.length) {
+          const days = await api.invoke('loop:days', { projectId });
+          return out(days.length
+            ? `(nothing recorded for that filter — the log holds ${days.join(', ')})`
+            : '(the loop has not written anything yet)');
+        }
+        return out(entries.map(e =>
+          `${String(e.at).slice(0, 19).replace('T', ' ')}  ${e.line}`).join('\n'));
       }
       if (sub === 'stop') return out(await api.invoke('loop:stop', { projectId }));
       return out(await api.invoke('loop:status', { projectId }));

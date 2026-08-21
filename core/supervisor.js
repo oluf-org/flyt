@@ -335,7 +335,7 @@ export class Supervisor {
           await this.#tick();
           continue;
         }
-        if (task.stolen) this.log(`reclaimed an expired lease on ${task.id} from ${task.claimedBy}`);
+        if (task.stolen) this.log(`reclaimed an expired lease on ${task.id} from ${task.claimedBy}`, { taskId: task.id });
         started += 1;
         await this.#begin(task);
       }
@@ -447,7 +447,7 @@ export class Supervisor {
     }
 
     const worker = this.#workerFor(level);
-    this.log(`▶ ${task.id} "${task.title}" ${worker ? `on ${worker.model} (band ${level})` : `at ${level}`}`);
+    this.log(`▶ ${task.id} "${task.title}" ${worker ? `on ${worker.model} (band ${level})` : `at ${level}`}`, { taskId: task.id });
     // startedAt, so "how long did this take" survives the process that knew.
     // The first attempt sets it and a retry does not, because the question the
     // benchmark asks is how long the TASK took, not the last try at it.
@@ -469,8 +469,10 @@ export class Supervisor {
       // must not park a task (a worker without it still works, just worse), but
       // it must be said out loud in the place a person is actually watching.
       for (const name of missingSkills(wt.dir, task.skills)) {
-        this.log(`  ${task.id} declares skill "${name}" and the worktree has no ${CONFIG_DIR}/skills/${name}.md`
-          + ' — untracked, ignored, or misspelled. The worker runs without it.');
+        this.log(
+          `  ${task.id} declares skill "${name}" and the worktree has no ${CONFIG_DIR}/skills/${name}.md`
+          + ' — untracked, ignored, or misspelled. The worker runs without it.',
+          { taskId: task.id });
       }
       const runId = await this.invoke('flow:run', {
         projectId: this.projectId,
@@ -505,7 +507,7 @@ export class Supervisor {
     } catch (err) {
       // A task that cannot even be started is not a task that should be retried
       // at a bigger model: the failure is in the harness, not the capability.
-      this.log(`✖ ${task.id} could not start: ${err.message}`);
+      this.log(`✖ ${task.id} could not start: ${err.message}`, { taskId: task.id });
       this.#park(task.id, `Could not start: ${String(err.message ?? err)}`);
     }
   }
@@ -568,7 +570,7 @@ export class Supervisor {
         // it forever, doing nothing, which is worse than either succeeding or
         // giving up.
         hb.pollErrors = (hb.pollErrors ?? 0) + 1;
-        this.log(`poll ${taskId}: ${err.message}`);
+        this.log(`poll ${taskId}: ${err.message}`, { taskId });
         if (hb.pollErrors >= (this.config.loop?.maxPollErrors ?? 5)) {
           await this.#discard(taskId);
           this.#park(taskId, `Could not be observed: ${err.message}`);
@@ -622,7 +624,7 @@ export class Supervisor {
       const kind = snapshot.meta?.pendingGateKind ?? 'pre';
       const mayAnswer = (this.config.loop?.autoApprove ?? ['pre']).includes(kind);
       if (mayAnswer) {
-        this.log(`  ${taskId} approving ${kind} gate (the landing sequence is the real check)`);
+        this.log(`  ${taskId} approving ${kind} gate (the landing sequence is the real check)`, { taskId });
         await this.invoke('run:approve', { projectId: this.projectId, runId: hb.runId });
         hb.lastProgressAt = this.now(); // answering a gate IS headway
         return;
@@ -675,7 +677,7 @@ export class Supervisor {
   async #intervene(taskId, hb, stall) {
     let rung = nextIntervention(hb);
     hb.interventions.push(rung);
-    this.log(`… ${taskId} ${stall.detector}: ${stall.detail} → ${rung}`);
+    this.log(`… ${taskId} ${stall.detector}: ${stall.detail} → ${rung}`, { taskId });
 
     const guidance = `SUPERVISOR: ${stall.detail} Change your approach rather than repeating it.`;
     const currentNode = hb.currentNode;
@@ -701,7 +703,7 @@ export class Supervisor {
       if (!hb.interventions.includes('restart')) hb.interventions.push('restart');
       rung = nextIntervention(hb);
       hb.interventions.push(rung);
-      this.log(`  ${taskId} nothing to restart → ${rung}`);
+      this.log(`  ${taskId} nothing to restart → ${rung}`, { taskId });
     }
 
     if (rung === 'escalate' && !this.noEscalate) {
@@ -710,7 +712,7 @@ export class Supervisor {
       this.#recordSpend(taskId, hb);
       const result = this.backlog.escalate(taskId, { reason: 'stalled', note: stall.detail });
       await this.#discard(taskId);
-      this.log(`↑ ${taskId} ${result.escalation.reason}`);
+      this.log(`↑ ${taskId} ${result.escalation.reason}`, { taskId });
       if (!result.escalation.escalated) this.parked.push({ taskId, reason: result.escalation.reason });
       this.history.push({ taskId, landed: false, stage: 'stalled', detector: stall.detector });
       return;
@@ -941,7 +943,7 @@ export class Supervisor {
     if (!this.ledger || !this.store) return null;
     const entries = this.ledger.recordRun(this.store, { runId: hb.runId, taskId, level: hb.level });
     const usd = entries.reduce((n, e) => n + (e.usd ?? 0), 0);
-    this.log(`  ${taskId} ${note || 'run ended'}, $${usd.toFixed(4)} across ${entries.length} call(s)`);
+    this.log(`  ${taskId} ${note || 'run ended'}, $${usd.toFixed(4)} across ${entries.length} call(s)`, { taskId });
     return { usd, calls: entries.length };
   }
 
@@ -975,7 +977,7 @@ export class Supervisor {
         this.backlog.release(taskId, { status: 'queued' });
         this.stopping = `the provider refused the call: ${blocked}`;
         this.running = false;
-        this.log(`✖ ${taskId} ${this.stopping} — stopping, because every task would fail the same way`);
+        this.log(`✖ ${taskId} ${this.stopping} — stopping, because every task would fail the same way`, { taskId });
         this.#publish();
         return;
       }
@@ -1034,7 +1036,7 @@ export class Supervisor {
     this.history.push({ taskId, landed: landed.landed, stage: landed.stage, guidance: landed.guidance ?? null });
     this.log(landed.landed
       ? `✔ ${taskId} landed ${landed.mergeSha?.slice(0, 8)}`
-      : `✖ ${taskId} ${landed.stage}: ${String(landed.guidance ?? '').slice(0, 160)}`);
+      : `✖ ${taskId} ${landed.stage}: ${String(landed.guidance ?? '').slice(0, 160)}`, { taskId });
 
     if (!landed.landed) {
       await this.#discard(taskId);
@@ -1061,12 +1063,12 @@ export class Supervisor {
       // "owner-mismatch" specifically means this supervisor just tried to clean
       // up a worktree that now belongs to a newer attempt (WR-02).
       if (r?.outcome === 'owner-mismatch') {
-        this.log(`· ${taskId} cleanup skipped: worktree now belongs to attempt ${r.owner}`);
+        this.log(`· ${taskId} cleanup skipped: worktree now belongs to attempt ${r.owner}`, { taskId });
       } else if (r?.outcome === 'live-owner') {
-        this.log(`· ${taskId} cleanup skipped: attempt ${r.owner} is still live`);
+        this.log(`· ${taskId} cleanup skipped: attempt ${r.owner} is still live`, { taskId });
       }
     } catch (err) {
-      this.log(`· ${taskId} cleanup failed: ${String(err?.message ?? err).slice(0, 160)}`);
+      this.log(`· ${taskId} cleanup failed: ${String(err?.message ?? err).slice(0, 160)}`, { taskId });
     } finally {
       this.attempts.delete(taskId);
     }
@@ -1078,7 +1080,7 @@ export class Supervisor {
     try { this.backlog.release(taskId, { status: 'parked' }); } catch { /* no lock */ }
     this.parked.push({ taskId, reason });
     this.history.push({ taskId, landed: false, stage: 'parked' });
-    this.log(`⏸ ${taskId} parked: ${reason}`);
+    this.log(`⏸ ${taskId} parked: ${reason}`, { taskId });
     this.#publish();
   }
 }
@@ -1104,7 +1106,7 @@ function currentNodeOf(snapshot) {
  * and what it cost. One page, because a report nobody finishes reading is a
  * report that does not exist.
  */
-export function renderReport({ status, backlog, ledger, windowMs = 24 * 60 * 60 * 1000 }) {
+export function renderReport({ status, backlog, ledger, loopLog = null, windowMs = 24 * 60 * 60 * 1000 }) {
   const tasks = backlog.list();
   const by = s => tasks.filter(t => t.status === s);
   const spend = ledger?.totals({ sinceMs: windowMs }) ?? null;
@@ -1134,6 +1136,16 @@ export function renderReport({ status, backlog, ledger, windowMs = 24 * 60 * 60 
   section('Waiting on you', by('parked'), t => `- **${t.id}** ${t.title}\n  - ${t.blockedReason ?? 'no reason recorded'}`);
   section('Queued', by('queued'), t => `- ${t.id} ${t.title} _(${t.level ?? 'default'}${t.attempts ? `, ${t.attempts} attempt(s)` : ''})_`);
   section('In flight', status.inFlight, h => `- ${h.taskId} — ${h.stage ?? h.phase}, ${Math.round(h.ageMs / 60000)}min`);
+
+  // What the loop actually said, from its own file. A report that describes
+  // the state without the account of how it got there sends the reader back to
+  // the run folders, which is the trip this file exists to prevent.
+  const said = loopLog?.read({ tail: 15 }) ?? [];
+  if (said.length) {
+    lines.push('## What the loop said', '');
+    for (const e of said) lines.push(`- \`${String(e.at).slice(11, 19)}\` ${e.line}`);
+    lines.push('');
+  }
 
   const blocked = backlog.blocked();
   if (blocked.length) {
