@@ -19,6 +19,14 @@ flows/
 .flyt/*
 !.flyt/skills/
 !.flyt/skills/**
+# A plan a task tells a worker to read has to be in the checkout the worker
+# gets. A Loop worker works in a git worktree, a worktree is a checkout, and an
+# untracked file is not in a checkout — the same trap the skills allowlist fell
+# into. Plan documents travel with the repository; task files stay runtime
+# state and do not.
+!.flyt/backlog/
+.flyt/backlog/*
+!.flyt/backlog/*-plan.md
 # The node library's record of which seeds it has already been offered
 # (core/nodestore.js). Per-library runtime state, like a run folder: it names
 # whatever templates that particular library holds, including the user's own.
