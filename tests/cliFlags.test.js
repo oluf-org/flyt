@@ -70,3 +70,30 @@ test('the refusal happens before anything is bound or spent', () => {
   const good = run(['task', 'list', '--status', 'queued', '--json']);
   assert.equal(good.status, 0, good.stderr);
 });
+
+// A repeat is the same defect wearing different clothes: the flag is spelled
+// right, the command runs, and the value is not what was written. `--goal`
+// twice produced the brief "first,second" — `String(['first','second'])` —
+// and the worker read that as the task.
+test('a repeated flag that takes one value is refused, not joined', () => {
+  assert.match(checkFlags('task', { goal: ['first', 'second'] }),
+    /--goal was given more than once; it takes one value\./);
+  assert.match(checkFlags('task', { status: ['queued', 'landed'] }), /given more than once/);
+  assert.match(checkFlags('loop', { 'cap-usd': ['1', '2'] }), /it takes one number\./,
+    'a number says number');
+});
+
+test('the flags documented as repeatable still repeat', () => {
+  assert.equal(checkFlags('task', { done: ['one', 'two'] }), null);
+  assert.equal(checkFlags('task', { skill: ['a', 'b'] }), null);
+  assert.equal(checkFlags('call', { arg: ['k=v', 'j=w'] }), null);
+  assert.equal(checkFlags('run', { in: ['repo=x', 'ref=y'] }), null);
+  assert.equal(checkFlags('loop', { only: ['t-1', 't-2'] }), null);
+});
+
+test('a repeated --goal never reaches the task file', () => {
+  const bad = run(['task', 'add', 'scratch repeat probe', '--goal', 'first', '--goal', 'second']);
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr + bad.stdout, /--goal was given more than once/);
+  assert.ok(!/queued t-/.test(bad.stderr + bad.stdout), 'and no task was written');
+});

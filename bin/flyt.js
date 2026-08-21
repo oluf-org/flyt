@@ -170,6 +170,19 @@ const NUMERIC_FLAGS = new Set([
   'timeout', 'tail', 'limit', 'port', 'length', 'max-tokens'
 ]);
 
+// Flags a caller may give more than once, because a reader downstream reads
+// the array. Everything else is single-valued, and that is the safe default:
+// the parser accumulates repeats for every flag, but only these call sites
+// use `[].concat(...)`. Every other site does `String(flags.x)`, and
+// `String(['a', 'b'])` is `'a,b'` — so `--goal "first" --goal "second"` wrote
+// a brief reading "first,second" into the task file, and the worker read that
+// as the whole goal. A repeat the command cannot use is refused for the same
+// reason a misspelling is (HT-04): its absence changes what the command does
+// and the caller cannot see that from the output.
+const REPEATABLE_FLAGS = new Set([
+  'answer', 'arg', 'arg-json', 'done', 'in', 'model', 'only', 'skill', 'skills'
+]);
+
 /** Edit distance, bounded to what a suggestion is worth. */
 function distance(a, b) {
   const rows = [...Array(a.length + 1)].map((_, i) => [i, ...Array(b.length).fill(0)]);
@@ -204,9 +217,11 @@ export function checkFlags(command, flags) {
         ? `Unknown flag "--${name}". Did you mean "--${near[0]}"?`
         : `Unknown flag "--${name}" for "flyt ${command}".`;
     }
-    if (!NUMERIC_FLAGS.has(name)) continue;
     const value = flags[name];
-    if (Array.isArray(value)) return `--${name} was given more than once; it takes one number.`;
+    if (Array.isArray(value) && !REPEATABLE_FLAGS.has(name)) {
+      return `--${name} was given more than once; it takes one ${NUMERIC_FLAGS.has(name) ? 'number' : 'value'}.`;
+    }
+    if (!NUMERIC_FLAGS.has(name)) continue;
     if (value === true || !Number.isFinite(Number(value))) {
       return `--${name} takes a number, and was given ${value === true ? 'nothing' : `"${value}"`}.`;
     }
