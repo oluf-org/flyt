@@ -123,6 +123,95 @@ function parseArgs(argv) {
   return { positional, flags };
 }
 
+// What each command accepts, so a typo is refused instead of ignored.
+//
+// `flyt task list --stauts queued` used to run and list everything; the sharp
+// version is `--capusd 2`, which is an unbounded loop rather than a $2 one.
+// A flag the parser does not recognise is a flag whose absence changes what
+// the command does, and the caller cannot see that from the output.
+//
+// Keyed by the first positional, because that is what selects the branch.
+// Subcommands share their command's set: the risk being closed here is a
+// mistyped flag, not a well-spelled one used under the wrong subcommand.
+const GLOBAL_FLAGS = new Set([
+  // Everything the help's Options block documents as applying anywhere.
+  'project', 'json', 'token', 'approval', 'gates', 'answer', 'timeout',
+  'goal', 'value', 'effort', 'level', 'help', 'port'
+]);
+
+const COMMAND_FLAGS = {
+  answer: ['gates', 'text', 'timeout'],
+  approve: ['reason'],
+  reject: ['reason'],
+  archive: ['card', 'date', 'limit'],
+  bench: ['keep', 'only', 'revision', 'suite'],
+  call: ['arg', 'arg-json'],
+  doctor: ['flow', 'model', 'probe'],
+  feedback: ['enqueue'],
+  log: ['event', 'node', 'quiet', 'tail'],
+  loop: ['cap-usd', 'date', 'dry-run', 'model', 'models', 'only', 'parallel',
+    'reviewer', 'soft-usd', 'tail', 'task', 'task-usd', 'tasks'],
+  probe: ['max-tokens', 'provider', 'stream'],
+  python: ['packages', 'python'],
+  ref: ['context', 'pattern', 'repo'],
+  run: ['answer', 'approval', 'gates', 'in', 'input', 'join', 'length', 'level', 'timeout'],
+  spend: ['since'],
+  task: ['all', 'blast', 'by', 'dependsOn', 'done', 'effort', 'force', 'gates', 'goal',
+    'level', 'note', 'reason', 'references', 'skill', 'skills', 'status', 'title', 'value'],
+  tools: ['arg', 'arg-json', 'yes'],
+  work: ['attempt', 'dry-run', 'push']
+};
+
+// Flags whose value has to be a number. A cap that silently becomes NaN is a
+// cap that is not there — `Number.isFinite` filters it out downstream, which
+// is the correct handling of a value nobody should have been given.
+const NUMERIC_FLAGS = new Set([
+  'cap-usd', 'soft-usd', 'task-usd', 'parallel', 'value', 'effort',
+  'timeout', 'tail', 'limit', 'port', 'length', 'max-tokens'
+]);
+
+/** Edit distance, bounded to what a suggestion is worth. */
+function distance(a, b) {
+  const rows = [...Array(a.length + 1)].map((_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) rows[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      rows[i][j] = Math.min(
+        rows[i - 1][j] + 1,
+        rows[i][j - 1] + 1,
+        rows[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return rows[a.length][b.length];
+}
+
+/**
+ * Refuse a flag this command cannot use.
+ *
+ * @param command — the first positional.
+ * @param flags — what was parsed.
+ * @returns an error message, or null when everything is usable.
+ */
+export function checkFlags(command, flags) {
+  const accepted = new Set([...GLOBAL_FLAGS, ...(COMMAND_FLAGS[command] ?? [])]);
+  for (const name of Object.keys(flags)) {
+    if (!accepted.has(name)) {
+      const near = [...accepted]
+        .map(a => [a, distance(name.toLowerCase(), a.toLowerCase())])
+        .filter(([, d]) => d <= Math.max(2, Math.ceil(name.length / 3)))
+        .sort((a, b) => a[1] - b[1])[0];
+      return `Unknown flag "--${name}"${near ? `. Did you mean "--${near[0]}"?` : ` for "flyt ${command ?? ''}".`.trimEnd()}`;
+    }
+    if (!NUMERIC_FLAGS.has(name)) continue;
+    const value = flags[name];
+    if (Array.isArray(value)) return `--${name} was given more than once; it takes one number.`;
+    if (value === true || !Number.isFinite(Number(value))) {
+      return `--${name} takes a number, and was given ${value === true ? 'nothing' : `"${value}"`}.`;
+    }
+  }
+  return null;
+}
+
 const { positional, flags } = parseArgs(process.argv.slice(2));
 const command = positional[0];
 const asJson = Boolean(flags.json);
@@ -274,6 +363,11 @@ function renderQuestionGate(runId, meta) {
 // --- commands --------------------------------------------------------------
 async function main() {
   if (!command || command === 'help' || flags.help) { console.log(USAGE); return; }
+
+  // Before anything is bound or spent: a flag this command cannot use is a
+  // flag whose absence changes what runs, and the caller cannot see that.
+  const unusable = checkFlags(command, flags);
+  if (unusable) return die(unusable, 2);
 
   if (command === 'serve') {
     // The server owns the emit callback, so every engine event reaches every
@@ -1178,7 +1272,15 @@ function renderDoctor(r) {
   return L.join('\n');
 }
 
-main().catch(err => {
-  if (err instanceof ApiError) die(err.message);
-  die(err.stack ?? String(err), 1);
-});
+// Only when this file IS the command being run. Importing it — which a test
+// does, to check the flag table against the help text — must not start a CLI
+// session against the test runner's own argv.
+const runningAsCommand = process.argv[1]
+  && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (runningAsCommand) {
+  main().catch(err => {
+    if (err instanceof ApiError) die(err.message);
+    die(err.stack ?? String(err), 1);
+  });
+}
