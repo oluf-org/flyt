@@ -1,6 +1,6 @@
 # Flyt v2 — plugins, stacks and blocks
 
-Status: **approved plan, not yet implemented.** Durable choices are promoted to
+Status: **approved plan; Phase 0 landed 2026-08-21, Phase 1 next.** Durable choices are promoted to
 `DECISIONS.md` as D52–D63 and the standing rules they amend are already updated
 in `CLAUDE.md` and `GOALS.md`. This file is the working plan; when the flag
 flips (Phase 5) it retires to git history and `DESIGN-SPEC.md` describes what
@@ -330,7 +330,9 @@ Tasks `t-0035`..`t-0040`, one per phase, chained by `dependsOn`. Each is a
 decomposition target, not a single attempt: a worker claiming one should break it
 into child tasks with `enqueue_task` rather than attempt it whole.
 
-**Phase 0 — kernel, seams, session log.** `t-0035`, hand-built, flag off.
+**Phase 0 — kernel, seams, session log. Landed 2026-08-21** (`t-0035`, hand-built
+as `t-0041`..`t-0048`). What exists is described in `DESIGN-SPEC.md` §10; what
+follows is the plan it was built from.
 Cordis added; TS kernel package stood up; eight seams defined and provided;
 `flyt-session-jsonl` with `deriveMessages()` and replay; run folder rebuilt as a
 projection; plugin loader reading `dsh.bundle` / `dsh.profile` and `cordis.yml`;
