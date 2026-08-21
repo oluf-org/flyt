@@ -1235,6 +1235,15 @@ function renderWhy(r) {
     s.nodeRestarts && `${s.nodeRestarts} manual restart(s)`
   ].filter(Boolean);
   if (flags.length) L.push(`  ${flags.join(' · ')}`);
+  // Which tools, most-used first. "64 tool call(s)" is a number nobody can act
+  // on; "58 read_file, 4 glob, 2 bash" is a diagnosis — the attempt spent its
+  // budget on discovery and never reached the work, which is the shape of every
+  // expensive run that changed nothing.
+  if (s.tools?.length) {
+    L.push(`  tools: ${s.tools.slice(0, 8)
+      .map(t => `${t.calls}× ${t.name}${t.failed ? ` (${t.failed} failed)` : ''}`).join(', ')}`
+      + (s.tools.length > 8 ? `, and ${s.tools.length - 8} more` : ''));
+  }
 
   for (const n of r.nodes) {
     L.push('');

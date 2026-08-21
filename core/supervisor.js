@@ -214,6 +214,60 @@ const IMPOSSIBLE = /^\s*TASK-IMPOSSIBLE:\s*(.+)$/m;
  * already retries it with backoff; stopping the night for one would be its own
  * failure.
  */
+/**
+ * Is this failure the MODEL being unreachable, rather than the task being hard?
+ *
+ * The adapter retries 429 with backoff, which is right and is why
+ * `providerBlocked` leaves it alone. But a free-tier model sitting behind a
+ * shared upstream pool is rate-limited for minutes, not for the thirty seconds
+ * a bounded backoff can wait — so the retries run out, the run fails, and the
+ * supervisor reads a failed run as a failed attempt.
+ *
+ * Watched twice in one session:
+ *
+ *   ▶ t-0070 … on z-ai/glm-5.2:free (band medium)
+ *     t-0070 run failed, $0.0000 across 2 call(s)
+ *   ↑ retrying at "high"
+ *
+ * `$0.0000 across 2 call(s)` is the tell: nothing answered, so nothing about
+ * this task was tried. Escalating spends a rung of the ladder on a model that
+ * never spoke, and the rung is gone whether or not it was used.
+ *
+ * A bigger model is not the missing piece here; a MOMENT is. So the task goes
+ * back at the same band, and the loop tries something else meanwhile.
+ *
+ * Not `providerBlocked`: a spent key fails every task forever and stops the
+ * loop, and a rate-limited model fails one task for a few minutes. Treating
+ * them alike would stop a night's work for a shared pool being busy.
+ */
+export function modelUnavailable(error) {
+  const s = String(error ?? '');
+  if (!s) return null;
+  // A 401/403/quota failure is the other thing, and it wins: it stops the loop.
+  if (providerBlocked(s)) return null;
+  if (/\b429\b/.test(s) || /\brate[- ]?limit(ed|ing)?\b/i.test(s)) {
+    const raw = /"raw"\s*:\s*"([^"]+)"/.exec(s)?.[1];
+    return (raw ?? /"message"\s*:\s*"([^"]+)"/.exec(s)?.[1] ?? s.slice(0, 160)).trim();
+  }
+  // "No instances available", "temporarily unavailable", a bare 502/503 — the
+  // provider is up and this model is not.
+  if (/\b50[23]\b/.test(s) || /\bno (instances|providers?) available\b/i.test(s)
+    || /\btemporarily unavailable\b/i.test(s)) {
+    return s.slice(0, 160).trim();
+  }
+  return null;
+}
+
+/**
+ * How many times one task may be set aside for an unreachable model before the
+ * loop stops believing the model will come back.
+ *
+ * Bounded because "put it back and try later" with no ceiling is a loop that
+ * spins on a model that is never coming back, reporting progress it is not
+ * making.
+ */
+export const UNAVAILABLE_RETRIES = 3;
+
 export function providerBlocked(error) {
   const s = String(error ?? '');
   if (!s) return null;
@@ -274,6 +328,7 @@ export class Supervisor {
     this.history = [];         // finished attempts, for the report
     this.durations = [];       // how long each finished attempt took, for the outlier detector
     this.parked = [];          // things waiting on a person
+    this.unavailable = new Map(); // taskId → times its model did not answer at all
     this.noEscalate = false;   // set when the soft cap trips
     // The last green canary's output — the base branch's own test count, handed
     // to the next task as its "before" (§7.3).
@@ -553,6 +608,25 @@ export class Supervisor {
       // is the most interesting single event a watcher sees.
       this.#publish();
     } catch (err) {
+      // A previous attempt's tree is still held, and its holder is still alive
+      // as far as the pool can tell. That is a WAIT, not a decision for a
+      // person: an owner whose process died releases the slot when its
+      // heartbeat goes stale, and the next pass picks the task up.
+      //
+      // Watched it park a task for this: a loop was stopped mid-attempt, the
+      // next session found the lease and parked the work permanently, which is
+      // the one outcome nothing recovers from on its own.
+      if (err?.code === 'attempt_live') {
+        const seen = (this.unavailable.get(task.id) ?? 0) + 1;
+        this.unavailable.set(task.id, seen);
+        if (seen <= UNAVAILABLE_RETRIES) {
+          this.backlog.release(task.id, { status: 'queued' });
+          this.log(`↻ ${task.id} set aside: ${err.message} Waiting for that lease to go stale.`,
+            { taskId: task.id });
+          this.#publish();
+          return;
+        }
+      }
       // A task that cannot even be started is not a task that should be retried
       // at a bigger model: the failure is in the harness, not the capability.
       this.log(`✖ ${task.id} could not start: ${err.message}`, { taskId: task.id });
@@ -1121,8 +1195,32 @@ export class Supervisor {
         this.#publish();
         return;
       }
+      // The model never answered. Not this task failing — this task not having
+      // been tried. A rung spent here is a rung spent on silence.
+      const unreachable = modelUnavailable(error);
+      if (unreachable) {
+        const seen = (this.unavailable.get(taskId) ?? 0) + 1;
+        this.unavailable.set(taskId, seen);
+        if (seen <= UNAVAILABLE_RETRIES) {
+          await this.#discard(taskId);
+          this.backlog.release(taskId, { status: 'queued' });
+          this.log(`↻ ${taskId} set aside: ${hb.worker?.model ?? 'the model'} did not answer`
+            + ` (${unreachable}). Same band, no attempt spent — ${UNAVAILABLE_RETRIES - seen} more before it parks.`,
+          { taskId });
+          this.#publish();
+          return;
+        }
+        // Out of patience. Fall through and let the ladder have it, with the
+        // reason recorded as what it was rather than as failed work.
+      }
       await this.#discard(taskId);
-      const result = this.backlog.escalate(taskId, { reason: 'failed', note: 'The run itself failed.', workerAt: this.#workerAt });
+      const result = this.backlog.escalate(taskId, {
+        reason: 'failed',
+        note: unreachable
+          ? `The model did not answer, ${UNAVAILABLE_RETRIES + 1} times: ${unreachable}`
+          : 'The run itself failed.',
+        workerAt: this.#workerAt
+      });
       this.history.push({ taskId, landed: false, stage: 'run-failed' });
       if (!result.escalation.escalated) this.parked.push({ taskId, reason: result.escalation.reason });
       return;

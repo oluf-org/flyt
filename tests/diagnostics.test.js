@@ -147,6 +147,39 @@ test('cost and call counts are summed across every round of every agent loop', (
   assert.equal(r.signals.usd, 0.035);
 });
 
+test('the report names which tools were called, and how many of them failed', () => {
+  // "64 tool call(s)" is a number nobody can act on. Watching a live attempt,
+  // the useful fact was the shape: seventeen bash, fifteen read_file, ten glob
+  // and four writes — an attempt that spent its budget on discovery, which is
+  // what every expensive run that changed nothing looks like from outside.
+  const store = makeStore();
+  const runId = seedRun(store, {
+    meta: { stage: 'done', nodeStatus: {} },
+    log: [
+      { event: 'tool_call', node: 'a', tool: 'read_file' },
+      { event: 'tool_call', node: 'a', tool: 'read_file' },
+      { event: 'tool_call', node: 'a', tool: 'read_file' },
+      { event: 'tool_call', node: 'a', tool: 'bash', ok: false, error: 'exit 1' },
+      { event: 'tool_call', node: 'a', tool: 'bash' },
+      { event: 'tool_call', node: 'a', tool: 'edit_file' }
+    ]
+  });
+
+  const r = explainRun(store, runId);
+  assert.deepEqual(r.signals.tools, [
+    { name: 'read_file', calls: 3, failed: 0 },
+    { name: 'bash', calls: 2, failed: 1 },
+    { name: 'edit_file', calls: 1, failed: 0 }
+  ], 'most-used first, so the shape of the attempt is the first thing read');
+  assert.equal(r.signals.toolCalls, 6, 'and the total still agrees with the parts');
+});
+
+test('a run that called no tools reports none rather than nothing', () => {
+  const store = makeStore();
+  const runId = seedRun(store, { meta: { stage: 'done', nodeStatus: {} }, log: [] });
+  assert.deepEqual(explainRun(store, runId).signals.tools, []);
+});
+
 // --- probeModel -----------------------------------------------------------
 
 registerProvider('probe-empty', async () => ({

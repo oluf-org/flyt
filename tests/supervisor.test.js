@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Ledger, costOf, spendFromRun } from '../core/ledger.js';
 import { Heartbeat, detectStall, workSignature, nextIntervention } from '../core/heartbeat.js';
-import { Supervisor, renderReport, providerBlocked } from '../core/supervisor.js';
+import { Supervisor, renderReport, providerBlocked, modelUnavailable, UNAVAILABLE_RETRIES } from '../core/supervisor.js';
 import { Backlog } from '../core/backlog.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-sup-'));
@@ -655,6 +655,80 @@ test('a provider refusing everyone stops the loop instead of grinding the backlo
   // same way.
   assert.equal(backlog.get('t-0002').attempts, 0);
   assert.equal(engine.calls.filter(c => c.name === 'flow:run').length, 1);
+});
+
+test('a model that never answered costs a rung of the ladder, so it does not', async () => {
+  // Watched twice in one session:
+  //
+  //   ▶ t-0070 … on z-ai/glm-5.2:free (band medium)
+  //     t-0070 run failed, $0.0000 across 2 call(s)
+  //   ↑ retrying at "high"
+  //
+  // "$0.0000 across 2 call(s)" is the tell: nothing answered, so nothing about
+  // the task was tried, and the rung was spent on silence.
+  const rateLimited = 'OpenRouter API 429: {"error":{"code":429,"metadata":'
+    + '{"raw":"z-ai/glm-5.2:free is temporarily rate-limited upstream"}}}';
+  assert.match(modelUnavailable(rateLimited), /temporarily rate-limited upstream/);
+  assert.match(modelUnavailable('HTTP 503 from upstream'), /503/);
+  // A spent key is the OTHER thing, and it wins: it stops the loop entirely.
+  assert.equal(modelUnavailable('OpenRouter API 403: {"error":{"message":"Key limit exceeded"}}'), null);
+  assert.equal(modelUnavailable('the assertion failed'), null);
+
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g', value: 5, effort: 1, level: 'medium' });
+  const engine = fakeEngine({ backlog, stages: { default: ['failed'] }, error: rateLimited });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+
+  await sup.run({ maxTasks: 1 });
+
+  const task = backlog.get('t-0001');
+  assert.equal(task.status, 'queued', 'back in the queue, not parked and not in flight');
+  assert.equal(task.level, 'medium', 'same band — a bigger model is not the missing piece');
+  assert.equal(task.attempts, 0, 'and nothing was attempted, so nothing was spent');
+});
+
+test('a model that never comes back stops being waited for', async () => {
+  // "Put it back and try later" with no ceiling is a loop spinning on a model
+  // that is never coming back, reporting progress it is not making.
+  const rateLimited = 'OpenRouter API 429: rate limited upstream';
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g', value: 5, effort: 1, level: 'medium' });
+  const engine = fakeEngine({ backlog, stages: { default: ['failed'] }, error: rateLimited });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+
+  await sup.run({ maxTasks: UNAVAILABLE_RETRIES + 1 });
+
+  const task = backlog.get('t-0001');
+  assert.equal(task.attempts, 1, 'the last one counted, because patience is bounded');
+  assert.match(task.blockedReason, /did not answer/,
+    'and it is recorded as what it was, not as work that failed');
+});
+
+test('a lease left by a stopped loop is waited out, not parked forever', async () => {
+  // Watched it: a loop was stopped mid-attempt, the next session found the
+  // worktree lease still held and parked the task — permanently, since a park
+  // is the one outcome nothing recovers from on its own. But the pool releases
+  // a slot whose owner's heartbeat has gone stale, so this is a wait.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g', value: 5, effort: 1, level: 'medium' });
+  const engine = fakeEngine({ backlog });
+  const held = Object.assign(
+    new Error('Task "t-0001" already has a live attempt (t-0001-abc). Stop or discard it before starting another.'),
+    { code: 'attempt_live' },
+  );
+  let starts = 0;
+  const inner = engine.invoke;
+  engine.invoke = async (name, args) => {
+    if (name === 'work:start' && starts++ === 0) throw held;
+    return inner(name, args);
+  };
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+
+  await sup.run({ maxTasks: 2 });
+
+  const task = backlog.get('t-0001');
+  assert.notEqual(task.status, 'blocked', 'a held lease is a wait, not a decision for a person');
+  assert.ok(starts >= 2, 'and the next pass tried it again');
 });
 
 test('a task the agent says cannot be done here is parked, not escalated', async () => {

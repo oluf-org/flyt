@@ -311,6 +311,24 @@ function suggestFor({ status, error, calls, ok, empties, retries, reasoningChars
  * and `flyt why` went on to explain that the run predated the black box. It
  * did not; the box was full and nobody opened it.
  */
+/**
+ * Every tool this run called, most-used first, with how many failed.
+ *
+ * @param log — the run's event log.
+ * @returns `[{ name, calls, failed }]`, or an empty list for a run that called none.
+ */
+function toolBreakdown(log) {
+  const byName = new Map();
+  for (const e of log) {
+    if (e.event !== 'tool_call' || !e.tool) continue;
+    const row = byName.get(e.tool) ?? { name: e.tool, calls: 0, failed: 0 };
+    row.calls += 1;
+    if (e.ok === false) row.failed += 1;
+    byName.set(e.tool, row);
+  }
+  return [...byName.values()].sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name));
+}
+
 function signalsFrom(log, store = null, runId = null) {
   const count = ev => log.filter(e => e.event === ev).length;
   const logged = log.filter(e => e.event === 'model_call');
@@ -325,6 +343,15 @@ function signalsFrom(log, store = null, runId = null) {
     modelCalls: modelCalls.length,
     modelMs: modelCalls.reduce((n, c) => n + (c.ms ?? 0), 0),
     toolCalls: count('tool_call'),
+    // WHICH tools, and how many of them failed.
+    //
+    // "64 tool calls" is a number you cannot act on. "58 read_file, 4 glob, 2
+    // bash, 0 writes" is a diagnosis: the attempt spent its budget on discovery
+    // and never got to the work, which is the most common shape of an expensive
+    // run that changed nothing. Counted by NAME rather than by a classification
+    // — the names already say which is which, and a classification computed
+    // here is a second one to keep in step with the tool definitions.
+    tools: toolBreakdown(log),
     transientRetries: count('model_retry'),
     emptyTurns: count('model_empty_turn'),
     // Tasks that answered but did not do the thing they owed (WR-01). A run
