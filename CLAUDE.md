@@ -18,6 +18,13 @@ A rebuild onto a Cordis plugin kernel is approved and under way (D52-D63, plan i
 - **v1 code keeps v1 names.** The rename map (flow to stack, node to block, `FlowRunner` to `StackRunner`, `flowlang` to `stacklang`) is executed once, in `t-0040`, in a single commit. Do not rename opportunistically while working on something else.
 - **v2 code uses the v2 vocabulary from the start.** A new plugin, block, stack or seam is named for what it is, not for what it replaces.
 
+Phase 0 landed on 2026-08-21 (`t-0035`, built as `t-0041`-`t-0048`). What exists is described in `DESIGN-SPEC.md` §10; the short version for anyone touching it:
+
+- `kernel/` is TypeScript, compiled to `kernel/dist` by `npm run build:kernel`, and imported as `#kernel`. `npm test` and `npm run build` compile it first, so a change to `kernel/src` is not live until something builds it.
+- `core/v2.js` is the only module that reads the flag, and `bootKernel()` there is the only import of the v2 tree. Keep it that way: a static `#kernel` import anywhere in `core/` would load v2 on startup whatever the flag says, and a test asserts there is none.
+- A service on the dsh contract is a Cordis `Service` subclass with ordinary private fields. Cordis derives a per-caller view with `Object.create()`, so `#private` state is unreachable through it and a registration made without `this.ctx.effect()` outlives the plugin that made it.
+- Phase 1 (`t-0036`) is next, and is hand-built rather than the Loop's, until the handoff test passes.
+
 ## Standing rules
 
 - Flyt is the product. `flow` is the v1 domain object and `stack` is its v2 successor (D52). Within v1 code, do not rename `.flow.yaml`, `flowlang`, `FlowRunner`, `flow.nodes`, `FLOW_LANG.md`, or `FLOW_NODES.md` — those renames belong to the cutover task. `core/brand.js` owns brand literals and legacy migration names.
