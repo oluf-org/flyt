@@ -9,6 +9,8 @@
 import { Context } from '@deepseek-ai/cordis';
 
 export * from './seams/index.js';
+export * from './loader/index.js';
+export * from './profiles.js';
 export * from './events.js';
 export type * from './types.js';
 export * from './session/jsonl.js';

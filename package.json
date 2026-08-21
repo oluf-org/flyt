@@ -5,7 +5,8 @@
   "main": "electron/main.js",
   "type": "module",
   "imports": {
-    "#kernel": "./kernel/dist/index.js"
+    "#kernel": "./kernel/dist/index.js",
+    "#kernel/*": "./kernel/dist/*"
   },
   "scripts": {
     "build:kernel": "tsc -p kernel",
