@@ -577,6 +577,44 @@ test('the brief says how the work will be judged, because the task file cannot k
   assert.match(brief, /do not invent work/);
 });
 
+test('the brief names the files the task said it would change', async () => {
+  // Watched a worker spend 52 tool calls and four minutes without writing a
+  // byte: it read the task, listed the backlog, opened two unrelated tasks,
+  // globbed for a tsconfig, tried to cd into a path from another machine, and
+  // read four files none of which were the contract it needed — while the task
+  // file had named the two files it was supposed to create, in a field that
+  // reached nothing.
+  const backlog = makeBacklog();
+  backlog.add({
+    title: 'Build the read model',
+    goal: 'A session log becomes nested turns and steps',
+    blastRadius: ['src/traceModel.js', 'tests/traceModel.test.js']
+  });
+  const engine = fakeEngine({ backlog });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+
+  await sup.run({ maxTasks: 1 });
+  const brief = engine.calls.find(c => c.name === 'flow:run').args.userInput;
+  assert.match(brief, /WHERE THIS WORK GOES/);
+  assert.match(brief, /src\/traceModel\.js/);
+  assert.match(brief, /tests\/traceModel\.test\.js/);
+  // A hint about scope, never a fence: the ceiling is what bounds authority,
+  // and a prompt line must not read as though it narrowed one.
+  assert.match(brief, /hint about\s+scope rather than a fence/);
+});
+
+test('a task that named no files says nothing about where the work goes', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'Something', goal: 'Do something' });
+  const engine = fakeEngine({ backlog });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+
+  await sup.run({ maxTasks: 1 });
+  const brief = engine.calls.find(c => c.name === 'flow:run').args.userInput;
+  assert.doesNotMatch(brief, /WHERE THIS WORK GOES/,
+    'an empty section is a paragraph of instructions about nothing');
+});
+
 test('a provider refusing everyone stops the loop instead of grinding the backlog', async () => {
   // A spent key is not a failed task. It fails every task after it the same way
   // in seconds, and the ladder turns that into a parked backlog: up a band,

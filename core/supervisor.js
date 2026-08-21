@@ -143,6 +143,35 @@ const WORK_REASON_TAIL = ' Its last attempt was rejected on the work, not the mo
 /** A reason that is about the wallet rather than about the work. */
 const BUDGET_REASON = /per-task cap/;
 
+/**
+ * Where the work is expected to LAND, when the task said so.
+ *
+ * `blastRadius` is on every task file and reaches nothing. Watched a worker
+ * spend 52 tool calls and four minutes without writing a byte: it read the
+ * task, listed the backlog, opened two unrelated tasks, globbed for a tsconfig,
+ * tried to cd into a path from another machine, and read four files none of
+ * which were the contract it needed — while the task file had named the two
+ * files it was supposed to create, in a field nothing put in front of it.
+ *
+ * A hint about scope, not a fence. Nothing here narrows or widens what the
+ * ceiling already allows; it only stops the discovery pass from being the
+ * whole attempt.
+ */
+function whereItLands(task) {
+  const paths = (task.blastRadius ?? []).map(p => String(p).trim()).filter(Boolean);
+  if (!paths.length) return '';
+  return [
+    'WHERE THIS WORK GOES (added by the supervisor):',
+    '',
+    `Whoever wrote this task expected it to change: ${paths.map(p => `\`${p}\``).join(', ')}.`,
+    '',
+    'Read those first — the contract you need is almost certainly in them, and a discovery pass',
+    'that goes anywhere else is the part of the attempt that produces nothing. It is a hint about',
+    'scope rather than a fence: change what the task actually needs. But if you finish having',
+    'changed none of them, say why in your final message.'
+  ].join('\n');
+}
+
 function whereItCameFrom(task) {
   const refs = (task.references ?? []).filter(Boolean);
   if (!refs.length) return '';
@@ -539,6 +568,7 @@ export class Supervisor {
     return [
       task.title,
       task.body,
+      whereItLands(task),
       whereItCameFrom(task),
       HOW_IT_LANDS,
       task.blockedReason ? `\nA PREVIOUS ATTEMPT FAILED:\n${task.blockedReason}` : '',
