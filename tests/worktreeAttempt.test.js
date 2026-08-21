@@ -66,6 +66,18 @@ test('a linked node_modules does not stop the worktree being discarded', async (
     'and the checkout still has its dependencies');
 });
 
+test('git failing because its directory is gone does not read as git being missing', async () => {
+  const root = await makeRepo();
+  const gone = path.join(root, 'a-directory-that-was-removed');
+  await assert.rejects(
+    async () => { await git(['status', '--porcelain'], { cwd: gone }); },
+    err => {
+      assert.match(err.message, /its working directory is gone/);
+      assert.ok(!/ENOENT/.test(err.message), `"spawn git ENOENT" sends the reader to the wrong place: ${err.message}`);
+      return true;
+    });
+});
+
 test('a real node_modules inside a worktree is not mistaken for the link', async () => {
   // Cutting the link must never turn into "delete whatever is called
   // node_modules": if something installed into the tree, that is the tree's,

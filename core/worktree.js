@@ -88,8 +88,17 @@ export function git(args, { cwd, timeoutMs = GIT_TIMEOUT_MS, env = process.env }
     execFile('git', args, { cwd, env, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
+          // ENOENT from execFile means "could not start", and on Windows a
+          // missing `cwd` produces the identical error to a missing git — so a
+          // worktree that was removed under a poll reported "spawn git ENOENT",
+          // which reads as "git is not installed" and sends the reader looking
+          // in entirely the wrong place. Say which of the two it was.
+          const cwdGone = err.code === 'ENOENT' && cwd && !fs.existsSync(cwd);
+          const detail = cwdGone
+            ? `its working directory is gone (${cwd})`
+            : String(stderr || err.message).slice(0, 500);
           return reject(new GitError(
-            `git ${args.slice(0, 3).join(' ')} failed: ${String(stderr || err.message).slice(0, 500)}`,
+            `git ${args.slice(0, 3).join(' ')} failed: ${detail}`,
             { code: typeof err.code === 'number' ? err.code : 1, stderr: String(stderr ?? '') }));
         }
         resolve(String(stdout ?? '').trim());
