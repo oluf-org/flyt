@@ -64,7 +64,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt loop log [--date d] [--task t] what the loop said, after the process is gone
                 [--tail N]
   flyt report                         what landed, what needs you, what it cost
-  flyt spend [--since 24h]            the ledger
+  flyt spend [--since 24h] [--by d]   the ledger, whole or by task|model|run|node|level|day
   flyt bench list                     the benchmark suite and its probes
   flyt bench run [--only a,b] [--keep] clone, work the suite, score it
   flyt bench status|cards|show        the in-flight run, past cards, one card
@@ -155,7 +155,7 @@ const COMMAND_FLAGS = {
   python: ['packages', 'python'],
   ref: ['context', 'pattern', 'repo'],
   run: ['answer', 'approval', 'gates', 'in', 'input', 'join', 'length', 'level', 'timeout'],
-  spend: ['since'],
+  spend: ['by', 'limit', 'since', 'task'],
   task: ['all', 'blast', 'by', 'dependsOn', 'done', 'effort', 'force', 'gates', 'goal',
     'level', 'note', 'reason', 'references', 'skill', 'skills', 'status', 'title', 'value'],
   tools: ['arg', 'arg-json', 'yes'],
@@ -763,7 +763,32 @@ async function main() {
     case 'spend': {
       const since = String(flags.since ?? '24h');
       const ms = /^(\d+)h$/.test(since) ? Number(since.slice(0, -1)) * 3600_000 : null;
-      return out(await api.invoke('ledger:totals', { projectId: openProject(api, engine), sinceMs: ms }));
+      const projectId = openProject(api, engine);
+      const taskId = typeof flags.task === 'string' ? flags.task : null;
+      if (!flags.by) return out(await api.invoke('ledger:totals', { projectId, sinceMs: ms, taskId }));
+      const r = await api.invoke('ledger:breakdown', {
+        projectId, sinceMs: ms, taskId, by: String(flags.by),
+        limit: Number.isFinite(flags.limit) ? flags.limit : 20
+      });
+      if (asJson) return out(r);
+      // A dollar column that is four zeros and a digit is a column nobody can
+      // compare down. Cents, with the sub-cent rows shown as what they are
+      // rather than rounded to nothing.
+      const money = usd => (usd >= 0.01 || usd === 0 ? '$' + usd.toFixed(2) : '$' + usd.toFixed(4));
+      const width = Math.max(4, ...r.rows.map(row => String(row.key).length));
+      const L = ['spend by ' + r.by + ' — ' + money(r.total.usd) + ' across ' + r.total.calls + ' call(s)'
+        + (r.total.live ? ', ' + money(r.total.live) + ' of it still in flight' : '')];
+      for (const row of r.rows) {
+        L.push('  ' + String(row.key).padEnd(width) + '  ' + money(row.usd).padStart(8)
+          + '  ' + String(row.calls).padStart(5) + ' call(s)'
+          + (row.groups ? ' across ' + row.groups + ' more' : '')
+          + (row.live ? '  (live ' + money(row.live) + ')' : '')
+          + (row.unknown ? '  ' + row.unknown + ' unpriced' : '')
+          + (row.estimated ? '  ' + row.estimated + ' estimated' : '')
+          + (r.by !== 'model' && row.models.length === 1 ? '  ' + row.models[0] : ''));
+      }
+      if (r.total.unknown) L.push('  ' + r.total.unknown + ' call(s) nobody priced — the total is a floor, not a figure');
+      return out(L.join('\n'));
     }
 
     case 'bench': {

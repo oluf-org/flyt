@@ -653,7 +653,12 @@ function truncate(s, n = 200) { return s.length > n ? s.slice(0, n) + '…' : s;
 // The same sanitising nodeOutputPath applies, so a node's call trace and its
 // output artifact are findable under the same name. Node ids carry ':' on the
 // executor path ("executor:task-1"), which is not a legal Windows filename.
-function safeName(nodeId) { return String(nodeId).replace(/[^a-zA-Z0-9_-]/g, '_'); }
+// A node id as a file name. Exported because the ledger has to compare a node
+// it read from a DIRECTORY LISTING with one it read from a JSON key, and those
+// are the same node written two ways: `interrogate:reask` is on disk as
+// `interrogate_reask`. Comparing the two spellings without agreeing on one is
+// how the same call got counted twice.
+export function safeName(nodeId) { return String(nodeId).replace(/[^a-zA-Z0-9_-]/g, '_'); }
 
 export const UNTITLED_RUN = 'Untitled run';
 const MAX_RUN_NAME = 80;

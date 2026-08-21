@@ -19,7 +19,7 @@ import { pushRefs, git } from './worktree.js';
 import { workerForLevel, workerForLevelMap, levelFor, LEVELS } from './levels.js';
 import { blockersAll, boardBlockers } from './blockers.js';
 import { ChatStore, runChatTurn, CHAT_TOOLS } from './chat.js';
-import { costOf, totalsWithLive } from './ledger.js';
+import { breakdown, costOf, liveEntries, totalsWithLive } from './ledger.js';
 import { executeTool, getTools, registerDefinition } from './tools/index.js';
 import { isDestructive } from '../src/toolTypes.js';
 import { pythonStatus, setupPython } from './python.js';
@@ -121,10 +121,14 @@ export function createApi(engine) {
    * status file names the runs — so spend can be answered honestly from a
    * terminal while the desktop app does the work.
    */
-  const inFlightRunIds = projectId => {
+  const inFlightRuns = projectId => {
     const status = supervisors.get(projectId)?.status() ?? readLoopStatus(projectId);
-    return (status?.inFlight ?? []).map(h => h?.runId).filter(Boolean);
+    // The whole heartbeat, not just its run id: a live call belongs to a task
+    // and a band, and only the heartbeat knows which. A breakdown that dropped
+    // them would file every dollar being spent right now under "(none)".
+    return (status?.inFlight ?? []).filter(h => h?.runId);
   };
+  const inFlightRunIds = projectId => inFlightRuns(projectId).map(h => h.runId);
 
   const ledgerFor = projectId => {
     proj(projectId);
@@ -1336,6 +1340,37 @@ export function createApi(engine) {
         { store: proj(projectId).store, runIds: inFlightRunIds(projectId) }),
     'ledger:check': ({ projectId, taskId = null }) =>
       ledgerFor(projectId).check({ caps: runtimeConfig.loop?.caps ?? {}, taskId }),
+
+    /**
+     * Where the money went.
+     *
+     * The totals above answer "may I keep going". This answers "what should I
+     * stop doing", which is the question anyone watching a budget actually has
+     * — and the ledger has been able to answer it since the first line was
+     * written, because every line already carries the task, the run, the node,
+     * the band and the model. Nothing read them.
+     *
+     * In-flight calls are included on the same terms as everywhere else: what
+     * is being spent right now belongs in the answer, marked as live so a
+     * reader can tell a receipt from a running meter.
+     */
+    'ledger:breakdown': ({ projectId, sinceMs = null, taskId = null, by = 'task', limit = null }) => {
+      const ledger = ledgerFor(projectId);
+      const settled = ledger.entries({ sinceMs });
+      const live = liveEntries(proj(projectId).store, inFlightRuns(projectId), { prices: ledger.prices });
+      const all = [...settled, ...live].filter(e => !taskId || e.taskId === taskId);
+      return {
+        by,
+        rows: breakdown(all, { by, limit }),
+        total: all.reduce((t, e) => ({
+          usd: Number((t.usd + (typeof e.usd === 'number' ? e.usd : 0)).toFixed(6)),
+          calls: t.calls + 1,
+          unknown: t.unknown + (typeof e.usd === 'number' ? 0 : 1),
+          estimated: t.estimated + (typeof e.usd === 'number' && e.estimated ? 1 : 0),
+          live: Number((t.live + (e.live && typeof e.usd === 'number' ? e.usd : 0)).toFixed(6))
+        }), { usd: 0, calls: 0, unknown: 0, estimated: 0, live: 0 })
+      };
+    },
 
     // --- Diagnostics (D40) --------------------------------------------------
     //

@@ -287,7 +287,10 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
       // fell through to the adapter's bare 4096 — enough budget for a thinking
       // model to spend entirely on thinking.
       maxTokens: effortBudget(task.effort),
-      onCall: record => store.writeCallTrace(runId, `executor:${taskId}`, record),
+            // The SAME name the retrospective below is written under. Two spellings
+      // for one node meant the ledger read the trace and the retrospective as
+      // two nodes and billed the task twice for one set of calls.
+      onCall: record => store.writeCallTrace(runId, `executor-${taskId}`, record),
       onEmptyTurn: info => store.appendLog(runId, { event: 'model_empty_turn', node: `executor:${taskId}`, ...info }),
       retry: retry ?? config.retry, timeout: timeout ?? config.timeout, signal
     });

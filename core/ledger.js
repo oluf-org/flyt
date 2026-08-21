@@ -19,6 +19,7 @@
 // mid-run rather than only between tasks.
 import fs from 'node:fs';
 import path from 'node:path';
+import { safeName } from './state.js';
 
 export const CAP_KINDS = ['task', 'soft', 'hard'];
 
@@ -85,12 +86,19 @@ export function spendFromRun(store, runId, { prices = {} } = {}) {
   // So: per node, the trace wins where it has anything to say, and the
   // retrospective is the fallback for a node with no trace (an executor task,
   // an older run). Never both — that would double every finished node.
+  // Keyed by the name the trace files carry, because that is the only spelling
+  // both sides can agree on: `callTraceNodes()` lists a DIRECTORY, so its names
+  // are already sanitised, while a retrospective key is the raw node id. Held as
+  // raw strings, `executor:task-1` never matched `executor_task-1`, the node
+  // was counted from both sources, and every total in the app read high — which
+  // is worse than reading low, because a cap trips early and a task is parked
+  // for money it never spent.
   const traced = new Set();
   for (const node of callTraceNodes(store, runId)) {
     const records = readTrace(store, runId, node);
     const usable = records.filter(r => r?.usage);
     if (!usable.length) continue;
-    traced.add(node);
+    traced.add(safeName(node));
     for (const rec of usable) {
       const { usd, estimated } = costOf({
         usage: rec.usage, provider: rec.provider, model: rec.model, prices
@@ -110,7 +118,7 @@ export function spendFromRun(store, runId, { prices = {} } = {}) {
   }
 
   for (const [node, retro] of Object.entries(retros)) {
-    if (!retro?.usage || traced.has(node)) continue;
+    if (!retro?.usage || traced.has(safeName(node))) continue;
     const { usd, estimated } = costOf({
       usage: retro.usage,
       provider: retro.model?.provider,
@@ -146,17 +154,109 @@ export function spendFromRun(store, runId, { prices = {} } = {}) {
 export function liveSpend(store, runIds = [], { prices = {} } = {}) {
   let usd = 0;
   let calls = 0;
-  if (!store) return { usd, calls };
-  for (const runId of runIds) {
+  for (const e of liveEntries(store, runIds, { prices })) {
+    usd += e.usd ?? 0;
+    calls += 1;
+  }
+  return { usd, calls };
+}
+
+/**
+ * The in-flight calls, shaped like ledger lines.
+ *
+ * `liveSpend` above answers "how much", which is what a ceiling needs. A
+ * reader asking WHERE the money is going needs the same calls itemised, and
+ * itemising them twice is how the two answers drift apart. So the totals are
+ * derived from these, and a breakdown reads them directly.
+ *
+ * Each entry carries `live: true` and, where the caller knew it, the task and
+ * band the run belongs to — a heartbeat knows both and a run folder does not.
+ *
+ * @param store — the run store.
+ * @param runs — run ids, or `{ runId, taskId, level }` records (a heartbeat is one).
+ */
+export function liveEntries(store, runs = [], { prices = {} } = {}) {
+  const out = [];
+  if (!store) return out;
+  const at = new Date().toISOString();
+  for (const entry of runs) {
+    const runId = typeof entry === 'string' ? entry : entry?.runId;
     if (!runId) continue;
+    const taskId = typeof entry === 'string' ? null : (entry?.taskId ?? null);
+    const level = typeof entry === 'string' ? null : (entry?.level ?? null);
     try {
       for (const e of spendFromRun(store, runId, { prices })) {
-        usd += e.usd ?? 0;
-        calls += 1;
+        out.push({ at, taskId, runId, level, ...e, live: true });
       }
     } catch { /* a run with nothing readable yet has cost nothing yet */ }
   }
-  return { usd, calls };
+  return out;
+}
+
+/** The dimensions spend can be grouped along. */
+export const BREAKDOWN_BY = ['task', 'model', 'run', 'node', 'level', 'day'];
+
+const KEY_OF = {
+  task: e => e.taskId ?? '(none)',
+  model: e => (e.model ? `${e.provider ? `${e.provider}/` : ''}${e.model}` : '(unknown)'),
+  run: e => e.runId ?? '(none)',
+  node: e => e.node ?? '(none)',
+  level: e => e.level ?? '(none)',
+  day: e => String(e.at ?? '').slice(0, 10) || '(undated)'
+};
+
+/**
+ * Where the money went, grouped one way.
+ *
+ * A total answers "can I keep going". It cannot answer "what should I stop
+ * doing", and that is the question a person watching a budget actually has:
+ * one task that ate a third of the session, one model that is not worth its
+ * band, one node that retried forty times. The ledger has held the answer
+ * since the first line was written — nothing read it.
+ *
+ * `unknown` and `estimated` are carried per group rather than only in the
+ * total, because a group whose number is a guess must not be compared with one
+ * whose number is a receipt without the reader being told.
+ *
+ * @param entries — ledger lines, live ones included.
+ * @param by — one of `BREAKDOWN_BY`.
+ * @param limit — keep the biggest N groups; the rest collapse into `(other)`.
+ */
+export function breakdown(entries = [], { by = 'task', limit = null } = {}) {
+  const key = KEY_OF[by];
+  if (!key) throw new Error(`Cannot group spend by "${by}". There is: ${BREAKDOWN_BY.join(', ')}.`);
+  const groups = new Map();
+  for (const e of entries) {
+    const k = key(e);
+    let g = groups.get(k);
+    if (!g) groups.set(k, g = { key: k, usd: 0, calls: 0, unknown: 0, estimated: 0, live: 0, models: new Set() });
+    g.calls += 1;
+    if (typeof e.usd === 'number') {
+      g.usd += e.usd;
+      if (e.estimated) g.estimated += 1;
+      if (e.live) g.live += e.usd;
+    } else g.unknown += 1;
+    if (e.model) g.models.add(e.model);
+  }
+  const rows = [...groups.values()]
+    .map(g => ({ ...g, usd: Number(g.usd.toFixed(6)), live: Number(g.live.toFixed(6)), models: [...g.models].sort() }))
+    .sort((a, b) => b.usd - a.usd || b.calls - a.calls);
+  if (!Number.isFinite(limit) || limit === null || rows.length <= limit) return rows;
+  const kept = rows.slice(0, limit);
+  const rest = rows.slice(limit);
+  const other = rest.reduce((acc, r) => ({
+    key: '(other)',
+    usd: acc.usd + r.usd,
+    calls: acc.calls + r.calls,
+    unknown: acc.unknown + r.unknown,
+    estimated: acc.estimated + r.estimated,
+    live: acc.live + r.live,
+    // A collapsed row names how many groups it stands for; without that the
+    // reader cannot tell one long tail from thirty.
+    groups: (acc.groups ?? 0) + 1,
+    models: []
+  }), { usd: 0, calls: 0, unknown: 0, estimated: 0, live: 0, groups: 0 });
+  return [...kept, { ...other, usd: Number(other.usd.toFixed(6)), live: Number(other.live.toFixed(6)) }];
 }
 
 /**
