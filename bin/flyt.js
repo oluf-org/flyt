@@ -59,6 +59,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
                   [--cap-usd 6] [--soft-usd 4] [--task-usd 1.5] [--only t-0001,t-0002]
                                       work the backlog until empty, capped or stopped
                                       (--only: just these tasks, same picker order)
+                                      (the caps are THIS session's spend, from now)
   flyt loop stop|status               stop it, or see what it is doing
   flyt report                         what landed, what needs you, what it cost
   flyt spend [--since 24h]            the ledger

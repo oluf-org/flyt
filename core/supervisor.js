@@ -106,6 +106,23 @@ const HOW_IT_LANDS = [
  * The task carries the reference name (`references:`), so the brief can say
  * where to look and how — which is all that was missing.
  */
+/**
+ * A duration as a person would say it: "24h", "90min", "45s".
+ *
+ * Used in the one message where the span matters — a cap the loop hit before
+ * it started reads as nonsense unless it says what window the number covers.
+ *
+ * @param ms — the span.
+ * @returns a short human label.
+ */
+function formatSpan(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return 'this session';
+  if (n >= 3600_000) return `${Math.round(n / 3600_000)}h`;
+  if (n >= 60_000) return `${Math.round(n / 60_000)}min`;
+  return `${Math.max(1, Math.round(n / 1000))}s`;
+}
+
 function whereItCameFrom(task) {
   const refs = (task.references ?? []).filter(Boolean);
   if (!refs.length) return '';
@@ -263,6 +280,7 @@ export class Supervisor {
   async run({ maxTasks = Infinity } = {}) {
     this.running = true;
     this.stopping = null;
+    this.startedAtMs = Date.now();
     let started = 0;
     this.#publish();
 
@@ -272,7 +290,15 @@ export class Supervisor {
         // in-flight work and stopping cleanly is the promise (§9).
         const budget = this.#checkBudget();
         if (budget.action === 'stop') {
-          this.stopping = `hard cap reached ($${budget.window.usd.toFixed(2)})`;
+          // A cap that was already tripped when the loop started is different
+          // news from one this loop's own work reached: nothing was attempted,
+          // and saying only "hard cap reached" sends the reader looking for
+          // work that never happened.
+          this.stopping = started === 0 && budget.scope !== 'session'
+            ? `hard cap reached before any task started: $${budget.window.usd.toFixed(2)} already spent`
+              + ` in the last ${formatSpan(this.#windowMs())}, cap $${Number(budget.caps.hardUsd).toFixed(2)}`
+              + ' — nothing was attempted'
+            : `hard cap reached ($${budget.window.usd.toFixed(2)})`;
           this.log(this.stopping);
           break;
         }
@@ -321,9 +347,50 @@ export class Supervisor {
     this.running = false;
   }
 
+  /** Caps named on THIS start call, as opposed to the project's standing ones. */
+  #sessionCaps() { return this.config.loop?.sessionCaps ?? {}; }
+
+  /**
+   * What the budget says right now.
+   *
+   * Two kinds of cap, measured over two different spans, because they answer
+   * two different questions:
+   *
+   * - a cap in the project's config is a standing guard on a rolling window —
+   *   "this project may spend $20 a day, whoever starts a loop";
+   * - a cap named on `loop start` is this session's ceiling — "the next few
+   *   hours may cost $2".
+   *
+   * Measuring the second one over the first one's window is why `--cap-usd 2`
+   * on a project that already spent $7 today refused to start a single task
+   * and reported a cap the caller had not reached. A session cap counts what
+   * THIS loop spent, from the moment it started.
+   */
   #checkBudget(taskId = null) {
     if (!this.ledger) return { ok: true, action: null, window: { usd: 0 } };
-    return this.ledger.check({ caps: this.#caps(), taskId, windowMs: this.#windowMs() });
+    const session = this.#sessionCaps();
+    const caps = this.#caps();
+    const standing = Object.fromEntries(Object.entries(caps).filter(([k]) => !(k in session)));
+
+    const byWindow = this.ledger.check({ caps: standing, taskId, windowMs: this.#windowMs() });
+    if (!Object.keys(session).length) return byWindow;
+
+    // Since the loop started, floored at a millisecond so a check on the first
+    // tick still reads the ledger rather than dividing by nothing.
+    const sinceStart = Math.max(1, Date.now() - (this.startedAtMs ?? Date.now()));
+    const bySession = this.ledger.check({ caps: session, taskId, windowMs: sinceStart });
+
+    const hits = [...new Set([...byWindow.hits, ...bySession.hits])];
+    const strongest = bySession.hits.length ? bySession : byWindow;
+    return {
+      ...strongest,
+      ok: !hits.length,
+      hits,
+      action: hits.includes('hard') ? 'stop' : hits.includes('task') ? 'park' : hits.includes('soft') ? 'no-escalate' : null,
+      // Which span the reported number covers, so the message can say it.
+      scope: bySession.hits.length ? 'session' : 'window',
+      caps
+    };
   }
 
   async #begin(task) {

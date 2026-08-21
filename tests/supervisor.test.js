@@ -681,6 +681,59 @@ test('the hard cap stops the loop; the soft cap only stops it reaching', async (
   assert.equal(softStatus.landed, 3, 'the loop kept working at the cheapest band');
 });
 
+test('a cap named at the start counts what THIS loop spent, not what today did', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'work', goal: 'g' });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  ledger.record({ taskId: 'this-morning', usd: 7.84, estimated: false });
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog }), projectId: 'p', backlog, ledger, pollMs: 1,
+    // What `flyt loop start --cap-usd 2` sends: a ceiling for this session.
+    config: { loop: { caps: { hardUsd: 2 }, sessionCaps: { hardUsd: 2 } } }
+  });
+  const status = await sup.run();
+
+  assert.equal(status.landed, 1, 'money spent before the loop started is not this session ceiling');
+  assert.ok(!/hard cap/.test(status.stopping ?? ''), `it should not refuse to start: ${status.stopping}`);
+});
+
+test('a standing cap already tripped says nothing was attempted, and over what span', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'work', goal: 'g' });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  ledger.record({ taskId: 'this-morning', usd: 7.84, estimated: false });
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog }), projectId: 'p', backlog, ledger, pollMs: 1,
+    config: { loop: { caps: { hardUsd: 2 } } }   // the project's standing guard
+  });
+  const status = await sup.run();
+
+  assert.match(status.stopping, /before any task started/);
+  assert.match(status.stopping, /\$7\.84 already spent in the last 24h/);
+  assert.match(status.stopping, /cap \$2\.00/);
+  assert.match(status.stopping, /nothing was attempted/);
+  assert.equal(status.completed, 0);
+});
+
+test('a session cap this loop DID reach still stops it', async () => {
+  const backlog = makeBacklog();
+  for (let i = 0; i < 3; i++) backlog.add({ title: `t${i}`, goal: 'g' });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog }), projectId: 'p', backlog, ledger, pollMs: 1,
+    config: { loop: { caps: { hardUsd: 1 }, sessionCaps: { hardUsd: 1 } } }
+  });
+  sup.startedAtMs = Date.now();
+  ledger.record({ taskId: 'in-this-session', usd: 1.5, estimated: false });
+  const status = await sup.run();
+
+  assert.match(status.stopping, /hard cap reached \(\$1\.50\)/);
+  assert.ok(!/before any task started/.test(status.stopping), 'this one it did reach');
+});
+
 test('the report puts what needs a person above what does not', () => {
   const backlog = makeBacklog();
   const landed = backlog.add({ title: 'shipped', goal: 'g' });

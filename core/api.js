@@ -1100,7 +1100,14 @@ export function createApi(engine) {
           // after, in a ledger.
           loop: {
             ...runtimeConfig.loop, dryRun, worker: pinned, models: byLevel,
-            caps: { ...(runtimeConfig.loop?.caps ?? {}), ...sessionCaps }
+            caps: { ...(runtimeConfig.loop?.caps ?? {}), ...sessionCaps },
+            // Kept apart from the merged map on purpose: a cap named HERE is
+            // this session's ceiling and is measured from the moment the loop
+            // starts, while a cap in the project's config guards a rolling
+            // window. Merging them lost that distinction, and a session cap
+            // measured over the project's window is a loop that refuses to
+            // start over money it did not spend.
+            sessionCaps
           }
         },
         parallelism,
