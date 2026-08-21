@@ -200,7 +200,9 @@ export function checkFlags(command, flags) {
         .map(a => [a, distance(name.toLowerCase(), a.toLowerCase())])
         .filter(([, d]) => d <= Math.max(2, Math.ceil(name.length / 3)))
         .sort((a, b) => a[1] - b[1])[0];
-      return `Unknown flag "--${name}"${near ? `. Did you mean "--${near[0]}"?` : ` for "flyt ${command ?? ''}".`.trimEnd()}`;
+      return near
+        ? `Unknown flag "--${name}". Did you mean "--${near[0]}"?`
+        : `Unknown flag "--${name}" for "flyt ${command}".`;
     }
     if (!NUMERIC_FLAGS.has(name)) continue;
     const value = flags[name];

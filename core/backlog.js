@@ -324,6 +324,20 @@ export class Backlog {
     if (patch.status && !TASK_STATUSES.includes(patch.status)) {
       throw new Error(`Unknown status "${patch.status}".`);
     }
+    // A list field given a scalar is refused rather than written.
+    //
+    // `flyt call task:update --arg dependsOn=` stored an empty STRING in a
+    // field every reader treats as an array, and from then on `task:list`
+    // threw for every task in the backlog — one bad field, the whole queue
+    // unreadable, including the picker's. A store that will write anything
+    // hands its callers' typos to everybody who reads afterwards.
+    for (const [field, fallback] of Object.entries(DEFAULTS())) {
+      if (!Array.isArray(fallback) || !(field in patch)) continue;
+      if (Array.isArray(next[field])) continue;
+      // An empty scalar is the honest way to say "none", so it clears the list.
+      if (next[field] === '' || next[field] === null || next[field] === undefined) { next[field] = []; continue; }
+      throw new Error(`"${field}" is a list, and was given ${JSON.stringify(next[field])}.`);
+    }
     fs.writeFileSync(this.#file(task.id), serializeTask(stripId(next)));
     this._cache.delete(this.#file(task.id));
     return next;

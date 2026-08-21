@@ -427,3 +427,24 @@ test('a lock held by a live claim is still respected', () => {
   // claimed, so there is nothing orphaned about it.
   assert.equal(backlog.claim(task.id, 'second', { now: Date.now() + 10 * 60_000 }), null);
 });
+
+test('a list field given a scalar is refused, not written', () => {
+  // What this prevents: `flyt call task:update --arg dependsOn=` wrote an empty
+  // string into a field every reader treats as an array, and task:list then
+  // threw for EVERY task — one bad field, the whole queue unreadable.
+  const backlog = new Backlog(fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-backlog-')));
+  const task = backlog.add({ title: 'a task', goal: 'g' });
+
+  assert.throws(() => backlog.update(task.id, { dependsOn: 't-0001' }),
+    /"dependsOn" is a list, and was given "t-0001"/);
+  assert.throws(() => backlog.update(task.id, { gates: 'npm test' }), /"gates" is a list/);
+
+  // An empty scalar is the honest way to say "none".
+  backlog.update(task.id, { dependsOn: ['t-1'] });
+  assert.deepEqual(backlog.get(task.id).dependsOn, ['t-1']);
+  assert.deepEqual(backlog.update(task.id, { dependsOn: '' }).dependsOn, []);
+  assert.deepEqual(backlog.get(task.id).dependsOn, []);
+
+  // ...and the file is still readable by everything that reads it.
+  assert.equal(backlog.list().length, 1);
+});
