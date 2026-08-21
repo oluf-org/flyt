@@ -352,10 +352,43 @@ Decomposed into eight slices, in dependency order, one commit each:
 | `t-0057` | layout derived from containment, never stored | landed |
 | `t-0058` | the four stack edits, over containment | landed |
 | `t-0059` | `flyt-api` provides `ctx.commands`; the edits are commands | landed |
-| `t-0060` | `flyt-stack-runner` provides `ctx.agents` over containment | queued |
-| `t-0061` | Trace renders the session log | queued |
-| `t-0062` | the Work and Build surfaces, behind the flag | queued |
+| `t-0060` | `flyt-stack-runner` provides `ctx.agents` — **umbrella** over t-0064–t-0069 | queued |
+| `t-0061` | Trace renders the session log — **umbrella** over t-0070–t-0072 | queued |
+| `t-0062` | the Work and Build surfaces — **umbrella** over t-0073–t-0077 | queued |
 | `t-0063` | the handoff test: `loop-task` end to end | queued |
+
+The last three were decomposed again, and the reason is worth keeping: each
+had five or six done-when criteria spanning the kernel AND the renderer, and
+a task that wide does not fail on capability. It fails by arriving with the
+module written, a helper added and nothing wired to it — which is what the loop
+log records for every attempt that was rejected at review. So each becomes an
+umbrella that lands when its children do, and every child is one commit with a
+done-when a single test can answer.
+
+| Task | Slice | For |
+|---|---|---|
+| `t-0064` | the block registry: `ctx.blocks`, and what a `use` resolves to | t-0060 |
+| `t-0065` | one block runs: the agent loop through the seams, every step logged | t-0060 |
+| `t-0066` | the walk: a sequence in order, a parallel under its bound, lanes isolated | t-0060 |
+| `t-0067` | stop lands at a durable boundary, and the log says where | t-0060 |
+| `t-0068` | resume replays to the last durable event; an unreturned tool call is reconstructed | t-0060 |
+| `t-0069` | the run folder is projected as the run goes, and rebuilds from the log | t-0060 |
+| `t-0070` | the trace read model: a session log becomes nested turns and steps | t-0061 |
+| `t-0071` | Trace renders it, behind the flag, and reopens from a finished run's log | t-0061 |
+| `t-0072` | the detail: finish reason, usage, timing, the full tool result, the route | t-0061 |
+| `t-0073` | the v2 shell: Work, Build and Trace | t-0062 |
+| `t-0074` | the block editor draws the derived layout, read-only | t-0062 |
+| `t-0075` | editing is containment: a drag is a command, an agent's edit animates alike | t-0062 |
+| `t-0076` | one search over stacks, blocks, plugins, tools, skills and models | t-0062 |
+| `t-0077` | Work: the running stack, the active block lit, output streaming inline | t-0062 |
+
+`t-0064` is new work rather than a slice of `t-0060`: the parser turns
+`use: flyt-blocks-core:work` into a string on purpose, and nothing turned that
+string into something that can run. Three consumers were waiting on the same
+missing noun.
+
+Three of them are ready at once — the registry, the shell and the trace read
+model share no files — so the loop works them in parallel rather than in a line.
 
 The four that landed are the model the surfaces draw: `kernel/src/stack/` holds
 the parser, the derived layout and the edits, all hand-written and
