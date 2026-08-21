@@ -8,6 +8,10 @@
  */
 import { Context } from '@deepseek-ai/cordis';
 
+export * from './seams/index.js';
+export * from './events.js';
+export type * from './types.js';
+
 /**
  * Which surface a kernel serves.
  *
