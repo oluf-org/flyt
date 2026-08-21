@@ -166,10 +166,28 @@ Current architectural gaps worth preserving as explicit choices:
 - context can still balloon when no `contextSpec` is supplied;
 - synchronous filesystem access assumes modest run and graph sizes;
 - shell execution is controlled but not securely sandboxed;
-- pending tool calls cannot be reconstructed after process death;
+- pending tool calls cannot be reconstructed after process death in the v1 runner (the v2 session log closes this, behind the flag — §10);
 - MCP/HTTP-imported tools, a full Tools management page, and code mode are not implemented; the tool library is reachable from the CLI (`flyt tools`) but has no desktop surface;
 - a killed call's spend is estimated from what it streamed, so it is bounded
   evidence rather than a measurement;
 - model routing is configured rather than learned;
 - sub-flow references follow the latest library version at the next run start; and
 - large-graph layout and rendering are not a current target.
+
+## 10. The v2 stack, behind a flag
+
+A rebuild onto a Cordis plugin kernel is under way (D52-D63; the plan is `.flyt/backlog/v2-plugin-stack-plan.md`). It ships behind one flag, off by default, and this section describes what exists today rather than what is planned.
+
+**Reading the flag.** `FLYT_V2` in the environment, `v2` in settings, or an explicit choice at the call site; the call wins, then the environment, then settings, then off. `flyt doctor` prints the state and which of those decided it. `core/v2.js` is the only module that reads it, and `bootKernel()` there is the only door into the v2 tree.
+
+**What "off" means.** Not "disabled" — *unloaded*. The import in `bootKernel()` is dynamic and behind the check, nothing in `core/` imports `#kernel` statically, and a test asserts both. With the flag off, no v2 module is loaded, so v2 cannot alter a v1 run by existing.
+
+**What the kernel is, with the flag on.** `kernel/` is TypeScript compiled to `kernel/dist` and imported as `#kernel`; the JS core and the renderer consume the generated types (D53). The boundary is the seam: anything a third-party plugin can touch is typed and lives there.
+
+- **Eight capability seams** — `ctx.sessions`, `ctx.tools`, `ctx.llm`, `ctx.fs`, `ctx.shell`, `ctx.agents`, `ctx.commands`, `ctx.sandbox`. A seam is a service definition, a provider, and consumers that never learn which provider they got. `ctx.skills` also exists: not a capability seam, but the service definition dsh's skill packages register into.
+- **The session log** — `runs/<id>/session.jsonl`, append-only, is the canonical record (D55). `deriveMessages()` reconstructs exactly what a model saw; a tool call with no result reconstructs as a synthetic never-returned result rather than disappearing. The run folder beside it (`meta.json`, `stack.json`, `blocks/*.md`, `tools/*.json`, `calls/*.jsonl`) is a projection, rebuildable from the log, and the ledger reads the log rather than the projection. Runs written before the log open through a read-only compatibility reader and are never converted.
+- **The permission bridge** — every tool, ours or a plugin's, reaches execution through `tools/pre-execute`. Unclassified tools are in no toolset and no ceiling can name them; classification is not a grant; `ask` with nobody to ask is a denial (D57).
+- **Composition** — bundles, then the profile patch, then the home patch, then the CLI overlay, a later layer replacing a row by id. One profile per surface (`flyt-desktop`, `flyt-cli`, `flyt-loop-worker`), and a narrower surface may never gain a row a broader one lacks.
+- **dsh compatibility** — a pinned, real published dsh plugin loads, registers and executes against these services in CI (D54). Services on that contract are Cordis `Service` subclasses using ordinary private fields, because cordis derives a per-caller view with `Object.create()` and `#private` state is unreachable through it.
+
+**What the flag does not switch.** Nothing user-visible yet. There is no v2 runner, no Work/Build/Trace surface, and no stack format on disk; the v1 surfaces do all the real work until the Phase 5 cutover (D62). Flipping the flag on today gets a booted kernel with its seams resolved and nothing driving them.

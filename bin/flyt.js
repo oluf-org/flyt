@@ -1151,6 +1151,7 @@ function renderDoctor(r) {
   }
   L.push('', r.findings.length ? 'findings:' : 'findings: none');
   for (const f of r.findings) L.push(`  [${f.level}] ${f.message}`);
+  if (r.v2) L.push('', `v2 stack: ${r.v2.enabled ? 'on' : 'off'} (${r.v2.source})`);
   L.push('', `settings: ${r.settingsPath}`);
   if (r.project) L.push(`runs:     ${r.project.runsDir}`);
   return L.join('\n');

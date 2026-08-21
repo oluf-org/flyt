@@ -39,6 +39,7 @@ import {
 import { claudeCredentialStatus, resolveClaudeCli } from './adapters/claudeCode.js';
 import { codexCredentialStatus, resolveCodexCli } from './adapters/codexCli.js';
 import { supportsToolsFor } from './agent.js';
+import { v2Flag } from './v2.js';
 
 const PUSH_COALESCE_MS = 80;
 
@@ -343,6 +344,11 @@ export function createEngine({
     // 'ask' is the shipped default: an agent with a shell should not run
     // unattended because nobody got round to choosing.
     runtimeConfig.approvalMode = normalizeApprovalMode(settings.approvalMode ?? 'ask');
+    // The v2 stack, off unless somebody said otherwise (D62). Resolved here so
+    // there is one answer per process rather than one per call site — and it is
+    // only ever an ANSWER: nothing in core/ imports the v2 tree, which is what
+    // makes "the app is unchanged with the flag off" checkable.
+    runtimeConfig.v2 = v2Flag({ settings }).enabled;
     // What 'smart' mode screens with. The runner gets a resolver, never a key.
     runtimeConfig.safety = { model: effectiveSafetyModel(), resolveModelSource };
     // The Python sidecar (core/python.js, TOOLS.md). A tool that borrows a
@@ -409,6 +415,7 @@ export function createEngine({
       },
       projectStorage: settings.projectStorage === 'appdata' ? 'appdata' : 'workspace',
       approvalMode: normalizeApprovalMode(settings.approvalMode ?? 'ask'),
+      v2: v2Flag({ settings }).enabled,
       safetyModel: settings.safetyModel ?? 'auto',
       resolvedSafetyModel: effectiveSafetyModel(),
       judgeModel: settings.judgeModel ?? '',

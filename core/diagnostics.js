@@ -21,6 +21,7 @@ import { callModel } from './adapters/index.js';
 import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
 import { planDefaultRoute, TASK_KINDS } from './modelPriority.js';
 import { effortBudget, DEFAULT_EFFORT } from '../src/flowTypes.js';
+import { v2Flag } from './v2.js';
 
 // --- explainRun -----------------------------------------------------------
 
@@ -543,6 +544,10 @@ export async function doctor(engine, { probe = false, models = [], project = nul
   const report = {
     settingsPath: engine.settingsPath,
     dataRoot: engine.dataRoot,
+    // Which stack is running, and who decided (D62). A flag whose state you
+    // cannot read is a flag you end up guessing about at the exact moment a
+    // run behaves strangely.
+    v2: v2Flag({ settings: engine.settings ?? null }),
     ...(project ? { project } : {}),
     providers,
     priority,
