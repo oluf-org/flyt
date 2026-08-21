@@ -11,6 +11,8 @@ import { Context } from '@deepseek-ai/cordis';
 export * from './seams/index.js';
 export * from './events.js';
 export type * from './types.js';
+export * from './session/jsonl.js';
+export * as sessionJsonl from './plugins/session-jsonl.js';
 
 /**
  * Which surface a kernel serves.
