@@ -24,3 +24,24 @@ For each proposed skill:
 
 Prefer a small skill that composes with an existing flow over a new generic
 framework.
+
+## A skill is an active discipline, not a vocabulary read
+
+Name the active action the skill changes or enforces — the discipline it builds
+or sharpens. A pointer that only says "read `FILE` for vocabulary" is not a
+skill; reading a vocabulary file is a one-line habit any skill can perform, so
+it does not earn an interrupt on its own. Create the skill only when the finding
+describes how work should be done *differently*, not when it just names a file
+to look up.
+
+## Hard config needs are prose, never enforcement
+
+A per-repo config need — something seeded in the target project that the skill
+depends on — is described as prose, never as an enforced dependency. When the
+missing config makes the output wrong, not just fuzzy, call it a **hard**
+dependency: name the missing artifact explicitly and tell the human what to run
+to provide it. When the skill only uses the config to sharpen output and still
+works without it, call it a **soft** dependency: use vague, gracefully
+degrading wording ("the project's domain glossary", "ADRs in the area you're
+touching") instead of a required setup pointer. Do not cargo-cult a setup
+pointer into a skill where it is not load-bearing.
