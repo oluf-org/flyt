@@ -1185,8 +1185,22 @@ export class Supervisor {
   }
 
   #park(taskId, reason) {
+    // A park that interrupted a RUN is an attempt: a run started, money was
+    // spent, and nothing landed — which is what `attempts` means everywhere
+    // else. Only escalate() and work:land counted, so every task that died at
+    // its cap, at a gate nobody could answer, or at the bottom of the ladder
+    // recorded its spend and no attempt. Watched live: t-0011 reported
+    // "Spent $0.77 of its $0.5 per-task cap over 0 attempt(s)", which is not a
+    // sentence about anything that can happen.
+    //
+    // Being in flight is the signal, and it is exact: the pre-run refusals
+    // above — an unaffordable task, an unrunnable gate, a run that would not
+    // start — park a task that never began, and those are not attempts.
+    const attempted = this.inFlight.has(taskId);
     this.inFlight.delete(taskId);
-    this.backlog.update(taskId, { status: 'parked', blockedReason: reason, claimedBy: null, claimedAt: null });
+    const attempts = attempted ? { attempts: (this.backlog.get(taskId)?.attempts ?? 0) + 1 } : {};
+    this.backlog.update(taskId,
+      { status: 'parked', blockedReason: reason, claimedBy: null, claimedAt: null, ...attempts });
     try { this.backlog.release(taskId, { status: 'parked' }); } catch { /* no lock */ }
     this.parked.push({ taskId, reason });
     this.history.push({ taskId, landed: false, stage: 'parked' });

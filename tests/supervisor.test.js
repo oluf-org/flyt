@@ -527,6 +527,31 @@ test('a task is stopped at its own cap, and what it spent is recorded either way
   // record, so the burn-down omitted exactly the runs that went wrong — it read
   // lowest when the night was going worst.
   assert.ok(ledger.totals({ taskId: 't-0001' }).usd >= 5);
+
+  // ...and so does the ATTEMPT. A run started, money was spent, nothing
+  // landed, which is what `attempts` means everywhere else. Only escalate()
+  // and work:land counted it, so a task that died at its cap recorded its
+  // spend and no attempt: watched live, t-0011 reported "Spent $0.77 of its
+  // $0.5 per-task cap over 0 attempt(s)", which is not a sentence about
+  // anything that can happen.
+  assert.equal(task.attempts, 1);
+});
+
+test('a park that never got as far as a run is not an attempt', async () => {
+  // The other direction, and the reason this cannot just always count: a task
+  // refused before it starts — unaffordable, or declaring a gate this machine
+  // cannot run — never began, and charging it an attempt would exhaust a
+  // ladder nobody climbed.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'ungateable', goal: 'g', gates: ['definitely-not-a-command --x'] });
+  const engine = fakeEngine({ backlog });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+
+  await sup.run({ maxTasks: 1 });
+  const task = backlog.get('t-0001');
+  assert.equal(task.status, 'parked');
+  assert.match(task.blockedReason, /gate that cannot run here/);
+  assert.equal(task.attempts, 0, 'nothing was attempted, and nothing was spent');
 });
 
 test('the brief says how the work will be judged, because the task file cannot know', async () => {
