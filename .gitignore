@@ -1,4 +1,6 @@
 node_modules/
+# Build output, at the root (vite) and under kernel/ (tsc). Both are built by
+# `npm run build`, and `npm test` builds the kernel first.
 dist/
 runs/
 .env

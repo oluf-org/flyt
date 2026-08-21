@@ -8,6 +8,10 @@ directories:
 files:
   - dist/**
   - electron/**
+  # The v2 kernel is compiled TypeScript (D53): the sources are not shipped,
+  # the build output is. It is inert while the v2 flag is off, and packaging it
+  # now means flipping the flag is not also a packaging change.
+  - kernel/dist/**
   - core/**
   - src/**/*.js
   - config.json
