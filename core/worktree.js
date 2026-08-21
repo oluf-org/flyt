@@ -298,7 +298,33 @@ export class WorktreePool {
       this.#clearOwner(taskId);
       throw err;
     }
+    this.#linkDependencies(dir);
     return { taskId, dir, branch, base: from, attemptId: attempt };
+  }
+
+  /**
+   * Point the worktree's `node_modules` at the checkout's.
+   *
+   * A git worktree is a checkout, and `node_modules` is not in the checkout —
+   * so a gate that needs an installed dependency fails there for a reason that
+   * has nothing to do with the work being judged. This project's suite ran
+   * without dependencies for a long time, which hid it; the moment `npm test`
+   * gained a build step, every gate in every worktree failed in two seconds
+   * and the loop escalated tasks whose code was fine.
+   *
+   * A junction on Windows and a symlink elsewhere, both of which work without
+   * privileges. Failure is not fatal: a worktree without it is exactly what we
+   * had before, and the gate will say so in its own output.
+   *
+   * @param dir — the worktree.
+   */
+  #linkDependencies(dir) {
+    const target = path.join(this.repoRoot, 'node_modules');
+    const link = path.join(dir, 'node_modules');
+    try {
+      if (!fs.existsSync(target) || fs.existsSync(link)) return;
+      fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch { /* no link: the gate reports what it could not find */ }
   }
 
   /**

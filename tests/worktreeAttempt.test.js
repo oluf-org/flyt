@@ -34,6 +34,28 @@ const poolFor = async () => {
   return new WorktreePool(root, path.join(tmp(), 'worktrees'));
 };
 
+test('a worktree gets the dependencies its checkout has, or the gates judge the wrong thing', async () => {
+  const root = await makeRepo();
+  // What an installed checkout looks like, and what a checkout does NOT carry.
+  fs.mkdirSync(path.join(root, 'node_modules', 'typescript'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'node_modules', 'typescript', 'package.json'), '{"name":"typescript"}');
+
+  const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
+  const { dir } = await pool.create('t-1', 'a task');
+
+  const linked = path.join(dir, 'node_modules', 'typescript', 'package.json');
+  assert.ok(fs.existsSync(linked), 'a gate that needs an installed dependency can find it');
+  assert.equal(JSON.parse(fs.readFileSync(linked, 'utf8')).name, 'typescript');
+});
+
+test('a checkout with nothing installed still gets a worktree', async () => {
+  const root = await makeRepo();      // no node_modules at all
+  const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
+  const { dir } = await pool.create('t-1', 'a task');
+  assert.ok(fs.existsSync(dir), 'linking is a convenience, not a precondition');
+  assert.equal(fs.existsSync(path.join(dir, 'node_modules')), false);
+});
+
 test('attempt ids are unique even when minted in the same millisecond', () => {
   const ids = new Set(Array.from({ length: 200 }, () => newAttemptId('t-1', { now: 1_700_000_000_000 })));
   assert.equal(ids.size, 200);
