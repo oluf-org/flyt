@@ -41,10 +41,25 @@ export interface ModelInfo {
   unavailableReason?: string;
 }
 
+/**
+ * A streaming request in flight.
+ *
+ * Iterating gives the chunks; `settled()` gives what the request ended as.
+ * Both, because the scheduler needs both and a caller that has to choose is a
+ * caller that logs a stream it cannot price or prices a call it cannot show.
+ * D55 asks for the whole record — finish reason, usage and route included —
+ * and D40 asks for the reasoning kept apart from the content; neither survives
+ * a stream that ends by simply stopping.
+ */
+export interface LlmStream extends AsyncIterable<LlmChunk> {
+  /** Resolves when the stream ends, with the same record `complete()` returns. */
+  settled(): Promise<LlmResponse>;
+}
+
 /** The seam. Providers: `flyt-adapters-*`, one per provider family. */
 export interface LlmSeam {
-  /** Stream a request, chunk by chunk. */
-  stream(request: LlmRequest): AsyncIterable<LlmChunk>;
+  /** Stream a request, chunk by chunk, and settle with the whole record. */
+  stream(request: LlmRequest): LlmStream;
   /** Run a request to completion. */
   complete(request: LlmRequest): Promise<LlmResponse>;
   /** What this seam can reach right now, including what it cannot and why. */
