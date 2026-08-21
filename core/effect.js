@@ -158,7 +158,12 @@ const GIT_TIMEOUT_MS = 30_000;
 // shifts the first entry's path by one character and every path read off it is
 // silently wrong.
 function gitOut(args, cwd, { trim = true } = {}) {
-  const out = String(execFileSync('git', args, {
+  // `--no-optional-locks`: this is a POLLED read, and a plain `git status`
+  // takes .git/index.lock to refresh the index. A killed refresh — a timeout,
+  // an app quitting — leaves a zero-byte lock behind, and every later git
+  // write in that repository fails, including the person's own commits. A
+  // reader has no business taking a write lock.
+  const out = String(execFileSync('git', ['--no-optional-locks', ...args], {
     cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024,
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
   }) ?? '');

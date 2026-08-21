@@ -24,6 +24,7 @@ import path from 'node:path';
 import { Heartbeat, detectStall, nextIntervention, DEFAULT_THRESHOLDS } from './heartbeat.js';
 import { escalate as escalateLevel, levelFor, workerForLevelMap } from './levels.js';
 import { spendFromRun } from './ledger.js';
+import { captureWorkspaceSignature } from './effect.js';
 import { unrunnableGates } from './gates.js';
 import { whyNothingReady } from './blockers.js';
 import { CONFIG_DIR } from './brand.js';
@@ -122,6 +123,11 @@ function formatSpan(ms) {
   if (n >= 60_000) return `${Math.round(n / 60_000)}min`;
   return `${Math.max(1, Math.round(n / 1000))}s`;
 }
+
+// How often a task's workspace is actually looked at. The detectors work in
+// minutes; sampling faster spends a git process per poll and answers the same
+// question.
+const WORKSPACE_SAMPLE_MS = 15_000;
 
 /** How a budget park introduces the work reason it is preserving. */
 const WORK_REASON_TAIL = ' Its last attempt was rejected on the work, not the money: ';
@@ -229,6 +235,7 @@ export class Supervisor {
     this.inFlight = new Map(); // taskId -> Heartbeat
     this.attempts = new Map(); // taskId -> attemptId (WR-02 ownership)
     this.history = [];         // finished attempts, for the report
+    this.durations = [];       // how long each finished attempt took, for the outlier detector
     this.parked = [];          // things waiting on a person
     this.noEscalate = false;   // set when the soft cap trips
     // The last green canary's output — the base branch's own test count, handed
@@ -499,7 +506,11 @@ export class Supervisor {
         // to say "we do it this way here", so the task has to.
         skills: task.skills ?? null
       });
-      this.inFlight.set(task.id, new Heartbeat({ taskId: task.id, runId, level, now: this.now(), model: worker?.model ?? null }));
+      const hb = new Heartbeat({ taskId: task.id, runId, level, now: this.now(), model: worker?.model ?? null });
+      // Where the work is supposed to appear. The heartbeat reads it to tell
+      // accomplishment from talking (workSignature).
+      hb.dir = wt.dir;
+      this.inFlight.set(task.id, hb);
       this.backlog.update(task.id, { runIds: [...(task.runIds ?? []), runId] });
       // Say so at once rather than at the next tick: a task appearing in flight
       // is the most interesting single event a watcher sees.
@@ -599,7 +610,7 @@ export class Supervisor {
     const tokens = Math.max(0, usage.tokens - (hb.seenTokens ?? 0));
     hb.seenUsd = usage.usd;
     hb.seenTokens = usage.tokens;
-    hb.observe(snapshot, { now: this.now(), usd, tokens });
+    hb.observe(snapshot, { now: this.now(), usd, tokens, workspace: this.#workspaceOf(hb) });
     // Which node the ladder's nudge and restart rungs would act on. Without
     // this they silently fall through to escalate, which spends money to solve
     // a problem the cheapest rung might have fixed.
@@ -669,7 +680,7 @@ export class Supervisor {
       ...(Number.isFinite(taskUsd) && taskUsd > 0 ? { burnUsd: taskUsd / 4 } : {}),
       ...(this.config.loop?.thresholds ?? {})
     };
-    const stall = detectStall(hb, { thresholds });
+    const stall = detectStall(hb, { thresholds, medianMs: this.#medianAttemptMs() });
     if (stall) await this.#intervene(taskId, hb, stall);
   }
 
@@ -895,6 +906,43 @@ export class Supervisor {
     return budgetMessage + WORK_REASON_TAIL + prior;
   }
 
+  /**
+   * What the task's workspace looks like, sampled rather than polled.
+   *
+   * The detectors work in minutes, so asking git every five seconds buys
+   * nothing and spends a process each time. Between samples the last answer
+   * stands, which is correct: an unchanged fingerprint is exactly what "no
+   * progress" means, and a stale one only ever delays an intervention by a
+   * sample.
+   *
+   * Null — never a throw — when there is no worktree to look at; the signature
+   * falls back to completed tool calls in that case.
+   */
+  #workspaceOf(hb) {
+    if (!hb?.dir) return null;
+    const now = this.now();
+    if (hb.workspaceAt && now - hb.workspaceAt < WORKSPACE_SAMPLE_MS) return hb.workspace ?? null;
+    hb.workspaceAt = now;
+    try { hb.workspace = captureWorkspaceSignature(hb.dir); }
+    catch { hb.workspace = null; }
+    return hb.workspace;
+  }
+
+  /**
+   * How long this session's attempts have been taking.
+   *
+   * The outlier detector compares an attempt against the usual for its kind,
+   * and `detectStall` was never given a median — so that branch could not fire
+   * either. Three samples before it means anything: two attempts do not have a
+   * usual.
+   */
+  #medianAttemptMs() {
+    if (this.durations.length < 3) return null;
+    const sorted = [...this.durations].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+  }
+
   #liveSpend() {
     let live = 0;
     for (const hb of this.inFlight.values()) live += this.#liveSpendOf(hb);
@@ -950,6 +998,9 @@ export class Supervisor {
   /** A finished run: record the spend, then verify, review and land it. */
   async #complete(taskId, hb, stage, error = null) {
     this.inFlight.delete(taskId);
+    // What an attempt usually costs in wall time, which is the only thing the
+    // outlier detector can compare against.
+    this.durations.push(Math.max(0, this.now() - hb.startedAt));
     this.#recordSpend(taskId, hb, `run ${stage}`);
     // Landing takes minutes — gates, a reviewer, a merge, a canary — and it all
     // happens inside one tick, so without this the published status keeps

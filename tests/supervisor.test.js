@@ -98,11 +98,54 @@ test('headway is change in the work, not elapsed time or tokens burned', () => {
   assert.equal(hb.observe(snap({ a: 'done', b: 'running' }), { now: 3000 }), true);
   assert.equal(hb.tokensSinceProgress, 0);
 
-  // A rewrite of the same size is NOT progress — hashing the content is the
-  // point, since a model asked to try again often produces exactly that.
-  hb.observe(snap({ b: 'running' }, { b: 'hello world' }), { now: 4000 });
-  assert.equal(hb.observe(snap({ b: 'running' }, { b: 'hello world' }), { now: 5000 }), false);
-  assert.equal(hb.observe(snap({ b: 'running' }, { b: 'HELLO WORLD' }), { now: 6000 }), true);
+  // A RUNNING node's output is a streaming buffer — the model talking, not
+  // work accomplished. It moves every 250ms, and treating it as headway is
+  // what made three of the five detectors unreachable.
+  hb.observe(snap({ b: 'running' }, { b: 'thinking about it' }), { now: 4000 });
+  assert.equal(hb.observe(snap({ b: 'running' }, { b: 'thinking about it, at length' }), { now: 5000 }), false,
+    'a model mid-sentence has not accomplished anything');
+  assert.equal(hb.observe(snap({ b: 'running' }, { b: 'still thinking' }), { now: 6000 }), false);
+
+  // A FINISHED output changing is progress: something was produced.
+  assert.equal(hb.observe(snap({ b: 'done' }, { b: 'still thinking' }), { now: 7000 }), true);
+
+  // ...and a rewrite of the same size is not, because the content is hashed —
+  // a model asked to try again often produces exactly that.
+  hb.observe(snap({ b: 'done' }, { b: 'hello world' }), { now: 8000 });
+  assert.equal(hb.observe(snap({ b: 'done' }, { b: 'hello world' }), { now: 9000 }), false);
+  assert.equal(hb.observe(snap({ b: 'done' }, { b: 'HELLO WORLD' }), { now: 10000 }), true);
+});
+
+test('the workspace is the measure where there is one to look at', () => {
+  const hb = new Heartbeat({ taskId: 't-1', runId: 'r1', now: 0 });
+  const streaming = n => snap({ work: 'running' }, { work: `token ${n}` });
+
+  hb.observe(streaming(1), { now: 1000, workspace: { status: {} } });
+  // Eleven minutes of talking, with nothing changed in the workspace. This is
+  // the run that cost $0.97 and reported idleMs: 0 on every poll.
+  for (let i = 2; i < 20; i++) {
+    assert.equal(hb.observe(streaming(i), { now: 1000 + i * 1000, workspace: { status: {} } }), false,
+      `poll ${i} claimed headway`);
+  }
+  assert.equal(hb.repeats, 18, 'the detectors can finally see it');
+  assert.ok(hb.idleMs >= 18_000);
+
+  // A file appears: that is what the task promised, and it resets the clock.
+  assert.equal(
+    hb.observe(streaming(20), { now: 21_000, workspace: { status: { 'core/backlog.js': ' M' } } }), true);
+  assert.equal(hb.repeats, 0);
+});
+
+test('reading is not progress', () => {
+  // 66 tool calls, every one a read, no workspace change: the exact shape of
+  // the attempt that produced nothing and was never stopped.
+  const hb = new Heartbeat({ taskId: 't-1', runId: 'r1', now: 0 });
+  const workspace = { status: {} };
+  hb.observe(snap({ work: 'running' }), { now: 0, workspace });
+  for (let i = 1; i <= 66; i++) {
+    assert.equal(hb.observe(snap({ work: 'running' }), { now: i * 5000, workspace }), false);
+  }
+  assert.equal(detectStall(hb, { thresholds: { silentMs: 60_000, spinMs: 60_000, spinRepeats: 2 } })?.detector, 'spin');
 });
 
 test('a different error is progress; the same error three times is a groundhog', () => {
@@ -189,7 +232,7 @@ test('the ladder is climbed once per rung, then stays at the bottom', () => {
 // same command the CLI calls by hand, so the supervisor reads the result rather
 // than duplicating the transition. The fake therefore has to apply it too, or
 // the test would be simulating a different system.
-function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = null, error = null, land = () => ({ landed: true, stage: 'landed', mergeSha: 'abc12345' }) } = {}) {
+function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = null, error = null, stream = false, land = () => ({ landed: true, stage: 'landed', mergeSha: 'abc12345' }) } = {}) {
   const calls = [];
   let runSeq = 0;
   const runs = new Map(); // runId -> { polls, taskId }
@@ -227,7 +270,12 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
         prompt: r.prompt,
         nodeOutputs: {
           'user-input': r.prompt,
-          'work-1': stage === 'done' ? (output ?? 'finished') : 'thinking'
+          // `stream` is what a real agentTask does: streamInto() rewrites the
+          // node's output every 250ms while the model talks, so every poll
+          // shows different bytes under a node that is still running. Without
+          // it a fake cannot exhibit the failure that made three detectors
+          // unreachable.
+          'work-1': stage === 'done' ? (output ?? 'finished') : (stream ? `thinking, ${r.polls} polls in` : 'thinking')
         },
         retrospectives: {}
       };
@@ -896,6 +944,65 @@ test('a budget park does not nest inside another budget park', async () => {
 
   const reason = backlog.get(task.id).blockedReason;
   assert.equal(reason.match(/per-task cap/g).length, 1, 'one budget message, not two');
+});
+
+test('a task that streams steadily while accomplishing nothing is intervened on', async () => {
+  // The failure this whole redefinition exists for: eleven minutes, forty
+  // model calls, no workspace change, and a ladder that never fired because
+  // the streaming buffer looked like progress on every poll.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'talks a lot', goal: 'g' });
+  const said = [];
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog, stages: { default: ['execution'] }, stream: true }),
+    projectId: 'p', backlog, pollMs: 1, log: line => said.push(line),
+    config: { loop: { thresholds: { silentMs: 50, spinMs: 50, spinRepeats: 2 } } }
+  });
+  await sup.run({ maxTasks: 1 });
+
+  const intervened = said.filter(l => /spin|silent|burn|outlier/.test(l));
+  assert.ok(intervened.length, `nothing intervened: ${said.join(' | ')}`);
+  assert.match(intervened[0], /→ (nudge|restart|escalate|park)/, 'and it climbed a rung');
+});
+
+test('a task that is genuinely working is left alone', async () => {
+  // The other direction, which matters just as much: a harness that stops good
+  // tasks is worse than one that stops none.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'actually working', goal: 'g' });
+  const said = [];
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog, stages: { default: ['execution', 'execution', 'done'] }, stream: true }),
+    projectId: 'p', backlog, pollMs: 1, log: line => said.push(line),
+    config: { loop: { thresholds: { silentMs: 50, spinMs: 50, spinRepeats: 2 } } }
+  });
+  const status = await sup.run({ maxTasks: 1 });
+
+  assert.equal(status.landed, 1);
+  assert.deepEqual(said.filter(l => /spin|silent|burn|outlier/.test(l)), [],
+    'a node reaching done is progress, whatever its buffer was doing');
+});
+
+test('the outlier detector is given the median it never had', async () => {
+  const backlog = makeBacklog();
+  for (let i = 0; i < 3; i++) backlog.add({ title: `t${i}`, goal: 'g' });
+
+  const sup = new Supervisor({
+    ...fakeEngine({ backlog }), projectId: 'p', backlog, pollMs: 1
+  });
+  await sup.run();
+
+  assert.equal(sup.durations.length, 3, 'every finished attempt is timed');
+  assert.ok(sup.durations.every(d => Number.isFinite(d) && d >= 0));
+
+  // ...and the branch those samples feed does fire, given one.
+  const slow = new Heartbeat({ taskId: 't', runId: 'r', now: 0 });
+  slow.observe(snap({ a: 'running' }), { now: 0 });
+  slow.observe(snap({ a: 'done', b: 'running' }), { now: 60 * 60 * 1000 });
+  assert.equal(detectStall(slow, { medianMs: 60_000 }).detector, 'outlier');
+  assert.equal(detectStall(slow, { medianMs: null }), null, 'and stays quiet without one');
 });
 
 test('the report puts what needs a person above what does not', () => {

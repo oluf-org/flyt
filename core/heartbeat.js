@@ -45,30 +45,68 @@ export const DEFAULT_THRESHOLDS = {
 const hash = value => crypto.createHash('sha1').update(String(value ?? '')).digest('hex').slice(0, 16);
 
 /**
- * A fingerprint of the WORK, not of the run's metadata.
+ * A fingerprint of what has been ACCOMPLISHED, not of what is being said.
  *
- * Node statuses plus the content of what has been produced. Two polls with the
- * same signature mean nothing changed in the only sense that matters — which is
- * not the same as "no events fired", because a node can retry busily and
- * produce byte-identical output each time.
+ * This is the definition the whole stall ladder rests on, and it was wrong.
+ * The old signature hashed every node and task output, and `streamInto()`
+ * rewrites `tasks/<id>.md` every 250ms while a model is talking — so every
+ * poll looked like new work. `repeats` reset to 0, `lastProgressAt` reset, and
+ * `idleMs` stayed at 0 for as long as the model kept producing tokens. Three
+ * of the five detectors could therefore never fire. Watched live: an
+ * eleven-minute attempt, 40 model calls, 66 tool calls, no workspace change,
+ * reporting `idleMs: 0, repeats: 0` on every single poll until it hit its cap.
+ *
+ * So progress means the durable record changed:
+ *
+ * - a node or task **status** changed;
+ * - a **finished** output changed — a node or task whose status says it is
+ *   done, never a buffer that is still being streamed into;
+ * - the **workspace** changed, when the caller can see one.
+ *
+ * Talking is not progress. Reading is not progress either, which is the case
+ * that cost real money: the attempt above made 66 tool calls and every one of
+ * them was a read. A signature that counted tool calls would have called that
+ * progress too, so the workspace — what the task actually promised to change —
+ * is the measure wherever there is one to look at.
+ *
+ * @param snapshot — the run snapshot.
+ * @param options.workspace — a fingerprint of the bound workspace, when the
+ *        caller has one. Absent (a run with no worktree) falls back to the
+ *        completed tool-call count, which at least only moves when a node ends.
+ * @returns a hash that changes only when something was accomplished.
  */
-export function workSignature(snapshot = {}) {
-  const statuses = Object.entries(snapshot.meta?.nodeStatus ?? {})
+export function workSignature(snapshot = {}, { workspace = null } = {}) {
+  const nodeStatus = snapshot.meta?.nodeStatus ?? {};
+  const statuses = Object.entries(nodeStatus)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([id, s]) => `${id}:${s}`)
     .join(',');
+
+  // Which tasks have finished, so their output can be trusted to be final.
+  const taskStatus = Object.fromEntries(
+    (snapshot.tasks?.tasks ?? []).map(t => [t.id, t.status ?? 'pending']));
+  const settled = new Set(['done', 'failed', 'skipped', 'rejected']);
+  const finished = ([id, text], status) => settled.has(status) ? `${id}:${hash(text)}` : null;
+
   const outputs = [
-    ...Object.entries(snapshot.nodeOutputs ?? {}),
-    ...Object.entries(snapshot.taskOutputs ?? {})
+    ...Object.entries(snapshot.nodeOutputs ?? {}).map(e => finished(e, nodeStatus[e[0]] ?? 'pending')),
+    ...Object.entries(snapshot.taskOutputs ?? {}).map(e => finished(e, taskStatus[e[0]] ?? 'pending'))
   ]
-    .sort(([a], [b]) => a.localeCompare(b))
+    .filter(Boolean)
+    .sort()
     // Hash the content, not its length: a rewrite of the same size is not
     // progress, and a model asked to try again often produces exactly that.
-    .map(([id, text]) => `${id}:${hash(text)}`)
     .join(',');
-  const calls = Object.values(snapshot.retrospectives ?? {})
-    .reduce((n, r) => n + (r?.toolCalls?.length ?? 0), 0);
-  return hash(`${statuses}|${outputs}|${calls}`);
+
+  // With a workspace to look at, that is the answer. Without one, the count of
+  // tool calls RECORDED BY FINISHED NODES — which moves when a node ends, not
+  // while one talks.
+  const acted = workspace === null
+    ? String(Object.values(snapshot.retrospectives ?? {})
+      .reduce((n, r) => n + (r?.toolCalls?.length ?? 0), 0))
+    : hash(JSON.stringify(workspace));
+
+  return hash(`${statuses}|${outputs}|${acted}`);
 }
 
 /**
@@ -99,11 +137,19 @@ export class Heartbeat {
     this.interventions = [];     // what the supervisor has already tried (§11.4)
   }
 
-  /** Fold in a poll. Returns true when this poll showed headway. */
-  observe(snapshot, { now = Date.now(), tokens = 0, usd = 0 } = {}) {
+  /**
+   * Fold in a poll. Returns true when this poll showed headway.
+   *
+   * @param snapshot — the run snapshot.
+   * @param options.workspace — the workspace fingerprint, when the caller has
+   *        one; see {@link workSignature} for why it is the measure.
+   * @param options.tokens — tokens spent since the last poll.
+   * @param options.usd — money spent since the last poll.
+   */
+  observe(snapshot, { now = Date.now(), tokens = 0, usd = 0, workspace = null } = {}) {
     this.lastPollAt = now;
     this.stage = snapshot?.meta?.stage ?? this.stage;
-    const signature = workSignature(snapshot);
+    const signature = workSignature(snapshot, { workspace });
     const moved = this.signature !== null && signature !== this.signature;
     const first = this.signature === null;
     this.signature = signature;
