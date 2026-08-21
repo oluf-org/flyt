@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Heartbeat, detectStall, nextIntervention, DEFAULT_THRESHOLDS } from './heartbeat.js';
 import { escalate as escalateLevel, levelFor, workerForLevelMap } from './levels.js';
-import { spendFromRun } from './ledger.js';
+import { spendFromRun, totalsWithLive } from './ledger.js';
 import { captureWorkspaceSignature } from './effect.js';
 import { unrunnableGates } from './gates.js';
 import { whyNothingReady } from './blockers.js';
@@ -882,10 +882,9 @@ export class Supervisor {
 
   /** The window total as it stands right now, in-flight runs included. */
   #spendNow() {
-    const recorded = this.ledger?.totals({ sinceMs: this.#windowMs() });
-    if (!recorded) return null;
-    const live = this.#liveSpend();
-    return { ...recorded, usd: recorded.usd + live, live };
+    if (!this.ledger) return null;
+    return totalsWithLive(this.ledger, { sinceMs: this.#windowMs() },
+      { store: this.store, runIds: [...this.inFlight.values()].map(hb => hb.runId) });
   }
 
   /**
@@ -1157,14 +1156,21 @@ function currentNodeOf(snapshot) {
  * and what it cost. One page, because a report nobody finishes reading is a
  * report that does not exist.
  */
-export function renderReport({ status, backlog, ledger, loopLog = null, windowMs = 24 * 60 * 60 * 1000 }) {
+export function renderReport({ status, backlog, ledger, loopLog = null, store = null, windowMs = 24 * 60 * 60 * 1000 }) {
   const tasks = backlog.list();
   const by = s => tasks.filter(t => t.status === s);
-  const spend = ledger?.totals({ sinceMs: windowMs }) ?? null;
+  // Including what the runs named in the status are spending right now: a
+  // morning report that says $0 about a loop that has been working since
+  // midnight is the same lie as a status that says "stopped".
+  const spend = ledger
+    ? totalsWithLive(ledger, { sinceMs: windowMs },
+      { store, runIds: (status?.inFlight ?? []).map(h => h?.runId).filter(Boolean) })
+    : null;
   const lines = [`# Loop report — ${new Date().toISOString()}`, ''];
 
   if (spend) {
     lines.push(`**Spend:** $${spend.usd.toFixed(2)} across ${spend.calls} call(s)`
+      + (spend.live ? ` (of which $${spend.live.toFixed(2)} is still in flight)` : '')
       + (spend.unknown ? ` — ${spend.unknown} call(s) with no cost reported` : ''), '');
   }
   lines.push(`**Loop:** ${status.running ? 'running' : `stopped (${status.stopping ?? 'idle'})`}`

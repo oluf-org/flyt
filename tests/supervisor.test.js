@@ -1005,6 +1005,46 @@ test('the outlier detector is given the median it never had', async () => {
   assert.equal(detectStall(slow, { medianMs: null }), null, 'and stays quiet without one');
 });
 
+test('every reader counts what is in flight, not only what settled', async () => {
+  const { liveSpend, totalsWithLive } = await import('../core/ledger.js');
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  ledger.record({ taskId: 't-1', usd: 0.25, estimated: false });
+
+  // A run that is spending right now. Its calls are in the trace; the ledger
+  // will not hear about them until it ends.
+  const store = {
+    snapshot: () => ({ retrospectives: {} }),
+    callTraceNodes: () => ['work'],
+    readCallTrace: () => [{ usage: { cost: 0.4 }, provider: 'openrouter', model: 'm', ok: true }]
+  };
+
+  assert.deepEqual(liveSpend(store, ['run-1'], {}), { usd: 0.4, calls: 1 });
+  assert.deepEqual(liveSpend(store, [], {}), { usd: 0, calls: 0 }, 'nothing in flight costs nothing');
+  assert.deepEqual(liveSpend(null, ['run-1'], {}), { usd: 0, calls: 0 }, 'and no store is not a crash');
+
+  const totals = totalsWithLive(ledger, {}, { store, runIds: ['run-1'] });
+  assert.equal(Number(totals.usd.toFixed(2)), 0.65, 'settled plus in flight');
+  assert.equal(totals.live, 0.4, 'and the two stay distinguishable');
+  assert.equal(totalsWithLive(ledger, {}, {}).usd, 0.25, 'with nothing in flight it is the settled total');
+});
+
+test('the morning report says how much of the spend is still in flight', () => {
+  const backlog = makeBacklog();
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  ledger.record({ taskId: 't-1', usd: 1, estimated: false });
+  const store = {
+    snapshot: () => ({ retrospectives: {} }),
+    callTraceNodes: () => ['work'],
+    readCallTrace: () => [{ usage: { cost: 0.5 }, provider: 'openrouter', model: 'm', ok: true }]
+  };
+
+  const report = renderReport({
+    status: { running: true, stopping: null, inFlight: [{ taskId: 't-1', runId: 'run-1' }], landed: 0, completed: 0 },
+    backlog, ledger, store
+  });
+  assert.match(report, /\$1\.50 across 2 call\(s\) \(of which \$0\.50 is still in flight\)/);
+});
+
 test('the report puts what needs a person above what does not', () => {
   const backlog = makeBacklog();
   const landed = backlog.add({ title: 'shipped', goal: 'g' });

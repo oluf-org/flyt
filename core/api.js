@@ -19,7 +19,7 @@ import { pushRefs, git } from './worktree.js';
 import { workerForLevel, levelFor, LEVELS } from './levels.js';
 import { blockersAll, boardBlockers } from './blockers.js';
 import { ChatStore, runChatTurn, CHAT_TOOLS } from './chat.js';
-import { costOf } from './ledger.js';
+import { costOf, totalsWithLive } from './ledger.js';
 import { executeTool, getTools, registerDefinition } from './tools/index.js';
 import { isDestructive } from '../src/toolTypes.js';
 import { pythonStatus, setupPython } from './python.js';
@@ -114,6 +114,18 @@ export function createApi(engine) {
     }
     return pool;
   };
+  /**
+   * The runs in flight for this project, whoever is driving them.
+   *
+   * A loop in ANOTHER process is the normal case for a CLI reader, and its
+   * status file names the runs — so spend can be answered honestly from a
+   * terminal while the desktop app does the work.
+   */
+  const inFlightRunIds = projectId => {
+    const status = supervisors.get(projectId)?.status() ?? readLoopStatus(projectId);
+    return (status?.inFlight ?? []).map(h => h?.runId).filter(Boolean);
+  };
+
   const ledgerFor = projectId => {
     proj(projectId);
     const ledger = engine.ledgerFor(projectId);
@@ -1175,7 +1187,8 @@ export function createApi(engine) {
         ?? { running: false, stopping: null, inFlight: [], landed: 0, completed: 0 },
       backlog: backlogFor(projectId),
       ledger: ledgerFor(projectId),
-      loopLog: engine.loopLogFor(projectId)
+      loopLog: engine.loopLogFor(projectId),
+      store: proj(projectId).store
     }),
 
     // --- The benchmark and the archive (DESIGN-SPEC.md §8) --------------------
@@ -1309,8 +1322,12 @@ export function createApi(engine) {
     'archive:trend': ({ projectId, limit = 30 }) => trend(stateDir(projectId, 'archive'), { limit }),
 
     // --- Spend (DESIGN-SPEC.md §8) ----------------------------------------------
+    // Settled spend PLUS what the runs in flight have already cost. A person
+    // asking what a running loop is costing was getting the last settled
+    // total, which is $0 for the whole first attempt of a session.
     'ledger:totals': ({ projectId, sinceMs = null, taskId = null }) =>
-      ledgerFor(projectId).totals({ sinceMs, taskId }),
+      totalsWithLive(ledgerFor(projectId), { sinceMs, taskId },
+        { store: proj(projectId).store, runIds: inFlightRunIds(projectId) }),
     'ledger:check': ({ projectId, taskId = null }) =>
       ledgerFor(projectId).check({ caps: runtimeConfig.loop?.caps ?? {}, taskId }),
 

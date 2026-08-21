@@ -129,6 +129,53 @@ export function spendFromRun(store, runId, { prices = {} } = {}) {
   return entries;
 }
 
+/**
+ * What runs that have not finished have already cost.
+ *
+ * Recorded spend reaches the ledger when a run ENDS, so every reader that
+ * consults only the ledger reports $0 for exactly as long as the money is
+ * being spent — which is the stretch somebody is watching it for. The call
+ * trace is written as the calls settle, so it can be read mid-run by anyone
+ * who knows which runs are in flight.
+ *
+ * @param store — the run store.
+ * @param runIds — the runs currently in flight.
+ * @param options.prices — the ledger's price table.
+ * @returns `{ usd, calls }`, both zero when nothing is in flight.
+ */
+export function liveSpend(store, runIds = [], { prices = {} } = {}) {
+  let usd = 0;
+  let calls = 0;
+  if (!store) return { usd, calls };
+  for (const runId of runIds) {
+    if (!runId) continue;
+    try {
+      for (const e of spendFromRun(store, runId, { prices })) {
+        usd += e.usd ?? 0;
+        calls += 1;
+      }
+    } catch { /* a run with nothing readable yet has cost nothing yet */ }
+  }
+  return { usd, calls };
+}
+
+/**
+ * The totals a person should be shown: settled plus in flight.
+ *
+ * `live` is broken out rather than folded in silently, because "banked" and
+ * "being spent right now" are different facts and a reader deciding whether to
+ * stop a loop needs both.
+ *
+ * @param ledger — the ledger to read settled spend from.
+ * @param query — `{ sinceMs, taskId }`, as `totals()` takes them.
+ * @param inFlight — `{ store, runIds }` for the runs still going.
+ */
+export function totalsWithLive(ledger, query = {}, { store = null, runIds = [] } = {}) {
+  const settled = ledger?.totals(query) ?? { usd: 0, calls: 0, unknown: 0, estimated: 0 };
+  const live = liveSpend(store, runIds, { prices: ledger?.prices ?? {} });
+  return { ...settled, usd: settled.usd + live.usd, calls: settled.calls + live.calls, live: live.usd };
+}
+
 const callTraceNodes = (store, runId) => {
   try { return store.callTraceNodes?.(runId) ?? []; } catch { return []; }
 };
