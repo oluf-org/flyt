@@ -48,6 +48,38 @@ test('a worktree gets the dependencies its checkout has, or the gates judge the 
   assert.equal(JSON.parse(fs.readFileSync(linked, 'utf8')).name, 'typescript');
 });
 
+test('a linked node_modules does not stop the worktree being discarded', async () => {
+  // git worktree remove is fussy about what it finds in the tree, and a link
+  // into the checkout is something it did not put there. If cleanup cannot
+  // survive the convenience, the convenience leaves orphans behind.
+  const root = await makeRepo();
+  fs.mkdirSync(path.join(root, 'node_modules', 'x'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'node_modules', 'x', 'package.json'), '{}');
+
+  const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
+  const { dir, attemptId } = await pool.create('t-1', 'a task');
+  assert.ok(fs.existsSync(path.join(dir, 'node_modules', 'x', 'package.json')));
+
+  await pool.remove('t-1', { attemptId });
+  assert.equal(fs.existsSync(dir), false, 'the worktree is gone');
+  assert.ok(fs.existsSync(path.join(root, 'node_modules', 'x', 'package.json')),
+    'and the checkout still has its dependencies');
+});
+
+test('a real node_modules inside a worktree is not mistaken for the link', async () => {
+  // Cutting the link must never turn into "delete whatever is called
+  // node_modules": if something installed into the tree, that is the tree's,
+  // and it goes with the tree rather than being unlinked out from under it.
+  const root = await makeRepo();
+  const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
+  const { dir, attemptId } = await pool.create('t-1', 'a task');   // no link: nothing to link
+  fs.mkdirSync(path.join(dir, 'node_modules', 'installed-here'), { recursive: true });
+
+  const result = await pool.remove('t-1', { attemptId });
+  assert.equal(result.outcome, 'removed');
+  assert.equal(fs.existsSync(dir), false);
+});
+
 test('a checkout with nothing installed still gets a worktree', async () => {
   const root = await makeRepo();      // no node_modules at all
   const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));

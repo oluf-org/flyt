@@ -328,6 +328,25 @@ export class WorktreePool {
   }
 
   /**
+   * Cut the dependency link, leaving what it pointed at alone.
+   *
+   * Only ever removes the LINK: if `node_modules` in the worktree is a real
+   * directory, somebody installed it there on purpose and it is not ours to
+   * delete. Windows reports a junction as a symlink to `lstat` but refuses
+   * `unlink` on it, hence the second attempt.
+   *
+   * @param dir — the worktree.
+   */
+  #unlinkDependencies(dir) {
+    const link = path.join(dir, 'node_modules');
+    let stat;
+    try { stat = fs.lstatSync(link); } catch { return; }
+    if (!stat.isSymbolicLink()) return;
+    try { fs.unlinkSync(link); }
+    catch { try { fs.rmdirSync(link); } catch { /* leave it; the caller reports what it could not remove */ } }
+  }
+
+  /**
    * Throw away ONE attempt's worktree.
    *
    * Force, because the whole point is that a failed task is thrown away — an
@@ -367,6 +386,14 @@ export class WorktreePool {
       if (record && (!attemptId || record.attemptId === attemptId)) this.#clearOwner(taskId);
       return { outcome: 'already-removed', taskId: String(taskId), attemptId: attemptId ?? record?.attemptId ?? null, dir };
     }
+
+    // Before anything deletes anything: take the dependency link out.
+    //
+    // `git worktree remove --force` recurses, and on Windows it walked THROUGH
+    // the junction and deleted the checkout's own node_modules — 117 packages,
+    // from a command whose entire job is to delete a scratch directory. A link
+    // out of a directory that is about to be destroyed has to be cut first.
+    this.#unlinkDependencies(dir);
 
     let branch = null;
     if (deleteBranch) {
