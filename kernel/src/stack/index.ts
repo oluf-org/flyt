@@ -1,0 +1,7 @@
+/**
+ * The stack: containment, parsed.
+ *
+ * @module #kernel/stack
+ */
+export * from './types.js';
+export * from './parse.js';

@@ -13,6 +13,7 @@ export * from './loader/index.js';
 export * from './profiles.js';
 export * from './events.js';
 export type * from './types.js';
+export * from './stack/index.js';
 export * from './session/jsonl.js';
 export * from './session/projection.js';
 export * as sessionJsonl from './plugins/session-jsonl.js';
