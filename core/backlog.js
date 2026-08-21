@@ -160,17 +160,17 @@ export class Backlog {
     const file = this.#file(safe);
     let st;
     try { st = fs.statSync(file); }
-    catch { this._cache.delete(safe); return null; }
-    const hit = this._cache.get(safe);
+    catch { this._cache.delete(file); return null; }
+    const hit = this._cache.get(file);
     const fresh = Date.now() - st.mtimeMs < CACHE_HIT_FRESH_MS;
     const same = hit && hit.mtime === st.mtimeMs && hit.size === st.size;
     if (same && !fresh) return hit.task; // older than the rounding window, provably unchanged
     try {
       const task = parseTask(fs.readFileSync(file, 'utf8'), safe);
-      this._cache.set(safe, { mtime: st.mtimeMs, size: st.size, task });
+      this._cache.set(file, { mtime: st.mtimeMs, size: st.size, task });
       return task;
     } catch (err) {
-      if (err?.code === 'ENOENT') { this._cache.delete(safe); return null; }
+      if (err?.code === 'ENOENT') { this._cache.delete(file); return null; }
       throw err;
     }
   }
@@ -325,7 +325,7 @@ export class Backlog {
       throw new Error(`Unknown status "${patch.status}".`);
     }
     fs.writeFileSync(this.#file(task.id), serializeTask(stripId(next)));
-    this._cache.delete(task.id);
+    this._cache.delete(this.#file(task.id));
     return next;
   }
 
@@ -368,7 +368,7 @@ export class Backlog {
       throw new Error(`Task "${safe}" is claimed by ${task.claimedBy ?? 'someone'}. Release it before removing it.`);
     }
     fs.rmSync(this.#file(safe));
-    this._cache.delete(safe);
+    this._cache.delete(this.#file(safe));
     try { fs.rmSync(this.#lock(safe)); } catch { /* no lock, or already gone */ }
     // Spend the number on the way out. `add` already records what it hands out,
     // so this only matters for a file a human wrote by hand and then removed —
