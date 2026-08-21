@@ -12,6 +12,7 @@ export * from './seams/index.js';
 export * from './events.js';
 export type * from './types.js';
 export * from './session/jsonl.js';
+export * from './session/projection.js';
 export * as sessionJsonl from './plugins/session-jsonl.js';
 
 /**
