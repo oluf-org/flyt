@@ -516,6 +516,25 @@ export class WorktreePool {
     return [...files].sort();
   }
 
+  /**
+   * Files the task wrote that git is ignoring.
+   *
+   * Only asked for on the failure path, where "nothing changed" needs to
+   * distinguish a task that produced nothing from a task that produced
+   * something into a path `.gitignore` covers. The second is invisible to
+   * `changedFiles` — `git status --porcelain` omits ignored files — so the
+   * next attempt is told to write a file that is already sitting there.
+   *
+   * @param taskId — whose worktree to look in.
+   * @returns paths, sorted; empty when there are none or git cannot say.
+   */
+  async ignoredFiles(taskId) {
+    const dir = this.dirFor(taskId);
+    const out = await git(['ls-files', '--others', '--ignored', '--exclude-standard'], { cwd: dir })
+      .catch(() => '');
+    return out.split('\n').map(s => s.trim()).filter(Boolean).sort();
+  }
+
   async hasChanges(taskId) {
     const dir = this.dirFor(taskId);
     const status = await git(['status', '--porcelain'], { cwd: dir });

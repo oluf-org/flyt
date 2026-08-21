@@ -118,6 +118,24 @@ export async function landTask({
   // guidance separates the two ways to get here, because they need different
   // answers from the next attempt.
   if (!changedFiles.length) {
+    // A third way to get here, and the one that reads as the first: the file
+    // WAS written, into a path `.gitignore` covers. `git status --porcelain`
+    // omits ignored files, so the work is invisible to everything above, and
+    // the guidance below would send the next attempt to write a file that is
+    // already sitting in the worktree. Every attempt would do it again.
+    const ignored = typeof pool.ignoredFiles === 'function'
+      ? await pool.ignoredFiles(taskId).catch(() => [])
+      : [];
+    if (ignored.length) {
+      return withCommit({
+        landed: false, stage: 'no-changes', steps, ignored,
+        guidance: `The task wrote ${ignored.length === 1 ? 'a file' : 'files'} that git is ignoring, `
+          + `so there is nothing to land: ${ignored.slice(0, 5).join(', ')}`
+          + `${ignored.length > 5 ? `, and ${ignored.length - 5} more` : ''}. Writing `
+          + 'it again will not help. Either the deliverable belongs somewhere the repository '
+          + 'tracks, or this path is ignored on purpose and a person has to decide which.'
+      });
+    }
     return {
       landed: false, stage: 'no-changes', steps,
       guidance: 'The task produced no change to the repository at all. If its deliverable is a '

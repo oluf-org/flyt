@@ -266,6 +266,48 @@ test('a task that changed nothing is a failure, and does not cost a review to no
   assert.equal((await git(['rev-list', '--count', 'main'], { cwd: root })).trim(), '1');
 });
 
+test('a deliverable git is ignoring is not "no change", and says so', async () => {
+  // The third way to reach an empty diff, and the one that reads as the first.
+  // `git status --porcelain` omits ignored files, so a task whose deliverable
+  // lands in a gitignored directory produces work that is invisible to every
+  // check above — and the old guidance told the next attempt to write the file
+  // into the workspace, which is exactly what it had just done. Every attempt
+  // would do it again, and every one would cost.
+  const root = await makeRepo();
+  fs.writeFileSync(path.join(root, '.gitignore'), 'notes/\n');
+  await git(['add', '-A'], { cwd: root });
+  await git(['commit', '-m', 'ignore notes'], { cwd: root });
+
+  const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
+  await pool.create('t-0001', 'Write the note');
+  const dir = pool.dirFor('t-0001');
+  fs.mkdirSync(path.join(dir, 'notes'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'notes', 'plan.md'), '# the deliverable\n');
+
+  let reviewed = false;
+  setScript(({ system }) => {
+    if (/ROLE: diff-review/.test(system)) reviewed = true;
+    return '```json\n{"verdict":"approve","reason":"fine"}\n```';
+  });
+
+  const result = await landTask({
+    pool, repoRoot: root, taskId: 't-0001', base: 'main',
+    task: { title: 'Write the note' },
+    config: { workers: { reviewer: { provider: 'script', model: 'm' } }, retry: { attempts: 1, baseMs: 1 } },
+    verify: async () => runGates([SUITE], { cwd: root })
+  });
+
+  assert.equal(result.landed, false);
+  assert.equal(result.stage, 'no-changes');
+  assert.equal(reviewed, false);
+  assert.deepEqual(result.ignored, ['notes/plan.md'], 'the file is named, not merely counted');
+  assert.match(result.guidance, /git is ignoring/);
+  assert.match(result.guidance, /notes\/plan\.md/);
+  assert.match(result.guidance, /Writing it again will not help/,
+    'the one thing the old guidance told it to do');
+  assert.ok(!/write it into the workspace/.test(result.guidance));
+});
+
 test('a task lands on main by itself when the gates and the reviewer agree', async () => {
   const root = await makeRepo();
   const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
