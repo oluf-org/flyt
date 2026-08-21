@@ -37,7 +37,7 @@ test('the seam list is the eight the plan names, and nothing else', () => {
 test('the event contract is the turn, in order', () => {
   assert.deepEqual([...KERNEL_EVENTS], [
     'turn/start', 'agent/pre-step', 'step/start', 'llm/stream', 'tool/call',
-    'tools/pre-execute', 'tools/post-execute', 'tools/change', 'commands/invoke', 'step/end',
+    'tools/pre-execute', 'tools/post-execute', 'tools/change', 'blocks/change', 'commands/invoke', 'step/end',
     'turn/end', 'session/append',
   ]);
 });

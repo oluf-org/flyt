@@ -131,6 +131,11 @@ const COVERAGE = {
   // dispatch). A dsh TOOL plugin needs a shim; that is the stated limit.
   tools: null,
 
+  // Ours, and not a seam at all. `SEAM_NAMES` is the eight-name dsh capability
+  // contract; a block is Flyt's own noun and dsh has no equivalent to be
+  // compatible with. Nothing to pin, and nothing missing.
+  blocks: null,
+
   // Declared, not yet provided. Each becomes a pinned plugin when it gains a
   // provider — which is what makes that task fail here until it does.
   sessions: null,

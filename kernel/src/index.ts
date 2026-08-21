@@ -14,6 +14,7 @@ export * from './profiles.js';
 export * from './events.js';
 export type * from './types.js';
 export * from './stack/index.js';
+export * from './blocks/types.js';
 export * from './session/jsonl.js';
 export * from './session/projection.js';
 export * as sessionJsonl from './plugins/session-jsonl.js';
@@ -22,6 +23,8 @@ export * as flytApprovals from './plugins/approvals.js';
 export * as flytSkills from './plugins/skills.js';
 export * as flytApi from './plugins/commands.js';
 export * as flytStackCommands from './plugins/stack-commands.js';
+export * as flytBlocks from './plugins/blocks.js';
+export { BlockRegistry, missingBlocks } from './plugins/blocks.js';
 export { registerStackCommands } from './plugins/stack-commands.js';
 export type { StackHandle } from './plugins/stack-commands.js';
 

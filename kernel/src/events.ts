@@ -124,6 +124,14 @@ declare module '@deepseek-ai/cordis' {
     /** The registered tool set changed. @mode emit */
     'tools/change'(): void;
     /**
+     * The installed block set changed.
+     *
+     * The peer of `tools/change`, and the library and the editor subscribe to
+     * it for the same reason: a block that appeared because a plugin loaded,
+     * or went because one unloaded, changes what a stack can name. @mode emit
+     */
+    'blocks/change'(): void;
+    /**
      * A command was invoked, by whoever invoked it.
      *
      * The editor's subscription, and the reason an edit a model made animates
@@ -157,6 +165,7 @@ export const KERNEL_EVENTS = [
   'tools/pre-execute',
   'tools/post-execute',
   'tools/change',
+  'blocks/change',
   'commands/invoke',
   'step/end',
   'turn/end',
