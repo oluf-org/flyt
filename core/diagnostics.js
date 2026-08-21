@@ -17,6 +17,8 @@
 //
 // Every one returns plain data. The CLI renders it; an agent reads it as JSON;
 // nothing here prints.
+import fs from 'node:fs';
+import path from 'node:path';
 import { callModel } from './adapters/index.js';
 import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
 import { planDefaultRoute, TASK_KINDS } from './modelPriority.js';
@@ -441,6 +443,45 @@ function probeVerdict({ content, reasoning, finishReason, maxTokens }) {
  * @param {object} engine  the created engine (paths, settings, references)
  * @param {object} opts    { probe: boolean, models: string[] }
  */
+/**
+ * A `.git/index.lock` that nothing is using.
+ *
+ * git takes this lock to refresh or write the index. A killed git — a timeout,
+ * an app quitting, a machine sleeping — leaves it behind, and from then on
+ * every git WRITE in that repository fails, including the person's own
+ * commits. Flyt polls `git status` on a schedule, so Flyt is a likely author.
+ *
+ * The test is "empty and old", not "no git is running": a git mid-operation
+ * has written the new index into the lock, so an empty one is nobody's work in
+ * progress, and one older than the longest operation we would wait for is not
+ * about to be finished. Scanning the process table would be less accurate, not
+ * more — an unrelated git anywhere on the machine would suppress the finding.
+ *
+ * Reports only. Deleting another process's lock is how a real concurrent write
+ * gets corrupted, and that trade is not this function's to make.
+ *
+ * @param root — the repository to look at.
+ * @param options.now — the clock, for tests.
+ * @param options.staleMs — how old an empty lock has to be.
+ * @returns the finding, or null.
+ */
+export function staleIndexLock(root, { now = Date.now(), staleMs = 5 * 60 * 1000 } = {}) {
+  if (!root) return null;
+  const lock = path.join(root, '.git', 'index.lock');
+  let stat;
+  try { stat = fs.statSync(lock); } catch { return null; }
+  if (!stat.isFile() || stat.size > 0) return null;
+  const ageMs = now - stat.mtimeMs;
+  if (ageMs < staleMs) return null;
+  return {
+    level: 'warn',
+    message: `${lock} has been empty for ${Math.round(ageMs / 60000)} minute(s). `
+      + 'Until it is removed, every git write in this repository fails — including your own commits. '
+      + 'It is usually left by a git that was killed mid-read; Flyt polls `git status`, so it may well be ours. '
+      + `Check that no git is running, then: rm "${lock}"`
+  };
+}
+
 export async function doctor(engine, { probe = false, models = [], project = null } = {}) {
   const settings = engine.settings ?? {};
   const priority = settings.providerPriority ?? [];
@@ -457,6 +498,8 @@ export async function doctor(engine, { probe = false, models = [], project = nul
   });
 
   const findings = [];
+  const lock = staleIndexLock(project?.folder ?? null);
+  if (lock) findings.push(lock);
   if (!providers.some(p => p.connected && p.id !== 'mock')) {
     findings.push({ level: 'error', message: 'No real provider is connected — every run will fall back to the mock adapter.' });
   }

@@ -8,7 +8,10 @@
 // evidence is not there.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { explainRun, probeModel, modelsInFlow } from '../core/diagnostics.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { explainRun, probeModel, modelsInFlow, staleIndexLock } from '../core/diagnostics.js';
 import { registerProvider } from '../core/adapters/index.js';
 import { makeStore } from './helpers.js';
 
@@ -277,4 +280,54 @@ test('an executor task\'s calls are counted, attributed and explained', () => {
   assert.ok(r.suggestions.some(s => /executor/.test(s)),
     'pointing at the executor entry beats telling someone to re-run a run whose evidence is on disk');
   assert.ok(!r.suggestions.some(s => /predates the model-call black box/.test(s)));
+});
+
+// --- a stale index.lock (HT-05) --------------------------------------------
+
+test('an empty, old index.lock is reported with the command to clear it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-lock-'));
+  try {
+    fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.git', 'index.lock'), '');
+
+    const now = Date.now() + 10 * 60 * 1000;   // ten minutes later
+    const finding = staleIndexLock(root, { now });
+    assert.equal(finding.level, 'warn');
+    assert.match(finding.message, /empty for 10 minute\(s\)/);
+    assert.match(finding.message, /every git write in this repository fails/);
+    assert.match(finding.message, /rm "/, 'and says exactly what to do');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a fresh lock, a lock with content, and no lock at all are not reported', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-lock-'));
+  try {
+    fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+    assert.equal(staleIndexLock(root), null, 'no lock');
+
+    const lock = path.join(root, '.git', 'index.lock');
+    fs.writeFileSync(lock, '');
+    assert.equal(staleIndexLock(root), null, 'a git that started a second ago is not stale');
+
+    // A git mid-write has put the new index INTO the lock.
+    fs.writeFileSync(lock, 'DIRC…the new index…');
+    assert.equal(staleIndexLock(root, { now: Date.now() + 60 * 60 * 1000 }), null,
+      'somebody is writing; that is not ours to judge');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('reporting a lock never removes it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-lock-'));
+  try {
+    fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+    const lock = path.join(root, '.git', 'index.lock');
+    fs.writeFileSync(lock, '');
+    staleIndexLock(root, { now: Date.now() + 10 * 60 * 1000 });
+    assert.ok(fs.existsSync(lock), 'deleting another process lock is how a real write gets corrupted');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a path that is not a repository is not a finding', () => {
+  assert.equal(staleIndexLock(null), null);
+  assert.equal(staleIndexLock(path.join(os.tmpdir(), 'flyt-not-a-repo-at-all')), null);
 });
