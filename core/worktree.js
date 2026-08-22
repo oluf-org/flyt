@@ -558,9 +558,43 @@ export class WorktreePool {
     return git(['rev-parse', 'HEAD'], { cwd: dir });
   }
 
-  async diff(taskId, { base, maxChars = 60_000 }) {
+  /**
+   * What this attempt has done to the workspace, so far.
+   *
+   * Two things were wrong with the obvious version, and both made it useless at
+   * exactly the moment somebody types it.
+   *
+   * The default base was the string `'HEAD'`, so it ran `git diff HEAD...HEAD`
+   * — a diff of a commit against itself, which is empty for every attempt that
+   * has ever existed. The base an attempt started from is on its owner record,
+   * where `create()` wrote it.
+   *
+   * And `a...b` compares two COMMITS. An attempt that is still running has
+   * written files and committed nothing, which is the state a supervisor most
+   * wants to look at: watched a worktree with 285 new lines in it report no
+   * diff at all. Diffing against the merge base, with no second revision,
+   * covers the commits and the working tree together.
+   *
+   * Untracked files are listed rather than inlined: `git diff` cannot see them
+   * and a new file is the most common shape of a first attempt, so "no diff"
+   * would again be the answer for work that is plainly there.
+   */
+  async diff(taskId, { base = null, maxChars = 60_000 } = {}) {
     const dir = this.dirFor(taskId);
-    const out = await git(['diff', `${base}...HEAD`], { cwd: dir });
+    const from = base ?? this.owner(taskId)?.base ?? await this.defaultBranch();
+    let anchor = from;
+    try { anchor = await git(['merge-base', from, 'HEAD'], { cwd: dir }); }
+    catch { /* an unborn or unrelated base: diff against it directly */ }
+
+    const changed = await git(['diff', anchor], { cwd: dir });
+    let untracked = '';
+    try {
+      const listed = await git(['ls-files', '--others', '--exclude-standard'], { cwd: dir });
+      const files = listed.split('\n').map(s => s.trim()).filter(Boolean);
+      if (files.length) untracked = `\n\n${files.length} untracked file(s):\n${files.map(f => `  ${f}`).join('\n')}`;
+    } catch { /* nothing to add */ }
+
+    const out = changed + untracked;
     return out.length > maxChars
       ? `${out.slice(0, maxChars)}\n…[diff truncated at ${maxChars} characters]`
       : out;

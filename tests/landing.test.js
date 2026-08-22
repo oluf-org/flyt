@@ -484,3 +484,36 @@ test('a worktree root inside the repository is refused, loudly', async () => {
   // Two checkouts that share a basename do not share a worktree directory.
   assert.notEqual(defaultWorktreeRoot('/a/repo', { home }), defaultWorktreeRoot('/b/repo', { home }));
 });
+
+test('the diff of a live attempt shows what it has written, committed or not', async () => {
+  // `flyt work diff <task>` is what a supervisor types to see what an attempt
+  // is doing, and it answered nothing for every attempt that ever ran.
+  //
+  // The default base was the string 'HEAD', so it ran `git diff HEAD...HEAD` —
+  // a commit against itself. And `a...b` compares two COMMITS, so even with a
+  // real base it could not see an attempt that had written files and committed
+  // nothing, which is the state you are looking at while one is still running.
+  const root = await makeRepo();
+  const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
+  const wt = await pool.create('t-0001', 'Write something');
+
+  // Uncommitted, in a file that already existed: `git diff` sees this.
+  fs.appendFileSync(path.join(wt.dir, 'src.js'), 'export const added = 1;\n');
+  // Untracked: `git diff` cannot see it at all, and a new file is the most
+  // common shape of a first attempt.
+  fs.writeFileSync(path.join(wt.dir, 'brand-new.js'), 'export const y = 2;\n');
+
+  // No base given — the one the attempt started from is on its owner record.
+  const live = await pool.diff('t-0001');
+  assert.match(live, /\+export const added = 1;/, 'work in flight is work');
+  assert.match(live, /1 untracked file\(s\)/);
+  assert.match(live, /brand-new\.js/, 'a file git is not tracking yet is still the attempt');
+
+  // And once committed it is still there, rather than disappearing because the
+  // comparison moved.
+  await pool.commit('t-0001', 'the work');
+  const settled = await pool.diff('t-0001');
+  assert.match(settled, /\+export const added = 1;/);
+
+  await pool.remove('t-0001', { deleteBranch: true });
+});
