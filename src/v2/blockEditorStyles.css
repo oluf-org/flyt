@@ -137,3 +137,40 @@
 
 .block-editor-empty .section-label { margin: 0; }
 .block-editor-empty p { margin: 0; }
+/* --- editing (t-0075) -----------------------------------------------------
+   One movement, doing one job: saying which node just changed and who changed
+   it. An edit a model made has to be as visible as one you made yourself, or
+   watching an agent work is watching a diff appear from nowhere. */
+.block-editor[data-editable] .be-node { cursor: grab; }
+.block-editor[data-editable] .be-node:active { cursor: grabbing; }
+
+.be-dragging { opacity: .45; }
+
+.be-touched {
+  animation: be-settle 600ms var(--spring, ease-out);
+}
+
+/* Who did it, in the one place it matters. The agent's colour is the
+   orchestrator hue the app already uses for "not you". */
+.be-touched.be-by-human { --be-touch: var(--accent); }
+.be-touched.be-by-agent { --be-touch: var(--orch, var(--accent)); }
+
+@keyframes be-settle {
+  0%   { box-shadow: 0 0 0 3px color-mix(in oklch, var(--be-touch, var(--accent)) 55%, transparent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still says which node changed, without moving. A reduced-motion reader
+     loses the animation, not the information. */
+  .be-touched { animation: none; outline: 2px solid var(--be-touch, var(--accent)); }
+}
+
+.be-refusal {
+  margin: 0;
+  padding: 8px 14px;
+  background: var(--err-soft);
+  color: var(--err);
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}

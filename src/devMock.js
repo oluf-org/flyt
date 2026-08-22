@@ -695,6 +695,78 @@ export function installDevMock() {
     onTabsKey: () => () => {},
     getConfig: async () => ({ workers: structuredClone(mockSettings.workers) }),
     getSettings: async () => structuredClone(mockSettings),
+
+    // What Build edits in the browser preview. Electron does not implement this
+    // yet — a project has no `stacks/` until Phase 2 — so the desktop app shows
+    // the empty editor, which is the honest state. Here it is a real parsed
+    // stack over the real command surface, so the editor, the drag and the
+    // agent-edit animation can all be looked at.
+    v2Build: async () => {
+      const [{ parseStack, createKernel, flytApi, flytBlocks, registerStackCommands }] =
+        await Promise.all([import('#kernel')]);
+      const kernel = createKernel();
+      await kernel.ctx.plugin(flytApi);
+      await kernel.ctx.plugin(flytBlocks);
+      await kernel.ctx.plugin({
+        name: 'preview-blocks',
+        inject: ['blocks'],
+        apply(ctx) {
+          for (const use of ['flyt:work', 'flyt:evaluate']) {
+            ctx.blocks.register({
+              use, title: use.split(':')[1], description: '', category: 'work',
+              settings: { type: 'object' }, ceiling: null,
+              async execute() { return { status: 'done', output: '' }; },
+            });
+          }
+        },
+      });
+
+      let root = parseStack(`version: 2
+id: preview
+name: A stack to look at
+blocks:
+  - id: plan
+    use: flyt:work
+    title: Plan the change
+  - id: fan
+    kind: parallel
+    maxParallel: 2
+    lanes:
+      - id: left
+        kind: sequence
+        blocks:
+          - id: write
+            use: flyt:work
+            title: Write it
+      - id: right
+        kind: sequence
+        blocks:
+          - id: check
+            use: flyt:evaluate
+            title: Check it
+  - id: gone
+    use: flyt:not-installed
+    title: A block nobody installed
+`).root;
+
+      const listeners = new Set();
+      kernel.ctx.on('commands/invoke', record => { for (const fn of listeners) fn(record); });
+      registerStackCommands(kernel.ctx, { get: () => root, set: next => { root = next; } });
+
+      const surface = {
+        get stack() { return { id: 'preview', root }; },
+        blocks: kernel.ctx.blocks,
+        commands: {
+          invoke: (name, args, caller) => kernel.ctx.commands.invoke(name, args, caller),
+          subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+        },
+      };
+      // So a person can watch an agent edit: from the console,
+      // `flytPreviewAgentEdit()` moves a block the way a model would.
+      globalThis.flytPreviewAgentEdit = (nodeId = 'plan', container = 'left', index = 0) =>
+        surface.commands.invoke('stack:move-block', { nodeId, to: { container, index } }, 'agent');
+      return surface;
+    },
     setSettings: async (patch = {}) => {
       if (patch.providerKeys) {
         for (const p of Object.keys(patch.providerKeys)) {

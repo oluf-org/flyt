@@ -128,3 +128,17 @@ test('an uncontrolled shell renders its own state, not the prop default', async 
   assert.match(src('v2/Shell.jsx'), /location = null/,
     'defaulting the prop to INITIAL makes the fallback unreachable');
 });
+
+test('the host re-reads the stack when a command settles, so an edit redraws', () => {
+  // Found by driving an agent edit in a browser: the node lit up and did not
+  // move. The animation comes from `commands/invoke`, which the editor hears;
+  // the geometry came from a `stack` prop captured on the render before, which
+  // nothing had told anybody to take again. The host owns "the stack changed" —
+  // an editor re-reading a mutable surface behind React's back would be a
+  // second source of truth for the tree.
+  const root = src('Root.jsx');
+  assert.match(root, /commands\.subscribe\(\(\) => setEdits/,
+    'something has to count the edits, or nothing re-renders');
+  assert.match(root, /stack: build\.stack/,
+    'and the stack is taken again on each of them, not held from the first render');
+});

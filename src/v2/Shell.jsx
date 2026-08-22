@@ -21,7 +21,14 @@ import BlockEditor from './BlockEditor.jsx';
  *   this. Found by clicking Build in a browser and watching the heading stay
  *   on Work.
  */
-export default function Shell({ location = null, onNavigate }) {
+/**
+ * @param build — what Build edits: `{ stack, blocks, commands }`. Absent, the
+ *   editor renders its empty state, which is what a project holding no stacks
+ *   should look like. The HOST supplies it; the shell does not go and find one,
+ *   because there is exactly one place the command surface may come from and it
+ *   is not a renderer component.
+ */
+export default function Shell({ location = null, onNavigate, build = null }) {
   const [focus, setFocus] = useState(location ?? INITIAL);
   const loc = resolveLocation(location, focus);
   const trace = traceOf(loc);
@@ -55,7 +62,11 @@ export default function Shell({ location = null, onNavigate }) {
       <section className="v2-panel" data-surface={here.surface}>
         <h1>{heading(loc.dest)}</h1>
         {loc.dest === BUILD
-          ? <BlockEditor />
+          ? <BlockEditor
+              stack={build?.stack ?? null}
+              blocks={build?.blocks ?? null}
+              commands={build?.commands ?? null}
+            />
           : trace
             ? <p className="muted">Trace of run <span className="mono">{trace.run}</span>.</p>
             : <p className="muted">No run addressed.</p>}
