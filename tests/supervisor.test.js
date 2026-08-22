@@ -603,6 +603,30 @@ test('the brief names the files the task said it would change', async () => {
   assert.match(brief, /hint about\s+scope rather than a fence/);
 });
 
+test('the brief says whether each named file exists, because those are different jobs', async () => {
+  // A task file naming `tests/library.test.js` for a brand-new v2 library sends
+  // the worker into two hundred lines about the v1 NODE library. It sent one
+  // there for ninety-three calls and forty cents, with an empty diff at the end.
+  // Saying which paths are new catches that from both sides: the worker reads
+  // it, and so does whoever is about to write the task.
+  const root = tmp();
+  fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'tests', 'library.test.js'), 'a\nb\nc\n');
+  const backlog = makeBacklog();
+  backlog.add({
+    title: 'The library',
+    goal: 'One search over everything',
+    blastRadius: ['src/v2/Library.jsx', 'tests/library.test.js']
+  });
+  const engine = fakeEngine({ backlog });
+  const sup = new Supervisor({ ...engine, projectId: root, backlog, pollMs: 1 });
+
+  await sup.run({ maxTasks: 1 });
+  const brief = engine.calls.find(c => c.name === 'flow:run').args.userInput;
+  assert.match(brief, /`src\/v2\/Library\.jsx` \(new\)/);
+  assert.match(brief, /`tests\/library\.test\.js` \(exists, 4 lines/);
+});
+
 test('a task that named no files says nothing about where the work goes', async () => {
   const backlog = makeBacklog();
   backlog.add({ title: 'Something', goal: 'Do something' });

@@ -157,13 +157,29 @@ const BUDGET_REASON = /per-task cap/;
  * ceiling already allows; it only stops the discovery pass from being the
  * whole attempt.
  */
-function whereItLands(task) {
+function whereItLands(task, root = null) {
   const paths = (task.blastRadius ?? []).map(p => String(p).trim()).filter(Boolean);
   if (!paths.length) return '';
+  // NEW or EXISTING, because those are different jobs and the agent finds out
+  // by reading either way. It also catches the mistake from the other side: a
+  // task file that names `tests/library.test.js` for a brand-new v2 library
+  // sends the worker into two hundred lines about the v1 node library, and it
+  // sent one there for four hundred calls and forty cents.
+  const label = p => {
+    if (!root) return `\`${p}\``;
+    try {
+      const full = path.resolve(root, p);
+      if (!fs.existsSync(full)) return `\`${p}\` (new)`;
+      const stat = fs.statSync(full);
+      if (stat.isDirectory()) return `\`${p}\` (an existing directory)`;
+      const lines = fs.readFileSync(full, 'utf8').split('\n').length;
+      return `\`${p}\` (exists, ${lines} lines — read it before you change it)`;
+    } catch { return `\`${p}\``; }
+  };
   return [
     'WHERE THIS WORK GOES (added by the supervisor):',
     '',
-    `Whoever wrote this task expected it to change: ${paths.map(p => `\`${p}\``).join(', ')}.`,
+    `Whoever wrote this task expected it to change: ${paths.map(label).join(', ')}.`,
     '',
     'Read those first — the contract you need is almost certainly in them, and a discovery pass',
     'that goes anywhere else is the part of the attempt that produces nothing. It is a hint about',
@@ -642,7 +658,7 @@ export class Supervisor {
     return [
       task.title,
       task.body,
-      whereItLands(task),
+      whereItLands(task, this.projectId),
       whereItCameFrom(task),
       HOW_IT_LANDS,
       task.blockedReason ? `\nA PREVIOUS ATTEMPT FAILED:\n${task.blockedReason}` : '',
