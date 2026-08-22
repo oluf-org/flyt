@@ -23,6 +23,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { JsonValue } from '../types.js';
 import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js';
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
+import { AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
 
 /** Cordis plugin name. */
 export const name = 'flyt-blocks-core';
@@ -84,6 +85,10 @@ export const WORK_SETTINGS = {
     model: { type: 'string', description: 'The model to ask for. Routing is the seam’s business.' },
     instructions: { type: 'string', description: 'Appended to the standing instructions above.' },
     maxSteps: { type: 'integer', minimum: 1, description: 'Tool rounds before it must answer.' },
+    effort: {
+      enum: ['low', 'medium', 'high'],
+      description: 'How hard to think. A hint, not a route — the pipeline effort dial writes here.',
+    },
     effect: {
       enum: ['workspace-change', 'artifact', 'none'],
       description: 'What this block owes. `workspace-change` fails where the work was, rather than looking finished until it is judged.',
@@ -146,6 +151,37 @@ export const workBlock: BlockDefinition = {
  *
  * @param ctx — the context to register in.
  */
+/**
+ * Define a one-shot core block: same executor, its own role brief.
+ */
+const aiStep = (use: string, title: string, description: string, brief: string): BlockDefinition => ({
+  use, title, description, category: 'work',
+  settings: AI_STEP_SETTINGS as unknown as JsonValue,
+  ceiling: [], // reads its input only; a stack grants tools by naming a ceiling
+  execute: run => executeAiStep(run, brief),
+});
+
+export const generalAnalysisBlock = aiStep('flyt-blocks-core:general-analysis', 'General analysis',
+  'General text analysis: summary, structure, claims and evidence, gaps, risks, recommendations.',
+  'Analyse the input. Give a summary, its structure, the claims and the evidence for them, the gaps, the risks, and a recommendation. Ground every claim in what you were given.');
+export const combineBlock = aiStep('flyt-blocks-core:combine', 'Combine',
+  'Merge parallel upstream outputs into one coherent deliverable, keeping the best of each.',
+  'Merge the upstream outputs into one coherent deliverable, keeping the best of each. Small fixes inline; a larger gap becomes a named fix task, not a silent patch.');
+export const splitBlock = aiStep('flyt-blocks-core:split', 'Split',
+  'Divide the upstream work into clearly labeled independent parts that downstream blocks can run in parallel.',
+  'Divide the upstream work into clearly labeled, independent parts that downstream blocks can run in parallel.');
+export const planStartBlock = aiStep('flyt-blocks-core:plan-start', 'Plan',
+  'Produce a tasks.md with well-defined tasks and explicit per-file context.',
+  ['ROLE: plan-start',
+    'Given the brief, produce ONLY a structured tasks.md.',
+    'Decompose the work into the smallest independently-verifiable tasks that still carry real meaning.',
+    'For every task include a "Context files:" section naming each file and, per file, exactly which part is needed.',
+    'Call out risks, unknowns, and acceptance criteria per task.'].join('\n'));
+
 export function apply(ctx: Context): void {
   ctx.blocks.register(workBlock);
+  ctx.blocks.register(generalAnalysisBlock);
+  ctx.blocks.register(combineBlock);
+  ctx.blocks.register(splitBlock);
+  ctx.blocks.register(planStartBlock);
 }

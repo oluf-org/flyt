@@ -1,0 +1,11 @@
+id: flyt-tools-backlog
+name: Backlog tools
+kind: tool-plugin
+version: 1
+description: |
+  The tools that read and change the task queue a worker lives in. Delivery,
+  not grant — reached through the `loop` ceiling.
+contributes:
+  tools: [list_tasks, read_task, why_blocked, read_run, create_task, enqueue_task, update_task, write_task_md]
+ceilings:
+  - loop

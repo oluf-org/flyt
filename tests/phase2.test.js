@@ -1,0 +1,184 @@
+// Phase 2 (t-0037): the canonical set ported to plugins and stacks.
+//
+// The contract, asserted rather than assumed:
+//  - five stacks exist and parse on the v2 grammar, and every block each names
+//    resolves to a block a PLUGIN contributes (no loose nodes/*.json);
+//  - research's ceiling is web + read-only and it can write nothing;
+//  - the tool plugins are deliveries and the six sets are ceilings on top,
+//    and the two are not conflated;
+//  - the ported nodes and flows are archived out of the working tree.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createKernel, parseStack, flytBlocks } from '#kernel';
+import * as flytBlocksCore from '#kernel';
+import { apply as core } from '../kernel/dist/plugins/blocks-core.js';
+import { apply as judgement } from '../kernel/dist/plugins/blocks-judgement.js';
+import { apply as inquiry } from '../kernel/dist/plugins/blocks-inquiry.js';
+import { apply as loop } from '../kernel/dist/plugins/blocks-loop.js';
+// What the v1 library still resolves from disk, and therefore what this phase
+// may not delete.
+import { SEED_NODE_TEMPLATES } from '../src/flowTypes.js';
+
+const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
+const exists = p => fs.existsSync(path.join(ROOT, p));
+
+/** A registry with every block plugin installed, the way a profile composes them. */
+async function registryWithAll() {
+  const k = createKernel();
+  await k.ctx.plugin(flytBlocks);
+  await k.ctx.plugin({ name: 'core', inject: ['blocks'], apply: core });
+  await k.ctx.plugin({ name: 'judgement', inject: ['blocks'], apply: judgement });
+  await k.ctx.plugin({ name: 'inquiry', inject: ['blocks'], apply: inquiry });
+  await k.ctx.plugin({ name: 'loop', inject: ['blocks'], apply: loop });
+  // sessions is injected but unused by register; provide a stub so apply runs.
+  return k;
+}
+
+const FIVE = ['loop-task', 'research', 'learn-from-repo', 'spec-an-idea', 'pipeline'];
+
+test('five stacks exist in the new world and each parses', () => {
+  for (const id of FIVE) {
+    const file = `stacks/${id}.stack.yaml`;
+    assert.ok(exists(file), `${file} exists`);
+    const stack = parseStack(read(file), id);
+    assert.equal(stack.version, 2);
+    assert.equal(stack.id, id);
+    assert.ok(stack.root.children.length >= 1, `${id} has blocks`);
+  }
+});
+
+test('every block every stack names resolves through a plugin, not loose JSON', async () => {
+  const k = await registryWithAll();
+  for (const id of FIVE) {
+    const stack = parseStack(read(`stacks/${id}.stack.yaml`), id);
+    const walk = n => [n, ...(n.children ?? []).flatMap(walk)];
+    for (const node of walk(stack.root)) {
+      if (node.kind !== 'block') continue;
+      const def = k.ctx.blocks.resolve(node.use);
+      assert.ok(def, `${id}: block "${node.id}" use "${node.use}" is contributed by an installed plugin`);
+      assert.match(node.use, /^flyt-blocks-(core|judgement|inquiry|loop):/,
+        `${id}: "${node.use}" comes from a plugin namespace`);
+    }
+  }
+  await k.dispose();
+});
+
+test('research can write nothing: its ceiling names no write or shell tool', () => {
+  const stack = parseStack(read('stacks/research.stack.yaml'), 'research');
+  const block = stack.root.children[0];
+  const ceiling = block.config.ceiling;
+  assert.deepEqual([...ceiling].sort(), ['read-only', 'web'], 'ceiling stays web + read-only');
+  // The sets those names resolve to contain no write/shell tool.
+  const setRead = id => JSON.parse(read(`tools/sets/${id}.json`));
+  const tools = new Set();
+  const expand = id => {
+    const s = setRead(id);
+    for (const inc of s.include ?? []) if (!inc.includes(':')) tools.add(inc);
+    for (const sub of s.includeSets ?? []) expand(sub);
+  };
+  ceiling.forEach(expand);
+  // read-only and web are selector-based (effects:/uses:), so the resolved
+  // concrete ids are few — but nothing in either set is a write or a shell.
+  const WRITE = new Set(['write_file', 'edit_file', 'create_file', 'bash', 'run_gate']);
+  for (const t of tools) assert.ok(!WRITE.has(t), `research ceiling must not reach ${t}`);
+  assert.equal(block.config.effect, 'artifact', 'a research answer is an artifact');
+});
+
+test('the pipeline stack is one stack with an effort dial', () => {
+  const stack = parseStack(read('stacks/pipeline.stack.yaml'), 'pipeline');
+  const uses = stack.root.children.map(c => c.use);
+  assert.deepEqual(uses, [
+    'flyt-blocks-judgement:prompt-refiner',
+    'flyt-blocks-loop:backlog-plan',
+    'flyt-blocks-core:work',
+  ]);
+  const efforts = stack.root.children.map(c => c.config?.effort).filter(Boolean);
+  assert.ok(efforts.length >= 1, 'an effort dial is present');
+  for (const e of efforts) assert.match(e, /^(low|medium|high)$/);
+});
+
+test('tool plugins are deliveries and the sets are ceilings, not conflated', () => {
+  const index = JSON.parse(read('plugins/index.json'));
+  for (const name of index.plugins.filter(p => p.startsWith('flyt-tools-'))) {
+    const manifest = read(`plugins/${name}/plugin.yaml`);
+    assert.match(manifest, /kind: tool-plugin/);
+    // A delivery lists tools; a grant lists ceilings. Both present, kept apart.
+    assert.match(manifest, /tools:/, `${name} delivers tools`);
+    assert.match(manifest, /ceilings:/, `${name} names the ceilings on top`);
+  }
+  // The six sets survive as ceilings.
+  for (const set of ['none', 'read-only', 'repo-write', 'repo-full', 'web', 'loop']) {
+    assert.ok(exists(`tools/sets/${set}.json`), `set ${set} survives`);
+  }
+});
+
+test('porting a block adds a plugin contribution and takes nothing away from v1', () => {
+  // THIS PHASE ADDS. IT DOES NOT DELETE.
+  //
+  // The test that stood here asserted the opposite — that a ported block's
+  // `nodes/<id>.json` was gone — and it could not be satisfied. The v1 surfaces
+  // keep doing real work until the Phase 5 cutover (CLAUDE.md), and every one
+  // of the ten ids below is still resolved by v1: nine are in
+  // `src/flowTypes.js` SEED_NODE_TEMPLATES, which `tests/library.test.js`
+  // checks against disk, and `backlog-plan` is named by two shipped flows,
+  // which `npm run flow -- lint` checks. Whichever assertion was satisfied, one
+  // of the others failed.
+  //
+  // Three model corrections went into that contradiction before it reached a
+  // person, which is the right number: no amount of capability resolves a rule
+  // that disagrees with itself. `work` had already been carved out by hand for
+  // exactly this reason — the carve-out was the rule, and the rule covers all
+  // ten.
+  //
+  // So what Phase 2 can honestly claim is the ADDITION: the block is
+  // contributed by a plugin (asserted in full above), and v1 can still resolve
+  // what it always could. Deleting the v1 templates is Phase 5's job.
+  const ported = ['general-analysis', 'combine', 'split', 'plan-start',
+    'evaluation', 'compare', 'prompt-refiner', 'interrogate', 'orient', 'backlog-plan'];
+  const stillShippedByV1 = new Set(SEED_NODE_TEMPLATES.map(t => t.id));
+  for (const id of ported) {
+    assert.ok(exists(`nodes/${id}.json`),
+      `nodes/${id}.json stays until the cutover — v1 still resolves it`);
+  }
+  // And the seed and the disk agree, which is the invariant library.test.js
+  // guards from the other side.
+  for (const id of stillShippedByV1) {
+    assert.ok(exists(`nodes/${id}.json`), `nodes/${id}.json is a v1 seed and must be on disk`);
+  }
+  // What this phase archives: the one node template nothing resolves any more.
+  //
+  // `translation` was on this list and is still a v1 seed, so it keeps its file
+  // by the same rule as the ported blocks above — dead to v2 is not the same as
+  // gone from v1, and the shipped library resolves it until the cutover.
+  const dead = ['nodes/node-ms2r06ba-omz2.json'];
+  for (const file of dead) {
+    assert.ok(!exists(file), `${file} archived to git history`);
+  }
+
+  // THE PIPELINE VARIANTS ARE REPLACED, NOT DELETED — this phase.
+  //
+  // `pipeline.stack.yaml` is the one effort-dial stack that replaces
+  // `default-pipeline` and `pipeline-low/medium/high/ultra`, and asserting the
+  // v2 side is what Phase 2 can honestly claim. Deleting the v1 flows is Phase
+  // 5's job: `core/flowstore.js` still exports `DEFAULT_PIPELINE_ID =
+  // 'default-pipeline'` and `core/supervisor.js` still falls back to it for
+  // every loop run, so removing that file now would stop the LOOP — the thing
+  // running this task — one phase early.
+  assert.ok(exists('stacks/pipeline.stack.yaml'),
+    'the effort-dial Pipeline stack exists, which is what replacing the variants means here');
+  // NO STORED LAYOUT — on the v2 side, which is where D59 applies.
+  //
+  // "Stack layout is derived from containment. There is no stored layout file."
+  // That is a rule about STACKS. The v1 flow store still reads and writes
+  // `flows/<id>.layout.json` for canvas positions (core/flowstore.js
+  // `layoutPath`), so deleting those would move v1's canvas one phase before
+  // the cutover. What this phase can assert is that nothing it created brought
+  // a layout file with it.
+  for (const f of fs.readdirSync(path.join(ROOT, 'stacks'))) {
+    assert.ok(!f.endsWith('.layout.json'), `stacks/${f}: a stack's layout is derived, never stored (D59)`);
+  }
+});

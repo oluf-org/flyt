@@ -1,0 +1,11 @@
+id: flyt-tools-human
+name: Human tools
+kind: tool-plugin
+version: 1
+description: |
+  The tool that asks a person rather than guessing. Delivery, not grant —
+  reached through the `loop` ceiling.
+contributes:
+  tools: [ask_human]
+ceilings:
+  - loop

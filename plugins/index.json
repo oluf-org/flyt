@@ -1,0 +1,13 @@
+{
+  "plugins": [
+    "flyt-blocks-core",
+    "flyt-blocks-judgement",
+    "flyt-blocks-inquiry",
+    "flyt-blocks-loop",
+    "flyt-tools-repo",
+    "flyt-tools-web",
+    "flyt-tools-backlog",
+    "flyt-tools-inspect",
+    "flyt-tools-human"
+  ]
+}

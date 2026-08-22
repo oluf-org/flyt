@@ -1,0 +1,36 @@
+version: 2
+id: spec-an-idea
+name: Spec an idea
+description: |
+  Bring a half-formed idea. The interrogation asks a few rounds of questions —
+  what it is for, what would make it wrong, what is deliberately out of scope —
+  and writes the specification the answers settled. The plan turns that
+  specification into claimable backlog tasks, and the handoff queues them.
+  Ported as-is from the v1 flow; the interrogation keeps its multi-round
+  contract (D46).
+
+blocks:
+  - id: interrogate
+    use: flyt-blocks-inquiry:interrogate
+    title: What are we actually building?
+    config:
+      instructions: |
+        Ask a few bounded rounds — goal, non-goals, constraints, acceptance —
+        then write the specification the answers settle. Mark every assumption
+        you had to take as an assumption.
+
+  - id: plan
+    use: flyt-blocks-loop:backlog-plan
+    title: What this becomes
+    config:
+      instructions: |
+        The specification was settled WITH the person who asked for it — its
+        Goal, Non-goals, Constraints and Acceptance are decisions, not guesses,
+        so do not quietly re-open them. What is not settled is in the open
+        items; where a task rests on an assumption, say so in its goal.
+        Propose only work this project should genuinely do, prefer tasks that
+        land on their own, and confirm every path in blastRadius.
+
+  - id: handoff
+    use: flyt-blocks-loop:loop-handoff
+    title: Queue it
