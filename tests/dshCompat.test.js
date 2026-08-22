@@ -142,10 +142,15 @@ const COVERAGE = {
   // install here and saying so is the honest answer rather than a gap.
   agents: null,
 
+  // Ours, provided, and a bridge rather than a contract: it wraps the JS
+  // core's adapters, which speak the OpenAI shape every provider here speaks.
+  // A dsh plugin providing a model would provide it through dsh's own LLM
+  // service, which is a larger contract; that is the stated limit.
+  llm: null,
+
   // Declared, not yet provided. Each becomes a pinned plugin when it gains a
   // provider — which is what makes that task fail here until it does.
   sessions: null,
-  llm: null,
   fs: null,
   shell: null,
   commands: null,

@@ -27,6 +27,8 @@ export * as flytStackCommands from './plugins/stack-commands.js';
 export * as flytBlocks from './plugins/blocks.js';
 export * as flytStackRunner from './plugins/stack-runner.js';
 export * as flytRunProjection from './plugins/run-projection.js';
+export * as flytAdapters from './plugins/llm-adapters.js';
+export { routeOf } from './plugins/llm-adapters.js';
 export { StackRunner } from './plugins/stack-runner.js';
 export type { StackSource, StackRunnerConfig } from './plugins/stack-runner.js';
 export { BlockRegistry, missingBlocks } from './plugins/blocks.js';
