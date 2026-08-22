@@ -1,0 +1,139 @@
+/* --- the block editor (t-0074) --------------------------------------------
+   A stack drawn from the derived layout, read-only. Every box here is a
+   function of the tree (D59): nothing is stored, and nothing is interactive —
+   editing is t-0075. Phase 1 ships Sequence and Parallel only, and nesting is
+   the whole composition, so containers render as boxes that enclose their
+   children and there are no edges anywhere. Tokens only — the derived palette
+   in styles.css is the design language, and a new colour here would be a
+   second one. */
+
+.block-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 20px 24px;
+}
+
+.block-editor-scroll {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--canvas);
+  padding: 16px;
+}
+
+.block-editor-stack {
+  position: relative;
+  /* The whole stack is one box: blocks and containers inside it are placed
+     absolutely from the derived layout. */
+}
+
+/* Every node — a leaf block or a container — drawn from its box. A container
+   IS its box, so a sequence visibly holds its blocks and a parallel visibly
+   holds its lanes. */
+.be-node {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--tx);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.block-frame {
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-rest);
+  padding: 10px 12px;
+  gap: 4px;
+}
+
+.container-frame {
+  border: 1px dashed var(--divider);
+  background: var(--side);
+  padding: 8px 10px;
+  gap: 6px;
+}
+
+.be-block-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.be-block-use {
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A block nobody installed: drawn as missing, saying which use is missing.
+   Not a normal block and not invisible — rose is the token reserved for
+   failure, and "this will not run" is a failure to say before a run. */
+.be-node.missing {
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
+.be-node.missing .be-block-title { color: var(--err); }
+
+.be-block-missing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--err);
+}
+
+.be-block-missing .mono { color: var(--err); }
+
+.be-container-type {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding: 0 4px;
+}
+
+/* The lane rail: one dot per lane of a parallel, so a parallel with no blocks
+   drawn inside it still reads as a parallel rather than an empty box. */
+.be-lane-rail {
+  display: flex;
+  gap: 5px;
+  padding: 2px 4px;
+}
+
+.be-lane-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--divider);
+}
+
+/* An empty stack draws as an empty stack rather than as nothing. */
+.block-editor-empty {
+  padding: 24px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: var(--side);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--dim);
+  align-self: stretch;
+}
+
+.block-editor-empty .section-label { margin: 0; }
+.block-editor-empty p { margin: 0; }
