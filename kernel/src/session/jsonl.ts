@@ -290,9 +290,16 @@ export function deriveMessages(events: readonly SessionEvent[], upTo?: number): 
         const id = String(data.callId ?? data.id ?? '');
         const pending = requested.get(id);
         if (pending) pending.answered = true;
+        // The CONTENT is what the writer meant the model to read, and it wins
+        // wherever there is one. `refusal()` builds `Refused: <reason>` on
+        // purpose, and rewriting that as `Error: <reason>` tells the model the
+        // wrong thing about what happened: an error invites another attempt,
+        // and a refusal invites a different approach. The error is the fallback
+        // for a result that carries one and nothing to say.
+        const text = String(data.content ?? '');
         const message: Message = {
           role: 'tool',
-          content: data.error ? `Error: ${String(data.error)}` : String(data.content ?? ''),
+          content: text || (data.error ? `Error: ${String(data.error)}` : ''),
           toolCallId: id,
         };
         const name = String(data.name ?? pending?.name ?? '');
