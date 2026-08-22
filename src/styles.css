@@ -5197,3 +5197,24 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 }
 .v2-trace-chip:hover { color: var(--tx); }
 .v2-trace-chip.active { background: var(--accent-soft); color: var(--accent); }
+/* --- compact density (D4) ------------------------------------------------- */
+/* A board set to compact drops each collapsed card to ONE line - no value/
+   effort chip, no blocker sentence - for scanning eighty tasks rather than
+   reading six. The choice lives in the data attribute on the board, so these
+   rules are keyed off it and there is still exactly one card renderer. An
+   open card is a person reading one task, so it gets the roomy look back. */
+.loop-board[data-density="compact"] .loop-card { padding: 0 7px; }
+.loop-board[data-density="compact"] .loop-card-head { font-size: 11px; line-height: 1.15; gap: 6px; }
+.loop-board[data-density="compact"] .loop-card-head .caret { font-size: 8px; }
+.loop-board[data-density="compact"] .loop-card-head .id { font-size: 10px; }
+.loop-board[data-density="compact"] .loop-card-head .chip { display: none; }
+.loop-board[data-density="compact"] .loop-card-line { display: none; }
+.loop-board[data-density="compact"] .loop-card .source-run { display: none; }
+/* The hover-revealed action row would re-grow the card mid-scan; the keyboard
+   paths (j/k, enter, r, x) still reach every one of those actions. */
+.loop-board[data-density="compact"] .loop-card-actions { display: none; }
+.loop-board[data-density="compact"] .loop-column-cards { gap: 2px; }
+.loop-board[data-density="compact"] .loop-card.open { padding: 6px 9px; }
+.loop-board[data-density="compact"] .loop-card.open .loop-card-head { font-size: 12px; line-height: 1.5; }
+.loop-board[data-density="compact"] .loop-card.open .loop-card-head .chip { display: revert; }
+

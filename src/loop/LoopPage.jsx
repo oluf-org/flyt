@@ -20,7 +20,7 @@ import LoopChat from './LoopChat.jsx';
 
 const POLL_MS = 3000;
 
-export default function LoopPage({ projectId, activeModels = [], onOpenRun = null }) {
+export default function LoopPage({ projectId, activeModels = [], onOpenRun = null, density = 'comfortable', onDensityChange = null }) {
   const [status, setStatus] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [blockers, setBlockers] = useState({});
@@ -459,6 +459,20 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
           title="Keyboard shortcuts"
           onClick={() => setShowKeys(v => !v)}
         >?</button>
+        {/* Density (D4): comfortable when you are reading six tasks,
+            compact when you are scanning eighty. The choice is per-project
+            and survives a reload via saveProjectState. */}
+        <div className="loop-density" role="group" aria-label="Card density">
+          {[['comfortable', 'Comfortable'], ['compact', 'Compact']].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={`loop-density-btn${density === value ? ' active' : ''}`}
+              aria-pressed={density === value}
+              onClick={() => onDensityChange?.(value)}
+            >{label}</button>
+          ))}
+        </div>
       </div>
 
       {showKeys && (
@@ -471,6 +485,7 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
       )}
 
       <Board
+        density={density}
         columns={columns}
         banner={banner}
         tasksById={tasksById}

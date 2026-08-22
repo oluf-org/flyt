@@ -879,6 +879,7 @@ export default function App() {
       runInputs: slim.runInputs ?? {}, runInput: slim.runInput,
       workspaceDir: slim.workspaceDir,
       flowViewMode: slim.flowViewMode, runView2: slim.runView2,
+      loopDensity: slim.loopDensity ?? 'comfortable',
       runs: []
     };
     if (slim.activeFlowId) {
@@ -2424,6 +2425,8 @@ export default function App() {
                 projectId={activeTab}
                 activeModels={activeModels}
                 onOpenRun={id => { setActiveActivity('runs'); openRun(id); }}
+                density={loopDensity}
+                onDensityChange={setLoopDensity}
               />
             : libraryView
             ? <NodesPage
