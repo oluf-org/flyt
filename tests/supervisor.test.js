@@ -13,7 +13,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { Ledger, costOf, spendFromRun } from '../core/ledger.js';
 import { Heartbeat, detectStall, workSignature, nextIntervention, DEFAULT_THRESHOLDS } from '../core/heartbeat.js';
-import { Supervisor, renderReport, providerBlocked, modelUnavailable, UNAVAILABLE_RETRIES } from '../core/supervisor.js';
+import {
+  Supervisor, renderReport, providerBlocked, modelUnavailable, UNAVAILABLE_RETRIES, LEASE_WAIT_MS,
+} from '../core/supervisor.js';
 import { Backlog } from '../core/backlog.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-sup-'));
@@ -728,16 +730,23 @@ test('a model that never comes back stops being waited for', async () => {
     'and it is recorded as what it was, not as work that failed');
 });
 
-test('a lease left by a stopped loop is waited out, not parked forever', async () => {
-  // Watched it: a loop was stopped mid-attempt, the next session found the
-  // worktree lease still held and parked the task — permanently, since a park
-  // is the one outcome nothing recovers from on its own. But the pool releases
-  // a slot whose owner's heartbeat has gone stale, so this is a wait.
+test('a lease left by a stopped loop is waited out, not spun on', async () => {
+  // Watched both halves of this go wrong. First a park: a loop stopped
+  // mid-attempt leaves the worktree lease held, and the next session parked the
+  // task permanently rather than waiting for the heartbeat to go stale.
+  //
+  // Then, with the wait in place but no delay behind it, a spin — the picker
+  // runs every five seconds and a lease takes ten MINUTES to expire, so all
+  // three tries were spent inside a minute and the task parked anyway:
+  //
+  //   ↻ t-0071 set aside: already has a live attempt … Waiting.
+  //   ↻ t-0071 set aside: already has a live attempt … Waiting.
+  //   ⏸ t-0071 parked: Could not start …
   const backlog = makeBacklog();
   backlog.add({ title: 'first', goal: 'g', value: 5, effort: 1, level: 'medium' });
   const engine = fakeEngine({ backlog });
   const held = Object.assign(
-    new Error('Task "t-0001" already has a live attempt (t-0001-abc). Stop or discard it before starting another.'),
+    new Error('Task "t-0001" already has a live attempt (t-0001-abc).'),
     { code: 'attempt_live' },
   );
   let starts = 0;
@@ -746,13 +755,25 @@ test('a lease left by a stopped loop is waited out, not parked forever', async (
     if (name === 'work:start' && starts++ === 0) throw held;
     return inner(name, args);
   };
-  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+  const said = [];
+  const sup = new Supervisor({
+    ...engine, projectId: 'p', backlog, pollMs: 1, log: m => said.push(String(m)),
+  });
 
-  await sup.run({ maxTasks: 2 });
+  // The clock is injected, so the wait can be watched rather than waited out.
+  let clock = 0;
+  sup.now = () => clock;
+  const run = sup.run({ maxTasks: 2 });
+  // Let it collide and set the task aside, then move past the wait.
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(starts, 1, 'it tried once and stopped trying — that is the wait');
+  assert.ok(said.some(m => /set aside for \d+ min/.test(m)), said.join(' | '));
+  clock = LEASE_WAIT_MS + 1;
+  await run;
 
   const task = backlog.get('t-0001');
   assert.notEqual(task.status, 'blocked', 'a held lease is a wait, not a decision for a person');
-  assert.ok(starts >= 2, 'and the next pass tried it again');
+  assert.ok(starts >= 2, 'and once the wait was over it tried again');
 });
 
 test('a restart resets every counter that measures headway, not just some of them', () => {

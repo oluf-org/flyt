@@ -283,6 +283,15 @@ export function modelUnavailable(error) {
  * making.
  */
 export const UNAVAILABLE_RETRIES = 3;
+/**
+ * How long a task waits after colliding with a live attempt.
+ *
+ * A worktree lease goes stale after `OWNER_LIVE_MS` (ten minutes) without a
+ * heartbeat, so waiting for one is a wait of MINUTES. Releasing the task back
+ * to a picker that runs every five seconds is not a wait; it is a spin that
+ * spends the whole allowance before the lease could possibly have expired.
+ */
+export const LEASE_WAIT_MS = 4 * 60 * 1000;
 
 export function providerBlocked(error) {
   const s = String(error ?? '');
@@ -345,6 +354,7 @@ export class Supervisor {
     this.durations = [];       // how long each finished attempt took, for the outlier detector
     this.parked = [];          // things waiting on a person
     this.unavailable = new Map(); // taskId → times its model did not answer at all
+    this.deferred = new Map();    // taskId → the earliest moment it is worth trying again
     this.noEscalate = false;   // set when the soft cap trips
     // The last green canary's output — the base branch's own test count, handed
     // to the next task as its "before" (§7.3).
@@ -435,6 +445,16 @@ export class Supervisor {
         if (this.inFlight.size >= this.parallelism) { await this.#tick(); continue; }
 
         const task = this.backlog.take('supervisor', { only: this.only });
+        // A task set aside a moment ago is not ready yet, whatever the picker
+        // thinks. Put it back and take a tick: the picker scores what is
+        // QUEUED, and a task waiting for someone else's lease to expire is
+        // queued and not startable, which are different things.
+        if (task && (this.deferred.get(task.id) ?? 0) > this.now()) {
+          this.backlog.release(task.id, { status: 'queued' });
+          await this.#tick();
+          continue;
+        }
+        if (task) this.deferred.delete(task.id);
         if (!task) {
           // Nothing ready. If work is in flight it may unblock something, so
           // keep polling; otherwise the loop is genuinely done.
@@ -636,9 +656,19 @@ export class Supervisor {
         const seen = (this.unavailable.get(task.id) ?? 0) + 1;
         this.unavailable.set(task.id, seen);
         if (seen <= UNAVAILABLE_RETRIES) {
+          // DEFERRED, not just released. The lease goes stale after
+          // `OWNER_LIVE_MS` without a heartbeat, so "wait for it" is a wait of
+          // minutes — and releasing it back to a picker that runs every five
+          // seconds is not a wait, it is a spin. Watched it burn all three
+          // tries in under a minute and park the task:
+          //
+          //   ↻ t-0071 set aside: already has a live attempt … Waiting.
+          //   ↻ t-0071 set aside: already has a live attempt … Waiting.
+          //   ⏸ t-0071 parked: Could not start …
+          this.deferred.set(task.id, this.now() + LEASE_WAIT_MS);
           this.backlog.release(task.id, { status: 'queued' });
-          this.log(`↻ ${task.id} set aside: ${err.message} Waiting for that lease to go stale.`,
-            { taskId: task.id });
+          this.log(`↻ ${task.id} set aside for ${Math.round(LEASE_WAIT_MS / 60000)} min:`
+            + ` ${err.message} Waiting for that lease to go stale.`, { taskId: task.id });
           this.#publish();
           return;
         }
