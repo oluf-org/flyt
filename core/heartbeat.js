@@ -169,6 +169,37 @@ export class Heartbeat {
     return false;
   }
 
+  /**
+   * A rung was taken: the attempt starts again from here.
+   *
+   * Every counter that measures "since the work last changed" resets, because
+   * a restart IS the work changing — it is the supervisor changing it. Watched
+   * what happens when only some of them do:
+   *
+   *   … burn: $0.15 spent since anything last changed. → nudge
+   *   … burn: $0.22 spent since anything last changed. → restart
+   *   … burn: $0.23 spent since anything last changed. → escalate
+   *
+   * The threshold was $0.15. `repeats` was reset after each restart and
+   * `usdSinceProgress` was not, so the moment it crossed once it stayed
+   * crossed, and the next poll — eight cents later — burned the next rung.
+   * Three rungs on one observation, two of them never given a chance to work.
+   *
+   * That is the same defect the deferred-restart change fixed for the spin
+   * counter, one field along. One method, so the next counter added to
+   * `observe()` cannot be reset in one place and forgotten in the other.
+   */
+  restarted(now = Date.now()) {
+    this.lastProgressAt = now;
+    this.repeats = 0;
+    this.gateFailures = [];
+    this.tokensSinceProgress = 0;
+    this.usdSinceProgress = 0;
+    // The signature too: the run was stopped and relaunched, so the bytes it
+    // had are not evidence about the attempt that is starting.
+    this.signature = null;
+  }
+
   /** A gate result, for the groundhog detector. */
   observeGate(failure) {
     if (!failure) { this.gateFailures = []; return; }

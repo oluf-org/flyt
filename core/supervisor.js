@@ -731,11 +731,13 @@ export class Supervisor {
       }
       hb.pendingRestart = null;
       hb.restartWaits = 0;
-      // A restart is a fresh attempt: the spin counters start over, or the next
-      // poll would trip the same detector instantly and burn the ladder.
-      hb.repeats = 0;
-      hb.gateFailures = [];
-      hb.lastProgressAt = this.now();
+      // A restart is a fresh attempt: EVERY counter that measures "since the
+      // work last changed" starts over, or the next poll trips the same
+      // detector and burns the next rung. This reset used to name the spin
+      // counters only, and the burn counter went on accumulating — so a task
+      // whose burn threshold was $0.15 took nudge, restart and escalate inside
+      // a few polls, at $0.15, $0.22 and $0.23.
+      hb.restarted(this.now());
       this.log(`  ${taskId} ${rung}: restarted ${nodeId} with guidance`, { taskId });
       return;
     }

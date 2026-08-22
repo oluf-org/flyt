@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Ledger, costOf, spendFromRun } from '../core/ledger.js';
-import { Heartbeat, detectStall, workSignature, nextIntervention } from '../core/heartbeat.js';
+import { Heartbeat, detectStall, workSignature, nextIntervention, DEFAULT_THRESHOLDS } from '../core/heartbeat.js';
 import { Supervisor, renderReport, providerBlocked, modelUnavailable, UNAVAILABLE_RETRIES } from '../core/supervisor.js';
 import { Backlog } from '../core/backlog.js';
 
@@ -731,6 +731,37 @@ test('a lease left by a stopped loop is waited out, not parked forever', async (
   assert.ok(starts >= 2, 'and the next pass tried it again');
 });
 
+test('a restart resets every counter that measures headway, not just some of them', () => {
+  // Watched three rungs burn on one observation:
+  //
+  //   … burn: $0.15 spent since anything last changed. → nudge
+  //   … burn: $0.22 spent since anything last changed. → restart
+  //   … burn: $0.23 spent since anything last changed. → escalate
+  //
+  // The threshold was $0.15. `repeats` was reset after each restart and
+  // `usdSinceProgress` was not, so once it crossed it stayed crossed and every
+  // later poll took the next rung — eight cents apart, two of them never given
+  // a chance to work.
+  const hb = new Heartbeat({ taskId: 't-1', runId: 'r-1', now: 0 });
+  const snap = { meta: { stage: 'execution', nodeStatus: { a: 'active' } } };
+  hb.observe(snap, { now: 1, usd: 0.08, workspace: 'same' });
+  hb.observe(snap, { now: 2, usd: 0.08, workspace: 'same' });
+  assert.ok(hb.usdSinceProgress >= 0.08, 'it was accumulating, which is its job');
+  assert.ok(hb.repeats >= 1);
+
+  hb.restarted(3);
+  assert.equal(hb.usdSinceProgress, 0, 'the money spent before the restart is not evidence about after it');
+  assert.equal(hb.tokensSinceProgress, 0);
+  assert.equal(hb.repeats, 0);
+  assert.deepEqual(hb.gateFailures, []);
+  assert.equal(hb.signature, null,
+    'the bytes the stopped run had are not evidence about the attempt starting');
+  assert.equal(hb.lastProgressAt, 3);
+
+  // And the detector agrees: the restarted attempt is not immediately stalled.
+  assert.equal(detectStall(hb, { thresholds: { ...DEFAULT_THRESHOLDS, burnUsd: 0.15 } }), null);
+});
+
 test('a task the agent says cannot be done here is parked, not escalated', async () => {
   // The brief promises this: change nothing, say so, and it will be parked for
   // a person. A loop that then escalated the task to a more expensive model
@@ -1083,19 +1114,26 @@ test('the burn detector is handed real numbers', async () => {
     }]
   };
 
+  const said = [];
   const sup = new Supervisor({
     ...engine, invoke,
     projectId: 'p', backlog, ledger, store, pollMs: 1,
+    log: m => said.push(String(m)),
     config: { loop: { caps: { taskUsd: 2 }, thresholds: { silentMs: 1e9, spinMs: 1e9, spinRepeats: 1e9 } } }
   });
   const status = await sup.run({ maxTasks: 1 });
 
   const hb = status.inFlight[0];
   assert.ok(!hb, 'the task did not stay in flight forever');
-  const interventions = sup.history.map(h => h.stage);
-  assert.ok(interventions.length, 'it ended, one way or another');
-  assert.ok(sup.parked.length === 0 || /spent since anything last changed/.test(sup.parked[0].reason),
-    `a burn should be named as one: ${sup.parked[0]?.reason}`);
+  assert.ok(sup.history.length, 'it ended, one way or another');
+  // What this test is FOR: the detector used to be handed a hard-coded zero on
+  // every poll, so its counter could never reach any threshold — a safety net
+  // that cannot fire is a comment. It fires.
+  assert.ok(said.some(m => /burn: \$.*spent since anything last changed/.test(m)),
+    `the burn detector should have fired: ${said.join(' | ')}`);
+  // How it ENDS is the cap's business or the ladder's, depending on which
+  // reaches it first, and both are correct outcomes for a run that is busy,
+  // expensive and producing the same thing every time.
 });
 
 test('a park about the wallet keeps what was wrong with the work', async () => {

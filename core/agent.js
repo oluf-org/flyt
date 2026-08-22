@@ -10,6 +10,7 @@
 import { callModel } from './adapters/index.js';
 import { classifyAdapterError, mayFallThrough } from './adapters/failures.js';
 import { executeTool, isDestructive } from './tools/index.js';
+import { writesWorkspace } from './effect.js';
 
 // How many tool-calling rounds a node gets before it must answer. Eight is
 // plenty for "check the time, then write"; it is not enough for "search a
@@ -39,18 +40,52 @@ const MAX_ITERATIONS = 8;
  */
 export const BUDGET_MARKS = [2 / 3, 6 / 7];
 
-export function budgetNotice(used, total) {
+/**
+ * @param used — rounds spent.
+ * @param total — rounds granted.
+ * @param wrote — has anything been WRITTEN yet? `null` when the question does
+ *   not apply, because the task was granted no tool that can write the
+ *   workspace; a read-only task owes an artifact, not a diff, and telling it
+ *   to write a file it cannot write is worse than saying nothing.
+ */
+export function budgetNotice(used, total, { wrote = null } = {}) {
   const left = total - used;
   return [
     `BUDGET: ${used} of ${total} tool rounds used, ${left} left.`,
     'On the last one the tools are withdrawn and only text is accepted, so anything you have not',
     'done by then will not get done.',
-    left <= 2
-      ? 'Make the change now, with what you already know.'
-      : 'Stop exploring and start producing: make the smallest complete version of the change, then'
-        + ' verify it. Re-reading something you have already opened is the most expensive way left'
-        + ' to spend this.'
+    // A fact beats advice. "Stop exploring" is a suggestion the model can agree
+    // with while carrying on reading; "you have used two thirds of your budget
+    // and changed no file" is the thing it agreed with, measured. Watched an
+    // attempt reach 74 tool calls — 38 read_file, 17 glob, 9 bash, 9
+    // search_files, and not one write.
+    wrote === false
+      ? 'YOU HAVE NOT CHANGED A FILE YET. Nothing you have read is work that can be accepted;'
+        + ' a run that changes no file produces an empty diff. Write the change now, then verify it.'
+      : left <= 2
+        ? 'Make the change now, with what you already know.'
+        : 'Stop exploring and start producing: make the smallest complete version of the change, then'
+          + ' verify it. Re-reading something you have already opened is the most expensive way left'
+          + ' to spend this.'
   ].join(' ');
+}
+
+/**
+ * The names among these tools that can change the project's files.
+ *
+ * Read off each record's declared effects rather than remembered here, so a
+ * tool a plugin contributed is classified by what it says it does. `shell` is
+ * deliberately not one: granting bash is how a task is told to run a suite,
+ * and treating that as a promise to produce a diff fails honest work.
+ */
+function writerNames(tools = []) {
+  return new Set(tools.filter(t => writesWorkspace(t) === true).map(t => t.name));
+}
+
+/** Has this attempt written anything yet? `null` when it was granted no way to. */
+function hasWritten(writers, toolCalls) {
+  if (!writers.size) return null;
+  return toolCalls.some(c => c?.ok !== false && writers.has(c?.tool));
 }
 
 const LAST_ROUND_NOTICE = [
@@ -463,13 +498,14 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
   // Rounds at which the agent is told how much of its budget is gone. Computed
   // once so the marks cannot drift, and shifted off as they are used.
   const warnAt = BUDGET_MARKS.map(f => Math.floor(rounds * f)).filter(n => n > 0 && n < rounds - 1);
+  const writers = writerNames(tools);
   for (let i = 0; i < rounds; i++) {
     // The final round is answer-only: the tools are withdrawn AND the model is
     // told why, so it writes instead of asking for another search it cannot get.
     const last = i === rounds - 1;
     if (last) messages.push({ role: 'user', content: LAST_ROUND_NOTICE });
     else if (warnAt.length && i + 1 >= warnAt[0]) {
-      messages.push({ role: 'user', content: budgetNotice(i, rounds) });
+      messages.push({ role: 'user', content: budgetNotice(i, rounds, { wrote: hasWritten(writers, toolCalls) }) });
       warnAt.shift();
     }
     // onText rides along, but today's adapters decline to stream a tool-enabled
@@ -549,6 +585,7 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
   // Same budget notices as the native path. A text-protocol model runs out of
   // rounds the same way and had the same blind spot.
   const warnAt = BUDGET_MARKS.map(f => Math.floor(rounds * f)).filter(n => n > 0 && n < rounds - 1);
+  const writers = writerNames(tools);
   for (let i = 0; i < rounds; i++) {
     // The last round is answer-only here too. The native path has said so since
     // it was written; this one never did, so a text-protocol model reaching its
@@ -564,7 +601,9 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
         system: last ? system : fullSystem,
         prompt: last
           ? `${transcript}\n\n${LAST_ROUND_NOTICE}`
-          : (warnAt.length && i + 1 >= warnAt[0] ? `${transcript}\n\n${budgetNotice(i, rounds)}` : transcript),
+          : (warnAt.length && i + 1 >= warnAt[0]
+            ? `${transcript}\n\n${budgetNotice(i, rounds, { wrote: hasWritten(writers, toolCalls) })}`
+            : transcript),
         onText, onRetry, onCall, retry, timeout, signal, ...(maxTokens ? { maxTokens } : {})
       },
       d => onEmptyTurn?.({ ...d, round: i + 1, of: rounds })
