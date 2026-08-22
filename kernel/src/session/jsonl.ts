@@ -26,6 +26,50 @@ export const MESSAGE_EVENTS = [
   'tool.result',
 ] as const;
 
+/**
+ * The whole session-log vocabulary, in the order a run produces it.
+ *
+ * Written down because two things read this log and neither is the writer: the
+ * projection turns it into a run folder, and Trace renders it for a person. A
+ * vocabulary agreed by everyone remembering the same strings is a vocabulary
+ * that drifts — the first trace read model written against it invented
+ * `turn/start` and `step/start`, borrowing the SLASH names from
+ * `kernel/src/events.ts`, which are cordis events and a different thing
+ * entirely. Same run, two spellings, and the fold silently matched nothing.
+ *
+ * Dots, always. A cordis event is dispatched to listeners in this process; a
+ * session event is a line in a file that outlives the process. They are named
+ * apart because confusing them is a category error, not a typo.
+ */
+export const SESSION_EVENTS = [
+  // The run
+  'run.created',
+  'stack.resolved',
+  'run.stage',
+  'run.error',
+  // A block's turn, and the steps within it
+  'turn.start',
+  'step.start',
+  'step.prompt',
+  'step.end',
+  'turn.end',
+  // What the model was asked and what it said
+  'message.system',
+  'message.user',
+  'llm.request',
+  'llm.response',
+  // What it did
+  'tool.call',
+  'permission.decision',
+  'tool.result',
+  // What the block produced
+  'block.status',
+  'block.output',
+] as const;
+
+/** One of the session log's event types. */
+export type SessionEventType = (typeof SESSION_EVENTS)[number];
+
 /** A line the reader could not parse, kept rather than swallowed. */
 export interface LogProblem {
   /** 1-based line number in the file. */

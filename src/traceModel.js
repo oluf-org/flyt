@@ -1,0 +1,299 @@
+// The trace read model (phase 1, first slice of Trace).
+//
+// A pure function from a session event list to the shape a surface renders:
+// turns holding steps, each step holding its prompt assembly, its model
+// request, its tool calls and its permission decisions. Route records attach
+// to the request they describe.
+//
+// Deliberately small — no React, no kernel import, no file reads. The
+// rendering slice that follows only has to render what this produces.
+//
+// **Live-safe.** A session log is still being written while it is watched, so
+// the fold has to survive the tail being open: the last turn has no turn/end,
+// the last step no step/end, one request no response, one tool call no result.
+// None of that is an edge case — it is what every live run looks like.
+// Unfinished parts stay in the model marked unfinished, never dropped.
+//
+// **Incremental.** Events arrive in `seq` order and the model is built forward,
+// so a surface can feed it a cursor's worth of new events rather than re-reading
+// the log. `feed` may be called with more events at any time and keeps the open
+// turn, step, request and tool call that were already there.
+//
+// **Lossless by default.** An event type nobody has taught the fold about is
+// kept on `trace.others`, not discarded. A plugin's events are still that run's
+// record.
+
+const TURN_START = 'turn.start';
+const TURN_END = 'turn.end';
+const STEP_START = 'step.start';
+const STEP_END = 'step.end';
+const STEP_PROMPT = 'step.prompt';
+const LLM_REQUEST = 'llm.request';
+const LLM_RESPONSE = 'llm.response';
+const TOOL_CALL = 'tool.call';
+const TOOL_RESULT = 'tool.result';
+const PERMISSION_DECISION = 'permission.decision';
+/**
+ * The event types this fold understands, as data.
+ *
+ * Exported so a test can hold it against the kernel's `SESSION_EVENTS` and
+ * fail when the two drift. They drifted once already: the first version of
+ * this file matched `turn/start` and `step/start`, borrowing the SLASH names
+ * from the kernel's cordis events, which are dispatched in a process and are
+ * not what a session log contains. Same run, two spellings, and a fold that
+ * silently matched nothing at all.
+ */
+export const FOLDED_EVENTS = [
+  TURN_START, TURN_END, STEP_START, STEP_END, STEP_PROMPT,
+  LLM_REQUEST, LLM_RESPONSE, TOOL_CALL, TOOL_RESULT, PERMISSION_DECISION
+];
+
+function asRecord(value) {
+  return value && typeof value === 'object' ? value : {};
+}
+
+function asOther(event) {
+  return {
+    seq: typeof event?.seq === 'number' ? event.seq : null,
+    at: event?.at ?? null,
+    type: event?.type ?? '',
+    data: event?.data ?? null,
+  };
+}
+
+/** The most recent turn that has not ended, or null. */
+function openTurn(trace) {
+  for (let i = trace.turns.length - 1; i >= 0; i--) {
+    if (!trace.turns[i].finished) return trace.turns[i];
+  }
+  return null;
+}
+
+/** The most recent step that has not ended, inside the open turn. */
+function openStep(trace) {
+  const turn = openTurn(trace);
+  if (!turn) return null;
+  for (let i = turn.steps.length - 1; i >= 0; i--) {
+    if (!turn.steps[i].finished) return turn.steps[i];
+  }
+  return null;
+}
+
+/** Find a tool call by id, newest step first so a live tail resolves first. */
+function findToolCall(trace, callId) {
+  if (callId === null || callId === undefined) return null;
+  const want = String(callId);
+  for (let t = trace.turns.length - 1; t >= 0; t--) {
+    const steps = trace.turns[t].steps;
+    for (let s = steps.length - 1; s >= 0; s--) {
+      const calls = steps[s].toolCalls;
+      for (let c = calls.length - 1; c >= 0; c--) {
+        if (String(calls[c].callId) === want) return calls[c];
+      }
+    }
+  }
+  return null;
+}
+
+/** A fresh, empty trace, ready to be fed. */
+export function emptyTrace() {
+  return { turns: [], others: [] };
+}
+
+/**
+ * Fold `events` (in seq order) into `trace`, returning it.
+ *
+ * May be called repeatedly: it keeps whatever of the run the previous call left
+ * open — the live tail — and continues from there. This is what lets a surface
+ * feed a cursor's worth of new events instead of re-reading the log.
+ */
+export function feed(trace, events) {
+  for (const event of events ?? []) {
+    const type = typeof event?.type === 'string' ? event.type : '';
+    if (!type) {
+      trace.others.push(asOther(event));
+      continue;
+    }
+    const data = asRecord(event.data);
+
+    switch (type) {
+      case TURN_START: {
+        trace.turns.push({
+          id: typeof data.turn === 'number' ? data.turn : trace.turns.length + 1,
+          runId: data.runId ?? null,
+          startedAt: event.at ?? null,
+          endedAt: null,
+          finished: false,
+          steps: [],
+        });
+        break;
+      }
+
+      case TURN_END: {
+        const turn = openTurn(trace);
+        if (turn) {
+          turn.finished = true;
+          turn.endedAt = event.at ?? turn.endedAt;
+        }
+        break;
+      }
+
+      case STEP_START: {
+        let turn = openTurn(trace);
+        if (!turn) {
+          turn = {
+            id: trace.turns.length + 1,
+            runId: data.runId ?? null,
+            startedAt: event.at ?? null,
+            endedAt: null,
+            finished: false,
+            steps: [],
+          };
+          trace.turns.push(turn);
+        }
+        const stepNumber = typeof data.step === 'number' ? data.step : turn.steps.length + 1;
+        turn.steps.push({
+          id: `${data.runId ?? ''}:${data.blockId ?? ''}:${stepNumber}`,
+          runId: data.runId ?? null,
+          blockId: data.blockId ?? null,
+          step: stepNumber,
+          startedAt: event.at ?? null,
+          endedAt: null,
+          finished: false,
+          prompt: null,
+          request: null,
+          toolCalls: [],
+          decisions: [],
+        });
+        break;
+      }
+
+      case STEP_END: {
+        const step = openStep(trace);
+        if (!step) break;
+        step.finished = true;
+        step.endedAt = event.at ?? step.endedAt;
+        const settled = asRecord(data.settled);
+        if (step.request && settled) {
+          if (settled.finishReason != null && step.request.finishReason == null) {
+            step.request.finishReason = settled.finishReason;
+          }
+          if (settled.usage != null && step.request.usage == null) step.request.usage = settled.usage;
+          if (settled.route != null && step.request.route == null) step.request.route = settled.route;
+        }
+        break;
+      }
+
+      case STEP_PROMPT: {
+        const step = openStep(trace) ?? openTurn(trace)?.steps.at(-1) ?? null;
+        if (step) step.prompt = data.content ?? data.prompt ?? null;
+        break;
+      }
+
+      case LLM_REQUEST: {
+        const step = openStep(trace);
+        if (!step) break;
+        step.request = {
+          callId: data.callId ?? null,
+          provider: data.provider ?? null,
+          model: data.model ?? null,
+          prompt: data.prompt ?? null,
+          requestedAt: event.at ?? null,
+          settled: false,
+          finishReason: null,
+          usage: null,
+          route: null,
+          content: null,
+          reasoning: null,
+        };
+        break;
+      }
+
+      case LLM_RESPONSE: {
+        const step = openStep(trace);
+        const request = step?.request ?? null;
+        if (request) {
+          request.settled = true;
+          if (data.finishReason != null) request.finishReason = data.finishReason;
+          if (data.usage != null) request.usage = data.usage;
+          if (data.route != null) request.route = data.route;
+          if (data.content != null) request.content = data.content;
+          if (data.reasoning != null) request.reasoning = data.reasoning;
+        }
+        // The response may carry the tool calls the model asked for; they are
+        // part of this step's record too, attached by id.
+        const calls = Array.isArray(data.toolCalls) ? data.toolCalls : [];
+        for (const call of calls) {
+          const record = asRecord(call);
+          const id = record.id ?? null;
+          if (id == null) continue;
+          if (!findToolCall(trace, id)) {
+            step?.toolCalls.push({
+              callId: String(id),
+              name: record.name ?? null,
+              args: record.args ?? null,
+              result: null,
+              hasResult: false,
+              error: null,
+            });
+          }
+        }
+        break;
+      }
+
+      case TOOL_CALL: {
+        const step = openStep(trace);
+        if (!step) break;
+        if (findToolCall(trace, data.callId)) break; // already on the step
+        step.toolCalls.push({
+          callId: data.callId ?? null,
+          name: data.name ?? null,
+          args: data.args ?? null,
+          result: null,
+          hasResult: false,
+          error: null,
+        });
+        break;
+      }
+
+      case TOOL_RESULT: {
+        const call = findToolCall(trace, data.callId);
+        if (call) {
+          call.result = data.result ?? data.content ?? null;
+          call.error = data.error ?? null;
+          call.hasResult = true;
+        }
+        break;
+      }
+
+      case PERMISSION_DECISION: {
+        const step = openStep(trace);
+        if (!step) break;
+        step.decisions.push({
+          callId: data.callId ?? null,
+          decision: data.decision ?? null,
+          reason: data.reason ?? null,
+          at: event.at ?? null,
+        });
+        break;
+      }
+
+      default:
+        // An event type nobody has taught this fold about is still the run's
+        // record. Keep it whole instead of discarding it.
+        trace.others.push(asOther(event));
+        break;
+    }
+  }
+  return trace;
+}
+
+/**
+ * Fold a whole log into a trace in one call.
+ *
+ * Equivalent to feeding an empty trace every event — a surface that streams
+ * the log just calls `feed` instead.
+ */
+export function foldTrace(events) {
+  return feed(emptyTrace(), events);
+}
