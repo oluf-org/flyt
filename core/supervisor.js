@@ -1127,17 +1127,45 @@ export class Supervisor {
   #cannotAfford(task) {
     const cap = Number(this.#caps().taskUsd);
     if (!Number.isFinite(cap) || cap <= 0) return null;
-    const spent = this.ledger?.totals({ taskId: task.id })?.usd ?? 0;
+
+    // OVER WHICH SPAN (D67). `#checkBudget` already draws this distinction and
+    // this check did not, which made it the one place a session cap was still
+    // measured over a task's whole life.
+    //
+    // A cap named at `loop start` is this session's ceiling; a cap standing in
+    // the project's config guards a rolling window. Reading the LIFETIME total
+    // against a session cap makes a task permanently unworkable at any cap
+    // below what it has ever cost — and the more a task is worked, the more
+    // certainly it can never be worked again.
+    //
+    // Watched it, on the task this whole correction mechanism was built for:
+    // t-0037 had cost $2.39 across three attempts, a fresh loop with
+    // `--task-usd 2` parked it in the same second it picked it up, and the
+    // notice read "Spent $2.39 of its $2 per-task cap" — money that session had
+    // not spent, against a cap it had not reached, for a task it never ran.
+    const sessionScoped = 'taskUsd' in this.#sessionCaps();
+    const sinceMs = sessionScoped
+      ? Math.max(1, this.now() - (this.startedAtMs ?? this.now()))
+      : this.#windowMs();
+    const spent = this.ledger?.totals({ taskId: task.id, sinceMs })?.usd ?? 0;
+    const span = sessionScoped ? ' this session' : ` in the last ${formatSpan(sinceMs)}`;
+
+    // Attempts over the SAME span, or the per-attempt estimate divides one
+    // span's money by another span's count and reports a cost per attempt that
+    // no attempt ever had.
+    const attempts = sessionScoped
+      ? this.history.filter(h => h.taskId === task.id).length
+      : Number(task.attempts ?? 0);
+
     const remaining = cap - spent;
     if (remaining <= 0) {
-      return `Spent $${spent.toFixed(2)} of its $${cap} per-task cap over ${task.attempts ?? 0} attempt(s),`
+      return `Spent $${spent.toFixed(2)} of its $${cap} per-task cap${span} over ${attempts} attempt(s),`
         + ' with nothing left for another — raise --task-usd to work it again.';
     }
-    const attempts = Number(task.attempts ?? 0);
     if (attempts < 1) return null;
     const perAttempt = spent / attempts;
     if (perAttempt <= 0 || remaining >= perAttempt / 2) return null;
-    return `Spent $${spent.toFixed(2)} of its $${cap} per-task cap over ${attempts} attempt(s)`
+    return `Spent $${spent.toFixed(2)} of its $${cap} per-task cap${span} over ${attempts} attempt(s)`
       + ` — $${remaining.toFixed(2)} left, against $${perAttempt.toFixed(2)} an attempt.`
       + ' Starting one that gets killed partway costs the money and produces nothing;'
       + ' raise --task-usd to work it again.';

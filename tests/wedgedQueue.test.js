@@ -179,3 +179,87 @@ test('a budget park quotes one sentence of the work reason, not the whole brief'
   assert.ok(!/do not delete/i.test(park), 'instructions for the model do not belong in a park notice');
   assert.ok(park.length < 500, `a park notice a person can read (was ${park.length})`);
 });
+
+// --- a session cap counts this session's money (D67) ------------------------
+
+// The one place the session/window distinction had not reached. `#checkBudget`
+// draws it; the pre-flight affordability check did not, so it measured a task's
+// WHOLE LIFE against a cap named at `loop start`.
+//
+// Live, on the task this correction mechanism was built for: t-0037 had cost
+// $2.39 across three attempts over an afternoon. A fresh loop with
+// `--task-usd 2` parked it in the same second it picked it up — no run, no
+// spend — reporting "Spent $2.39 of its $2 per-task cap". A task therefore
+// became permanently unworkable at any session cap below what it had ever
+// cost, and the more it was worked the more certainly it could never be worked
+// again.
+test('a per-task session cap does not count money this session never spent', async () => {
+  const { Supervisor } = await import('../core/supervisor.js');
+  const { Ledger } = await import('../core/ledger.js');
+
+  const backlog = makeBacklog();
+  const task = backlog.add({ title: 'Expensive history', goal: 'g' });
+  backlog.update(task.id, { attempts: 3 });
+
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  // Yesterday's money, on this task.
+  ledger.record({ taskId: task.id, usd: 2.39, estimated: false,
+    at: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString() });
+
+  const started = [];
+  const invoke = async (name, args) => {
+    if (name === 'work:start') { started.push(args.taskId); return { dir: '/tmp/wt', branch: 'b', attemptId: 'a1' }; }
+    if (name === 'flow:run') return 'run-1';
+    if (name === 'work:touch') return { touched: true };
+    if (name === 'run:snapshot') {
+      return { meta: { stage: 'done', nodeStatus: { 'work-1': 'done' } },
+        prompt: '', nodeOutputs: { 'work-1': 'x' }, retrospectives: {} };
+    }
+    if (name === 'work:land') {
+      backlog.update(args.taskId, { status: 'landed', blockedReason: null });
+      return { landed: true, stage: 'landed', mergeSha: 'abc12345' };
+    }
+    if (name === 'work:discard') { backlog.release(args.taskId, { status: args.status ?? null }); return { removed: true }; }
+    throw new Error(`unexpected ${name}`);
+  };
+
+  const lines = [];
+  const sup = new Supervisor({
+    invoke, projectId: 'p', backlog, ledger, pollMs: 1, log: l => lines.push(l),
+    // A cap named at `loop start` — the session kind.
+    config: { loop: { caps: { taskUsd: 2 }, sessionCaps: { taskUsd: 2 } } }
+  });
+  await sup.run();
+
+  assert.deepEqual(started, [task.id],
+    'this session has spent nothing on it, so it can afford an attempt');
+  assert.ok(!lines.some(l => /per-task cap/.test(l)),
+    `no cap should have tripped — got:\n${lines.join('\n')}`);
+  assert.equal(backlog.get(task.id).status, 'landed');
+});
+
+test('a STANDING per-task cap still counts the rolling window', async () => {
+  const { Supervisor } = await import('../core/supervisor.js');
+  const { Ledger } = await import('../core/ledger.js');
+
+  const backlog = makeBacklog();
+  const task = backlog.add({ title: 'Already spent', goal: 'g' });
+  backlog.update(task.id, { attempts: 3 });
+
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  ledger.record({ taskId: task.id, usd: 2.39, estimated: false });
+
+  const lines = [];
+  const sup = new Supervisor({
+    invoke: async () => { throw new Error('should not run'); },
+    projectId: 'p', backlog, ledger, pollMs: 1, log: l => lines.push(l),
+    // No sessionCaps: this is a guard standing in the project's config.
+    config: { loop: { caps: { taskUsd: 2 } } }
+  });
+  await sup.run();
+
+  const park = lines.find(l => /per-task cap/.test(l));
+  assert.ok(park, 'a standing cap that has genuinely been reached still parks the task');
+  assert.match(park, /in the last/, 'and says which span it counted');
+  assert.equal(backlog.get(task.id).status, 'parked');
+});
