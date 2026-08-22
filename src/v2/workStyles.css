@@ -1,0 +1,97 @@
+/* --- Work (t-0077) ----------------------------------------------------------
+   Everything happening, and it stays calm. The stack renders through the block
+   editor — the same drawing, because a second one would drift — and the only
+   thing this file adds is which block is live and what it is saying.
+
+   One animation, doing one job: a block that is working looks like it is
+   working. Tokens only. */
+
+.v2-work {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+}
+
+.work-run {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.work-run-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.work-run-id { color: var(--faint); font-size: 12px; }
+.work-lanes { color: var(--accent); font-size: 12px; }
+
+.work-error {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--err-soft);
+  color: var(--err);
+  font-size: 13px;
+}
+
+.work-outputs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.work-block {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  padding: 10px 12px;
+}
+
+.work-block h3 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.work-state { color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.state-done .work-state { color: var(--ok); }
+.state-failed .work-state { color: var(--err); }
+.state-active .work-state { color: var(--accent); }
+
+/* The live block. A steady pulse on the border rather than anything moving:
+   the eye should find it without being pulled away from the text that is
+   arriving inside it. */
+.work-block[data-active] {
+  border-color: var(--accent);
+  animation: work-alive 2.2s ease-in-out infinite;
+}
+
+@keyframes work-alive {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 24%, transparent); }
+  50%      { box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 10%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still says which block is live, without moving. */
+  .work-block[data-active] { animation: none; box-shadow: 0 0 0 2px var(--accent-soft); }
+}
+
+.work-output {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--tx);
+}

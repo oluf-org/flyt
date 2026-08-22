@@ -5176,3 +5176,14 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 .v2-panel { padding: 28px 32px; overflow: auto; flex: 1; }
 .v2-panel h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
 .v2-panel .muted { color: var(--dim); margin: 0; }
+
+/* The trace chip is a control, not a label (t-0071): it opens Trace over the
+   surface you are on. Same shape as the nav buttons it sits beside. */
+.v2-trace-chip {
+  appearance: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.v2-trace-chip:hover { color: var(--tx); }
+.v2-trace-chip.active { background: var(--accent-soft); color: var(--accent); }

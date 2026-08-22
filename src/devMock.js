@@ -708,9 +708,17 @@ export function installDevMock() {
     v2Watching: async () => {
       const { foldTrace } = await import('./traceModel.js');
       const at = n => new Date(Date.UTC(2026, 7, 22, 10, 0, n)).toISOString();
-      return { runId: 'preview-run', trace: foldTrace([
+      const { parseStack } = await import('#kernel');
+      const stack = parseStack([
+        'version: 2', 'id: preview-run', 'blocks:',
+        '  - id: plan', '    use: flyt:work', '    title: Plan the change',
+        '  - id: build', '    use: flyt:work', '    title: Make it',
+      ].join('\n'));
+      return { runId: 'preview-run', stack, trace: foldTrace([
         { seq: 1, at: at(0), type: 'run.created', data: { runId: 'preview-run', stackId: 'preview' } },
+        { seq: 2, at: at(1), type: 'run.stage', data: { stage: 'execution' } },
         { seq: 2, at: at(1), type: 'turn.start', data: { runId: 'preview-run', turn: 1, blockId: 'plan' } },
+        { seq: 21, at: at(1), type: 'block.status', data: { blockId: 'plan', status: 'active', use: 'flyt:work' } },
         { seq: 3, at: at(1), type: 'step.start', data: { runId: 'preview-run', blockId: 'plan', step: 1 } },
         { seq: 4, at: at(1), type: 'step.prompt', data: { content: 'You are the plan block.\n\nWork out what to change.' } },
         { seq: 5, at: at(2), type: 'llm.request', data: { callId: 'q1', model: 'deepseek/deepseek-v4-flash' } },
@@ -730,6 +738,7 @@ export function installDevMock() {
           toolCalls: [{ id: 'c2', name: 'bash', args: { command: 'npm test' } }],
           usage: { promptTokens: 5210, completionTokens: 88, costUsd: 0.0019 } } },
         { seq: 13, at: at(11), type: 'permission.decision', data: { callId: 'c2', decision: 'allow', reason: 'the loop ceiling names it' } },
+        { seq: 22, at: at(12), type: 'block.status', data: { blockId: 'build', status: 'pending' } },
         { seq: 14, at: at(12), type: 'plugin/impeccable', data: { finding: 'a detector this surface has no shape for' } },
       ]) };
     },
