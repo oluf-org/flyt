@@ -211,6 +211,10 @@ const snapshots = {
 // In-memory stand-ins for the settings/models IPC surface (DESIGN-SPEC.md §6).
 const mockSettings = {
   hasKey: false,
+  // The v2 flag, off, matching the shipped default. `?v2=1` turns it on, so
+  // both shells are reachable in the browser preview — which has no settings
+  // file to read and no main process to resolve one.
+  v2: new URLSearchParams(globalThis.location?.search ?? '').get('v2') === '1',
   providers: {
     anthropic: { hasKey: false },
     // Subscription (CLI-delegation) providers: signed in but not yet enabled,

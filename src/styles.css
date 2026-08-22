@@ -5117,3 +5117,62 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
   font: inherit; font-size: 12px; line-height: 1.5;
 }
 .loop-chat-compose textarea:focus-visible { outline: none; border-color: var(--accent); }
+
+/* --- the v2 shell (t-0073) ------------------------------------------------
+   Two permanent destinations and one transient record, behind the flag. Only
+   the frame is here: the editor, the library and the running stack each arrive
+   with their own task, and a shell that pre-styles surfaces that do not exist
+   is a shell nobody can tell is finished. Tokens only — the derived palette in
+   this file is the design language, and a new colour here would be a second
+   one. */
+.v2-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--canvas);
+  color: var(--tx);
+}
+
+.v2-shell-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  height: 44px;
+  background: var(--side);
+  border-bottom: 1px solid var(--border);
+}
+
+.v2-nav {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  /* The one movement here, and it is doing a job: which destination you are on
+     is the only thing this bar says, so the change has to read as a change. */
+  transition: background-color .14s var(--spring), color .14s var(--spring);
+}
+.v2-nav:hover { background: var(--chip); color: var(--tx); }
+.v2-nav.active { background: var(--accent-soft); color: var(--accent); }
+
+.v2-trace-chip {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--chip);
+  color: var(--chip-tx);
+  font-size: 12px;
+}
+.v2-trace-chip .mono { font-family: var(--mono, ui-monospace, monospace); color: var(--faint); }
+
+.v2-panel { padding: 28px 32px; overflow: auto; flex: 1; }
+.v2-panel h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+.v2-panel .muted { color: var(--dim); margin: 0; }
