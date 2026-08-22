@@ -32,6 +32,24 @@ export const DEFAULT_THRESHOLDS = {
   spinMs: 6 * 60 * 1000,
   groundhogRepeats: 3,        // identical gate failure
   outlierFactor: 4,           // times the median for this class of task
+  // A floor under the outlier detector, and it is the load-bearing half.
+  //
+  // The median is computed from finished attempts, and a session where several
+  // died fast — a rate-limited model, a provider hiccup, a task refused before
+  // it started — has a median of seconds. Four times seconds is a minute, and
+  // then every REAL attempt is an outlier at one minute and the ladder is spent
+  // before any of them has read a file.
+  //
+  // Watched it eat a whole task: "Running 2 minutes; 4× the usual for this kind
+  // of task" fired at nudge, at restart and at escalate, twice over, driving
+  // t-0069 from medium to the top of the ladder in nine minutes for $0.81 and
+  // an empty diff. It is self-reinforcing, which is what makes it worth a
+  // floor rather than a bigger factor: each fast death lowers the median, and a
+  // lower median kills the next attempt sooner.
+  //
+  // Ten minutes is what agent work on a repository actually costs — the runs
+  // that LANDED in that session took six and eleven.
+  outlierFloorMs: 10 * 60 * 1000,
   // Money spent since the work last changed. Dollars rather than tokens
   // because dollars are what the provider reports and what the caps are
   // written in; `burnTokens` still works for a caller that prefers it.
@@ -269,10 +287,14 @@ export function detectStall(heartbeat, { thresholds = DEFAULT_THRESHOLDS, median
       detail: `${heartbeat.tokensSinceProgress} tokens since anything last changed.`
     };
   }
-  if (medianMs && heartbeat.ageMs >= medianMs * t.outlierFactor) {
+  // Both, and the floor is not negotiable by the median: a task is an outlier
+  // when it has run long enough to be one AND long compared to its peers.
+  const outlierAt = Math.max(medianMs * t.outlierFactor, t.outlierFloorMs ?? 0);
+  if (medianMs && heartbeat.ageMs >= outlierAt) {
     return {
       detector: 'outlier',
-      detail: `Running ${Math.round(heartbeat.ageMs / 60000)} minutes; ${t.outlierFactor}× the usual for this kind of task.`
+      detail: `Running ${Math.round(heartbeat.ageMs / 60000)} minutes; ${t.outlierFactor}× the usual`
+        + ` for this kind of task (${Math.round(medianMs / 60000)} min).`
     };
   }
   return null;

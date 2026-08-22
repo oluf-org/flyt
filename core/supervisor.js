@@ -1180,8 +1180,23 @@ export class Supervisor {
   async #complete(taskId, hb, stage, error = null) {
     this.inFlight.delete(taskId);
     // What an attempt usually costs in wall time, which is the only thing the
-    // outlier detector can compare against.
-    this.durations.push(Math.max(0, this.now() - hb.startedAt));
+    // outlier detector can compare against — and only from attempts where a
+    // model ANSWERED.
+    //
+    // An attempt that died in twenty seconds because a free model was
+    // rate-limited says nothing about how long this work takes; it says how
+    // fast that failure is. Counting those made the median a median of how
+    // quickly things break, and the outlier detector then killed every real
+    // attempt at four times that. The floor in heartbeat.js catches the worst
+    // of it; this stops the number being wrong in the first place.
+    //
+    // When there is no way to SEE whether a model answered — no ledger, no
+    // store — nothing is recorded and the median stays null, which leaves the
+    // outlier detector quiet. That is the safe direction: the other four
+    // detectors still work, and a detector with no baseline guessing at one is
+    // how this went wrong to begin with.
+    const spent = this.#liveUsageOf(hb);
+    if ((spent?.tokens ?? 0) > 0) this.durations.push(Math.max(0, this.now() - hb.startedAt));
     this.#recordSpend(taskId, hb, `run ${stage}`);
     // Landing takes minutes — gates, a reviewer, a merge, a canary — and it all
     // happens inside one tick, so without this the published status keeps

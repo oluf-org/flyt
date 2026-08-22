@@ -581,6 +581,10 @@ export class WorktreePool {
    */
   async diff(taskId, { base = null, maxChars = 60_000 } = {}) {
     const dir = this.dirFor(taskId);
+    // A task with no worktree has no diff, and that is an ANSWER. Letting git
+    // fail in a directory that is not there sends a stack trace to somebody who
+    // asked a simple question about a task that finished an hour ago.
+    if (!fs.existsSync(dir)) return `No worktree for "${taskId}" — nothing is checked out for it right now.`;
     const from = base ?? this.owner(taskId)?.base ?? await this.defaultBranch();
     let anchor = from;
     try { anchor = await git(['merge-base', from, 'HEAD'], { cwd: dir }); }

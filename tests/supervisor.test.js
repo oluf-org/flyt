@@ -1245,24 +1245,67 @@ test('a task that is genuinely working is left alone', async () => {
     'a node reaching done is progress, whatever its buffer was doing');
 });
 
-test('the outlier detector is given the median it never had', async () => {
+test('the outlier detector times attempts where a model actually answered', async () => {
+  // An attempt that died in twenty seconds because a free model was
+  // rate-limited says nothing about how long this work takes — it says how fast
+  // that failure is. Counting those made the median a median of how quickly
+  // things break.
   const backlog = makeBacklog();
   for (let i = 0; i < 3; i++) backlog.add({ title: `t${i}`, goal: 'g' });
+  const quiet = new Supervisor({ ...fakeEngine({ backlog }), projectId: 'p', backlog, pollMs: 1 });
+  await quiet.run();
+  assert.deepEqual(quiet.durations, [],
+    'no model answered in any of them, so none of them is a sample of anything');
 
-  const sup = new Supervisor({
-    ...fakeEngine({ backlog }), projectId: 'p', backlog, pollMs: 1
+  const spending = makeBacklog();
+  for (let i = 0; i < 3; i++) spending.add({ title: `t${i}`, goal: 'g' });
+  const store = {
+    snapshot: () => ({ retrospectives: {} }),
+    callTraceNodes: () => ['work'],
+    readCallTrace: () => [{
+      usage: { cost: 0.02, prompt_tokens: 900, completion_tokens: 100 },
+      provider: 'openrouter', model: 'm', ok: true
+    }]
+  };
+  const real = new Supervisor({
+    ...fakeEngine({ backlog: spending }), projectId: 'p', backlog: spending, store, pollMs: 1,
+    // Both, because seeing what a run spent needs the trace AND the prices.
+    ledger: new Ledger(path.join(tmp(), 'ledger'))
   });
-  await sup.run();
+  await real.run();
+  assert.equal(real.durations.length, 3, 'attempts that reached a model are timed');
+  assert.ok(real.durations.every(d => Number.isFinite(d) && d >= 0));
+});
 
-  assert.equal(sup.durations.length, 3, 'every finished attempt is timed');
-  assert.ok(sup.durations.every(d => Number.isFinite(d) && d >= 0));
+test('an attempt is not an outlier for being slower than a session of fast deaths', () => {
+  // Watched this eat a task whole. Several attempts had died in seconds, so the
+  // median was seconds, and "4× the usual" was under two minutes:
+  //
+  //   … t-0069 outlier: Running 2 minutes; 4× the usual → nudge
+  //   … t-0069 outlier: Running 2 minutes; 4× the usual → restart
+  //   … t-0069 outlier: Running 2 minutes; 4× the usual → escalate
+  //
+  // Twice over, medium to the top of the ladder in nine minutes, for an empty
+  // diff. And self-reinforcing: each fast death lowered the median again.
+  const twoMinutes = new Heartbeat({ taskId: 't', runId: 'r', now: 0 });
+  twoMinutes.observe(snap({ a: 'running' }), { now: 0 });
+  twoMinutes.observe(snap({ a: 'running' }), { now: 2 * 60 * 1000, workspace: 'moved' });
+  assert.equal(detectStall(twoMinutes, { medianMs: 20_000 }), null,
+    'two minutes of real work is not an outlier, whatever a session of failures averaged');
 
-  // ...and the branch those samples feed does fire, given one.
-  const slow = new Heartbeat({ taskId: 't', runId: 'r', now: 0 });
-  slow.observe(snap({ a: 'running' }), { now: 0 });
-  slow.observe(snap({ a: 'done', b: 'running' }), { now: 60 * 60 * 1000 });
-  assert.equal(detectStall(slow, { medianMs: 60_000 }).detector, 'outlier');
-  assert.equal(detectStall(slow, { medianMs: null }), null, 'and stays quiet without one');
+  // The floor is a floor, not a replacement: past it, the comparison decides.
+  const anHour = new Heartbeat({ taskId: 't', runId: 'r', now: 0 });
+  anHour.observe(snap({ a: 'running' }), { now: 0 });
+  anHour.observe(snap({ a: 'done', b: 'running' }), { now: 60 * 60 * 1000 });
+  assert.equal(detectStall(anHour, { medianMs: 60_000 }).detector, 'outlier');
+  assert.equal(detectStall(anHour, { medianMs: null }), null, 'and it stays quiet without a median');
+
+  // A genuinely slow session raises the bar rather than lowering it.
+  const twelve = new Heartbeat({ taskId: 't', runId: 'r', now: 0 });
+  twelve.observe(snap({ a: 'running' }), { now: 0 });
+  twelve.observe(snap({ a: 'running' }), { now: 12 * 60 * 1000, workspace: 'moved' });
+  assert.equal(detectStall(twelve, { medianMs: 10 * 60 * 1000 }), null,
+    'twelve minutes against a ten-minute median is ordinary');
 });
 
 test('every reader counts what is in flight, not only what settled', async () => {
