@@ -1543,3 +1543,27 @@ test('a slow model reading is not a spin, and a stopped one still is', () => {
   for (let i = 1; i <= 40; i++) busy.observe(snap2, { now: i * 5000, workspace: 'same', usd: 0.02, tokens: 500 });
   assert.equal(detectStall(busy, { thresholds: { ...thresholds, burnUsd: 0.5 } })?.detector, 'burn');
 });
+
+test('a session cap counts this session, for the task as well as the window', async () => {
+  // The CLI help says the caps are "THIS session's spend, from now", and
+  // `#checkBudget` already made that true for the window. The per-task cap read
+  // the task's WHOLE HISTORY regardless, so a task that cost $1.65 six days ago
+  // parked instantly under a $1.20 session cap it had not spent a cent of —
+  // and said so in a sentence nobody could act on: "$1.65 over 0 attempt(s)".
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  const longAgo = new Date(Date.now() - 6 * 24 * 3600_000).toISOString();
+  ledger.record({ at: longAgo, taskId: 't-0001', usd: 1.65, estimated: false });
+
+  // Over the whole history, that money is there.
+  assert.equal(ledger.totals({ taskId: 't-0001' }).usd, 1.65);
+  // Over this session, it is not, and the cap is what asks.
+  const session = ledger.check({ caps: { taskUsd: 1.2 }, taskId: 't-0001', windowMs: 60_000 });
+  assert.equal(session.task.usd, 0, 'nothing was spent on it in the last minute');
+  assert.deepEqual(session.hits, [], 'so the cap it has not reached does not fire');
+
+  // A standing cap over the project's rolling day still sees a day's spending.
+  ledger.record({ taskId: 't-0001', usd: 0.9, estimated: false });
+  const today = ledger.check({ caps: { taskUsd: 0.5 }, taskId: 't-0001', windowMs: 24 * 3600_000 });
+  assert.deepEqual(today.hits, ['task']);
+  assert.equal(today.action, 'park');
+});

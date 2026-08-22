@@ -363,7 +363,13 @@ export class Ledger {
     const recorded = this.totals({ sinceMs: windowMs });
     const live = Number.isFinite(extraUsd) ? Math.max(0, extraUsd) : 0;
     const window = { ...recorded, usd: recorded.usd + live, live };
-    const task = taskId ? this.totals({ taskId }) : null;
+    // Over the SAME window as everything else. This read the task's whole
+    // history regardless of `windowMs`, so a session cap named on `loop start`
+    // — documented as "this session's spend, from now" — was checked against
+    // money the task spent last week. A task that once cost $1.65 could never
+    // be worked again under a $1.20 session cap, and the park said so in a
+    // sentence nobody could act on: "$1.65 over 0 attempt(s)".
+    const task = taskId ? this.totals({ taskId, sinceMs: windowMs }) : null;
     const hits = [];
     if (caps.hardUsd != null && window.usd >= caps.hardUsd) hits.push('hard');
     if (caps.softUsd != null && window.usd >= caps.softUsd) hits.push('soft');

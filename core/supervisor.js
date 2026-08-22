@@ -793,7 +793,15 @@ export class Supervisor {
     // written when a run ends, so reading only the ledger meant an in-flight
     // task always reported $0 and the per-task cap below could never fire: the
     // one ceiling whose job is to stop a single runaway task was decorative.
-    const taskSpend = this.#spentOn(taskId, hb);
+    // The window the per-task cap is measured over: this session when the cap
+    // was named at `loop start`, the project's rolling window when it came from
+    // the config. The same distinction `#checkBudget` makes, and it has to be
+    // made here too — this is the check that can stop a task MID-RUN, and the
+    // other one only runs between tasks.
+    const taskWindowMs = this.#sessionCaps().taskUsd != null
+      ? Math.max(1, Date.now() - (this.startedAtMs ?? Date.now()))
+      : this.#windowMs();
+    const taskSpend = this.#spentOn(taskId, hb, { sinceMs: taskWindowMs });
     // What this poll cost, as a DELTA. The burn detector exists to catch a
     // polite infinite loop — busy, expensive, producing the same thing every
     // time — and it was handed a hard-coded zero on every poll, so its counter
@@ -1177,9 +1185,16 @@ export class Supervisor {
     return { usd, tokens };
   }
 
-  /** Recorded spend for this task, plus what the in-flight run has cost. */
-  #spentOn(taskId, hb) {
-    const recorded = this.ledger?.totals({ taskId }) ?? { usd: 0 };
+  /**
+   * Recorded spend for this task, plus what the in-flight run has cost.
+   *
+   * @param sinceMs — the window to count over. A SESSION cap means "this loop,
+   *   from when it started", and counting a task's whole history against one is
+   *   how a task that cost $1.65 last week became unworkable under a $1.20 cap
+   *   it had not spent a cent of.
+   */
+  #spentOn(taskId, hb, { sinceMs = null } = {}) {
+    const recorded = this.ledger?.totals({ taskId, sinceMs }) ?? { usd: 0 };
     if (!this.ledger || !this.store || !hb?.runId) return recorded;
     let live = 0;
     try {
