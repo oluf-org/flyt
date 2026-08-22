@@ -54,7 +54,7 @@ const CACHE_HIT_FRESH_MS = 1000;
 // The frontmatter fields that hold a number. `budgetUsd` is here even though
 // its default is null: "no budget" is a real state, and a string is still not
 // a number.
-const NUMERIC_FIELDS = ['value', 'effort', 'attempts', 'budgetUsd'];
+const NUMERIC_FIELDS = ['value', 'effort', 'attempts', 'budgetUsd', 'repairs', 'failureCount'];
 
 // Frontmatter fields, with their defaults. Anything not listed here is still
 // preserved on write — a field a later phase adds must not be erased by an
@@ -97,12 +97,28 @@ const DEFAULTS = () => ({
   claimedBy: null,
   claimedAt: null,
   blockedReason: null,
-  // The commit a reviewer read and rejected, when the last landing failed at
-  // review. The next attempt starts from it instead of from the base branch, so
-  // a specific objection is a correction rather than a rebuild. Null on every
-  // other outcome — a gate failure or an empty diff is not work worth
-  // inheriting.
+  // The commit the last attempt was judged on, when what it was judged on was
+  // worth keeping — a reviewer's objection, or a red gate over real work. The
+  // next attempt starts from it instead of from the base branch, so a specific
+  // objection is a correction rather than a rebuild. Null when there is nothing
+  // worth inheriting, so a stale sha can never be resumed from.
   resumeFrom: null,
+  // WHICH judgement produced `resumeFrom`: 'review' or 'gates'. The two need
+  // different things said to the next attempt — "a person read this and asked
+  // for one change" against "this is red and here is what is red" — and the
+  // brief was telling every resumed attempt its gates had passed, which after a
+  // gate failure is the one thing that is definitely untrue.
+  resumeStage: null,
+  // Corrections spent on THIS body of work: attempts that kept the diff and
+  // went back at the same band to fix what the gates named (core/repair.js).
+  // Deliberately not reset when the ladder escalates — the budget is the task's,
+  // not the band's, or a five-rung ladder would buy fifteen attempts.
+  repairs: 0,
+  // What the gates said last time, so a correction that changed nothing is
+  // visible: same fingerprint means the feedback did not land, and a third copy
+  // of it will not either.
+  failureSignature: null,
+  failureCount: null,
   runIds: []
 });
 
@@ -423,6 +439,27 @@ export class Backlog {
     if (!force && fs.existsSync(this.#lock(safe))) {
       throw new Error(`Task "${safe}" is claimed by ${task.claimedBy ?? 'someone'}. Release it before removing it.`);
     }
+    // Who this leaves stranded.
+    //
+    // A task whose dependency does not exist scores zero forever: `score()`
+    // requires every dependency to be LANDED, and a task that is gone can never
+    // land. So removing one task can quietly make another unclaimable for the
+    // rest of the backlog's life, and nothing said so at the moment it
+    // happened. Watched it: t-0006 was removed after spending $2.29, t-0008
+    // depended on it, and the loop reported "nothing ready" for weeks with a
+    // queued task sitting in the backlog that no picker would ever take.
+    //
+    // Reported rather than refused. `--all` removes parents and children in one
+    // pass and would otherwise trip over its own feet, and a person deleting a
+    // task usually means it — what they cannot do is notice the consequence,
+    // because it is in a different file. `blockers.js` already offers the
+    // remedy (`dep-missing` → drop the dependency); this is what tells anyone
+    // to go and look.
+    const stranded = this.list()
+      .filter(t => t.id !== safe
+        && !TERMINAL.has(t.status)
+        && (t.dependsOn ?? []).includes(safe))
+      .map(t => ({ id: t.id, title: t.title, status: t.status }));
     fs.rmSync(this.#file(safe));
     this._cache.delete(this.#file(safe));
     try { fs.rmSync(this.#lock(safe)); } catch { /* no lock, or already gone */ }
@@ -431,7 +468,7 @@ export class Backlog {
     // but that is the whole point of the counter: the directory has just
     // forgotten this id, and the ledger has not.
     this.#recordId(safe);
-    return task;
+    return { ...task, stranded };
   }
 
   // --- claiming ------------------------------------------------------------

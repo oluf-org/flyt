@@ -164,13 +164,24 @@ export function cardOf(task = {}, blockers = [], { spend = null } = {}) {
     blockers: list,
     blocked: isBlocked(list),
     actionable: actionable(list),
-    // The one line the collapsed card shows, as a SENTENCE.
-    line: question?.question ?? first?.summary ?? task.blockedReason ?? null,
+    // The one line the collapsed card shows, as a SENTENCE — so a
+    // `blockedReason` that runs to several lines contributes its FIRST one and
+    // not the whole brief. Gate feedback is written for two readers (a person
+    // here, the correcting attempt in its brief) and opens with a summary
+    // sentence for this one; without the cut, the card would render the entire
+    // instruction block into a space meant for a line.
+    line: question?.question ?? first?.summary ?? firstLine(task.blockedReason),
     question,
     unreadable: Boolean(task.unreadable || task.error),
     ...(task.error ? { error: String(task.error) } : {}),
     ...(spend ? { spend } : {})
   };
+}
+
+/** The first non-empty line of a reason, or null when there is no reason. */
+function firstLine(reason) {
+  const text = String(reason ?? '').split('\n').map(s => s.trim()).find(Boolean);
+  return text || null;
 }
 
 // `ask_human` parks a task with `Q:` on the front of blockedReason. A prefix

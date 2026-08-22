@@ -666,7 +666,22 @@ async function main() {
           for (const id of ids) {
             removed.push(await api.invoke('task:remove', { projectId, id, force: Boolean(flags.force) }));
           }
-          return out(asJson ? { removed } : removed.map(r => `removed ${r.removed}\t${r.title}`).join('\n'));
+          if (asJson) return out({ removed });
+          // What each removal left behind. A dependency that no longer exists
+          // makes its dependent unclaimable forever — `score()` wants every
+          // dependency LANDED and a deleted task never lands — so the one
+          // moment worth saying it is this one. Anything removed in the SAME
+          // breath is not stranded; it is going too.
+          const gone = new Set(removed.filter(Boolean).map(r => r.removed));
+          const lines = [];
+          for (const r of removed.filter(Boolean)) {
+            lines.push(`removed ${r.removed}\t${r.title}`);
+            for (const s of (r.stranded ?? []).filter(s => !gone.has(s.id))) {
+              lines.push(`  ⚠ ${s.id} "${s.title}" depended on ${r.removed} and can no longer become ready.`
+                + ` Drop the dependency (\`flyt task show ${s.id}\`) or remove it too.`);
+            }
+          }
+          return out(lines.join('\n'));
         }
         case 'stats':
           return out(await api.invoke('task:stats', { projectId }));
@@ -750,8 +765,20 @@ async function main() {
             ? `(nothing recorded for that filter — the log holds ${days.join(', ')})`
             : '(the loop has not written anything yet)');
         }
-        return out(entries.map(e =>
-          `${String(e.at).slice(0, 19).replace('T', ' ')}  ${e.line}`).join('\n'));
+        // One event, one block — with its continuation lines indented under the
+        // timestamp rather than loose in the margin.
+        //
+        // `--tail` counts ENTRIES (core/loopLog.js `read`), so a single entry
+        // holding a whole npm transcript used to render as hundreds of
+        // untimestamped lines, and `--tail 5` could return several hundred
+        // lines of somebody else's stdout with the interesting line buried in
+        // it. The gate path no longer writes multi-line events, but `append`
+        // takes any string and the entries already on disk are still there.
+        return out(entries.map(e => {
+          const at = String(e.at).slice(0, 19).replace('T', ' ');
+          const [head, ...rest] = String(e.line).split('\n');
+          return [`${at}  ${head}`, ...rest.map(l => `${' '.repeat(at.length)}  ${l}`)].join('\n');
+        }).join('\n'));
       }
       if (sub === 'stop') return out(await api.invoke('loop:stop', { projectId }));
       return out(await api.invoke('loop:status', { projectId }));

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Flow DSL command line — the AI/CI surface of the DSL (FLOW_LANG.md):
 //
-//   npm run flow -- lint <file> [--json]     validate a *.flow.yaml (exit 1 on errors)
+//   npm run flow -- lint [<file>] [--json]   validate a *.flow.yaml — or, with no
+//                                            file, every flow this repo ships (exit 1 on errors)
 //   npm run flow -- templates [--json]       Node Library templates + ports + allowed overrides
 //   npm run flow -- migrate [--json]         convert legacy flows/*.json → .flow.yaml + .layout.json
 //   npm run flow -- adopt [--json]           list flows in the INSTALLED app
@@ -93,21 +94,71 @@ function siblingFlows(file) {
   return out;
 }
 
+// Every flow this repository ships, for the no-argument form below.
+function shippedFlows() {
+  const dir = path.join(projectRoot, 'flows');
+  try {
+    return fs.readdirSync(dir).filter(f => f.endsWith('.flow.yaml')).sort()
+      .map(f => path.join(dir, f));
+  } catch { return []; }
+}
+
+/**
+ * Lint one flow, or — with no argument — every flow this repository ships.
+ *
+ * The bare form exists because it is the form the contributor guide documents:
+ * "Run `npm run flow -- lint` after changing shipped flows, the DSL, template
+ * resolution, or tool-grant linting." It did not run. It printed a usage line
+ * and exited 2, so everybody who followed the instruction got an error, and a
+ * task that put the documented command in its `gates` was unlandable by
+ * construction — no diff could ever make it pass, and the failure said nothing
+ * about the flows.
+ *
+ * A gate is checked for whether its INTERPRETER exists (`gateProblem`), which
+ * `npm` does; nothing checks whether the command is well-formed, and nothing
+ * can in general. Making the documented command mean something is the fix that
+ * closes it at the source.
+ */
 function cmdLint() {
-  if (!target) fail('usage: flow lint <file.flow.yaml> [--json]');
-  const text = fs.readFileSync(target, 'utf8');
-  const r = lintText(text, { templates: loadTemplates(), library: toolLibrary.catalog(), flows: siblingFlows(target) });
+  const targets = target ? [target] : shippedFlows();
+  if (!targets.length) {
+    fail(target ? 'usage: flow lint <file.flow.yaml> [--json]' : 'no flows/*.flow.yaml to lint');
+  }
+
+  const results = targets.map(file => ({
+    file,
+    ...lintText(fs.readFileSync(file, 'utf8'), {
+      templates: loadTemplates(), library: toolLibrary.catalog(), flows: siblingFlows(file)
+    })
+  }));
+  const ok = results.every(r => r.ok);
+
+  // One file keeps exactly the shape it always had: this is a CI surface and
+  // something is reading it.
   if (json) {
-    out({ ok: r.ok, errors: r.errors, warnings: r.warnings });
-  } else {
-    for (const f of r.findings) {
+    out(target
+      ? { ok, errors: results[0].errors, warnings: results[0].warnings }
+      : { ok, files: results.map(r => ({ file: path.relative(projectRoot, r.file), ok: r.ok, errors: r.errors, warnings: r.warnings })) });
+  } else if (target) {
+    for (const f of results[0].findings) {
       console.log(`${f.severity === 'error' ? 'ERROR  ' : 'warning'}  ${f.rule}  ${f.message}`);
     }
-    console.log(r.ok
-      ? `OK — ${path.basename(target)} (${r.warnings.length} warning${r.warnings.length === 1 ? '' : 's'})`
-      : `FAILED — ${r.errors.length} error${r.errors.length === 1 ? '' : 's'}, ${r.warnings.length} warning(s)`);
+    console.log(results[0].ok
+      ? `OK — ${path.basename(target)} (${results[0].warnings.length} warning${results[0].warnings.length === 1 ? '' : 's'})`
+      : `FAILED — ${results[0].errors.length} error${results[0].errors.length === 1 ? '' : 's'}, ${results[0].warnings.length} warning(s)`);
+  } else {
+    for (const r of results) {
+      for (const f of r.findings) {
+        console.log(`${f.severity === 'error' ? 'ERROR  ' : 'warning'}  ${path.basename(r.file)}  ${f.rule}  ${f.message}`);
+      }
+    }
+    const bad = results.filter(r => !r.ok).length;
+    const warnings = results.reduce((n, r) => n + r.warnings.length, 0);
+    console.log(ok
+      ? `OK — ${results.length} flow${results.length === 1 ? '' : 's'} (${warnings} warning${warnings === 1 ? '' : 's'})`
+      : `FAILED — ${bad} of ${results.length} flow(s) have errors`);
   }
-  process.exitCode = r.ok ? 0 : 1;
+  process.exitCode = ok ? 0 : 1;
 }
 
 function cmdTemplates() {
