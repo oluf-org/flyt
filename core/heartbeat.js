@@ -150,10 +150,15 @@ export class Heartbeat {
     this.gateFailures = [];      // consecutive identical gate failure signatures
     this.tokensSinceProgress = 0;
     this.usdSinceProgress = 0;
-    // Consecutive polls where NOTHING was spent. A model working settles calls
-    // and burns tokens; a run that has stopped asking does not, and that is
-    // what tells a spin apart from a long turn on a long context.
-    this.quietPolls = 0;
+    // When something was last SPENT. A model working settles calls and burns
+    // tokens; a run that has stopped asking does not, and that is what tells a
+    // spin apart from a long turn on a long context.
+    //
+    // A timestamp rather than a count of polls, for the reason `spinRepeats`
+    // already carries a comment about: a count is a property of the observer.
+    // Two quiet polls is ten seconds, and a model routinely thinks for longer
+    // than that — the count version of this was inert.
+    this.lastSpendAt = now;
     this.phase = 'running';
     this.stage = null;
     this.interventions = [];     // what the supervisor has already tried (§11.4)
@@ -181,12 +186,12 @@ export class Heartbeat {
       this.repeats = 0;
       this.tokensSinceProgress = 0;
       this.usdSinceProgress = 0;
-      this.quietPolls = 0;
+      this.lastSpendAt = now;
       return true;
     }
     this.repeats += 1;
     // Spending resets it: the run is alive and doing something new.
-    this.quietPolls = (tokens > 0 || usd > 0) ? 0 : this.quietPolls + 1;
+    if (tokens > 0 || usd > 0) this.lastSpendAt = now;
     // The counter that catches a polite infinite loop: busy, expensive, and
     // producing the same thing every time.
     this.tokensSinceProgress += tokens;
@@ -220,7 +225,7 @@ export class Heartbeat {
     this.gateFailures = [];
     this.tokensSinceProgress = 0;
     this.usdSinceProgress = 0;
-    this.quietPolls = 0;
+    this.lastSpendAt = now;
     // The signature too: the run was stopped and relaunched, so the bytes it
     // had are not evidence about the attempt that is starting.
     this.signature = null;
@@ -237,6 +242,8 @@ export class Heartbeat {
   }
 
   get idleMs() { return this.lastPollAt - this.lastProgressAt; }
+  /** How long since anything was spent. Zero on a run that is settling calls. */
+  get quietMs() { return this.lastPollAt - this.lastSpendAt; }
   get ageMs() { return this.lastPollAt - this.startedAt; }
 
   toJSON() {
@@ -247,7 +254,7 @@ export class Heartbeat {
       ageMs: this.ageMs, idleMs: this.idleMs,
       repeats: this.repeats,
       tokensSinceProgress: this.tokensSinceProgress,
-      quietPolls: this.quietPolls,
+      quietMs: this.quietMs,
       usdSinceProgress: Number(this.usdSinceProgress.toFixed(6)),
       interventions: this.interventions
     };
@@ -287,15 +294,22 @@ export function detectStall(heartbeat, { thresholds = DEFAULT_THRESHOLDS, median
   // This does not let a polite infinite loop through. A run that is busy,
   // expensive and producing the same thing every time is the BURN detector's
   // case above, and it is bounded in dollars, which is the honest unit for it.
-  const quiet = heartbeat.quietPolls ?? heartbeat.repeats;
-  if (heartbeat.repeats >= t.spinRepeats && heartbeat.idleMs >= (t.spinMs ?? 0)
-    && quiet >= t.spinRepeats) {
+  const quietMs = heartbeat.quietMs ?? heartbeat.idleMs;
+  if (heartbeat.repeats >= t.spinRepeats
+    && heartbeat.idleMs >= (t.spinMs ?? 0)
+    && quietMs >= (t.spinMs ?? 0)) {
     return {
       detector: 'spin',
       detail: `${heartbeat.repeats} consecutive polls over ${Math.round(heartbeat.idleMs / 60000)} minutes with byte-identical work. Whatever it is doing, it is producing the same thing each time.`
     };
   }
-  if (heartbeat.idleMs >= t.silentMs) {
+  // Same correction as the spin above, and the same reason. This is documented
+  // as "no event of any kind", and it was measured by `idleMs` — time since the
+  // DURABLE RECORD changed — so a run reading its way through a repository for
+  // eleven minutes was silent by this reading while settling a call a minute.
+  // A run that is spending is not silent; it is slow, and the burn detector and
+  // the caps are what bound slow.
+  if (heartbeat.idleMs >= t.silentMs && quietMs >= t.silentMs) {
     return {
       detector: 'silent',
       detail: `No file, tool or node event for ${Math.round(heartbeat.idleMs / 1000)}s.`

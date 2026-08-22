@@ -1527,8 +1527,10 @@ test('a slow model reading is not a spin, and a stopped one still is', () => {
     working.observe(snap2, { now: i * 5000, workspace: 'same', tokens: i % 20 === 0 ? 900 : 0, usd: 0 });
   }
   assert.ok(working.idleMs > DEFAULT_THRESHOLDS.spinMs, 'long enough to have tripped the old rule');
+  assert.ok(working.quietMs < DEFAULT_THRESHOLDS.spinMs, 'because something was spent recently');
   assert.equal(detectStall(working, { thresholds }), null,
-    'a run still settling calls is exploring, not spinning');
+    'a run still settling calls is exploring, not spinning — nor silent, which was'
+    + ' measured the same wrong way');
 
   const stopped = new Heartbeat({ taskId: 't', runId: 'r', now: 0 });
   stopped.observe(snap2, { now: 0, workspace: 'same' });
