@@ -16,6 +16,7 @@ import path from 'node:path';
 import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression } from './gates.js';
 import { WorktreePool, land as gitLand, git } from './worktree.js';
 import { reviewDiff, reviewWorker } from './diffReview.js';
+import { assessRepair } from './repair.js';
 
 /**
  * Run the gates against a task's worktree.
@@ -94,12 +95,35 @@ export async function landTask({
   // 1. Gates, in the worktree.
   const gateRun = record('gates', await verifyTask({ pool, taskId, task, log }));
   if (!gateRun.ok) {
-    // Red gates are a correction case too, and the most specific one there is:
-    // the output names the assertion. Watched two tasks arrive with the module
+    // Red gates are a correction case, and the most specific one there is: the
+    // output names the assertion. Watched two tasks arrive with the module
     // written, the tool registered, and one pinned test list not updated — and
-    // both were thrown away and rebuilt from nothing on a dearer model. The
-    // gate output travels with the task; so should the work it is about.
-    return withCommit({ landed: false, stage: 'gates', steps, guidance: gateFailureGuidance(gateRun) });
+    // both were thrown away and rebuilt from nothing on a dearer model.
+    //
+    // So before a rung is spent, ask whether there is work here worth
+    // correcting (core/repair.js). The answer is mechanical and free, and it
+    // needs the diff — which is why `changedFiles` is read HERE and not only in
+    // the branch below: "which files did this touch" is what separates a change
+    // breaking its own tests from a change breaking the repository.
+    const changed = await pool.changedFiles(taskId, { base }).catch(() => []);
+    const repair = assessRepair({
+      failure: gateRun.failure,
+      changedFiles: changed,
+      repairs: task.repairs ?? 0,
+      lastSignature: task.failureSignature ?? null,
+      lastCount: task.failureCount ?? null,
+      maxRepairs: config.loop?.maxRepairs
+    });
+    log(`gates: ${repair.verdict} — ${repair.reason}`);
+    return withCommit({
+      landed: false, stage: 'gates', steps, repair, changedFiles: changed,
+      // The feedback IS the guidance now: the failures by name, place and
+      // assertion, under an instruction not to start over. The guidance used to
+      // be the gate's whole bounded output, which then became the task's
+      // `blockedReason` — twenty thousand characters of mostly-passing tests in
+      // a field the board renders as one line.
+      guidance: repair.feedback
+    });
   }
 
   // 2. Mechanical checks — free, and not a model's judgment call.
@@ -208,17 +232,6 @@ export async function landTask({
     // tests" is the most convincing way to fail.
     canaryOutput: (result.canary?.results ?? []).map(r => r.output).join('\n') || null
   };
-}
-
-// What the next attempt is told. The failing gate's own output, bounded — not a
-// summary of it, because the exact error is the useful part.
-function gateFailureGuidance(gateRun) {
-  const f = gateRun.failure;
-  if (!f) return 'The gates did not pass.';
-  if (f.status === 'timeout') {
-    return `The gate \`${f.command}\` timed out after ${f.ms}ms. Something hangs — find it rather than raising the timeout.`;
-  }
-  return `The gate \`${f.command}\` failed (exit ${f.code}). Output:\n${f.output}`;
 }
 
 function canaryGuidance(canary) {

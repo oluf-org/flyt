@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Heartbeat, detectStall, nextIntervention, DEFAULT_THRESHOLDS } from './heartbeat.js';
 import { escalate as escalateLevel, levelFor, workerForLevelMap } from './levels.js';
+import { repairLogLines } from './repair.js';
 import { spendFromRun, totalsWithLive } from './ledger.js';
 import { captureWorkspaceSignature } from './effect.js';
 import { unrunnableGates } from './gates.js';
@@ -206,6 +207,34 @@ function whereItCameFrom(task) {
     'What you write still goes into THIS project. The reference is what you are learning from;',
     'the workspace is what you are changing.'
   ].join('\n');
+}
+
+/**
+ * What to say about work this attempt has INHERITED.
+ *
+ * Three states, and they are not interchangeable:
+ *
+ *   gates   — the work is here and the suite is red. The failures are already
+ *             in `blockedReason` (core/repair.js writes them); this only has to
+ *             say where the work is and that correcting beats restarting.
+ *   review  — the work is here, its gates PASSED, and a reviewer objected to
+ *             one specific thing.
+ *   neither — nothing to inherit, so nothing to say. A brief that describes a
+ *             previous attempt to an attempt that has none sends it looking for
+ *             a commit that is not there.
+ */
+function resumeNote(task = {}) {
+  if (!task.resumeFrom) return '';
+  if (task.resumeStage === 'gates') {
+    return 'THE PREVIOUS ATTEMPT IS ALREADY HERE. Its commit is checked out in this worktree, and'
+      + ' the failures above are what is standing between it and landing. Read the diff'
+      + ' (`git show HEAD`, `git diff HEAD~1`), then fix ONLY what is red. Starting over throws'
+      + ' away work that nothing has objected to and puts you back in front of the same suite.';
+  }
+  return 'THE PREVIOUS ATTEMPT IS ALREADY HERE. Its commit is checked out in this worktree and its'
+    + ' gates passed; a reviewer read it and asked for the change above. Read the diff'
+    + ' (`git show HEAD`, `git diff HEAD~1`) and CORRECT it. Do not start over — the parts'
+    + ' nobody objected to are the parts you would be throwing away.';
 }
 
 // How an agent says "not here". A sentinel line rather than a judgement about
@@ -691,19 +720,19 @@ export class Supervisor {
       whereItLands(task, this.projectId),
       whereItCameFrom(task),
       HOW_IT_LANDS,
-      task.blockedReason ? `\nA PREVIOUS ATTEMPT FAILED:\n${task.blockedReason}` : '',
-      // When the last attempt was rejected at REVIEW, its work is already in
-      // this worktree — gates green, one specific objection. Saying so is what
-      // turns "rebuild it" into "fix that". Without this line the worker opens
-      // a checkout it does not recognise as its own and writes the whole thing
-      // again, which is both the expensive answer and the one that loses the
-      // parts nobody objected to.
-      task.resumeFrom
-        ? 'THE PREVIOUS ATTEMPT IS ALREADY HERE. Its commit is checked out in this worktree and its'
-          + ' gates passed; a reviewer read it and asked for the change above. Read the diff'
-          + ' (`git show HEAD`, `git diff HEAD~1`) and CORRECT it. Do not start over — the parts'
-          + ' nobody objected to are the parts you would be throwing away.'
-        : ''
+      task.blockedReason
+        ? `\n${task.repairs > 0 && task.resumeStage === 'gates'
+          ? 'WHY YOU ARE HERE:' : 'A PREVIOUS ATTEMPT FAILED:'}\n${task.blockedReason}`
+        : '',
+      // The previous attempt's work is already in this worktree, and WHICH
+      // judgement it survived decides what to say about it.
+      //
+      // Without this line the worker opens a checkout it does not recognise as
+      // its own and writes the whole thing again — the expensive answer, and
+      // the one that loses the parts nobody objected to. With the wrong version
+      // of it, a correcting attempt is told its gates passed while it is
+      // standing in front of a red suite, which is worse than saying nothing.
+      resumeNote(task)
     ].filter(Boolean).join('\n\n');
   }
 
@@ -1349,15 +1378,67 @@ export class Supervisor {
         : null
     });
     if (landed.canaryOutput) this.lastCanaryOutput = landed.canaryOutput;
-    this.history.push({ taskId, landed: landed.landed, stage: landed.stage, guidance: landed.guidance ?? null });
-    this.log(landed.landed
-      ? `✔ ${taskId} landed ${landed.mergeSha?.slice(0, 8)}`
-      : `✖ ${taskId} ${landed.stage}: ${String(landed.guidance ?? '').slice(0, 160)}`, { taskId });
+    this.history.push({
+      taskId, landed: landed.landed, stage: landed.stage, guidance: landed.guidance ?? null,
+      repair: landed.repair ? { verdict: landed.repair.verdict, count: landed.repair.count } : null
+    });
+    if (landed.landed) this.log(`✔ ${taskId} landed ${landed.mergeSha?.slice(0, 8)}`, { taskId });
+    else this.#reportFailedLanding(taskId, landed, hb.level ?? null);
 
     if (!landed.landed) {
       await this.#discard(taskId);
       const after = this.backlog.get(taskId);
       if (after?.status === 'parked') this.parked.push({ taskId, reason: after.blockedReason });
+    }
+  }
+
+  /**
+   * Say what happened to a landing that did not land, in lines a person can act on.
+   *
+   * The old line was `✖ t-0037 gates: ` plus the first 160 characters of the
+   * guidance, and the guidance opens with the gate's name — so what a person
+   * actually got, after forty calls and a dollar fifty, was:
+   *
+   *   ✖ t-0037 gates: The gate `npm test` failed (exit 1). Output:
+   *
+   * Which gate failed, and nothing else. Not what was red, not how badly, not
+   * what the loop decided to do about it, not whether the work survived. The
+   * answer to every one of those was on disk and none of it was said.
+   *
+   * So: the failures by name, then the DECISION — read back from the backlog
+   * rather than assumed, because the backlog is what actually happened. One
+   * `log` call per line, since the loop log is one event per line and
+   * `flyt loop log` prints a timestamp in front of each.
+   */
+  #reportFailedLanding(taskId, landed, levelBefore = null) {
+    const after = this.backlog.get(taskId) ?? {};
+    const kept = landed.attemptCommit ? ` — work kept at ${landed.attemptCommit.slice(0, 8)}` : '';
+
+    if (landed.repair) {
+      const { headline, failures } = repairLogLines(landed.repair, { taskId });
+      this.log(headline, { taskId });
+      for (const line of failures) this.log(line, { taskId });
+    } else {
+      // Every other stage: the first sentence of the guidance, not the first
+      // 160 bytes of it. A guidance that begins with a heading and continues
+      // into an embedded gate transcript should not print the heading alone.
+      const first = String(landed.guidance ?? '').split('\n').map(s => s.trim()).find(Boolean) ?? '';
+      this.log(`✖ ${taskId} ${landed.stage}: ${first.slice(0, 220)}`, { taskId });
+    }
+
+    if (after.status === 'parked') {
+      this.log(`  ⏸ ${taskId} parked for a person${kept}`, { taskId });
+      return;
+    }
+    if (landed.repair?.verdict === 'repair') {
+      const model = this.#workerFor(after.level ?? this.config.loop?.minLevel)?.model;
+      this.log(`  ↻ ${taskId} correction ${after.repairs ?? 1} of ${landed.repair.budget}`
+        + `${model ? ` on ${model}` : ''} (band ${after.level ?? '?'}) — same model, no rung spent${kept}`,
+      { taskId });
+      return;
+    }
+    if (after.level && after.level !== levelBefore) {
+      this.log(`  ↑ ${taskId} escalated to "${after.level}"${kept}`, { taskId });
     }
   }
 

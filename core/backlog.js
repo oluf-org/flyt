@@ -54,7 +54,7 @@ const CACHE_HIT_FRESH_MS = 1000;
 // The frontmatter fields that hold a number. `budgetUsd` is here even though
 // its default is null: "no budget" is a real state, and a string is still not
 // a number.
-const NUMERIC_FIELDS = ['value', 'effort', 'attempts', 'budgetUsd'];
+const NUMERIC_FIELDS = ['value', 'effort', 'attempts', 'budgetUsd', 'repairs', 'failureCount'];
 
 // Frontmatter fields, with their defaults. Anything not listed here is still
 // preserved on write — a field a later phase adds must not be erased by an
@@ -97,12 +97,28 @@ const DEFAULTS = () => ({
   claimedBy: null,
   claimedAt: null,
   blockedReason: null,
-  // The commit a reviewer read and rejected, when the last landing failed at
-  // review. The next attempt starts from it instead of from the base branch, so
-  // a specific objection is a correction rather than a rebuild. Null on every
-  // other outcome — a gate failure or an empty diff is not work worth
-  // inheriting.
+  // The commit the last attempt was judged on, when what it was judged on was
+  // worth keeping — a reviewer's objection, or a red gate over real work. The
+  // next attempt starts from it instead of from the base branch, so a specific
+  // objection is a correction rather than a rebuild. Null when there is nothing
+  // worth inheriting, so a stale sha can never be resumed from.
   resumeFrom: null,
+  // WHICH judgement produced `resumeFrom`: 'review' or 'gates'. The two need
+  // different things said to the next attempt — "a person read this and asked
+  // for one change" against "this is red and here is what is red" — and the
+  // brief was telling every resumed attempt its gates had passed, which after a
+  // gate failure is the one thing that is definitely untrue.
+  resumeStage: null,
+  // Corrections spent on THIS body of work: attempts that kept the diff and
+  // went back at the same band to fix what the gates named (core/repair.js).
+  // Deliberately not reset when the ladder escalates — the budget is the task's,
+  // not the band's, or a five-rung ladder would buy fifteen attempts.
+  repairs: 0,
+  // What the gates said last time, so a correction that changed nothing is
+  // visible: same fingerprint means the feedback did not land, and a third copy
+  // of it will not either.
+  failureSignature: null,
+  failureCount: null,
   runIds: []
 });
 

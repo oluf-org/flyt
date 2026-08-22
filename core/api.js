@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
+import { correctionFields } from './repair.js';
 import { pushRefs, git } from './worktree.js';
 import { workerForLevel, workerForLevelMap, levelFor, LEVELS } from './levels.js';
 import { blockersAll, boardBlockers } from './blockers.js';
@@ -964,7 +965,12 @@ export function createApi(engine) {
         verify: async () => verifyTask({ pool: { dirFor: () => entry.folder }, taskId, task })
       });
       if (result.landed) {
-        backlog.update(taskId, { status: 'landed', attempts: (task.attempts ?? 0) + 1, blockedReason: null });
+        backlog.update(taskId, {
+          status: 'landed', attempts: (task.attempts ?? 0) + 1, blockedReason: null,
+          // The correction record dies with the work it was about. Left behind,
+          // it would make the NEXT task to reuse this id look mid-correction.
+          repairs: 0, failureSignature: null, failureCount: null, resumeStage: null
+        });
       } else {
         // A failed attempt goes back up a rung rather than back at the same
         // band: retrying the same capability mostly reproduces the same answer.
@@ -992,7 +998,25 @@ export function createApi(engine) {
         // has to reach a person eventually, and the attempt count is what gets
         // it there.
         const reviewerFailed = result.stage === 'review' && result.review?.unavailable === true;
-        if (reviewerFailed) {
+        // A RED GATE OVER REAL WORK IS A CORRECTION, NOT A FAILED ATTEMPT.
+        //
+        // This is the case the whole ladder used to swallow. A task spent forty
+        // calls and a dollar fifty, `npm test` exited 1 over one stale
+        // assertion, and the loop moved the task up a band — where a dearer
+        // model re-read the same repository and wrote the same thing again.
+        // The rung bought nothing, because more capability was never what was
+        // missing; the failing test's name was.
+        //
+        // `assessRepair` has already decided whether there is work here worth
+        // correcting (core/repair.js). When there is, the attempt goes back at
+        // the SAME band with its commit and the failures attached. The attempt
+        // is still counted — money was spent, and the per-task cap has to see
+        // it — but no rung is, and `repairs` is what bounds it.
+        const repair = result.stage === 'gates' && result.repair?.verdict === 'repair'
+          ? result.repair : null;
+        if (repair) {
+          backlog.update(taskId, correctionFields(task, repair));
+        } else if (reviewerFailed) {
           backlog.update(taskId, {
             status: 'queued',
             attempts: (task.attempts ?? 0) + 1,
@@ -1018,8 +1042,19 @@ export function createApi(engine) {
         // start. Cleared on every other outcome so a stale sha can never be
         // resumed from.
         const correctable = result.stage === 'review' || result.stage === 'gates';
+        const keeping = correctable && result.attemptCommit;
         backlog.update(taskId, {
-          resumeFrom: correctable && result.attemptCommit ? result.attemptCommit : null
+          resumeFrom: keeping ? result.attemptCommit : null,
+          // Which judgement the next attempt is inheriting. Without it the brief
+          // told every resumed attempt that its gates had passed and a reviewer
+          // had objected — true after a review, and exactly backwards after a
+          // red gate.
+          resumeStage: keeping ? result.stage : null,
+          // The correction record belongs to the work. When the work is not
+          // being inherited there is nothing for the next attempt's failures to
+          // be compared against, and a stale fingerprint would make its first
+          // gate failure look like a repeat.
+          ...(keeping ? {} : { repairs: 0, failureSignature: null, failureCount: null })
         });
       }
       // Landed: this attempt's tree is finished with. Scoped to the attempt
