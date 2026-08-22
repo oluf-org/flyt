@@ -1,0 +1,11 @@
+id: flyt-tools-web
+name: Web tools
+kind: tool-plugin
+version: 1
+description: |
+  The tools that reach the network. What they return is untrusted input.
+  Delivery, not grant — a run reaches them only through the `web` ceiling.
+contributes:
+  tools: [web_search, web_fetch, scrape_page, extract_page]
+ceilings:
+  - web

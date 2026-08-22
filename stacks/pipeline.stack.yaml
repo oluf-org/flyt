@@ -1,0 +1,32 @@
+version: 2
+id: pipeline
+name: Pipeline
+description: |
+  The general-purpose pipeline: refine the request, plan it, and do the work.
+  This one stack replaces the v1 default-pipeline and the pipeline-low/medium/
+  high/ultra seeds — five flows collapsed into one with an effort dial on the
+  plan and the work blocks (low/medium/high). Higher effort raises the lower
+  bound on the swarm it plans; the shape is always refine → plan → work.
+
+blocks:
+  - id: refine
+    use: flyt-blocks-judgement:prompt-refiner
+    title: Refine the request
+  - id: plan
+    use: flyt-blocks-loop:backlog-plan
+    title: Plan
+    config:
+      effort: high
+      instructions: |
+        Decompose the request into the smallest independently-verifiable tasks
+        that still carry real meaning. Prefer tasks that can run in parallel
+        and say so, and state dependencies explicitly.
+  - id: work
+    use: flyt-blocks-core:work
+    title: Do the work
+    config:
+      effort: medium
+      instructions: |
+        Work the plan. If running tests or commands: read every exit code — a
+        non-zero exit is a failure to fix and re-run, never a suite reported
+        passing while it fails.

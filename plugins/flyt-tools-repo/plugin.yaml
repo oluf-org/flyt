@@ -1,0 +1,14 @@
+id: flyt-tools-repo
+name: Repo tools
+kind: tool-plugin
+version: 1
+description: |
+  The tools that read and write the bound workspace. Delivery, not grant: this
+  plugin contributes the tools; whether a run may reach them is the ceiling's
+  decision (a set is a grant, a plugin is a delivery — D57).
+contributes:
+  tools: [read_file, write_file, edit_file, create_file, glob, search_files, read_tool_result]
+ceilings:
+  - read-only
+  - repo-write
+  - repo-full

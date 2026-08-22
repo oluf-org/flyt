@@ -1,0 +1,12 @@
+id: flyt-tools-inspect
+name: Inspect tools
+kind: tool-plugin
+version: 1
+description: |
+  The tools that run the project's own gates and its shell. Delivery, not grant
+  — reached through the `repo-full` and `loop` ceilings.
+contributes:
+  tools: [bash, run_gate, search_references]
+ceilings:
+  - repo-full
+  - loop
