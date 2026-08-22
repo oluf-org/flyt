@@ -352,8 +352,8 @@ Decomposed into eight slices, in dependency order, one commit each:
 | `t-0057` | layout derived from containment, never stored | landed |
 | `t-0058` | the four stack edits, over containment | landed |
 | `t-0059` | `flyt-api` provides `ctx.commands`; the edits are commands | landed |
-| `t-0060` | `flyt-stack-runner` provides `ctx.agents` — **umbrella** over t-0064–t-0069 | queued |
-| `t-0061` | Trace renders the session log — **umbrella** over t-0070–t-0072 | queued |
+| `t-0060` | `flyt-stack-runner` provides `ctx.agents` — **umbrella** over t-0064–t-0069 | landed |
+| `t-0061` | Trace renders the session log — **umbrella** over t-0070–t-0072 | landed |
 | `t-0062` | the Work and Build surfaces — **umbrella** over t-0073–t-0077 | queued |
 | `t-0063` | the handoff test: `loop-task` end to end | queued |
 
@@ -381,6 +381,27 @@ done-when a single test can answer.
 | `t-0075` | editing is containment: a drag is a command, an agent's edit animates alike | t-0062 |
 | `t-0076` | one search over stacks, blocks, plugins, tools, skills and models | t-0062 |
 | `t-0077` | Work: the running stack, the active block lit, output streaming inline | t-0062 |
+
+Thirteen of the fourteen landed. `t-0076` is the one left, and `t-0062` closes
+when it does.
+
+Two of them were not in the plan and turned out to be load-bearing. `t-0064`
+because the parser stops at a string and nothing turned that string into
+something that can run. And `ctx.llm`, which was declared in Phase 0 and never
+provided — so everything built on it could be tested against a fake and could
+not be run against anything real. It is a bridge over the JS core's adapters
+rather than a reimplementation: the retry budget, the idle deadline and the
+aborted-spend record are a year old and correct, and a second copy of them would
+be a second set of the same bugs.
+
+What supervising this cost, and where: the loop landed one of these fourteen on
+its own and produced usable work on three more. The rest of the money went to
+detectors, not to models — an outlier threshold computed from a session of fast
+failures killed every real attempt at two minutes, a gate's output cut the one
+failure out of 20KB of passing tests, and a reviewer that could not parse its own
+verdict was charged to the task's ladder. Those are fixed. The pattern is the one
+already in the loop notes: the harness fails by measuring the wrong thing, not by
+being unable to act.
 
 `t-0064` is new work rather than a slice of `t-0060`: the parser turns
 `use: flyt-blocks-core:work` into a string on purpose, and nothing turned that
