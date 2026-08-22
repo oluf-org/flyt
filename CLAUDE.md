@@ -23,7 +23,10 @@ Phase 0 landed on 2026-08-21 (`t-0035`, built as `t-0041`-`t-0048`). What exists
 - `kernel/` is TypeScript, compiled to `kernel/dist` by `npm run build:kernel`, and imported as `#kernel`. `npm test` and `npm run build` compile it first, so a change to `kernel/src` is not live until something builds it.
 - `core/v2.js` is the only module that reads the flag, and `bootKernel()` there is the only import of the v2 tree. Keep it that way: a static `#kernel` import anywhere in `core/` would load v2 on startup whatever the flag says, and a test asserts there is none.
 - A service on the dsh contract is a Cordis `Service` subclass with ordinary private fields. Cordis derives a per-caller view with `Object.create()`, so `#private` state is unreachable through it and a registration made without `this.ctx.effect()` outlives the plugin that made it.
-- Phase 1 (`t-0036`) is next, and is hand-built rather than the Loop's, until the handoff test passes.
+- Phase 1 landed on 2026-08-22 and the handoff test passes: `loop-task` runs end to end on the
+  v2 kernel, watched in Trace. `ctx.blocks`, `ctx.agents` and `ctx.llm` have providers now;
+  `ctx.fs`, `ctx.shell` and `ctx.sandbox` are still declared and waiting. Phase 2 (`t-0037`)
+  is open, and it is the first phase the Loop is meant to work rather than a person.
 
 ## Standing rules
 

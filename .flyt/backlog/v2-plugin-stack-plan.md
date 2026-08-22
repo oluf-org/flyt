@@ -1,6 +1,6 @@
 # Flyt v2 — plugins, stacks and blocks
 
-Status: **approved plan; Phase 0 landed 2026-08-21, Phase 1 under way.** Durable choices are promoted to
+Status: **approved plan; Phase 0 landed 2026-08-21, Phase 1 landed 2026-08-22 with the handoff test passing.** Durable choices are promoted to
 `DECISIONS.md` as D52–D63 and the standing rules they amend are already updated
 in `CLAUDE.md` and `GOALS.md`. This file is the working plan; when the flag
 flips (Phase 5) it retires to git history and `DESIGN-SPEC.md` describes what
@@ -339,8 +339,8 @@ projection; plugin loader reading `dsh.bundle` / `dsh.profile` and `cordis.yml`;
 permission bridge wiring ceiling and approval onto `tools/pre-execute`. Compat
 suite in CI from day one. Nothing user-visible ships; the old app runs untouched.
 
-**Phase 1 — block editor, Work/Build shell, Trace.** `t-0036`, hand-built, flag
-off, **in progress**. Containment-and-snapping editor with derived layout; two
+**Phase 1 — block editor, Work/Build shell, Trace. Landed 2026-08-22.**
+Hand-built, flag off. Containment-and-snapping editor with derived layout; two
 surfaces; Trace reading the log. `Sequence` and `Parallel` only — the
 containment model needs to be right before it holds four more container types.
 
@@ -417,10 +417,13 @@ dependency-free, and `kernel/src/plugins/commands.ts` is the seam through which
 a person and an agent make the same edit. Nothing user-visible ships yet; the
 surfaces are `t-0062`.
 
-> **Handoff test.** `loop-task` runs end to end on the new kernel, authored in
-> the new editor, watched in Trace. Until this passes the app cannot build
-> itself and Phase 2 does not start. Once it passes, the remaining phases are
-> the Loop's work and the human role changes to fixing what the Loop hits.
+> **Handoff test — PASSED (`t-0063`).** `loop-task` runs end to end on the new
+> kernel: the stack file, the parser, `ctx.agents`, the block registry, the
+> work block, the shared agent loop, `ctx.llm`, the tool gate, the session log,
+> the projection, and the trace a person reads — with nothing faked but the
+> provider at the far end. The ceiling holds against a tool it does not name,
+> the run reopens in Trace from its log with no live process, and the commands
+> the editor invokes produce the stack the file holds. Phase 2 is open.
 
 **Phase 2 — port the canonical set.** `t-0037`. Four stacks, four block plugins,
 five tool plugins, six toolsets as ceilings. This is where the app is stressed on
