@@ -22,7 +22,6 @@ blocks:
 
   - id: read
     kind: parallel
-    title: Read it
     lanes:
       - id: read-architecture
         use: flyt-blocks-core:general-analysis

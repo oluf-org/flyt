@@ -26,11 +26,11 @@ const exists = p => fs.existsSync(path.join(ROOT, p));
 /** A registry with every block plugin installed, the way a profile composes them. */
 async function registryWithAll() {
   const k = createKernel();
-  k.ctx.plugin(flytBlocks);
-  k.ctx.plugin({ name: 'core', inject: ['blocks'], apply: core });
-  k.ctx.plugin({ name: 'judgement', inject: ['blocks'], apply: judgement });
-  k.ctx.plugin({ name: 'inquiry', inject: ['blocks'], apply: inquiry });
-  k.ctx.plugin({ name: 'loop', inject: ['blocks'], apply: loop });
+  await k.ctx.plugin(flytBlocks);
+  await k.ctx.plugin({ name: 'core', inject: ['blocks'], apply: core });
+  await k.ctx.plugin({ name: 'judgement', inject: ['blocks'], apply: judgement });
+  await k.ctx.plugin({ name: 'inquiry', inject: ['blocks'], apply: inquiry });
+  await k.ctx.plugin({ name: 'loop', inject: ['blocks'], apply: loop });
   // sessions is injected but unused by register; provide a stub so apply runs.
   return k;
 }
