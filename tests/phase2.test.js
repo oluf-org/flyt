@@ -18,6 +18,9 @@ import { apply as core } from '../kernel/dist/plugins/blocks-core.js';
 import { apply as judgement } from '../kernel/dist/plugins/blocks-judgement.js';
 import { apply as inquiry } from '../kernel/dist/plugins/blocks-inquiry.js';
 import { apply as loop } from '../kernel/dist/plugins/blocks-loop.js';
+// What the v1 library still resolves from disk, and therefore what this phase
+// may not delete.
+import { SEED_NODE_TEMPLATES } from '../src/flowTypes.js';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
@@ -114,28 +117,59 @@ test('tool plugins are deliveries and the sets are ceilings, not conflated', () 
 });
 
 test('the ported blocks have no loose nodes/*.json, and the archives are gone', () => {
-  // `work` keeps its v1 template on disk: the shipped v1 library
-  // (src/flowTypes.js SEED_NODE_TEMPLATES and the flows that instantiate it)
-  // still resolves it from nodes/work.json, and the v1 app is untouched this
-  // phase. The other ten ported blocks are plugin-only.
+  // A BLOCK THE V1 LIBRARY STILL RESOLVES KEEPS ITS TEMPLATE ON DISK.
+  //
+  // The v1 surfaces keep doing real work until the Phase 5 cutover (CLAUDE.md),
+  // and `src/flowTypes.js` SEED_NODE_TEMPLATES is the list v1 resolves from —
+  // so deleting a file it still names breaks the shipped app one phase early.
+  // `tests/library.test.js` asserts exactly that, and the two tests were
+  // mutually unsatisfiable: nine of the ten ids below are still v1 seeds, so
+  // whichever one was satisfied, the other failed. Three corrections went into
+  // that contradiction before it reached a person, which is the right number:
+  // no amount of capability resolves a rule that disagrees with itself.
+  //
+  // `work` was already carved out by hand for this exact reason. The carve-out
+  // is the RULE, not a second list — derived from the seed so it cannot drift
+  // out of step with what v1 actually reads.
+  const stillShippedByV1 = new Set(SEED_NODE_TEMPLATES.map(t => t.id));
   const ported = ['general-analysis', 'combine', 'split', 'plan-start',
-    'evaluation', 'compare', 'prompt-refiner', 'interrogate', 'orient', 'backlog-plan'];
+    'evaluation', 'compare', 'prompt-refiner', 'interrogate', 'orient', 'backlog-plan']
+    .filter(id => !stillShippedByV1.has(id));
+  // The list must not empty itself into a test that asserts nothing.
+  assert.ok(ported.length, 'some ported block is plugin-only, or this test has stopped checking anything');
   for (const id of ported) {
     assert.ok(!exists(`nodes/${id}.json`), `nodes/${id}.json archived (block now plugin-contributed)`);
   }
-  // What the task archives: the two dead node templates, and the pipeline
-  // variants the one effort-dial Pipeline stack replaces — files and layouts.
-  // The four canonical flows stay: the v1 front door still ships them, and the
-  // archive list names only what it names.
-  const dead = ['nodes/translation.json', 'nodes/node-ms2r06ba-omz2.json'];
-  for (const id of ['default-pipeline', 'pipeline-low', 'pipeline-medium', 'pipeline-high', 'pipeline-ultra']) {
-    dead.push(`flows/${id}.flow.yaml`, `flows/${id}.layout.json`);
-  }
+  // What this phase archives: the one node template nothing resolves any more.
+  //
+  // `translation` was on this list and is still a v1 seed, so it keeps its file
+  // by the same rule as the ported blocks above — dead to v2 is not the same as
+  // gone from v1, and the shipped library resolves it until the cutover.
+  const dead = ['nodes/node-ms2r06ba-omz2.json'];
   for (const file of dead) {
     assert.ok(!exists(file), `${file} archived to git history`);
   }
-  // Every layout file, whoever it belonged to.
-  for (const f of fs.readdirSync(path.join(ROOT, 'flows'))) {
-    assert.ok(!f.endsWith('.layout.json'), `flows/${f}: layout files are archived, all of them`);
+
+  // THE PIPELINE VARIANTS ARE REPLACED, NOT DELETED — this phase.
+  //
+  // `pipeline.stack.yaml` is the one effort-dial stack that replaces
+  // `default-pipeline` and `pipeline-low/medium/high/ultra`, and asserting the
+  // v2 side is what Phase 2 can honestly claim. Deleting the v1 flows is Phase
+  // 5's job: `core/flowstore.js` still exports `DEFAULT_PIPELINE_ID =
+  // 'default-pipeline'` and `core/supervisor.js` still falls back to it for
+  // every loop run, so removing that file now would stop the LOOP — the thing
+  // running this task — one phase early.
+  assert.ok(exists('stacks/pipeline.stack.yaml'),
+    'the effort-dial Pipeline stack exists, which is what replacing the variants means here');
+  // NO STORED LAYOUT — on the v2 side, which is where D59 applies.
+  //
+  // "Stack layout is derived from containment. There is no stored layout file."
+  // That is a rule about STACKS. The v1 flow store still reads and writes
+  // `flows/<id>.layout.json` for canvas positions (core/flowstore.js
+  // `layoutPath`), so deleting those would move v1's canvas one phase before
+  // the cutover. What this phase can assert is that nothing it created brought
+  // a layout file with it.
+  for (const f of fs.readdirSync(path.join(ROOT, 'stacks'))) {
+    assert.ok(!f.endsWith('.layout.json'), `stacks/${f}: a stack's layout is derived, never stored (D59)`);
   }
 });
