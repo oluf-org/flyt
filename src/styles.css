@@ -5217,4 +5217,15 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 .loop-board[data-density="compact"] .loop-card.open { padding: 6px 9px; }
 .loop-board[data-density="compact"] .loop-card.open .loop-card-head { font-size: 12px; line-height: 1.5; }
 .loop-board[data-density="compact"] .loop-card.open .loop-card-head .chip { display: revert; }
+/* The density toggle itself (D4): two bordered chips in the filter bar, the
+   active one tinted — the same language as the keyboard button it sits next
+   to, so the choice reads as a control rather than a label. */
+.loop-density { display: flex; align-items: center; gap: 4px; }
+.loop-density-btn {
+  flex: none; padding: 3px 9px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--card); color: var(--faint);
+  font: inherit; font-size: 11px; cursor: pointer;
+}
+.loop-density-btn:hover { border-color: var(--accent); color: var(--accent); }
+.loop-density-btn.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 
