@@ -15,6 +15,7 @@ import {
 import BlockEditor from './BlockEditor.jsx';
 import Trace from './Trace.jsx';
 import Work from './Work.jsx';
+import Library from './Library.jsx';
 
 /**
  * @param location — where the shell is, when a host is driving it. Omitted, the
@@ -88,11 +89,19 @@ export default function Shell({ location = null, onNavigate, build = null, watch
         {showTrace
           ? <Trace trace={watching?.trace ?? null} runId={trace.run} />
           : loc.dest === BUILD
-            ? <BlockEditor
-                stack={build?.stack ?? null}
-                blocks={build?.blocks ?? null}
-                commands={build?.commands ?? null}
-              />
+            ? (
+              <>
+                {/* Everything authored, in one place: the library above what
+                    you are editing, because finding a block and putting it in
+                    a stack is one motion and used to be two screens. */}
+                <Library sources={build?.library ?? {}} onAct={build?.onAct ?? null} />
+                <BlockEditor
+                  stack={build?.stack ?? null}
+                  blocks={build?.blocks ?? null}
+                  commands={build?.commands ?? null}
+                />
+              </>
+            )
             : <Work
                 stack={watching?.stack ?? null}
                 blocks={build?.blocks ?? null}

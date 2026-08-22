@@ -98,3 +98,32 @@ test('an absent source contributes nothing rather than requiring an empty array'
   assert.deepEqual(entries, []);
   assert.deepEqual(empty, KINDS, 'a project with nothing in it is not a broken library');
 });
+
+// --- the library rendered ----------------------------------------------------
+
+test('the search and the entries meet: six registries, one ranked list', async () => {
+  // The two halves of t-0076, held together. `libraryEntries` knows six
+  // registries and no ranking; `librarySearch` knows ranking and no registry.
+  // This is the only place both are true at once, so it is where the seam
+  // between them is worth asserting.
+  const { librarySearch } = await import('../src/v2/librarySearch.js');
+  const { entries, empty } = libraryEntries({
+    blocks: blocksRegistry([
+      { use: 'flyt-blocks-core:work', title: 'Work', description: 'Change the repository.', category: 'work', settings: {}, ceiling: ['bash'] },
+    ]),
+    stacks: [{ id: 'loop-task', name: 'Work one backlog task', description: 'One work block.' }],
+    tools: [{ id: 'from_a_plugin', description: 'Contributed, unclassified.' }],
+    skills: [{ name: 'impeccable', description: 'Critique the work.', requiresTools: ['bash'] }],
+  });
+
+  const { matches, facets } = librarySearch(entries, 'work');
+  assert.deepEqual(matches.map(m => m.kind), ['block', 'stack', 'skill'],
+    'the block titled Work first, then the stack, then the skill that mentions it');
+  assert.equal(facets.plugin, 0, 'and a kind with nothing in it is still counted');
+  assert.ok(empty.includes('plugin'));
+
+  // The two warnings the library exists to surface survive the round trip.
+  const all = librarySearch(entries, '').matches;
+  assert.equal(all.find(m => m.id === 'from_a_plugin').detail.unclassified, true);
+  assert.deepEqual(all.find(m => m.id === 'impeccable').detail.requiresTools, ['bash']);
+});

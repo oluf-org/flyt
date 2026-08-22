@@ -795,9 +795,26 @@ blocks:
       kernel.ctx.on('commands/invoke', record => { for (const fn of listeners) fn(record); });
       registerStackCommands(kernel.ctx, { get: () => root, set: next => { root = next; } });
 
+      // What the library shows in the preview: the real block registry, plus
+      // the tools and models this mock already carries. Six kinds, so the
+      // facets and the empty-kind line can both be looked at.
+      const library = {
+        blocks: kernel.ctx.blocks,
+        stacks: [{ id: 'loop-task', name: 'Work one backlog task', description: 'One work block.', blockCount: 1 }],
+        tools: [
+          { id: 'read_file', title: 'Read a file', description: 'Read a text file from the workspace.', effects: ['read'], risk: 'safe', scope: 'workspace' },
+          { id: 'bash', title: 'Run a command', description: 'A shell in the workspace.', effects: ['shell'], risk: 'danger', scope: 'workspace' },
+          { id: 'from_a_plugin', description: 'Contributed, and not yet classified.' },
+        ],
+        skills: [{ name: 'impeccable', description: 'Critique the work.', requiresTools: ['bash'] }],
+        models: Object.keys(mockSettings.modelFacts ?? {}).slice(0, 12).map(id => ({ id, source: 'openrouter' })),
+        modelFacts: mockSettings.modelFacts ?? {},
+      };
+
       const surface = {
         get stack() { return { id: 'preview', root }; },
         blocks: kernel.ctx.blocks,
+        library,
         commands: {
           invoke: (name, args, caller) => kernel.ctx.commands.invoke(name, args, caller),
           subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); },

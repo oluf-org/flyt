@@ -1,0 +1,103 @@
+/* --- the library (t-0076) ---------------------------------------------------
+   One search over six kinds, replacing four lists. The row is the unit: what
+   it is, what it is called, what it does, and the verb for using it. Nothing
+   moves — a list that animates while you type is a list you cannot read while
+   you type. Tokens only. */
+
+.library {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+
+.lib-search {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--tx);
+  font: inherit;
+}
+.lib-search:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+
+.lib-facets { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.lib-facet {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.lib-facet:hover { color: var(--tx); }
+.lib-facet.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+/* Shown, not hidden. "There are no plugins matching this" is an answer. */
+.lib-facet.none { color: var(--faint); }
+.lib-count { color: var(--faint); font-variant-numeric: tabular-nums; }
+.lib-facet.on .lib-count { color: var(--accent); }
+
+.lib-results { list-style: none; margin: 0; padding: 0; }
+
+.lib-row {
+  display: grid;
+  grid-template-columns: 72px minmax(160px, 1fr) 2fr auto auto;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 4px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.lib-row:first-child { border-top: 0; }
+.lib-row:hover { background: var(--chip); }
+
+.lib-kind {
+  color: var(--faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.lib-title { display: flex; flex-direction: column; gap: 1px; }
+.lib-id { color: var(--faint); font-size: 11px; }
+.lib-desc { color: var(--dim); }
+
+.lib-warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.lib-act {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  color: var(--tx);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.lib-act:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.lib-act:disabled { color: var(--faint); cursor: default; }
+
+.lib-empty { font-size: 12px; }
+
+@media (max-width: 720px) {
+  /* The description is the first thing to go: the kind, the name and the verb
+     are what the row is for. */
+  .lib-row { grid-template-columns: 64px 1fr auto; }
+  .lib-desc { display: none; }
+}
