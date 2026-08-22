@@ -78,8 +78,8 @@ export function blockersFor(task, ctx = {}) {
   if (missing.length) {
     out.push(blocker('dep-missing', 'blocked',
       missing.length === 1
-        ? `Waiting on ${missing[0]}, which does not exist.`
-        : `Waiting on ${missing.length} tasks that do not exist: ${missing.join(', ')}.`,
+        ? `Waiting for ${missing[0]}, which does not exist.`
+        : `Waiting for ${missing.length} tasks that do not exist: ${missing.join(', ')}.`,
       {
         detail: 'It was removed, or the id was written down wrong. This task can never be picked while it names a task that is not there.',
         subjects: missing,
@@ -96,7 +96,7 @@ export function blockersFor(task, ctx = {}) {
     out.push(blocker('dep-cycle', 'blocked',
       `Circular dependency: ${cycle.join(' → ')}.`,
       {
-        detail: 'Every task in this ring is waiting on another one in it, so none of them can ever be picked. Cut one edge.',
+        detail: 'Every task in this ring is waiting on another one in it, so none of them can ever be picked. Remove one of the links to break the circle.',
         subjects: cycle.slice(0, -1),
         remedy: remedy('break-cycle', `Stop ${cycle[0]} depending on ${cycle[1]}`,
           { id: cycle[0], drop: cycle[1] })
@@ -108,8 +108,8 @@ export function blockersFor(task, ctx = {}) {
   if (dead.length) {
     out.push(blocker('dep-failed', 'blocked',
       dead.length === 1
-        ? `Waiting on ${dead[0].id}, which is ${dead[0].status} — it will not finish on its own.`
-        : `Waiting on ${dead.length} tasks that are failed or parked: ${dead.map(d => d.id).join(', ')}.`,
+        ? `Waiting for ${dead[0].id}, which is ${dead[0].status} — it will not finish on its own.`
+        : `Waiting for ${dead.length} tasks that are failed or parked: ${dead.map(d => d.id).join(', ')}.`,
       {
         detail: dead[0].blockedReason ? `${dead[0].id}: ${dead[0].blockedReason}` : null,
         subjects: dead.map(d => d.id),
@@ -121,8 +121,8 @@ export function blockersFor(task, ctx = {}) {
   if (unlanded.length) {
     out.push(blocker('dep-unlanded', 'blocked',
       unlanded.length === 1
-        ? `Waiting on ${unlanded[0].id} (${unlanded[0].status}) to land.`
-        : `Waiting on ${unlanded.length} tasks to land: ${unlanded.map(d => `${d.id} (${d.status})`).join(', ')}.`,
+        ? `Waiting for ${unlanded[0].id} (${unlanded[0].status}) to finish.`
+        : `Waiting for ${unlanded.length} tasks to finish: ${unlanded.map(d => `${d.id} (${d.status})`).join(', ')}.`,
       {
         // One level deep, deliberately. Two levels is a graph nobody reads in
         // a card; the chain view is where that belongs.
@@ -140,8 +140,8 @@ export function blockersFor(task, ctx = {}) {
   if (badGates.length) {
     out.push(blocker('gate-unrunnable', 'blocked',
       badGates.length === 1
-        ? `Its gate \`${badGates[0].command}\` cannot run here: ${badGates[0].problem}.`
-        : `${badGates.length} of its gates cannot run here.`,
+        ? `Cannot run its check \`${badGates[0].command}\`: ${badGates[0].problem}.`
+        : `${badGates.length} checks cannot run on this machine.`,
       {
         detail: badGates.map(g => `\`${g.command}\` — ${g.problem}`).join('; '),
         subjects: badGates.map(g => g.command),
@@ -154,9 +154,9 @@ export function blockersFor(task, ctx = {}) {
     const held = now - Date.parse(task.claimedAt);
     if (Number.isFinite(held) && held > (ctx.leaseMs ?? LEASE_MS)) {
       out.push(blocker('lease-held', 'blocked',
-        `Held by ${task.claimedBy ?? 'a worker'} since ${task.claimedAt.slice(0, 16).replace('T', ' ')}, past the one-hour lease.`,
+        `Stuck with ${task.claimedBy ?? 'a worker'} since ${task.claimedAt.slice(0, 16).replace('T', ' ')}, over an hour ago — the lease has expired.`,
         {
-          detail: 'The worker that claimed it is probably gone. Releasing it puts it back in the queue.',
+          detail: 'The worker that claimed it probably exited without releasing it. Releasing it puts it back in the queue.',
           subjects: [task.claimedBy].filter(Boolean),
           remedy: remedy('release-task', 'Release it', { id: task.id })
         }));
@@ -168,14 +168,14 @@ export function blockersFor(task, ctx = {}) {
     const top = (task.level ?? null) === LEVELS[LEVELS.length - 1];
     out.push(blocker('attempts-exhausted', 'blocked',
       top
-        ? `Parked after ${task.attempts ?? 0} attempt(s) at the top band — there is no bigger model to try.`
-        : `Parked${task.attempts ? ` after ${task.attempts} attempt(s)` : ''} and waiting on you.`,
+        ? `Tried ${task.attempts ?? 0} times and still needs help — already at the strongest model, so it will not retry on its own.`
+        : `Tried ${task.attempts ? `${task.attempts} time(s)` : 'once'} and now needs your help to try again.`,
       {
         detail: task.blockedReason ?? null,
         subjects: [task.id],
         remedy: top
           ? remedy('requeue', 'Put it back in the queue', { id: task.id })
-          : remedy('requeue-up', 'Requeue a level up', { id: task.id })
+          : remedy('requeue-up', 'Try again with a stronger model', { id: task.id })
       }));
   }
 
@@ -184,7 +184,7 @@ export function blockersFor(task, ctx = {}) {
   const inFlight = ctx.status?.inFlight?.length ?? 0;
   if (task.status === 'queued' && !out.length && ctx.status?.running && inFlight >= parallelism) {
     out.push(blocker('parallelism-full', 'warning',
-      `Ready, but all ${parallelism} worker slot(s) are busy.`,
+      `Ready to run — waiting for a free worker (${inFlight} of ${parallelism} busy).`,
       {
         detail: 'It will be picked as soon as something in flight finishes.',
         subjects: [],
@@ -221,11 +221,11 @@ export function boardBlockers(ctx = {}) {
   const reviewer = settings.workers?.reviewer;
   if (!reviewer?.model) {
     out.push(blocker('no-reviewer', 'blocked',
-      'No reviewer model is set, so nothing can land.',
+      'No reviewer model is set, so completed work cannot be approved.',
       {
-        detail: 'The loop will pick tasks, run them and verify them, then stop before merging. Set a reviewer to let work land.',
+        detail: 'The loop will pick tasks, run them and verify them, then stop before merging. Choose a reviewer to let work be approved.',
         subjects: [],
-        remedy: remedy('set-reviewer', 'Set a reviewer', {})
+        remedy: remedy('set-reviewer', 'Choose a reviewer', {})
       }));
   }
 
@@ -245,7 +245,7 @@ export function boardBlockers(ctx = {}) {
     out.push(blocker('no-model', 'blocked',
       'No model is configured for any effort band, and there is no OpenRouter key to route with.',
       {
-        detail: 'Name a model for at least one band, or add an OpenRouter key so the router can pick one.',
+        detail: 'Pick a model for at least one band, or add an OpenRouter key so the router can choose one.',
         subjects: [],
         remedy: remedy('set-model', 'Choose a model', {})
       }));
@@ -253,7 +253,7 @@ export function boardBlockers(ctx = {}) {
 
   if (spend?.hits?.includes('hard')) {
     out.push(blocker('budget-hard', 'blocked',
-      `The hard spending cap of $${Number(spend.caps?.hardUsd ?? 0).toFixed(2)} has been reached — the loop stops here.`,
+      `Spending limit of $${Number(spend.caps?.hardUsd ?? 0).toFixed(2)} reached — the loop has paused.`,
       {
         detail: `$${Number(spend.window?.usd ?? 0).toFixed(2)} spent in the current window.`,
         subjects: [],
@@ -261,7 +261,7 @@ export function boardBlockers(ctx = {}) {
       }));
   } else if (spend?.hits?.includes('soft')) {
     out.push(blocker('budget-soft', 'warning',
-      `The soft spending cap of $${Number(spend.caps?.softUsd ?? 0).toFixed(2)} has been reached — work continues, but nothing escalates to a dearer band.`,
+      `Soft spending limit of $${Number(spend.caps?.softUsd ?? 0).toFixed(2)} reached — work continues but will not use a more expensive model.`,
       {
         detail: `$${Number(spend.window?.usd ?? 0).toFixed(2)} spent in the current window.`,
         subjects: [],
