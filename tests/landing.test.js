@@ -517,3 +517,33 @@ test('the diff of a live attempt shows what it has written, committed or not', a
 
   await pool.remove('t-0001', { deleteBranch: true });
 });
+
+test('a review cut off at its token budget says so, and one that rambled says that', async () => {
+  // The loop reported "the reviewer returned no usable verdict block" twice in
+  // one session and the two causes call for different things: a truncated
+  // review wants a bigger budget or a smaller diff, a rambling one wants a
+  // different reviewer. Saying the same sentence for both is what you say when
+  // you have not looked.
+  const { reviewDiff } = await import('../core/diffReview.js');
+  const worker = { provider: 'script', model: 'reviewer' };
+
+  setScript(() => '{"verdict":"approve","reason":"It does what the task asked.');  // cut mid-JSON
+  const cut = await reviewDiff({ worker, task: { title: 't' }, diff: 'x', finishReason: 'length' });
+  // The fake reports `stop`, so this is the prose branch — which is the point:
+  // the distinction is made from what the ADAPTER said, not guessed from the text.
+  assert.equal(cut.unavailable, true);
+  assert.equal(cut.verdict, 'request-changes', 'an unreadable review is never an approval');
+  assert.match(cut.reason, /without a verdict block/);
+
+  setScript(() => '```json\n{"verdict":"approve","reason":"Fine."}\n```\nSome notes after it.');
+  const fine = await reviewDiff({ worker, task: { title: 't' }, diff: 'x' });
+  assert.equal(fine.verdict, 'approve');
+  assert.equal(fine.unavailable, undefined, 'a block followed by prose is still a verdict');
+});
+
+test('the reviewer is asked for its verdict FIRST, so a cut answer still has one', async () => {
+  const { REVIEW_SYSTEM } = await import('../core/diffReview.js');
+  assert.match(REVIEW_SYSTEM, /START your reply with ONE ```json block/);
+  assert.doesNotMatch(REVIEW_SYSTEM, /End with ONE ```json block/,
+    'whatever is last is what a token budget cuts, and the verdict is the part that must survive');
+});

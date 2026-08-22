@@ -24,6 +24,13 @@ const DIFF_BUDGET = 60_000;
 // place in the system for this bug to live.
 const MAX_TOKENS = 1200 + REASONING_HEADROOM;
 
+// The verdict block comes FIRST, and that is not a style choice. A review of a
+// sixty-thousand-character diff can run out of completion budget mid-sentence,
+// and whatever is last is what gets cut — which used to be the verdict. The
+// loop then read "the reviewer returned no usable verdict block" twice in one
+// session and could not tell a truncated answer from a rambling one. Asking for
+// the block first means a cut response still carries the only part that has to
+// survive.
 export const REVIEW_SYSTEM = [
   'ROLE: diff-review',
   'You are reviewing a change before it is merged into the main branch of a real repository,',
@@ -46,13 +53,16 @@ export const REVIEW_SYSTEM = [
   'Do NOT review style, naming or formatting. The suite is green; you are judging whether',
   'this should be on main.',
   '',
-  'End with ONE ```json block and nothing after it:',
+  'START your reply with ONE ```json block, before any prose:',
   '```json',
   '{"verdict":"approve|request-changes|reject","reason":"<one or two sentences>",',
   ' "changes":["<specific, actionable change>"],"concerns":["<anything worth flagging that is not blocking>"]}',
   '```',
   'approve = land it. request-changes = fixable, say exactly what. reject = this should not',
-  'land and another attempt at the same thing will not help.'
+  'land and another attempt at the same thing will not help.',
+  '',
+  'Anything you want to add goes after the block. Nothing reads it, so keep it short or',
+  'leave it out — the block is the review.'
 ].join('\n');
 
 export const VERDICTS = ['approve', 'request-changes', 'reject'];
@@ -125,10 +135,19 @@ export async function reviewDiff({
     });
     const parsed = parseReview(res.text);
     if (!parsed) {
+      // WHICH failure, because they call for different things and the loop was
+      // being told the same sentence for both. A review cut off at the token
+      // budget wants a bigger budget or a smaller diff; one that answered in
+      // prose wants a different reviewer. "No usable verdict block" is what you
+      // say when you have not looked.
+      const cut = res.finishReason === 'length';
       return {
         verdict: 'request-changes',
-        reason: 'The reviewer returned no usable verdict block.',
-        changes: [], concerns: [], unavailable: true
+        reason: cut
+          ? `The reviewer ran out of its completion budget before finishing (${res.text?.length ?? 0}`
+            + ' characters, cut mid-answer). The diff may be too large to review in one pass.'
+          : 'The reviewer answered without a verdict block, so there is nothing to read as a decision.',
+        changes: [], concerns: [], unavailable: true, truncated: cut
       };
     }
     return { ...parsed, model: { provider: res.provider, model: res.model }, usage: res.usage ?? null };
