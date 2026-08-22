@@ -45,6 +45,9 @@ export const SESSION_EVENTS = [
   // The run
   'run.created',
   'stack.resolved',
+  // `stage` is one of: execution, resumed, stopped, done, failed. `resumed`
+  // carries how much was replayed rather than re-run, and is followed by
+  // `execution` — a run picked up from its log is a run that is going again.
   'run.stage',
   'run.error',
   // A block's turn, and the steps within it

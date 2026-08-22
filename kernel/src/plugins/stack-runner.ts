@@ -137,11 +137,84 @@ export class StackRunner extends Service implements AgentsSeam {
     return run;
   }
 
-  /** Resume an interrupted run from its log. Implemented in t-0068. */
+  /**
+   * Resume an interrupted run from its log.
+   *
+   * A READ, not a reconstruction. v1 rebuilt state from status files and had to
+   * be told what each of them meant; here the log is the record, so resuming is
+   * a matter of reading what already happened and continuing (D55).
+   *
+   * A block that reached a terminal `block.status` is not run again — its
+   * recorded output is the carry, exactly as it was the first time. A block
+   * that went `active` and never settled IS run again, and its unreturned tool
+   * call comes back through `deriveMessages()` as a synthetic never-returned
+   * result rather than disappearing (D17). A dropped call is how a resumed
+   * conversation silently changes shape, and the model then answers a question
+   * nobody asked.
+   */
   async resume(runId: string): Promise<AgentRun> {
     const live = this.runs.get(runId);
     if (live) return live;
-    throw new Error(`Resuming run "${runId}" from its log is not built yet (t-0068).`);
+
+    // `read` refuses a run with no log, naming it — which is the honest answer
+    // to "resume something that never started".
+    const past = await this.ctx.sessions.read(runId);
+    const events = [];
+    for await (const event of past.read()) events.push(event);
+
+    const created = events.find(e => e.type === 'run.created');
+    const stackId = String((created?.data as { stackId?: unknown })?.stackId ?? '');
+    const input = String((created?.data as { input?: unknown })?.input ?? '');
+    if (!stackId) throw new Error(`Run "${runId}" has a log with no stack in it, so there is nothing to resume.`);
+
+    // FINISHED? Then resuming is reading, not running: a caller that asks twice
+    // must not pay twice.
+    //
+    // `stopped` is deliberately not in this list. A stopped run is the thing
+    // you resume — that is what stopping is for. Treating it as terminal made
+    // `resume` hand back the stop it was asked to undo, which reads as success
+    // and is the exact opposite of the feature.
+    const stages = events.filter(e => e.type === 'run.stage')
+      .map(e => String((e.data as { stage?: unknown })?.stage ?? ''));
+    const last = stages.at(-1);
+    if (last === 'done' || last === 'failed') {
+      const settled: RunOutcome = last === 'done'
+        ? { status: 'done', messages: await past.deriveMessages() as Message[] }
+        : {
+          status: 'failed',
+          error: String((events.findLast(e => e.type === 'run.error')?.data as { error?: unknown })?.error
+            ?? 'the run failed'),
+        };
+      return { runId, settled: async () => settled, stop: async () => {} };
+    }
+
+    const root = this.stacks?.resolve(stackId) ?? null;
+    if (!root) throw new Error(`Run "${runId}" is a run of stack "${stackId}", which this runner cannot resolve.`);
+
+    // What already finished, and what it produced. Both from the log.
+    const done = new Map<string, BlockOutcome>();
+    const outputs = new Map<string, string>();
+    for (const event of events) {
+      const data = event.data as { blockId?: unknown; status?: unknown; content?: unknown; error?: unknown };
+      if (event.type === 'block.output' && typeof data.blockId === 'string') {
+        outputs.set(data.blockId, String(data.content ?? ''));
+      }
+      if (event.type !== 'block.status' || typeof data.blockId !== 'string') continue;
+      if (data.status === 'done' || data.status === 'failed') {
+        done.set(data.blockId, {
+          status: data.status,
+          output: outputs.get(data.blockId) ?? '',
+          ...(data.error ? { error: String(data.error) } : {}),
+        });
+      }
+    }
+
+    const session = await this.ctx.sessions.open(runId);
+    await session.append({ type: 'run.stage', data: { stage: 'resumed', from: events.at(-1)?.seq ?? 0, replayed: done.size } });
+
+    const run = new Run(runId, r => this.walkRun(r, root, input, session, done));
+    this.runs.set(runId, run);
+    return run;
   }
 
   /** A run still in flight in this process, if any. */
@@ -156,10 +229,14 @@ export class StackRunner extends Service implements AgentsSeam {
   // consumer makes, which is exactly how this was found.
 
   /** The whole run: the root sequence, then the outcome. */
-  private async walkRun(run: Run, root: SequenceNode, input: string, session: SessionHandle): Promise<RunOutcome> {
+  private async walkRun(
+    run: Run, root: SequenceNode, input: string, session: SessionHandle,
+    /** Blocks the log says already settled, from `resume`. Empty for a fresh run. */
+    done: Map<string, BlockOutcome> = new Map(),
+  ): Promise<RunOutcome> {
     await session.append({ type: 'run.stage', data: { stage: 'execution' } });
     try {
-      const walked = await this.walk(run, root, input, session);
+      const walked = await this.walk(run, root, input, session, done);
       if (run.stopReason) {
         await session.append({
           type: 'run.stage',
@@ -194,24 +271,27 @@ export class StackRunner extends Service implements AgentsSeam {
    *
    * @returns every block step this subtree ran, in completion order.
    */
-  private async walk(run: Run, node: StackNode, input: string, session: SessionHandle): Promise<BlockStep[]> {
-    if (node.kind === 'block') {
-      const step = await this.runBlock(run, node, input, session);
-      return [step];
-    }
-    if (node.kind === 'parallel') return this.runParallel(run, node, input, session);
-    return this.runSequence(run, node, input, session);
+  private async walk(
+    run: Run, node: StackNode, input: string, session: SessionHandle,
+    done: Map<string, BlockOutcome>,
+  ): Promise<BlockStep[]> {
+    if (node.kind === 'block') return [await this.runBlock(run, node, input, session, done)];
+    if (node.kind === 'parallel') return this.runParallel(run, node, input, session, done);
+    return this.runSequence(run, node, input, session, done);
   }
 
   /** Children, top to bottom, each fed what the one before produced. */
-  private async runSequence(run: Run, node: SequenceNode, input: string, session: SessionHandle): Promise<BlockStep[]> {
+  private async runSequence(
+    run: Run, node: SequenceNode, input: string, session: SessionHandle,
+    done: Map<string, BlockOutcome>,
+  ): Promise<BlockStep[]> {
     const steps: BlockStep[] = [];
     let carried = input;
     for (const child of node.children) {
       // The durable boundary. A stop lands BETWEEN children, after the event
       // that recorded the last one, and never inside a block.
       if (run.stopReason) break;
-      const ran = await this.walk(run, child, carried, session);
+      const ran = await this.walk(run, child, carried, session, done);
       steps.push(...ran);
       const last = ran.at(-1);
       if (last?.outcome.status === 'failed') break;
@@ -227,14 +307,17 @@ export class StackRunner extends Service implements AgentsSeam {
    * isolation (D37): a lane cannot see what a sibling produced because it was
    * never handed it, and there is no shared carry for one to leak through.
    */
-  private async runParallel(run: Run, node: ParallelNode, input: string, session: SessionHandle): Promise<BlockStep[]> {
+  private async runParallel(
+    run: Run, node: ParallelNode, input: string, session: SessionHandle,
+    done: Map<string, BlockOutcome>,
+  ): Promise<BlockStep[]> {
     const lanes = node.children;
     const bound = Math.max(1, node.maxParallel ?? lanes.length);
     const steps: BlockStep[] = [];
     for (let i = 0; i < lanes.length; i += bound) {
       if (run.stopReason) break;
       const wave = lanes.slice(i, i + bound);
-      const ran = await Promise.all(wave.map(lane => this.walk(run, lane, input, session)));
+      const ran = await Promise.all(wave.map(lane => this.walk(run, lane, input, session, done)));
       for (const laneSteps of ran) steps.push(...laneSteps);
       if (steps.some(s => s.outcome.status === 'failed')) break;
     }
@@ -242,7 +325,18 @@ export class StackRunner extends Service implements AgentsSeam {
   }
 
   /** One block, through the registry and the other seams. */
-  private async runBlock(run: Run, node: BlockNode, input: string, session: SessionHandle): Promise<BlockStep> {
+  private async runBlock(
+    run: Run, node: BlockNode, input: string, session: SessionHandle,
+    done: Map<string, BlockOutcome> = new Map(),
+  ): Promise<BlockStep> {
+    // Already settled, according to the log. Not run again, and not
+    // re-logged: replaying a block that finished is how a resume charges
+    // twice for the same work and writes a second copy of its output.
+    const already = done.get(node.id);
+    if (already) {
+      run.lastBlockId = node.id;
+      return { node, outcome: already };
+    }
     const definition: BlockDefinition = this.ctx.blocks.require(node.use, `block "${node.id}"`);
     // The block's own ceiling narrows the run's; it never widens it (D57).
     const ceiling = definition.ceiling
