@@ -116,29 +116,38 @@ test('tool plugins are deliveries and the sets are ceilings, not conflated', () 
   }
 });
 
-test('the ported blocks have no loose nodes/*.json, and the archives are gone', () => {
-  // A BLOCK THE V1 LIBRARY STILL RESOLVES KEEPS ITS TEMPLATE ON DISK.
+test('porting a block adds a plugin contribution and takes nothing away from v1', () => {
+  // THIS PHASE ADDS. IT DOES NOT DELETE.
   //
-  // The v1 surfaces keep doing real work until the Phase 5 cutover (CLAUDE.md),
-  // and `src/flowTypes.js` SEED_NODE_TEMPLATES is the list v1 resolves from —
-  // so deleting a file it still names breaks the shipped app one phase early.
-  // `tests/library.test.js` asserts exactly that, and the two tests were
-  // mutually unsatisfiable: nine of the ten ids below are still v1 seeds, so
-  // whichever one was satisfied, the other failed. Three corrections went into
-  // that contradiction before it reached a person, which is the right number:
-  // no amount of capability resolves a rule that disagrees with itself.
+  // The test that stood here asserted the opposite — that a ported block's
+  // `nodes/<id>.json` was gone — and it could not be satisfied. The v1 surfaces
+  // keep doing real work until the Phase 5 cutover (CLAUDE.md), and every one
+  // of the ten ids below is still resolved by v1: nine are in
+  // `src/flowTypes.js` SEED_NODE_TEMPLATES, which `tests/library.test.js`
+  // checks against disk, and `backlog-plan` is named by two shipped flows,
+  // which `npm run flow -- lint` checks. Whichever assertion was satisfied, one
+  // of the others failed.
   //
-  // `work` was already carved out by hand for this exact reason. The carve-out
-  // is the RULE, not a second list — derived from the seed so it cannot drift
-  // out of step with what v1 actually reads.
-  const stillShippedByV1 = new Set(SEED_NODE_TEMPLATES.map(t => t.id));
+  // Three model corrections went into that contradiction before it reached a
+  // person, which is the right number: no amount of capability resolves a rule
+  // that disagrees with itself. `work` had already been carved out by hand for
+  // exactly this reason — the carve-out was the rule, and the rule covers all
+  // ten.
+  //
+  // So what Phase 2 can honestly claim is the ADDITION: the block is
+  // contributed by a plugin (asserted in full above), and v1 can still resolve
+  // what it always could. Deleting the v1 templates is Phase 5's job.
   const ported = ['general-analysis', 'combine', 'split', 'plan-start',
-    'evaluation', 'compare', 'prompt-refiner', 'interrogate', 'orient', 'backlog-plan']
-    .filter(id => !stillShippedByV1.has(id));
-  // The list must not empty itself into a test that asserts nothing.
-  assert.ok(ported.length, 'some ported block is plugin-only, or this test has stopped checking anything');
+    'evaluation', 'compare', 'prompt-refiner', 'interrogate', 'orient', 'backlog-plan'];
+  const stillShippedByV1 = new Set(SEED_NODE_TEMPLATES.map(t => t.id));
   for (const id of ported) {
-    assert.ok(!exists(`nodes/${id}.json`), `nodes/${id}.json archived (block now plugin-contributed)`);
+    assert.ok(exists(`nodes/${id}.json`),
+      `nodes/${id}.json stays until the cutover — v1 still resolves it`);
+  }
+  // And the seed and the disk agree, which is the invariant library.test.js
+  // guards from the other side.
+  for (const id of stillShippedByV1) {
+    assert.ok(exists(`nodes/${id}.json`), `nodes/${id}.json is a v1 seed and must be on disk`);
   }
   // What this phase archives: the one node template nothing resolves any more.
   //

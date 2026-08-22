@@ -1,0 +1,22 @@
+{
+  "id": "backlog-plan",
+  "name": "Backlog plan",
+  "description": "Turns analysis into queued work: a strict JSON array of backlog tasks a loop node can enqueue and a supervisor can claim.",
+  "category": null,
+  "icon": "≡",
+  "baseType": "aiStep",
+  "role": "plan-backlog",
+  "effort": "high",
+  "evalType": "step",
+  "worker": null,
+  "instructions": "",
+  "tools": [
+    "glob",
+    "search_files",
+    "read_file"
+  ],
+  "skills": [],
+  "requiresApproval": true,
+  "approveToolCalls": false,
+  "outputs": null
+}
