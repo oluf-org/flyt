@@ -1,0 +1,52 @@
+{
+  "id": "create_file",
+  "title": "Create a file",
+  "description": "Create a NEW text file in the workspace (the bound target project). Fails if the file already exists — use write_file to overwrite. Forward-slash relative paths like \"src/new.js\"; the path is confined to the workspace root.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "write"
+  ],
+  "scope": "workspace",
+  "risk": "caution",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "path",
+      "content"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Relative path inside the workspace for the new file, e.g. \"src/new.js\"."
+      },
+      "content": {
+        "type": "string",
+        "description": "Full text content of the new file."
+      }
+    }
+  },
+  "keywords": [
+    "create",
+    "new",
+    "file",
+    "add"
+  ],
+  "examples": [
+    "create src/new-module.js",
+    "add a README to the project"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

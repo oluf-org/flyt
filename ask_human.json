@@ -1,0 +1,60 @@
+{
+  "id": "ask_human",
+  "title": "Ask a human",
+  "description": "Stop and ask the person who owns this project a question, instead of guessing or failing. Use it when the task is genuinely ambiguous — two defensible designs, a decision nobody has made, a constraint the task does not state — and no amount of reading the repository would settle it. Do NOT use it for something you could find out by reading a file or running a gate. The task is parked with your question and will come back to you with the answer. This ENDS your work on this task: say everything you need in the question.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "write"
+  ],
+  "scope": "workspace",
+  "risk": "caution",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "question"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "question": {
+        "type": "string",
+        "description": "The question, in one or two sentences, answerable without reading this run. State what you would do by default if nobody answers."
+      },
+      "options": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "The candidate answers you are choosing between, if it is a choice. Makes the reply a click rather than an essay."
+      },
+      "context": {
+        "type": "string",
+        "description": "What you already established — what you read, what you ruled out — so the reply does not repeat your work."
+      }
+    }
+  },
+  "keywords": [
+    "ask",
+    "question",
+    "human",
+    "clarify",
+    "ambiguous",
+    "decision"
+  ],
+  "examples": [
+    "the plan does not say whether the drawer should remember its height per project or globally",
+    "there are two existing patterns for this and the task does not say which to follow"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

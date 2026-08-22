@@ -701,6 +701,39 @@ export function installDevMock() {
     // the empty editor, which is the honest state. Here it is a real parsed
     // stack over the real command surface, so the editor, the drag and the
     // agent-edit animation can all be looked at.
+    // The run Trace is looking at, in the browser preview. A real fold over a
+    // real event list, so what is on screen is what a session log produces —
+    // including the two things this surface exists for: a degraded route, and
+    // a tool call that never came back.
+    v2Watching: async () => {
+      const { foldTrace } = await import('./traceModel.js');
+      const at = n => new Date(Date.UTC(2026, 7, 22, 10, 0, n)).toISOString();
+      return { runId: 'preview-run', trace: foldTrace([
+        { seq: 1, at: at(0), type: 'run.created', data: { runId: 'preview-run', stackId: 'preview' } },
+        { seq: 2, at: at(1), type: 'turn.start', data: { runId: 'preview-run', turn: 1, blockId: 'plan' } },
+        { seq: 3, at: at(1), type: 'step.start', data: { runId: 'preview-run', blockId: 'plan', step: 1 } },
+        { seq: 4, at: at(1), type: 'step.prompt', data: { content: 'You are the plan block.\n\nWork out what to change.' } },
+        { seq: 5, at: at(2), type: 'llm.request', data: { callId: 'q1', model: 'deepseek/deepseek-v4-flash' } },
+        { seq: 6, at: at(6), type: 'llm.response', data: {
+          callId: 'q1', content: 'I will read the layout first.', reasoning: 'Weighing two orders of work.',
+          finishReason: 'tool_calls',
+          toolCalls: [{ id: 'c1', name: 'read_file', args: { path: 'kernel/src/stack/layout.ts' } }],
+          usage: { promptTokens: 4021, completionTokens: 233, reasoningTokens: 96, costUsd: 0.0031 },
+          route: { requested: 'deepseek/deepseek-v4-flash', effective: 'openrouter/deepseek/deepseek-v4-flash-0731',
+            reason: 'the latest alias resolved to a dated build', degraded: true } } },
+        { seq: 7, at: at(6), type: 'permission.decision', data: { callId: 'c1', decision: 'allow', reason: 'it only reads' } },
+        { seq: 8, at: at(7), type: 'tool.result', data: { callId: 'c1', name: 'read_file', content: 'export interface Box { x: number; y: number }' } },
+        { seq: 9, at: at(7), type: 'step.end', data: { runId: 'preview-run', blockId: 'plan', step: 1 } },
+        { seq: 10, at: at(8), type: 'step.start', data: { runId: 'preview-run', blockId: 'plan', step: 2 } },
+        { seq: 11, at: at(8), type: 'llm.request', data: { callId: 'q2', model: 'deepseek/deepseek-v4-flash' } },
+        { seq: 12, at: at(11), type: 'llm.response', data: { callId: 'q2', content: 'Running the suite.', finishReason: 'tool_calls',
+          toolCalls: [{ id: 'c2', name: 'bash', args: { command: 'npm test' } }],
+          usage: { promptTokens: 5210, completionTokens: 88, costUsd: 0.0019 } } },
+        { seq: 13, at: at(11), type: 'permission.decision', data: { callId: 'c2', decision: 'allow', reason: 'the loop ceiling names it' } },
+        { seq: 14, at: at(12), type: 'plugin/impeccable', data: { finding: 'a detector this surface has no shape for' } },
+      ]) };
+    },
+
     v2Build: async () => {
       const [{ parseStack, createKernel, flytApi, flytBlocks, registerStackCommands }] =
         await Promise.all([import('#kernel')]);

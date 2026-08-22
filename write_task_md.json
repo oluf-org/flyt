@@ -1,0 +1,47 @@
+{
+  "id": "write_task_md",
+  "title": "Write the task spec",
+  "description": "Write or update the structured spec markdown for the CURRENT task (saved as tasks/<taskId>.spec.md). Use it to record your plan, interface decisions, or acceptance criteria before producing the deliverable.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "write"
+  ],
+  "scope": "run",
+  "risk": "safe",
+  "autoExecute": true,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "content"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "content": {
+        "type": "string",
+        "description": "Full markdown content of the task spec."
+      }
+    }
+  },
+  "keywords": [
+    "spec",
+    "plan",
+    "notes",
+    "task",
+    "markdown"
+  ],
+  "examples": [
+    "record the plan before implementing"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

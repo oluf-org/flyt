@@ -1,0 +1,53 @@
+{
+  "id": "write_file",
+  "title": "Write a file",
+  "description": "Create or OVERWRITE a text file in the workspace (the bound target project). Use write_file when the file may already exist; use create_file when it must be new. Forward-slash relative paths like \"src/app.js\"; the path is confined to the workspace root.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "write"
+  ],
+  "scope": "workspace",
+  "risk": "caution",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "path",
+      "content"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Relative path inside the workspace, e.g. \"report.md\" or \"src/app.js\"."
+      },
+      "content": {
+        "type": "string",
+        "description": "Full text content of the file."
+      }
+    }
+  },
+  "keywords": [
+    "write",
+    "file",
+    "save",
+    "overwrite",
+    "edit"
+  ],
+  "examples": [
+    "save the report to report.md",
+    "overwrite src/app.js with the new version"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

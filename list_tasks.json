@@ -1,0 +1,61 @@
+{
+  "id": "list_tasks",
+  "title": "List backlog tasks",
+  "description": "List the tasks in the PROJECT'S BACKLOG — the queue this task was picked from. Use it before enqueueing work, to check whether it is already queued, and to see what depends on what. Titles and metadata only; call read_task for one task's full text. Filter by status: queued, claimed, running, verifying, review, landed, failed, parked.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "read"
+  ],
+  "scope": "workspace",
+  "risk": "safe",
+  "autoExecute": true,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "status": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "claimed",
+          "running",
+          "verifying",
+          "review",
+          "landed",
+          "failed",
+          "parked"
+        ],
+        "description": "Only tasks in this status. Omit for all of them."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "description": "At most this many tasks (default 50)."
+      }
+    }
+  },
+  "keywords": [
+    "backlog",
+    "queue",
+    "tasks",
+    "todo",
+    "list"
+  ],
+  "examples": [
+    "what else is in the backlog",
+    "is there already a task for the board columns"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "repo-write",
+  "title": "Repo (read + write)",
+  "description": "Read, and modify files in the bound workspace. No shell.",
+  "include": [
+    "read-only",
+    "effects:write"
+  ],
+  "includeSets": [],
+  "exclude": [
+    "bash"
+  ],
+  "source": {
+    "kind": "builtin"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "id": "read_tool_result",
+  "title": "Read an earlier tool result",
+  "description": "Read the full result of an earlier tool call by its handle (e.g. \"@tool:14\"), optionally narrowed to one part with a jsonPath like \"$.stdout\" or \"$.items[0].name\". Use this instead of repeating a call whose result was truncated.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "read"
+  ],
+  "scope": "run",
+  "risk": "safe",
+  "autoExecute": true,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "handle"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "handle": {
+        "type": "string",
+        "description": "The handle from a previous tool result, e.g. \"@tool:14\"."
+      },
+      "jsonPath": {
+        "type": "string",
+        "description": "Optional path into the result, e.g. \"$.stdout\" or \"$.items[0].name\". Omit for the whole result."
+      },
+      "maxChars": {
+        "type": "integer",
+        "minimum": 200,
+        "maximum": 100000,
+        "description": "Optional cap on how much comes back (default 10000)."
+      }
+    }
+  },
+  "keywords": [
+    "result",
+    "handle",
+    "truncated",
+    "full",
+    "again",
+    "more"
+  ],
+  "examples": [
+    "read the rest of the command output",
+    "get the full response body from @tool:14"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 100000,
+    "artifact": true
+  }
+}

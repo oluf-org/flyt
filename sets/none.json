@@ -1,0 +1,11 @@
+{
+  "id": "none",
+  "title": "No tools",
+  "description": "Nothing. A node with this ceiling can only think and write its own output.",
+  "include": [],
+  "includeSets": [],
+  "exclude": [],
+  "source": {
+    "kind": "builtin"
+  }
+}

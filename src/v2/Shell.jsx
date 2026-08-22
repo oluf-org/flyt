@@ -9,6 +9,7 @@ import {
   DESTINATIONS, INITIAL, BUILD, navigate, heading, traceOf, state, resolveLocation,
 } from './shellRouting.js';
 import BlockEditor from './BlockEditor.jsx';
+import Trace from './Trace.jsx';
 
 /**
  * @param location — where the shell is, when a host is driving it. Omitted, the
@@ -22,16 +23,23 @@ import BlockEditor from './BlockEditor.jsx';
  *   on Work.
  */
 /**
+ * @param watching — the run being looked at: `{ trace }`, a folded trace from
+ *   `src/traceModel.js`. Absent, Trace says nothing has been recorded, which is
+ *   what a run whose log holds no turns yet should look like.
  * @param build — what Build edits: `{ stack, blocks, commands }`. Absent, the
  *   editor renders its empty state, which is what a project holding no stacks
  *   should look like. The HOST supplies it; the shell does not go and find one,
  *   because there is exactly one place the command surface may come from and it
  *   is not a renderer component.
  */
-export default function Shell({ location = null, onNavigate, build = null }) {
+export default function Shell({ location = null, onNavigate, build = null, watching = null }) {
   const [focus, setFocus] = useState(location ?? INITIAL);
   const loc = resolveLocation(location, focus);
-  const trace = traceOf(loc);
+  // Trace appears when anything RUNS (D60), not when somebody navigates to it.
+  // A host that is watching a run has addressed one, and a location that names
+  // a run has too — the second is how you reopen a finished run's record, and
+  // the first is how the live one shows up without being asked for.
+  const trace = traceOf(watching?.runId ? { ...loc, run: watching.runId } : loc);
   const here = state(loc);
 
   const go = dest => {
@@ -68,7 +76,7 @@ export default function Shell({ location = null, onNavigate, build = null }) {
               commands={build?.commands ?? null}
             />
           : trace
-            ? <p className="muted">Trace of run <span className="mono">{trace.run}</span>.</p>
+            ? <Trace trace={watching?.trace ?? null} runId={trace.run} />
             : <p className="muted">No run addressed.</p>}
       </section>
     </div>

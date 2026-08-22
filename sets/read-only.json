@@ -1,0 +1,13 @@
+{
+  "id": "read-only",
+  "title": "Read-only",
+  "description": "Everything that observes and changes nothing — reading files, re-reading an earlier tool result.",
+  "include": [
+    "effects:read"
+  ],
+  "includeSets": [],
+  "exclude": [],
+  "source": {
+    "kind": "builtin"
+  }
+}

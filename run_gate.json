@@ -1,0 +1,47 @@
+{
+  "id": "run_gate",
+  "title": "Run a gate",
+  "description": "Run one of the project's declared gate commands (its tests, its linter) and get back the exit code and output. Call this BEFORE you say a task is done: the gates are what decide whether the work lands, and the supervisor runs them itself afterwards regardless — finding out now costs one call, finding out later costs the whole attempt. Omit `command` to run every declared gate in order, stopping at the first failure. Only declared gates can be run; anything else is refused with the list of what is available.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "shell"
+  ],
+  "scope": "workspace",
+  "risk": "caution",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "Which declared gate to run, e.g. \"npm test\". Omit to run them all in order."
+      }
+    }
+  },
+  "keywords": [
+    "gate",
+    "test",
+    "verify",
+    "check",
+    "suite",
+    "lint",
+    "npm test"
+  ],
+  "examples": [
+    "run the tests before finishing",
+    "check whether npm test passes now"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

@@ -79,9 +79,21 @@ function V2Root() {
     return build.commands.subscribe(() => setEdits(n => n + 1));
   }, [build]);
 
+  // The run being watched, when the host has one. Trace is transient: it is
+  // addressed by run rather than navigated to, so it arrives the same way the
+  // stack does — from the host, not found by a component.
+  const [watching, setWatching] = useState(null);
+  useEffect(() => {
+    let live = true;
+    Promise.resolve(window.flyt?.v2Watching?.())
+      .then(w => { if (live) setWatching(w ?? null); })
+      .catch(() => { if (live) setWatching(null); });
+    return () => { live = false; };
+  }, []);
+
   // Read through on every edit. `stack` may be a live view of a tree the
   // command surface owns, so taking it again is the point rather than an
   // accident of rendering.
   const view = build ? { ...build, stack: build.stack, edits } : null;
-  return <V2Shell build={view} />;
+  return <V2Shell build={view} watching={watching} />;
 }
