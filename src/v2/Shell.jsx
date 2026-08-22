@@ -1,12 +1,14 @@
 // The v2 shell renderer (t-0073). A thin view over shellRouting.js — the
 // routing contract lives there so tests hold the renderer to it without
-// importing React. Work and Build render their headings only: the editor is
-// t-0074, the library t-0076, the running stack t-0077, each a separate task.
-// Trace is transient and addressed by run, carried across navigation.
+// importing React. Work renders its heading only (the running stack is
+// t-0077); Build's body is the block editor (t-0074), drawn read-only from
+// the derived layout. The library is t-0076. Trace is transient and
+// addressed by run, carried across navigation.
 import React, { useState } from 'react';
 import {
-  DESTINATIONS, INITIAL, navigate, heading, traceOf, state, resolveLocation,
+  DESTINATIONS, INITIAL, BUILD, navigate, heading, traceOf, state, resolveLocation,
 } from './shellRouting.js';
+import BlockEditor from './BlockEditor.jsx';
 
 /**
  * @param location — where the shell is, when a host is driving it. Omitted, the
@@ -52,9 +54,11 @@ export default function Shell({ location = null, onNavigate }) {
       </nav>
       <section className="v2-panel" data-surface={here.surface}>
         <h1>{heading(loc.dest)}</h1>
-        {trace
-          ? <p className="muted">Trace of run <span className="mono">{trace.run}</span>.</p>
-          : <p className="muted">No run addressed.</p>}
+        {loc.dest === BUILD
+          ? <BlockEditor />
+          : trace
+            ? <p className="muted">Trace of run <span className="mono">{trace.run}</span>.</p>
+            : <p className="muted">No run addressed.</p>}
       </section>
     </div>
   );
