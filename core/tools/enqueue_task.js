@@ -68,6 +68,10 @@ export default {
         type: 'array',
         items: { type: 'string' },
         description: 'Names of project skills (.flyt/skills/<name>.md) the worker will need — the conventions this particular job has to follow. Instructions only; naming a skill never grants a tool.'
+      },
+      propose: {
+        type: 'boolean',
+        description: 'Propose the task WITHOUT writing it (default false). The id is reserved and the would-be task is returned, but nothing is queued — the caller (a chat) presents it to a human, who commits it with task:add. Loop workers must leave this false: an unattended agent has nobody to confirm with, so it writes directly.'
       }
     }
   },
@@ -83,6 +87,43 @@ export default {
     // (DESIGN-SPEC.md §8). A throw fails the call and lands in the retrospective.
     if (!ctx?.backlog) {
       throw new Error('No backlog is bound to this run, so there is nowhere to queue work. Use create_task for work that belongs to this run.');
+    }
+    const spec = {
+      title: args.title,
+      goal: args.goal,
+      doneWhen: args.doneWhen ?? [],
+      value: args.value,
+      effort: args.effort,
+      dependsOn: args.dependsOn ?? [],
+      blastRadius: args.blastRadius ?? [],
+      // What the worker will need to KNOW, as distinct from what it may do.
+      // Resolved from the bound project at run time (core/skills.js), so a task
+      // written today still finds the convention the project keeps tomorrow.
+      skills: args.skills ?? []
+    };
+    // PROPOSE mode: build the task it WOULD write and hand it back, unwritten.
+    // The chat drawer needs "the model proposes; the human commits" — the card
+    // appears with Queue it / Discard BEFORE anything exists on disk, because a
+    // card that can only say "queued" is a confirmation of a decision the model
+    // already made, not a decision the human is being offered. The id is
+    // RESERVED so the proposal can name it and Queue it can claim exactly it;
+    // reserveId spends the counter only, so nothing here touches .flyt/backlog/.
+    //
+    // Nothing about the throw above softens in this mode: a proposal is not a
+    // write, so a call with no backlog bound still has nowhere to queue work
+    // and fails the call the same way. The proposed body is exactly the input
+    // task:add takes, so pressing Queue it is the human making the same call
+    // the model would have made directly — with `id` added, so the task lands
+    // on the id the proposal showed.
+    // The mode has two sources: the CALL (args.propose) and the BINDING
+    // (ctx.proposeTasks). A chat turn cannot change what the model will write,
+    // so whoever binds a chat sets the flag on the tool ctx and every call in
+    // that run proposes; a loop's workers never set it, so their calls stay
+    // writes exactly as tests/backlog.test.js asserts.
+    if (args.propose === true || ctx?.proposeTasks === true) {
+      const id = ctx.backlog.reserveId();
+      const createdBy = ctx.nodeId ? `agent:${ctx.runId}:${ctx.nodeId}` : `agent:${ctx.runId}`;
+      return { id, title: spec.title, status: 'proposed', proposed: true, task: { id, ...spec, createdBy } };
     }
     const task = ctx.backlog.add({
       title: args.title,

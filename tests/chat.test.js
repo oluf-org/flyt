@@ -165,31 +165,73 @@ test('a turn that calls list_tasks answers from the real queue', async () => {
   assert.equal(turns[0].text, 'what is in the backlog?');
 });
 
-test('an enqueue_task call comes back as a proposal the human can commit', async () => {
+test('an enqueue_task call in a chat turn PROPOSES and writes nothing', async () => {
   const store = newStore();
   const backlog = newBacklog();
   const id = store.newThreadId();
 
   setScript(({ prompt }) => {
     if (!prompt.includes('TOOL RESULT')) {
-      return ['I will queue that.', '```tool', JSON.stringify({
+      return ['I can queue that.', '```tool', JSON.stringify({
         tool: 'enqueue_task',
         args: { title: 'Split LoopPage into src/loop/', goal: 'It is 563 lines and this phase adds three surfaces.' }
       }), '```'].join('\n');
     }
-    return 'Queued as t-0001.';
+    return 'Proposed — queue it if it looks right.';
   });
 
   const turn = await runChatTurn({
     store, threadId: id, text: 'split the loop page up', worker, toolCtx: { backlog }
   });
 
+  // The assertion this whole task turns on: the chat turn's enqueue_task call
+  // wrote NOTHING to .flyt/backlog/ — the directory LISTING, not an absence
+  // from the index. The model proposes; the human commits.
+  const entries = fs.existsSync(backlog.rootDir) ? fs.readdirSync(backlog.rootDir) : [];
+  assert.deepEqual(entries.filter(f => f.endsWith('.task.md')), [],
+    'propose mode must not write a task file to .flyt/backlog/');
+  assert.equal(backlog.list().length, 0);
+
   // The proposal is surfaced separately, because the UI renders it as a card
-  // with Queue it / Discard: the model proposes, the human commits.
+  // with Queue it / Discard. It names the id it RESERVED and carries the body
+  // Queue it hands to task:add verbatim.
   assert.equal(turn.proposals.length, 1);
+  assert.equal(turn.proposals[0].id, 't-0001');
   assert.equal(turn.proposals[0].title, 'Split LoopPage into src/loop/');
-  assert.ok(turn.proposals[0].id, 'it names the task it created');
+  assert.equal(turn.proposals[0].task?.id, 't-0001');
+  assert.equal(turn.proposals[0].task?.goal, 'It is 563 lines and this phase adds three surfaces.');
+});
+
+test('pressing Queue it creates the task on the id the proposal showed', () => {
+  const backlog = newBacklog();
+  // What the card was showing: a reserved id and a proposed body, nothing on disk.
+  const proposal = { id: backlog.reserveId(), title: 'Split LoopPage into src/loop/', goal: 'It is 563 lines.' };
+  assert.deepEqual(fs.readdirSync(backlog.rootDir).filter(f => f.endsWith('.task.md')), []);
+
+  // The button's whole job: task:add with the proposed body, id included.
+  const task = backlog.add({ id: proposal.id, title: proposal.title, goal: proposal.goal });
+  assert.equal(task.id, proposal.id, 'the committed task lands on the id the proposal reserved');
   assert.equal(backlog.list().length, 1);
+  assert.equal(backlog.get(proposal.id).status, 'queued');
+
+  // And a later plain enqueue cannot reuse the reserved id even if the human
+  // pressed Discard: reserveId spends the number, so the id a card showed once
+  // never points at different work later.
+  const next = backlog.add({ title: 'Something else', goal: 'g' });
+  assert.notEqual(next.id, proposal.id);
+});
+
+test('a loop worker calling enqueue_task still writes immediately', async () => {
+  const backlog = newBacklog();
+  // The registry entry — what a run binds for its workers, untouched by chat's
+  // propose:true copy. An unattended agent has nobody to confirm with, so its
+  // call is the write, exactly as tests/backlog.test.js asserts.
+  const { tools } = resolveTools({ grant: ['enqueue_task'], ceiling: ['enqueue_task'] });
+  const tool = tools.find(t => t.name === 'enqueue_task');
+  const out = await tool.run({ title: 'Extract the retry helper', goal: 'Three tools copy it.' }, { backlog, runId: 'run-x', nodeId: 'n-1' });
+  assert.equal(out.id, 't-0001');
+  assert.equal(out.status, 'queued');
+  assert.deepEqual(fs.readdirSync(backlog.rootDir).filter(f => f.endsWith('.task.md')), ['t-0001.task.md']);
 });
 
 test('a model failure keeps the question, so you can see what broke it', async () => {

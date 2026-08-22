@@ -163,6 +163,13 @@ export function chatSystemPrompt({ projectName = null, tasks = [], ctx = {} }) {
  * Both halves of the exchange are written even when the model call THROWS. A
  * thread that loses the question along with the answer is a thread where the
  * person cannot see what they asked that broke it.
+ *
+ * Chat turns call enqueue_task in PROPOSE mode via `proposeTasks` on the tool
+ * ctx. A loop worker keeps writing directly — an unattended agent has nobody
+ * to confirm with, so propose mode would leave its task unwritten forever. A
+ * chat turn has exactly the person the button is for: the card appears with
+ * Queue it / Discard before anything exists on disk, and Queue it is the human
+ * making the same task:add call the model would have made.
  */
 export async function runChatTurn({
   store, threadId, text, worker, apiKey, projectName = null,
@@ -188,7 +195,12 @@ export async function runChatTurn({
       // exactly where executeTool announces a call, so a sink in that slot is
       // the documented seam rather than a hook bolted on: tool calls arrive
       // live, in the shape the audit trail already uses.
-      ctx: { ...toolCtx, store: logSink(toolCtx.store, threadId, onEvent) },
+      // Chat turns enqueue in PROPOSE mode (the model proposes; the human
+      // commits). The binding carries the flag because executeTool binds the
+      // registry's run, not a copy a caller could wrap — the only door into a
+      // model's call is the ctx. The loop's workers never set it: an
+      // unattended agent has nobody to confirm with, so its calls stay writes.
+      ctx: { ...toolCtx, proposeTasks: true, store: logSink(toolCtx.store, threadId, onEvent) },
       onText, signal, timeout, retry,
       // What the MODEL call did — budget, finish reason, cost (D40). Distinct
       // from a tool call, and conflating the two is why this was wrong first.
@@ -205,8 +217,15 @@ export async function runChatTurn({
   // renders each as a card with Queue it / Discard: the model proposes, the
   // human commits, and that is the highest-value interaction in the phase.
   const proposals = (result.toolCalls ?? [])
-    .filter(c => c.tool === 'enqueue_task' && c.ok)
-    .map(c => ({ id: c.result?.id ?? null, title: c.args?.title ?? '', goal: c.args?.goal ?? '' }));
+    .filter(c => c.tool === 'enqueue_task' && c.ok && c.result?.proposed)
+    .map(c => ({
+      id: c.result?.id ?? null,
+      title: c.result?.task?.title ?? c.args?.title ?? '',
+      goal: c.result?.task?.goal ?? c.args?.goal ?? '',
+      // The body Queue it passes to task:add verbatim: the human committing is
+      // the same call the model would have made without a witness.
+      task: c.result?.task ?? null
+    }));
 
   const turn = store.append(threadId, {
     role: 'assistant',

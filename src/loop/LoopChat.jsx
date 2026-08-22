@@ -201,7 +201,7 @@ export default function LoopChat({ projectId, activeModels = [], boardBlockers =
   );
 }
 
-function Turn({ turn, onOpenTask }) {
+function Turn({ turn, onOpenTask, projectId }) {
   if (turn.role === 'user') {
     return <div className="loop-chat-turn user"><p className="text">{turn.text}</p></div>;
   }
@@ -213,7 +213,7 @@ function Turn({ turn, onOpenTask }) {
         : <p className="text">{turn.text}</p>}
       {/* The model proposes; the human commits. */}
       {(turn.proposals ?? []).map(p => (
-        <Proposal key={p.id ?? p.title} proposal={p} onOpenTask={onOpenTask} />
+        <Proposal key={p.id ?? p.title} proposal={p} projectId={projectId} onOpenTask={onOpenTask} />
       ))}
       {turn.model && <p className="loop-chat-meta">{turn.model}</p>}
     </div>
@@ -243,20 +243,42 @@ function ToolLine({ call }) {
   );
 }
 
-// A task the model queued, shown as the card it became. It is already written —
-// `enqueue_task` is the one write this toolset has — so the control is "open
-// it" and "remove it", not "confirm it": a button that pretends to gate
-// something that already happened would be a lie about what the model can do.
-function Proposal({ proposal, onOpenTask }) {
+// A task the model PROPOSED, shown before it exists. Chat turns call
+// enqueue_task in propose mode, so unlike the old card this one is not already
+// written when it appears: Queue it is the commit — `task:add` with the
+// proposed body verbatim, landing on the exact id the proposal reserved — and
+// Discard closes the card with nothing ever on disk. The model proposes; the
+// human commits.
+function Proposal({ proposal, projectId, onOpenTask }) {
+  const [state, setState] = useState('pending'); // pending | queued | discarded
+  const [queueError, setQueueError] = useState(null);
+  const queue = async () => {
+    setQueueError(null);
+    try {
+      // The body the model proposed, committed by the one person who can. The
+      // id goes in with it so the task lands on the id the card showed —
+      // reserved at proposal time, claimed here (task:add, one door).
+      const r = await window.flyt.addTask(projectId, proposal.task ?? { id: proposal.id, title: proposal.title, goal: proposal.goal });
+      setState('queued');
+      if (onOpenTask) onOpenTask(r?.id ?? proposal.id);
+    } catch (err) { setQueueError(String(err?.message ?? err)); }
+  };
   return (
-    <div className="loop-chat-proposal">
+    <div className={`loop-chat-proposal${state !== 'pending' ? ` ${state}` : ''}`}>
       <div className="head">
-        <span className="badge">queued</span>
+        <span className="badge">{state === 'pending' ? 'proposed' : state}</span>
         <code className="mono">{proposal.id}</code>
         <strong>{proposal.title}</strong>
       </div>
       {proposal.goal && <p className="goal">{proposal.goal}</p>}
-      {onOpenTask && proposal.id && (
+      {state === 'pending' && (
+        <div className="loop-chat-proposal-actions">
+          <button type="button" className="primary" onClick={queue}>Queue it</button>
+          <button type="button" className="link" onClick={() => setState('discarded')}>Discard</button>
+        </div>
+      )}
+      {queueError && <p className="err">{queueError}</p>}
+      {state === 'queued' && onOpenTask && proposal.id && (
         <button type="button" className="link" onClick={() => onOpenTask(proposal.id)}>Show it on the board</button>
       )}
     </div>
