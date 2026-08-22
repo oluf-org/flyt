@@ -707,6 +707,10 @@ export function createApi(engine) {
       if (!removed) throw new ApiError(`No task "${id}".`, { status: 404, code: 'no_task' });
       return {
         removed: removed.id, title: removed.title, status: removed.status,
+        // Tasks that depended on this one and can no longer become ready.
+        // Carried through so a caller says it at the moment of removal, which
+        // is the only moment anyone is looking.
+        stranded: removed.stranded ?? [],
         ...(removed.unreadable ? { unreadable: removed.unreadable } : {})
       };
     },

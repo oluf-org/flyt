@@ -272,8 +272,21 @@ test('whyNothingReady: "backlog empty" only when it really is', () => {
 });
 
 test('whyNothingReady: caps the list and says how many more', () => {
-  const many = ['a', 'b', 'c', 'd', 'e'].map((_, i) => task(`t-000${i}`, { dependsOn: ['t-gone'] }));
+  // Five tasks blocked for five UNRELATED reasons, which is the case this cap
+  // is for. The fixture used to point all five at one missing dependency; that
+  // now takes the better path below — five tasks behind one thing is a fact
+  // about that one thing, not a list to truncate — so the cap is exercised
+  // where it still applies.
+  const many = ['a', 'b', 'c', 'd', 'e'].map((_, i) => task(`t-000${i}`, { dependsOn: [`t-gone-${i}`] }));
   const line = whyNothingReady(ctx(many));
   assert.match(line, /5 task\(s\) blocked/);
   assert.match(line, /and 2 more/);
+});
+
+test('whyNothingReady: names the one thing everything is waiting for', () => {
+  const many = ['a', 'b', 'c', 'd', 'e'].map((_, i) => task(`t-000${i}`, { dependsOn: ['t-gone'] }));
+  const line = whyNothingReady(ctx(many));
+  assert.match(line, /5 task\(s\) blocked/);
+  assert.match(line, /5 of them behind t-gone \(missing\)/,
+    'one sentence beats five that each name the same cause');
 });

@@ -145,6 +145,20 @@ const WORK_REASON_TAIL = ' Its last attempt was rejected on the work, not the mo
 const BUDGET_REASON = /per-task cap/;
 
 /**
+ * The first line of a reason, for quoting inside another one.
+ *
+ * Reasons are written for a person AND for the next attempt, so they open with
+ * a summary and continue into instructions. Anything that QUOTES a reason —
+ * a park notice, a report, a log line — wants the summary and not the
+ * instructions, or one event becomes thirty lines of advice addressed to
+ * somebody who is not reading.
+ */
+function firstSentenceOf(reason) {
+  const first = String(reason ?? '').split('\n').map(s => s.trim()).find(Boolean) ?? '';
+  return first.length > 240 ? `${first.slice(0, 239)}…` : first;
+}
+
+/**
  * Where the work is expected to LAND, when the task said so.
  *
  * `blastRadius` is on every task file and reaches nothing. Watched a worker
@@ -1151,7 +1165,19 @@ export class Supervisor {
     const at = prior.indexOf(WORK_REASON_TAIL);
     if (at >= 0) prior = prior.slice(at + WORK_REASON_TAIL.length);   // do not nest them
     if (!prior || BUDGET_REASON.test(prior)) return budgetMessage;
-    return budgetMessage + WORK_REASON_TAIL + prior;
+    // The SENTENCE, not the whole brief.
+    //
+    // A work reason is written for two readers — this one, and the next
+    // attempt, which gets the rest of it in its brief — so it opens with a
+    // summary line and continues into instructions addressed to a model.
+    // Quoting all of it puts two and a half kilobytes of "do not delete tests
+    // to go green" into a park notice and into the log, which is the very
+    // flood this park is trying to explain. Watched it: t-0037's park line ran
+    // to thirty lines of somebody else's instructions.
+    //
+    // The task file still holds the whole thing; this is the quote, and a
+    // quote is one sentence.
+    return budgetMessage + WORK_REASON_TAIL + firstSentenceOf(prior);
   }
 
   /**

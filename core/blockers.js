@@ -320,9 +320,65 @@ export function whyNothingReady(ctx = {}) {
     .map(t => ({ task: t, blockers: blockersFor(t, ctx).filter(b => b.severity === 'blocked') }))
     .filter(e => e.blockers.length);
   if (!blocked.length) return 'nothing ready';
+
+  // The task that is ACTUALLY holding things up, which is usually not the one
+  // any single blocker names.
+  //
+  // A blocker names the IMMEDIATE dependency, so a chain reports itself one
+  // link at a time: "t-0038 (waiting for t-0037), t-0039 (waiting for t-0038),
+  // t-0040 (waiting for t-0039)". Every line is true and the useful fact — that
+  // one parked task is holding up the entire chain, and unparking it frees all
+  // three — is in none of them. Watched this backlog sit wedged behind a single
+  // parked task with four queued tasks that no picker would ever take.
+  //
+  // So the chains are walked to their roots and counted. When one root explains
+  // more than one blocked task, IT is the news.
+  const byId = new Map(tasks.map(t => [t.id, t]));
+  const roots = new Map();
+  for (const e of blocked) {
+    const root = blockingRoot(e.task, byId);
+    if (!root || root === e.task.id) continue;
+    roots.set(root, (roots.get(root) ?? 0) + 1);
+  }
+  const [rootId, count] = [...roots].sort((a, b) => b[1] - a[1])[0] ?? [];
+  if (count > 1) {
+    const root = byId.get(rootId);
+    const state = root ? root.status : 'missing';
+    return `nothing ready — ${blocked.length} task(s) blocked, ${count} of them behind ${rootId}`
+      + ` (${state}${root?.title ? `: ${root.title}` : ''})`;
+  }
+
   const shown = blocked.slice(0, 3).map(e => `${e.task.id} (${e.blockers[0].summary})`).join(', ');
   const rest = blocked.length > 3 ? `, and ${blocked.length - 3} more` : '';
   return `nothing ready — ${blocked.length} task(s) blocked: ${shown}${rest}`;
+}
+
+/**
+ * The task at the bottom of a dependency chain that is not going to resolve.
+ *
+ * Walks `dependsOn` past every link that is itself merely WAITING, and stops at
+ * the first one that is the actual reason: parked, failed, missing, or in
+ * flight. A chain of queued tasks all waiting on each other has exactly one
+ * such task at the end of it, and that is the one worth naming.
+ *
+ * Returns its id, or null when nothing is holding this task up.
+ *
+ * @param task — the blocked task to walk down from.
+ * @param byId — every task, by id.
+ */
+export function blockingRoot(task, byId, seen = new Set()) {
+  if (!task || seen.has(task.id)) return null;   // a cycle is `dep-cycle`, not this
+  seen.add(task.id);
+  for (const id of (task.dependsOn ?? []).filter(Boolean)) {
+    const dep = byId.get(id);
+    // Gone, or stuck on a person: the chain ends here whatever is above it.
+    if (!dep || dep.status === 'parked' || dep.status === 'failed') return id;
+    if (dep.status === 'landed') continue;       // this link is satisfied
+    // Queued or running: it may itself be waiting on something.
+    const deeper = blockingRoot(dep, byId, seen);
+    return deeper ?? id;
+  }
+  return null;
 }
 
 // --- helpers ---------------------------------------------------------------

@@ -439,6 +439,27 @@ export class Backlog {
     if (!force && fs.existsSync(this.#lock(safe))) {
       throw new Error(`Task "${safe}" is claimed by ${task.claimedBy ?? 'someone'}. Release it before removing it.`);
     }
+    // Who this leaves stranded.
+    //
+    // A task whose dependency does not exist scores zero forever: `score()`
+    // requires every dependency to be LANDED, and a task that is gone can never
+    // land. So removing one task can quietly make another unclaimable for the
+    // rest of the backlog's life, and nothing said so at the moment it
+    // happened. Watched it: t-0006 was removed after spending $2.29, t-0008
+    // depended on it, and the loop reported "nothing ready" for weeks with a
+    // queued task sitting in the backlog that no picker would ever take.
+    //
+    // Reported rather than refused. `--all` removes parents and children in one
+    // pass and would otherwise trip over its own feet, and a person deleting a
+    // task usually means it — what they cannot do is notice the consequence,
+    // because it is in a different file. `blockers.js` already offers the
+    // remedy (`dep-missing` → drop the dependency); this is what tells anyone
+    // to go and look.
+    const stranded = this.list()
+      .filter(t => t.id !== safe
+        && !TERMINAL.has(t.status)
+        && (t.dependsOn ?? []).includes(safe))
+      .map(t => ({ id: t.id, title: t.title, status: t.status }));
     fs.rmSync(this.#file(safe));
     this._cache.delete(this.#file(safe));
     try { fs.rmSync(this.#lock(safe)); } catch { /* no lock, or already gone */ }
@@ -447,7 +468,7 @@ export class Backlog {
     // but that is the whole point of the counter: the directory has just
     // forgotten this id, and the ledger has not.
     this.#recordId(safe);
-    return task;
+    return { ...task, stranded };
   }
 
   // --- claiming ------------------------------------------------------------
