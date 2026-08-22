@@ -40,6 +40,9 @@ export default function BlockerNote({ blocker, busy = false, onRemedy = null, on
           type="button"
           className="loop-remedy"
           disabled={busy}
+          aria-label={remedy.label}
+          title={remedy.label}
+          data-action={remedy.action}
           onClick={() => onRemedy(remedy)}
         >{remedy.label}</button>
       )}

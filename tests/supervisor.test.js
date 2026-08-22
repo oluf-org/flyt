@@ -350,7 +350,7 @@ test('the loop works the queue and stops when there is nothing ready', async () 
   // the line on the card are the same words rather than two accounts of one
   // fact (DECISIONS.md D45). It also says the consequence, which "(parked)" did
   // not: a parked dependency will not finish on its own.
-  assert.match(idle.stopping, /t-0002 \(Waiting on t-0001, which is parked — it will not finish on its own\.\)/);
+  assert.match(idle.stopping, /t-0002 \(Waiting for t-0001, which is parked — it will not finish on its own\.\)/);
 
   // Highest score first: the picker's order is the loop's order.
   const started = engine.calls.filter(c => c.name === 'work:start').map(c => c.args.taskId);
@@ -1480,7 +1480,7 @@ test('the last green canary becomes the next task\'s test-count baseline', async
 
 // `--only` narrows what the loop may take, so it has to narrow the EXPLANATION
 // too. A run over two named tasks that had both parked reported "nothing ready
-// — 1 task(s) blocked: t-0008 (Waiting on t-0006, which does not exist.)",
+// — 1 task(s) blocked: t-0008 (Waiting for t-0006, which does not exist.)",
 // naming a task nobody had asked it to work. Three restarts went looking at
 // t-0008 before anyone read the backlog directory.
 test('a --only loop explains the tasks it was told to work, not the rest of the backlog', async () => {

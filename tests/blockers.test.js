@@ -34,7 +34,7 @@ test('dep-missing: names the id that is not there, and offers to drop it', () =>
   assert.equal(rest.length, 0);
   assert.equal(b.kind, 'dep-missing');
   assert.equal(b.severity, 'blocked');
-  assert.equal(b.summary, 'Waiting on t-0006, which does not exist.');
+  assert.equal(b.summary, 'Waiting for t-0006, which does not exist.');
   assert.deepEqual(b.subjects, ['t-0006']);
   assert.equal(b.remedy.action, 'remove-dep');
 });
@@ -44,7 +44,7 @@ test('dep-unlanded: a dependency that is simply not finished yet', () => {
   const t = task('t-0002', { dependsOn: ['t-0001'] });
   const [b] = blockersFor(t, ctx([dep, t]));
   assert.equal(b.kind, 'dep-unlanded');
-  assert.match(b.summary, /Waiting on t-0001 \(running\) to land/);
+  assert.match(b.summary, /Waiting for t-0001 \(running\) to finish/);
   // Nothing to press: the answer is to wait, and a button that does nothing is
   // worse than none.
   assert.equal(b.remedy, null);
@@ -109,7 +109,7 @@ test('gate-unrunnable: a gate this machine cannot run, before the task is picked
   const t = task('t-0003', { gates: ['definitely-not-a-real-binary-xyz --run'] });
   const b = blockersFor(t, ctx([t])).find(x => x.kind === 'gate-unrunnable');
   assert.ok(b);
-  assert.match(b.summary, /cannot run here/);
+  assert.match(b.summary, /Cannot run its check/);
   assert.match(b.detail, /is not an executable command/);
   assert.equal(b.remedy.action, 'edit-gates');
 });
@@ -135,7 +135,7 @@ test('attempts-exhausted: at the top band the remedy is requeue, below it a leve
   const top = task('t-0006', { status: 'parked', level: 'max', attempts: 4, blockedReason: 'out of ladder' });
   const mid = task('t-0007', { status: 'parked', level: 'medium', attempts: 2 });
   const b1 = blockersFor(top, ctx([top])).find(x => x.kind === 'attempts-exhausted');
-  assert.match(b1.summary, /top band/);
+  assert.match(b1.summary, /strongest model/);
   assert.equal(b1.remedy.action, 'requeue');
   assert.equal(b1.detail, 'out of ladder');
   const b2 = blockersFor(mid, ctx([mid])).find(x => x.kind === 'attempts-exhausted');
@@ -173,7 +173,7 @@ test('no-reviewer: project-wide, and it says nothing can land', () => {
   const b = boardBlockers({ ...ctx([t]), settings: { loopModels: { low: 'm' } } })
     .find(x => x.kind === 'no-reviewer');
   assert.ok(b);
-  assert.match(b.summary, /nothing can land/);
+  assert.match(b.summary, /cannot be approved/);
   assert.equal(b.remedy.action, 'set-reviewer');
   // And it is NOT repeated on the card.
   assert.ok(!kinds(blockersFor(t, ctx([t]))).includes('no-reviewer'));
@@ -208,7 +208,7 @@ test('budget-hard stops, budget-soft only warns', () => {
   const soft = boardBlockers({ ...base, spend: { hits: ['soft'], caps: { softUsd: 2 }, window: { usd: 2.5 } } });
   const s = soft.find(x => x.kind === 'budget-soft');
   assert.equal(s.severity, 'warning');
-  assert.match(s.summary, /nothing escalates/);
+  assert.match(s.summary, /more expensive model/);
 });
 
 test('loop-stopped: only when there is actually something ready to pick up', () => {
@@ -259,7 +259,7 @@ test('blockersAll: keyed by id, and unreadable files get an entry too', () => {
 test('whyNothingReady: names the blocked tasks in the same words the card uses', () => {
   const t = task('t-0008', { dependsOn: ['t-0006'] });
   const line = whyNothingReady(ctx([t]));
-  assert.match(line, /^nothing ready — 1 task\(s\) blocked: t-0008 \(Waiting on t-0006, which does not exist\.\)$/);
+  assert.match(line, /^nothing ready — 1 task\(s\) blocked: t-0008 \(Waiting for t-0006, which does not exist\.\)$/);
 });
 
 test('whyNothingReady: "backlog empty" only when it really is', () => {

@@ -104,7 +104,7 @@ test('the system prompt is grounded in the actual board, not generic', () => {
   assert.match(prompt, /"flyt"/);
   assert.match(prompt, /2 queued/);
   assert.match(prompt, /1 parked/);
-  assert.match(prompt, /t-0002: Waiting on t-0006, which does not exist\./);
+  assert.match(prompt, /t-0002: Waiting for t-0006, which does not exist\./);
   // The instruction the whole phase turns on.
   assert.match(prompt, /PROPOSE A TASK AND CALL enqueue_task/);
   assert.match(prompt, /Do NOT attempt the work here/);
