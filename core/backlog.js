@@ -227,6 +227,25 @@ export class Backlog {
     catch { /* an unwritable counter must not fail the add: the id is taken on disk regardless */ }
   }
 
+  /**
+   * Reserve the next task id without writing a file.
+   * Used by enqueue_task in propose mode: the chat proposes, the human commits,
+   * so the id must not be reused before they press Queue it.
+   */
+  reserveId() {
+    this.#ensure();
+    let n = this.#highWater();
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const id = `t-${String(++n).padStart(4, '0')}`;
+      const file = this.#file(id);
+      if (!fs.existsSync(file)) {
+        this.#recordId(id);
+        return id;
+      }
+    }
+    throw new Error('Could not allocate a task id.');
+  }
+
   // An id is only ever the stem of a file this class wrote. Callers pass ids in
   // from a CLI, an HTTP body and a model's tool call, so a traversal attempt
   // must fail here rather than resolve to somewhere interesting.

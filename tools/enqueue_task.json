@@ -71,6 +71,10 @@
           "type": "string"
         },
         "description": "Names of project skills (.flyt/skills/<name>.md) the worker will need — the conventions this particular job has to follow. Instructions only; naming a skill never grants a tool."
+      },
+      "propose": {
+        "type": "boolean",
+        "description": "Propose the task WITHOUT writing it (default false). The id is reserved and the would-be task is returned, but nothing is queued — the caller (a chat) presents it to a human, who commits it with task:add. Loop workers must leave this false: an unattended agent has nobody to confirm with, so it writes directly."
       }
     }
   },
