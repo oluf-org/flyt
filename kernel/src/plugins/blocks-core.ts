@@ -176,7 +176,7 @@ export const planStartBlock = aiStep('flyt-blocks-core:plan-start', 'Plan',
     'Given the brief, produce ONLY a structured tasks.md.',
     'Decompose the work into the smallest independently-verifiable tasks that still carry real meaning.',
     'For every task include a "Context files:" section naming each file and, per file, exactly which part is needed.',
-    'Call out risks, unknowns, and acceptance criteria per task.'].join('\\n'));
+    'Call out risks, unknowns, and acceptance criteria per task.'].join('\n'));
 
 export function apply(ctx: Context): void {
   ctx.blocks.register(workBlock);
