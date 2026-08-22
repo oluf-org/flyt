@@ -136,13 +136,18 @@ const COVERAGE = {
   // compatible with. Nothing to pin, and nothing missing.
   blocks: null,
 
+  // Ours, provided, and with no dsh counterpart to pin. dsh replaces the agent
+  // LOOP; this seam schedules a Flyt STACK, over containment dsh has no notion
+  // of. A dsh plugin cannot be written against it, so there is nothing to
+  // install here and saying so is the honest answer rather than a gap.
+  agents: null,
+
   // Declared, not yet provided. Each becomes a pinned plugin when it gains a
   // provider — which is what makes that task fail here until it does.
   sessions: null,
   llm: null,
   fs: null,
   shell: null,
-  agents: null,
   commands: null,
   sandbox: null,
 };

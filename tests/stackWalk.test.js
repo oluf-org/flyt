@@ -1,0 +1,243 @@
+// The walk: a sequence in order, a parallel under its bound, lanes isolated
+// (t-0066).
+//
+// The containment already says all three of those things. What is tested here
+// is that the scheduler HONOURS the structure rather than reimplementing it —
+// most of all lane isolation, which is not a rule the runner enforces but a
+// consequence of every lane being handed what entered the parallel.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  createKernel, flytBlocks, flytStackRunner, sessionJsonl, parseStack,
+} from '#kernel';
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-walk-'));
+
+/**
+ * A kernel with a stack, a block type, and a runner over them.
+ *
+ * `record` collects `{ blockId, input }` in the order blocks STARTED, and
+ * `finished` in the order they ended — a parallel is the one case where those
+ * two orders differ, and that difference is the assertion.
+ */
+async function bootWalk(source, { execute, ceiling = [], blockCeiling = null } = {}) {
+  const root = tmp();
+  const kernel = createKernel();
+  const record = [];
+  const finished = [];
+
+  await kernel.ctx.plugin(flytBlocks);
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  await kernel.ctx.plugin({
+    name: 'demo-blocks',
+    inject: ['blocks'],
+    apply(ctx) {
+      ctx.blocks.register({
+        use: 'demo:work',
+        title: 'Work',
+        description: 'Records what it was given and answers.',
+        category: 'work',
+        settings: { type: 'object' },
+        ceiling: blockCeiling,
+        async execute(run) {
+          record.push({ blockId: run.blockId, input: run.input, ceiling: [...run.ceiling] });
+          const outcome = execute
+            ? await execute(run)
+            : { status: 'done', output: `${run.blockId} saw "${run.input}"` };
+          finished.push(run.blockId);
+          return outcome;
+        },
+      });
+    },
+  });
+
+  const stack = parseStack(source);
+  await kernel.ctx.plugin(flytStackRunner, {
+    stacks: { resolve: id => (id === stack.id ? stack.root : null) },
+    ceiling,
+  });
+
+  return { kernel, record, finished, stack, root };
+}
+
+const typesIn = async (kernel, runId) => {
+  const session = await kernel.ctx.sessions.read(runId);
+  const out = [];
+  for await (const e of session.read()) out.push(e);
+  return out;
+};
+
+const SEQUENCE = `version: 2
+id: demo
+blocks:
+  - id: first
+    use: demo:work
+  - id: second
+    use: demo:work
+`;
+
+const PARALLEL = `version: 2
+id: demo
+blocks:
+  - id: before
+    use: demo:work
+  - id: fan
+    kind: parallel
+    maxParallel: 2
+    lanes:
+      - id: left
+        kind: sequence
+        blocks:
+          - id: la
+            use: demo:work
+      - id: middle
+        kind: sequence
+        blocks:
+          - id: ma
+            use: demo:work
+      - id: right
+        kind: sequence
+        blocks:
+          - id: ra
+            use: demo:work
+`;
+
+test('a two-block sequence runs in order, each fed what the one before produced', async () => {
+  const boot = await bootWalk(SEQUENCE);
+  const run = await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'the input');
+  const outcome = await run.settled();
+
+  assert.equal(outcome.status, 'done');
+  assert.deepEqual(boot.record.map(r => r.blockId), ['first', 'second']);
+  assert.equal(boot.record[0].input, 'the input');
+  assert.equal(boot.record[1].input, 'first saw "the input"', 'the carry is the previous output');
+
+  const events = await typesIn(boot.kernel, 'run-1');
+  assert.deepEqual(
+    events.filter(e => e.type === 'block.status' && e.data.status === 'done').map(e => e.data.blockId),
+    ['first', 'second'],
+    'and the log holds both, in the order they ran');
+  await boot.kernel.dispose();
+});
+
+test('start returns before the walk finishes, and settled is what you await', async () => {
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  const boot = await bootWalk(SEQUENCE, {
+    async execute(run) {
+      if (run.blockId === 'first') await held;
+      return { status: 'done', output: 'ok' };
+    },
+  });
+
+  const run = await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in');
+  assert.equal(boot.finished.length, 0, 'nothing has finished, and start already returned');
+  assert.equal(boot.kernel.ctx.agents.get('run-1'), run, 'and the run is findable while it goes');
+  release();
+  assert.equal((await run.settled()).status, 'done');
+  await boot.kernel.dispose();
+});
+
+test('a parallel runs its lanes together and never more than maxParallel at once', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const boot = await bootWalk(PARALLEL, {
+    async execute() {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise(r => setTimeout(r, 15));
+      inFlight -= 1;
+      return { status: 'done', output: 'lane done' };
+    },
+  });
+
+  assert.equal((await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled()).status, 'done');
+  assert.equal(peak, 2, 'maxParallel: 2 means two, not three and not one');
+  assert.equal(boot.record.length, 4, 'the block before the fan, and all three lanes');
+  await boot.kernel.dispose();
+});
+
+test('a lane cannot see what a sibling lane produced', async () => {
+  // Not a rule the scheduler enforces — a consequence of every lane being
+  // handed what entered the PARALLEL. There is no shared carry for one lane's
+  // output to leak into (D37).
+  const boot = await bootWalk(PARALLEL, {
+    async execute(run) {
+      return { status: 'done', output: `${run.blockId} produced something` };
+    },
+  });
+  await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'the input')).settled();
+
+  const lanes = boot.record.filter(r => r.blockId !== 'before');
+  assert.equal(lanes.length, 3);
+  for (const lane of lanes) {
+    assert.equal(lane.input, 'before produced something',
+      `lane ${lane.blockId} saw what entered the parallel`);
+  }
+  await boot.kernel.dispose();
+});
+
+test('a block that fails ends the run as failed, naming the block', async () => {
+  const boot = await bootWalk(SEQUENCE, {
+    async execute(run) {
+      if (run.blockId === 'first') return { status: 'failed', output: '', error: 'the file was not there' };
+      return { status: 'done', output: 'never reached' };
+    },
+  });
+  const outcome = await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.error, /Block "first" failed: the file was not there/);
+  assert.deepEqual(boot.record.map(r => r.blockId), ['first'], 'and the second block never ran');
+  const events = await typesIn(boot.kernel, 'run-1');
+  assert.equal(events.at(-1).data.stage, 'failed');
+  await boot.kernel.dispose();
+});
+
+test('a block that throws is a failed block, not a crashed run', async () => {
+  const boot = await bootWalk(SEQUENCE, {
+    async execute() { throw new Error('it exploded'); },
+  });
+  const outcome = await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.error, /Block "first" failed: it exploded/);
+  await boot.kernel.dispose();
+});
+
+test('a block narrows the run’s ceiling and cannot widen it', async () => {
+  const boot = await bootWalk(SEQUENCE, {
+    ceiling: ['read_file', 'bash'],
+    blockCeiling: ['read_file', 'rm_rf'],
+  });
+  await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+  assert.deepEqual(boot.record[0].ceiling, ['read_file'],
+    'the intersection: what the block asked for AND the run allowed');
+  await boot.kernel.dispose();
+});
+
+test('a stack naming a block nobody installed fails before anything is spent', async () => {
+  const boot = await bootWalk(`version: 2
+id: demo
+blocks:
+  - id: first
+    use: demo:work
+  - id: second
+    use: demo:absent
+`);
+  await assert.rejects(
+    () => boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in'),
+    /names 1 block type\(s\) nothing contributes: second \(demo:absent\)/);
+  assert.equal(boot.record.length, 0, 'block 1 did not run, so block 1 was not paid for');
+  await boot.kernel.dispose();
+});
+
+test('starting a stack that does not exist says so', async () => {
+  const boot = await bootWalk(SEQUENCE);
+  await assert.rejects(
+    () => boot.kernel.ctx.agents.start({ id: 'nope', runId: 'run-1' }, 'in'),
+    /There is no stack "nope"/);
+  await boot.kernel.dispose();
+});
