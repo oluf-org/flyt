@@ -5133,21 +5133,31 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
   color: var(--tx);
 }
 
+/* The nav IS the title bar here. The window has no native frame — v1 draws its
+   own 40px chrome and v2 has two destinations and a run chip, which is less
+   than a bar's worth of content, so making the nav draggable is one row
+   instead of two. The right padding reserves the OS min/max/close overlay,
+   and the buttons opt out of the drag region or they cannot be clicked. */
 .v2-shell-nav {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0 12px;
+  padding: 0 148px 0 12px;
   height: 44px;
-  background: var(--side);
+  background: var(--app);
+  color: var(--app-tx);
   border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+  -webkit-user-select: none;
+  user-select: none;
 }
+.v2-shell-nav > * { -webkit-app-region: no-drag; }
 
 .v2-nav {
   appearance: none;
   border: 0;
   background: transparent;
-  color: var(--dim);
+  color: var(--app-dim);
   font: inherit;
   font-weight: 500;
   padding: 6px 12px;
@@ -5157,8 +5167,8 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
      is the only thing this bar says, so the change has to read as a change. */
   transition: background-color .14s var(--spring), color .14s var(--spring);
 }
-.v2-nav:hover { background: var(--chip); color: var(--tx); }
-.v2-nav.active { background: var(--accent-soft); color: var(--accent); }
+.v2-nav:hover { background: rgba(255, 255, 255, .08); color: var(--app-tx); }
+.v2-nav.active { background: rgba(255, 255, 255, .12); color: var(--app-tx); }
 
 .v2-trace-chip {
   margin-left: auto;
