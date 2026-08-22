@@ -1,0 +1,59 @@
+version: 1
+id: spec-an-idea
+name: Spec an idea
+description: |
+  Bring a half-formed idea. The interrogation asks you a few rounds of
+  questions — what it is for, what would make it wrong, what is deliberately
+  out of scope — and writes the specification your answers settled, with the
+  assumptions it had to take marked as assumptions. The plan then turns that
+  specification into claimable backlog tasks, so the thing you just described
+  is work the loop can pick up rather than a document you have to re-read.
+
+inputs:
+  idea:
+    type: text
+    label: The idea, however rough
+    required: true
+    placeholder: e.g. a way to interrogate me about a prompt before any work starts
+
+nodes:
+  interrogate:
+    use: interrogate
+    expose: [maxRounds, worker]
+    title: "What are we actually building?"
+    effort: medium
+  plan:
+    use: backlog-plan
+    title: What this becomes
+    instructions: |
+      The specification above was settled WITH the person who asked for it —
+      its Goal, Non-goals, Constraints and Acceptance are decisions, not
+      guesses, so do not quietly re-open them.
+
+      What is NOT settled is in the open items: read them. An assumption the
+      interrogation had to take is the most likely thing to be wrong here, so
+      where a task rests on one, say so in the task's goal rather than
+      inheriting it silently.
+
+      Propose only work this project should genuinely do. Prefer three real
+      tasks to ten plausible ones, and prefer tasks that can land on their own
+      — a queue where three tasks wait on one stops the moment that one stops.
+      Confirm every path you put in blastRadius against this workspace, and
+      take gates from the commands this project actually has.
+    maxToolIterations: 10
+  work:
+    type: loop
+    title: Queue it
+    maxTasks: 6
+    waitFor: none
+
+flow:
+  - input -> inputs
+  - inputs.idea -> interrogate
+  - plan.tasks -> work
+  - interrogate -> output
+  - interrogate.transcript -> output
+  - plan -> output
+  - work -> output
+  - inputs -> interrogate
+  - interrogate -> plan

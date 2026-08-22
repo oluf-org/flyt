@@ -114,14 +114,28 @@ test('tool plugins are deliveries and the sets are ceilings, not conflated', () 
 });
 
 test('the ported blocks have no loose nodes/*.json, and the archives are gone', () => {
-  const ported = ['work', 'general-analysis', 'combine', 'split', 'plan-start',
+  // `work` keeps its v1 template on disk: the shipped v1 library
+  // (src/flowTypes.js SEED_NODE_TEMPLATES and the flows that instantiate it)
+  // still resolves it from nodes/work.json, and the v1 app is untouched this
+  // phase. The other ten ported blocks are plugin-only.
+  const ported = ['general-analysis', 'combine', 'split', 'plan-start',
     'evaluation', 'compare', 'prompt-refiner', 'interrogate', 'orient', 'backlog-plan'];
   for (const id of ported) {
     assert.ok(!exists(`nodes/${id}.json`), `nodes/${id}.json archived (block now plugin-contributed)`);
   }
-  for (const dead of ['nodes/translation.json', 'nodes/node-ms2r06ba-omz2.json',
-    'flows/research.flow.yaml', 'flows/learn-from-repo.flow.yaml',
-    'flows/spec-an-idea.flow.yaml', 'flows/loop-task.flow.yaml']) {
-    assert.ok(!exists(dead), `${dead} archived to git history`);
+  // What the task archives: the two dead node templates, and the pipeline
+  // variants the one effort-dial Pipeline stack replaces — files and layouts.
+  // The four canonical flows stay: the v1 front door still ships them, and the
+  // archive list names only what it names.
+  const dead = ['nodes/translation.json', 'nodes/node-ms2r06ba-omz2.json'];
+  for (const id of ['default-pipeline', 'pipeline-low', 'pipeline-medium', 'pipeline-high', 'pipeline-ultra']) {
+    dead.push(`flows/${id}.flow.yaml`, `flows/${id}.layout.json`);
+  }
+  for (const file of dead) {
+    assert.ok(!exists(file), `${file} archived to git history`);
+  }
+  // Every layout file, whoever it belonged to.
+  for (const f of fs.readdirSync(path.join(ROOT, 'flows'))) {
+    assert.ok(!f.endsWith('.layout.json'), `flows/${f}: layout files are archived, all of them`);
   }
 });

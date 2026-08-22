@@ -13,7 +13,7 @@ description: |
   envelope is the one that makes that survivable.
 
 blocks:
-  - id: research
+  - id: look-it-up
     use: flyt-blocks-core:work
     title: Look it up
     config:
