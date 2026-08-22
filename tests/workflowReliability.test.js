@@ -342,3 +342,44 @@ test('WR-07/7: reordering providers in Settings moves the next unpinned node', (
   assert.equal(pinned.worker.provider, 'anthropic');
   assert.equal(pinned.via, 'node');
 });
+
+// --- INVARIANT: a reviewer that could not judge is not a task that failed ----
+
+test('WR-07/8: a reviewer with no usable verdict costs the task no band', async () => {
+  // Watched it in a live loop:
+  //
+  //   ✖ t-0076 review: The reviewer returned no usable verdict block.
+  //   ▶ t-0076 … on deepseek/deepseek-v4-pro-0813 (band high)
+  //
+  // A band bought with a reviewer's malformed answer. The dearer model then
+  // produces the same diff, for a reviewer that may garble it again.
+  const { api, dataRoot } = harness();
+  const repo = await scenarioRepo(dataRoot, 'review-subject');
+  const { id: projectId } = await api.invoke('project:open', { folder: repo });
+  await api.invoke('task:add', {
+    projectId, title: 'Add the banner', body: 'Add a banner to app.js.', level: 'medium'
+  });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+
+  const wt = await api.invoke('work:start', { projectId, taskId: task.id });
+  fs.writeFileSync(path.join(wt.dir, 'app.js'), 'export const banner = "v1";\n');
+  assert.equal((await api.invoke('work:verify', { projectId, taskId: task.id })).ok, true);
+
+  // The reviewer answers with prose the parser cannot read — which is what a
+  // cheap reviewer does under load, and is not an opinion about the diff.
+  setScript(() => 'I think this looks broadly reasonable but I am not going to say so in a block.');
+
+  const landed = await api.invoke('work:land', {
+    projectId, taskId: task.id, attemptId: wt.attemptId,
+    reviewer: { provider: 'script', model: 'reviewer' }
+  });
+  assert.equal(landed.landed, false);
+  assert.equal(landed.stage, 'review');
+  assert.equal(landed.review.unavailable, true, 'the review says it could not judge, not that it objected');
+
+  const after = await api.invoke('task:get', { projectId, id: task.id });
+  assert.equal(after.level, 'medium', 'INVARIANT VIOLATED: the reviewer failing moved the task up a band');
+  assert.equal(after.status, 'queued', 'and it is back in the queue rather than parked');
+  assert.equal(after.attempts, 1, 'the attempt still counts, so a review that never works reaches a person');
+  assert.match(after.blockedReason, /could not judge/);
+});

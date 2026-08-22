@@ -975,7 +975,33 @@ export function createApi(engine) {
         // worker, announced as more capability.
         const workerAt = level =>
           workerForLevelMap(level, config?.loop?.models)?.model ?? config?.loop?.worker?.model ?? null;
-        backlog.escalate(taskId, { reason: 'failed', note: result.guidance ?? result.stage, workerAt });
+        // The REVIEWER failing is not the work failing.
+        //
+        // `reviewDiff` already distinguishes the two: `unavailable` means the
+        // reviewer could not be reached, or answered with nothing this could
+        // parse, as against reading the diff and objecting to it. Both arrive
+        // here as `stage: 'review'`, and both used to spend a rung.
+        //
+        // Watched it: "review: The reviewer returned no usable verdict block."
+        // and the task went from medium to high — a band bought with a
+        // reviewer's malformed answer, and the dearer model then produced the
+        // same diff for a reviewer that might garble it again.
+        //
+        // So the attempt goes back at the SAME band with its work preserved.
+        // The attempt is still counted: a review that can never be completed
+        // has to reach a person eventually, and the attempt count is what gets
+        // it there.
+        const reviewerFailed = result.stage === 'review' && result.review?.unavailable === true;
+        if (reviewerFailed) {
+          backlog.update(taskId, {
+            status: 'queued',
+            attempts: (task.attempts ?? 0) + 1,
+            blockedReason: `The reviewer could not judge the last attempt: ${result.guidance ?? 'no verdict'}`
+              + ' The work itself was not rejected — the same band gets another go at being reviewed.'
+          });
+        } else {
+          backlog.escalate(taskId, { reason: 'failed', note: result.guidance ?? result.stage, workerAt });
+        }
         // Where the next attempt should start.
         //
         // A rejection at REVIEW or at GATES is a correction case: something
