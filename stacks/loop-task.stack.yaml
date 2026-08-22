@@ -1,0 +1,41 @@
+version: 2
+id: loop-task
+name: Work one backlog task
+description: |
+  What the Loop runs for a claimed task, ported to the v2 stack format
+  (t-0063). The task file is already the plan — someone wrote a goal,
+  acceptance criteria, a blast radius and the gates it is judged by — so this
+  stack does not plan it again. It reads, it changes the repository, and it
+  runs the project's own gates before it says it is done.
+
+  One block, and that is the point. The pipeline this replaced had to emit a
+  strict JSON plan before any tool-holding node existed, so a cheap model that
+  answered in prose materialised nothing, made zero tool calls, and reported
+  `done` having touched no file — a whole task's budget spent describing the
+  work.
+
+  Two properties survive the port unchanged, and they are the load-bearing
+  ones. `ceiling: loop` names what an unattended worker may ever reach (D45):
+  the repository, the shell, the queue it lives in, the run that failed last
+  time, and a way to ask a human — not the web, which a task that genuinely
+  needs it must ask for itself. And `effect: workspace-change` states the
+  deliverable contract, so the block fails where the work was rather than
+  looking finished until a reviewer judges it.
+
+blocks:
+  - id: work
+    use: flyt-blocks-core:work
+    title: Do the task
+    config:
+      effect: workspace-change
+      instructions: |
+        The brief above is the task file exactly as it was written, plus how it
+        will be judged.
+
+        Where the task hands you evidence — a command to run, a URL, a file and
+        a line — use the thing you were given rather than looking for your own.
+        It was checked. Yours has not been.
+
+        If the task cannot be done here at all, say so with the TASK-IMPOSSIBLE
+        line described in the brief rather than inventing work that looks like
+        progress.

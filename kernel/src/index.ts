@@ -28,6 +28,8 @@ export * as flytBlocks from './plugins/blocks.js';
 export * as flytStackRunner from './plugins/stack-runner.js';
 export * as flytRunProjection from './plugins/run-projection.js';
 export * as flytAdapters from './plugins/llm-adapters.js';
+export * as flytBlocksCore from './plugins/blocks-core.js';
+export { workBlock, LOOP_CEILING, WORK_SYSTEM } from './plugins/blocks-core.js';
 export { routeOf } from './plugins/llm-adapters.js';
 export { StackRunner } from './plugins/stack-runner.js';
 export type { StackSource, StackRunnerConfig } from './plugins/stack-runner.js';
