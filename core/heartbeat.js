@@ -150,6 +150,10 @@ export class Heartbeat {
     this.gateFailures = [];      // consecutive identical gate failure signatures
     this.tokensSinceProgress = 0;
     this.usdSinceProgress = 0;
+    // Consecutive polls where NOTHING was spent. A model working settles calls
+    // and burns tokens; a run that has stopped asking does not, and that is
+    // what tells a spin apart from a long turn on a long context.
+    this.quietPolls = 0;
     this.phase = 'running';
     this.stage = null;
     this.interventions = [];     // what the supervisor has already tried (§11.4)
@@ -177,9 +181,12 @@ export class Heartbeat {
       this.repeats = 0;
       this.tokensSinceProgress = 0;
       this.usdSinceProgress = 0;
+      this.quietPolls = 0;
       return true;
     }
     this.repeats += 1;
+    // Spending resets it: the run is alive and doing something new.
+    this.quietPolls = (tokens > 0 || usd > 0) ? 0 : this.quietPolls + 1;
     // The counter that catches a polite infinite loop: busy, expensive, and
     // producing the same thing every time.
     this.tokensSinceProgress += tokens;
@@ -213,6 +220,7 @@ export class Heartbeat {
     this.gateFailures = [];
     this.tokensSinceProgress = 0;
     this.usdSinceProgress = 0;
+    this.quietPolls = 0;
     // The signature too: the run was stopped and relaunched, so the bytes it
     // had are not evidence about the attempt that is starting.
     this.signature = null;
@@ -239,6 +247,7 @@ export class Heartbeat {
       ageMs: this.ageMs, idleMs: this.idleMs,
       repeats: this.repeats,
       tokensSinceProgress: this.tokensSinceProgress,
+      quietPolls: this.quietPolls,
       usdSinceProgress: Number(this.usdSinceProgress.toFixed(6)),
       interventions: this.interventions
     };
@@ -261,9 +270,26 @@ export function detectStall(heartbeat, { thresholds = DEFAULT_THRESHOLDS, median
       detail: `The same gate failure ${heartbeat.gateFailures.length} times running. The last ${heartbeat.gateFailures.length} attempts changed nothing the gate can see.`
     };
   }
-  // Both halves, deliberately: enough polls to be sure it is not one unlucky
-  // sample, and enough time that a model legitimately working cannot trip it.
-  if (heartbeat.repeats >= t.spinRepeats && heartbeat.idleMs >= (t.spinMs ?? 0)) {
+  // Three halves now, and the third is the one that stops this misfiring on
+  // work that is simply slow.
+  //
+  // "Byte-identical work" is what a spin looks like AND what READING looks
+  // like. A worker on a long context can take two minutes a turn, and six
+  // minutes of that is three turns of legitimate exploration with nothing
+  // durable written yet — watched one get nudged and restarted for exactly
+  // that, twenty-five distinct tool calls in.
+  //
+  // What tells the two apart is whether the run is still SPENDING. A model
+  // working is settling calls and burning tokens; a genuinely stuck run — a
+  // wedged tool, a process that has stopped asking — is not. So a spin needs
+  // the work unchanged, for long enough, AND the meter stopped.
+  //
+  // This does not let a polite infinite loop through. A run that is busy,
+  // expensive and producing the same thing every time is the BURN detector's
+  // case above, and it is bounded in dollars, which is the honest unit for it.
+  const quiet = heartbeat.quietPolls ?? heartbeat.repeats;
+  if (heartbeat.repeats >= t.spinRepeats && heartbeat.idleMs >= (t.spinMs ?? 0)
+    && quiet >= t.spinRepeats) {
     return {
       detector: 'spin',
       detail: `${heartbeat.repeats} consecutive polls over ${Math.round(heartbeat.idleMs / 60000)} minutes with byte-identical work. Whatever it is doing, it is producing the same thing each time.`

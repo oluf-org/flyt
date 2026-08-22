@@ -1508,3 +1508,38 @@ test('an --only naming nothing says so rather than reporting an empty backlog', 
   }).run();
   assert.match(status.stopping, /no task matched --only t-9999/);
 });
+
+test('a slow model reading is not a spin, and a stopped one still is', () => {
+  // "Byte-identical work" is what a spin looks like AND what READING looks
+  // like. A worker on a long context can take two minutes a turn, so six
+  // minutes of that is three turns of legitimate exploration with nothing
+  // durable written yet. Watched one get nudged and restarted for exactly
+  // that, twenty-five distinct tool calls in.
+  //
+  // What tells them apart is whether the meter is still running.
+  const snap2 = { meta: { stage: 'execution', nodeStatus: { a: 'active' } } };
+  const thresholds = { ...DEFAULT_THRESHOLDS, burnUsd: null };
+
+  const working = new Heartbeat({ taskId: 't', runId: 'r', now: 0 });
+  working.observe(snap2, { now: 0, workspace: 'same' });
+  for (let i = 1; i <= 100; i++) {
+    // Polls with nothing written, but calls settling: tokens keep arriving.
+    working.observe(snap2, { now: i * 5000, workspace: 'same', tokens: i % 20 === 0 ? 900 : 0, usd: 0 });
+  }
+  assert.ok(working.idleMs > DEFAULT_THRESHOLDS.spinMs, 'long enough to have tripped the old rule');
+  assert.equal(detectStall(working, { thresholds }), null,
+    'a run still settling calls is exploring, not spinning');
+
+  const stopped = new Heartbeat({ taskId: 't', runId: 'r', now: 0 });
+  stopped.observe(snap2, { now: 0, workspace: 'same' });
+  for (let i = 1; i <= 100; i++) stopped.observe(snap2, { now: i * 5000, workspace: 'same' });
+  assert.equal(detectStall(stopped, { thresholds })?.detector, 'spin',
+    'nothing written, nothing spent, and nothing said: that is stuck');
+
+  // And a polite infinite loop is still caught — by BURN, in dollars, which is
+  // the honest unit for "busy, expensive and producing the same thing".
+  const busy = new Heartbeat({ taskId: 't', runId: 'r', now: 0 });
+  busy.observe(snap2, { now: 0, workspace: 'same' });
+  for (let i = 1; i <= 40; i++) busy.observe(snap2, { now: i * 5000, workspace: 'same', usd: 0.02, tokens: 500 });
+  assert.equal(detectStall(busy, { thresholds: { ...thresholds, burnUsd: 0.5 } })?.detector, 'burn');
+});
