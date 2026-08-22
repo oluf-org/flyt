@@ -261,6 +261,7 @@ export default function App() {
   const [flowLint, setFlowLint] = useState(null); // { ok, errors, warnings } for the open flow
   const [models, setModels] = useState([]);
   const [flowViewMode, setFlowViewMode] = useState('canvas'); // 'canvas' | 'yaml'
+  const [loopDensity, setLoopDensity] = useState('comfortable'); // D4: 'comfortable' | 'compact', per project
   const [pickerOpen, setPickerOpen] = useState(false); // the add-node panel over the canvas
   // DECISIONS.md D27: the Configs panel (anchored at the modes chip) and the
   // Inspector's config edit target (null = editing the Flow, today's behavior).
@@ -813,7 +814,7 @@ export default function App() {
     compareOn, compareB, compareRunIds,
     undo: [...undoStack.current], redo: [...redoStack.current],
     runFlowId, runModeId, runInputs, runInput, workspaceDir, newRunOpen,
-    flowViewMode, runView2, runs
+    flowViewMode, runView2, loopDensity, runs
   });
 
   const slimOf = b => ({
@@ -830,6 +831,7 @@ export default function App() {
     runInput: b.runInput,
     workspaceDir: b.workspaceDir,
     flowViewMode: b.flowViewMode,
+    loopDensity: b.loopDensity,
     runView2: b.runView2
   });
 
@@ -860,6 +862,7 @@ export default function App() {
     setWorkspaceDir(b.workspaceDir ?? '');
     setNewRunOpen(b.newRunOpen ?? false);
     setFlowViewMode(b.flowViewMode ?? 'canvas');
+    setLoopDensity(b.loopDensity ?? 'comfortable');
     setRunView2(b.runView2 ?? 'canvas');
     setReplayFrames(null); setReplayIndex(null); setReplayPlaying(false);
     setRuns(b.runs ?? []);
@@ -879,6 +882,7 @@ export default function App() {
       runInputs: slim.runInputs ?? {}, runInput: slim.runInput,
       workspaceDir: slim.workspaceDir,
       flowViewMode: slim.flowViewMode, runView2: slim.runView2,
+      loopDensity: slim.loopDensity ?? 'comfortable',
       runs: []
     };
     if (slim.activeFlowId) {
@@ -2424,6 +2428,8 @@ export default function App() {
                 projectId={activeTab}
                 activeModels={activeModels}
                 onOpenRun={id => { setActiveActivity('runs'); openRun(id); }}
+                density={loopDensity}
+                onDensityChange={setLoopDensity}
               />
             : libraryView
             ? <NodesPage

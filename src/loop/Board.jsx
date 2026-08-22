@@ -27,6 +27,7 @@ export default function Board({
   spend = {},
   removeState = null,
   showDone = false,
+  density = 'comfortable',
   onToggleDone,
   onToggle,
   onMove,
@@ -38,7 +39,7 @@ export default function Board({
   const beatFor = id => heartbeats.find(h => h.taskId === id) ?? null;
 
   return (
-    <div className="loop-board">
+    <div className="loop-board" data-density={density}>
       {banner && (
         <div className={`loop-banner sev-${banner.severity}`}>
           <BlockerNote blocker={banner} busy={busy} onRemedy={onRemedy} />
