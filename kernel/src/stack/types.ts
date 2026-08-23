@@ -7,10 +7,9 @@
  * does not parse (D59).
  *
  * Three containers exist. `Repeat N` is built (the first of the Phase 3
- * control-flow containers); `For each`, `Until` and `If` are still Phase 3
- * (t-0038). The containment model had to be right before it held the rest, and
- * a container type is far cheaper to add to a model that works than to remove
- * from one that does not.
+ * control-flow containers); `For each` and `Until` are still Phase 3
+ * (t-0038), and `If` arrives here with a structured predicate that is not an
+ * expression.
  *
  * @module #kernel/stack/types
  */
@@ -77,11 +76,66 @@ export interface RepeatNode {
   position: Position;
 }
 
+/**
+ * The closed set of operators an `If` predicate may use.
+ *
+ * A closed set is the fence that keeps this out of expression territory: no
+ * concatenation, no arithmetic, no function calls. Each operator compares a
+ * declared field against a literal (or emptiness), and nothing else.
+ */
+export const IF_OPERATORS = ['is', 'is not', '<', '<=', '>', '>=', 'is empty', 'is not empty'] as const;
+
+/** One of the closed predicate operators. */
+export type IfOperator = (typeof IF_OPERATORS)[number];
+
+/**
+ * One comparison: a declared field, an operator, and a literal.
+ *
+ * `source` is `<block>.<field>` — as authored, the field a genuinely upstream
+ * block declared in its structured outputs. `literal` is absent exactly for
+ * `is empty` / `is not empty`, where there is nothing to compare against.
+ */
+export interface IfPredicateTerm {
+  source: string;
+  operator: IfOperator;
+  literal?: JsonValue;
+}
+
+/**
+ * A predicate: a single comparison, or one flat all-of / any-of list of them.
+ *
+ * The flat list is the ONLY combination allowed. No nesting, no `not` of a
+ * list, no arithmetic — anything shaped like an expression is refused before
+ * it becomes a parallel grammar someone has to keep in their head.
+ */
+export type IfPredicate =
+  | IfPredicateTerm
+  | { allOf: IfPredicateTerm[] }
+  | { anyOf: IfPredicateTerm[] };
+
+/**
+ * A body and an optional else, chosen by a structured predicate.
+ *
+ * The body runs when the predicate holds; the else (when present) when it does
+ * not; when there is no else and the predicate does not hold, the if changes
+ * nothing and its input passes through to whatever follows it.
+ */
+export interface IfNode {
+  kind: 'if';
+  id: string;
+  predicate: IfPredicate;
+  /** The body, run when the predicate holds. A list, exactly like a sequence holds. */
+  children: StackNode[];
+  /** The else branch, run when it does not; null means "pass through". */
+  else: StackNode[] | null;
+  position: Position;
+}
+
 /** Any node in the tree. */
-export type StackNode = BlockNode | SequenceNode | ParallelNode | RepeatNode;
+export type StackNode = BlockNode | SequenceNode | ParallelNode | RepeatNode | IfNode;
 
 /** The container kinds this phase implements. */
-export const CONTAINER_KINDS = ['sequence', 'parallel', 'repeat'] as const;
+export const CONTAINER_KINDS = ['sequence', 'parallel', 'repeat', 'if'] as const;
 
 /** One of the containers. */
 export type ContainerKind = (typeof CONTAINER_KINDS)[number];
@@ -97,7 +151,6 @@ export const PLANNED_KINDS: Record<string, string> = {
   foreach: 'For each',
   'for-each': 'For each',
   until: 'Until',
-  if: 'If',
 };
 
 /** A parsed stack. */
@@ -141,14 +194,19 @@ export const MAX_EXPANSION = 512;
 export const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 /** Is this node a container? */
-export function isContainer(node: StackNode): node is SequenceNode | ParallelNode | RepeatNode {
-  return node.kind === 'sequence' || node.kind === 'parallel' || node.kind === 'repeat';
+export function isContainer(node: StackNode): node is Exclude<StackNode, BlockNode> {
+  return node.kind !== 'block';
 }
 
 /** Every node in the tree, parents before children. */
 export function* walk(node: StackNode): Generator<StackNode> {
   yield node;
-  if (isContainer(node)) for (const child of node.children) yield* walk(child);
+  if (isContainer(node)) {
+    for (const child of node.children) yield* walk(child);
+    if (node.kind === 'if' && node.else) {
+      for (const child of node.else) yield* walk(child);
+    }
+  }
 }
 
 /**
@@ -157,8 +215,7 @@ export function* walk(node: StackNode): Generator<StackNode> {
  * `blocks` is the total number of authored block nodes in the tree, counted
  * once each. `expansion` is how many block executions the tree can produce in
  * the worst case: every lane runs, and a repeat multiplies its body by
- * `count`. Containers that add a multiplier later extend this same fold, which
- * is why the bound lives with the first one.
+ * `count`. An if runs one branch, so its worst case is the heavier of the two.
  */
 export interface StackBounds {
   /** Distinct block nodes in the authored tree. */
@@ -167,12 +224,23 @@ export interface StackBounds {
   expansion: number;
 }
 
+const sum = (kids: StackBounds[]): StackBounds => ({
+  blocks: kids.reduce((n, k) => n + k.blocks, 0),
+  expansion: kids.reduce((n, k) => n + k.expansion, 0),
+});
+
 /** Compute {@link StackBounds} over a whole subtree. */
 export function boundStack(node: StackNode): StackBounds {
   if (node.kind === 'block') return { blocks: 1, expansion: 1 };
-  const kids = node.children.map(boundStack);
-  const blocks = kids.reduce((n, k) => n + k.blocks, 0);
-  const expansion = kids.reduce((n, k) => n + k.expansion, 0);
-  if (node.kind === 'repeat') return { blocks, expansion: expansion * node.count };
-  return { blocks, expansion };
+  if (node.kind === 'if') {
+    const body = sum(node.children.map(boundStack));
+    const other = node.else ? sum(node.else.map(boundStack)) : { blocks: 0, expansion: 0 };
+    return {
+      blocks: body.blocks + other.blocks,
+      expansion: Math.max(body.expansion, other.expansion),
+    };
+  }
+  const kids = sum(node.children.map(boundStack));
+  if (node.kind === 'repeat') return { blocks: kids.blocks, expansion: kids.expansion * node.count };
+  return kids;
 }
