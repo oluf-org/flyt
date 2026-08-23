@@ -18,9 +18,9 @@ import { parseYaml, YamlError } from '../loader/yaml.js';
 import type { YamlValue } from '../loader/yaml.js';
 import type { JsonValue } from '../types.js';
 import {
-  CONTAINER_KINDS, ID_PATTERN, IF_OPERATORS, MAX_DEPTH, MAX_EXPANSION, MAX_REPEAT, PLANNED_KINDS,
+  CONTAINER_KINDS, ID_PATTERN, IF_OPERATORS, MAX_DEPTH, MAX_EXPANSION, MAX_FOR_EACH, MAX_REPEAT, PLANNED_KINDS,
   boundStack, walk,
-  type BlockNode, type IfNode, type IfPredicate, type IfPredicateTerm, type IfOperator,
+  type BlockNode, type ForEachNode, type IfNode, type IfPredicate, type IfPredicateTerm, type IfOperator,
   type ParallelNode, type Position, type RepeatNode, type SequenceNode,
   type Stack, type StackNode,
 } from './types.js';
@@ -66,19 +66,35 @@ const isMapping = (v: YamlValue): v is Record<string, YamlValue> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** What each shape of node may carry. Anything else is a typo, and is said so. */
+/**
+ * What a stack may declare an output as.
+ *
+ * The same closed set `BlockDefinition.outputs` uses (t-0093), written again
+ * rather than imported: the parser knows nothing about the block registry by
+ * design, and a stack is parsed long before anyone asks which plugin provides
+ * what. `list` is the one that carries weight here — it is what lets a roster
+ * be told from a sentence.
+ */
+const OUTPUT_TYPES = ['string', 'number', 'boolean', 'list'];
+
 const BLOCK_KEYS = new Set(['id', 'use', 'title', 'config', 'outputs']);
 const SEQUENCE_KEYS = new Set(['id', 'kind', 'blocks']);
 const PARALLEL_KEYS = new Set(['id', 'kind', 'lanes', 'maxParallel']);
 const REPEAT_KEYS = new Set(['id', 'kind', 'count', 'body']);
 const IF_KEYS = new Set(['id', 'kind', 'predicate', 'body', 'else']);
+const FOREACH_KEYS = new Set(['id', 'kind', 'roster', 'max', 'body']);
 const TERM_KEYS = new Set(['source', 'operator', 'literal']);
 
 interface Ctx {
   lines: Map<string, number>;
   /** id -> where it was first seen, so a duplicate can name both. */
   seen: Map<string, { path: string; line: number }>;
-  /** block id -> the fields it declared in `outputs`, so a predicate can be checked against the authored contract. */
-  outputs: Map<string, { line: number; fields: Set<string> }>;
+  /**
+   * block id -> the fields it declared in `outputs`, and what each one holds,
+   * so a predicate can be checked against the authored contract and a `For
+   * each` roster can be held to a list rather than to a sentence.
+   */
+  outputs: Map<string, { line: number; fields: Map<string, string> }>;
 }
 
 function lineFor(ctx: Ctx, id: string | null): number {
@@ -126,13 +142,13 @@ function rejectUnknownKeys(
  * one way to write each and no shape to guess at. A kind we have not built is
  * refused by NAME with the phase that brings it.
  */
-function kindOf(raw: Record<string, YamlValue>, path: string, line: number): 'block' | 'sequence' | 'parallel' | 'repeat' | 'if' {
+function kindOf(raw: Record<string, YamlValue>, path: string, line: number): 'block' | 'sequence' | 'parallel' | 'repeat' | 'if' | 'foreach' {
   const kind = raw['kind'];
   if (kind === undefined || kind === null) {
     if (raw['blocks'] !== undefined || raw['lanes'] !== undefined || raw['body'] !== undefined
       || raw['predicate'] !== undefined || raw['else'] !== undefined) {
       throw new StackError(
-        'a container needs "kind: sequence", "kind: parallel", "kind: repeat" or "kind: if"; children alone do not say which',
+        'a container needs "kind: sequence", "kind: parallel", "kind: repeat", "kind: if" or "kind: foreach"; children alone do not say which',
         path, line);
     }
     return 'block';
@@ -141,7 +157,11 @@ function kindOf(raw: Record<string, YamlValue>, path: string, line: number): 'bl
   if (kind === 'block') {
     throw new StackError('a block is written without a "kind"; give it a "use" instead', path, line);
   }
-  if (kind === 'sequence' || kind === 'parallel' || kind === 'repeat' || kind === 'if') return kind;
+  // `for-each` is how the plan and the editor spell it; one kind, either
+  // spelling, normalised here so nothing downstream has to know about both.
+  if (kind === 'for-each') return 'foreach';
+  if (kind === 'sequence' || kind === 'parallel' || kind === 'repeat' || kind === 'if'
+    || kind === 'foreach') return kind;
   const planned = PLANNED_KINDS[kind.toLowerCase()];
   if (planned) {
     throw new StackError(
@@ -169,6 +189,65 @@ function readChildren(
       `this container has no ${key}; a container with nothing in it cannot run`, path, line);
   }
   return value.map((child, i) => readNode(ctx, child, `${path}.${key}[${i}]`, depth + 1));
+}
+
+/**
+ * The roster: an upstream block's declared LIST field, and nothing else.
+ *
+ * Held to the same contract a predicate source is, plus one more — the field
+ * has to be a list. A `type: string` field naming itself as a roster is the
+ * "iterate over whatever the last block said" that D56 forbids, and it is
+ * refused here rather than split on newlines at run time.
+ */
+function readRoster(ctx: Ctx, raw: Record<string, YamlValue>, path: string, line: number): string {
+  const roster = raw['roster'];
+  if (typeof roster !== 'string' || !roster) {
+    throw new StackError(
+      'a for-each needs "roster", naming a declared list field on an upstream block, like "plan.tasks"',
+      path, line);
+  }
+  const parts = roster.split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new StackError(
+      `a for-each "roster" is exactly "<block-id>.<field>", and this one says ${JSON.stringify(roster)}`,
+      path, line);
+  }
+  const [block, field] = parts as [string, string];
+  const declared = ctx.outputs.get(block);
+  if (!declared) {
+    const lists = [...ctx.outputs.entries()]
+      .flatMap(([id, o]) => [...o.fields].filter(([, t]) => t === 'list').map(([f]) => `${id}.${f}`))
+      .sort();
+    throw new StackError(
+      `the roster names "${roster}", but "${block}" declares no output; upstream list outputs: ${lists.join(', ') || 'none'}`,
+      path, line);
+  }
+  const type = declared.fields.get(field);
+  if (type === undefined) {
+    throw new StackError(
+      `the roster names field "${field}" on block "${block}", which does not declare it; "${block}" declares ${[...declared.fields.keys()].sort().join(', ') || 'no fields'}`,
+      path, line);
+  }
+  if (type !== 'list') {
+    throw new StackError(
+      `the roster names "${roster}", which "${block}" declares as ${type}. A roster has to be a list — a for-each iterates a declared list, never text split into pieces`,
+      path, line);
+  }
+  return roster;
+}
+
+/** The authored bound on how many roster elements the body runs for. */
+function readForEachMax(raw: Record<string, YamlValue>, path: string, line: number): number {
+  const value = raw['max'];
+  if (value === undefined || value === null) {
+    throw new StackError(
+      'a for-each needs "max", the most roster elements its body may run for — the roster itself is not known until the block above has run, so this is the only bound a run can be checked against before it starts',
+      path, line);
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new StackError('a for-each "max" must be a whole number of at least 1', path, line);
+  }
+  return value;
 }
 
 function readRepeatCount(raw: Record<string, YamlValue>, path: string, line: number): number {
@@ -260,7 +339,7 @@ function readOutputs(ctx: Ctx, raw: Record<string, YamlValue>, id: string, path:
   if (!Array.isArray(value)) {
     throw new StackError('a block "outputs" is a list, each entry a mapping with a "name"', path, line);
   }
-  const fields = new Set<string>();
+  const fields = new Map<string, string>();
   value.forEach((entry, i) => {
     const entryPath = `${path}.outputs[${i}]`;
     if (!isMapping(entry)) {
@@ -270,7 +349,13 @@ function readOutputs(ctx: Ctx, raw: Record<string, YamlValue>, id: string, path:
     if (typeof name !== 'string' || !name) {
       throw new StackError('each output needs a "name", the field a predicate or roster names', entryPath, line);
     }
-    fields.add(name);
+    const type = entry['type'] ?? 'string';
+    if (typeof type !== 'string' || !OUTPUT_TYPES.includes(type)) {
+      throw new StackError(
+        `an output "type" is one of ${OUTPUT_TYPES.join(', ')}, and this one says ${JSON.stringify(type)}`,
+        entryPath, line);
+    }
+    fields.set(name, type);
   });
   ctx.outputs.set(id, { line, fields });
 }
@@ -283,14 +368,14 @@ function checkPredicate(ctx: Ctx, predicate: IfPredicate, path: string, line: nu
     const declared = ctx.outputs.get(block);
     if (!declared) {
       const known = [...ctx.outputs.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-      const wantedBy = known.map(([id, o]) => `${id} (${[...o.fields].sort().join(', ')})`).join('; ');
+      const wantedBy = known.map(([id, o]) => `${id} (${[...o.fields.keys()].sort().join(', ')})`).join('; ');
       throw new StackError(
         `the predicate names "${term.source}", but "${block}" declares no output; upstream blocks that do declare outputs: ${wantedBy || 'none'}`,
         path, line);
     }
     if (!declared.fields.has(field)) {
       throw new StackError(
-        `the predicate names field "${field}" on block "${block}", which does not declare it; "${block}" declares ${[...declared.fields].sort().join(', ') || 'no fields'}`,
+        `the predicate names field "${field}" on block "${block}", which does not declare it; "${block}" declares ${[...declared.fields.keys()].sort().join(', ') || 'no fields'}`,
         path, line);
     }
   }
@@ -381,6 +466,17 @@ function readNode(ctx: Ctx, raw: YamlValue, path: string, depth: number): StackN
     } satisfies IfNode;
   }
 
+  if (kind === 'foreach') {
+    rejectUnknownKeys(raw, FOREACH_KEYS, 'for-each', path, line);
+    const roster = readRoster(ctx, raw, path, line);
+    return {
+      kind: 'foreach', id, roster,
+      max: readForEachMax(raw, path, line),
+      children: readChildren(ctx, raw, 'body', path, line, depth),
+      position,
+    } satisfies ForEachNode;
+  }
+
   rejectUnknownKeys(raw, REPEAT_KEYS, 'repeat', path, line);
   return {
     kind: 'repeat', id,
@@ -442,6 +538,11 @@ export function parseStack(source: string, fallbackId = ''): Stack {
     if (node.kind === 'repeat' && node.count > MAX_REPEAT) {
       throw new StackError(
         `a repeat runs its body at most ${MAX_REPEAT} times, and this one says ${node.count}`,
+        node.position.path, node.position.line);
+    }
+    if (node.kind === 'foreach' && node.max > MAX_FOR_EACH) {
+      throw new StackError(
+        `a for-each runs its body for at most ${MAX_FOR_EACH} roster elements, and this one says ${node.max}`,
         node.position.path, node.position.line);
     }
   }
