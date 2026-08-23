@@ -39,6 +39,78 @@ function assertDate(date) {
 
 export function archiveDir(root, date) { return path.join(root, assertDate(date)); }
 
+export const RETIRE_FILE = 'retirement.json';
+
+/**
+ * Where a retired task's run folders and retirement record live.
+ *
+ * Deliberately keyed on the task id, not a date: a task is retired once, and
+ * its record belongs to the task rather than to the day somebody pressed the
+ * button. `listArchive`/`readArchive`/`trend` stay keyed on DATE_RE, so this
+ * sibling never shows up in the day list or the trend.
+ */
+export function retiredDir(root, taskId) { return path.join(root, 'retired', String(taskId)); }
+
+/**
+ * Write the record of a retirement (the archive-side half of retiring a task).
+ *
+ * Idempotent by overwrite, like writeArchive: a task has one retirement and
+ * rewriting it replaces the facts rather than appending a second set.
+ */
+export function writeRetirement({
+  root, taskId, reason = null, retiredBy = null,
+  retiredAt = new Date().toISOString(), movedRunIds = [], resumeFrom = null
+} = {}) {
+  const dir = retiredDir(root, taskId);
+  fs.mkdirSync(dir, { recursive: true });
+  const record = { taskId, reason, retiredBy, retiredAt, movedRunIds, resumeFrom };
+  const file = path.join(dir, RETIRE_FILE);
+  fs.writeFileSync(file, JSON.stringify(record, null, 2));
+  return { dir, file, record };
+}
+
+export function readRetirement(root, taskId) {
+  const file = path.join(retiredDir(root, taskId), RETIRE_FILE);
+  if (!fs.existsSync(file)) return null;
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+/**
+ * Move a task's run folders into the retired archive and leave a pointer where
+ * each one used to be.
+ *
+ * The source files are MOVED, never copied: an archive that leaves the live
+ * files in place is not retirement, it is a second name for the present. The
+ * pointer file at the original `.flyt/runs/<runId>` path is what tells a
+ * reader where the run went, so a vanished run folder reads as relocated
+ * rather than as lost.
+ */
+export function relocateRetiredRuns({
+  root, runsDir, taskId, runIds = [], reason = null, retiredBy = null,
+  retiredAt = new Date().toISOString(), resumeFrom = null
+} = {}) {
+  const dir = retiredDir(root, taskId);
+  const runsDest = path.join(dir, 'runs');
+  const moved = [];
+  for (const runId of runIds) {
+    const from = path.join(runsDir, runId);
+    const to = path.join(runsDest, runId);
+    if (!fs.existsSync(from)) continue; // already relocated, or never existed
+    if (fs.existsSync(to)) continue;    // never clobber an existing archive
+    fs.mkdirSync(runsDest, { recursive: true });
+    fs.renameSync(from, to);
+    // The pointer replaces the folder at its original path, so the spot a
+    // reader looks first says where the run went rather than staying empty.
+    fs.writeFileSync(from, JSON.stringify({ taskId, retiredAt, archivePath: to }, null, 2));
+    moved.push({ runId, from, to });
+  }
+  const record = writeRetirement({
+    root, taskId, reason, retiredBy, retiredAt,
+    movedRunIds: moved.map(m => m.runId), resumeFrom
+  });
+  return { dir, record, moved };
+}
+
 /**
  * What landed, from git rather than from the backlog.
  *
