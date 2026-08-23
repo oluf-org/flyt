@@ -481,7 +481,7 @@ export class Backlog {
    * from the queue but can be brought back by revive() under the same id.
    */
   retire(id, { reason = null, by = null, force = false } = {}) {
-    if (String(reason ?? '').trim() === '' && !force) {
+    if (String(reason ?? '').trim() === '') {
       throw new Error('A retirement needs a reason.');
     }
     const safe = this.#assertId(id);
