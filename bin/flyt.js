@@ -53,6 +53,8 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task show <id>                 one task, in full
   flyt task ready                     what the picker would take, and what is stuck
   flyt task escalate <id>             one effort level up, back to the queue
+  flyt task retire <id>... --reason "<why>" [--force]   park with evidence, out of the queue
+  flyt task revive <id>               bring a retired task back, queued
   flyt task rm <id>... [--all]        take tasks out of the queue for good
   flyt task take                      claim the top-scoring ready task
   flyt loop start [--parallel N] [--model <id> | --models low=a,high=b] [--reviewer <id>]
@@ -644,6 +646,35 @@ async function main() {
           return out(await api.invoke('task:release', {
             projectId, id: positional[2], status: String(flags.status ?? 'queued')
           }));
+        case 'retire': {
+          const reason = String(flags.reason ?? '').trim();
+          if (!reason) return die('flyt task retire <id>... --reason "<why>"');
+          const ids = positional.slice(2);
+          if (!ids.length) return die('flyt task retire <id>... --reason "<why>"');
+          const retired = [];
+          for (const id of ids) {
+            retired.push(await api.invoke('task:retire', {
+              projectId, id, reason, by: String(flags.by ?? 'cli'), force: Boolean(flags.force)
+            }));
+          }
+          if (asJson) return out({ retired });
+          const gone = new Set(retired.filter(Boolean).map(r => r.retired));
+          const lines = [];
+          for (const r of retired.filter(Boolean)) {
+            lines.push(`retired ${r.retired}\t${r.title}`);
+            for (const s of (r.stranded ?? []).filter(s => !gone.has(s.id))) {
+              lines.push(`  ⚠ ${s.id} "${s.title}" depended on ${r.retired} and can no longer become ready.`
+                + ` Drop the dependency (\`flyt task show ${s.id}\`) or retire it too.`);
+            }
+          }
+          return out(lines.join('\n'));
+        }
+        case 'revive': {
+          const id = positional[2];
+          if (!id) return die('flyt task revive <id>');
+          const task = await api.invoke('task:revive', { projectId, id });
+          return out(asJson ? task : `${task.id}\t${task.title}`);
+        }
         // `flyt task rm <id>...` / `--all` / `--status parked`. Plural because
         // the case it exists for is plural: a backlog written against the wrong
         // repository is thirteen wrong tasks, not one.
