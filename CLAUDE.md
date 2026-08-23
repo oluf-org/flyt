@@ -25,8 +25,14 @@ Phase 0 landed on 2026-08-21 (`t-0035`, built as `t-0041`-`t-0048`). What exists
 - A service on the dsh contract is a Cordis `Service` subclass with ordinary private fields. Cordis derives a per-caller view with `Object.create()`, so `#private` state is unreachable through it and a registration made without `this.ctx.effect()` outlives the plugin that made it.
 - Phase 1 landed on 2026-08-22 and the handoff test passes: `loop-task` runs end to end on the
   v2 kernel, watched in Trace. `ctx.blocks`, `ctx.agents` and `ctx.llm` have providers now;
-  `ctx.fs`, `ctx.shell` and `ctx.sandbox` are still declared and waiting. Phase 2 (`t-0037`)
-  is open, and it is the first phase the Loop is meant to work rather than a person.
+  `ctx.fs`, `ctx.shell` and `ctx.sandbox` are still declared and waiting.
+- Phase 2 (`t-0037`) landed on 2026-08-22: the canonical set is ported, five stacks and the
+  block and tool plugins exist, and v1 still resolves everything it did before.
+- Phase 3 (`t-0038`) landed on 2026-08-24, built as `t-0093`-`t-0098`. All six containers
+  parse, lint, run and draw; the grammar and every bound it enforces are in `STACK_LANG.md`.
+  Blocks declare their structured outputs with a type, which is what a predicate source and a
+  `For each` roster are checked against. `PLANNED_KINDS` is empty and kept for the next
+  container planned before it is written. Phase 4 (`t-0039`) is open.
 
 ## Standing rules
 
