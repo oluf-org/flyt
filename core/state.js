@@ -35,6 +35,25 @@ export class RunStore {
 
   runDir(runId) { return path.join(this.rootDir, runId); }
 
+  // A retired task's run folder is MOVED to the archive and replaced with a
+  // pointer stub written by core/archive.js relocateRetiredRuns:
+  //   { taskId, retiredAt, archivePath }
+  // Readers resolve this before treating the path as a run, so a retired run
+  // reads as relocated rather than as missing. The stub is the spec's carrier,
+  // not a second registry: nothing here reads the archived run data itself.
+  runRetirement(runId) {
+    const p = this.runDir(runId);
+    try {
+      if (!fs.existsSync(p) || !fs.statSync(p).isFile()) return null;
+      const stub = JSON.parse(fs.readFileSync(p, 'utf8'));
+      const { taskId, retiredAt, archivePath } = stub ?? {};
+      if (typeof taskId !== 'string' || !taskId) return null;
+      if (typeof retiredAt !== 'string' || !retiredAt) return null;
+      if (typeof archivePath !== 'string' || !archivePath) return null;
+      return { taskId, retiredAt, archivePath };
+    } catch { return null; }
+  }
+
   listRuns() {
     if (!fs.existsSync(this.rootDir)) return [];
     return fs.readdirSync(this.rootDir)
