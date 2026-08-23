@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { parseStack, MAX_DEPTH, MAX_EXPANSION, MAX_FOR_EACH, MAX_REPEAT, boundStack, walk, isContainer } from '#kernel';
+import { parseStack, MAX_DEPTH, MAX_EXPANSION, MAX_FOR_EACH, MAX_REPEAT, MAX_UNTIL, PLANNED_KINDS, boundStack, walk, isContainer } from '#kernel';
 
 const stack = body => `version: 2\nid: demo\nname: A demo\n${body}`;
 
@@ -134,20 +134,22 @@ test('a repeat count must be a literal whole number within the cap, and a missin
   }
 });
 
-test('a container this phase has not built is refused by name, with the phase that brings it', () => {
-  for (const [kind, called] of [['until', 'Until']]) {
-    const err = refusal(() => parseStack(stack(`blocks:
-  - id: loop
-    kind: ${kind}
-    blocks:
+test('nothing is left in the planned register, and the mechanism still stands', () => {
+  // Phase 3 built all four containers it held, so PLANNED_KINDS is empty. The
+  // mechanism is what mattered and is kept: a kind that is named but not built
+  // is refused BY NAME with the phase that brings it, so somebody hand-writing
+  // a stack learns the boundary from the error rather than from a plan.
+  assert.deepEqual(Object.keys(PLANNED_KINDS), []);
+  const err = refusal(() => parseStack(stack(`blocks:
+  - id: weird
+    kind: fanout
+    body:
       - id: a
-        use: work
+        use: demo:work
 `)));
-    assert.match(err.message, new RegExp(`"${called}" is not built yet`),
-      `${kind} should be refused by the name a person knows it by`);
-    assert.match(err.message, /Phase 3 \(t-0038\)/, 'and should say where it went');
-    assert.match(err.message, /sequence and parallel and repeat and if and foreach/, 'and what there is instead');
-  }
+  assert.match(err.message, /"fanout" is not a container/);
+  assert.match(err.message, /sequence and parallel and repeat and if and foreach and until/,
+    'and every kind there now is');
 });
 
 test('a container nobody planned is refused too, without pretending to know it', () => {
@@ -220,7 +222,7 @@ test('a container without a kind is refused rather than guessed at', () => {
       - id: a
         use: work
 `)));
-  assert.match(err.message, /a container needs "kind: sequence", "kind: parallel", "kind: repeat", "kind: if" or "kind: foreach"/);
+  assert.match(err.message, /a container needs "kind: sequence", "kind: parallel", "kind: repeat", "kind: if", "kind: foreach" or "kind: until"/);
 });
 
 test('a block needs a use, and does not take a kind', () => {
@@ -706,4 +708,69 @@ test('a for-each nested in a repeat multiplies both bounds', () => {
             use: demo:work
 `));
   assert.equal(boundStack(s.root).expansion, 1 + 3 * 4, 'the plan block, then three passes of four');
+});
+
+// --- Until: bounded by an authored maximum (t-0097) ------------------------
+//
+// "A body plus a named gate" in the plan means a condition somebody declared,
+// and v2 has exactly one vocabulary for that — the structured predicate an `If`
+// takes. A second gate concept beside it would be two things meaning one thing.
+// What is specific to Until is the bound: an until without a maximum is the
+// unbounded container this format exists to make impossible.
+
+const UNTIL = `blocks:
+  - id: gate
+    kind: until
+    max: 5
+    condition:
+      source: check.verdict
+      operator: is
+      literal: passed
+    body:
+      - id: attempt
+        use: demo:work
+      - id: check
+        use: demo:evaluate
+        outputs:
+          - name: verdict
+            type: string
+`;
+
+test('an until parses with a body, a condition and an authored max', () => {
+  const until = parseStack(stack(UNTIL)).root.children[0];
+  assert.equal(until.kind, 'until');
+  assert.equal(until.max, 5);
+  assert.deepEqual(until.condition, { source: 'check.verdict', operator: 'is', literal: 'passed' });
+  assert.deepEqual(until.children.map(c => c.id), ['attempt', 'check']);
+});
+
+test('an until may ask about its own body, which is the whole point of it', () => {
+  // The body is read before the condition, so a block inside it has declared
+  // its outputs by the time the condition names one. Without that ordering an
+  // until could only ever ask about something outside itself.
+  assert.ok(parseStack(stack(UNTIL)).root.children[0]);
+});
+
+test('an until with no max is refused, and says why', () => {
+  const err = refusal(() => parseStack(stack(UNTIL.replace('    max: 5\n', ''))));
+  assert.match(err.message, /an until needs "max"/);
+  assert.match(err.message, /unbounded container this format exists to make impossible/);
+});
+
+test('an until max beyond the cap is refused, with the cap and the number', () => {
+  const err = refusal(() => parseStack(stack(UNTIL.replace('max: 5', `max: ${MAX_UNTIL + 1}`))));
+  assert.match(err.message, new RegExp(`at most ${MAX_UNTIL} passes`));
+  assert.match(err.message, new RegExp(`says ${MAX_UNTIL + 1}`));
+});
+
+test('an until condition naming an undeclared field is refused like any predicate', () => {
+  const err = refusal(() => parseStack(stack(UNTIL.replace('source: check.verdict', 'source: check.score'))));
+  assert.match(err.message, /field "score" on block "check"/);
+  assert.match(err.message, /"check" declares verdict/);
+});
+
+test('worst-case expansion multiplies the body by the authored max', () => {
+  const until = parseStack(stack(UNTIL)).root.children[0];
+  assert.equal(boundStack(until).blocks, 2, 'two authored blocks in the body');
+  assert.equal(boundStack(until).expansion, 10, 'and five passes of them');
 });

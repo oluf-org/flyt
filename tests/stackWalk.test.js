@@ -438,3 +438,82 @@ test('an empty roster runs the body no times and does not fail the run', async (
   assert.deepEqual(boot.record.map(r => r.blockId), ['plan', 'after']);
   await boot.kernel.dispose();
 });
+
+// --- Until: again, until it holds or the passes run out (t-0097) -----------
+
+const untilStack = (max = 5) => `version: 2
+id: demo
+blocks:
+  - id: gate
+    kind: until
+    max: ${max}
+    condition:
+      source: check.verdict
+      operator: is
+      literal: passed
+    body:
+      - id: attempt
+        use: demo:work
+      - id: check
+        use: demo:work
+        outputs:
+          - name: verdict
+            type: string
+  - id: after
+    use: demo:work
+`;
+
+// `check` answers `passed` on the nth pass and `failed` before it.
+const passesOn = n => {
+  let seen = 0;
+  return async run => {
+    if (run.blockId !== 'check') return { status: 'done', output: `${run.blockId} ran` };
+    seen += 1;
+    return { status: 'done', output: 'checked', structured: { verdict: seen >= n ? 'passed' : 'failed' } };
+  };
+};
+
+test('an until stops the first time its condition holds', async () => {
+  const boot = await bootWalk(untilStack(), { execute: passesOn(1) });
+  const outcome = await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.equal(outcome.status, 'done');
+  assert.deepEqual(boot.record.map(r => r.blockId), ['attempt', 'check', 'after'], 'one pass, then on');
+  await boot.kernel.dispose();
+});
+
+test('an until goes round again while the condition does not hold', async () => {
+  const boot = await bootWalk(untilStack(), { execute: passesOn(3) });
+  const outcome = await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.equal(outcome.status, 'done');
+  assert.equal(boot.record.filter(r => r.blockId === 'attempt').length, 3);
+  // Each pass is judged on its OWN verdict, not on a verdict a previous pass
+  // left behind — otherwise one success would end every later attempt early.
+  const events = await typesIn(boot.kernel, 'run-1');
+  const settled = events.find(e => e.type === 'block.status' && e.data.kind === 'until' && e.data.status === 'done');
+  assert.equal(settled.data.passes, 3);
+  await boot.kernel.dispose();
+});
+
+test('an until that runs out of passes fails the run rather than carrying on', async () => {
+  const boot = await bootWalk(untilStack(2), { execute: passesOn(99) });
+  const outcome = await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.equal(outcome.status, 'failed', 'work that was never accepted must not be handed on');
+  assert.equal(boot.record.filter(r => r.blockId === 'attempt').length, 2, 'and the bound is honoured');
+  assert.ok(!boot.finished.includes('after'), 'the block after it never ran');
+  const events = await typesIn(boot.kernel, 'run-1');
+  const failed = events.find(e => e.type === 'block.status' && e.data.kind === 'until' && e.data.status === 'failed');
+  assert.match(failed.data.error, /2 time\(s\) and its condition never held/);
+  await boot.kernel.dispose();
+});
+
+test('what follows an until reads the pass that was accepted', async () => {
+  const boot = await bootWalk(untilStack(), { execute: passesOn(2) });
+  await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  const after = boot.record.find(r => r.blockId === 'after');
+  assert.equal(after.input, 'checked', 'the carry is the accepted attempt, not the first one');
+  await boot.kernel.dispose();
+});

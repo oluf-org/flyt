@@ -91,6 +91,26 @@ export interface RepeatNode {
  * roster is not known until the upstream block has run, so the authored bound
  * is the only ceiling a pre-run expansion report can multiply by.
  */
+export interface UntilNode {
+  kind: 'until';
+  id: string;
+  /**
+   * What has to become true for the retrying to stop.
+   *
+   * The same structured predicate an `If` takes, deliberately: "a named gate"
+   * in the plan means a condition somebody declared, and v2 has exactly one
+   * vocabulary for that. Inventing a second gate concept beside it would leave
+   * two things to keep in your head that mean the same thing. The source
+   * normally names a block inside this body — the body's own verdict is what
+   * decides whether to go round again.
+   */
+  condition: IfPredicate;
+  /** The most passes the body gets. Whole, positive, at most {@link MAX_UNTIL}. */
+  max: number;
+  children: StackNode[];
+  position: Position;
+}
+
 export interface ForEachNode {
   kind: 'foreach';
   id: string;
@@ -158,24 +178,24 @@ export interface IfNode {
 }
 
 /** Any node in the tree. */
-export type StackNode = BlockNode | SequenceNode | ParallelNode | RepeatNode | IfNode | ForEachNode;
+export type StackNode = BlockNode | SequenceNode | ParallelNode | RepeatNode | IfNode | ForEachNode | UntilNode;
 
 /** The container kinds this phase implements. */
-export const CONTAINER_KINDS = ['sequence', 'parallel', 'repeat', 'if', 'foreach'] as const;
+export const CONTAINER_KINDS = ['sequence', 'parallel', 'repeat', 'if', 'foreach', 'until'] as const;
 
 /** One of the containers. */
 export type ContainerKind = (typeof CONTAINER_KINDS)[number];
 
 /**
- * The containers Phase 3 still brings, and the task that brings them.
+ * Containers that are named but not built.
  *
- * Named here so a stack that reaches for one is refused with the phase rather
- * than with "unknown kind" — somebody hand-writing a stack should learn the
- * boundary from the error, not from the plan document.
+ * Empty, and kept: Phase 3 finished the four it held (`Repeat N`, `For each`,
+ * `Until`, `If`), and the mechanism is what mattered — a kind we have not built
+ * is refused by NAME with the phase that brings it, so somebody hand-writing a
+ * stack learns the boundary from the error rather than from a plan document.
+ * The next container to be planned before it is written goes here.
  */
-export const PLANNED_KINDS: Record<string, string> = {
-  until: 'Until',
-};
+export const PLANNED_KINDS: Record<string, string> = {};
 
 /** A parsed stack. */
 export interface Stack {
@@ -215,6 +235,15 @@ export const MAX_REPEAT = 64;
  * gate that catches what the individual rungs do not.
  */
 export const MAX_FOR_EACH = 64;
+
+/**
+ * The most passes one `Until` gives its body.
+ *
+ * Lower than the other rungs on purpose: a repeat's passes are work somebody
+ * asked for, while an until's are attempts at work that keeps not being right,
+ * and the cost of the last few is rarely worth what they buy.
+ */
+export const MAX_UNTIL = 16;
 
 /**
  * The most blocks one stack may expand to, in the worst case, over the whole
@@ -279,5 +308,6 @@ export function boundStack(node: StackNode): StackBounds {
   // above has run, and a bound that can only be computed after spending money
   // is not a bound.
   if (node.kind === 'foreach') return { blocks: kids.blocks, expansion: kids.expansion * node.max };
+  if (node.kind === 'until') return { blocks: kids.blocks, expansion: kids.expansion * node.max };
   return kids;
 }

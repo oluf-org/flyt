@@ -28,7 +28,7 @@ import type { AgentRun, AgentsSeam, RunOutcome, StackRef } from '../seams/agents
 import type { SessionHandle } from '../seams/sessions.js';
 import {
   boundStack,
-  type BlockNode, type ForEachNode, type IfNode, type IfOperator, type IfPredicate, type IfPredicateTerm,
+  type BlockNode, type ForEachNode, type IfNode, type UntilNode, type IfOperator, type IfPredicate, type IfPredicateTerm,
   type ParallelNode, type RepeatNode, type SequenceNode, type StackNode,
 } from '../stack/types.js';
 import type { BlockDefinition, BlockOutcome } from '../blocks/types.js';
@@ -302,6 +302,7 @@ export class StackRunner extends Service implements AgentsSeam {
     if (node.kind === 'repeat') return this.runRepeat(run, node, input, session, done);
     if (node.kind === 'if') return this.runIf(run, node, input, session, done);
     if (node.kind === 'foreach') return this.runForEach(run, node, input, session, done);
+    if (node.kind === 'until') return this.runUntil(run, node, input, session, done);
     return this.runSequence(run, node, input, session, done);
   }
 
@@ -403,6 +404,58 @@ export class StackRunner extends Service implements AgentsSeam {
    * it is also the bound honoured here — a roster longer than it is cut, and the
    * log says so rather than quietly running the whole thing.
    */
+  /**
+   * The body, again, until the condition holds or the passes run out.
+   *
+   * The condition is the same structured predicate an `If` takes, and it
+   * normally names a block inside this body: the body's own verdict is what
+   * decides whether to go round again. Each pass therefore starts from the
+   * `done` map as it was BEFORE the pass — otherwise pass two would be judged
+   * on pass one's verdict, and an until that succeeded once would never run
+   * again however bad the next attempt was.
+   *
+   * Running out of passes fails the run. An until whose condition never holds
+   * has not finished quietly; it has failed to do the thing, and a walk that
+   * carried on would hand the next block work that was never accepted.
+   */
+  private async runUntil(
+    run: Run, node: UntilNode, input: string, session: SessionHandle,
+    done: Map<string, BlockOutcome>,
+  ): Promise<BlockStep[]> {
+    const steps: BlockStep[] = [];
+    let carried = input;
+    for (let pass = 1; pass <= node.max; pass++) {
+      if (run.stopReason) break;
+      const attempt = new Map(done);
+      const body: SequenceNode = { kind: 'sequence', id: node.id, children: node.children, position: node.position };
+      const ran = await this.runSequence(run, body, carried, session, attempt);
+      steps.push(...ran);
+      const last = ran.at(-1);
+      if (last?.outcome.status === 'failed') return steps;
+      if (last) carried = last.outcome.output;
+      if (this.holds(node.condition, attempt)) {
+        await session.append({
+          type: 'block.status',
+          data: { blockId: node.id, status: 'done', kind: 'until', passes: pass },
+        });
+        // What the body settled as is what the until settled as, so whatever
+        // follows reads the accepted attempt rather than the first one.
+        for (const [id, outcome] of attempt) done.set(id, outcome);
+        return steps;
+      }
+    }
+    const error = `"${node.id}" ran its body ${node.max} time(s) and its condition never held`;
+    await session.append({
+      type: 'block.status',
+      data: { blockId: node.id, status: 'failed', kind: 'until', passes: node.max, error },
+    });
+    steps.push({
+      node: { kind: 'block', id: node.id, use: 'until', title: null, config: {}, position: node.position },
+      outcome: { status: 'failed', output: carried, error },
+    });
+    return steps;
+  }
+
   private async runForEach(
     run: Run, node: ForEachNode, input: string, session: SessionHandle,
     done: Map<string, BlockOutcome>,

@@ -19,11 +19,11 @@
 import type { JsonValue } from '../types.js';
 import {
   isContainer, walk,
-  type BlockNode, type ForEachNode, type IfNode, type ParallelNode, type RepeatNode, type SequenceNode, type StackNode,
+  type BlockNode, type ForEachNode, type IfNode, type ParallelNode, type RepeatNode, type SequenceNode, type StackNode, type UntilNode,
 } from './types.js';
 
 /** One of the nodes that can hold children. */
-export type ContainerNode = SequenceNode | ParallelNode | RepeatNode | IfNode | ForEachNode;
+export type ContainerNode = SequenceNode | ParallelNode | RepeatNode | IfNode | ForEachNode | UntilNode;
 
 /** Where a node sits, or is going: a container and an index among its children. */
 export interface Slot {
