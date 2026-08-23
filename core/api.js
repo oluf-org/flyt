@@ -613,12 +613,19 @@ export function createApi(engine) {
     },
 
     'run:list': ({ projectId }) => proj(projectId).store.runSummaries(),
-    'run:log': ({ projectId, runId }) => proj(projectId).store.readLog(runId),
+    'run:log': ({ projectId, runId }) => {
+      const store = proj(projectId).store;
+      const retired = store.runRetirement(runId);
+      if (retired) return { retired: true, runId, ...retired };
+      return store.readLog(runId);
+    },
 
     // Fetching a snapshot re-baselines the caller's diff channel at the same
     // instant, so the rev it gets back is the one subsequent patches build on.
     'run:snapshot': ({ projectId, runId }) => {
       const entry = proj(projectId);
+      const retired = entry.store.runRetirement(runId);
+      if (retired) return { retired: true, runId, ...retired };
       const chans = engine.pushStateFor(entry.id).channels;
       const snapshot = entry.store.snapshot(runId);
       const rev = (chans.get(runId)?.rev ?? 0) + 1;

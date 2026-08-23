@@ -345,6 +345,9 @@ async function waitForRun(api, projectId, runId, { timeoutSec, autoApprove, answ
 // full specification printed its own transcript of questions instead, which
 // reads exactly like the run having produced nothing but chatter.
 //
+const renderRetirement = r =>
+  `run ${r.runId} retired with task ${r.taskId} on ${r.retiredAt}, now at ${r.archivePath}`;
+
 // The flow already says where the result is. Take the output node's content;
 // failing that, the last real NODE's output, never a sidecar.
 function runDeliverable(snapshot) {
@@ -1071,8 +1074,11 @@ async function main() {
       return out(asJson ? runs : runs.map(r => `${r.id}\t${r.stage ?? ''}\t${r.name ?? ''}`).join('\n'));
     }
 
-    case 'snapshot':
-      return out(await api.invoke('run:snapshot', { projectId: openProject(api, engine), runId: positional[1] }));
+    case 'snapshot': {
+      const result = await api.invoke('run:snapshot', { projectId: openProject(api, engine), runId: positional[1] });
+      if (result?.retired) return out(asJson ? result : renderRetirement(result));
+      return out(result);
+    }
 
     // The log is the primary evidence, and a fan-out writes hundreds of lines
     // of it — a run reading a repository through four lanes logged 441 entries,
@@ -1080,7 +1086,9 @@ async function main() {
     // reader writes a filter script every time, which is what happened.
     case 'log': {
       const projectId = openProject(api, engine);
-      let entries = await api.invoke('run:log', { projectId, runId: positional[1] });
+      const result = await api.invoke('run:log', { projectId, runId: positional[1] });
+      if (result?.retired) return out(asJson ? result : renderRetirement(result));
+      let entries = result;
       const only = typeof flags.event === 'string' ? flags.event.split(',').map(s => s.trim()) : null;
       if (only) entries = entries.filter(e => only.includes(e.event));
       if (typeof flags.node === 'string') entries = entries.filter(e => e.node === flags.node);

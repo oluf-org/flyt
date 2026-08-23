@@ -48,6 +48,20 @@ export default {
     const runId = String(args.runId ?? '').trim();
     const what = args.what ?? 'summary';
 
+    // A retired run leaves a pointer stub where the run folder was; report
+    // where the run went rather than treating the stub as a missing run.
+    const retired = store.runRetirement?.(runId);
+    if (retired) {
+      return {
+        runId,
+        retired: true,
+        taskId: retired.taskId,
+        retiredAt: retired.retiredAt,
+        archivePath: retired.archivePath,
+        message: `run ${runId} retired with task ${retired.taskId} on ${retired.retiredAt}, now at ${retired.archivePath}`
+      };
+    }
+
     if (what === 'diff') return await diffOf(args, ctx, runId);
 
     let snapshot;
