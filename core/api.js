@@ -716,6 +716,25 @@ export function createApi(engine) {
     },
     // One rung up and back in the queue — or parked, when the ladder is spent.
     // The supervisor calls this on a failed attempt and on a stalled one (§11.4).
+    // Parked with its evidence, not erased. A retirement moves the task file,
+    // the retirement record, and its run folders into .flyt/archive/retired/;
+    // a revival under the same id brings it back queued. A claimed task is
+    // refused unless forced, for the same reason remove() refuses it.
+    'task:retire': ({ projectId, id, reason, by = null, force = false }) => {
+      const retired = backlogFor(projectId).retire(id, { reason, by, force });
+      if (!retired) throw new ApiError(`No task "${id}".`, { status: 404, code: 'no_task' });
+      return {
+        retired: retired.id, title: retired.title, status: retired.status,
+        // Tasks that depended on this one and can no longer become ready.
+        stranded: retired.stranded ?? [],
+        ...(retired.unreadable ? { unreadable: retired.unreadable } : {})
+      };
+    },
+    'task:revive': ({ projectId, id }) => {
+      const revived = backlogFor(projectId).revive(id);
+      if (!revived) throw new ApiError(`No retired task "${id}".`, { status: 404, code: 'no_task' });
+      return revived;
+    },
     'task:escalate': ({ projectId, id, reason = 'failed', note = '' }) =>
       backlogFor(projectId).escalate(id, { reason, note }),
     'task:levels': () => ({ levels: LEVELS }),
