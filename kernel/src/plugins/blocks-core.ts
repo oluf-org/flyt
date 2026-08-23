@@ -23,7 +23,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { JsonValue } from '../types.js';
 import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js';
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
-import { AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
+import { AI_STEP_OUTPUT, AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
 
 /** Cordis plugin name. */
 export const name = 'flyt-blocks-core';
@@ -152,31 +152,45 @@ export const workBlock: BlockDefinition = {
  * @param ctx — the context to register in.
  */
 /**
- * Define a one-shot core block: same executor, its own role brief.
+ * Define a one-shot core block: same executor, its own role brief, and the
+ * structured output it declares. The executor fills exactly the field named
+ * here, so the declaration and the return agree by construction.
  */
-const aiStep = (use: string, title: string, description: string, brief: string): BlockDefinition => ({
+const aiStep = (
+  use: string, title: string, description: string, brief: string,
+  output: { name: string; type?: 'string' | 'list' } = { name: AI_STEP_OUTPUT },
+): BlockDefinition => ({
   use, title, description, category: 'work',
   settings: AI_STEP_SETTINGS as unknown as JsonValue,
   ceiling: [], // reads its input only; a stack grants tools by naming a ceiling
-  execute: run => executeAiStep(run, brief),
+  outputs: [{ name: output.name, type: output.type ?? 'string' }],
+  execute: run => executeAiStep(run, brief, output),
 });
 
 export const generalAnalysisBlock = aiStep('flyt-blocks-core:general-analysis', 'General analysis',
   'General text analysis: summary, structure, claims and evidence, gaps, risks, recommendations.',
-  'Analyse the input. Give a summary, its structure, the claims and the evidence for them, the gaps, the risks, and a recommendation. Ground every claim in what you were given.');
+  'Analyse the input. Give a summary, its structure, the claims and the evidence for them, the gaps, the risks, and a recommendation. Ground every claim in what you were given.',
+  { name: 'analysis' });
 export const combineBlock = aiStep('flyt-blocks-core:combine', 'Combine',
   'Merge parallel upstream outputs into one coherent deliverable, keeping the best of each.',
-  'Merge the upstream outputs into one coherent deliverable, keeping the best of each. Small fixes inline; a larger gap becomes a named fix task, not a silent patch.');
+  'Merge the upstream outputs into one coherent deliverable, keeping the best of each. Small fixes inline; a larger gap becomes a named fix task, not a silent patch.',
+  { name: 'combined' });
 export const splitBlock = aiStep('flyt-blocks-core:split', 'Split',
   'Divide the upstream work into clearly labeled independent parts that downstream blocks can run in parallel.',
-  'Divide the upstream work into clearly labeled, independent parts that downstream blocks can run in parallel.');
+  'Divide the upstream work into clearly labeled, independent parts that downstream blocks can run in parallel.',
+  // The one core roster: a typed list is the only source a `For each` may
+  // read, which is what keeps a roster from ever being prose split on
+  // newlines at the lint rule's discretion (D56).
+  { name: 'parts', type: 'list' });
 export const planStartBlock = aiStep('flyt-blocks-core:plan-start', 'Plan',
   'Produce a tasks.md with well-defined tasks and explicit per-file context.',
   ['ROLE: plan-start',
     'Given the brief, produce ONLY a structured tasks.md.',
     'Decompose the work into the smallest independently-verifiable tasks that still carry real meaning.',
     'For every task include a "Context files:" section naming each file and, per file, exactly which part is needed.',
-    'Call out risks, unknowns, and acceptance criteria per task.'].join('\n'));
+    'Call out risks, unknowns, and acceptance criteria per task.'].join('\n'),
+  // `plan.tasks`, the field the Phase 3 predicate examples name.
+  { name: 'tasks', type: 'list' });
 
 export function apply(ctx: Context): void {
   ctx.blocks.register(workBlock);

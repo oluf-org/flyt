@@ -25,22 +25,26 @@ const INQUIRY_CEILING = ['read_file', 'glob', 'search_files', 'search_references
 
 const inquire = (
   use: string, title: string, description: string, brief: string,
+  output: { name: string; type?: 'string' | 'list' },
 ): BlockDefinition => ({
   use, title, description, category: 'inquiry',
   settings: AI_STEP_SETTINGS as unknown as JsonValue,
   ceiling: INQUIRY_CEILING,
-  execute: (run: BlockRun) => executeAiStep(run, brief),
+  outputs: [{ name: output.name, type: output.type ?? 'string' }],
+  execute: (run: BlockRun) => executeAiStep(run, brief, output),
 });
 
 export const interrogateBlock = inquire(
   'flyt-blocks-inquiry:interrogate', 'Interrogate',
   'Question the person behind the request over bounded rounds, then write the specification their answers settled.',
   'Interrogate the request over a few bounded rounds — goal, non-goals, constraints, acceptance — then write the specification the answers settle. Mark every assumption you had to take as an assumption; do not present one as a decision.',
+  { name: 'spec' },
 );
 export const orientBlock = inquire(
   'flyt-blocks-inquiry:orient', 'Orient',
   'Survey the workspace and the subject, and say what relationship they have. Everything downstream is aimed by its answer.',
   'Say what THIS project is and what relationship it has to the subject about to be read: empty, the same kind of thing, overlapping problems, or no real overlap. Read enough to argue it — the manifests and guidance, plus at most two load-bearing files from each side — then stop. This is a bounded survey, not the analysis.',
+  { name: 'orientation' },
 );
 
 /** Contribute the inquiry blocks. */
