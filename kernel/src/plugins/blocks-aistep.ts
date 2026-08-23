@@ -48,13 +48,26 @@ const str = (value: JsonValue | undefined, fallback = ''): string =>
   (typeof value === 'string' && value ? value : fallback);
 
 /**
+ * The field a one-shot step fills when its block declares no narrower name.
+ *
+ * Every named ai-step block passes its own declared field; the fallback keeps
+ * the executor callable without one.
+ */
+export const AI_STEP_OUTPUT = 'text';
+
+/**
  * Run one bounded pass over the block's input.
  *
  * @param run — the block's execution context.
  * @param brief — the block's standing instructions (its role).
+ * @param output — the declared structured field this pass fills, and what it
+ *   holds: the deliverable itself unless it is 'list', when the deliverable
+ *   is the newline-separated items a For each roster may be read from (D56).
  * @returns what it produced, and why it stopped.
  */
-export async function executeAiStep(run: BlockRun, brief: string): Promise<BlockOutcome> {
+export async function executeAiStep(
+  run: BlockRun, brief: string, output: { name: string; type?: 'string' | 'list' } = { name: AI_STEP_OUTPUT },
+): Promise<BlockOutcome> {
   const session = await run.ctx.sessions.open(run.runId);
   const instructions = str(run.config.instructions);
   const effort = str(run.config.effort);
@@ -84,5 +97,11 @@ export async function executeAiStep(run: BlockRun, brief: string): Promise<Block
   if (result.stopped !== 'answered') {
     return { status: 'failed', output: result.content, error: result.reason ?? result.stopped };
   }
-  return { status: 'done', output: result.content };
+  // The declaration is the contract: the one field this block declared is
+  // the one field `structured` carries, so a predicate or a roster never
+  // names a field the block did not fill.
+  const structured = output.type === 'list'
+    ? { [output.name]: result.content.split('\n').map(line => line.trim()).filter(Boolean) }
+    : { [output.name]: result.content };
+  return { status: 'done', output: result.content, structured };
 }

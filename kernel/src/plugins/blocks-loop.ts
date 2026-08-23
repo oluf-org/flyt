@@ -30,12 +30,13 @@ export const backlogPlanBlock: BlockDefinition = {
   category: 'loop',
   settings: AI_STEP_SETTINGS as unknown as JsonValue,
   ceiling: PLAN_CEILING,
+  outputs: [{ name: 'tasks', type: 'list' }],
   execute: (run: BlockRun) => executeAiStep(run, [
     'Turn the analysis into claimable backlog tasks.',
     'Prefer three real tasks to ten plausible ones, and prefer tasks that land on their own — a queue where three tasks wait on one stops the moment that one stops.',
     'Confirm every path you put in a blast radius against this workspace, and take gates from the commands this project actually has.',
     'Every task must be claimable by someone standing here weeks from now who has not read the analysis.',
-  ].join('\n')),
+  ].join('\n'), { name: 'tasks', type: 'list' }),
 };
 
 /**
@@ -50,8 +51,10 @@ export const loopHandoffBlock: BlockDefinition = {
   category: 'loop',
   settings: AI_STEP_SETTINGS as unknown as JsonValue,
   ceiling: [],
+  outputs: [{ name: 'queued', type: 'list' }],
   execute: (run: BlockRun) => executeAiStep(run,
-    'Hand the planned tasks to the loop queue: emit them as the queue accepts them, and say what was queued. Nothing else is this block’s to do.'),
+    'Hand the planned tasks to the loop queue: emit them as the queue accepts them, and say what was queued. Nothing else is this block’s to do.',
+    { name: 'queued', type: 'list' }),
 };
 
 /** Contribute the loop blocks. */
