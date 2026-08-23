@@ -1,4 +1,4 @@
-// The stack format: containment parsed, Sequence and Parallel only.
+// The stack format: containment parsed, Sequence, Parallel and Repeat.
 //
 // Containment replaces edges, so this tree IS the graph — there is no edge
 // list to disagree with the nodes and no layout file to disagree with both
@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { parseStack, MAX_DEPTH, walk, isContainer } from '#kernel';
+import { parseStack, MAX_DEPTH, MAX_EXPANSION, MAX_REPEAT, boundStack, walk, isContainer } from '#kernel';
 
 const stack = body => `version: 2\nid: demo\nname: A demo\n${body}`;
 
@@ -97,8 +97,45 @@ test('a parallel with no bound says so, rather than defaulting quietly', () => {
   assert.match(err.message, /"maxParallel" must be a whole number of at least 1/);
 });
 
+test('a repeat parses into a repeat node with a literal count and a body', () => {
+  const parsed = parseStack(stack(`blocks:
+  - id: loop
+    kind: repeat
+    count: 3
+    body:
+      - id: a
+        use: work
+`));
+  const loop = parsed.root.children[0];
+  assert.equal(loop.kind, 'repeat');
+  assert.equal(loop.count, 3);
+  assert.deepEqual(loop.children.map(c => c.id), ['a']);
+});
+
+test('a repeat count must be a literal whole number within the cap, and a missing body is a refusal', () => {
+  const cases = [
+    // missing count
+    'blocks:\n  - id: loop\n    kind: repeat\n    body:\n      - id: a\n        use: work\n',
+    // non-literal count
+    'blocks:\n  - id: loop\n    kind: repeat\n    count: later\n    body:\n      - id: a\n        use: work\n',
+    // non-positive count
+    'blocks:\n  - id: loop\n    kind: repeat\n    count: 0\n    body:\n      - id: a\n        use: work\n',
+    // non-integer count
+    'blocks:\n  - id: loop\n    kind: repeat\n    count: 1.5\n    body:\n      - id: a\n        use: work\n',
+    // over the cap
+    'blocks:\n  - id: loop\n    kind: repeat\n    count: 65\n    body:\n      - id: a\n        use: work\n',
+    // missing body
+    'blocks:\n  - id: loop\n    kind: repeat\n    count: 2\n',
+  ];
+  for (const body of cases) {
+    const err = refusal(() => parseStack(stack(body)));
+    assert.match(err.message, /repeat/, 'names the container');
+    assert.equal(err.path, 'blocks[0]', 'the refusal carries the path');
+  }
+});
+
 test('a container this phase has not built is refused by name, with the phase that brings it', () => {
-  for (const [kind, called] of [['repeat', 'Repeat N'], ['for-each', 'For each'], ['until', 'Until'], ['if', 'If']]) {
+  for (const [kind, called] of [['for-each', 'For each'], ['until', 'Until'], ['if', 'If']]) {
     const err = refusal(() => parseStack(stack(`blocks:
   - id: loop
     kind: ${kind}
@@ -109,7 +146,7 @@ test('a container this phase has not built is refused by name, with the phase th
     assert.match(err.message, new RegExp(`"${called}" is not built yet`),
       `${kind} should be refused by the name a person knows it by`);
     assert.match(err.message, /Phase 3 \(t-0038\)/, 'and should say where it went');
-    assert.match(err.message, /sequence and parallel/, 'and what there is instead');
+    assert.match(err.message, /sequence and parallel and repeat/, 'and what there is instead');
   }
 });
 
@@ -167,6 +204,7 @@ test('a container with nothing in it cannot run, and does not parse', () => {
   for (const body of [
     'blocks:\n  - id: empty\n    kind: sequence\n    blocks: []\n',
     'blocks:\n  - id: empty\n    kind: parallel\n    lanes: []\n',
+    'blocks:\n  - id: empty\n    kind: repeat\n    count: 2\n    body: []\n',
   ]) {
     assert.match(refusal(() => parseStack(stack(body))).message,
       /a container with nothing in it cannot run/);
@@ -221,6 +259,55 @@ test('nesting past the cap is refused, and the error states the cap', () => {
   assert.ok(parseStack(build(MAX_DEPTH - 1)), `${MAX_DEPTH - 1} containers under the root fit`);
   const err = refusal(() => parseStack(build(MAX_DEPTH)));
   assert.match(err.message, new RegExp(`containers nest at most ${MAX_DEPTH} deep`));
+});
+
+test('total block count and worst-case expansion are computed over the whole tree', () => {
+  // A repeat body of two blocks run twice: 2 authored blocks, 4 executions.
+  const parsed = parseStack(stack(`blocks:
+  - id: loop
+    kind: repeat
+    count: 2
+    body:
+      - id: a
+        use: work
+      - id: b
+        use: work
+`));
+  assert.deepEqual(boundStack(parsed.root), { blocks: 2, expansion: 4 });
+
+  // A parallel lane beside the repeat counts every lane in the expansion.
+  const both = parseStack(stack(`blocks:
+  - id: loop
+    kind: repeat
+    count: 2
+    body:
+      - id: a
+        use: work
+  - id: fan
+    kind: parallel
+    lanes:
+      - id: la
+        use: work
+      - id: lb
+        use: work
+`));
+  assert.deepEqual(boundStack(both.root), { blocks: 3, expansion: 4 });
+});
+
+test('a stack over the expansion cap is refused with the cap and its own worst case', () => {
+  // One repeat of 2 blocks run 300 times: 2 authored blocks, 600 executions.
+  const err = refusal(() => parseStack(stack(`blocks:
+  - id: loop
+    kind: repeat
+    count: 300
+    body:
+      - id: a
+        use: work
+      - id: b
+        use: work
+`)));
+  assert.match(err.message, new RegExp(String(MAX_EXPANSION)), 'names the cap');
+  assert.match(err.message, /600/, 'names its own worst case');
 });
 
 test('a version 1 flow is not read here, and says where it is read', () => {

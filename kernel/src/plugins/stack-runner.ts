@@ -2,15 +2,18 @@
  * `flyt-stack-runner` — `ctx.agents`, the scheduler over containment.
  *
  * A sequence walks its children top to bottom. A parallel runs its lanes
- * together under `maxParallel`. Neither fact is decided here: the tree already
- * says it, and the scheduler's job is to honour the structure rather than to
- * reimplement it in a second place where the two can disagree.
+ * together under `maxParallel`. A repeat runs its body `count` times, each
+ * iteration fed what the one before produced. None of that is decided here:
+ * the tree already says it, and the scheduler's job is to honour the
+ * structure rather than to reimplement it in a second place where the two can
+ * disagree.
  *
  * Lane isolation (D37) is the clearest case. The containment says a parallel's
  * lanes are siblings; the scheduler gives each lane the input the PARALLEL
  * received rather than whatever a sibling last produced, so a lane cannot see
- * another lane's work. That is one line, and it is one line because the tree
- * did the work.
+ * another lane's work. A repeat is the other clear case: it is a sequence of
+ * `count` runs of the same body, and the carry is exactly the thread a
+ * sequence already knows how to pass.
  *
  * What executes a block, in what workspace, under which ceiling, is resolved
  * through the other seams. The scheduler does not know — which is what makes
@@ -23,7 +26,10 @@ import { Service, type Context } from '@deepseek-ai/cordis';
 import type { JsonValue, Message } from '../types.js';
 import type { AgentRun, AgentsSeam, RunOutcome, StackRef } from '../seams/agents.js';
 import type { SessionHandle } from '../seams/sessions.js';
-import type { BlockNode, ParallelNode, SequenceNode, StackNode } from '../stack/types.js';
+import {
+  boundStack,
+  type BlockNode, type ParallelNode, type RepeatNode, type SequenceNode, type StackNode,
+} from '../stack/types.js';
 import type { BlockDefinition, BlockOutcome } from '../blocks/types.js';
 import { missingBlocks } from './blocks.js';
 
@@ -132,6 +138,15 @@ export class StackRunner extends Service implements AgentsSeam {
     const session = await this.ctx.sessions.open(stack.runId);
     await session.append({ type: 'run.created', data: { runId: stack.runId, stackId: stack.id, input } });
 
+    // The bounds that decide whether this tree may run at all are known now,
+    // before any block executes. They go in the log so a run that went wrong
+    // can still say what it was allowed to become (D55).
+    const bounds = boundStack(root);
+    await session.append({
+      type: 'run.stage',
+      data: { stage: 'execution', blockCount: bounds.blocks, worstCaseExpansion: bounds.expansion },
+    });
+
     const run = new Run(stack.runId, r => this.walkRun(r, root, input, session));
     this.runs.set(stack.runId, run);
     return run;
@@ -234,7 +249,6 @@ export class StackRunner extends Service implements AgentsSeam {
     /** Blocks the log says already settled, from `resume`. Empty for a fresh run. */
     done: Map<string, BlockOutcome> = new Map(),
   ): Promise<RunOutcome> {
-    await session.append({ type: 'run.stage', data: { stage: 'execution' } });
     try {
       const walked = await this.walk(run, root, input, session, done);
       if (run.stopReason) {
@@ -277,6 +291,7 @@ export class StackRunner extends Service implements AgentsSeam {
   ): Promise<BlockStep[]> {
     if (node.kind === 'block') return [await this.runBlock(run, node, input, session, done)];
     if (node.kind === 'parallel') return this.runParallel(run, node, input, session, done);
+    if (node.kind === 'repeat') return this.runRepeat(run, node, input, session, done);
     return this.runSequence(run, node, input, session, done);
   }
 
@@ -320,6 +335,29 @@ export class StackRunner extends Service implements AgentsSeam {
       const ran = await Promise.all(wave.map(lane => this.walk(run, lane, input, session, done)));
       for (const laneSteps of ran) steps.push(...laneSteps);
       if (steps.some(s => s.outcome.status === 'failed')) break;
+    }
+    return steps;
+  }
+
+  /**
+   * A repeat runs its body exactly `count` times, each iteration fed what the
+   * one before produced — the same carry a sequence threads — and a failing
+   * body stops it the way a sequence stops.
+   */
+  private async runRepeat(
+    run: Run, node: RepeatNode, input: string, session: SessionHandle,
+    done: Map<string, BlockOutcome>,
+  ): Promise<BlockStep[]> {
+    const body: SequenceNode = { kind: 'sequence', id: node.id, children: node.children, position: node.position };
+    const steps: BlockStep[] = [];
+    let carried = input;
+    for (let i = 0; i < node.count; i++) {
+      if (run.stopReason) break;
+      const walked = await this.runSequence(run, body, carried, session, done);
+      steps.push(...walked);
+      const last = walked.at(-1);
+      if (last?.outcome.status === 'failed') break;
+      if (last) carried = last.outcome.output;
     }
     return steps;
   }
