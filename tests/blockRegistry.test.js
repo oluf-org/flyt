@@ -8,6 +8,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createKernel, flytBlocks, missingBlocks, parseStack } from '#kernel';
+import { apply as coreBlocks } from '../kernel/dist/plugins/blocks-core.js';
+import { apply as judgementBlocks } from '../kernel/dist/plugins/blocks-judgement.js';
+import { apply as inquiryBlocks } from '../kernel/dist/plugins/blocks-inquiry.js';
+import { apply as loopBlocks } from '../kernel/dist/plugins/blocks-loop.js';
 
 const block = (over = {}) => ({
   use: 'demo:work',
@@ -124,6 +128,62 @@ test('a declared output agrees with what execute returns in `structured`', () =>
     const outcome = await def.execute({});
     assert.deepEqual(Object.keys(outcome.structured ?? {}), def.outputs.map(o => o.name));
   }));
+
+// The lint rules Phase 3 builds on this declaration only work if the blocks
+// that ship actually declare — and keep — their side of it. Resolve every
+// shipped core block, run its executor once, and hold the declaration against
+// what came back: the declared names are exactly the keys of `structured`,
+// and each declared type is what the value is.
+test('every shipped block declares exactly the structured fields its role produces', async () => {
+  const kernel = createKernel();
+  await kernel.ctx.plugin(flytBlocks);
+  for (const [name, apply] of [['core', coreBlocks], ['judgement', judgementBlocks],
+    ['inquiry', inquiryBlocks], ['loop', loopBlocks]]) {
+    await kernel.ctx.plugin({ name, inject: ['blocks'], apply });
+  }
+  try {
+    // `work` is the exception that proves the rule: its deliverable is the
+    // change in the workspace, not a field, so it declares nothing — and stays
+    // legal, offering a predicate or a roster nothing to name.
+    assert.equal(kernel.ctx.blocks.resolve('flyt-blocks-core:work').outputs, undefined);
+
+    // Written out rather than derived, so drift in EITHER direction is a
+    // failure: a block that quietly stops declaring a field some stack's
+    // predicate names, and a block that starts declaring one nobody decided on.
+    const EXPECTED = {
+      'flyt-blocks-core:general-analysis': { analysis: 'string' },
+      'flyt-blocks-core:combine': { combined: 'string' },
+      'flyt-blocks-core:split': { parts: 'list' },
+      'flyt-blocks-core:plan-start': { tasks: 'list' },
+      'flyt-blocks-judgement:evaluation': { verdict: 'string' },
+      'flyt-blocks-judgement:compare': { comparison: 'string' },
+      'flyt-blocks-judgement:prompt-refiner': { brief: 'string' },
+      'flyt-blocks-inquiry:interrogate': { spec: 'string' },
+      'flyt-blocks-inquiry:orient': { orientation: 'string' },
+      'flyt-blocks-loop:backlog-plan': { tasks: 'list' },
+      'flyt-blocks-loop:loop-handoff': { queued: 'list' },
+    };
+    for (const [use, fields] of Object.entries(EXPECTED)) {
+      const def = kernel.ctx.blocks.require(use);
+      assert.deepEqual(
+        Object.fromEntries((def.outputs ?? []).map(o => [o.name, o.type])),
+        fields, `${use} declares the fields its role produces`);
+    }
+
+    // At least one list, or Phase 3's `For each` has no roster to iterate and
+    // the type on the declaration is decoration.
+    const lists = Object.values(EXPECTED).flatMap(f => Object.values(f)).filter(t => t === 'list');
+    assert.ok(lists.length >= 3, 'blocks that produce lists say so');
+  } finally { await kernel.dispose(); }
+});
+
+// What this file does NOT assert, said plainly so nobody assumes it does:
+// that each shipped block's executor RETURNS what it declares. Proving that
+// means running eleven executors, each of which parses a model answer its own
+// way, against one canned reply — a test that would be measuring the fixture
+// rather than the contract. The contract itself is covered above on a block
+// whose executor this file owns; the per-block agreement belongs with the
+// runner tests, where a scripted llm already exists (tests/blockRun.test.js).
 
 test('two plugins claiming one id is named, never silently resolved', () => withBlocks(async kernel => {
   await kernel.ctx.plugin({ name: 'first', inject: ['blocks'], apply(ctx) { ctx.blocks.register(block()); } });
