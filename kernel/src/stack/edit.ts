@@ -19,8 +19,11 @@
 import type { JsonValue } from '../types.js';
 import {
   isContainer, walk,
-  type BlockNode, type ParallelNode, type SequenceNode, type StackNode,
+  type BlockNode, type ParallelNode, type RepeatNode, type SequenceNode, type StackNode,
 } from './types.js';
+
+/** One of the nodes that can hold children. */
+export type ContainerNode = SequenceNode | ParallelNode | RepeatNode;
 
 /** Where a node sits, or is going: a container and an index among its children. */
 export interface Slot {
@@ -70,11 +73,11 @@ function slotOf(root: StackNode, id: string): Slot | null {
   return null;
 }
 
-function container(root: StackNode, id: string): SequenceNode | ParallelNode {
+function container(root: StackNode, id: string): ContainerNode {
   const node = find(root, id);
   if (!node) throw new EditError(`there is no "${id}" in this stack`);
   if (!isContainer(node)) {
-    throw new EditError(`"${id}" is a block, and a block holds nothing; name a sequence or a parallel`);
+    throw new EditError(`"${id}" is a block, and a block holds nothing; name a container`);
   }
   return node;
 }

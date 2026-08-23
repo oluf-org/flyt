@@ -73,10 +73,20 @@ function measure(node: StackNode, m: LayoutMetrics): { width: number; height: nu
       height: kids.reduce((n, k) => n + k.height, 0) + gaps + m.padding * 2 + m.header,
     };
   }
-  // Side by side: as wide as all the lanes, as tall as the tallest.
+  if (node.kind === 'parallel') {
+    // Side by side: as wide as all the lanes, as tall as the tallest.
+    return {
+      width: kids.reduce((n, k) => n + k.width, 0) + gaps + m.padding * 2,
+      height: Math.max(...kids.map(k => k.height)) + m.padding * 2 + m.header,
+    };
+  }
+  // A repeat runs its body count times in sequence: as wide as the widest
+  // child, and count bodies deep.
+  const childWidth = Math.max(...kids.map(k => k.width));
+  const childHeight = kids.reduce((n, k) => n + k.height, 0) + gaps;
   return {
-    width: kids.reduce((n, k) => n + k.width, 0) + gaps + m.padding * 2,
-    height: Math.max(...kids.map(k => k.height)) + m.padding * 2 + m.header,
+    width: childWidth + m.padding * 2,
+    height: childHeight * node.count + m.padding * 2 + m.header,
   };
 }
 
@@ -98,11 +108,27 @@ function place(node: StackNode, x: number, y: number, m: LayoutMetrics, into: Re
     }
     return;
   }
-  let cursor = inner.x;
-  for (const child of node.children) {
-    const childSize = measure(child, m);
-    place(child, cursor, inner.y, m, into);
-    cursor += childSize.width + m.gap;
+  if (node.kind === 'parallel') {
+    let cursor = inner.x;
+    for (const child of node.children) {
+      const childSize = measure(child, m);
+      place(child, cursor, inner.y, m, into);
+      cursor += childSize.width + m.gap;
+    }
+    return;
+  }
+  // Repeat: the body is measured once and its slots laid out count times,
+  // which is what the measure() height above promised.
+  const bodyHeight = node.children.reduce((n, child) => n + measure(child, m).height, 0)
+    + m.gap * (node.children.length - 1);
+  for (let i = 0; i < node.count; i++) {
+    let cursor = inner.y + bodyHeight * i;
+    for (const child of node.children) {
+      const childSize = measure(child, m);
+      const available = size.width - m.padding * 2;
+      place(child, inner.x + (available - childSize.width) / 2, cursor, m, into);
+      cursor += childSize.height + m.gap;
+    }
   }
 }
 
