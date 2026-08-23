@@ -77,6 +77,32 @@ export interface RepeatNode {
 }
 
 /**
+ * A body, run once per element of a roster, in order.
+ *
+ * The roster is a typed LIST output an upstream block declared — `plan.tasks`,
+ * where `plan` ran before this and `tasks` is one of its `type: list` fields.
+ * There is no path by which a string becomes a roster: no split on newlines, no
+ * fallback, no one-item convenience. That restriction is the container, not a
+ * detail of it — an iteration over whatever the previous block happened to say
+ * is the "roster from prose" D56 exists to forbid, and it is what a plan for
+ * this phase proposed before typed outputs existed to make it unnecessary.
+ *
+ * `max` is the authored bound on how many elements the body runs for. The
+ * roster is not known until the upstream block has run, so the authored bound
+ * is the only ceiling a pre-run expansion report can multiply by.
+ */
+export interface ForEachNode {
+  kind: 'foreach';
+  id: string;
+  /** `<block>.<field>` — the upstream block and its declared list field. */
+  roster: string;
+  /** The most elements the body runs for. Whole, positive, at most {@link MAX_FOR_EACH}. */
+  max: number;
+  children: StackNode[];
+  position: Position;
+}
+
+/**
  * The closed set of operators an `If` predicate may use.
  *
  * A closed set is the fence that keeps this out of expression territory: no
@@ -132,10 +158,10 @@ export interface IfNode {
 }
 
 /** Any node in the tree. */
-export type StackNode = BlockNode | SequenceNode | ParallelNode | RepeatNode | IfNode;
+export type StackNode = BlockNode | SequenceNode | ParallelNode | RepeatNode | IfNode | ForEachNode;
 
 /** The container kinds this phase implements. */
-export const CONTAINER_KINDS = ['sequence', 'parallel', 'repeat', 'if'] as const;
+export const CONTAINER_KINDS = ['sequence', 'parallel', 'repeat', 'if', 'foreach'] as const;
 
 /** One of the containers. */
 export type ContainerKind = (typeof CONTAINER_KINDS)[number];
@@ -148,8 +174,6 @@ export type ContainerKind = (typeof CONTAINER_KINDS)[number];
  * boundary from the error, not from the plan document.
  */
 export const PLANNED_KINDS: Record<string, string> = {
-  foreach: 'For each',
-  'for-each': 'For each',
   until: 'Until',
 };
 
@@ -182,6 +206,15 @@ export const MAX_DEPTH = 6;
  * the repeat bound is the first rung of the ladder, not the whole ladder.
  */
 export const MAX_REPEAT = 64;
+
+/**
+ * The most roster elements one `For each` may run its body for.
+ *
+ * A rung beside {@link MAX_REPEAT} in the same ladder: a for-each inside a
+ * for-each multiplies `max` twice, and {@link MAX_EXPANSION} is the whole-tree
+ * gate that catches what the individual rungs do not.
+ */
+export const MAX_FOR_EACH = 64;
 
 /**
  * The most blocks one stack may expand to, in the worst case, over the whole
@@ -242,5 +275,9 @@ export function boundStack(node: StackNode): StackBounds {
   }
   const kids = sum(node.children.map(boundStack));
   if (node.kind === 'repeat') return { blocks: kids.blocks, expansion: kids.expansion * node.count };
+  // The authored bound, not the roster: the roster is not known until the block
+  // above has run, and a bound that can only be computed after spending money
+  // is not a bound.
+  if (node.kind === 'foreach') return { blocks: kids.blocks, expansion: kids.expansion * node.max };
   return kids;
 }

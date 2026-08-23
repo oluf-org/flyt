@@ -11,7 +11,7 @@
  *
  * @module #kernel/stack/layout
  */
-import { isContainer, type StackNode } from './types.js';
+import { isContainer, type ForEachNode, type RepeatNode, type StackNode } from './types.js';
 
 /** One node's rectangle, in stack units. */
 export interface Box {
@@ -48,6 +48,15 @@ export const METRICS: LayoutMetrics = {
 };
 
 /** The size a node needs, before anything decides where to put it. */
+/**
+ * How many copies of its body a container draws.
+ *
+ * A repeat is authored with a literal count and shows every pass. A for-each is
+ * bounded by `max`, but its roster comes from a block that has not run yet, so
+ * one body is the honest drawing.
+ */
+const bodies = (node: RepeatNode | ForEachNode): number => (node.kind === 'repeat' ? node.count : 1);
+
 function measure(node: StackNode, m: LayoutMetrics): { width: number; height: number } {
   if (!isContainer(node)) return { width: m.blockWidth, height: m.blockHeight };
 
@@ -75,12 +84,15 @@ function measure(node: StackNode, m: LayoutMetrics): { width: number; height: nu
       height: Math.max(body.height, other.height) + m.padding * 2 + m.header,
     };
   }
-  // Repeat: as wide as the widest child, and count bodies deep.
+  // Repeat: as wide as the widest child, and count bodies deep. A for-each
+  // draws its body ONCE — the roster is not known until the block above it has
+  // run, and drawing `max` empty copies would be a picture of the bound rather
+  // than of the stack.
   const childWidth = Math.max(...kids.map(k => k.width));
   const childHeight = kids.reduce((n, k) => n + k.height, 0) + gaps;
   return {
     width: childWidth + m.padding * 2,
-    height: childHeight * node.count + m.padding * 2 + m.header,
+    height: childHeight * bodies(node) + m.padding * 2 + m.header,
   };
 }
 
@@ -141,10 +153,10 @@ function place(node: StackNode, x: number, y: number, m: LayoutMetrics, into: Re
     }
     return;
   }
-  // Repeat: body measured once, slots laid out count times.
+  // Repeat: body measured once, slots laid out count times; a for-each once.
   const bodyHeight = node.children.reduce((n, child) => n + measure(child, m).height, 0)
     + m.gap * (node.children.length - 1);
-  for (let i = 0; i < node.count; i++) {
+  for (let i = 0; i < bodies(node); i++) {
     let cursor = inner.y + bodyHeight * i;
     for (const child of node.children) {
       const childSize = measure(child, m);

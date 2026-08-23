@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { parseStack, MAX_DEPTH, MAX_EXPANSION, MAX_REPEAT, boundStack, walk, isContainer } from '#kernel';
+import { parseStack, MAX_DEPTH, MAX_EXPANSION, MAX_FOR_EACH, MAX_REPEAT, boundStack, walk, isContainer } from '#kernel';
 
 const stack = body => `version: 2\nid: demo\nname: A demo\n${body}`;
 
@@ -135,7 +135,7 @@ test('a repeat count must be a literal whole number within the cap, and a missin
 });
 
 test('a container this phase has not built is refused by name, with the phase that brings it', () => {
-  for (const [kind, called] of [['for-each', 'For each'], ['until', 'Until']]) {
+  for (const [kind, called] of [['until', 'Until']]) {
     const err = refusal(() => parseStack(stack(`blocks:
   - id: loop
     kind: ${kind}
@@ -146,7 +146,7 @@ test('a container this phase has not built is refused by name, with the phase th
     assert.match(err.message, new RegExp(`"${called}" is not built yet`),
       `${kind} should be refused by the name a person knows it by`);
     assert.match(err.message, /Phase 3 \(t-0038\)/, 'and should say where it went');
-    assert.match(err.message, /sequence and parallel and repeat/, 'and what there is instead');
+    assert.match(err.message, /sequence and parallel and repeat and if and foreach/, 'and what there is instead');
   }
 });
 
@@ -220,7 +220,7 @@ test('a container without a kind is refused rather than guessed at', () => {
       - id: a
         use: work
 `)));
-  assert.match(err.message, /a container needs "kind: sequence", "kind: parallel", "kind: repeat" or "kind: if"/);
+  assert.match(err.message, /a container needs "kind: sequence", "kind: parallel", "kind: repeat", "kind: if" or "kind: foreach"/);
 });
 
 test('a block needs a use, and does not take a kind', () => {
@@ -592,4 +592,118 @@ test('an if counts as a container, and its worst case is one branch not both', (
     'both branches are in the tree, though only one ever runs');
   assert.equal(boundStack(gate).expansion, 2, 'the heavier branch, not the sum');
   assert.equal(boundStack(gate).blocks, 3, 'but all three are authored blocks');
+});
+
+// --- For each: a declared list, and nothing else (t-0096) ------------------
+//
+// The restriction IS the container. A plan for this phase proposed defining
+// for-each as splitting the previous block's text on newlines, which is exactly
+// the "roster from prose" D56 forbids, and it proposed it because typed outputs
+// did not exist yet. They do. So most of what is tested here is the absence of
+// a route from a string to a roster — in the file, and at run time.
+
+const FOREACH = `blocks:
+  - id: plan
+    use: demo:plan
+    outputs:
+      - name: tasks
+        type: list
+      - name: summary
+        type: string
+  - id: each
+    kind: foreach
+    roster: plan.tasks
+    max: 8
+    body:
+      - id: do-one
+        use: demo:work
+`;
+
+test('a for-each parses with a roster and an authored max', () => {
+  const each = parseStack(stack(FOREACH)).root.children[1];
+  assert.equal(each.kind, 'foreach');
+  assert.equal(each.roster, 'plan.tasks');
+  assert.equal(each.max, 8);
+  assert.deepEqual(each.children.map(c => c.id), ['do-one']);
+});
+
+test('for-each and foreach are one kind, either spelling', () => {
+  const each = parseStack(stack(FOREACH.replace('kind: foreach', 'kind: for-each'))).root.children[1];
+  assert.equal(each.kind, 'foreach', 'normalised, so nothing downstream has to know about both');
+});
+
+test('a roster naming a text field is refused, and says what it is instead', () => {
+  const err = refusal(() => parseStack(stack(FOREACH.replace('roster: plan.tasks', 'roster: plan.summary'))));
+  assert.match(err.message, /"plan.summary", which "plan" declares as string/);
+  assert.match(err.message, /never text split into pieces/, 'and why there is no fallback');
+});
+
+test('a roster naming a field nobody declared is refused', () => {
+  const err = refusal(() => parseStack(stack(FOREACH.replace('roster: plan.tasks', 'roster: plan.items'))));
+  assert.match(err.message, /field "items" on block "plan"/);
+  assert.match(err.message, /"plan" declares summary, tasks/);
+});
+
+test('a roster may not read a block that has not run yet', () => {
+  const err = refusal(() => parseStack(stack(`blocks:
+  - id: each
+    kind: foreach
+    roster: later.tasks
+    max: 4
+    body:
+      - id: do-one
+        use: demo:work
+  - id: later
+    use: demo:plan
+    outputs:
+      - name: tasks
+        type: list
+`)));
+  assert.match(err.message, /"later" declares no output/);
+});
+
+test('a for-each without a max is refused: the roster is not a bound', () => {
+  const err = refusal(() => parseStack(stack(FOREACH.replace('    max: 8\n', ''))));
+  assert.match(err.message, /a for-each needs "max"/);
+  assert.match(err.message, /not known until the block above has run/,
+    'and says why the roster itself cannot be the bound');
+});
+
+test('a for-each max beyond the cap is refused, with the cap and the number', () => {
+  const err = refusal(() => parseStack(stack(FOREACH.replace('max: 8', `max: ${MAX_FOR_EACH + 1}`))));
+  assert.match(err.message, new RegExp(`at most ${MAX_FOR_EACH} roster elements`));
+  assert.match(err.message, new RegExp(`says ${MAX_FOR_EACH + 1}`));
+});
+
+test('an output type outside the closed set is refused', () => {
+  const err = refusal(() => parseStack(stack(FOREACH.replace('type: list', 'type: array'))));
+  assert.match(err.message, /an output "type" is one of string, number, boolean, list/);
+});
+
+test('worst-case expansion multiplies by the authored max, not by the roster', () => {
+  const each = parseStack(stack(FOREACH)).root.children[1];
+  assert.equal(boundStack(each).blocks, 1, 'one authored block in the body');
+  assert.equal(boundStack(each).expansion, 8, 'and eight of it in the worst case');
+});
+
+test('a for-each nested in a repeat multiplies both bounds', () => {
+  const s = parseStack(stack(`blocks:
+  - id: plan
+    use: demo:plan
+    outputs:
+      - name: tasks
+        type: list
+  - id: twice
+    kind: repeat
+    count: 3
+    body:
+      - id: each
+        kind: foreach
+        roster: plan.tasks
+        max: 4
+        body:
+          - id: do-one
+            use: demo:work
+`));
+  assert.equal(boundStack(s.root).expansion, 1 + 3 * 4, 'the plan block, then three passes of four');
 });

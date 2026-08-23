@@ -28,7 +28,7 @@ import type { AgentRun, AgentsSeam, RunOutcome, StackRef } from '../seams/agents
 import type { SessionHandle } from '../seams/sessions.js';
 import {
   boundStack,
-  type BlockNode, type IfNode, type IfOperator, type IfPredicate, type IfPredicateTerm,
+  type BlockNode, type ForEachNode, type IfNode, type IfOperator, type IfPredicate, type IfPredicateTerm,
   type ParallelNode, type RepeatNode, type SequenceNode, type StackNode,
 } from '../stack/types.js';
 import type { BlockDefinition, BlockOutcome } from '../blocks/types.js';
@@ -301,6 +301,7 @@ export class StackRunner extends Service implements AgentsSeam {
     if (node.kind === 'parallel') return this.runParallel(run, node, input, session, done);
     if (node.kind === 'repeat') return this.runRepeat(run, node, input, session, done);
     if (node.kind === 'if') return this.runIf(run, node, input, session, done);
+    if (node.kind === 'foreach') return this.runForEach(run, node, input, session, done);
     return this.runSequence(run, node, input, session, done);
   }
 
@@ -386,6 +387,53 @@ export class StackRunner extends Service implements AgentsSeam {
    * not. When there is no else and the body is not chosen, the if runs nothing
    * and its input passes through unchanged.
    */
+  /**
+   * A body, once per roster element, in order.
+   *
+   * The roster is resolved from what the named block actually put in
+   * `structured` — the parser has already refused any roster that is not a
+   * declared `list` field on a block above this one, so what is left to decide
+   * here is what to do when the promise was not kept. A block that declared a
+   * list and returned something else, or nothing, gives an empty roster and the
+   * body does not run: iterating a string by splitting it is the one thing this
+   * container must never do, and that stays true when the string arrives at run
+   * time rather than in the file.
+   *
+   * `max` is the authored bound the pre-run expansion report multiplied by, so
+   * it is also the bound honoured here — a roster longer than it is cut, and the
+   * log says so rather than quietly running the whole thing.
+   */
+  private async runForEach(
+    run: Run, node: ForEachNode, input: string, session: SessionHandle,
+    done: Map<string, BlockOutcome>,
+  ): Promise<BlockStep[]> {
+    const dot = node.roster.indexOf('.');
+    const record = done.get(node.roster.slice(0, dot))?.structured as Record<string, unknown> | undefined;
+    const value = record?.[node.roster.slice(dot + 1)];
+    const roster = Array.isArray(value) ? value : [];
+    const items = roster.slice(0, node.max);
+    await session.append({
+      type: 'block.status',
+      data: {
+        blockId: node.id, status: 'active', kind: 'foreach',
+        roster: node.roster, elements: items.length,
+        ...(roster.length > items.length ? { cut: roster.length - items.length } : {}),
+      },
+    });
+    const steps: BlockStep[] = [];
+    for (const item of items) {
+      if (run.stopReason) break;
+      const body: SequenceNode = { kind: 'sequence', id: node.id, children: node.children, position: node.position };
+      // Each element is its own pass: it gets the element, not the carry from
+      // the pass before, or the second element would be reading the first one's
+      // work instead of its own.
+      const ran = await this.runSequence(run, body, String(item ?? ''), session, new Map(done));
+      steps.push(...ran);
+      if (ran.at(-1)?.outcome.status === 'failed') break;
+    }
+    return steps;
+  }
+
   private async runIf(
     run: Run, node: IfNode, input: string, session: SessionHandle,
     done: Map<string, BlockOutcome>,

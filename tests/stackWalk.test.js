@@ -367,3 +367,74 @@ blocks:
   assert.ok(!boot.finished.includes('leaked'), 'and nothing crossed between lanes');
   await boot.kernel.dispose();
 });
+
+// --- For each: once per element, and never over prose (t-0096) -------------
+
+const forEachStack = (max = 8) => `version: 2
+id: demo
+blocks:
+  - id: plan
+    use: demo:work
+    outputs:
+      - name: tasks
+        type: list
+  - id: each
+    kind: foreach
+    roster: plan.tasks
+    max: ${max}
+    body:
+      - id: do-one
+        use: demo:work
+  - id: after
+    use: demo:work
+`;
+
+const planning = tasks => async run => (run.blockId === 'plan'
+  ? { status: 'done', output: 'planned', structured: { tasks } }
+  : { status: 'done', output: `${run.blockId} saw "${run.input}"` });
+
+test('a for-each runs its body once per roster element, each fed its own element', async () => {
+  const boot = await bootWalk(forEachStack(), { execute: planning(['alpha', 'beta', 'gamma']) });
+  const outcome = await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.equal(outcome.status, 'done');
+  assert.deepEqual(boot.record.map(r => r.blockId), ['plan', 'do-one', 'do-one', 'do-one', 'after']);
+  assert.deepEqual(
+    boot.record.filter(r => r.blockId === 'do-one').map(r => r.input),
+    ['alpha', 'beta', 'gamma'],
+    'each pass gets its own element, not the pass before it');
+  await boot.kernel.dispose();
+});
+
+test('a roster longer than the authored max is cut, and the log says by how much', async () => {
+  const boot = await bootWalk(forEachStack(2), { execute: planning(['a', 'b', 'c', 'd', 'e']) });
+  await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.equal(boot.record.filter(r => r.blockId === 'do-one').length, 2, 'the bound is honoured');
+  const events = await typesIn(boot.kernel, 'run-1');
+  const announced = events.find(e => e.type === 'block.status' && e.data.blockId === 'each');
+  assert.equal(announced.data.elements, 2);
+  assert.equal(announced.data.cut, 3, 'and it is not quietly cut');
+  await boot.kernel.dispose();
+});
+
+test('a block that declared a list and returned a string iterates nothing', async () => {
+  // The one thing this container must never do, checked where the promise can
+  // still be broken: the parser guaranteed the field was declared a list, not
+  // that the block put a list there on the day.
+  const boot = await bootWalk(forEachStack(), { execute: planning('alpha\nbeta\ngamma') });
+  await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.deepEqual(boot.record.map(r => r.blockId), ['plan', 'after'],
+    'a string is not a roster, at run time either — no split, no fallback');
+  await boot.kernel.dispose();
+});
+
+test('an empty roster runs the body no times and does not fail the run', async () => {
+  const boot = await bootWalk(forEachStack(), { execute: planning([]) });
+  const outcome = await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.equal(outcome.status, 'done');
+  assert.deepEqual(boot.record.map(r => r.blockId), ['plan', 'after']);
+  await boot.kernel.dispose();
+});
