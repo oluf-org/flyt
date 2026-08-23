@@ -11,7 +11,7 @@
  *
  * @module #kernel/stack/layout
  */
-import { isContainer, type ForEachNode, type RepeatNode, type StackNode } from './types.js';
+import { isContainer, type ForEachNode, type RepeatNode, type StackNode, type UntilNode } from './types.js';
 
 /** One node's rectangle, in stack units. */
 export interface Box {
@@ -52,10 +52,13 @@ export const METRICS: LayoutMetrics = {
  * How many copies of its body a container draws.
  *
  * A repeat is authored with a literal count and shows every pass. A for-each is
- * bounded by `max`, but its roster comes from a block that has not run yet, so
- * one body is the honest drawing.
+ * bounded by `max` but its roster comes from a block that has not run yet, and
+ * an until may stop after one pass or use all of them — for both, one body is
+ * the honest drawing, and `max` empty copies would be a picture of the bound
+ * rather than of the stack.
  */
-const bodies = (node: RepeatNode | ForEachNode): number => (node.kind === 'repeat' ? node.count : 1);
+const bodies = (node: RepeatNode | ForEachNode | UntilNode): number =>
+  (node.kind === 'repeat' ? node.count : 1);
 
 function measure(node: StackNode, m: LayoutMetrics): { width: number; height: number } {
   if (!isContainer(node)) return { width: m.blockWidth, height: m.blockHeight };

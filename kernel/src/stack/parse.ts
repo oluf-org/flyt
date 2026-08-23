@@ -18,10 +18,10 @@ import { parseYaml, YamlError } from '../loader/yaml.js';
 import type { YamlValue } from '../loader/yaml.js';
 import type { JsonValue } from '../types.js';
 import {
-  CONTAINER_KINDS, ID_PATTERN, IF_OPERATORS, MAX_DEPTH, MAX_EXPANSION, MAX_FOR_EACH, MAX_REPEAT, PLANNED_KINDS,
+  CONTAINER_KINDS, ID_PATTERN, IF_OPERATORS, MAX_DEPTH, MAX_EXPANSION, MAX_FOR_EACH, MAX_REPEAT, MAX_UNTIL, PLANNED_KINDS,
   boundStack, walk,
   type BlockNode, type ForEachNode, type IfNode, type IfPredicate, type IfPredicateTerm, type IfOperator,
-  type ParallelNode, type Position, type RepeatNode, type SequenceNode,
+  type ParallelNode, type Position, type RepeatNode, type SequenceNode, type UntilNode,
   type Stack, type StackNode,
 } from './types.js';
 
@@ -83,6 +83,7 @@ const PARALLEL_KEYS = new Set(['id', 'kind', 'lanes', 'maxParallel']);
 const REPEAT_KEYS = new Set(['id', 'kind', 'count', 'body']);
 const IF_KEYS = new Set(['id', 'kind', 'predicate', 'body', 'else']);
 const FOREACH_KEYS = new Set(['id', 'kind', 'roster', 'max', 'body']);
+const UNTIL_KEYS = new Set(['id', 'kind', 'condition', 'max', 'body']);
 const TERM_KEYS = new Set(['source', 'operator', 'literal']);
 
 interface Ctx {
@@ -142,13 +143,13 @@ function rejectUnknownKeys(
  * one way to write each and no shape to guess at. A kind we have not built is
  * refused by NAME with the phase that brings it.
  */
-function kindOf(raw: Record<string, YamlValue>, path: string, line: number): 'block' | 'sequence' | 'parallel' | 'repeat' | 'if' | 'foreach' {
+function kindOf(raw: Record<string, YamlValue>, path: string, line: number): 'block' | 'sequence' | 'parallel' | 'repeat' | 'if' | 'foreach' | 'until' {
   const kind = raw['kind'];
   if (kind === undefined || kind === null) {
     if (raw['blocks'] !== undefined || raw['lanes'] !== undefined || raw['body'] !== undefined
       || raw['predicate'] !== undefined || raw['else'] !== undefined) {
       throw new StackError(
-        'a container needs "kind: sequence", "kind: parallel", "kind: repeat", "kind: if" or "kind: foreach"; children alone do not say which',
+        'a container needs "kind: sequence", "kind: parallel", "kind: repeat", "kind: if", "kind: foreach" or "kind: until"; children alone do not say which',
         path, line);
     }
     return 'block';
@@ -161,7 +162,7 @@ function kindOf(raw: Record<string, YamlValue>, path: string, line: number): 'bl
   // spelling, normalised here so nothing downstream has to know about both.
   if (kind === 'for-each') return 'foreach';
   if (kind === 'sequence' || kind === 'parallel' || kind === 'repeat' || kind === 'if'
-    || kind === 'foreach') return kind;
+    || kind === 'foreach' || kind === 'until') return kind;
   const planned = PLANNED_KINDS[kind.toLowerCase()];
   if (planned) {
     throw new StackError(
@@ -234,6 +235,20 @@ function readRoster(ctx: Ctx, raw: Record<string, YamlValue>, path: string, line
       path, line);
   }
   return roster;
+}
+
+/** The authored bound on how many passes an until gives its body. */
+function readUntilMax(raw: Record<string, YamlValue>, path: string, line: number): number {
+  const value = raw['max'];
+  if (value === undefined || value === null) {
+    throw new StackError(
+      'an until needs "max", the most passes its body gets before the run gives up — an until without one is the unbounded container this format exists to make impossible',
+      path, line);
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new StackError('an until "max" must be a whole number of at least 1', path, line);
+  }
+  return value;
 }
 
 /** The authored bound on how many roster elements the body runs for. */
@@ -466,6 +481,24 @@ function readNode(ctx: Ctx, raw: YamlValue, path: string, depth: number): StackN
     } satisfies IfNode;
   }
 
+  if (kind === 'until') {
+    rejectUnknownKeys(raw, UNTIL_KEYS, 'until', path, line);
+    // The body is read FIRST, so its blocks have declared their outputs by the
+    // time the condition is checked. An until normally asks about its own
+    // body's verdict — that is the whole shape of "go round again" — and a
+    // condition checked before the body was read could only ever name
+    // something outside it.
+    const children = readChildren(ctx, raw, 'body', path, line, depth);
+    const condition = readPredicate(raw['condition'], `${path}.condition`, line);
+    checkPredicate(ctx, condition, `${path}.condition`, line);
+    return {
+      kind: 'until', id, condition,
+      max: readUntilMax(raw, path, line),
+      children,
+      position,
+    } satisfies UntilNode;
+  }
+
   if (kind === 'foreach') {
     rejectUnknownKeys(raw, FOREACH_KEYS, 'for-each', path, line);
     const roster = readRoster(ctx, raw, path, line);
@@ -538,6 +571,11 @@ export function parseStack(source: string, fallbackId = ''): Stack {
     if (node.kind === 'repeat' && node.count > MAX_REPEAT) {
       throw new StackError(
         `a repeat runs its body at most ${MAX_REPEAT} times, and this one says ${node.count}`,
+        node.position.path, node.position.line);
+    }
+    if (node.kind === 'until' && node.max > MAX_UNTIL) {
+      throw new StackError(
+        `an until gives its body at most ${MAX_UNTIL} passes, and this one says ${node.max}`,
         node.position.path, node.position.line);
     }
     if (node.kind === 'foreach' && node.max > MAX_FOR_EACH) {
