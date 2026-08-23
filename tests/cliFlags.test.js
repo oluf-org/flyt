@@ -5,6 +5,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { checkFlags } from '../bin/flyt.js';
@@ -96,4 +98,27 @@ test('a repeated --goal never reaches the task file', () => {
   assert.equal(bad.status, 2);
   assert.match(bad.stderr + bad.stdout, /--goal was given more than once/);
   assert.ok(!/queued t-/.test(bad.stderr + bad.stdout), 'and no task was written');
+});
+
+// A flag the CLI consumes itself must never arrive as an argument.
+//
+// `flyt call` copied every parsed flag into the command's arguments and skipped
+// only json, project and arg. `--arg-json` was added later and never added to
+// that list, so it arrived as an argument named "arg-json" — and `task:update`
+// preserves fields it does not recognise on purpose, so the flag's own name
+// became a frontmatter field in the task file and stayed there. Four tasks in
+// this project's backlog were found carrying one.
+test('flyt call does not write its own flags into the target', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-call-'));
+  const added = run(['task', 'add', 'arg-json probe', '--goal', 'x', '--project', dir]);
+  const id = (added.stdout.match(/t-\d{4}/) ?? [])[0];
+  assert.ok(id, `expected a queued task: ${added.stdout}${added.stderr}`);
+
+  const out = run(['call', 'task:update', '--arg', `id=${id}`,
+    '--arg-json', 'gates=["npm test"]', '--project', dir]);
+  assert.equal(out.status, 0, out.stderr);
+
+  const file = fs.readFileSync(path.join(dir, '.flyt', 'backlog', `${id}.task.md`), 'utf8');
+  assert.match(file, /gates: \[npm test\]/, 'the argument it was given still lands');
+  assert.ok(!/^arg-json:/m.test(file), `the flag itself must not become a field:\n${file}`);
 });

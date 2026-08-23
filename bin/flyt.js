@@ -556,9 +556,19 @@ async function main() {
       const name = positional[1];
       if (!name) return die('flyt call <command> — see `flyt commands`');
       // --arg k=v, repeatable; --arg-json k={"a":1} for structured values.
+      //
+      // The flags this command consumes ITSELF never become arguments. Listed
+      // once, because the skip list drifting behind the flag list is how
+      // `--arg-json` — added later, and never added here — ended up arriving as
+      // an argument called "arg-json". `task:update` preserves fields it does
+      // not recognise on purpose, so a single `flyt call task:update
+      // --arg-json gates=[...]` wrote a frontmatter field named after the flag
+      // into the task file and left it there. Four tasks in this backlog were
+      // carrying one.
+      const OWN_FLAGS = new Set(['json', 'project', 'arg', 'arg-json']);
       const args = {};
       for (const [k, v] of Object.entries(flags)) {
-        if (k === 'json' || k === 'project' || k === 'arg') continue;
+        if (OWN_FLAGS.has(k)) continue;
         args[k] = v;
       }
       for (const pair of [].concat(flags.arg ?? [])) {
