@@ -185,3 +185,82 @@ test('the retired pile never appears in the day archive', () => {
   // read as a day — the trend is a series of days and this is not one.
   assert.deepEqual(listArchive(archive), []);
 });
+
+// --- moving a run folder that cannot be renamed ----------------------------
+//
+// This is not hypothetical: on Windows a directory with an open handle beneath
+// it cannot be renamed, Flyt watches `.flyt/runs` to stream a run into the
+// canvas, and retiring t-0033's eleven run folders failed EPERM on the first
+// one. The tmpdir these tests use has no watcher on it, so the fallback would
+// never be exercised by accident — renameSync is stubbed to fail the way the
+// real filesystem did.
+test('a run folder that refuses to be renamed is still moved', () => {
+  const { backlog, runs, archive } = project();
+  const task = backlog.add({ title: 'Held open', goal: 'x' });
+  backlog.update(task.id, { runIds: ['r-held'] });
+  seedRun(runs, 'r-held', 'the evidence');
+
+  const realRename = fs.renameSync;
+  fs.renameSync = () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); };
+  try {
+    backlog.retire(task.id, { reason: 'the watcher had it open' });
+  } finally {
+    fs.renameSync = realRename;
+  }
+
+  assert.equal(
+    fs.readFileSync(path.join(retiredDir(archive, task.id), 'runs', 'r-held', 'nodes', 'work.md'), 'utf8'),
+    'the evidence', 'the copy carries the run, not just its shell');
+  assert.ok(fs.statSync(path.join(runs, 'r-held')).isFile(), 'and a pointer stands where it was');
+  assert.deepEqual(readRetirement(archive, task.id).movedRunIds, ['r-held']);
+});
+
+test('a failure partway leaves an archive that names what it holds', () => {
+  const { backlog, runs, archive } = project();
+  const task = backlog.add({ title: 'Two runs, one problem', goal: 'x' });
+  backlog.update(task.id, { runIds: ['r-first', 'r-second'] });
+  seedRun(runs, 'r-first', 'moved');
+  seedRun(runs, 'r-second', 'stuck');
+
+  // The second move fails outright, the way a disk error would.
+  const realRename = fs.renameSync;
+  let n = 0;
+  fs.renameSync = (...args) => {
+    if (++n > 1) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    return realRename(...args);
+  };
+  try {
+    assert.throws(() => backlog.retire(task.id, { reason: 'testing the unhappy path' }), /EIO/);
+  } finally {
+    fs.renameSync = realRename;
+  }
+
+  // What moved is recorded, so the archive is not a pile of folders nothing
+  // points at — and the task is still in the queue, because it never finished
+  // being retired.
+  assert.deepEqual(readRetirement(archive, task.id).movedRunIds, ['r-first']);
+  assert.ok(backlog.get(task.id), 'a retirement that threw must not have removed the task');
+});
+
+test('retiring again after a partial failure finishes the job', () => {
+  const { backlog, runs, archive } = project();
+  const task = backlog.add({ title: 'Resumed', goal: 'x' });
+  backlog.update(task.id, { runIds: ['r-a', 'r-b'] });
+  seedRun(runs, 'r-a', 'a');
+  seedRun(runs, 'r-b', 'b');
+
+  const realRename = fs.renameSync;
+  let n = 0;
+  fs.renameSync = (...args) => {
+    if (++n > 1) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    return realRename(...args);
+  };
+  try { backlog.retire(task.id, { reason: 'first go' }); } catch { /* expected */ }
+  finally { fs.renameSync = realRename; }
+
+  backlog.retire(task.id, { reason: 'second go' });
+
+  // Both runs are named, not just the one this pass happened to move.
+  assert.deepEqual(readRetirement(archive, task.id).movedRunIds.sort(), ['r-a', 'r-b']);
+  assert.equal(backlog.get(task.id), null);
+});
