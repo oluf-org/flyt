@@ -19,7 +19,7 @@ import type { YamlValue } from '../loader/yaml.js';
 import type { JsonValue } from '../types.js';
 import {
   CONTAINER_KINDS, ID_PATTERN, MAX_DEPTH, MAX_EXPANSION, MAX_REPEAT, PLANNED_KINDS,
-  boundStack,
+  boundStack, walk,
   type BlockNode, type ParallelNode, type Position, type RepeatNode, type SequenceNode,
   type Stack, type StackNode,
 } from './types.js';
@@ -173,12 +173,7 @@ function readRepeatCount(raw: Record<string, YamlValue>, path: string, line: num
     throw new StackError('a repeat needs "count", the number of times to run its body', path, line);
   }
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
-    throw new StackError('"count" must be a whole number of at least 1', path, line);
-  }
-  if (value > MAX_REPEAT) {
-    throw new StackError(
-      `a repeat runs its body at most ${MAX_REPEAT} times, and this one says ${value}`,
-      path, line);
+    throw new StackError('a repeat "count" must be a whole number of at least 1', path, line);
   }
   return value;
 }
@@ -313,6 +308,18 @@ export function parseStack(source: string, fallbackId = ''): Stack {
     throw new StackError(
       `this stack expands to ${bounds.expansion} blocks in the worst case, which is more than the cap of ${MAX_EXPANSION}`,
       'stack', 0);
+  }
+
+  // The expansion bound is checked first so a repeat large enough to blow the
+  // stack is refused for that, with the cap and its own worst case. A repeat
+  // that fits the whole tree but still says more than MAX_REPEAT is refused
+  // here, naming the container.
+  for (const node of walk(root)) {
+    if (node.kind === 'repeat' && node.count > MAX_REPEAT) {
+      throw new StackError(
+        `a repeat runs its body at most ${MAX_REPEAT} times, and this one says ${node.count}`,
+        node.position.path, node.position.line);
+    }
   }
 
   const name = doc['name'];
