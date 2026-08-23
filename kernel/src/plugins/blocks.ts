@@ -9,7 +9,7 @@
  */
 import { Service, type Context } from '@deepseek-ai/cordis';
 import {
-  BLOCK_CATEGORIES, USE_PATTERN,
+  BLOCK_CATEGORIES, BLOCK_OUTPUT_TYPES, USE_PATTERN,
   type BlockDefinition, type BlocksService,
 } from '../blocks/types.js';
 import { isContainer, type StackNode } from '../stack/types.js';
@@ -49,6 +49,14 @@ export class BlockRegistry extends Service implements BlocksService {
     if (typeof block.execute !== 'function') throw new Error(`Block "${block.use}" has no execute`);
     if (!BLOCK_CATEGORIES.includes(block.category)) {
       throw new Error(`Block "${block.use}" has no category. There is: ${BLOCK_CATEGORIES.join(', ')}.`);
+    }
+    for (const out of block.outputs ?? []) {
+      if (!out || typeof out.name !== 'string' || !out.name) {
+        throw new Error(`Block "${block.use}" declares an output without a "name"`);
+      }
+      if (!BLOCK_OUTPUT_TYPES.includes(out.type)) {
+        throw new Error(`Block "${block.use}" declares output "${out.name}" with unknown type "${String(out.type)}". There is: ${BLOCK_OUTPUT_TYPES.join(', ')}.`);
+      }
     }
     const existing = this.registered.get(block.use);
     if (existing) {

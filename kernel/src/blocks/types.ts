@@ -33,6 +33,26 @@ export const BLOCK_CATEGORIES = ['work', 'judgement', 'inquiry', 'loop', 'utilit
 /** One of the categories. */
 export type BlockCategory = (typeof BLOCK_CATEGORIES)[number];
 
+/**
+ * The closed set of shapes a declared structured output may hold.
+ *
+ * `list` is what lets a `For each` roster tell a list from a sentence: a block
+ * that declares `type: 'list'` is promising an array, and a predicate or roster
+ * that names it knows it is iterating, not splitting prose on newlines (D56).
+ */
+export const BLOCK_OUTPUT_TYPES = ['string', 'number', 'boolean', 'list'] as const;
+
+/** One of the declared structured-output shapes. */
+export type BlockOutputType = (typeof BLOCK_OUTPUT_TYPES)[number];
+
+/** One declared structured output: a field name plus the shape it holds. */
+export interface BlockOutput {
+  /** The field a predicate or a roster names. */
+  name: string;
+  /** What that field holds, so a consumer can tell a list from a sentence. */
+  type: BlockOutputType;
+}
+
 /** The id a stack names in `use`: `plugin:block`, or a bare name for a built-in. */
 export const USE_PATTERN = /^[a-z0-9][a-z0-9-]*(?::[a-z0-9][a-z0-9-]*)?$/;
 
@@ -99,8 +119,14 @@ export interface BlockDefinition {
    * ceiling names it AND somebody grants it (D57).
    */
   ceiling: readonly string[] | null;
-  /** Declared structured output field names, for a predicate to check against later. */
-  outputs?: readonly string[];
+  /**
+   * The structured fields this block declares it may put in
+   * `BlockOutcome.structured`, each a name plus one type from the closed set.
+   *
+   * Absent means the block offers no field a predicate or a roster can name;
+   * that is legal, and simply leaves Phase 3's lint rules nothing to read here.
+   */
+  outputs?: readonly BlockOutput[];
   /** Run it. The registry never calls this; the scheduler does. */
   execute(run: BlockRun): Promise<BlockOutcome>;
 }

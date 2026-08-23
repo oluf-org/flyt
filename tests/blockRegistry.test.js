@@ -93,6 +93,38 @@ test('a block without an id, an execute or a category is refused at registration
     assert.throws(() => blocks.register(block({ category: 'invented' })), /has no category/);
   }));
 
+test('a declared output is a name plus one type from a closed set, and an unknown type is refused', () =>
+  withBlocks(async kernel => {
+    const blocks = kernel.ctx.blocks;
+    assert.throws(() => blocks.register(block({ outputs: [{ type: 'string' }] })), /without a "name"/);
+    assert.throws(() => blocks.register(block({ outputs: [{ name: '', type: 'string' }] })), /without a "name"/);
+    assert.throws(
+      () => blocks.register(block({ outputs: [{ name: 'score', type: 'invented' }] })),
+      /unknown type "invented"/,
+    );
+    blocks.register(block({ outputs: [{ name: 'score', type: 'number' }] }));
+    assert.deepEqual(kernel.ctx.blocks.resolve('demo:work').outputs, [{ name: 'score', type: 'number' }]);
+  }));
+
+test('a block that declares no outputs stays legal and offers no field to name', () =>
+  withBlocks(async kernel => {
+    kernel.ctx.blocks.register(block());
+    const found = kernel.ctx.blocks.resolve('demo:work');
+    assert.ok(found);
+    assert.equal(found.outputs, undefined);
+  }));
+
+test('a declared output agrees with what execute returns in `structured`', () =>
+  withBlocks(async kernel => {
+    kernel.ctx.blocks.register(block({
+      outputs: [{ name: 'score', type: 'number' }],
+      async execute() { return { status: 'done', output: 'ok', structured: { score: 7 } }; },
+    }));
+    const def = kernel.ctx.blocks.resolve('demo:work');
+    const outcome = await def.execute({});
+    assert.deepEqual(Object.keys(outcome.structured ?? {}), def.outputs.map(o => o.name));
+  }));
+
 test('two plugins claiming one id is named, never silently resolved', () => withBlocks(async kernel => {
   await kernel.ctx.plugin({ name: 'first', inject: ['blocks'], apply(ctx) { ctx.blocks.register(block()); } });
   await assert.rejects(
