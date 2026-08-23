@@ -72,15 +72,47 @@ export default {
     if (!needle) throw new Error('`old` is empty — there is nothing to find. Use write_file or create_file to write a whole file.');
     const replacement = String(args.new ?? '');
 
-    const hits = findAll(before, needle);
-    if (!hits.length) throw new Error(noMatchMessage(before, needle, relPath));
+    // Match on a view with line endings normalised, never on the raw bytes.
+    //
+    // Over half the source files in a Windows checkout are CRLF, and a model
+    // writes `old` with plain newlines. Matched literally, every multi-line
+    // anchor into such a file misses — and the miss is invisible, because the
+    // "closest line" hint then degenerates to line 1 and the message blames the
+    // model for retyping instead of copying. Two Phase 3 tasks died on exactly
+    // this, both on kernel/src/stack/types.ts, both reporting `"/**\r"` as the
+    // nearest line. What a worker does next is not read more carefully: it
+    // writes a Python or Node script that does its own normalisation and edits
+    // the file that way, and then commits the script. Seven such scripts
+    // reached two task branches before anyone looked.
+    //
+    // So: search the normalised view, splice the ORIGINAL string at indices
+    // mapped back through it, and write `new` in whatever ending the file
+    // already uses. Untouched lines keep their bytes either way.
+    const eol = dominantEol(before);
+    const { norm, map } = normalized(before);
+    const needleN = lf(needle);
+    const replacementOut = eol === '\r\n' ? lf(replacement).replace(/\n/g, '\r\n') : lf(replacement);
+
+    const hits = findAll(norm, needleN);
+    if (!hits.length) throw new Error(noMatchMessage(norm, needleN, relPath));
     if (hits.length > 1 && args.replaceAll !== true) {
-      throw new Error(ambiguousMessage(before, hits, relPath));
+      throw new Error(ambiguousMessage(norm, hits, relPath));
     }
 
-    const after = args.replaceAll === true
-      ? before.split(needle).join(replacement)
-      : before.slice(0, hits[0]) + replacement + before.slice(hits[0] + needle.length);
+    // Back to offsets in the original, so the splice is over real bytes.
+    const spans = hits.map(at => [map[at], map[at + needleN.length]]);
+    const cut = args.replaceAll === true ? spans : [spans[0]];
+    let after = '';
+    let cursor = 0;
+    for (const [from, to] of cut) {
+      after += before.slice(cursor, from) + replacementOut;
+      cursor = to;
+    }
+    after += before.slice(cursor);
+    // Where the first edit landed and how long it is, in the original's terms.
+    const matchedLength = spans[0][1] - spans[0][0];
+    hits[0] = spans[0][0];
+    const wroteLength = replacementOut.length;
 
     if (after === before) {
       // Not an error worth failing on — but saying "1 replacement" over an
@@ -107,8 +139,8 @@ export default {
       target: host.target,
       // What it looked like and what it looks like now, ±3 lines. The agent
       // needs to SEE the edit; re-reading the file to check is a call it skips.
-      before: excerpt(before, hits[0], needle.length),
-      after: excerpt(after, hits[0], replacement.length)
+      before: excerpt(before, hits[0], matchedLength),
+      after: excerpt(after, hits[0], wroteLength)
     };
   }
 };
@@ -127,6 +159,47 @@ function noteWrite(ctx, relPath) {
     });
   }
   return conflict;
+}
+
+/** `text` with every CRLF collapsed to a bare newline. */
+const lf = text => String(text).replace(/\r\n/g, '\n');
+
+/**
+ * Which ending this file already uses, so `new` is written in it.
+ *
+ * A file with any CRLF at all is treated as a CRLF file: a mixed file is
+ * already inconsistent, and adding more of what it mostly has is the smaller
+ * surprise than adding the other kind.
+ */
+export function dominantEol(text) {
+  const crlf = (String(text).match(/\r\n/g) ?? []).length;
+  return crlf > 0 ? '\r\n' : '\n';
+}
+
+/**
+ * A newline-normalised view of `text`, plus the map back to it.
+ *
+ * `map[i]` is the offset in the ORIGINAL where `norm[i]` starts, and the map
+ * carries one extra entry at the end so the exclusive end of a match at the
+ * very end of the file resolves too. This is what lets the anchor be matched
+ * in a world where every line ends `\n`, while the splice still happens over
+ * the file's real bytes and leaves every untouched line exactly as it was.
+ */
+export function normalized(text) {
+  const s = String(text);
+  const out = [];
+  const map = [];
+  for (let i = 0; i < s.length; i++) {
+    // A collapsed CRLF maps to the '\r', not the '\n' — the START of what it
+    // stands for. Pointing at the '\n' loses the '\r' whenever a match ends on
+    // the line before it: the exclusive end lands between the two, and the
+    // splice swallows the carriage return of a line it never touched.
+    if (s[i] === '\r' && s[i + 1] === '\n') { out.push('\n'); map.push(i); i++; continue; }
+    out.push(s[i]);
+    map.push(i);
+  }
+  map.push(s.length);
+  return { norm: out.join(''), map };
 }
 
 // Every start index of `needle` in `haystack`. Non-overlapping, left to right.

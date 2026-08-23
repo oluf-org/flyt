@@ -140,3 +140,56 @@ test('findAll / closestLine: the two primitives behave', () => {
   assert.equal(closestLine('hello world\nsomething else', 'hello wurld').line, 1);
   assert.equal(closestLine('totally unrelated', 'nothing alike at all xyz'), null);
 });
+
+// The failure that stopped two Phase 3 tasks dead.
+//
+// Over half the source files in a Windows checkout are CRLF, and a model writes
+// `old` with plain newlines. Matched literally, every multi-line anchor into
+// such a file missed — and the message blamed the model ("copy the text from a
+// read_file result rather than retyping it") while reporting the nearest line as
+// `"/**\r"`, which is line 1 of any file with a header comment. What a worker
+// does next is not read more carefully: t-0093 and t-0097 each wrote programs
+// that did their own normalisation and edited the file that way, and committed
+// seven of them.
+test('edit_file: a multi-line anchor written with plain newlines matches a CRLF file', async () => {
+  const ctx = boundCtx({ 'a.ts': 'export const A = 1;\r\nexport const B = 2;\r\nexport const C = 3;\r\n' });
+  const rec = await executeTool('edit_file', {
+    path: 'a.ts',
+    old: 'export const A = 1;\nexport const B = 2;',
+    new: 'export const A = 1;\nexport const B = 22;'
+  }, ctx);
+  assert.equal(rec.ok, true, rec.error);
+  assert.equal(read(ctx, 'a.ts'),
+    'export const A = 1;\r\nexport const B = 22;\r\nexport const C = 3;\r\n',
+    'the edit lands and every line keeps the ending the file already had');
+});
+
+test('edit_file: what it writes into a CRLF file is CRLF, even across added lines', async () => {
+  const ctx = boundCtx({ 'a.ts': 'first\r\nlast\r\n' });
+  const rec = await executeTool('edit_file', { path: 'a.ts', old: 'first', new: 'first\nsecond\nthird' }, ctx);
+  assert.equal(rec.ok, true, rec.error);
+  assert.equal(read(ctx, 'a.ts'), 'first\r\nsecond\r\nthird\r\nlast\r\n');
+});
+
+test('edit_file: an LF file stays LF when the anchor arrives with CRLF', async () => {
+  const ctx = boundCtx({ 'a.ts': 'one\ntwo\nthree\n' });
+  const rec = await executeTool('edit_file', { path: 'a.ts', old: 'one\r\ntwo', new: 'one\r\nTWO' }, ctx);
+  assert.equal(rec.ok, true, rec.error);
+  assert.equal(read(ctx, 'a.ts'), 'one\nTWO\nthree\n', 'the file decides, not the anchor');
+});
+
+test('edit_file: replaceAll over a CRLF file replaces every match and keeps the endings', async () => {
+  const ctx = boundCtx({ 'a.ts': 'x\r\nkeep\r\nx\r\nkeep\r\n' });
+  const rec = await executeTool('edit_file', { path: 'a.ts', old: 'x\nkeep', new: 'y\nkeep', replaceAll: true }, ctx);
+  assert.equal(rec.ok, true, rec.error);
+  assert.equal(rec.result.replacements, 2);
+  assert.equal(read(ctx, 'a.ts'), 'y\r\nkeep\r\ny\r\nkeep\r\n');
+});
+
+test('edit_file: a genuine miss in a CRLF file names a real line, not the header', async () => {
+  const ctx = boundCtx({ 'a.ts': '/**\r\n * A header.\r\n */\r\nexport const value = 1;\r\n' });
+  const rec = await executeTool('edit_file', { path: 'a.ts', old: 'export const value = 2;', new: 'x' }, ctx);
+  assert.equal(rec.ok, false);
+  assert.match(rec.error, /export const value = 1;/, 'the nearest line is the one actually meant');
+  assert.ok(!/\r/.test(rec.error), `and it is not quoted with a stray carriage return: ${rec.error}`);
+});
