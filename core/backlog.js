@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseYaml, formatInline } from './flowlang/yaml.js';
 import { normalizeLevel, escalate as escalateLevel, DEFAULT_LEVEL } from './levels.js';
+import { retiredDir, relocateRetiredRuns, readRetirement } from './archive.js';
 
 export const TASK_STATUSES = [
   'queued',     // ready to be picked
@@ -471,6 +472,102 @@ export class Backlog {
     return { ...task, stranded };
   }
 
+/**
+   * Retire a task: move it out of the live queue into .flyt/archive/retired/.
+   *
+   * Unlike remove(), retirement keeps the evidence: the task frontmatter
+   * (verbatim), the retirement record, and the run folders named by runIds
+   * all move into a self-contained per-id directory. A retired task is gone
+   * from the queue but can be brought back by revive() under the same id.
+   */
+  retire(id, { reason = null, by = null, force = false } = {}) {
+    if (String(reason ?? '').trim() === '') {
+      throw new Error('A retirement needs a reason.');
+    }
+    const safe = this.#assertId(id);
+    let task = null;
+    try {
+      task = this.get(safe);
+      if (!task) return null;
+    } catch (err) {
+      if (!fs.existsSync(this.#file(safe))) return null;
+      task = { id: safe, title: '(unreadable)', status: 'unknown', unreadable: String(err.message ?? err) };
+    }
+    if (task.status === 'landed') {
+      throw new Error('Task "' + safe + '" is landed; archive it rather than retiring it.');
+    }
+    if (!force && fs.existsSync(this.#lock(safe))) {
+      throw new Error('Task "' + safe + '" is claimed by ' + (task.claimedBy ?? 'someone') + '. Release it before removing it.');
+    }
+    const stranded = this.list()
+      .filter(t => t.id !== safe
+        && !TERMINAL.has(t.status)
+        && (t.dependsOn ?? []).includes(safe))
+      .map(t => ({ id: t.id, title: t.title, status: t.status }));
+
+    const retiredAt = new Date().toISOString();
+    const root = path.dirname(this.rootDir);
+    const runsDir = path.join(root, 'runs');
+    const dir = retiredDir(root, safe);
+    const raw = fs.readFileSync(this.#file(safe), 'utf8');
+    relocateRetiredRuns({
+      root,
+      runsDir,
+      taskId: safe,
+      runIds: Array.isArray(task.runIds) ? task.runIds : [],
+      reason: String(reason ?? '').trim() || null,
+      retiredBy: by ?? task.claimedBy ?? null,
+      retiredAt,
+      resumeFrom: task.resumeFrom ?? null
+    });
+    fs.writeFileSync(path.join(dir, safe + '.task.md'), raw);
+    this.#recordId(safe);
+    fs.rmSync(this.#file(safe));
+    try { fs.rmSync(this.#lock(safe)); } catch { /* no lock, or already gone */ }
+    this._cache.delete(this.#file(safe));
+    return { ...task, retired: { dir, record: readRetirement(root, safe) }, stranded };
+  }
+
+  /**
+   * Bring a retired task back into the queue, same id and attempts, queued.
+   * The retirement record stays put: a revival is a second life, not an erasure.
+   */
+  revive(id) {
+    const safe = this.#assertId(id);
+    const root = path.dirname(this.rootDir);
+    const dir = retiredDir(root, safe);
+    const record = readRetirement(root, safe);
+    if (!record) return null;
+    if (fs.existsSync(this.#file(safe))) {
+      throw new Error('Task "' + safe + '" is already in the backlog.');
+    }
+    let archived = null;
+    const file = path.join(dir, safe + '.task.md');
+    if (fs.existsSync(file)) {
+      try { archived = parseTask(fs.readFileSync(file, 'utf8'), safe); } catch { archived = null; }
+    }
+    const patch = {
+      title: archived?.title ?? null,
+      status: 'queued',
+      attempts: archived?.attempts ?? 0,
+      dependsOn: archived?.dependsOn ?? [],
+      gates: archived?.gates ?? [],
+      blastRadius: archived?.blastRadius ?? [],
+      references: archived?.references ?? [],
+      skills: archived?.skills ?? [],
+      budgetUsd: archived?.budgetUsd,
+      value: archived?.value ?? 3,
+      effort: archived?.effort ?? 3,
+      level: archived?.level,
+      createdBy: archived?.createdBy ?? 'human',
+      createdAt: archived?.createdAt ?? record.retiredAt,
+      resumeFrom: null,
+      resumeStage: null,
+      body: archived?.body ?? ''
+    };
+    const fields = Object.fromEntries(Object.entries(patch).filter(([, v]) => v != null));
+    return this.add({ id: safe, ...fields });
+  }
   // --- claiming ------------------------------------------------------------
   //
   // Exclusive-create of a sibling lock file. `wx` fails with EEXIST if another
