@@ -92,23 +92,74 @@ export function relocateRetiredRuns({
   const dir = retiredDir(root, taskId);
   const runsDest = path.join(dir, 'runs');
   const moved = [];
-  for (const runId of runIds) {
-    const from = path.join(runsDir, runId);
-    const to = path.join(runsDest, runId);
-    if (!fs.existsSync(from)) continue; // already relocated, or never existed
-    if (fs.existsSync(to)) continue;    // never clobber an existing archive
-    fs.mkdirSync(runsDest, { recursive: true });
-    fs.renameSync(from, to);
-    // The pointer replaces the folder at its original path, so the spot a
-    // reader looks first says where the run went rather than staying empty.
-    fs.writeFileSync(from, JSON.stringify({ taskId, retiredAt, archivePath: to }, null, 2));
-    moved.push({ runId, from, to });
-  }
-  const record = writeRetirement({
+  // What DID move, written whether or not the rest of them do. A retirement
+  // that fell over halfway used to leave moved folders in the archive with no
+  // record naming them — a pile nothing points at, which is the one thing an
+  // archive may not be.
+  const record = () => writeRetirement({
     root, taskId, reason, retiredBy, retiredAt,
     movedRunIds: moved.map(m => m.runId), resumeFrom
   });
-  return { dir, record, moved };
+  try {
+    for (const runId of runIds) {
+      const from = path.join(runsDir, runId);
+      const to = path.join(runsDest, runId);
+      // Already in the archive, from an earlier pass over the same task. It is
+      // still one of this retirement's runs, so it stays in the record: a retry
+      // that reported fewer runs than the first attempt would shrink the record
+      // every time it ran.
+      if (fs.existsSync(to)) { moved.push({ runId, from, to }); continue; }
+      if (!fs.existsSync(from)) continue;             // never existed
+      if (fs.statSync(from).isFile()) continue;       // a pointer whose archive is gone
+      fs.mkdirSync(runsDest, { recursive: true });
+      moveRunFolder(from, to);
+      // The pointer replaces the folder at its original path, so the spot a
+      // reader looks first says where the run went rather than staying empty.
+      fs.writeFileSync(from, JSON.stringify({ taskId, retiredAt, archivePath: to }, null, 2));
+      moved.push({ runId, from, to });
+    }
+  } catch (err) {
+    record();
+    throw err;
+  }
+  return { dir, record: record(), moved };
+}
+
+/**
+ * Move one run folder into the archive.
+ *
+ * `fs.renameSync` is the right move when it works: one atomic operation, and no
+ * second copy of a folder that is routinely hundreds of megabytes. On Windows
+ * it frequently does not work. A directory with an open handle anywhere beneath
+ * it cannot be renamed, and Flyt watches `.flyt/runs` in order to stream a run
+ * into the canvas — so the app's own watcher is usually that handle. Retiring
+ * t-0033's eleven run folders failed EPERM on the first one; a same-parent
+ * rename of that same folder failed identically, while copying it succeeded.
+ *
+ * So rename first, and fall back only for the two codes that mean "this path
+ * cannot be renamed" rather than "this move is wrong": EPERM (a held handle)
+ * and EXDEV (a different volume). Anything else is a real error and propagates.
+ */
+function moveRunFolder(from, to) {
+  try {
+    fs.renameSync(from, to);
+    return;
+  } catch (err) {
+    if (err?.code !== 'EPERM' && err?.code !== 'EXDEV') throw err;
+  }
+  fs.cpSync(from, to, { recursive: true });
+  // maxRetries covers the same held handle that defeated the rename: a watcher
+  // releasing a moment later is the common case.
+  fs.rmSync(from, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  // The pointer is written where the folder WAS, so the original must actually
+  // be gone. A copy whose removal failed would leave the run in both places and
+  // the pointer unwritable, which is the one state no reader can make sense of.
+  if (fs.existsSync(from)) {
+    throw Object.assign(
+      new Error(`copied ${path.basename(from)} into the archive, but could not remove the original at ${from} — `
+        + 'something still holds it open. The archived copy is intact; nothing was lost.'),
+      { code: 'ERETIREBUSY' });
+  }
 }
 
 /**
