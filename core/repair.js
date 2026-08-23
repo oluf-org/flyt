@@ -561,6 +561,82 @@ export function escalationNote(assessment) {
 }
 
 /**
+ * Did this run fail because the work never reached the workspace?
+ *
+ * `core/effect.js` already makes this judgement and makes it well: a block with
+ * a `workspace-change` contract that produced no change fails the run rather
+ * than recording a completion. The supervisor then read the failed run as a
+ * generic failure — "The run itself failed." — and spent a rung of the ladder
+ * on it.
+ *
+ * That is a rung bought with a diagnosis. The model did not lack capability; it
+ * answered in prose and never wrote a file, and a dearer model asked the same
+ * question mostly answers the same way. Watched t-0013 spend SEVEN attempts and
+ * t-0033 three, every one escalating on that sentence, while the run meta said
+ * exactly what went wrong.
+ *
+ * Two shapes, because they need different answers: nothing was written at all,
+ * or things were written outside what the task said it would touch.
+ *
+ * @param error — the run's recorded error.
+ * @returns `{ reason, outOfScope }`, or null when this is some other failure.
+ */
+export function effectMissing(error) {
+  const s = String(error ?? '');
+  if (!s) return null;
+  // Greedy to the last `)` on the line, because the detail itself contains
+  // parentheses — "3 file(s) changed outside this task's scope" — and a lazy
+  // match stops at the one inside `file(s)`.
+  const m = /required (workspace change|artifact) was not produced(?:\s*\(([^\n]*)\))?/i.exec(s);
+  if (!m) return null;
+  return { reason: m[0], kind: m[1], outOfScope: m[2] ?? null };
+}
+
+/**
+ * What an attempt that produced nothing is told.
+ *
+ * `landTask` says this well already for an empty diff, and this is the same
+ * situation reached one step earlier — the effect contract catches it before
+ * the landing sequence ever runs, so the good sentence was unreachable for
+ * exactly the tasks that needed it. One definition, both callers.
+ */
+export const NO_CHANGE_GUIDANCE =
+  'The task produced no change to the repository at all. If its deliverable is a '
+  + 'file, write it into the workspace — an answer that exists only in the run\'s own output '
+  + 'cannot land. If the task is investigative and was never going to change code, it cannot '
+  + 'land by this route and needs a person to close it.';
+
+/**
+ * The feedback for a run that stopped because nothing reached the workspace.
+ *
+ * Deliberately NOT the gate-correction shape: there is no work here to preserve
+ * and no failing test to name, so telling this attempt that "your previous
+ * attempt is here" would send it looking for a commit that does not exist.
+ * What it needs is the opposite instruction — write the thing.
+ */
+export function noChangeFeedback({ effect = null, spent = 0, budget = MAX_REPAIRS } = {}) {
+  const remaining = Math.max(0, budget - spent);
+  const out = [];
+  if (effect?.outOfScope) {
+    out.push(`Your last attempt changed files, but every one of them was outside this task's scope: ${effect.outOfScope}.`,
+      '',
+      'The workspace change this task is judged on did not happen. Change what the task actually names —',
+      'a file written somewhere else does not count, and a reviewer would reject it even if it did.');
+  } else {
+    out.push('YOUR LAST ATTEMPT WROTE NOTHING.', '', NO_CHANGE_GUIDANCE);
+  }
+  out.push('',
+    'This is not a failure of capability and you are not being given a bigger model. Read what the task',
+    'names, then END BY WRITING — `create_file` or `write_file`. A final message, however correct, is not',
+    'a deliverable.',
+    '',
+    remaining > 1
+      ? `Attempt ${spent + 1} at this; ${remaining - 1} more before the task leaves this model.`
+      : 'This is the LAST try at this level. If nothing is written again, the task leaves this model.');
+  return out.join('\n');
+}
+
+/**
  * The backlog fields a correction writes.
  *
  * One definition, because two callers need it to be the same thing: `work:land`

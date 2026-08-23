@@ -23,7 +23,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Heartbeat, detectStall, nextIntervention, DEFAULT_THRESHOLDS } from './heartbeat.js';
 import { escalate as escalateLevel, levelFor, workerForLevelMap } from './levels.js';
-import { repairLogLines } from './repair.js';
+import {
+  repairLogLines, effectMissing, noChangeFeedback, correctionFields,
+  NO_CHANGE_GUIDANCE, MAX_REPAIRS
+} from './repair.js';
 import { spendFromRun, totalsWithLive } from './ledger.js';
 import { captureWorkspaceSignature } from './effect.js';
 import { unrunnableGates } from './gates.js';
@@ -1374,12 +1377,60 @@ export class Supervisor {
         // Out of patience. Fall through and let the ladder have it, with the
         // reason recorded as what it was rather than as failed work.
       }
+
+      // THE WORK NEVER REACHED THE WORKSPACE. That is a diagnosis, not a
+      // failure to escalate.
+      //
+      // `core/effect.js` already caught it and said so precisely: a block with
+      // a `workspace-change` contract produced no change, so the run failed
+      // rather than recording a completion. Everything above then read that as
+      // a generic run failure and bought a rung of the ladder with it.
+      //
+      // A dearer model is not the missing piece. The model answered in prose
+      // and never wrote a file, and asked the same question it mostly answers
+      // the same way. Watched t-0013 spend SEVEN attempts and t-0033 three,
+      // every one escalating on "The run itself failed.", while the run meta
+      // said exactly what had gone wrong.
+      //
+      // `landTask` has had the right words for this all along — but it is
+      // reached only by a run that SUCCEEDED, so for these tasks the good
+      // sentence was unreachable. Same band, same words, bounded by the same
+      // correction budget as a red gate.
+      const effect = effectMissing(error);
+      if (effect && !this.noEscalate) {
+        const task = this.backlog.get(taskId) ?? {};
+        const spent = Number(task.repairs ?? 0);
+        const budget = Number(this.config.loop?.maxRepairs ?? MAX_REPAIRS);
+        if (spent < budget) {
+          await this.#discard(taskId);
+          this.backlog.update(taskId, correctionFields(task, {
+            feedback: noChangeFeedback({ effect, spent, budget })
+          }));
+          this.history.push({ taskId, landed: false, stage: 'no-effect' });
+          this.log(`✖ ${taskId} produced no workspace change${
+            effect.outOfScope ? ` (changed ${effect.outOfScope})` : ''} — nothing was written`, { taskId });
+          this.log(`  ↻ ${taskId} attempt ${spent + 1} of ${budget} at this on ${
+            hb.worker?.model ?? 'the same model'} (band ${task.level ?? '?'}) — same model, no rung spent`,
+          { taskId });
+          this.#publish();
+          return;
+        }
+        // Out of tries. The ladder gets it, with the diagnosis attached rather
+        // than "the run itself failed".
+      }
+
       await this.#discard(taskId);
       const result = this.backlog.escalate(taskId, {
         reason: 'failed',
         note: unreachable
           ? `The model did not answer, ${UNAVAILABLE_RETRIES + 1} times: ${unreachable}`
-          : 'The run itself failed.',
+          // Even at the end of the ladder, say what actually happened. "The run
+          // itself failed" is what seven attempts on one task were told, and it
+          // named nothing a next attempt could act on.
+          : effectMissing(error)
+            ? `${effectMissing(error).reason}, after ${this.backlog.get(taskId)?.repairs ?? 0} `
+              + `attempt(s) that wrote nothing. ${NO_CHANGE_GUIDANCE}`
+            : 'The run itself failed.',
         workerAt: this.#workerAt
       });
       this.history.push({ taskId, landed: false, stage: 'run-failed' });

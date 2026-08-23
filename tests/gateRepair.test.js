@@ -482,3 +482,95 @@ test('the loop re-picks a corrected task at the same band, with the failures in 
   assert.match(said, /↻ .* correction 1 of 2 .*\(band low\) — same model, no rung spent — work kept at dddddddd/);
   assert.ok(!/escalated to/.test(said), 'nothing climbed');
 });
+
+// --- work that never reached the workspace ---------------------------------
+
+// `core/effect.js` fails a run whose block had a `workspace-change` contract
+// and produced no change. The supervisor read that as a generic run failure —
+// "The run itself failed." — and bought a rung of the ladder with it.
+//
+// Live evidence: t-0013 spent SEVEN attempts and t-0033 three, every one
+// escalating on that sentence, while each run's own meta said
+// `required workspace change was not produced`. A dearer model is not the
+// missing piece when the model answered in prose and never wrote a file.
+test('a run that produced no workspace change is read as the diagnosis it is', async () => {
+  const { effectMissing } = await import('../core/repair.js');
+
+  const plain = effectMissing('Task task-1 failed: required workspace change was not produced');
+  assert.ok(plain, 'the shape the effect contract actually writes');
+  assert.equal(plain.outOfScope, null);
+
+  const scoped = effectMissing(
+    "Task task-1 failed: required workspace change was not produced (3 file(s) changed outside this task's scope)");
+  assert.equal(scoped.outOfScope, "3 file(s) changed outside this task's scope",
+    'wrote the wrong things and wrote nothing need different answers');
+
+  assert.equal(effectMissing('ECONNRESET'), null, 'an ordinary failure is not this');
+  assert.equal(effectMissing(''), null);
+  assert.equal(effectMissing(null), null);
+});
+
+test('the feedback for an empty run tells it to write, not that its work is here', async () => {
+  const { noChangeFeedback, NO_CHANGE_GUIDANCE } = await import('../core/repair.js');
+
+  const wrote = noChangeFeedback({ effect: { outOfScope: null }, spent: 0, budget: 2 });
+  assert.match(wrote, /WROTE NOTHING/);
+  assert.ok(wrote.includes(NO_CHANGE_GUIDANCE), 'the words landTask already had, finally reachable');
+  assert.match(wrote, /END BY WRITING/);
+  assert.ok(!/PREVIOUS ATTEMPT IS HERE/.test(wrote),
+    'there is no commit to inherit — sending it to `git show HEAD` would send it nowhere');
+
+  const scoped = noChangeFeedback({ effect: { outOfScope: '3 file(s) outside scope' }, spent: 1, budget: 2 });
+  assert.match(scoped, /outside this task's scope/);
+  assert.match(scoped, /LAST try at this level/);
+});
+
+test('an empty run is corrected at the same band, and runs out', async () => {
+  const { Supervisor } = await import('../core/supervisor.js');
+  const { Backlog } = await import('../core/backlog.js');
+
+  const backlog = new Backlog(path.join(tmp(), 'backlog'));
+  const task = backlog.add({ title: 'Write a report', goal: 'g' });
+  backlog.update(task.id, { level: 'low' });
+
+  const bands = [];
+  let runs = 0;
+  const invoke = async (name, args) => {
+    if (name === 'work:start') return { dir: '/tmp/wt', branch: 'b', attemptId: 'a1' };
+    if (name === 'flow:run') { runs += 1; return `run-${runs}`; }
+    if (name === 'work:touch') return { touched: true };
+    if (name === 'run:snapshot') {
+      return {
+        meta: { stage: 'failed', error: 'Task task-1 failed: required workspace change was not produced',
+          nodeStatus: { 'work-1': 'active' } },
+        prompt: '', nodeOutputs: { 'work-1': 'a fine essay' }, retrospectives: {}
+      };
+    }
+    if (name === 'work:discard') { backlog.release(args.taskId, { status: args.status ?? null }); return { removed: true }; }
+    throw new Error(`unexpected ${name}`);
+  };
+
+  const lines = [];
+  const sup = new Supervisor({
+    invoke, projectId: 'p', backlog, pollMs: 1,
+    log: l => { lines.push(l); if (l.startsWith('▶')) bands.push(backlog.get(task.id)?.level); }
+  });
+  await sup.run();
+
+  // Two corrections at the same band, then the ladder — never five rungs.
+  assert.deepEqual(bands.slice(0, 3), ['low', 'low', 'low'],
+    'a model that wrote nothing is asked again, not asked more expensively');
+  assert.equal(backlog.get(task.id).repairs, 2, 'and it is bounded by the same budget as a red gate');
+
+  const said = lines.join('\n');
+  assert.match(said, /produced no workspace change — nothing was written/);
+  assert.match(said, /attempt 1 of 2 at this .* — same model, no rung spent/);
+  assert.ok(!/The run itself failed/.test(said),
+    'the sentence that named nothing, that seven attempts on one task were given');
+
+  // It still ends: the ladder gets it once the corrections are spent, and the
+  // reason that travels says what happened.
+  const after = backlog.get(task.id);
+  assert.ok(['queued', 'parked'].includes(after.status));
+  assert.match(String(after.blockedReason), /required workspace change was not produced/);
+});

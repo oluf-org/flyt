@@ -16,7 +16,7 @@ import path from 'node:path';
 import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression } from './gates.js';
 import { WorktreePool, land as gitLand, git } from './worktree.js';
 import { reviewDiff, reviewWorker } from './diffReview.js';
-import { assessRepair } from './repair.js';
+import { assessRepair, NO_CHANGE_GUIDANCE } from './repair.js';
 
 /**
  * Run the gates against a task's worktree.
@@ -162,10 +162,10 @@ export async function landTask({
     }
     return {
       landed: false, stage: 'no-changes', steps,
-      guidance: 'The task produced no change to the repository at all. If its deliverable is a '
-        + 'file, write it into the workspace — an answer that exists only in the run\'s own output '
-        + 'cannot land. If the task is investigative and was never going to change code, it cannot '
-        + 'land by this route and needs a person to close it.'
+      // Shared with the run-failure path: `core/effect.js` catches the same
+      // situation one step earlier, and for the tasks that hit it there, this
+      // sentence used to be unreachable.
+      guidance: NO_CHANGE_GUIDANCE
     };
   }
   const mech = record('checks', mechanicalChecks({
