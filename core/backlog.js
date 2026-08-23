@@ -506,8 +506,16 @@ export class Backlog {
       .map(t => ({ id: t.id, title: t.title, status: t.status }));
 
     const retiredAt = new Date().toISOString();
-    const root = path.dirname(this.rootDir);
-    const runsDir = path.join(root, 'runs');
+    // The state root is the backlog's parent (`.flyt/`), and the two things
+    // retirement touches sit at different depths under it: runs are `.flyt/runs`,
+    // but the archive is `.flyt/archive` — `retiredDir()` joins `retired/<id>`
+    // onto the ARCHIVE root, the same root `archive:write`, `archive:list` and
+    // `trend` are handed. Passing the state root instead put every retirement in
+    // `.flyt/retired/`, beside the archive rather than inside it, where nothing
+    // that reads the archive would ever find it.
+    const stateRoot = path.dirname(this.rootDir);
+    const root = path.join(stateRoot, 'archive');
+    const runsDir = path.join(stateRoot, 'runs');
     const dir = retiredDir(root, safe);
     const raw = fs.readFileSync(this.#file(safe), 'utf8');
     relocateRetiredRuns({
@@ -534,7 +542,9 @@ export class Backlog {
    */
   revive(id) {
     const safe = this.#assertId(id);
-    const root = path.dirname(this.rootDir);
+    // The archive root, exactly as retire() resolves it — the two must agree or
+    // a revival looks for the record in a place no retirement ever wrote to.
+    const root = path.join(path.dirname(this.rootDir), 'archive');
     const dir = retiredDir(root, safe);
     const record = readRetirement(root, safe);
     if (!record) return null;
