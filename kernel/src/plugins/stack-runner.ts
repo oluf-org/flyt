@@ -221,6 +221,13 @@ export class StackRunner extends Service implements AgentsSeam {
           status: data.status,
           output: outputs.get(data.blockId) ?? '',
           ...(data.error ? { error: String(data.error) } : {}),
+          // The structured fields go back too, or a resumed run reads every
+          // predicate against nothing and quietly takes the other branch —
+          // a resume that changes which work happens is worse than one that
+          // repeats work. `block.status` records them for exactly this.
+          ...((data as { structured?: unknown }).structured !== undefined
+            ? { structured: (data as { structured?: JsonValue }).structured }
+            : {}),
         });
       }
     }
@@ -334,7 +341,13 @@ export class StackRunner extends Service implements AgentsSeam {
     for (let i = 0; i < lanes.length; i += bound) {
       if (run.stopReason) break;
       const wave = lanes.slice(i, i + bound);
-      const ran = await Promise.all(wave.map(lane => this.walk(run, lane, input, session, done)));
+      // Each lane gets its OWN view of what has settled. Every lane already
+      // receives what entered the parallel rather than what a sibling produced
+      // (D37); a shared map would have handed that isolation straight back,
+      // because an `If` predicate in one lane could name a block in another and
+      // read its structured output. A lane still sees everything that settled
+      // before the parallel, which is genuinely upstream of it.
+      const ran = await Promise.all(wave.map(lane => this.walk(run, lane, input, session, new Map(done))));
       for (const laneSteps of ran) steps.push(...laneSteps);
       if (steps.some(s => s.outcome.status === 'failed')) break;
     }
@@ -460,6 +473,13 @@ export class StackRunner extends Service implements AgentsSeam {
         ...(outcome.structured !== undefined ? { structured: outcome.structured as JsonValue } : {}),
       },
     });
+    // What this block settled as, for anything downstream that reads it — an
+    // `If` predicate names `<block>.<field>` and resolves it here. Without this
+    // the map only ever held what a RESUME replayed from the log, so in a fresh
+    // run every predicate read `undefined`, every field was empty, and every
+    // `If` took its else branch. The parser cannot catch that: it checks the
+    // field was declared, not that anyone recorded it.
+    done.set(node.id, outcome);
     run.lastBlockId = node.id;
     return { node, outcome };
   }
