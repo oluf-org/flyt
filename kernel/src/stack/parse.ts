@@ -18,9 +18,10 @@ import { parseYaml, YamlError } from '../loader/yaml.js';
 import type { YamlValue } from '../loader/yaml.js';
 import type { JsonValue } from '../types.js';
 import {
-  CONTAINER_KINDS, ID_PATTERN, MAX_DEPTH, MAX_EXPANSION, MAX_REPEAT, PLANNED_KINDS,
+  CONTAINER_KINDS, ID_PATTERN, IF_OPERATORS, MAX_DEPTH, MAX_EXPANSION, MAX_REPEAT, PLANNED_KINDS,
   boundStack, walk,
-  type BlockNode, type ParallelNode, type Position, type RepeatNode, type SequenceNode,
+  type BlockNode, type IfNode, type IfPredicate, type IfPredicateTerm, type IfOperator,
+  type ParallelNode, type Position, type RepeatNode, type SequenceNode,
   type Stack, type StackNode,
 } from './types.js';
 
@@ -65,15 +66,19 @@ const isMapping = (v: YamlValue): v is Record<string, YamlValue> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** What each shape of node may carry. Anything else is a typo, and is said so. */
-const BLOCK_KEYS = new Set(['id', 'use', 'title', 'config']);
+const BLOCK_KEYS = new Set(['id', 'use', 'title', 'config', 'outputs']);
 const SEQUENCE_KEYS = new Set(['id', 'kind', 'blocks']);
 const PARALLEL_KEYS = new Set(['id', 'kind', 'lanes', 'maxParallel']);
 const REPEAT_KEYS = new Set(['id', 'kind', 'count', 'body']);
+const IF_KEYS = new Set(['id', 'kind', 'predicate', 'body', 'else']);
+const TERM_KEYS = new Set(['source', 'operator', 'literal']);
 
 interface Ctx {
   lines: Map<string, number>;
   /** id -> where it was first seen, so a duplicate can name both. */
   seen: Map<string, { path: string; line: number }>;
+  /** block id -> the fields it declared in `outputs`, so a predicate can be checked against the authored contract. */
+  outputs: Map<string, { line: number; fields: Set<string> }>;
 }
 
 function lineFor(ctx: Ctx, id: string | null): number {
@@ -119,15 +124,16 @@ function rejectUnknownKeys(
  *
  * `kind` is required on a container and absent on a leaf, so there is exactly
  * one way to write each and no shape to guess at. A kind we have not built is
- * refused by NAME with the phase that brings it — someone reaching for
- * `For each` should learn where it is from the error, not from the plan.
+ * refused by NAME with the phase that brings it.
  */
-function kindOf(raw: Record<string, YamlValue>, path: string, line: number): 'block' | 'sequence' | 'parallel' | 'repeat' {
+function kindOf(raw: Record<string, YamlValue>, path: string, line: number): 'block' | 'sequence' | 'parallel' | 'repeat' | 'if' {
   const kind = raw['kind'];
   if (kind === undefined || kind === null) {
-    if (raw['blocks'] !== undefined || raw['lanes'] !== undefined || raw['body'] !== undefined) {
+    if (raw['blocks'] !== undefined || raw['lanes'] !== undefined || raw['body'] !== undefined
+      || raw['predicate'] !== undefined || raw['else'] !== undefined) {
       throw new StackError(
-        'a container needs "kind: sequence" or "kind: parallel"; children alone do not say which', path, line);
+        'a container needs "kind: sequence", "kind: parallel", "kind: repeat" or "kind: if"; children alone do not say which',
+        path, line);
     }
     return 'block';
   }
@@ -135,7 +141,7 @@ function kindOf(raw: Record<string, YamlValue>, path: string, line: number): 'bl
   if (kind === 'block') {
     throw new StackError('a block is written without a "kind"; give it a "use" instead', path, line);
   }
-  if (kind === 'sequence' || kind === 'parallel' || kind === 'repeat') return kind;
+  if (kind === 'sequence' || kind === 'parallel' || kind === 'repeat' || kind === 'if') return kind;
   const planned = PLANNED_KINDS[kind.toLowerCase()];
   if (planned) {
     throw new StackError(
@@ -159,8 +165,6 @@ function readChildren(
     throw new StackError(`"${key}" must be a list`, path, line);
   }
   if (!value.length) {
-    // An empty container is not a stack with a hole in it — it is a container
-    // that runs nothing, which is never what anyone meant to write.
     throw new StackError(
       `this container has no ${key}; a container with nothing in it cannot run`, path, line);
   }
@@ -176,6 +180,126 @@ function readRepeatCount(raw: Record<string, YamlValue>, path: string, line: num
     throw new StackError('a repeat "count" must be a whole number of at least 1', path, line);
   }
   return value;
+}
+
+function readTerm(raw: YamlValue, path: string, line: number): IfPredicateTerm {
+  if (!isMapping(raw)) {
+    throw new StackError(
+      'a predicate comparison is a mapping of "source", "operator" and, where the operator compares, "literal"',
+      path, line);
+  }
+  rejectUnknownKeys(raw, TERM_KEYS, 'predicate comparison', path, line);
+  const source = raw['source'];
+  const dot = typeof source === 'string' ? source.split('.') : [];
+  if (typeof source !== 'string' || !source || dot.length !== 2 || !dot[0] || !dot[1]) {
+    throw new StackError(
+      'a predicate "source" is exactly "<block-id>.<field>", naming a field that block declared',
+      path, line);
+  }
+  const op = raw['operator'];
+  if (typeof op !== 'string' || !(IF_OPERATORS as readonly string[]).includes(op)) {
+    throw new StackError(
+      `"${typeof op === 'string' ? op : ''}" is not a predicate operator; operators are ${IF_OPERATORS.join(', ')}`,
+      path, line);
+  }
+  const operator = op as IfOperator;
+  const literal = raw['literal'] as JsonValue | undefined;
+  const empty = operator === 'is empty' || operator === 'is not empty';
+  if (empty) {
+    if (literal !== undefined) throw new StackError(`operator "${operator}" takes no literal`, path, line);
+    return { source, operator };
+  }
+  if (literal === undefined) {
+    throw new StackError(`operator "${operator}" needs a literal to compare against`, path, line);
+  }
+  const t = typeof literal;
+  if (t !== 'string' && t !== 'number' && t !== 'boolean') {
+    throw new StackError('a predicate literal is text, a number, or a boolean', path, line);
+  }
+  return { source, operator, literal };
+}
+
+function readPredicate(raw: YamlValue, path: string, line: number): IfPredicate {
+  if (isMapping(raw) && (raw['allOf'] !== undefined || raw['anyOf'] !== undefined)) {
+    const extra = Object.keys(raw).filter(k => k !== 'allOf' && k !== 'anyOf');
+    if (extra.length) {
+      throw new StackError(
+        `a combined predicate takes one of "allOf" or "anyOf", and this also has ${extra.map(k => `"${k}"`).join(', ')}`,
+        path, line);
+    }
+    if (raw['allOf'] !== undefined && raw['anyOf'] !== undefined) {
+      throw new StackError('a predicate is either "allOf" or "anyOf", not both', path, line);
+    }
+    const key = raw['allOf'] !== undefined ? 'allOf' : 'anyOf';
+    const list = raw[key];
+    if (!Array.isArray(list) || !list.length) {
+      throw new StackError(`"${key}" must be a list with at least one comparison`, path, line);
+    }
+    const terms = list.map((entry, i) => readTerm(entry, `${path}.${key}[${i}]`, line));
+    return key === 'allOf' ? { allOf: terms } : { anyOf: terms };
+  }
+  return readTerm(raw, path, line);
+}
+
+function readIfBranch(
+  ctx: Ctx, raw: Record<string, YamlValue>, key: 'body' | 'else',
+  path: string, line: number, depth: number,
+): StackNode[] | null {
+  const value = raw[key];
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value)) throw new StackError(`an if "${key}" must be a list`, path, line);
+  if (!value.length) {
+    throw new StackError(`an if "${key}" cannot be an empty list; leave "${key}" out instead`, path, line);
+  }
+  return value.map((child, i) => readNode(ctx, child, `${path}.${key}[${i}]`, depth + 1));
+}
+
+function readOutputs(ctx: Ctx, raw: Record<string, YamlValue>, id: string, path: string, line: number): void {
+  const value = raw['outputs'];
+  if (value === undefined || value === null) return;
+  if (!Array.isArray(value)) {
+    throw new StackError('a block "outputs" is a list, each entry a mapping with a "name"', path, line);
+  }
+  const fields = new Set<string>();
+  value.forEach((entry, i) => {
+    const entryPath = `${path}.outputs[${i}]`;
+    if (!isMapping(entry)) {
+      throw new StackError('each output is a mapping with a "name" (and a "type")', entryPath, line);
+    }
+    const name = entry['name'];
+    if (typeof name !== 'string' || !name) {
+      throw new StackError('each output needs a "name", the field a predicate or roster names', entryPath, line);
+    }
+    fields.add(name);
+  });
+  ctx.outputs.set(id, { line, fields });
+}
+
+function checkPredicate(ctx: Ctx, predicate: IfPredicate, path: string, line: number): void {
+  for (const term of predicateTerms(predicate)) {
+    const dot = term.source.indexOf('.');
+    const block = term.source.slice(0, dot);
+    const field = term.source.slice(dot + 1);
+    const declared = ctx.outputs.get(block);
+    if (!declared) {
+      const known = [...ctx.outputs.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      const wantedBy = known.map(([id, o]) => `${id} (${[...o.fields].sort().join(', ')})`).join('; ');
+      throw new StackError(
+        `the predicate names "${term.source}", but "${block}" declares no output; upstream blocks that do declare outputs: ${wantedBy || 'none'}`,
+        path, line);
+    }
+    if (!declared.fields.has(field)) {
+      throw new StackError(
+        `the predicate names field "${field}" on block "${block}", which does not declare it; "${block}" declares ${[...declared.fields].sort().join(', ') || 'no fields'}`,
+        path, line);
+    }
+  }
+}
+
+function predicateTerms(p: IfPredicate): IfPredicateTerm[] {
+  if ('source' in p) return [p];
+  if ('allOf' in p) return p.allOf;
+  return p.anyOf;
 }
 
 function readNode(ctx: Ctx, raw: YamlValue, path: string, depth: number): StackNode {
@@ -204,12 +328,10 @@ function readNode(ctx: Ctx, raw: YamlValue, path: string, depth: number): StackN
     if (title !== undefined && title !== null && typeof title !== 'string') {
       throw new StackError('"title" must be text', path, line);
     }
+    readOutputs(ctx, raw, id, path, line);
     return {
       kind: 'block', id, use,
       title: typeof title === 'string' ? title : null,
-      // Not interpreted: what a block's settings mean is the block's business,
-      // and a parser that validated them would be a parser that has to be
-      // taught every plugin ever installed.
       config: (config ?? {}) as Record<string, JsonValue>,
       position,
     } satisfies BlockNode;
@@ -244,6 +366,21 @@ function readNode(ctx: Ctx, raw: YamlValue, path: string, depth: number): StackN
     } satisfies ParallelNode;
   }
 
+  if (kind === 'if') {
+    rejectUnknownKeys(raw, IF_KEYS, 'if', path, line);
+    const predicate = readPredicate(raw['predicate'], `${path}.predicate`, line);
+    checkPredicate(ctx, predicate, `${path}.predicate`, line);
+    const body = readIfBranch(ctx, raw, 'body', path, line, depth);
+    if (!body) throw new StackError('an if needs "body", the branch it runs when the predicate holds', path, line);
+    const other = readIfBranch(ctx, raw, 'else', path, line, depth);
+    return {
+      kind: 'if', id, predicate,
+      children: body,
+      else: other,
+      position,
+    } satisfies IfNode;
+  }
+
   rejectUnknownKeys(raw, REPEAT_KEYS, 'repeat', path, line);
   return {
     kind: 'repeat', id,
@@ -270,9 +407,6 @@ export function parseStack(source: string, fallbackId = ''): Stack {
 
   const version = doc['version'];
   if (version !== 2) {
-    // Version 1 is a FLOW. It is read through the migration path and adopted
-    // on first write, exactly as `.llmflow/` -> `.flyt/` works — never here,
-    // because a flow has an edge list and this parser has nowhere to put one.
     throw new StackError(
       version === 1
         ? 'this is a version 1 flow, not a stack; it is read through the migration path'
@@ -280,7 +414,7 @@ export function parseStack(source: string, fallbackId = ''): Stack {
       'stack.version', 0);
   }
 
-  const ctx: Ctx = { lines: idLines(source), seen: new Map() };
+  const ctx: Ctx = { lines: idLines(source), seen: new Map(), outputs: new Map() };
   const id = typeof doc['id'] === 'string' && doc['id'] ? doc['id'] : fallbackId;
   if (!id) throw new StackError('a stack needs an "id", or a filename to take one from', 'stack.id', 0);
 
@@ -289,9 +423,6 @@ export function parseStack(source: string, fallbackId = ''): Stack {
     throw new StackError('a stack needs a "blocks" list with something in it', 'stack.blocks', 0);
   }
 
-  // The root is a sequence, always. A stack IS a sequence whatever else it
-  // holds, which is why the top level needs no `kind`, and why the editor has
-  // one shape to lay out rather than two.
   ctx.seen.set(id, { path: 'stack', line: 0 });
   const root: SequenceNode = {
     kind: 'sequence',
@@ -300,9 +431,6 @@ export function parseStack(source: string, fallbackId = ''): Stack {
     position: { line: 0, path: 'stack' },
   };
 
-  // The second bound (MAX_DEPTH is the first): worst-case expansion over the
-  // whole tree. It must be computed and refused before anything runs, so the
-  // parser is the last place that sees every tree exactly once.
   const bounds = boundStack(root);
   if (bounds.expansion > MAX_EXPANSION) {
     throw new StackError(
@@ -310,10 +438,6 @@ export function parseStack(source: string, fallbackId = ''): Stack {
       'stack', 0);
   }
 
-  // The expansion bound is checked first so a repeat large enough to blow the
-  // stack is refused for that, with the cap and its own worst case. A repeat
-  // that fits the whole tree but still says more than MAX_REPEAT is refused
-  // here, naming the container.
   for (const node of walk(root)) {
     if (node.kind === 'repeat' && node.count > MAX_REPEAT) {
       throw new StackError(

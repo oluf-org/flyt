@@ -241,3 +241,129 @@ test('starting a stack that does not exist says so', async () => {
     /There is no stack "nope"/);
   await boot.kernel.dispose();
 });
+
+// --- If: one branch, chosen by the predicate (t-0095) ----------------------
+//
+// The parser has already refused anything whose source is not a declared field,
+// so what the runner has to get right is narrower and sharper: exactly one
+// branch runs, the other is never entered, and an if that chooses nothing
+// changes nothing — its input carries on to whatever follows.
+
+const ifStack = (predicate, withElse) => `version: 2
+id: demo
+blocks:
+  - id: judge
+    use: demo:work
+    outputs:
+      - name: score
+        type: number
+  - id: gate
+    kind: if
+    predicate:
+${predicate.split('\n').map(l => `      ${l}`).join('\n')}
+    body:
+      - id: then-branch
+        use: demo:work
+${withElse ? `    else:
+      - id: else-branch
+        use: demo:work
+` : ''}  - id: after
+    use: demo:work
+`;
+
+// `judge` answers with a score; everything else answers plainly.
+const scoring = score => async run => (run.blockId === 'judge'
+  ? { status: 'done', output: 'judged', structured: { score } }
+  : { status: 'done', output: `${run.blockId} saw "${run.input}"` });
+
+test('an if whose predicate holds runs the body, and never the else', async () => {
+  const boot = await bootWalk(ifStack('source: judge.score\noperator: "<"\nliteral: 7', true),
+    { execute: scoring(3) });
+  const outcome = await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.equal(outcome.status, 'done');
+  assert.deepEqual(boot.record.map(r => r.blockId), ['judge', 'then-branch', 'after']);
+  assert.ok(!boot.finished.includes('else-branch'), 'the untaken branch never ran');
+  await boot.kernel.dispose();
+});
+
+test('an if whose predicate does not hold runs the else, and never the body', async () => {
+  const boot = await bootWalk(ifStack('source: judge.score\noperator: "<"\nliteral: 7', true),
+    { execute: scoring(9) });
+  await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.deepEqual(boot.record.map(r => r.blockId), ['judge', 'else-branch', 'after']);
+  assert.ok(!boot.finished.includes('then-branch'));
+  await boot.kernel.dispose();
+});
+
+test('an if with no else and a predicate that fails passes its input through unchanged', async () => {
+  const boot = await bootWalk(ifStack('source: judge.score\noperator: "<"\nliteral: 7', false),
+    { execute: scoring(9) });
+  await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.deepEqual(boot.record.map(r => r.blockId), ['judge', 'after'], 'nothing ran inside the if');
+  const after = boot.record.find(r => r.blockId === 'after');
+  assert.equal(after.input, 'judged',
+    'and what reaches the next block is what entered the if, not an empty string');
+  await boot.kernel.dispose();
+});
+
+test('a field the block never set is empty rather than an error at run time', async () => {
+  // The parser guarantees the field was DECLARED. It cannot guarantee the block
+  // put it there on the day, so the runner has to decide truthfully instead of
+  // throwing: absent is empty.
+  const boot = await bootWalk(ifStack('source: judge.score\noperator: is empty', true),
+    { execute: async run => ({ status: 'done', output: 'judged' }) });
+  await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.deepEqual(boot.record.map(r => r.blockId), ['judge', 'then-branch', 'after']);
+  await boot.kernel.dispose();
+});
+
+test('a lane cannot read what a sibling lane produced, even through a predicate', async () => {
+  // Lane isolation (D37) is not a rule the runner enforces, it is a consequence
+  // of every lane being handed what entered the parallel. A predicate is the one
+  // thing that could have reached around it, so it is the one thing worth
+  // asserting: `right` names a field `left`'s block really does declare, and
+  // still must not see it.
+  const boot = await bootWalk(`version: 2
+id: demo
+blocks:
+  - id: fan
+    kind: parallel
+    maxParallel: 1
+    lanes:
+      - id: left
+        kind: sequence
+        blocks:
+          - id: judge
+            use: demo:work
+            outputs:
+              - name: score
+                type: number
+      - id: right
+        kind: sequence
+        blocks:
+          - id: gate
+            kind: if
+            predicate:
+              source: judge.score
+              operator: is not empty
+            body:
+              - id: leaked
+                use: demo:work
+            else:
+              - id: isolated
+                use: demo:work
+`, {
+    execute: async run => (run.blockId === 'judge'
+      ? { status: 'done', output: 'judged', structured: { score: 3 } }
+      : { status: 'done', output: `${run.blockId} ran` }),
+  });
+  await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in')).settled();
+
+  assert.ok(boot.finished.includes('isolated'), 'the sibling lane is invisible, so the field reads empty');
+  assert.ok(!boot.finished.includes('leaked'), 'and nothing crossed between lanes');
+  await boot.kernel.dispose();
+});

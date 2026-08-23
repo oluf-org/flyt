@@ -7,10 +7,7 @@
  * there is nothing to store: the same tree laid out twice gives the same
  * boxes, so a layout is something you compute rather than something you keep.
  *
- * Pure, and free of the browser on purpose. A layout that needed measurement
- * could not be tested without a DOM, could not be rendered by the CLI, and
- * could not be reasoned about by the agent editing the stack — and the same
- * boxes have to serve all three (D63).
+ * Pure, and free of the browser on purpose (D63).
  *
  * @module #kernel/stack/layout
  */
@@ -32,21 +29,12 @@ export interface Layout {
   height: number;
 }
 
-/**
- * The sizes the geometry is built from.
- *
- * Units, not pixels. The renderer scales; what matters here is the ratios, and
- * that they are the same everywhere the layout is computed.
- */
+/** The sizes the geometry is built from. */
 export interface LayoutMetrics {
-  /** A leaf block's footprint. */
   blockWidth: number;
   blockHeight: number;
-  /** Between siblings, along whichever axis the container runs. */
   gap: number;
-  /** Between a container's edge and its children. */
   padding: number;
-  /** Room at the top of a container for its own label. */
   header: number;
 }
 
@@ -64,29 +52,45 @@ function measure(node: StackNode, m: LayoutMetrics): { width: number; height: nu
   if (!isContainer(node)) return { width: m.blockWidth, height: m.blockHeight };
 
   const kids = node.children.map(child => measure(child, m));
-  const gaps = m.gap * (kids.length - 1);
+  const gaps = m.gap * (Math.max(kids.length, 1) - 1);
 
   if (node.kind === 'sequence') {
-    // Top to bottom: as wide as the widest child, as tall as all of them.
     return {
       width: Math.max(...kids.map(k => k.width)) + m.padding * 2,
       height: kids.reduce((n, k) => n + k.height, 0) + gaps + m.padding * 2 + m.header,
     };
   }
   if (node.kind === 'parallel') {
-    // Side by side: as wide as all the lanes, as tall as the tallest.
     return {
       width: kids.reduce((n, k) => n + k.width, 0) + gaps + m.padding * 2,
       height: Math.max(...kids.map(k => k.height)) + m.padding * 2 + m.header,
     };
   }
-  // A repeat runs its body count times in sequence: as wide as the widest
-  // child, and count bodies deep.
+  if (node.kind === 'if') {
+    // The if shows both branches side by side, so a reader can see the choice.
+    const body = stackSize(node.children, m);
+    const other = node.else ? stackSize(node.else, m) : { width: 0, height: 0 };
+    return {
+      width: body.width + (node.else ? other.width + m.gap : 0) + m.padding * 2,
+      height: Math.max(body.height, other.height) + m.padding * 2 + m.header,
+    };
+  }
+  // Repeat: as wide as the widest child, and count bodies deep.
   const childWidth = Math.max(...kids.map(k => k.width));
   const childHeight = kids.reduce((n, k) => n + k.height, 0) + gaps;
   return {
     width: childWidth + m.padding * 2,
     height: childHeight * node.count + m.padding * 2 + m.header,
+  };
+}
+
+function stackSize(children: StackNode[], m: LayoutMetrics): { width: number; height: number } {
+  if (!children.length) return { width: 0, height: 0 };
+  const kids = children.map(child => measure(child, m));
+  const gaps = m.gap * (kids.length - 1);
+  return {
+    width: Math.max(...kids.map(k => k.width)),
+    height: kids.reduce((n, k) => n + k.height, 0) + gaps,
   };
 }
 
@@ -99,8 +103,6 @@ function place(node: StackNode, x: number, y: number, m: LayoutMetrics, into: Re
   if (node.kind === 'sequence') {
     let cursor = inner.y;
     for (const child of node.children) {
-      // Centred across the container's inner width, so a narrow block under a
-      // wide one reads as one column rather than a ragged left edge.
       const childSize = measure(child, m);
       const available = size.width - m.padding * 2;
       place(child, inner.x + (available - childSize.width) / 2, cursor, m, into);
@@ -117,8 +119,29 @@ function place(node: StackNode, x: number, y: number, m: LayoutMetrics, into: Re
     }
     return;
   }
-  // Repeat: the body is measured once and its slots laid out count times,
-  // which is what the measure() height above promised.
+  if (node.kind === 'if') {
+    const bodyWidth = node.children.length ? stackSize(node.children, m).width : 0;
+    const bodyHeight = node.children.length ? stackSize(node.children, m).height : 0;
+    let cursor = inner.x;
+    for (const child of node.children) {
+      const childSize = measure(child, m);
+      const available = bodyWidth;
+      place(child, inner.x + (available - childSize.width) / 2, cursor, m, into);
+      cursor += childSize.height + m.gap;
+    }
+    if (node.else) {
+      const otherX = inner.x + bodyWidth + m.gap;
+      const otherWidth = stackSize(node.else, m).width;
+      let oy = inner.y;
+      for (const child of node.else) {
+        const childSize = measure(child, m);
+        place(child, otherX + (otherWidth - childSize.width) / 2, oy, m, into);
+        oy += childSize.height + m.gap;
+      }
+    }
+    return;
+  }
+  // Repeat: body measured once, slots laid out count times.
   const bodyHeight = node.children.reduce((n, child) => n + measure(child, m).height, 0)
     + m.gap * (node.children.length - 1);
   for (let i = 0; i < node.count; i++) {
@@ -149,20 +172,10 @@ export function layout(root: StackNode, metrics: Partial<LayoutMetrics> = {}): L
 
 /**
  * Which node is at this point, innermost first.
- *
- * What a click resolves to. Innermost wins, because a container's box contains
- * every child's — a drop onto a block inside a lane is a drop into that lane,
- * not onto the parallel that holds it.
- *
- * @param at — the layout to search.
- * @param x — horizontal position, in stack units.
- * @param y — vertical position.
- * @returns node ids, innermost first; empty when the point is outside everything.
  */
 export function hits(at: Layout, x: number, y: number): string[] {
   const inside = Object.entries(at.boxes).filter(([, b]) =>
     x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height);
-  // Smaller area is deeper: a child is always strictly inside its parent.
   inside.sort((a, b) => a[1].width * a[1].height - b[1].width * b[1].height);
   return inside.map(([id]) => id);
 }

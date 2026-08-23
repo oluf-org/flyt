@@ -28,7 +28,8 @@ import type { AgentRun, AgentsSeam, RunOutcome, StackRef } from '../seams/agents
 import type { SessionHandle } from '../seams/sessions.js';
 import {
   boundStack,
-  type BlockNode, type ParallelNode, type RepeatNode, type SequenceNode, type StackNode,
+  type BlockNode, type IfNode, type IfOperator, type IfPredicate, type IfPredicateTerm,
+  type ParallelNode, type RepeatNode, type SequenceNode, type StackNode,
 } from '../stack/types.js';
 import type { BlockDefinition, BlockOutcome } from '../blocks/types.js';
 import { missingBlocks } from './blocks.js';
@@ -220,6 +221,13 @@ export class StackRunner extends Service implements AgentsSeam {
           status: data.status,
           output: outputs.get(data.blockId) ?? '',
           ...(data.error ? { error: String(data.error) } : {}),
+          // The structured fields go back too, or a resumed run reads every
+          // predicate against nothing and quietly takes the other branch —
+          // a resume that changes which work happens is worse than one that
+          // repeats work. `block.status` records them for exactly this.
+          ...((data as { structured?: unknown }).structured !== undefined
+            ? { structured: (data as { structured?: JsonValue }).structured }
+            : {}),
         });
       }
     }
@@ -292,6 +300,7 @@ export class StackRunner extends Service implements AgentsSeam {
     if (node.kind === 'block') return [await this.runBlock(run, node, input, session, done)];
     if (node.kind === 'parallel') return this.runParallel(run, node, input, session, done);
     if (node.kind === 'repeat') return this.runRepeat(run, node, input, session, done);
+    if (node.kind === 'if') return this.runIf(run, node, input, session, done);
     return this.runSequence(run, node, input, session, done);
   }
 
@@ -332,7 +341,13 @@ export class StackRunner extends Service implements AgentsSeam {
     for (let i = 0; i < lanes.length; i += bound) {
       if (run.stopReason) break;
       const wave = lanes.slice(i, i + bound);
-      const ran = await Promise.all(wave.map(lane => this.walk(run, lane, input, session, done)));
+      // Each lane gets its OWN view of what has settled. Every lane already
+      // receives what entered the parallel rather than what a sibling produced
+      // (D37); a shared map would have handed that isolation straight back,
+      // because an `If` predicate in one lane could name a block in another and
+      // read its structured output. A lane still sees everything that settled
+      // before the parallel, which is genuinely upstream of it.
+      const ran = await Promise.all(wave.map(lane => this.walk(run, lane, input, session, new Map(done))));
       for (const laneSteps of ran) steps.push(...laneSteps);
       if (steps.some(s => s.outcome.status === 'failed')) break;
     }
@@ -360,6 +375,55 @@ export class StackRunner extends Service implements AgentsSeam {
       if (last) carried = last.outcome.output;
     }
     return steps;
+  }
+
+  /**
+   * An if runs exactly one branch, chosen by its structured predicate.
+   *
+   * A predicate reads only the structured outputs of blocks that have already
+   * settled in THIS run. A field that was never declared can still be decided
+   * truthfully: it is empty, so `is empty` holds and a value comparison does
+   * not. When there is no else and the body is not chosen, the if runs nothing
+   * and its input passes through unchanged.
+   */
+  private async runIf(
+    run: Run, node: IfNode, input: string, session: SessionHandle,
+    done: Map<string, BlockOutcome>,
+  ): Promise<BlockStep[]> {
+    const held = this.holds(node.predicate, done);
+    const chosen = held ? node.children : (node.else ?? []);
+    if (!chosen.length) return [];
+    const body: SequenceNode = { kind: 'sequence', id: node.id, children: chosen, position: node.position };
+    return this.runSequence(run, body, input, session, done);
+  }
+
+  private holds(predicate: IfPredicate, done: ReadonlyMap<string, BlockOutcome>): boolean {
+    if ('source' in predicate) return this.holdsTerm(predicate, done);
+    const terms = 'allOf' in predicate ? predicate.allOf : predicate.anyOf;
+    const results = terms.map(term => this.holdsTerm(term, done));
+    return 'allOf' in predicate ? results.every(Boolean) : results.some(Boolean);
+  }
+
+  private holdsTerm(term: IfPredicateTerm, done: ReadonlyMap<string, BlockOutcome>): boolean {
+    const dot = term.source.indexOf('.');
+    const record = done.get(term.source.slice(0, dot))?.structured as Record<string, unknown> | undefined;
+    const value = record?.[term.source.slice(dot + 1)];
+    return this.compare(term.operator, value, term.literal);
+  }
+
+  private compare(operator: IfOperator, value: unknown, literal: unknown): boolean {
+    const empty = value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
+    switch (operator) {
+      case 'is': return value === literal;
+      case 'is not': return value !== literal;
+      case 'is empty': return empty;
+      case 'is not empty': return !empty;
+      case '<': return typeof value === 'number' && typeof literal === 'number' && value < literal;
+      case '<=': return typeof value === 'number' && typeof literal === 'number' && value <= literal;
+      case '>': return typeof value === 'number' && typeof literal === 'number' && value > literal;
+      case '>=': return typeof value === 'number' && typeof literal === 'number' && value >= literal;
+      default: return false;
+    }
   }
 
   /** One block, through the registry and the other seams. */
@@ -409,6 +473,13 @@ export class StackRunner extends Service implements AgentsSeam {
         ...(outcome.structured !== undefined ? { structured: outcome.structured as JsonValue } : {}),
       },
     });
+    // What this block settled as, for anything downstream that reads it — an
+    // `If` predicate names `<block>.<field>` and resolves it here. Without this
+    // the map only ever held what a RESUME replayed from the log, so in a fresh
+    // run every predicate read `undefined`, every field was empty, and every
+    // `If` took its else branch. The parser cannot catch that: it checks the
+    // field was declared, not that anyone recorded it.
+    done.set(node.id, outcome);
     run.lastBlockId = node.id;
     return { node, outcome };
   }

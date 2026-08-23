@@ -135,7 +135,7 @@ test('a repeat count must be a literal whole number within the cap, and a missin
 });
 
 test('a container this phase has not built is refused by name, with the phase that brings it', () => {
-  for (const [kind, called] of [['for-each', 'For each'], ['until', 'Until'], ['if', 'If']]) {
+  for (const [kind, called] of [['for-each', 'For each'], ['until', 'Until']]) {
     const err = refusal(() => parseStack(stack(`blocks:
   - id: loop
     kind: ${kind}
@@ -220,7 +220,7 @@ test('a container without a kind is refused rather than guessed at', () => {
       - id: a
         use: work
 `)));
-  assert.match(err.message, /a container needs "kind: sequence" or "kind: parallel"/);
+  assert.match(err.message, /a container needs "kind: sequence", "kind: parallel", "kind: repeat" or "kind: if"/);
 });
 
 test('a block needs a use, and does not take a kind', () => {
@@ -368,4 +368,228 @@ test('nothing under core/ imports the stack parser', () => {
   };
   scan(dir);
   assert.deepEqual(offenders, []);
+});
+
+// --- If: a predicate that is not an expression (t-0095) --------------------
+//
+// The refusals ARE the feature. D56 widened the GOALS boundary exactly as far
+// as source / operator / literal over declared fields and no further, so what
+// matters most here is what will not parse: a combination inside a combination,
+// an operator nobody chose, and a source naming a field no upstream block
+// promised. The last is deliberate leverage — adding a conditional forces the
+// block above it to have a real output contract, which is the point of the rule
+// rather than a side effect of it.
+
+const IF_STACK = `blocks:
+  - id: judge
+    use: demo:evaluate
+    outputs:
+      - name: score
+        type: number
+      - name: verdict
+        type: string
+  - id: gate
+    kind: if
+    predicate:
+      source: judge.score
+      operator: "<"
+      literal: 7
+    body:
+      - id: redo
+        use: demo:work
+    else:
+      - id: ship
+        use: demo:work
+`;
+
+test('an if parses with a body, an else, and a flat predicate', () => {
+  const gate = parseStack(stack(IF_STACK)).root.children[1];
+  assert.equal(gate.kind, 'if');
+  assert.deepEqual(gate.predicate, { source: 'judge.score', operator: '<', literal: 7 });
+  assert.deepEqual(gate.children.map(c => c.id), ['redo']);
+  assert.deepEqual(gate.else.map(c => c.id), ['ship']);
+});
+
+test('an if with no else says so, rather than pretending to an empty branch', () => {
+  const gate = parseStack(stack(`blocks:
+  - id: judge
+    use: demo:evaluate
+    outputs:
+      - name: verdict
+        type: string
+  - id: gate
+    kind: if
+    predicate:
+      source: judge.verdict
+      operator: is
+      literal: failed
+    body:
+      - id: redo
+        use: demo:work
+`)).root.children[1];
+  assert.equal(gate.else, null, 'null is "pass through", which is not the same as an empty branch');
+});
+
+test('a predicate naming a field the block never declared says which field, which block, and what it does declare', () => {
+  const err = refusal(() => parseStack(stack(`blocks:
+  - id: judge
+    use: demo:evaluate
+    outputs:
+      - name: score
+        type: number
+  - id: gate
+    kind: if
+    predicate:
+      source: judge.confidence
+      operator: is
+      literal: high
+    body:
+      - id: redo
+        use: demo:work
+`)));
+  assert.match(err.message, /field "confidence" on block "judge"/);
+  assert.match(err.message, /"judge" declares score/);
+  assert.match(err.message, /predicate/, 'and where in the file to look');
+});
+
+test('a predicate naming a block that declares nothing points at the blocks that do', () => {
+  const err = refusal(() => parseStack(stack(`blocks:
+  - id: judge
+    use: demo:evaluate
+    outputs:
+      - name: score
+        type: number
+  - id: plain
+    use: demo:work
+  - id: gate
+    kind: if
+    predicate:
+      source: plain.anything
+      operator: is
+      literal: x
+    body:
+      - id: redo
+        use: demo:work
+`)));
+  assert.match(err.message, /"plain" declares no output/);
+  assert.match(err.message, /judge \(score\)/, 'the one that does, and what it has');
+});
+
+test('a predicate may not read a block that has not run yet', () => {
+  const err = refusal(() => parseStack(stack(`blocks:
+  - id: gate
+    kind: if
+    predicate:
+      source: later.score
+      operator: is
+      literal: 1
+    body:
+      - id: redo
+        use: demo:work
+  - id: later
+    use: demo:evaluate
+    outputs:
+      - name: score
+        type: number
+`)));
+  assert.match(err.message, /"later" declares no output/,
+    'a field declared below the predicate is not upstream of it');
+});
+
+test('an operator outside the closed set is refused, and the whole set is named', () => {
+  const err = refusal(() => parseStack(stack(`blocks:
+  - id: judge
+    use: demo:evaluate
+    outputs:
+      - name: score
+        type: number
+  - id: gate
+    kind: if
+    predicate:
+      source: judge.score
+      operator: matches
+      literal: a
+    body:
+      - id: redo
+        use: demo:work
+`)));
+  assert.match(err.message, /"matches" is not a predicate operator/);
+  assert.match(err.message, /is not empty/, 'the closed set is in the message, not in a document');
+});
+
+test('a source that is not exactly block.field is refused', () => {
+  for (const source of ['judge', 'judge.score.inner', '.score', 'judge.']) {
+    const err = refusal(() => parseStack(stack(`blocks:
+  - id: judge
+    use: demo:evaluate
+    outputs:
+      - name: score
+        type: number
+  - id: gate
+    kind: if
+    predicate:
+      source: ${JSON.stringify(source)}
+      operator: is
+      literal: 1
+    body:
+      - id: redo
+        use: demo:work
+`)));
+    assert.ok(err, `"${source}" is not a predicate source`);
+  }
+});
+
+test('a combination inside a combination is refused: flat, or it is an expression', () => {
+  const err = refusal(() => parseStack(stack(`blocks:
+  - id: judge
+    use: demo:evaluate
+    outputs:
+      - name: score
+        type: number
+      - name: verdict
+        type: string
+  - id: gate
+    kind: if
+    predicate:
+      allOf:
+        - source: judge.score
+          operator: "<"
+          literal: 7
+        - anyOf:
+            - source: judge.verdict
+              operator: is
+              literal: failed
+    body:
+      - id: redo
+        use: demo:work
+`)));
+  assert.ok(err, 'a predicate inside a predicate is the expression grammar D56 keeps out');
+});
+
+test('an if counts as a container, and its worst case is one branch not both', () => {
+  const gate = parseStack(stack(`blocks:
+  - id: judge
+    use: demo:evaluate
+    outputs:
+      - name: score
+        type: number
+  - id: gate
+    kind: if
+    predicate:
+      source: judge.score
+      operator: is not empty
+    body:
+      - id: a
+        use: demo:work
+      - id: b
+        use: demo:work
+    else:
+      - id: c
+        use: demo:work
+`)).root.children[1];
+  assert.ok(isContainer(gate));
+  assert.deepEqual([...walk(gate)].map(n => n.id), ['gate', 'a', 'b', 'c'],
+    'both branches are in the tree, though only one ever runs');
+  assert.equal(boundStack(gate).expansion, 2, 'the heavier branch, not the sum');
+  assert.equal(boundStack(gate).blocks, 3, 'but all three are authored blocks');
 });
