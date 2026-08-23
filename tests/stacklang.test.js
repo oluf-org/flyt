@@ -135,7 +135,7 @@ test('a repeat count must be a literal whole number within the cap, and a missin
 });
 
 test('a container this phase has not built is refused by name, with the phase that brings it', () => {
-  for (const [kind, called] of [['for-each', 'For each'], ['until', 'Until'], ['if', 'If']]) {
+  for (const [kind, called] of [['for-each', 'For each'], ['until', 'Until']]) {
     const err = refusal(() => parseStack(stack(`blocks:
   - id: loop
     kind: ${kind}
@@ -220,7 +220,7 @@ test('a container without a kind is refused rather than guessed at', () => {
       - id: a
         use: work
 `)));
-  assert.match(err.message, /a container needs "kind: sequence" or "kind: parallel"/);
+  assert.match(err.message, /a container needs "kind: sequence", "kind: parallel", "kind: repeat" or "kind: if"/);
 });
 
 test('a block needs a use, and does not take a kind', () => {
