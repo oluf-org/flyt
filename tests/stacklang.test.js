@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { parseStack, MAX_DEPTH, MAX_EXPANSION, MAX_FOR_EACH, MAX_REPEAT, MAX_UNTIL, PLANNED_KINDS, boundStack, walk, isContainer } from '#kernel';
+import { parseStack, MAX_DEPTH, MAX_EXPANSION, MAX_FOR_EACH, MAX_REPEAT, MAX_UNTIL, PLANNED_KINDS, CONTAINER_KINDS, IF_OPERATORS, boundStack, walk, isContainer } from '#kernel';
 
 const stack = body => `version: 2\nid: demo\nname: A demo\n${body}`;
 
@@ -773,4 +773,58 @@ test('worst-case expansion multiplies the body by the authored max', () => {
   const until = parseStack(stack(UNTIL)).root.children[0];
   assert.equal(boundStack(until).blocks, 2, 'two authored blocks in the body');
   assert.equal(boundStack(until).expansion, 10, 'and five passes of them');
+});
+
+// --- STACK_LANG.md says what the parser does (t-0098) ----------------------
+//
+// A document that describes a refusal the code does not make is worse than no
+// document, because the next person builds against it. These are the claims
+// cheap enough to check mechanically; the rest is prose, and prose drifts, so
+// the bounds table and the operator list — the two places a number or a name
+// gets stale silently — are held against the code.
+
+test('the documented bounds are the bounds', () => {
+  const doc = fs.readFileSync(new URL('../STACK_LANG.md', import.meta.url), 'utf8');
+  // The table rows, read as data: `| `MAX_DEPTH` | 6 | ... |`
+  const rows = new Map(doc.split('\n')
+    .map(line => line.match(/^\| `(MAX_[A-Z_]+)` \| (\d+) \|/))
+    .filter(Boolean)
+    .map(m => [m[1], Number(m[2])]));
+  const code = {
+    MAX_DEPTH, MAX_REPEAT, MAX_FOR_EACH, MAX_UNTIL, MAX_EXPANSION,
+  };
+  assert.deepEqual([...rows.keys()].sort(), Object.keys(code).sort(),
+    'every bound the parser enforces has a row, and no row names one it does not');
+  for (const [name, value] of Object.entries(code)) {
+    assert.equal(rows.get(name), value, `${name} in the document matches the code`);
+  }
+});
+
+test('the documented operators are the operators', () => {
+  const doc = fs.readFileSync(new URL('../STACK_LANG.md', import.meta.url), 'utf8');
+  for (const op of IF_OPERATORS) {
+    assert.ok(doc.includes('`' + op + '`'), `STACK_LANG.md lists the "${op}" operator`);
+  }
+  // And nothing that is not one: a reader who finds `matches` here will write it.
+  for (const invented of ['matches', 'contains', 'starts with']) {
+    assert.ok(!doc.includes('`' + invented + '`'),
+      `STACK_LANG.md must not name "${invented}" as an operator`);
+  }
+});
+
+test('every container kind the parser has is documented, and no others', () => {
+  const doc = fs.readFileSync(new URL('../STACK_LANG.md', import.meta.url), 'utf8');
+  // The table under "## Containers", read as data rather than searched for.
+  const after = doc.slice(doc.indexOf('## Containers'));
+  const table = after.slice(0, after.indexOf('\n\n', after.indexOf('|')));
+  const rows = table.split('\n')
+    .map(line => line.match(/^\| `([a-z-]+)` \|/))
+    .filter(Boolean).map(m => m[1]);
+  assert.deepEqual(rows.sort(), [...CONTAINER_KINDS].sort(),
+    'a row for every kind, and a row for nothing else');
+});
+
+test('the v1 DSL is still pointed at, and not renamed', () => {
+  const doc = fs.readFileSync(new URL('../STACK_LANG.md', import.meta.url), 'utf8');
+  assert.match(doc, /FLOW_LANG\.md/, 'v1 keeps v1 names until the cutover');
 });
