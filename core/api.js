@@ -57,6 +57,7 @@ import {
   compareCards, renderScorecard, renderComparison, DEFAULT_SUITE_DIR
 } from './benchmark.js';
 import { writeArchive, listArchive, readArchive, trend, dateStamp } from './archive.js';
+import { listIncidents, resolveIncident, damagedBy, clearDamaged } from './incidents.js';
 import { assertRepoUrl, nameFromRepoUrl } from './references.js';
 import { explainRun, probeModel, doctor, modelsInFlow } from './diagnostics.js';
 
@@ -737,6 +738,41 @@ export function createApi(engine) {
         ...(retired.unreadable ? { unreadable: retired.unreadable } : {})
       };
     },
+    // Put back what something that was not the task's fault took from it: the
+    // rung it was walked up, the attempts it was charged, the block reason
+    // describing work that never ran. `incident` resets everything one incident
+    // damaged in a single call, which is the shape the need actually has — a
+    // provider does not refuse one task, it refuses all of them.
+    'task:reset': ({ projectId, id = null, incident = null, reason = null }) => {
+      const backlog = backlogFor(projectId);
+      const root = engine.configDirOf(projectId);
+      const ids = incident
+        ? damagedBy(root, incident).map(d => d.taskId)
+        : [].concat(id ?? []).map(String).filter(Boolean);
+      if (!ids.length) {
+        throw new ApiError(incident
+          ? `Incident "${incident}" did not record any damaged task.`
+          : 'Name a task to reset, or an incident to reset everything it damaged.',
+        { status: 400, code: 'nothing_to_reset' });
+      }
+      const reset = [];
+      for (const one of ids) {
+        const out = backlog.reset(one, { reason: reason ?? (incident ? `incident ${incident}` : null) });
+        if (out) reset.push({ id: out.id, level: out.level, was: out.before });
+      }
+      // The incident keeps its history and stops advertising a repair that has
+      // now been done: a headline still offering `reset` for tasks already
+      // reset is how a loud channel teaches people to ignore it.
+      if (incident && reset.length) clearDamaged(root, incident, reset.map(r => r.id));
+      return { reset, incident };
+    },
+    'incident:list': ({ projectId, open = false }) =>
+      ({ incidents: listIncidents(engine.configDirOf(projectId), { includeResolved: !open }) }),
+    'incident:resolve': ({ projectId, id, by = 'human' }) => {
+      const out = resolveIncident(engine.configDirOf(projectId), id, { by });
+      if (!out) throw new ApiError(`No incident "${id}".`, { status: 404, code: 'no_incident' });
+      return out;
+    },
     'task:revive': ({ projectId, id }) => {
       const revived = backlogFor(projectId).revive(id);
       if (!revived) throw new ApiError(`No retired task "${id}".`, { status: 404, code: 'no_task' });
@@ -1197,6 +1233,9 @@ export function createApi(engine) {
 
       const sup = new Supervisor({
         invoke, projectId,
+        // Where an incident is recorded, so that a provider refusal outlives
+        // the process that met it (core/incidents.js).
+        stateRoot: engine.configDirOf(projectId) ?? null,
         backlog: backlogFor(projectId),
         ledger: ledgerFor(projectId),
         store: proj(projectId).store,
@@ -1496,7 +1535,11 @@ export function createApi(engine) {
       let project = null;
       try {
         const p = proj(projectId);
-        project = { id: p.id ?? projectId, folder: p.folder ?? null, runsDir: p.store.rootDir };
+        project = {
+          id: p.id ?? projectId, folder: p.folder ?? null, runsDir: p.store.rootDir,
+          // So an open incident can lead the findings (core/incidents.js).
+          stateRoot: engine.configDirOf(projectId) ?? null,
+        };
       } catch { /* no project bound — the rest of the report still stands */ }
       return doctor(engine, { probe, models: list, project });
     },

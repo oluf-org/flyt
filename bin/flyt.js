@@ -55,6 +55,8 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task escalate <id>             one effort level up, back to the queue
   flyt task retire <id>... --reason "<why>" [--force]   park with evidence, out of the queue
   flyt task revive <id>               bring a retired task back, queued
+  flyt task reset <id>... [--reason r]  undo an escalation nothing about the work earned
+  flyt task reset --incident <id>     ...for every task one incident charged
   flyt task rm <id>... [--all]        take tasks out of the queue for good
   flyt task take                      claim the top-scoring ready task
   flyt loop start [--parallel N] [--model <id> | --models low=a,high=b] [--reviewer <id>]
@@ -158,7 +160,7 @@ const COMMAND_FLAGS = {
   ref: ['context', 'pattern', 'repo'],
   run: ['answer', 'approval', 'gates', 'in', 'input', 'join', 'length', 'level', 'timeout'],
   spend: ['by', 'limit', 'since', 'task'],
-  task: ['all', 'blast', 'by', 'dependsOn', 'done', 'effort', 'force', 'gates', 'goal',
+  task: ['all', 'blast', 'by', 'dependsOn', 'done', 'effort', 'force', 'gates', 'goal', 'incident',
     'level', 'note', 'reason', 'references', 'skill', 'skills', 'status', 'title', 'value'],
   tools: ['arg', 'arg-json', 'yes'],
   work: ['attempt', 'dry-run', 'push']
@@ -687,6 +689,27 @@ async function main() {
           if (!id) return die('flyt task revive <id>');
           const task = await api.invoke('task:revive', { projectId, id });
           return out(asJson ? task : `${task.id}\t${task.title}`);
+        }
+        // `flyt task reset <id>...` — or `--incident <id>` for everything one
+        // incident damaged, which is the shape the need usually has: a provider
+        // does not refuse one task, it refuses whichever ones happened to be next.
+        case 'reset': {
+          const ids = positional.slice(2);
+          const incident = typeof flags.incident === 'string' ? flags.incident : null;
+          if (!ids.length && !incident) {
+            return die('flyt task reset <id>... — or --incident <id> to undo everything one incident charged');
+          }
+          const r = await api.invoke('task:reset', {
+            projectId, id: ids, incident,
+            reason: typeof flags.reason === 'string' ? flags.reason : null
+          });
+          if (asJson) return out(r);
+          if (!r.reset.length) return out('nothing to reset');
+          // What each one got back, because "reset 5 tasks" is not something a
+          // person can check and "medium, was xhigh after 6 attempts" is.
+          return out(r.reset.map(t => `reset ${t.id}\tlevel ${t.was.level} → ${t.level}`
+            + `\tattempts ${t.was.attempts} → 0`
+            + (t.was.status !== 'queued' ? `\t${t.was.status} → queued` : '')).join('\n'));
         }
         // `flyt task rm <id>...` / `--all` / `--status parked`. Plural because
         // the case it exists for is plural: a backlog written against the wrong

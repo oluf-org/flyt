@@ -110,6 +110,16 @@ const DEFAULTS = () => ({
   // brief was telling every resumed attempt its gates had passed, which after a
   // gate failure is the one thing that is definitely untrue.
   resumeStage: null,
+  // The level this task had before anything escalated it, recorded on the FIRST
+  // escalation and never overwritten after.
+  //
+  // Without it, undoing an escalation is guesswork. A task found at `xhigh`
+  // after six attempts might have been authored there, or might have started at
+  // `medium` and been walked up by a provider that was refusing every call —
+  // which is what happened to five tasks on 2026-08-24, and what had to be
+  // repaired by hand afterwards from memory. The ladder is cheap to climb and
+  // expensive to be wrong about, so it says where it started.
+  baseLevel: null,
   // Corrections spent on THIS body of work: attempts that kept the diff and
   // went back at the same band to fix what the gates named (core/repair.js).
   // Deliberately not reset when the ladder escalates — the budget is the task's,
@@ -662,19 +672,70 @@ export class Backlog {
     // Without it the ladder cannot tell a rung from a repeat.
     const result = escalateLevel({ level: task.level ?? DEFAULT_LEVEL, reason, attempts, workerAt });
     const blockedReason = [result.reason, note].filter(Boolean).join(' ');
+    // Where the ladder started, remembered once. Set here rather than at `add`
+    // so a task that is never escalated carries nothing, and never overwritten
+    // so the second rung does not record the first rung as the ground.
+    const baseLevel = task.baseLevel ?? task.level ?? DEFAULT_LEVEL;
     if (!result.escalated) {
-      return { ...this.update(id, { status: 'parked', attempts, blockedReason }), escalation: result };
+      return { ...this.update(id, { status: 'parked', attempts, blockedReason, baseLevel }), escalation: result };
     }
     // The lease goes with it: an escalated task is queued again, and a task
     // that is queued while still holding a lock can never be picked up.
     try { fs.unlinkSync(this.#lock(task.id)); } catch { /* no lock held */ }
     return {
       ...this.update(id, {
-        status: 'queued', attempts, level: result.level, blockedReason,
+        status: 'queued', attempts, level: result.level, blockedReason, baseLevel,
         claimedBy: null, claimedAt: null
       }),
       escalation: result
     };
+  }
+
+  /**
+   * Put a task back the way it was before something that was not its fault.
+   *
+   * The counterpart to `escalate`. A provider that refuses every call, a tool
+   * that cannot edit a file, a loop whose process died — none of these are the
+   * work being inadequate, but all of them used to arrive at the task as spent
+   * attempts, a climbed effort ladder and a `blockedReason` describing work
+   * that had never run. Five tasks needed this on 2026-08-24 and it did not
+   * exist, so it was done by hand, from memory, at midnight.
+   *
+   * What comes back: the level it started at (from `baseLevel`, which the first
+   * escalation recorded), no attempts, no block reason, no lease, and queued.
+   * What does NOT come back is `repairs` — corrections spent on a body of work
+   * that still exists are still spent, and the resumeFrom they belong to is
+   * cleared here only because a task starting over must never resume from a
+   * commit judged under different conditions.
+   */
+  reset(id, { reason = null } = {}) {
+    const safe = this.#assertId(id);
+    const task = this.get(safe);
+    if (!task) return null;
+    if (task.status === 'landed') {
+      throw new Error(`Task "${safe}" has landed; there is nothing to put back.`);
+    }
+    const level = task.baseLevel ?? task.level ?? null;
+    const before = {
+      status: task.status, attempts: task.attempts ?? 0,
+      level: task.level ?? null, blockedReason: task.blockedReason ?? null,
+    };
+    // The lease goes, or a queued task nobody holds can never be picked up.
+    try { fs.rmSync(this.#lock(safe)); } catch { /* no lock held */ }
+    const next = this.update(safe, {
+      status: 'queued',
+      attempts: 0,
+      level,
+      baseLevel: null,
+      blockedReason: reason ? `Reset: ${reason}` : null,
+      resumeFrom: null,
+      resumeStage: null,
+      failureSignature: null,
+      failureCount: null,
+      claimedBy: null,
+      claimedAt: null,
+    });
+    return { ...next, before };
   }
 
   // --- picking (§5.3) ------------------------------------------------------
