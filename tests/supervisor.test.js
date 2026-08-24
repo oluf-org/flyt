@@ -17,6 +17,7 @@ import { providerRefusal,
   Supervisor, renderReport, providerBlocked, modelUnavailable, UNAVAILABLE_RETRIES, LEASE_WAIT_MS,
 } from '../core/supervisor.js';
 import { openIncidents, resolveIncident, incidentHeadline } from '../core/incidents.js';
+import { briefNotes } from '../core/brief.js';
 import { Backlog } from '../core/backlog.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-sup-'));
@@ -1645,4 +1646,41 @@ test('a rate limit is not an incident: it clears on its own', async () => {
   await new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1, stateRoot: root }).run();
 
   assert.equal(openIncidents(root).length, 0, 'nobody is woken for a rate limit');
+});
+
+test('escalating amends the brief, so the dearer model reads what the cheap one hit', async () => {
+  // The point of a rung is that the next attempt does better. A bigger model
+  // given the identical brief mostly makes the identical mistake, more
+  // expensively — so what the last attempt ran into goes into the task before
+  // the rung is spent.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'work', goal: 'g', level: 'low', blastRadius: ['core/a.js'] });
+  const engine = fakeEngine({
+    backlog, error: 'the run failed', stages: { default: ['running', 'failed'] },
+  });
+  await new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 }).run({ maxTasks: 1 });
+
+  const task = backlog.get('t-0001');
+  assert.equal(task.level, 'medium', 'the rung was still spent');
+  assert.match(task.body, /What previous attempts hit/, "and the brief now says what happened");
+  assert.match(task.body, /Attempt 1/);
+  assert.deepEqual(briefNotes(task.body).length, 1, 'recorded so the next one adds to it');
+});
+
+test('the amendment never replaces what the author wrote', async () => {
+  const backlog = makeBacklog();
+  backlog.add({
+    title: 'work', goal: 'the original instruction', level: 'low',
+    doneWhen: ['the original acceptance'],
+  });
+  const engine = fakeEngine({
+    backlog, error: 'the run failed', stages: { default: ['running', 'failed'] },
+  });
+  await new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 }).run({ maxTasks: 1 });
+
+  const body = backlog.get('t-0001').body;
+  assert.match(body, /the original instruction/);
+  assert.match(body, /the original acceptance/);
+  assert.ok(body.indexOf('the original instruction') < body.indexOf('What previous attempts hit'),
+    'the task still opens with the task');
 });

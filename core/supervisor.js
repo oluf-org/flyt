@@ -31,6 +31,7 @@ import { spendFromRun, totalsWithLive } from './ledger.js';
 import { captureWorkspaceSignature } from './effect.js';
 import { unrunnableGates } from './gates.js';
 import { raiseIncident } from './incidents.js';
+import { amendBrief, briefNotes } from './brief.js';
 import { classifyAdapterError, needsHuman } from './adapters/failures.js';
 import { whyNothingReady } from './blockers.js';
 import { CONFIG_DIR } from './brand.js';
@@ -495,6 +496,34 @@ export class Supervisor {
     try {
       if (this.stateRoot) this.incident = raiseIncident(this.stateRoot, what);
     } catch { /* an unwritable incident must never take the loop down */ }
+  }
+
+  /**
+   * Write what this attempt hit into the task, before the next one reads it.
+   *
+   * The point of escalating is that the next attempt should do better, and a
+   * dearer model reading the identical brief mostly makes the identical
+   * mistake more expensively. Everything recorded here is a count or a set
+   * difference the run already produced (core/brief.js) — no call is made, so
+   * this costs nothing and can run on every escalation.
+   *
+   * Swallowed, like the other bookkeeping: failing to improve a brief is not a
+   * reason to fail to escalate.
+   */
+  #amend(taskId, evidence) {
+    try {
+      const task = this.backlog.get(taskId);
+      if (!task) return;
+      const note = {
+        attempt: (task.attempts ?? 0) + 1,
+        level: task.level ?? null,
+        at: new Date(this.now()).toISOString(),
+        blastRadius: task.blastRadius ?? [],
+        ...evidence,
+      };
+      const body = amendBrief(task.body ?? '', [...briefNotes(task.body ?? ''), note]);
+      if (body !== task.body) this.backlog.update(taskId, { body });
+    } catch { /* an unamendable brief must never take the loop down */ }
   }
 
   #windowMs() { return this.config.loop?.windowMs ?? 24 * 60 * 60 * 1000; }
@@ -1483,6 +1512,14 @@ export class Supervisor {
         // than "the run itself failed".
       }
 
+      // Amend the brief BEFORE the rung is spent, so the dearer model reads
+      // what the cheaper ones hit rather than the same words that defeated them.
+      this.#amend(taskId, {
+        stage: 'run-failed',
+        wroteNothing: Boolean(effectMissing(error)),
+        said: unreachable ? null : firstSentenceOf(String(error ?? '')),
+        model: hb?.worker?.model ?? null,
+      });
       await this.#discard(taskId);
       const result = this.backlog.escalate(taskId, {
         reason: 'failed',
