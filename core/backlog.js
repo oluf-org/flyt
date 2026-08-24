@@ -371,10 +371,13 @@ export class Backlog {
   update(id, patch = {}) {
     const task = this.get(id);
     if (!task) throw new Error(`No task "${id}".`);
-    const safe = this.#assertId(id);
-    // If status is being set to a terminal state, remove the lock
-    if (patch.status && (patch.status === 'landed' || patch.status === 'failed')) {
-      try { fs.unlinkSync(this.#lock(safe)); } catch (e) { /* ignore */ }
+    // A task that reaches a terminal status has no lease to keep: no worker
+    // holds it, no run is executing it, and leaving the lock behind misreports
+    // who holds the task and blocks `remove()` without --force. Clearing it
+    // here, in the one method that sees every status change, means no caller
+    // has to remember to do it — the rule lives in the store.
+    if (patch.status && TERMINAL.has(patch.status)) {
+      try { fs.unlinkSync(this.#lock(task.id)); } catch { /* no lock to drop */ }
     }
     const next = { ...task, ...patch, id: task.id, updatedAt: new Date().toISOString() };
     if (patch.status && !TASK_STATUSES.includes(patch.status)) {

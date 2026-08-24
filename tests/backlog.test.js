@@ -472,3 +472,29 @@ test('a list field given a scalar is refused, not written', () => {
   // ...and the file is still readable by everything that reads it.
   assert.equal(backlog.list().length, 1);
 });
+
+test('landing a claimed task drops its lock as part of the same write', () => {
+  const backlog = newBacklog();
+  const task = backlog.add({ title: 'to land', goal: 'g' });
+  backlog.claim(task.id, 'worker-a');
+  const lock = path.join(backlog.rootDir, `${task.id}.lock`);
+  assert.equal(fs.existsSync(lock), true, 'a claim leaves a lock');
+
+  backlog.update(task.id, { status: 'landed', attempts: 1, blockedReason: null });
+
+  assert.equal(backlog.get(task.id).status, 'landed');
+  assert.equal(fs.existsSync(lock), false, 'the lock is gone with the terminal status, not by a caller');
+});
+
+test('failing a claimed task drops its lock as part of the same write', () => {
+  const backlog = newBacklog();
+  const task = backlog.add({ title: 'to fail', goal: 'g' });
+  backlog.claim(task.id, 'worker-a');
+  const lock = path.join(backlog.rootDir, `${task.id}.lock`);
+  assert.equal(fs.existsSync(lock), true, 'a claim leaves a lock');
+
+  backlog.update(task.id, { status: 'failed', attempts: 1, blockedReason: 'gates rejected' });
+
+  assert.equal(backlog.get(task.id).status, 'failed');
+  assert.equal(fs.existsSync(lock), false, 'the lock is gone with the terminal status, not by a caller');
+});
