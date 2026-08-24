@@ -529,7 +529,13 @@ function readNode(ctx: Ctx, raw: YamlValue, path: string, depth: number): StackN
  * @throws {YamlError} for anything outside the YAML subset.
  */
 export function parseStack(source: string, fallbackId = ''): Stack {
-  const doc = parseYaml(source);
+  // A byte-order mark is not content. Windows editors add one by default, so a
+  // hand-written stack file routinely arrives with an invisible character in
+  // front of `version:` — and the refusal for that read "unexpected content
+  // after the document (line 2)", which points at the wrong line for a problem
+  // nobody can see. It is a fact about the file, so it is dropped here rather
+  // than described.
+  const doc = parseYaml(source.charCodeAt(0) === 0xFEFF ? source.slice(1) : source);
   if (!isMapping(doc)) {
     throw new StackError('a stack file is a mapping with a "blocks" list in it', 'stack', 0);
   }

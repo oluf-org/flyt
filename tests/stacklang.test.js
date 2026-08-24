@@ -828,3 +828,13 @@ test('the v1 DSL is still pointed at, and not renamed', () => {
   const doc = fs.readFileSync(new URL('../STACK_LANG.md', import.meta.url), 'utf8');
   assert.match(doc, /FLOW_LANG\.md/, 'v1 keeps v1 names until the cutover');
 });
+
+test('a stack file saved with a byte-order mark parses', () => {
+  // Windows editors add one by default and it is invisible everywhere a person
+  // would look. The refusal used to be "unexpected content after the document
+  // (line 2)", which points at the line after the problem.
+  const BOM = String.fromCharCode(0xFEFF);
+  const s = parseStack(BOM + stack('blocks:\n  - id: a\n    use: demo:work\n'));
+  assert.equal(s.id, 'demo');
+  assert.deepEqual(s.root.children.map(c => c.id), ['a']);
+});
