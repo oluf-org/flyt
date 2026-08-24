@@ -123,3 +123,46 @@ test('fallback: with no bound workspace, file tools use the run sandbox', async 
   assert.equal(rec.result.written, 'workspace/notes.md'); // relative to the run dir, as before
   assert.equal(store.readWorkspaceFile(runId, 'notes.md'), '# hi\n');
 });
+
+// --- search answers the same question every other file tool does -----------
+//
+// A search that says "not here" about code that IS here is worse than one that
+// errors, because nobody goes looking for a bug in a negative result. Read
+// blindly as UTF-8, every line of a CRLF file ended with a carriage return, so
+// any pattern anchored to end-of-line matched nothing, in silence.
+
+test('search_files: an end-of-line anchor matches in a CRLF file', async () => {
+  const CR = String.fromCharCode(13);
+  const ctx = boundCtx();
+  fs.writeFileSync(path.join(ctx.proj, 'crlf.js'),
+    Buffer.from('const foo = 1;' + CR + '\n' + 'const bar = 2;' + CR + '\n', 'utf8'));
+
+  const rec = await executeTool('search_files', { pattern: 'foo = 1;$' }, ctx);
+  assert.equal(rec.ok, true, rec.error);
+  assert.equal(rec.result.results.length, 1, 'the line is there, so it must be found');
+  assert.ok(!rec.result.results[0].text.endsWith(CR),
+    'and the hit is not reported with a stray carriage return on it');
+});
+
+test('search_files: a UTF-16 file is searched as text, not as mojibake', async () => {
+  const ctx = boundCtx();
+  fs.writeFileSync(path.join(ctx.proj, 'wide.js'), Buffer.concat([
+    Buffer.from([0xFF, 0xFE]),
+    Buffer.from('const needle = 1;\n', 'utf16le'),
+  ]));
+
+  const rec = await executeTool('search_files', { pattern: 'needle' }, ctx);
+  assert.equal(rec.ok, true, rec.error);
+  assert.equal(rec.result.results.length, 1, 'a NUL between every letter matched nothing before');
+});
+
+test('search_files: a binary file is skipped rather than searched as text', async () => {
+  const ctx = boundCtx();
+  fs.writeFileSync(path.join(ctx.proj, 'logo.png'), Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4E, 0x47]), Buffer.alloc(64, 0x00),
+  ]));
+
+  const rec = await executeTool('search_files', { pattern: 'PNG' }, ctx);
+  assert.equal(rec.ok, true, rec.error);
+  assert.equal(rec.result.results.length, 0, 'its bytes are not lines of text');
+});

@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileHost } from './fileHost.js';
 import { globToRegExp } from './glob.js';
+import { readFileShaped, toEol } from './textFile.js';
 
 const DEFAULT_MAX_RESULTS = 40;
 const MAX_RESULTS = 200;
@@ -138,13 +139,19 @@ export default {
         let text;
         try {
           if (fs.statSync(abs).size > MAX_FILE_BYTES) continue;
-          text = fs.readFileSync(abs, 'utf8');
+          // Through the interpreter, so a search answers the same question every
+          // other file tool does. Read blindly as UTF-8, a CRLF file gave every
+          // line a trailing carriage return, so `foo$` matched nothing — in
+          // silence, and the reader concluded the code was not there. A UTF-16
+          // file was searched as mojibake and matched nothing for the same
+          // reason, less visibly. Binary files are skipped here as they always
+          // were, now by what they are rather than by a NUL in the decoding.
+          const read = readFileShaped(abs);
+          if (!read || read.shape.binary) continue;
+          text = read.text;
         } catch { continue; }
-        // A NUL byte is the cheap, reliable binary test, and cheaper than
-        // maintaining a list of extensions that will always be incomplete.
-        if (text.includes('\0')) continue;
 
-        const lines = text.split('\n');
+        const lines = toEol(text, '\n').split('\n');
         let hitsHere = 0;
         for (let i = 0; i < lines.length; i++) {
           if (!re.test(lines[i])) continue;
