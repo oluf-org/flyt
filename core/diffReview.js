@@ -13,6 +13,7 @@
 //     gate results. Handing it the author's justification is how a reviewer
 //     gets talked into things.
 import { callModel } from './adapters/index.js';
+import { classifyAdapterError, needsHuman } from './adapters/failures.js';
 import { extractJson } from './planEval.js';
 import { REASONING_HEADROOM } from '../src/flowTypes.js';
 
@@ -152,10 +153,24 @@ export async function reviewDiff({
     }
     return { ...parsed, model: { provider: res.provider, model: res.model }, usage: res.usage ?? null };
   } catch (err) {
+    // A reviewer that COULD NOT RUN is not a reviewer that objected.
+    //
+    // Both used to arrive as `request-changes`, so a provider refusing the
+    // review call was charged to the task as a rejection: the work was sent
+    // back, the attempt counted, the rung spent. Watched it on 2026-08-24 —
+    // a worker on a free model produced a diff, the reviewer was still pointed
+    // at a paid one, and the 402 that came back read as "the reviewer wants
+    // changes".
+    //
+    // `refusal` is set only when nothing about retrying, escalating or picking
+    // another task would get past it (core/adapters/failures.js), which is
+    // exactly when the caller must stop rather than blame the diff.
+    const seen = classifyAdapterError(err, { provider: 'the reviewer' });
     return {
       verdict: 'request-changes',
       reason: `The review could not be completed: ${String(err?.message ?? err).slice(0, 200)}`,
-      changes: [], concerns: [], unavailable: true
+      changes: [], concerns: [], unavailable: true,
+      ...(needsHuman(seen.code) ? { refusal: { code: seen.code, remedy: seen.remedy } } : {})
     };
   }
 }

@@ -1518,7 +1518,10 @@ export class Supervisor {
         stage: 'run-failed',
         wroteNothing: Boolean(effectMissing(error)),
         said: unreachable ? null : firstSentenceOf(String(error ?? '')),
-        model: hb?.worker?.model ?? null,
+        // The heartbeat carries the model directly; `hb.worker` does not exist,
+        // and reading it wrote `model: null` into three amendments before a
+        // real run showed it.
+        model: hb?.model ?? null,
       });
       await this.#discard(taskId);
       const result = this.backlog.escalate(taskId, {
@@ -1584,6 +1587,37 @@ export class Supervisor {
         : null
     });
     if (landed.canaryOutput) this.lastCanaryOutput = landed.canaryOutput;
+
+    // A REVIEWER THAT COULD NOT RUN IS NOT A REVIEWER THAT OBJECTED.
+    //
+    // The same failure as a refused worker call, one stage later and easier to
+    // miss: the work is finished, the gates are green, and the only thing that
+    // went wrong is that nothing could be asked to look at it. Charged as a
+    // rejection it costs the attempt, the rung, and the diff — which is the
+    // expensive end of this mistake, because there was a good change sitting
+    // there. Watched it on 2026-08-24: a worker ran on a free model, the
+    // reviewer was still pointed at a paid one, and its 402 came back reading
+    // as "the reviewer wants changes".
+    //
+    // The work is kept where it is. Nothing is escalated, nothing is parked,
+    // and the loop stops — the next task's review would fail identically.
+    if (!landed.landed && landed.review?.refusal) {
+      const { code, remedy } = landed.review.refusal;
+      this.backlog.release(taskId, { status: 'queued' });
+      this.stopping = `the reviewer could not be reached: ${landed.review.reason}`;
+      this.running = false;
+      this.#raise({
+        kind: 'provider', code, remedy,
+        detail: landed.review.reason, taskId, runId: hb?.runId ?? null,
+        dedupeKey: `review:${code}`,
+      });
+      this.log(`✖ ${taskId} ${this.stopping}`, { taskId });
+      this.log(`  The work is finished and unreviewed, not rejected — it keeps its attempt and its rung.`
+        + ` ${remedy ?? ''}`, { taskId });
+      this.#publish();
+      return;
+    }
+
     this.history.push({
       taskId, landed: landed.landed, stage: landed.stage, guidance: landed.guidance ?? null,
       repair: landed.repair ? { verdict: landed.repair.verdict, count: landed.repair.count } : null

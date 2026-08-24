@@ -158,3 +158,21 @@ test('the section tells a human where to edit, since the loop rewrites this one'
   const out = amendBrief(BODY, [{ attempt: 1, wroteNothing: true }]);
   assert.match(out, /Edit the task above it/);
 });
+
+test('every band writing nothing is the brief, not five models being too small', () => {
+  // Seen for real: t-0089 went low → medium → high → xhigh → max and every one
+  // of them wrote nothing. Models at different prices do not fail the same way
+  // by coincidence.
+  const said = repeatedFailure([
+    { attempt: 5, level: 'high', wroteNothing: true },
+    { attempt: 6, level: 'xhigh', wroteNothing: true },
+    { attempt: 8, level: 'max', wroteNothing: true },
+  ]);
+  assert.match(said, /3 attempts wrote nothing/);
+  assert.match(said, /across high, xhigh, max/);
+  assert.match(said, /which file should end up different and how/);
+});
+
+test('one attempt writing nothing is still just an attempt', () => {
+  assert.equal(repeatedFailure([{ wroteNothing: true }]), null);
+});

@@ -112,14 +112,26 @@ export function attemptFindings(evidence = {}) {
  * addressed to the human rather than to the next worker.
  */
 export function repeatedFailure(notes = []) {
+  const ladder = 'A dearer model has already been tried and did not resolve it.';
+
+  // Nothing written, more than once. Seen for real: t-0089 went low → medium →
+  // high → xhigh → max, and every band wrote nothing at all. Five models cannot
+  // all be too small for the same task; what they have in common is the brief.
+  const silent = notes.filter(n => n.wroteNothing);
+  if (silent.length >= 2) {
+    const bands = [...new Set(silent.map(n => n.level).filter(Boolean))];
+    return `${silent.length} attempts wrote nothing${bands.length > 1 ? `, across ${list(bands)}` : ''}. `
+      + `${ladder} Models at different prices do not fail the same way by coincidence — the brief does `
+      + 'not say, in a way anything can act on, which file should end up different and how.';
+  }
+
   const gateSets = notes.map(n => clean(n.gateFailures)).filter(g => g.length);
   if (gateSets.length < 2) return null;
   const shared = gateSets.reduce((a, b) => a.filter(x => b.includes(x)));
   if (!shared.length) return null;
   return `${gateSets.length} attempts failed on the same thing: ${list(shared)}. `
-    + 'A dearer model has already been tried and did not resolve it. Either the task is asking for '
-    + 'something the gate forbids, or the gate is asserting something the task never promised — '
-    + 'that is a decision for a human, not a rung.';
+    + `${ladder} Either the task is asking for something the gate forbids, or the gate is asserting `
+    + 'something the task never promised — that is a decision for a human, not a rung.';
 }
 
 /**
