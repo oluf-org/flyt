@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { executeTool } from '../core/tools/index.js';
 import { Workspace } from '../core/workspace.js';
-import { closestLine, findAll } from '../core/tools/edit_file.js';
+import { normalized, origin, closestLine, findAll } from '../core/tools/edit_file.js';
 import { makeStore } from './helpers.js';
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-edit-'));
@@ -192,4 +192,159 @@ test('edit_file: a genuine miss in a CRLF file names a real line, not the header
   assert.equal(rec.ok, false);
   assert.match(rec.error, /export const value = 1;/, 'the nearest line is the one actually meant');
   assert.ok(!/\r/.test(rec.error), `and it is not quoted with a stray carriage return: ${rec.error}`);
+});
+
+// The mapping back into the original is arithmetic, not a table: an index in
+// the normalised view sits that many characters later as there were CRLF pairs
+// collapsed before it. That is worth ten times the speed and none of the
+// memory of the per-character version it replaced, and it is exactly the kind
+// of cleverness that is wrong in one place nobody looks. So it is held against
+// the obvious implementation, over strings built to be awkward.
+test('origin() agrees with the obvious implementation, everywhere', () => {
+  const CR = String.fromCharCode(13);
+  const LF = String.fromCharCode(10);
+  const cases = [
+    'no line endings at all',
+    LF + LF + LF,
+    CR + LF + CR + LF,
+    'a' + CR + LF + 'b' + LF + 'c' + CR + LF,          // mixed
+    CR + LF + 'leading pair',
+    'trailing pair' + CR + LF,
+    'lone carriage' + CR + 'return',                    // CR not followed by LF
+    CR + CR + LF,                                       // CR then a real pair
+    'x' + (CR + LF).repeat(50) + 'y',
+    '',
+  ];
+  for (const text of cases) {
+    const { norm, breaks } = normalized(text);
+    // The obvious implementation: walk it, and remember where every kept
+    // character came from.
+    const expect = [];
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === CR && text[i + 1] === LF) { expect.push(i); i++; continue; }
+      expect.push(i);
+    }
+    expect.push(text.length);
+    assert.equal(norm.length, expect.length - 1, `norm length for ${JSON.stringify(text)}`);
+    for (let i = 0; i <= norm.length; i++) {
+      assert.equal(origin(breaks, i), expect[i],
+        `index ${i} of ${JSON.stringify(text)}`);
+    }
+  }
+});
+
+// Old-style Mac endings are the third case, and they are not hypothetical in
+// the sense that matters: they are the same bug as CRLF, waiting for the first
+// file that has them. Folding a lone carriage return is a 1:1 substitution, so
+// it costs the index mapping nothing.
+test('edit_file: a file that uses lone carriage returns is matchable, and stays that way', async () => {
+  const CR = String.fromCharCode(13);
+  const ctx = boundCtx({ 'a.txt': 'one' + CR + 'two' + CR + 'three' + CR });
+  const rec = await executeTool('edit_file', {
+    path: 'a.txt', old: 'one\ntwo', new: 'one\nTWO',
+  }, ctx);
+
+  assert.equal(rec.ok, true, rec.error);
+  assert.equal(read(ctx, 'a.txt'), 'one' + CR + 'TWO' + CR + 'three' + CR,
+    'a plain-newline anchor matches it, and every ending is still a carriage return');
+});
+
+test('normalized() folds a lone carriage return without moving any index', () => {
+  const CR = String.fromCharCode(13);
+  const LF = String.fromCharCode(10);
+  const { norm, breaks } = normalized('one' + CR + 'two' + CR + 'three');
+  assert.equal(norm, 'one' + LF + 'two' + LF + 'three');
+  assert.deepEqual(breaks, [], "nothing was removed, so nothing shifts");
+  for (let i = 0; i <= norm.length; i++) assert.equal(origin(breaks, i), i);
+});
+
+// --- through the tools, which is where it actually bit ---------------------
+//
+// The unit tests above prove the interpreter. These prove the tools use it:
+// a BOM that made line 1 unmatchable, a UTF-16 file that read as mojibake, and
+// a binary file that a read-then-write destroyed.
+
+const bytesOf = (ctx, rel) => fs.readFileSync(path.join(ctx.proj, rel));
+const CRLF = String.fromCharCode(13, 10);
+const BOM = Buffer.from([0xEF, 0xBB, 0xBF]);
+
+test('edit_file: an anchor on the first line of a file with a BOM matches', async () => {
+  // The mark decodes to an invisible character in front of the first one, so
+  // `old: "/**"` could not match however carefully it was copied.
+  const before = Buffer.concat([BOM, Buffer.from("/**" + CRLF + " * A header." + CRLF, "utf8")]);
+  const ctx = boundCtx({ 'a.ts': before });
+  const rec = await executeTool('edit_file', {
+    path: 'a.ts', old: '/**\n * A header.', new: '/**\n * A better header.',
+  }, ctx);
+
+  assert.equal(rec.ok, true, rec.error);
+  const after = bytesOf(ctx, 'a.ts');
+  assert.ok(after.subarray(0, 3).equals(BOM), "the mark is a fact about the file and survives");
+  assert.equal(after.subarray(3).toString("utf8"), "/**" + CRLF + " * A better header." + CRLF);
+});
+
+test('edit_file: a UTF-16 file is edited as text and stays UTF-16', async () => {
+  const before = Buffer.concat([Buffer.from([0xFF, 0xFE]),
+    Buffer.from("const a = 1;" + CRLF + "const b = 2;" + CRLF, "utf16le")]);
+  const ctx = boundCtx({ 'a.ts': before });
+  const rec = await executeTool('edit_file', {
+    path: 'a.ts', old: 'const b = 2;', new: 'const b = 22;',
+  }, ctx);
+
+  assert.equal(rec.ok, true, rec.error);
+  const after = bytesOf(ctx, 'a.ts');
+  assert.ok(after.subarray(0, 2).equals(Buffer.from([0xFF, 0xFE])), "still UTF-16, still marked");
+  assert.equal(after.subarray(2).toString("utf16le"),
+    "const a = 1;" + CRLF + "const b = 22;" + CRLF);
+});
+
+test('edit_file: a binary file is refused, and not one byte of it moves', async () => {
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+    Buffer.from([0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52]), Buffer.alloc(32, 0xFF)]);
+  const ctx = boundCtx({ 'logo.png': png });
+  const rec = await executeTool('edit_file', { path: 'logo.png', old: 'IHDR', new: 'XXXX' }, ctx);
+
+  assert.equal(rec.ok, false);
+  assert.match(rec.error, /not a text file/);
+  assert.ok(bytesOf(ctx, 'logo.png').equals(png), 'the file is exactly as it was');
+});
+
+test('read_file: a binary file is reported as binary, not as missing', async () => {
+  // It used to read as mojibake, and writing that mojibake back destroyed the
+  // file. Refusing to hand it over is what closes that path.
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47]), Buffer.alloc(40)]);
+  const ctx = boundCtx({ 'logo.png': png });
+  const rec = await executeTool('read_file', { path: 'logo.png' }, ctx);
+
+  assert.equal(rec.ok, true);
+  assert.equal(rec.result.binary, true);
+  assert.equal(rec.result.bytes, png.length);
+  assert.ok(!("content" in rec.result), "nothing pretends to have read it");
+  assert.match(rec.result.note, /not a text file/);
+});
+
+test('write_file: replacing a file does not change what the file is', async () => {
+  // A model answers in plain newlines whatever the file used. Without the
+  // shape, a one-line correction to a CRLF file rewrites every line in it and
+  // a file with a BOM quietly loses it.
+  const before = Buffer.concat([BOM, Buffer.from("one" + CRLF + "two" + CRLF, "utf8")]);
+  const ctx = boundCtx({ 'a.txt': before });
+  const rec = await executeTool('write_file', {
+    path: 'a.txt', content: 'one\ntwo\nthree\n',
+  }, ctx);
+
+  assert.equal(rec.ok, true, rec.error);
+  const after = bytesOf(ctx, 'a.txt');
+  assert.ok(after.subarray(0, 3).equals(BOM), "the mark survives a whole-file write");
+  assert.equal(after.subarray(3).toString("utf8"),
+    "one" + CRLF + "two" + CRLF + "three" + CRLF,
+    "and so do the line endings the file already used");
+});
+
+test('write_file: a brand new file is written exactly as it was given', async () => {
+  // Nothing to preserve, so nothing is imposed: the caller decides.
+  const ctx = boundCtx({});
+  const rec = await executeTool('write_file', { path: 'new.txt', content: 'a\nb\n' }, ctx);
+  assert.equal(rec.ok, true, rec.error);
+  assert.equal(bytesOf(ctx, 'new.txt').toString('utf8'), 'a\nb\n');
 });

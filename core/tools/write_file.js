@@ -1,7 +1,8 @@
 // write_file: create or OVERWRITE a text file. Acts on the run's bound
 // workspace (the real target project) when one is set, else the run's own
 // workspace sandbox. Path confinement is enforced by the file backend.
-import { fileHost, writeText, noteWorkspaceWrite } from './fileHost.js';
+import { fileHost, readShaped, writeText, noteWorkspaceWrite } from './fileHost.js';
+import { toEol } from './textFile.js';
 
 export default {
   name: 'write_file',
@@ -23,9 +24,16 @@ export default {
   run(args, ctx) {
     const host = fileHost(ctx);
     const conflict = noteWorkspaceWrite(ctx, args.path);
-    const written = writeText(host, args.path, args.content);
+    // Replacing a file does not change its encoding, its byte-order mark or its
+    // line endings. A model answers in plain newlines whatever the file used, so
+    // without this a one-line correction to a CRLF file rewrites every line in
+    // it — and a file with a BOM quietly loses it.
+    const existing = readShaped(host, args.path);
+    const shape = existing && !existing.shape.binary ? existing.shape : null;
+    const content = shape ? toEol(args.content, shape.eol) : args.content;
+    const written = writeText(host, args.path, content, shape);
     return {
-      written, bytes: Buffer.byteLength(args.content, 'utf8'), target: host.target,
+      written, bytes: Buffer.byteLength(content, 'utf8'), target: host.target,
       ...(conflict ? { conflictWith: conflict } : {})
     };
   }
