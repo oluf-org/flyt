@@ -371,14 +371,6 @@ export class Backlog {
   update(id, patch = {}) {
     const task = this.get(id);
     if (!task) throw new Error(`No task "${id}".`);
-    // A task that reaches a terminal status has no lease to keep: no worker
-    // holds it, no run is executing it, and leaving the lock behind misreports
-    // who holds the task and blocks `remove()` without --force. Clearing it
-    // here, in the one method that sees every status change, means no caller
-    // has to remember to do it — the rule lives in the store.
-    if (patch.status && TERMINAL.has(patch.status)) {
-      try { fs.unlinkSync(this.#lock(task.id)); } catch { /* no lock to drop */ }
-    }
     const next = { ...task, ...patch, id: task.id, updatedAt: new Date().toISOString() };
     if (patch.status && !TASK_STATUSES.includes(patch.status)) {
       throw new Error(`Unknown status "${patch.status}".`);
@@ -416,6 +408,19 @@ export class Backlog {
       next[field] = n;
     }
     fs.writeFileSync(this.#file(task.id), serializeTask(stripId(next)));
+    // A task that reached a terminal status has no lease to keep: nothing holds
+    // it, nothing is executing it, and the lock left behind misreports who does
+    // and blocks `remove()` without --force. Done in the one method every status
+    // change goes through, so no caller has to remember it.
+    //
+    // AFTER the write, deliberately. Every validation above throws, and a lock
+    // dropped before one of them leaves a task that is still `running` with
+    // nothing guarding it — free for a second worker to claim while the first is
+    // mid-attempt. The lease is the thing protecting the work, so it is released
+    // only once the status that makes it unnecessary is actually on disk.
+    if (TERMINAL.has(next.status)) {
+      try { fs.rmSync(this.#lock(task.id)); } catch { /* no lock to drop */ }
+    }
     this._cache.delete(this.#file(task.id));
     return next;
   }

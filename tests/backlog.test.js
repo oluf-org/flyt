@@ -498,3 +498,35 @@ test('failing a claimed task drops its lock as part of the same write', () => {
   assert.equal(backlog.get(task.id).status, 'failed');
   assert.equal(fs.existsSync(lock), false, 'the lock is gone with the terminal status, not by a caller');
 });
+
+test('a lock survives every status that is not terminal', () => {
+  // The dangerous direction. Widening the terminal set, or moving this check
+  // above the validation that can throw, takes the lease off a task that is
+  // still being worked — and a running task with no lock is one a second
+  // worker may claim while the first is mid-attempt.
+  const backlog = newBacklog();
+  const task = backlog.add({ title: 'in flight', goal: 'g' });
+  backlog.claim(task.id, 'worker-a');
+  const lock = path.join(backlog.rootDir, `${task.id}.lock`);
+
+  for (const status of ['running', 'verifying', 'review', 'parked', 'queued', 'claimed']) {
+    backlog.update(task.id, { status });
+    assert.equal(fs.existsSync(lock), true, `${status} is not terminal, so the lease stands`);
+  }
+});
+
+test('an update that is refused does not release the lease on its way out', () => {
+  // Every validation in update() throws, and the lock used to be dropped before
+  // them: a rejected write left the task `running` on disk with nothing
+  // guarding it.
+  const backlog = newBacklog();
+  const task = backlog.add({ title: 'in flight', goal: 'g' });
+  backlog.claim(task.id, 'worker-a');
+  backlog.update(task.id, { status: 'running' });
+  const lock = path.join(backlog.rootDir, `${task.id}.lock`);
+
+  assert.throws(() => backlog.update(task.id, { status: 'landed', attempts: 'not a number' }),
+    /is a number/);
+  assert.equal(fs.existsSync(lock), true, 'the write was refused, so the lease it would have ended stands');
+  assert.equal(backlog.get(task.id).status, 'running', 'and the status is untouched');
+});
