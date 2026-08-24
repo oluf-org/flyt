@@ -371,6 +371,11 @@ export class Backlog {
   update(id, patch = {}) {
     const task = this.get(id);
     if (!task) throw new Error(`No task "${id}".`);
+    const safe = this.#assertId(id);
+    // If status is being set to a terminal state, remove the lock
+    if (patch.status && (patch.status === 'landed' || patch.status === 'failed')) {
+      try { fs.unlinkSync(this.#lock(safe)); } catch (e) { /* ignore */ }
+    }
     const next = { ...task, ...patch, id: task.id, updatedAt: new Date().toISOString() };
     if (patch.status && !TASK_STATUSES.includes(patch.status)) {
       throw new Error(`Unknown status "${patch.status}".`);
