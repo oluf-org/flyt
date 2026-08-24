@@ -13,9 +13,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { Ledger, costOf, spendFromRun } from '../core/ledger.js';
 import { Heartbeat, detectStall, workSignature, nextIntervention, DEFAULT_THRESHOLDS } from '../core/heartbeat.js';
-import {
+import { providerRefusal,
   Supervisor, renderReport, providerBlocked, modelUnavailable, UNAVAILABLE_RETRIES, LEASE_WAIT_MS,
 } from '../core/supervisor.js';
+import { openIncidents, resolveIncident, incidentHeadline } from '../core/incidents.js';
 import { Backlog } from '../core/backlog.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-sup-'));
@@ -1568,4 +1569,80 @@ test('a session cap counts this session, for the task as well as the window', as
   const today = ledger.check({ caps: { taskUsd: 0.5 }, taskId: 't-0001', windowMs: 24 * 3600_000 });
   assert.deepEqual(today.hits, ['task']);
   assert.equal(today.action, 'park');
+});
+
+// --- an empty account stops everything, once, loudly (2026-08-24) ----------
+//
+// The night this is written from: an OpenRouter balance ran out mid-loop.
+// `providerBlocked` matched 401 and 403 and the refusal was a 402, so the loop
+// read every one as the task failing, counted the attempt, escalated a rung,
+// retried, escalated again, and worked down the queue doing it to each task in
+// turn. Five ended parked with reasons describing work that had never run; one
+// climbed from `medium` to `xhigh` across six attempts without receiving a
+// single model call.
+
+const REAL_402 = 'OpenRouter API 402: {"error":{"message":"This request requires more '
+  + 'credits, or fewer max_tokens. You requested up to 12288 tokens, but can only afford '
+  + '1411","code":402}}';
+
+test('an empty account stops the loop and is charged to nobody', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-incident-'));
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g', value: 5, effort: 1, level: 'low' });
+  backlog.add({ title: 'second', goal: 'g', value: 4, effort: 1, level: 'low' });
+  const engine = fakeEngine({
+    backlog, error: REAL_402, stages: { default: ['running', 'failed'] },
+  });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1, stateRoot: root });
+
+  await sup.run();
+
+  // The task keeps everything. It was never tried.
+  const first = backlog.get('t-0001');
+  assert.equal(first.status, 'queued', 'released, not parked and not failed');
+  assert.equal(first.attempts, 0, "an attempt that never reached a model is not an attempt");
+  assert.equal(first.level, 'low', 'and it costs no rung of the effort ladder');
+  assert.ok(!first.blockedReason, `nothing describing work that never ran: ${first.blockedReason}`);
+
+  // And it stopped, rather than proving the same thing against the next one.
+  assert.equal(backlog.get('t-0002').status, 'queued', 'the second task was never touched');
+  assert.equal(backlog.get('t-0002').attempts, 0);
+  assert.match(sup.status().stopping, /provider refused/);
+});
+
+test('the refusal leaves a record that outlives the process', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-incident-'));
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g', level: 'low' });
+  const engine = fakeEngine({
+    backlog, error: REAL_402, stages: { default: ['running', 'failed'] },
+  });
+  await new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1, stateRoot: root }).run();
+
+  // A log line is not telling anybody: the process that wrote it exits.
+  const open = openIncidents(root);
+  assert.equal(open.length, 1, 'one incident');
+  assert.equal(open[0].kind, 'provider');
+  assert.equal(open[0].code, 'credit');
+  assert.match(open[0].remedy, /Add credit/);
+  assert.match(incidentHeadline(root), /credit|Add credit/);
+
+  // And it stays in the way until somebody says otherwise.
+  resolveIncident(root, open[0].id, { by: 'test' });
+  assert.equal(openIncidents(root).length, 0);
+  assert.equal(incidentHeadline(root), null);
+});
+
+test('a rate limit is not an incident: it clears on its own', async () => {
+  // The distinction that did not exist. Waiting fixes a 429 and never fixes a
+  // 402, and while they shared one code neither could be handled honestly.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-incident-'));
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g', level: 'low' });
+  const engine = fakeEngine({
+    backlog, error: 'OpenRouter API 429: rate limited', stages: { default: ['running', 'failed'] },
+  });
+  await new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1, stateRoot: root }).run();
+
+  assert.equal(openIncidents(root).length, 0, 'nobody is woken for a rate limit');
 });

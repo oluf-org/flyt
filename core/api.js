@@ -1197,6 +1197,9 @@ export function createApi(engine) {
 
       const sup = new Supervisor({
         invoke, projectId,
+        // Where an incident is recorded, so that a provider refusal outlives
+        // the process that met it (core/incidents.js).
+        stateRoot: engine.configDirOf(projectId) ?? null,
         backlog: backlogFor(projectId),
         ledger: ledgerFor(projectId),
         store: proj(projectId).store,

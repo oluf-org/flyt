@@ -20,7 +20,8 @@
 export const FAILURE_CODES = [
   'auth',                // no credential, expired sign-in, 401/403
   'capability',          // the provider cannot serve this model id / feature
-  'quota',               // out of credit, rate limited, plan exhausted
+  'credit',              // the account cannot pay for this request (402)
+  'quota',               // rate limited or over a plan limit — waiting helps
   'network',             // transient transport failure
   'runtime-missing',     // the vendor CLI is not installed / not on PATH
   'runtime-permission',  // the binary exists but will not launch (EPERM/EACCES)
@@ -39,10 +40,46 @@ const INFRASTRUCTURE = new Set(['runtime-missing', 'runtime-permission']);
 // Failures worth retrying on the SAME target after a wait. Distinct from the
 // set above: a rate limit is not a reason to change provider mid-run, and an
 // EPERM will never resolve itself by waiting.
-const TRANSIENT = new Set(['network', 'timeout']);
+// `quota` belongs here now that `credit` has been split out of it. A rate limit
+// clears on its own and an empty account does not, and while the two shared one
+// code neither could be retried honestly: waiting on a 402 is a loop that never
+// ends, and refusing to wait on a 429 throws away a call that would have worked.
+const TRANSIENT = new Set(['network', 'timeout', 'quota']);
+
+/**
+ * Failures no amount of retrying, escalating or waiting will resolve.
+ *
+ * A human has to add credit, sign in, install something, or pick a different
+ * model. Until they do, every further attempt fails identically — so the honest
+ * response is to stop and say so ONCE, not to work down the queue proving it
+ * against every task in turn.
+ *
+ * This is the set that was missing on 2026-08-24. An OpenRouter balance ran out
+ * mid-loop; the loop read each 402 as the task failing, counted the attempt,
+ * escalated a rung, retried, escalated again, and parked five tasks with
+ * reasons describing work that had never run. One of them climbed from `medium`
+ * to `xhigh` across six attempts without receiving a single model call.
+ */
+const NEEDS_HUMAN = new Set(['auth', 'credit', 'capability', 'runtime-missing', 'runtime-permission']);
 
 export const isInfrastructureFailure = code => INFRASTRUCTURE.has(code);
 export const isTransientFailure = code => TRANSIENT.has(code);
+export const needsHuman = code => NEEDS_HUMAN.has(code);
+
+/**
+ * Is this failure the WORK's fault?
+ *
+ * Never. Every code in this vocabulary describes a call that did not complete,
+ * which means nothing the task asked for was ever judged. Whether the work was
+ * any good is decided elsewhere — by gates, by review, by whether the workspace
+ * changed — and those are not adapter errors.
+ *
+ * It reads as a constant because it IS one, and it is written down as a
+ * function because the call sites are the point: anything about to charge an
+ * attempt, spend a rung of the effort ladder, or write a `blockedReason` that
+ * describes the work has to ask this first, and get "no".
+ */
+export const blamesTask = () => false;
 
 /**
  * May an auto-routed call try the next eligible provider after this failure?
@@ -73,7 +110,9 @@ export function sanitizeFailureDetail(value, max = 240) {
 const REMEDIES = {
   auth: provider => `Sign in again for ${provider} (Settings → Providers), or add an API key.`,
   capability: (provider, model) => `${provider} cannot serve "${model}". Pick a model it supports, or change the model's source.`,
-  quota: provider => `${provider} is out of quota or rate limited. Wait, raise the limit, or use another provider.`,
+  credit: provider => `${provider} will not serve this request because the account cannot pay for it. `
+    + 'Add credit, lower the token budget, or move to a model that costs nothing. Waiting will not clear it.',
+  quota: provider => `${provider} is rate limited or over a plan limit. Wait and try again, or use another provider.`,
   network: provider => `Could not reach ${provider}. Check the connection and try again.`,
   protocol: provider => `${provider} ran but its output could not be read. Update the CLI, or use the API provider instead.`,
   timeout: provider => `${provider} did not answer within the deadline. Raise the timeout or use a faster model.`,
@@ -117,7 +156,17 @@ export function classifyAdapterError(err, { provider = 'the provider', model = n
     code = 'network';
   } else if (status === 401 || status === 403 || /\b(unauthorized|forbidden|invalid api key|not signed in|log ?in)\b/i.test(message)) {
     code = 'auth';
-  } else if (status === 429 || /\b(rate limit|quota|insufficient credit|out of credit|payment required)\b/i.test(message)) {
+  } else if (status === 402
+    || /\b(requires? more credits?|can only afford|insufficient (?:credit|funds|balance)|out of credit|payment required|add credits|negative balance)\b/i.test(message)) {
+    // Distinct from `quota` because the responses are opposite: waiting fixes a
+    // rate limit and never fixes an empty account. OpenRouter's 402 reads
+    // "This request requires more credits, or fewer max_tokens. You requested
+    // up to 12288 tokens, but can only afford 1411" — which matched none of the
+    // old wording, so it classified `unknown`, and a loop charged it to the
+    // task: five tasks parked in one session with their effort ladders spent,
+    // for a failure that never reached a model.
+    code = 'credit';
+  } else if (status === 429 || /\b(rate limit|too many requests|quota)\b/i.test(message)) {
     code = 'quota';
   } else if (status === 404 || /\b(unknown model|model not found|does not support|unsupported)\b/i.test(message)) {
     code = 'capability';

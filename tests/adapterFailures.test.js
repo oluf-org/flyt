@@ -14,7 +14,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyAdapterError, mayFallThrough, withFailureCode,
-  isInfrastructureFailure, sanitizeFailureDetail, FAILURE_CODES
+  isInfrastructureFailure, isTransientFailure, needsHuman, blamesTask,
+  sanitizeFailureDetail, FAILURE_CODES
 } from '../core/adapters/failures.js';
 import { preflightCli } from '../core/adapters/cliDelegate.js';
 import { autoFallbackTargets } from '../core/modelSource.js';
@@ -252,4 +253,74 @@ test('a PINNED source that cannot start fails instead of spending elsewhere', as
   assert.equal(retro.status, 'failed');
   assert.deepEqual(tried, ['via-codex'], 'the pinned target was called once and nothing else was');
   assert.equal((store.readLog(runId) ?? []).some(e => e.event === 'route_fallback'), false);
+});
+
+// --- an empty account is not a bad task (2026-08-24) -----------------------
+//
+// An OpenRouter balance ran out mid-loop. Every attempt after it failed with a
+// 402 before a single token was generated, and the loop read each one as the
+// task failing on its merits: counted the attempt, escalated a rung, retried,
+// escalated again, then parked the task with a reason describing work that had
+// never run. Five tasks in one session; one climbed from medium to xhigh over
+// six attempts without receiving a model call.
+//
+// The cause was here: the 402 matched none of the wording, so it classified
+// `unknown`, and nothing downstream could tell it apart from a bad answer.
+
+test('the 402 OpenRouter actually sends is recognised', () => {
+  // Verbatim, because a paraphrase is what made this pass by inspection and
+  // fail in production.
+  const message = 'OpenRouter API 402: {"error":{"message":"This request requires more '
+    + 'credits, or fewer max_tokens. You requested up to 12288 tokens, but can only '
+    + 'afford 1411","code":402}}';
+  const err = Object.assign(new Error(message), { status: 402 });
+
+  const out = classifyAdapterError(err, { provider: 'openrouter' });
+  assert.equal(out.code, 'credit');
+  assert.equal(needsHuman(out.code), true, "no retry, rung or model change resolves an empty account");
+  assert.equal(out.retryable, false, "and waiting never clears it");
+  assert.match(out.remedy, /Add credit/);
+  assert.match(out.remedy, /Waiting will not clear it/);
+});
+
+test('a 402 is recognised from the status alone, whatever the wording', () => {
+  // Vendors rewrite these strings. The status is the stable half.
+  const err = Object.assign(new Error('Payment Required'), { status: 402 });
+  assert.equal(classifyAdapterError(err, { provider: 'openrouter' }).code, 'credit');
+});
+
+test('being out of money and being rate limited are different answers', () => {
+  // They shared one code, and so shared one response — which was wrong for
+  // both: waiting on a 402 is a loop that never ends, and refusing to wait on
+  // a 429 throws away a call that would have worked.
+  const broke = classifyAdapterError(Object.assign(new Error('x'), { status: 402 }), { provider: 'p' });
+  const limited = classifyAdapterError(Object.assign(new Error('x'), { status: 429 }), { provider: 'p' });
+
+  assert.equal(broke.code, 'credit');
+  assert.equal(limited.code, 'quota');
+  assert.equal(broke.retryable, false);
+  assert.equal(limited.retryable, true, "a rate limit clears on its own");
+  assert.equal(needsHuman(broke.code), true);
+  assert.equal(needsHuman(limited.code), false, "nobody needs waking for a rate limit");
+});
+
+test('every failure that needs a human is one no retry could fix', () => {
+  for (const code of ['auth', 'credit', 'capability', 'runtime-missing', 'runtime-permission']) {
+    assert.equal(needsHuman(code), true, code);
+    assert.equal(isTransientFailure(code), false,
+      `${code} must not also be retryable — that is a loop that cannot end`);
+  }
+  for (const code of ['network', 'timeout', 'quota']) {
+    assert.equal(needsHuman(code), false, code);
+    assert.equal(isTransientFailure(code), true, code);
+  }
+});
+
+test('no adapter failure is ever the task\'s fault', () => {
+  // The call did not complete, so nothing the task asked for was judged.
+  // Whether the work was any good is decided by gates, by review, and by
+  // whether the workspace changed — none of which are adapter errors.
+  for (const code of FAILURE_CODES) {
+    assert.equal(blamesTask(code), false, code);
+  }
 });

@@ -30,6 +30,8 @@ import {
 import { spendFromRun, totalsWithLive } from './ledger.js';
 import { captureWorkspaceSignature } from './effect.js';
 import { unrunnableGates } from './gates.js';
+import { raiseIncident } from './incidents.js';
+import { classifyAdapterError, needsHuman } from './adapters/failures.js';
 import { whyNothingReady } from './blockers.js';
 import { CONFIG_DIR } from './brand.js';
 import { skillPath } from './skills.js';
@@ -339,17 +341,40 @@ export const UNAVAILABLE_RETRIES = 3;
  */
 export const LEASE_WAIT_MS = 4 * 60 * 1000;
 
-export function providerBlocked(error) {
+export function providerRefusal(error) {
   const s = String(error ?? '');
   if (!s) return null;
-  if (/\b40[13]\b/.test(s) || /\b(unauthorized|forbidden)\b/i.test(s)) {
-    const detail = /"message"\s*:\s*"([^"]+)"/.exec(s)?.[1] ?? s.slice(0, 200);
-    return detail.trim();
-  }
-  if (/\b(key limit exceeded|insufficient (credit|funds|balance)|quota exceeded|billing)\b/i.test(s)) {
-    return s.slice(0, 200).trim();
-  }
-  return null;
+  // The status, dug out of a message that has already been flattened to a
+  // string by the time it reaches here — "OpenRouter API 402: {...}".
+  const status = Number(/\b(?:API|HTTP|status)\s+(\d{3})\b/i.exec(s)?.[1]
+    ?? /\b(4\d{2}|5\d{2})\b(?=\s*[:{])/.exec(s)?.[1] ?? 0);
+  const err = new Error(s);
+  if (status) err.status = status;
+
+  const seen = classifyAdapterError(err, { provider: 'the provider' });
+  if (!needsHuman(seen.code)) return null;
+
+  const detail = /"message"\s*:\s*"([^"]+)"/.exec(s)?.[1] ?? s.slice(0, 200);
+  return { code: seen.code, detail: detail.trim(), remedy: seen.remedy };
+}
+
+/**
+ * Did the provider refuse in a way no further attempt can get past?
+ *
+ * Delegated to `classifyAdapterError` rather than matched here, and that is the
+ * whole point of the change. This used to keep its own regex — `\b40[13]\b`,
+ * for 401 and 403 — and an OpenRouter balance running out sends a **402**. One
+ * character. The loop therefore read every "This request requires more credits"
+ * as the task failing on its merits, spent a rung of its effort ladder on it,
+ * retried, spent another, and parked five tasks in one session with reasons
+ * describing work that had never run.
+ *
+ * A second, private opinion about what a provider error means is a thing that
+ * drifts from the first one silently, and this is what that costs. There is now
+ * one vocabulary (core/adapters/failures.js) and everything asks it.
+ */
+export function providerBlocked(error) {
+  return providerRefusal(error)?.detail ?? null;
 }
 
 export class Supervisor {
@@ -359,7 +384,7 @@ export class Supervisor {
    * @param {string} deps.projectId
    */
   constructor({
-    invoke, projectId, backlog, ledger, store = null, config = {},
+    invoke, projectId, backlog, ledger, store = null, config = {}, stateRoot = null,
     parallelism = 1, only = null, pollMs = POLL_MS, log = () => {}, now = () => Date.now(),
     // Where the status goes so that something OTHER than this process can read
     // it (§11.1: the record is owned by the supervisor and kept outside the
@@ -386,6 +411,8 @@ export class Supervisor {
     this.parallelism = Math.max(1, parallelism);
     // The task ids this session may claim, or null for the whole backlog.
     this.only = Array.isArray(only) && only.length ? only.map(String) : null;
+    this.stateRoot = stateRoot;
+    this.incident = null;
     this.pollMs = pollMs;
     this.log = log;
     this.now = now;
@@ -411,6 +438,16 @@ export class Supervisor {
     return {
       running: this.running,
       stopping: this.stopping,
+      // The incident that stopped it, when one did. `stopping` is a sentence;
+      // this is the record, with the code, the remedy and the id to resolve it
+      // by — so a reader of the status has the same facts as a reader of the
+      // file, and neither has to go looking for the other.
+      incident: this.incident
+        ? {
+          id: this.incident.id, kind: this.incident.kind, code: this.incident.code,
+          detail: this.incident.detail, remedy: this.incident.remedy,
+        }
+        : null,
       // What this loop is actually running on, which is not necessarily what
       // the settings say right now: a pick made after the loop started belongs
       // to the next one, and a panel that showed the setting instead of the
@@ -446,6 +483,18 @@ export class Supervisor {
     try {
       this.writeStatus({ ...this.status(), pid: process.pid, at: new Date(this.now()).toISOString() });
     } catch { /* an unwritable status file must never take the loop down */ }
+  }
+
+  /**
+   * Record an incident, and remember it for this session's status.
+   *
+   * Swallowed like `#publish`: a loop that cannot write the file still has to
+   * stop for the right reason, and the log line has already said what happened.
+   */
+  #raise(what) {
+    try {
+      if (this.stateRoot) this.incident = raiseIncident(this.stateRoot, what);
+    } catch { /* an unwritable incident must never take the loop down */ }
   }
 
   #windowMs() { return this.config.loop?.windowMs ?? 24 * 60 * 60 * 1000; }
@@ -1349,13 +1398,28 @@ export class Supervisor {
       // in its blockedReason blaming work that never ran — and the loop stops
       // and says why. This is the same judgement `loop:start`'s pre-flight
       // makes before the first task; nothing was checking for it afterwards.
-      const blocked = providerBlocked(error);
-      if (blocked) {
+      const refusal = providerRefusal(error);
+      if (refusal) {
         await this.#discard(taskId);
+        // Released, not escalated and not parked: this task was never tried, so
+        // it keeps its attempts, its rung and its silence about why.
         this.backlog.release(taskId, { status: 'queued' });
-        this.stopping = `the provider refused the call: ${blocked}`;
+        this.stopping = `the provider refused the call: ${refusal.detail}`;
         this.running = false;
-        this.log(`✖ ${taskId} ${this.stopping} — stopping, because every task would fail the same way`, { taskId });
+        // The record that outlives this process. Without it the next person to
+        // look sees a stopped loop and a backlog, and nothing connecting them.
+        this.#raise({
+          kind: 'provider',
+          code: refusal.code,
+          detail: refusal.detail,
+          remedy: refusal.remedy,
+          taskId,
+          runId: hb?.runId ?? null,
+        });
+        this.log(`✖ ${taskId} ${this.stopping}`, { taskId });
+        this.log(`  ${refusal.remedy ?? 'A human has to act before anything else can run.'}`, { taskId });
+        this.log('  Stopping here. Every other task would fail the same way, and each one that tried'
+          + ' would be charged an attempt for it.', { taskId });
         this.#publish();
         return;
       }
