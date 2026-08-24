@@ -150,6 +150,28 @@ export function incidentHeadline(root) {
     + `${first.remedy ? ` — ${first.remedy}` : ''}${damaged}`;
 }
 
+/**
+ * Forget tasks an incident damaged, because they have been put back.
+ *
+ * The record stays — the incident happened, and that is history — but it stops
+ * advertising a repair that is already done. A headline that keeps offering
+ * `flyt task reset` for tasks already reset teaches people to ignore it, which
+ * is the one thing a loud channel cannot afford.
+ */
+export function clearDamaged(root, id, taskIds = []) {
+  const file = path.join(dirOf(root), `${safeId(id)}.json`);
+  if (!fs.existsSync(file)) return null;
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const gone = new Set(taskIds.map(String));
+  const next = {
+    ...record,
+    damaged: (record.damaged ?? []).filter(d => !gone.has(String(d.taskId))),
+    restored: [...new Set([...(record.restored ?? []), ...gone])],
+  };
+  write(root, next);
+  return next;
+}
+
 /** The tasks an incident damaged, with what they were before it. */
 export function damagedBy(root, id) {
   const file = path.join(dirOf(root), `${safeId(id)}.json`);

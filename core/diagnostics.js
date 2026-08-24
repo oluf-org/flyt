@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { callModel } from './adapters/index.js';
+import { incidentHeadline } from './incidents.js';
 import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
 import { planDefaultRoute, TASK_KINDS } from './modelPriority.js';
 import { effortBudget, DEFAULT_EFFORT } from '../src/flowTypes.js';
@@ -525,6 +526,13 @@ export async function doctor(engine, { probe = false, models = [], project = nul
   });
 
   const findings = [];
+  // An open incident goes FIRST, above everything, because it is the reason
+  // nothing else is working and every other finding below it is downstream of
+  // that. Somebody running `doctor` after a loop stopped is asking exactly this
+  // question, and the answer used to be a stopped process and a backlog of
+  // tasks that looked like they had failed on their merits.
+  const incident = project?.stateRoot ? incidentHeadline(project.stateRoot) : null;
+  if (incident) findings.push({ level: 'error', message: incident });
   const lock = staleIndexLock(project?.folder ?? null);
   if (lock) findings.push(lock);
   if (!providers.some(p => p.connected && p.id !== 'mock')) {
