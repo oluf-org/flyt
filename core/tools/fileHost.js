@@ -6,6 +6,7 @@
 // are rejected (Workspace.resolve / RunStore.workspacePath).
 import fs from 'node:fs';
 import path from 'node:path';
+import { readFileShaped, encode } from './textFile.js';
 
 export function fileHost(ctx) {
   if (ctx.workspace) {
@@ -23,19 +24,38 @@ export function fileHost(ctx) {
   };
 }
 
-// Read a text file; null when it doesn't exist or isn't a regular file.
-export function readText(host, relPath) {
+/**
+ * Read a file and say what it is: `{ text, shape }`, or null when there is no
+ * file. `shape.binary` means the bytes are not text and `text` is empty.
+ *
+ * Every file tool goes through this rather than `readFileSync(p, 'utf8')`, so
+ * the encoding, the byte-order mark and the line ending are decided once
+ * (core/tools/textFile.js). Decided privately, they disagree: `edit_file`
+ * matched raw bytes while models write plain newlines, a BOM sat invisibly in
+ * front of the first character so no anchor on line 1 could match, and reading
+ * a PNG as UTF-8 and writing it back destroyed it.
+ */
+export function readShaped(host, relPath) {
   const p = host.resolve(relPath);
-  if (!fs.existsSync(p) || !fs.statSync(p).isFile()) return null;
-  return fs.readFileSync(p, 'utf8');
+  return readFileShaped(p);
+}
+
+// Read a text file; null when it doesn't exist or isn't a regular file. A
+// binary file reads as null too: there is no text in it to hand back.
+export function readText(host, relPath) {
+  const read = readShaped(host, relPath);
+  if (!read || read.shape.binary) return null;
+  return read.text;
 }
 
 // Write a text file (creating parent dirs); returns the path relative to the
-// backend's reporting root.
-export function writeText(host, relPath, content) {
+// backend's reporting root. With a `shape`, the bytes go back in the encoding
+// and byte-order mark they came in — a file does not change what it IS because
+// something edited a line in it.
+export function writeText(host, relPath, content, shape = null) {
   const p = host.resolve(relPath);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, content, 'utf8');
+  fs.writeFileSync(p, shape ? encode(content, shape) : Buffer.from(String(content), 'utf8'));
   return host.rel(p);
 }
 

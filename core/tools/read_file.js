@@ -1,7 +1,7 @@
 // read_file: read a text file from the workspace (the bound target project, or
 // the run sandbox when unbound). Confined to the workspace root. Large files
 // are truncated so a single read can't blow the model's context window.
-import { fileHost, readText } from './fileHost.js';
+import { fileHost, readShaped } from './fileHost.js';
 
 const MAX_CHARS = 200_000;
 
@@ -100,8 +100,20 @@ export default {
         tool: 'read_file', path: args.path, read: 'workspace', expected: `reference:${ctx.subject.repo}`
       });
     }
-    const whole = readText(host, args.path);
-    if (whole == null) throw new Error(`File "${args.path}" not found in the workspace.`);
+    const read = readShaped(host, args.path);
+    if (read == null) throw new Error(`File "${args.path}" not found in the workspace.`);
+    // A binary file is present and unreadable, which is not the same as absent.
+    // Saying "not found" would send the caller looking for a path that is right
+    // there, and handing back the UTF-8 decoding would hand back mojibake that
+    // destroys the file the moment anybody writes it back.
+    if (read.shape.binary) {
+      return {
+        path: args.path, binary: true, bytes: read.bytes, target: host.target,
+        note: `"${args.path}" is not a text file, so there is nothing to read as text. `
+          + 'Its bytes are intact; inspect it with a tool that understands its format.',
+      };
+    }
+    const whole = read.text;
     const bytes = Buffer.byteLength(whole, 'utf8');
     const content = offset ? whole.slice(Math.min(offset, whole.length)) : whole;
     if (content.length > MAX_CHARS) {

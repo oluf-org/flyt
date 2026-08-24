@@ -15,7 +15,7 @@
 //
 // And it reports `before`/`after` with context, because an agent that cannot
 // see what it did has to re-read the file to find out — a call it usually skips.
-import { fileHost, readText } from './fileHost.js';
+import { fileHost, readShaped, writeText } from './fileHost.js';
 import fs from 'node:fs';
 
 const CONTEXT_LINES = 3;
@@ -65,8 +65,17 @@ export default {
   run(args, ctx) {
     const host = fileHost(ctx);
     const relPath = String(args.path ?? '');
-    const before = readText(host, relPath);
-    if (before == null) throw new Error(`File "${relPath}" not found in the workspace. Use create_file to make a new one.`);
+    const read = readShaped(host, relPath);
+    if (read == null) throw new Error(`File "${relPath}" not found in the workspace. Use create_file to make a new one.`);
+    // Not text, so there is nothing to anchor into and nothing that could be
+    // written back. Reading a binary file as UTF-8 and writing the result is
+    // not a bad edit, it is the file destroyed: every byte no encoding claims
+    // comes back as a replacement character and never goes back.
+    if (read.shape.binary) {
+      throw new Error(`"${relPath}" is not a text file, so it cannot be edited as one. `
+        + 'Editing it would rewrite every byte that is not valid text.');
+    }
+    const before = read.text;
 
     const needle = String(args.old ?? '');
     if (!needle) throw new Error('`old` is empty — there is nothing to find. Use write_file or create_file to write a whole file.');
@@ -88,8 +97,9 @@ export default {
     // So: search the normalised view, splice the ORIGINAL string at indices
     // mapped back through it, and write `new` in whatever ending the file
     // already uses. Untouched lines keep their bytes either way.
-    const eol = dominantEol(before);
-    const { norm, map } = normalized(before);
+    // What the FILE uses, from the one place that decides what a file is.
+    const eol = read.shape.eol;
+    const { norm, breaks } = normalized(before);
     const needleN = lf(needle);
     const replacementOut = eol === '\r\n' ? lf(replacement).replace(/\n/g, '\r\n') : lf(replacement);
 
@@ -100,7 +110,7 @@ export default {
     }
 
     // Back to offsets in the original, so the splice is over real bytes.
-    const spans = hits.map(at => [map[at], map[at + needleN.length]]);
+    const spans = hits.map(at => [origin(breaks, at), origin(breaks, at + needleN.length)]);
     const cut = args.replaceAll === true ? spans : [spans[0]];
     let after = '';
     let cursor = 0;
@@ -128,7 +138,7 @@ export default {
     // path confinement is enforced in exactly one place. Bytes, not text: the
     // file's own line endings and any trailing-newline convention survive,
     // because we only ever spliced a substring.
-    fs.writeFileSync(host.resolve(relPath), after, 'utf8');
+    writeText(host, relPath, after, read.shape);
     noteWrite(ctx, relPath);
 
     const firstLine = lineOf(before, hits[0]);
@@ -165,41 +175,47 @@ function noteWrite(ctx, relPath) {
 const lf = text => String(text).replace(/\r\n/g, '\n');
 
 /**
- * Which ending this file already uses, so `new` is written in it.
+ * A newline-normalised view of `text`, and what is needed to map back into it.
  *
- * A file with any CRLF at all is treated as a CRLF file: a mixed file is
- * already inconsistent, and adding more of what it mostly has is the smaller
- * surprise than adding the other kind.
- */
-export function dominantEol(text) {
-  const crlf = (String(text).match(/\r\n/g) ?? []).length;
-  return crlf > 0 ? '\r\n' : '\n';
-}
-
-/**
- * A newline-normalised view of `text`, plus the map back to it.
+ * The only transformation is dropping the `` of a CRLF pair, so the mapping
+ * is arithmetic rather than a table: an index in `norm` sits that many
+ * characters later in the original as there were pairs collapsed before it.
+ * `breaks` records where each collapsed newline landed IN `norm` — one entry
+ * per line rather than one per character, which matters because this runs on
+ * every edit: the per-character version cost 122ms and a 2.5-million-entry
+ * array on a 2.6MB file, to answer at most a handful of questions.
  *
- * `map[i]` is the offset in the ORIGINAL where `norm[i]` starts, and the map
- * carries one extra entry at the end so the exclusive end of a match at the
- * very end of the file resolves too. This is what lets the anchor be matched
- * in a world where every line ends `\n`, while the splice still happens over
- * the file's real bytes and leaves every untouched line exactly as it was.
+ * An all-LF file produces no breaks at all and the mapping is the identity,
+ * which is the common case in a repository that has not been near Windows.
  */
 export function normalized(text) {
   const s = String(text);
-  const out = [];
-  const map = [];
-  for (let i = 0; i < s.length; i++) {
-    // A collapsed CRLF maps to the '\r', not the '\n' — the START of what it
-    // stands for. Pointing at the '\n' loses the '\r' whenever a match ends on
-    // the line before it: the exclusive end lands between the two, and the
-    // splice swallows the carriage return of a line it never touched.
-    if (s[i] === '\r' && s[i + 1] === '\n') { out.push('\n'); map.push(i); i++; continue; }
-    out.push(s[i]);
-    map.push(i);
+  const norm = s.split('\r\n').join('\n');
+  const breaks = [];
+  if (norm.length !== s.length) {
+    for (let i = s.indexOf('\r\n'); i !== -1; i = s.indexOf('\r\n', i + 2)) {
+      breaks.push(i - breaks.length);
+    }
   }
-  map.push(s.length);
-  return { norm: out.join(''), map };
+  return { norm, breaks };
+}
+
+/**
+ * Where index `i` of the normalised view sits in the original.
+ *
+ * A collapsed newline maps to the carriage return, the START of the pair it
+ * stands for. Mapping it to the newline loses the carriage return whenever a
+ * match ends on the line before it: the exclusive end lands between the two,
+ * and the splice swallows a line ending it never touched. That cost a test.
+ */
+export function origin(breaks, i) {
+  let lo = 0;
+  let hi = breaks.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (breaks[mid] < i) lo = mid + 1; else hi = mid;
+  }
+  return i + lo;
 }
 
 // Every start index of `needle` in `haystack`. Non-overlapping, left to right.
