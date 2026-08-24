@@ -233,15 +233,29 @@ test('origin() agrees with the obvious implementation, everywhere', () => {
   }
 });
 
-test('a file whose every line ending is a lone carriage return is left alone', () => {
-  // Old-Mac endings are not a pair, so nothing is collapsed and nothing is
-  // rewritten. The anchor has to match them as they are, which is the same
-  // contract as before — recorded so a later change notices it is changing it.
+// Old-style Mac endings are the third case, and they are not hypothetical in
+// the sense that matters: they are the same bug as CRLF, waiting for the first
+// file that has them. Folding a lone carriage return is a 1:1 substitution, so
+// it costs the index mapping nothing.
+test('edit_file: a file that uses lone carriage returns is matchable, and stays that way', async () => {
   const CR = String.fromCharCode(13);
-  const text = 'one' + CR + 'two' + CR + 'three';
-  const { norm, breaks } = normalized(text);
-  assert.equal(norm, text);
-  assert.deepEqual(breaks, []);
+  const ctx = boundCtx({ 'a.txt': 'one' + CR + 'two' + CR + 'three' + CR });
+  const rec = await executeTool('edit_file', {
+    path: 'a.txt', old: 'one\ntwo', new: 'one\nTWO',
+  }, ctx);
+
+  assert.equal(rec.ok, true, rec.error);
+  assert.equal(read(ctx, 'a.txt'), 'one' + CR + 'TWO' + CR + 'three' + CR,
+    'a plain-newline anchor matches it, and every ending is still a carriage return');
+});
+
+test('normalized() folds a lone carriage return without moving any index', () => {
+  const CR = String.fromCharCode(13);
+  const LF = String.fromCharCode(10);
+  const { norm, breaks } = normalized('one' + CR + 'two' + CR + 'three');
+  assert.equal(norm, 'one' + LF + 'two' + LF + 'three');
+  assert.deepEqual(breaks, [], "nothing was removed, so nothing shifts");
+  for (let i = 0; i <= norm.length; i++) assert.equal(origin(breaks, i), i);
 });
 
 // --- through the tools, which is where it actually bit ---------------------

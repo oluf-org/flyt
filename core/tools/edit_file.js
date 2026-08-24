@@ -16,6 +16,7 @@
 // And it reports `before`/`after` with context, because an agent that cannot
 // see what it did has to re-read the file to find out — a call it usually skips.
 import { fileHost, readShaped, writeText } from './fileHost.js';
+import { toEol } from './textFile.js';
 import fs from 'node:fs';
 
 const CONTEXT_LINES = 3;
@@ -101,7 +102,9 @@ export default {
     const eol = read.shape.eol;
     const { norm, breaks } = normalized(before);
     const needleN = lf(needle);
-    const replacementOut = eol === '\r\n' ? lf(replacement).replace(/\n/g, '\r\n') : lf(replacement);
+    // Written in whatever the file uses — including a lone carriage return,
+    // which the previous form silently turned into a newline.
+    const replacementOut = toEol(replacement, eol);
 
     const hits = findAll(norm, needleN);
     if (!hits.length) throw new Error(noMatchMessage(norm, needleN, relPath));
@@ -172,7 +175,16 @@ function noteWrite(ctx, relPath) {
 }
 
 /** `text` with every CRLF collapsed to a bare newline. */
-const lf = text => String(text).replace(/\r\n/g, '\n');
+/**
+ * `text` with every line ending flattened to a bare newline.
+ *
+ * A lone carriage return is folded too. It is a 1:1 substitution, so it costs
+ * the mapping nothing — only the CRLF pairs remove a character, and only those
+ * are recorded. Leaving it out would have left a file that uses old-style Mac
+ * endings with precisely the bug CRLF files had, for precisely as long as it
+ * took somebody to open one.
+ */
+const lf = text => String(text).split('\r\n').join('\n').split('\r').join('\n');
 
 /**
  * A newline-normalised view of `text`, and what is needed to map back into it.
@@ -190,7 +202,7 @@ const lf = text => String(text).replace(/\r\n/g, '\n');
  */
 export function normalized(text) {
   const s = String(text);
-  const norm = s.split('\r\n').join('\n');
+  const norm = lf(s);
   const breaks = [];
   if (norm.length !== s.length) {
     for (let i = s.indexOf('\r\n'); i !== -1; i = s.indexOf('\r\n', i + 2)) {
