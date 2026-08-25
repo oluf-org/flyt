@@ -270,6 +270,80 @@ test('a run that is not parked carries no question block', () => {
   assert.equal(explainRun(store, runId).asking, undefined);
 });
 
+// --- a run parked on an approval gate ---------------------------------------
+//
+// awaiting_approval parks for three different reasons (flowRunner's
+// pendingGateKind), and every one of them used to render as bare stage +
+// call stats: not which node was waiting, not why, and not the command that
+// releases it — which is the only thing the person running `flyt why` needs.
+// The report carries the gate as data (`r.gate`), so the HTTP API and the
+// desktop app read exactly what the CLI renders.
+
+test('a pre gate names the node waiting at the checkpoint', () => {
+  const store = makeStore();
+  const runId = store.createRun('a run someone must wave through');
+  store.writeFlow(runId, {
+    id: 'f', name: 'F',
+    nodes: [{ id: 'deploy', type: 'agentTask', data: { title: 'Deploy to production' } }],
+    edges: []
+  });
+  store.setStage(runId, 'awaiting_approval', { pendingNodeId: 'deploy', pendingGateKind: 'pre' });
+
+  const r = explainRun(store, runId);
+  assert.equal(r.verdict, 'waiting for your decision', 'not "still running" — nothing is');
+  assert.equal(r.gate.kind, 'pre');
+  assert.equal(r.gate.node, 'deploy');
+  assert.equal(r.gate.title, 'Deploy to production', 'the title, not the node id');
+  assert.match(r.gate.meaning, /checkpoint/);
+});
+
+test('a tool gate says what the call wanted and why it stopped', () => {
+  const store = makeStore();
+  const runId = store.createRun('a run held at the tool ceiling');
+  store.writeFlow(runId, {
+    id: 'f', name: 'F',
+    nodes: [{ id: 'work', type: 'aiStep', data: { title: 'Do the work' } }],
+    edges: []
+  });
+  store.setStage(runId, 'awaiting_approval', {
+    pendingNodeId: 'work',
+    pendingGateKind: 'tool',
+    pendingToolCall: {
+      tool: 'bash', summary: 'rm -rf ./build', risk: 'high',
+      reason: 'approvalMode is "ask" and bash is a shell command',
+      checkedBy: 'screen'
+    }
+  });
+
+  const g = explainRun(store, runId).gate;
+  assert.equal(g.kind, 'tool');
+  assert.equal(g.tool, 'bash');
+  assert.equal(g.summary, 'rm -rf ./build');
+  assert.equal(g.risk, 'high');
+  assert.match(g.reason, /approvalMode/);
+  assert.equal(g.checkedBy, 'screen');
+});
+
+test('an escalation quotes the reason the evaluator escalated', () => {
+  const store = makeStore();
+  const runId = store.createRun('a run whose eval wants a human');
+  store.setStage(runId, 'awaiting_approval', { pendingNodeId: 'eval-1', pendingGateKind: 'escalation' });
+  // The reason lives in the log, not in meta: step_eval_escalate /
+  // feedback_review_escalate are where the runner writes it.
+  store.appendLog(runId, { event: 'step_eval_escalate', node: 'eval-1', reason: 'three retries still fail lint' });
+
+  const g = explainRun(store, runId).gate;
+  assert.equal(g.kind, 'escalation');
+  assert.match(g.reason, /three retries still fail lint/, 'the reason is worth quoting and must survive');
+});
+
+test('a run that is not parked carries no approval-gate block', () => {
+  const store = makeStore();
+  const runId = store.createRun('another ordinary run');
+  store.setStage(runId, 'done');
+  assert.equal(explainRun(store, runId).gate, undefined);
+});
+
 // An agentTask's calls are traced under `executor:<taskId>`, and nothing in the
 // log ties that name back to the flow node that spawned it — the executor path
 // logs `task_claimed`, not `node_start`. So a report built only from flow-node
