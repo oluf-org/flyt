@@ -1324,6 +1324,29 @@ function renderWhy(r) {
     L.push('');
     L.push(`  flyt answer ${r.runId} "<your answer>"`);
   }
+  // An approval gate gets the same treatment: the decision comes before the
+  // machinery. The difference from a question is that these need approve or
+  // reject — a checkpoint (pre), a held tool call (tool), or a human verdict an
+  // evaluation asked for (escalation).
+  if (r.gate) {
+    const g = r.gate;
+    L.push('');
+    L.push(`  "${g.title ?? g.node}" is waiting for your decision (${g.kind} gate) — ${g.meaning}:`);
+    if (g.kind === 'tool' && g.tool != null) {
+      L.push(`    tool: ${g.tool}${g.risk ? ` (risk: ${g.risk})` : ''}`);
+      if (g.summary) L.push(`    it wants to: ${g.summary}`);
+      if (g.reason) L.push(`    why it stopped: ${g.reason}`);
+      if (g.checkedBy) L.push(`    screened by: ${g.checkedBy}`);
+    }
+    // A question wearing an approve/reject interface: say so, and quote why.
+    if (g.kind === 'escalation') {
+      L.push('    a human was asked to decide how to proceed');
+      if (g.reason) L.push(`    why: ${g.reason}`);
+    }
+    L.push('');
+    L.push(`  flyt approve ${r.runId}   let it continue`);
+    L.push(`  flyt reject ${r.runId}   stop here`);
+  }
   const s = r.signals;
   L.push(`  ${s.modelCalls} model call(s) over ${ms(s.modelMs)}, ${s.toolCalls} tool call(s)`
     + `${s.usd ? `, $${s.usd}` : ''}`);

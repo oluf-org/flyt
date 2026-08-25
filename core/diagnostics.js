@@ -31,6 +31,15 @@ import { v2Flag } from './v2.js';
 // Node statuses that mean "this is where the run stopped".
 const BLOCKING = new Set(['failed', 'active']);
 
+// What each approval-gate kind means, in one line a person can act on. The
+// kinds are the ones flowRunner parks with (pendingGateKind): there is no
+// fourth — an eval that wants a human is parked as `escalation`.
+const GATE_MEANING = {
+  pre: 'a checkpoint: this node asks before it runs',
+  tool: 'a tool call was held at the ceiling before it ran',
+  escalation: 'an evaluation concluded a human has to decide'
+};
+
 /**
  * Explain one run: what it was doing, where it stopped, and what the model
  * calls at that point actually did.
@@ -95,12 +104,52 @@ export function explainRun(store, runId) {
     }
     : null;
 
+  // Same for an approval gate (stage awaiting_approval), which parks for three
+  // different reasons and releases by decision rather than by answer:
+  //
+  //   pre        — a requiresApproval node is about to run; a checkpoint.
+  //   tool       — a call wanted more than approvalMode allows; what it wanted
+  //                to do is in meta.pendingToolCall and is the whole story.
+  //   escalation — a step-eval or feedback review concluded a human has to
+  //                decide; a question wearing an approve/reject interface.
+  //
+  // The escalation reason is not in meta — step_eval_escalate /
+  // feedback_review_escalate carry it in the log — so it is read from there,
+  // latest first. Everything else comes off meta, so the report says the same
+  // thing over HTTP as the CLI does.
+  const gate = meta.stage === 'awaiting_approval'
+    ? (() => {
+      const kind = ['pre', 'tool', 'escalation'].includes(meta.pendingGateKind)
+        ? meta.pendingGateKind : 'pre';
+      const escalateReason = kind === 'escalation'
+        ? [...log].reverse().find(e =>
+          (e.event === 'step_eval_escalate' || e.event === 'feedback_review_escalate')
+          && (!meta.pendingNodeId || !e.node || e.node === meta.pendingNodeId))?.reason ?? null
+        : null;
+      return {
+        kind,
+        meaning: GATE_MEANING[kind],
+        node: meta.pendingNodeId ?? null,
+        title: nodeTitle(store, runId, meta.pendingNodeId) ?? meta.pendingNodeId ?? null,
+        ...(kind === 'tool' && meta.pendingToolCall ? {
+          tool: meta.pendingToolCall.tool ?? null,
+          summary: meta.pendingToolCall.summary ?? null,
+          risk: meta.pendingToolCall.risk ?? null,
+          reason: meta.pendingToolCall.reason ?? null,
+          checkedBy: meta.pendingToolCall.checkedBy ?? null
+        } : {}),
+        ...(escalateReason != null ? { reason: escalateReason } : {})
+      };
+    })()
+    : null;
+
   return {
     runId,
     stage: meta.stage,
     flow: meta.flowName ?? meta.flowId ?? null,
     error: meta.error ?? null,
     ...(asking ? { asking } : {}),
+    ...(gate ? { gate } : {}),
     startedAt: meta.createdAt ?? null,
     updatedAt: meta.updatedAt ?? null,
     // A run nobody stopped and nothing failed is simply still working; saying
@@ -128,6 +177,7 @@ function verdictFor(meta, nodes) {
   if (meta.stage === 'failed') return 'failed';
   // Not "still running": nothing is running, and nothing will until you answer.
   if (meta.stage === 'awaiting_input') return 'waiting for your answer';
+  if (meta.stage === 'awaiting_approval') return 'waiting for your decision';
   if (meta.stage === 'cancelled') return 'stopped by hand';
   if (meta.stage === 'done') return 'completed';
   if (nodes.some(n => n.inFlight || n.status === 'active')) return 'still running';
