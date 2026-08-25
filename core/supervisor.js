@@ -30,7 +30,7 @@ import {
 import { spendFromRun, totalsWithLive } from './ledger.js';
 import { captureWorkspaceSignature } from './effect.js';
 import { unrunnableGates } from './gates.js';
-import { raiseIncident } from './incidents.js';
+import { raiseIncident, noteSuccess } from './incidents.js';
 import { amendBrief, briefNotes } from './brief.js';
 import { classifyAdapterError, needsHuman } from './adapters/failures.js';
 import { whyNothingReady } from './blockers.js';
@@ -1629,7 +1629,16 @@ export class Supervisor {
       taskId, landed: landed.landed, stage: landed.stage, guidance: landed.guidance ?? null,
       repair: landed.repair ? { verdict: landed.repair.verdict, count: landed.repair.count } : null
     });
-    if (landed.landed) this.log(`✔ ${taskId} landed ${landed.mergeSha?.slice(0, 8)}`, { taskId });
+    if (landed.landed) {
+      this.log(`✔ ${taskId} landed ${landed.mergeSha?.slice(0, 8)}`, { taskId });
+      // A task that got all the way through is evidence against any provider
+      // incident still standing. Recorded, never acted on: succeeding on a free
+      // model says nothing about whether the account can afford a paid one, so
+      // an open incident is annotated rather than closed.
+      try {
+        if (this.stateRoot) noteSuccess(this.stateRoot, { model: hb?.model ?? null });
+      } catch { /* evidence is a nicety; landing is not */ }
+    }
     else this.#reportFailedLanding(taskId, landed, hb.level ?? null);
 
     if (!landed.landed) {

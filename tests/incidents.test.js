@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   raiseIncident, listIncidents, openIncidents, resolveIncident,
-  incidentHeadline, damagedBy, clearDamaged, INCIDENT_KINDS,
+  incidentHeadline, damagedBy, clearDamaged, noteSuccess, INCIDENT_KINDS,
 } from '../core/incidents.js';
 import { Backlog } from '../core/backlog.js';
 
@@ -171,4 +171,45 @@ test('landed work has nothing to put back', () => {
 
 test('resetting something that is not there says so rather than inventing it', () => {
   assert.equal(backlogIn(root()).reset('t-9999'), null);
+});
+
+test('a call going through is recorded against an open incident, not treated as a fix', () => {
+  // The credit incident raised on 2026-08-24 was still leading flyt doctor two
+  // days and dozens of successful free calls later, because nothing ever closed
+  // one but a human. An incident that outlives its truth is noise, and noise is
+  // what a loud channel cannot afford.
+  const r = root();
+  const raised = raiseIncident(r, CREDIT);
+
+  noteSuccess(r, { model: 'stealth/ox-alpha' });
+  noteSuccess(r, { model: 'stealth/ox-alpha' });
+
+  const [after] = listIncidents(r);
+  assert.equal(after.succeededSince, 2);
+  assert.equal(after.lastSuccessModel, 'stealth/ox-alpha');
+  assert.equal(after.resolvedAt, null,
+    'succeeding on a model that costs nothing does not prove a paid call would');
+  assert.equal(openIncidents(r).length, 1, 'so it is still in the way');
+
+  const said = incidentHeadline(r);
+  assert.match(said, /2 call\(s\) have gone through/);
+  assert.match(said, /most recently on stealth\/ox-alpha/);
+  assert.match(said, /may already be fixed/);
+  assert.match(said, new RegExp(`flyt incident resolve ${raised.id}`),
+    'the reader is handed the decision, not asked to go looking for it');
+});
+
+test('nothing is said about calls going through when nothing is wrong', () => {
+  const r = root();
+  assert.equal(noteSuccess(r, { model: 'x' }), 0);
+  assert.equal(incidentHeadline(r), null);
+});
+
+test('a resolved incident is not annotated by later traffic', () => {
+  const r = root();
+  const raised = raiseIncident(r, CREDIT);
+  resolveIncident(r, raised.id, { by: 'olav' });
+
+  noteSuccess(r, { model: 'x' });
+  assert.equal(listIncidents(r)[0].succeededSince ?? 0, 0, 'it is history, not a live question');
 });

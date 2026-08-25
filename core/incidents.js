@@ -146,8 +146,44 @@ export function incidentHeadline(root) {
   const damaged = first.damaged?.length
     ? ` ${first.damaged.length} task(s) were charged for it — \`flyt task reset --incident ${first.id}\` puts them back.`
     : '';
+  // Evidence against it, if any has turned up since. Reported rather than acted
+  // on: a call succeeding on a free model does not prove the account can afford
+  // a paid one, so this names what happened and lets the reader judge.
+  const since = first.succeededSince
+    ? ` Since it was raised, ${first.succeededSince} call(s) have gone through`
+      + `${first.lastSuccessModel ? ` (most recently on ${first.lastSuccessModel})` : ''}`
+      + `, so it may already be fixed — \`flyt incident resolve ${first.id}\` closes it.`
+    : '';
   return `${first.kind} incident${seen}${more}: ${first.detail ?? first.code ?? 'unknown'}`
-    + `${first.remedy ? ` — ${first.remedy}` : ''}${damaged}`;
+    + `${first.remedy ? ` — ${first.remedy}` : ''}${damaged}${since}`;
+}
+
+/**
+ * Record that a call went through while an incident was open.
+ *
+ * An incident that only a human can close is an incident that stays open, and
+ * one that stays open past its truth is noise. The credit incident raised on
+ * 2026-08-24 was still leading `flyt doctor` two days later, after dozens of
+ * successful calls to the same provider — which is the failure this module
+ * warns about for the damaged-task list, one level up.
+ *
+ * It does NOT resolve anything, and that restraint is the point. A call
+ * succeeding on a model that costs nothing says nothing whatever about whether
+ * the account can afford a paid one, so an empty balance is not disproved by
+ * any amount of free traffic. What the evidence can honestly do is be reported
+ * beside the incident, and let whoever reads it decide.
+ */
+export function noteSuccess(root, { model = null, at = new Date().toISOString() } = {}) {
+  const open = openIncidents(root).filter(i => i.kind === 'provider');
+  for (const incident of open) {
+    write(root, {
+      ...incident,
+      succeededSince: (incident.succeededSince ?? 0) + 1,
+      lastSuccessAt: at,
+      lastSuccessModel: model ?? incident.lastSuccessModel ?? null,
+    });
+  }
+  return open.length;
 }
 
 /**
