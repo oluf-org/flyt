@@ -283,3 +283,79 @@ test('renderOpenItems says "none" rather than leaving a reader to infer it', () 
   assert.match(text, /## Assumptions taken\n- \(none\)/);
   assert.match(text, /## Still unknown\n- \(none\)/);
 });
+
+// --- who is on the other end (t-0084) --------------------------------------
+//
+// "Is somebody here to ANSWER a question" and "is somebody here to APPROVE a
+// gate" are different questions, and `approvalMode` had been standing in for
+// both. It means five things at once (context-file edits, the question gate,
+// the t-0083 pre-gate, and this, twice), which is how t-0083's bug survived for
+// months: three readers, two honouring the contract, nothing to notice the
+// third with.
+
+test('a run started attended parks on its question, whatever approvalMode says', () => {
+  // `flyt run` is attended at approvalMode 'always': the process is parked on
+  // waitForRun and answers through run:answerInput. That is a fact about how
+  // the run was started, not about what the mode means.
+  const store = makeStore();
+  setScript(() => asking([{ text: 'What is it for?' }]));
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(interrogateFlow(), {
+    userInput: 'x', approvalMode: 'always', attended: true
+  });
+
+  return waitForRound(store, runId, 'What is it for?');
+});
+
+test('an attended run still passes node checkpoints: t-0084 must not undo t-0083', async () => {
+  // The regression this pairing exists to prevent, asserted in ONE run rather
+  // than two. The obvious implementation of t-0084 — making a CLI run stop
+  // being `always` — would have parked here forever, which is the exact
+  // deadlock t-0083 was written to fix.
+  const store = makeStore();
+  setScript(() => 'work output');
+  const runner = new FlowRunner(store, testConfig());
+  const flow = makeFlow(
+    [node('input', 'input', { text: 'brief' }),
+     node('step', 'aiStep', { role: 'execute', requiresApproval: true }),
+     node('output', 'output')],
+    [edge('input', 'step'), edge('step', 'output')]);
+
+  const runId = runner.start(flow, { approvalMode: 'always', attended: true });
+
+  assert.equal(await waitForStage(store, runId, ['done', 'failed', 'awaiting_approval']), 'done',
+    'attended means it can be asked a question, not that it parks on a checkpoint');
+  assert.equal(store.readLog(runId).filter(e => e.event === 'approval_gate_skipped').length, 1);
+});
+
+test('a caller that says nothing gets exactly what it got before the flag existed', async () => {
+  // The desktop app does not pass `attended`. Defaulting an unset value to
+  // false reads as the careful choice and is the opposite: every interrogation
+  // in the UI would silently stop asking, with a person sitting in front of it.
+  const store = makeStore();
+  setScript(() => asking([{ text: 'What is it for?' }]));
+  const runner = new FlowRunner(store, testConfig());
+
+  // Unset + a mode that is not 'always' — asks, as it always did.
+  const asks = runner.start(interrogateFlow(), { userInput: 'x', approvalMode: 'ask' });
+  await waitForRound(store, asks, 'What is it for?');
+
+  // Unset + 'always' — assumes, as it always did.
+  const assumes = runner.start(interrogateFlow(), { userInput: 'x', approvalMode: 'always' });
+  assert.equal(await waitForStage(store, assumes, ['done', 'failed', 'awaiting_input']), 'done');
+  assert.equal(store.readLog(assumes).filter(e => e.event === 'interrogation_assumed').length, 1);
+});
+
+test('a run started unattended assumes, whatever approvalMode says', async () => {
+  // The loop, and any scripted caller: `--gates approve` promises no reader.
+  const store = makeStore();
+  setScript(() => asking([{ text: 'What is it for?' }]));
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(interrogateFlow(), {
+    userInput: 'x', approvalMode: 'ask', attended: false
+  });
+
+  assert.equal(await waitForStage(store, runId, ['done', 'failed', 'awaiting_input']), 'done',
+    'nobody promised a reader, so nothing waits for one');
+  assert.equal(store.readLog(runId).filter(e => e.event === 'interrogation_assumed').length, 1);
+});

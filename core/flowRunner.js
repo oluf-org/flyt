@@ -2472,7 +2472,7 @@ export class FlowRunner {
       // `run:answerInput`; the loop and every other caller pass nothing and
       // stay unattended. Recorded in the meta so the interrogation's decision
       // is inspectable from the snapshot, not just from this closure.
-      attended: attended === true,
+      attended: attended === true ? true : (attended === false ? false : null),
       // Provenance for reproducibility/replay: which mode ran, and the exact
       // effective override map. The flow.json snapshot already bakes them in;
       // this records the intent behind that snapshot.
@@ -2495,7 +2495,7 @@ export class FlowRunner {
     this.store.appendLog(runId, {
       event: 'flow_run_created', flowId: flow.id, workspace: workspace ?? null,
       approvalMode: normalizeApprovalMode(approvalMode ?? this.config.approvalMode),
-      attended: attended === true,
+      attended: attended === true ? true : (attended === false ? false : null),
       ...(modeId ? { modeId } : {}),
       ...(hasLaunch ? { overrideNodes: Object.keys(launchOverrides) } : {}),
       ...(compareGroup?.id ? { compareGroup: String(compareGroup.id) } : {}),
@@ -3193,7 +3193,21 @@ export class FlowRunner {
   // and scripted runs). Only a run started attended may park on its questions;
   // everything else proceeds on stated assumptions.
   isAttended(runId) {
-    return this.store.readMeta(runId)?.attended === true;
+    const said = this.store.readMeta(runId)?.attended;
+    if (said === true || said === false) return said;
+    // A caller that did not say gets exactly what it got before this existed.
+    //
+    // Defaulting an unset value to `false` reads as the careful choice and is
+    // the opposite: the desktop app does not pass this, so every interrogation
+    // in the UI would have silently stopped asking and started assuming — with
+    // a person sitting in front of it, which is the most attended context there
+    // is. Seven interrogation tests caught it by timing out; the app has no
+    // test that would have.
+    //
+    // So an unset value falls back to the rule this replaces, and the flag only
+    // ever OVERRIDES it. Nothing changes for a caller that has not been taught
+    // to say.
+    return this.approvalMode(runId) !== 'always';
   }
 
   // Role-agnostic since D38: `refine` asks about the request, `orient` asks
