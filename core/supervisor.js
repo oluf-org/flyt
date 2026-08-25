@@ -1514,10 +1514,17 @@ export class Supervisor {
 
       // Amend the brief BEFORE the rung is spent, so the dearer model reads
       // what the cheaper ones hit rather than the same words that defeated them.
+      // Structured signals rather than a raw error dump. The string carries both
+      // kinds of fact — one about the brief ("ran out of tool rounds before it
+      // wrote anything", whose remedy is to name the files) and one about the
+      // model ("returned no content") — and only the first belongs in a brief.
+      const said = String(error ?? '');
       this.#amend(taskId, {
         stage: 'run-failed',
         wroteNothing: Boolean(effectMissing(error)),
-        said: unreachable ? null : firstSentenceOf(String(error ?? '')),
+        outOfRounds: /ran out of tool rounds/i.test(said),
+        modelSilent: /returned no content|did not answer|came back empty|finish_reason "error"/i.test(said),
+        said: unreachable ? null : firstSentenceOf(said),
         // The heartbeat carries the model directly; `hb.worker` does not exist,
         // and reading it wrote `model: null` into three amendments before a
         // real run showed it.

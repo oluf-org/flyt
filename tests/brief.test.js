@@ -176,3 +176,30 @@ test('every band writing nothing is the brief, not five models being too small',
 test('one attempt writing nothing is still just an attempt', () => {
   assert.equal(repeatedFailure([{ wroteNothing: true }]), null);
 });
+
+test('running out of tool rounds is a fact about the brief, and says what to change', () => {
+  // It arrives looking like a model problem. It is not: the remedy the harness
+  // itself gives is "narrow what it has to read", which is an instruction to
+  // whoever wrote the task.
+  const { findings } = attemptFindings({ outOfRounds: true });
+  assert.match(findings.join(' '), /Ran out of tool rounds before it wrote anything/);
+  assert.match(findings.join(' '), /Name the files and the change/);
+});
+
+test('a model that returned nothing is not quoted into the brief', () => {
+  // blamesTask() is false for every adapter failure, and the brief is where that
+  // is easiest to forget. An attempt whose model went silent judged nothing the
+  // task asked for, so its finish reason teaches the next worker nothing — and
+  // costs tokens in every prompt from here on. t-0087's amendment carried three
+  // hundred characters of exactly this.
+  const { findings } = attemptFindings({
+    said: 'returned no content — finish_reason "error"; a retry also came back empty',
+    modelSilent: true,
+  });
+  assert.ok(!findings.some(f => /It reported/.test(f)), findings.join(' '));
+});
+
+test('what an attempt said about the WORK is still quoted', () => {
+  const { findings } = attemptFindings({ said: 'the migration needs a schema I could not find' });
+  assert.match(findings.join(' '), /It reported: the migration needs a schema/);
+});

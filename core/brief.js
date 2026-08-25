@@ -84,6 +84,15 @@ export function attemptFindings(evidence = {}) {
       + 'brief that does not say where the code is; name the files, and the next attempt starts at the work.');
   }
 
+  // Running out of tool rounds before writing anything IS about the brief, even
+  // though it arrives looking like a model problem: the harness's own advice for
+  // it is "narrow what it has to read", and that is an instruction to the task.
+  if (evidence.outOfRounds) {
+    findings.push('Ran out of tool rounds before it wrote anything — it spent the whole budget '
+      + 'finding out where to work. Name the files and the change; discovery is the most expensive '
+      + 'thing a brief can leave to the worker.');
+  }
+
   const gates = clean(evidence.gateFailures);
   if (gates.length) findings.push(`Gates named: ${list(gates)}.`);
 
@@ -91,7 +100,17 @@ export function attemptFindings(evidence = {}) {
     findings.push(`The reviewer objected: ${oneLine(evidence.reviewerSaid, 300)}`);
   }
 
-  if (evidence.said) findings.push(`It reported: ${oneLine(evidence.said, 300)}`);
+  // What it said, unless what it said was about the MODEL rather than the work.
+  //
+  // `blamesTask()` is false for every adapter failure, and the brief is where
+  // that principle is easiest to forget: an attempt whose model returned no
+  // content never judged anything the task asked for, so quoting the finish
+  // reason into the brief teaches the next worker nothing and costs tokens in
+  // every prompt from here on. Seen on t-0087, whose amendment recorded three
+  // hundred characters of "finish_reason error, a retry also came back empty".
+  if (evidence.said && !evidence.modelSilent) {
+    findings.push(`It reported: ${oneLine(evidence.said, 300)}`);
+  }
 
   const where = [
     evidence.attempt ? `Attempt ${evidence.attempt}` : 'An attempt',
