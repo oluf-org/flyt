@@ -747,7 +747,7 @@ export function createApi(engine) {
     // describing work that never ran. `incident` resets everything one incident
     // damaged in a single call, which is the shape the need actually has — a
     // provider does not refuse one task, it refuses all of them.
-    'task:reset': ({ projectId, id = null, incident = null, reason = null }) => {
+    'task:reset': ({ projectId, id = null, incident = null, reason = null, keepWork = false }) => {
       const backlog = backlogFor(projectId);
       const root = engine.configDirOf(projectId);
       const ids = incident
@@ -761,7 +761,7 @@ export function createApi(engine) {
       }
       const reset = [];
       for (const one of ids) {
-        const out = backlog.reset(one, { reason: reason ?? (incident ? `incident ${incident}` : null) });
+        const out = backlog.reset(one, { reason: reason ?? (incident ? `incident ${incident}` : null), keepWork });
         if (out) reset.push({ id: out.id, level: out.level, was: out.before });
       }
       // The incident keeps its history and stops advertising a repair that has

@@ -55,7 +55,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task escalate <id>             one effort level up, back to the queue
   flyt task retire <id>... --reason "<why>" [--force]   park with evidence, out of the queue
   flyt task revive <id>               bring a retired task back, queued
-  flyt task reset <id>... [--reason r]  undo an escalation nothing about the work earned
+  flyt task reset <id>... [--reason r] [--keep-work]  undo an escalation nothing about the work earned
   flyt task reset --incident <id>     ...for every task one incident charged
   flyt task rm <id>... [--all]        take tasks out of the queue for good
   flyt task take                      claim the top-scoring ready task
@@ -160,7 +160,7 @@ const COMMAND_FLAGS = {
   ref: ['context', 'pattern', 'repo'],
   run: ['answer', 'approval', 'gates', 'in', 'input', 'join', 'length', 'level', 'timeout'],
   spend: ['by', 'limit', 'since', 'task'],
-  task: ['all', 'blast', 'by', 'dependsOn', 'done', 'effort', 'force', 'gates', 'goal', 'incident',
+  task: ['all', 'blast', 'by', 'dependsOn', 'done', 'effort', 'force', 'gates', 'goal', 'incident', 'keep-work',
     'level', 'note', 'reason', 'references', 'skill', 'skills', 'status', 'title', 'value'],
   tools: ['arg', 'arg-json', 'yes'],
   work: ['attempt', 'dry-run', 'push']
@@ -701,7 +701,10 @@ async function main() {
           }
           const r = await api.invoke('task:reset', {
             projectId, id: ids, incident,
-            reason: typeof flags.reason === 'string' ? flags.reason : null
+            reason: typeof flags.reason === 'string' ? flags.reason : null,
+            // Keep the commit when nothing judged it — a reviewer that could not
+            // answer, a provider that refused after the work was finished.
+            keepWork: flags['keep-work'] === true
           });
           if (asJson) return out(r);
           if (!r.reset.length) return out('nothing to reset');
