@@ -1254,6 +1254,12 @@ async function main() {
         flowId,
         userInput: String(flags.input ?? positional.slice(2).join(' ') ?? ''),
         approvalMode: typeof flags.approval === 'string' ? flags.approval : null,
+        // t-0084: a CLI run is ATTENDED — this process parks on waitForRun and
+        // answers through `run:answerInput` (or --answer pre-loads the replies).
+        // This is its own signal, deliberately not approvalMode: 'always' also
+        // governs the t-0083 node pre-gate, the context file and scripted runs,
+        // and flipping it would park every unattended run again.
+        attended: flags.gates !== 'approve',
         level: typeof flags.level === 'string' ? flags.level : null,
         // Typed run inputs (D36 P1): --in name=value, repeatable. A flow that
         // declares inputs cannot be started without them, so the headless front
