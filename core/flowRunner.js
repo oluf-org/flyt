@@ -3823,6 +3823,20 @@ ${menu}`;
       const outcome = {};
       const problems = [];
 
+      // A turn that parsed ZERO tool calls but whose text carries a model's
+      // native tool-call markup means the model tried to act and this harness
+      // did not understand it: nothing ran, and the raw markup would otherwise
+      // sit in the deliverable looking like content. Recorded as a problem so
+      // it reaches the retrospective (and `flyt why`) without anyone reading
+      // the call trace. Detection only — never executed, because parsing a
+      // dialect we do not speak well enough to run is how a wrong tool call
+      // gets made confidently. A model that narrates alongside a real call
+      // (result.toolCalls non-empty) or merely DISCUSSES these dialects
+      // (quoted in a code fence while explaining them) must stay silent.
+      if (!result.toolCalls?.length && result.unparsedToolCall) {
+        problems.push(`model emitted a ${result.unparsedToolCall} tool call as message content, which this harness cannot parse — no tool ran and no result was returned; the raw markup is in the output below`);
+      }
+
       // Special handling for the documented example nodes (FLOW_NODES.md)
       if (role === 'plan' || role === 'plan-start') {
         // Write the primary planning artifact as tasks.md (plus classic plan for compat)
