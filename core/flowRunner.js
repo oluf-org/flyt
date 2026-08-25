@@ -3282,6 +3282,23 @@ export class FlowRunner {
   // Optional human checkpoint before a node. Returns false when rejected.
   async gate(runId, node) {
     if (!node.data?.requiresApproval) return true;
+    // Unattended (DESIGN-SPEC.md §5: 'always' IS "the agent runs unattended"):
+    // pass the checkpoint rather than park a run nobody can release. This is
+    // the same contract isGated() honours above — 'always' means nothing is
+    // gated, whatever the node says — applied by the last reader that ignored
+    // it: a run here had already concluded three times that no human was
+    // answering its questions, then parked at this gate waiting for one. The
+    // pass is logged so an unattended run says which gates it went through
+    // rather than passing them silently. 'ask' and 'smart' fall through and
+    // pause exactly as before; no mode's meaning changes, and no gate becomes
+    // skippable under any other mode.
+    if (this.approvalMode(runId) === 'always') {
+      this.store.appendLog(runId, {
+        event: 'approval_gate_skipped', node: node.id,
+        reason: 'unattended run (approvalMode: always)'
+      });
+      return true;
+    }
     // Already approved before a restart (see resumeFromGate): don't re-pause.
     if (this.store.readMeta(runId).approvedGates?.includes(node.id)) return true;
     this.setNodeStatus(runId, node.id, 'waiting');
