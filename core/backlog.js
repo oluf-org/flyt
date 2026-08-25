@@ -721,7 +721,7 @@ export class Backlog {
    * cleared here only because a task starting over must never resume from a
    * commit judged under different conditions.
    */
-  reset(id, { reason = null } = {}) {
+  reset(id, { reason = null, keepWork = false } = {}) {
     const safe = this.#assertId(id);
     const task = this.get(safe);
     if (!task) return null;
@@ -741,7 +741,17 @@ export class Backlog {
       level,
       baseLevel: null,
       blockedReason: reason ? `Reset: ${reason}` : null,
-      resumeFrom: null,
+      // `keepWork` is for the case where the work is FINISHED and nothing
+      // judged it — a reviewer that could not be reached, a provider that
+      // refused after the commit. Throwing the commit away there would make the
+      // next attempt rebuild a diff that was already good, which is the
+      // expensive end of an infrastructure failure.
+      //
+      // `resumeStage` goes either way. It says which judgement produced the
+      // commit — 'review' means a person read this and asked for one change —
+      // and after a refusal no judgement happened at all, so keeping it would
+      // tell the next attempt something untrue about work nobody looked at.
+      resumeFrom: keepWork ? (task.resumeFrom ?? null) : null,
       resumeStage: null,
       failureSignature: null,
       failureCount: null,

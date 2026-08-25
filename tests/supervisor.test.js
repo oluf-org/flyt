@@ -1684,3 +1684,41 @@ test('the amendment never replaces what the author wrote', async () => {
   assert.ok(body.indexOf('the original instruction') < body.indexOf('What previous attempts hit'),
     'the task still opens with the task');
 });
+
+test('a reviewer that could not be reached keeps the work and stops the loop', async () => {
+  // The gate this branch guards is the expensive one: the work is finished and
+  // the gates are green, and the only thing that went wrong is that nothing
+  // could be asked to look at it. Charged as a rejection it costs the attempt,
+  // the rung and the diff. Nothing exercised it until now.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-review-refusal-'));
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g', value: 5, effort: 1, level: 'low' });
+  backlog.add({ title: 'second', goal: 'g', value: 4, effort: 1, level: 'low' });
+  const engine = fakeEngine({
+    backlog,
+    land: () => ({
+      landed: false, stage: 'review',
+      review: {
+        verdict: 'request-changes',
+        reason: 'The review could not be completed: OpenRouter API 402: out of credit',
+        refusal: { code: 'credit', remedy: 'Add credit. Waiting will not clear it.' }
+      }
+    })
+  });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1, stateRoot: root });
+
+  await sup.run();
+
+  const first = backlog.get('t-0001');
+  assert.equal(first.status, 'queued', 'the work is unreviewed, not rejected');
+  assert.equal(first.attempts, 0, 'and nothing about it was judged, so nothing is charged');
+  assert.equal(first.level, 'low', 'no rung spent on a reviewer that never answered');
+  assert.equal(first.resumeFrom ?? null, null, 'nothing to resume in this fixture');
+  assert.equal(backlog.get('t-0002').status, 'queued', 'the next task is untouched');
+
+  assert.match(sup.status().stopping, /reviewer could not be reached/);
+  const open = openIncidents(root);
+  assert.equal(open.length, 1);
+  assert.equal(open[0].code, 'credit');
+  assert.match(incidentHeadline(root), /Add credit/);
+});

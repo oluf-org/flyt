@@ -1610,7 +1610,17 @@ export class Supervisor {
     // and the loop stops — the next task's review would fail identically.
     if (!landed.landed && landed.review?.refusal) {
       const { code, remedy } = landed.review.refusal;
-      this.backlog.release(taskId, { status: 'queued' });
+      // RESET, not release. `work:land` is the single writer of a task's
+      // post-landing status and it has already run `escalate()` by the time
+      // this result comes back — the attempt is counted and the rung is spent
+      // before the supervisor gets to look at why. Releasing only put the
+      // status back, so a reviewer that could not be reached still cost the
+      // task an attempt and a band, which is the whole thing this branch exists
+      // to prevent. The commit survives: the work is finished and nothing
+      // judged it.
+      this.backlog.reset(taskId, {
+        reason: `the reviewer could not be reached (${code})`, keepWork: true
+      });
       this.stopping = `the reviewer could not be reached: ${landed.review.reason}`;
       this.running = false;
       this.#raise({

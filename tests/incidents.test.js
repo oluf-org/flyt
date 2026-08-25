@@ -213,3 +213,33 @@ test('a resolved incident is not annotated by later traffic', () => {
   noteSuccess(r, { model: 'x' });
   assert.equal(listIncidents(r)[0].succeededSince ?? 0, 0, 'it is history, not a live question');
 });
+
+test('a reset can keep finished work that nothing judged', () => {
+  // The reviewer that could not be reached: the diff is committed, the gates are
+  // green, and the only thing that went wrong is that nothing could be asked to
+  // look at it. Throwing the commit away would make the next attempt rebuild a
+  // diff that was already good — the expensive end of an infrastructure failure.
+  const r = root();
+  const b = backlogIn(r);
+  const t = b.add({ title: 'x', goal: 'g', level: 'low' });
+  b.escalate(t.id, { reason: 'failed', workerAt: l => l });
+  b.update(t.id, { resumeFrom: 'c0ffee', resumeStage: 'review' });
+
+  const out = b.reset(t.id, { reason: 'the reviewer could not be reached', keepWork: true });
+
+  assert.equal(out.resumeFrom, 'c0ffee', 'the work survives');
+  assert.equal(out.level, 'low', 'the rung does not');
+  assert.equal(out.attempts, 0);
+  assert.equal(out.resumeStage, null,
+    'and nothing claims a judgement that never happened — "review" would say a person read it');
+});
+
+test('an ordinary reset still throws the commit away', () => {
+  const r = root();
+  const b = backlogIn(r);
+  const t = b.add({ title: 'x', goal: 'g' });
+  b.update(t.id, { resumeFrom: 'c0ffee', resumeStage: 'gates' });
+
+  assert.equal(b.reset(t.id).resumeFrom, null,
+    'a task starting over must not resume a commit judged under other conditions');
+});
