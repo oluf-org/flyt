@@ -13,7 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FlowRunner } from '../core/flowRunner.js';
-import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
+import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge, roleOf } from './helpers.js';
 
 const gatedFlow = () => makeFlow(
   [node('in', 'input', { text: 'brief' }),
@@ -95,4 +95,52 @@ test('without a node flag the pre-node gate stays inert in every mode', async ()
     assert.equal(store.readLog(runId).filter(e => e.event === 'approval_gate_skipped').length, 0,
       `nothing to skip at ${approvalMode}`);
   }
+});
+
+test("approvalMode 'always': an ESCALATION gate still parks — that one is not ours to pass", async () => {
+  // The boundary this change must not cross, and the one nothing else asserts.
+  //
+  // A pre-node checkpoint under 'always' is a checkpoint the person chose to
+  // run past. An ESCALATION gate is different in kind: something looked at the
+  // work and concluded a human has to decide. Passing that automatically is not
+  // honouring the mode, it is answering the question the run just asked — and
+  // the loop already relies on it parking, so it takes the next task instead.
+  //
+  // The check lives in gate(), which handles the pre-node checkpoint only.
+  // Moving it up into resolveGate() or setStage() would "simplify" this into
+  // silently self-approving every human-decision gate, and every other test
+  // here would still pass.
+  const store = makeStore();
+  setScript(({ system }) =>
+    roleOf(system) === 'step-eval'
+      ? '```json\n{ "verdict": "escalate", "reason": "a human should look at this" }\n```'
+      : 'work output');
+  const runner = new FlowRunner(store, testConfig());
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }),
+     node('work', 'aiStep', { role: 'execute' }),
+     node('seval', 'aiStep', { role: 'step-eval' }),
+     node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'seval'), edge('seval', 'out')]);
+
+  const runId = runner.start(flow, { approvalMode: 'always' });
+
+  assert.equal(await waitForStage(store, runId, ['awaiting_approval', 'done', 'failed']),
+    'awaiting_approval', 'unattended does not mean unaccountable');
+  assert.equal(store.readMeta(runId).pendingGateKind, 'escalation');
+  assert.equal(store.readLog(runId).filter(e => e.event === 'approval_gate_skipped').length, 0,
+    'and nothing passed a gate it was never given');
+});
+
+test('an approvalMode nothing recognises gates, rather than assuming nobody is there', async () => {
+  // Fail-closed is the house rule. A mode that is missing, misspelt or from a
+  // newer version must never read as "run unattended".
+  const store = makeStore();
+  setScript(() => 'step output');
+  const runner = new FlowRunner(store, testConfig());
+  const runId = runner.start(gatedFlow(), { approvalMode: 'alway' });
+
+  assert.equal(await waitForStage(store, runId, ['awaiting_approval', 'done', 'failed']),
+    'awaiting_approval', 'an unrecognised mode is not permission');
+  assert.equal(store.readMeta(runId).pendingGateKind, 'pre');
 });
