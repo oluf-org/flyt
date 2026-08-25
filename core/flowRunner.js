@@ -34,7 +34,7 @@ import { callModel, abortError, isAbortError } from './adapters/index.js';
 import { runAgent, callForAnswer, describeEmptyTurn, toolProtocol, supportsToolsFor } from './agent.js';
 import { recordAttempt, settleAttempt } from '../src/attempts.js';
 import { plannerLimits, validatePlan, createSpinDetector } from './planContract.js';
-import { classifyAdapterError } from './adapters/failures.js';
+import { classifyAdapterError, unparsedToolDialect } from './adapters/failures.js';
 import { makeRetrospective } from './retrospective.js';
 import { recordToolUsage } from './feedback.js';
 import { resolveCallTarget } from './modelSource.js';
@@ -3833,8 +3833,17 @@ ${menu}`;
       // gets made confidently. A model that narrates alongside a real call
       // (result.toolCalls non-empty) or merely DISCUSSES these dialects
       // (quoted in a code fence while explaining them) must stay silent.
-      if (!result.toolCalls?.length && result.unparsedToolCall) {
-        problems.push(`model emitted a ${result.unparsedToolCall} tool call as message content, which this harness cannot parse — no tool ran and no result was returned; the raw markup is in the output below`);
+      // Asked here rather than relied on being carried: the value reaches this
+      // point through four different return shapes — two agent loops, a
+      // tool-less early return, and  short-circuiting
+      // straight to  when a node holds no tools, which is
+      // the path the node that produced the original failure takes. Three of
+      // the four had to be found one at a time. One place asking one question
+      // cannot drift the way four places passing a field can.
+      const dialect = result.toolCalls?.length ? null
+        : (result.unparsedToolCall ?? unparsedToolDialect(result.text));
+      if (dialect) {
+        problems.push(`model emitted a ${dialect} tool call as message content, which this harness cannot parse — no tool ran and no result was returned; the raw markup is in the output below`);
       }
 
       // Special handling for the documented example nodes (FLOW_NODES.md)

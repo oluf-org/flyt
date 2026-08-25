@@ -23,14 +23,20 @@ import { callModel, registerProvider } from '../core/adapters/index.js';
 // --- the exact markup, codepoint-checked -----------------------------------
 
 test('the deepseek DSML literal uses U+FF5C FULLWIDTH VERTICAL LINE, not an ASCII pipe', () => {
-  const dsml = UNPARSED_TOOL_DIALECTS.find(([d]) => d === 'deepseek-dsml');
-  assert.ok(dsml, 'deepseek-dsml dialect must exist');
-  // The pattern must contain the fullwidth vertical line and no bare ASCII pipe
-  // outside the llama python_tag alternative (which legitimately uses ASCII).
-  const asciiPipes = dsml[1].source.match(/\|/g) ?? [];
-  assert.ok(dsml[1].source.includes('\\u{FF5C}'),
-    'pattern must match U+FF5C via \\u{FF5C} escape');
-  assert.equal(asciiPipes.length, 1, 'only the regex alternation pipe expected');
+  // The detail that decides whether this works at all. A detection written from
+  // memory uses an ASCII pipe, matches nothing, and passes its own test if that
+  // test was written from the same memory — so this asserts BEHAVIOUR against
+  // both strings rather than counting characters in the pattern source.
+  const FW = String.fromCharCode(0xFF5C);
+  const real = `I believe.<${FW}DSML${FW}tool_calls>
+<${FW}DSML${FW}invoke name="search_files">`;
+  const imitation = real.split(FW).join('|');
+
+  assert.equal(unparsedToolDialect(real), 'deepseek-dsml',
+    'the markup a deepseek model actually emitted');
+  assert.equal(unparsedToolDialect(imitation), null,
+    'and an ASCII-pipe lookalike is not that markup — if this passes too, the '
+    + 'pattern is matching something looser than it thinks');
 });
 
 test('detects the exact markup observed in run 2026-08-23T18-55-27-794Z-87sh', () => {
@@ -240,7 +246,10 @@ test('prose quoting the markup inside a code fence does NOT report a problem', a
   await waitForStage(store, runId, ['done', 'failed']);
 
   const retro = store.readRetrospectives(runId).step;
-  assert.equal(retro.status, 'success');
-  assert.deepEqual(retro.problems, []);
+  // Not 'no problems at all': this prose is not interrogation status JSON
+  // either, so the node has a real and separate complaint about it. What must
+  // be absent is a complaint about a tool call, because none was attempted.
+  assert.deepEqual(retro.problems.filter(x => /tool call|dsml|dialect/i.test(String(x))), [],
+    'markup being DISCUSSED is not markup being emitted');
 });
 
