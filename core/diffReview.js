@@ -116,7 +116,12 @@ export async function reviewDiff({
   retry, timeout, signal, onRetry = null
 }) {
   if (!worker?.provider) {
-    return { verdict: 'request-changes', reason: 'No reviewer model is configured, so nothing may land unattended.', changes: [], concerns: [], unavailable: true };
+    return {
+      verdict: 'request-changes',
+      reason: 'No reviewer model is configured, so nothing may land unattended.',
+      changes: [], concerns: [], unavailable: true,
+      unusable: { code: 'no-reviewer', remedy: 'Name a reviewer model. Nothing lands unattended without one.' }
+    };
   }
   try {
     const res = await callModel({
@@ -148,7 +153,13 @@ export async function reviewDiff({
           ? `The reviewer ran out of its completion budget before finishing (${res.text?.length ?? 0}`
             + ' characters, cut mid-answer). The diff may be too large to review in one pass.'
           : 'The reviewer answered without a verdict block, so there is nothing to read as a decision.',
-        changes: [], concerns: [], unavailable: true, truncated: cut
+        changes: [], concerns: [], unavailable: true, truncated: cut,
+        // WHY it could not be read, structured, because the two want different
+        // things: a cut answer wants a smaller diff or a bigger budget, and a
+        // reviewer that will not emit the block wants a different reviewer.
+        unusable: cut
+          ? { code: 'reviewer-truncated', remedy: 'The diff outran the completion budget. Split the change, or raise the reviewer token budget.' }
+          : { code: 'reviewer-no-verdict', remedy: 'The reviewer did not return the verdict block it was asked for. Use a reviewer that follows the format, or a stronger one.' }
       };
     }
     return { ...parsed, model: { provider: res.provider, model: res.model }, usage: res.usage ?? null };

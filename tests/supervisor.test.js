@@ -1716,9 +1716,46 @@ test('a reviewer that could not be reached keeps the work and stops the loop', a
   assert.equal(first.resumeFrom ?? null, null, 'nothing to resume in this fixture');
   assert.equal(backlog.get('t-0002').status, 'queued', 'the next task is untouched');
 
-  assert.match(sup.status().stopping, /reviewer could not be reached/);
+  assert.match(sup.status().stopping, /review could not be used/);
   const open = openIncidents(root);
   assert.equal(open.length, 1);
   assert.equal(open[0].code, 'credit');
   assert.match(incidentHeadline(root), /Add credit/);
+});
+
+test('a reviewer that will not emit a verdict is the reviewer, not the work', async () => {
+  // The third variant of the same failure, and the one that found the other
+  // two were not enough. `reviewDiff` comes back unusable four ways — no
+  // reviewer configured, the call refused, the answer cut off at the budget,
+  // and a reviewer that answers in prose — and all four arrive as
+  // `verdict: 'request-changes'`, which is what the task gets charged for.
+  // t-0085 spent an attempt on "The reviewer answered without a verdict block".
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-review-unusable-'));
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g', level: 'low' });
+  const engine = fakeEngine({
+    backlog,
+    land: () => ({
+      landed: false, stage: 'review',
+      review: {
+        verdict: 'request-changes', unavailable: true,
+        reason: 'The reviewer answered without a verdict block, so there is nothing to read as a decision.',
+        unusable: { code: 'reviewer-no-verdict', remedy: 'Use a reviewer that follows the format.' }
+      }
+    })
+  });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1, stateRoot: root });
+
+  await sup.run();
+
+  const first = backlog.get('t-0001');
+  assert.equal(first.attempts, 0, 'a sentence about the reviewer is not a judgement of the work');
+  assert.equal(first.level, 'low');
+  assert.equal(first.status, 'queued');
+
+  // A gate that cannot produce a verdict is the review gate failing, not the
+  // provider declining — they are fixed in different places.
+  const [incident] = openIncidents(root);
+  assert.equal(incident.kind, 'gate');
+  assert.equal(incident.code, 'reviewer-no-verdict');
 });

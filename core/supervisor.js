@@ -1608,8 +1608,17 @@ export class Supervisor {
     //
     // The work is kept where it is. Nothing is escalated, nothing is parked,
     // and the loop stops — the next task's review would fail identically.
-    if (!landed.landed && landed.review?.refusal) {
-      const { code, remedy } = landed.review.refusal;
+    // A review that could not be READ is the same as one that could not be
+    // reached. There are four ways `reviewDiff` comes back unusable — no
+    // reviewer configured, the call refused, the answer cut off at the token
+    // budget, or a reviewer that would not emit the verdict block — and every
+    // one of them arrives as `verdict: 'request-changes'`, which is what the
+    // task gets charged for. Only the refusal was honoured here; t-0085 then
+    // spent an attempt on "The reviewer answered without a verdict block",
+    // which is a sentence about the reviewer.
+    const unusable = landed.review?.refusal ?? landed.review?.unusable ?? null;
+    if (!landed.landed && unusable) {
+      const { code, remedy } = unusable;
       // RESET, not release. `work:land` is the single writer of a task's
       // post-landing status and it has already run `escalate()` by the time
       // this result comes back — the attempt is counted and the rung is spent
@@ -1621,10 +1630,13 @@ export class Supervisor {
       this.backlog.reset(taskId, {
         reason: `the reviewer could not be reached (${code})`, keepWork: true
       });
-      this.stopping = `the reviewer could not be reached: ${landed.review.reason}`;
+      this.stopping = `the review could not be used: ${landed.review.reason}`;
       this.running = false;
       this.#raise({
-        kind: 'provider', code, remedy,
+        // A refusal is the PROVIDER declining; anything else is the review
+        // gate itself unable to produce a verdict. Different kinds because they
+        // are fixed in different places.
+        kind: landed.review.refusal ? 'provider' : 'gate', code, remedy,
         detail: landed.review.reason, taskId, runId: hb?.runId ?? null,
         dedupeKey: `review:${code}`,
       });
