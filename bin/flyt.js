@@ -1312,7 +1312,7 @@ async function main() {
 
 const ms = n => (n == null ? '?' : n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${n}ms`);
 
-function renderWhy(r) {
+export function renderWhy(r) {
   const L = [`run ${r.runId} — ${r.verdict}${r.flow ? ` (${r.flow})` : ''}`];
   if (r.error) L.push(`  error: ${r.error}`);
   // The question comes first, above the machinery. A run stalled on a question
@@ -1331,7 +1331,10 @@ function renderWhy(r) {
   if (r.gate) {
     const g = r.gate;
     L.push('');
-    L.push(`  "${g.title ?? g.node}" is waiting for your decision (${g.kind} gate) — ${g.meaning}:`);
+    // Not "is waiting for your decision" — the verdict line two lines above
+    // already said exactly that, and a command whose whole job is to read well
+    // cannot afford to say the same sentence twice before getting to the point.
+    L.push(`  "${g.title ?? g.node}" — ${g.meaning} (${g.kind} gate):`);
     if (g.kind === 'tool' && g.tool != null) {
       L.push(`    tool: ${g.tool}${g.risk ? ` (risk: ${g.risk})` : ''}`);
       if (g.summary) L.push(`    it wants to: ${g.summary}`);
@@ -1345,7 +1348,7 @@ function renderWhy(r) {
     }
     L.push('');
     L.push(`  flyt approve ${r.runId}   let it continue`);
-    L.push(`  flyt reject ${r.runId}   stop here`);
+    L.push(`  flyt reject  ${r.runId}   stop here`);
   }
   const s = r.signals;
   L.push(`  ${s.modelCalls} model call(s) over ${ms(s.modelMs)}, ${s.toolCalls} tool call(s)`

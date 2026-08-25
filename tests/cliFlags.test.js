@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { checkFlags } from '../bin/flyt.js';
+import { checkFlags, renderWhy } from '../bin/flyt.js';
 
 const cli = fileURLToPath(new URL('../bin/flyt.js', import.meta.url));
 const run = args => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
@@ -121,4 +121,66 @@ test('flyt call does not write its own flags into the target', () => {
   const file = fs.readFileSync(path.join(dir, '.flyt', 'backlog', `${id}.task.md`), 'utf8');
   assert.match(file, /gates: \[npm test\]/, 'the argument it was given still lands');
   assert.ok(!/^arg-json:/m.test(file), `the flag itself must not become a field:\n${file}`);
+});
+
+// --- `flyt why` on a run that is waiting for a decision ---------------------
+//
+// This is a rendering feature, so what it renders is the thing to test, and
+// nothing could until renderWhy was exported. The first version said "is
+// waiting for your decision" two lines below a verdict line that already said
+// "waiting for your decision" — in the command whose entire job is to be read.
+
+const whyReport = gate => ({
+  runId: 'run-1', verdict: 'waiting for your decision', flow: 'Spec an idea',
+  gate, nodes: [], suggestions: [],
+  signals: { modelCalls: 9, modelMs: 73200, toolCalls: 17, usd: '0.004', tools: [] },
+});
+
+test('flyt why: an approval gate leads with the decision, and says it once', () => {
+  const out = renderWhy(whyReport({
+    kind: 'pre', meaning: 'a checkpoint: this node asks before it runs',
+    node: 'plan', title: 'What this becomes',
+  }));
+
+  assert.match(out, /"What this becomes"/, 'the title, not the node id');
+  assert.match(out, /a checkpoint: this node asks before it runs/);
+  assert.equal(out.split('waiting for your decision').length - 1, 1,
+    'the verdict line already said it; saying it again buries the point');
+  // The two things the reader came for.
+  assert.match(out, /flyt approve run-1/);
+  assert.match(out, /flyt reject {2}run-1/);
+  assert.ok(out.indexOf('flyt approve') < out.indexOf('9 model call'),
+    'the decision comes before the machinery');
+});
+
+test('flyt why: a held tool call says what it wanted to do', () => {
+  const out = renderWhy(whyReport({
+    kind: 'tool', meaning: 'a tool call was held at the ceiling before it ran',
+    node: 'work', title: 'Do the work',
+    tool: 'bash', summary: 'rm -rf ./build', risk: 'high',
+    reason: 'destructive under approvalMode ask', checkedBy: 'screen',
+  }));
+
+  assert.match(out, /tool: bash \(risk: high\)/);
+  assert.match(out, /it wants to: rm -rf \.\/build/);
+  assert.match(out, /why it stopped: destructive under approvalMode ask/);
+  assert.match(out, /screened by: screen/);
+});
+
+test('flyt why: an escalation says a human was asked, and quotes why', () => {
+  const out = renderWhy(whyReport({
+    kind: 'escalation', meaning: 'an evaluation concluded a human has to decide',
+    node: 'seval', title: 'Check it', reason: 'three retries still fail lint',
+  }));
+
+  assert.match(out, /a human was asked to decide how to proceed/);
+  assert.match(out, /why: three retries still fail lint/);
+});
+
+test('flyt why: a run with no gate renders none of it', () => {
+  const out = renderWhy({
+    runId: 'run-1', verdict: 'completed', nodes: [], suggestions: [],
+    signals: { modelCalls: 1, modelMs: 10, toolCalls: 0, usd: null, tools: [] },
+  });
+  assert.ok(!/flyt approve/.test(out), out);
 });
