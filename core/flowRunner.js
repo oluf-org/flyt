@@ -2366,7 +2366,7 @@ export class FlowRunner {
   //   'ask'    — pause before every destructive tool call.
   //   'smart'  — screen each call (core/safetyCheck.js); pause only on risk.
   //   'always' — never pause. The dangerous one.
-  start(flow, { userInput = '', workspace = null, approvalMode = null, modeId = null, overrides = null, compareGroup = null, inputs = null, loopTaskId = null, skills = null } = {}) {
+  start(flow, { userInput = '', workspace = null, approvalMode = null, attended = null, modeId = null, overrides = null, compareGroup = null, inputs = null, loopTaskId = null, skills = null } = {}) {
     // Pre-run gate (FLOW_LANG.md): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
@@ -2466,6 +2466,13 @@ export class FlowRunner {
       flowName: flow.name,
       ...(workspace ? { workspace } : {}),
       approvalMode: normalizeApprovalMode(approvalMode ?? this.config.approvalMode),
+      // "A caller is blocked on this run and can ANSWER a question" is how the
+      // run was STARTED, not what approvalMode means (t-0084). `flyt run`
+      // passes attended: true — it parks on waitForRun and replies through
+      // `run:answerInput`; the loop and every other caller pass nothing and
+      // stay unattended. Recorded in the meta so the interrogation's decision
+      // is inspectable from the snapshot, not just from this closure.
+      attended: attended === true,
       // Provenance for reproducibility/replay: which mode ran, and the exact
       // effective override map. The flow.json snapshot already bakes them in;
       // this records the intent behind that snapshot.
@@ -2488,6 +2495,7 @@ export class FlowRunner {
     this.store.appendLog(runId, {
       event: 'flow_run_created', flowId: flow.id, workspace: workspace ?? null,
       approvalMode: normalizeApprovalMode(approvalMode ?? this.config.approvalMode),
+      attended: attended === true,
       ...(modeId ? { modeId } : {}),
       ...(hasLaunch ? { overrideNodes: Object.keys(launchOverrides) } : {}),
       ...(compareGroup?.id ? { compareGroup: String(compareGroup.id) } : {}),
@@ -3178,6 +3186,16 @@ export class FlowRunner {
   // gate (sibling of awaiting_approval) until the user answers from the
   // composer, then re-run the node with the answers as context.
   //
+  // "Is somebody there to ANSWER a question" (t-0084) is a property of how the
+  // run was STARTED — `flyt run` parks on waitForRun and replies through
+  // `run:answerInput` — not of approvalMode, whose 'always' also means four
+  // other things (context-file edits, the question gate, the t-0083 pre-gate,
+  // and scripted runs). Only a run started attended may park on its questions;
+  // everything else proceeds on stated assumptions.
+  isAttended(runId) {
+    return this.store.readMeta(runId)?.attended === true;
+  }
+
   // Role-agnostic since D38: `refine` asks about the request, `orient` asks
   // about the workspace, and both park identically. Since D46 the number of
   // rounds is the node's, not the gate's: `refine`/`orient` still get exactly
@@ -3185,18 +3203,20 @@ export class FlowRunner {
   // than tested for membership — it already appended one entry per round, so
   // the record needed no new shape. Returns { ok, requeue? }.
   async handleNodeQuestions(runId, flow, node, questions) {
-    // Nobody is there to answer (DESIGN-SPEC.md §5: 'always' IS "the agent runs
-    // unattended"). A flow that can park forever is not usable from the loop,
-    // and the loop is where these flows are meant to end up — so the questions
-    // are recorded and the run proceeds on the node's stated assumptions. They
+    // Nobody is there to answer unless the run was STARTED attended (t-0084):
+    // `flyt run` parks on waitForRun and replies through `run:answerInput`, so
+    // it parks here. The loop and every scripted caller did not promise a
+    // reader — approvalMode: always still passes the t-0083 pre-gate below and
+    // never reaches this branch differently than before. Questions are
+    // recorded and the run proceeds on the node's stated assumptions. They
     // stay visible in the node's output and in the log, so a human reading the
     // run afterwards sees exactly which forks were taken blind.
-    if (this.approvalMode(runId) === 'always') {
+    if (!this.isAttended(runId)) {
       this.store.writeNodeOutput(runId, `${node.id}.answers`,
         '(nobody was available to answer — this run is unattended. Proceed on your stated assumptions.)');
       this.store.appendLog(runId, {
         event: 'input_gate_skipped', node: node.id, questions: questions.length,
-        reason: 'unattended run (approvalMode: always)'
+        reason: 'unattended run (not started attended; approvalMode: ' + this.approvalMode(runId) + ')'
       });
       return { ok: true };
     }
@@ -3917,7 +3937,11 @@ ${menu}`;
 
         const used = countAnsweredRounds(this.store.readMeta(runId), node.id);
         const allowed = questionRoundsFor(node);
-        const unattended = this.approvalMode(runId) === 'always';
+        // t-0084: "nobody is there" means nobody was promised when the run
+        // STARTED, not approvalMode === 'always' — that flag also governs the
+        // t-0083 pre-gate and the context file, and an attended `flyt run` at
+        // 'always' has a caller parked on waitForRun who can answer.
+        const unattended = !this.isAttended(runId);
         const asking = interrogation.status === 'asking' && interrogation.questions.length > 0;
         // Out of rounds, or nobody there to answer. Either way the fork is
         // taken by the run rather than by a person, so it is recorded as an
@@ -3984,7 +4008,9 @@ ${menu}`;
 
         const answered = countAnsweredRounds(this.store.readMeta(runId), node.id)
           >= questionRoundsFor(node);
-        const unattended = this.approvalMode(runId) === 'always';
+        // t-0084: same signal as the interrogation — started attended means
+        // somebody is parked on the run and can answer.
+        const unattended = !this.isAttended(runId);
         // Unattended, a question is a fork taken blind, not a question — it is
         // recorded as an explicit assumption so the run afterwards shows which
         // ones were taken and on what basis (§4).

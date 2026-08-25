@@ -562,7 +562,7 @@ export function createApi(engine) {
     // The workspace is bound at run time (D15) — a bound tab IS its workspace
     // (T19), an appdata project has its own managed one (L5), and only an
     // unbound project picks one per run (or none, for mock/no-file flows).
-    'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null, level = null, worker = null, loopTaskId = null, skills = null }) => {
+    'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, attended = null, launch = null, level = null, worker = null, loopTaskId = null, skills = null }) => {
       const entry = proj(projectId);
       let workspace = null;
       // An explicit workspaceDir WINS, even for a bound project. That is how the
@@ -609,7 +609,11 @@ export function createApi(engine) {
         // task carries it because "this job needs to know how tools are
         // authored here" is a property of the job, not of the pipeline every
         // job runs through.
-        skills: Array.isArray(skills) ? skills : null
+        skills: Array.isArray(skills) ? skills : null,
+        // t-0084: did the caller promise somebody on the other end? Only
+        // `flyt run` passes true today; the loop and scripted callers leave it
+        // unset and the run stays unattended no matter its approvalMode.
+        attended
       });
     },
 
