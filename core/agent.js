@@ -446,9 +446,52 @@ async function runAgentOnce({ worker, apiKey, system, prompt, tools = [], ctx, o
 // of an artifact on disk (DESIGN-SPEC.md §5); when it is, the handle note rides
 // along so the model knows the rest exists and how to redeem it — a preview
 // with no way back to the full result would just make it re-run the call.
-function toolMessage(record) {
+function toolMessage(record, repeat = null) {
   const body = JSON.stringify(record.ok ? record.result : { error: record.error });
-  return [whichRoot(record), body, record.note].filter(Boolean).join('\n');
+  return [whichRoot(record), body, record.note, repeat].filter(Boolean).join('\n');
+}
+
+/**
+ * How many identical failures before the loop stops letting it happen quietly.
+ *
+ * Two. The first failure is information and the model deserves a chance to act
+ * on it; the second is the model not acting on it, and by the third the round
+ * budget is being spent proving that nothing changed.
+ */
+const REPEAT_NUDGE_AT = 2;
+
+/**
+ * The same call, failing the same way, again.
+ *
+ * A tool error is written to be actionable — `edit_file` says which anchor
+ * missed and names the closest line it did find. A model that cannot use that
+ * sends the identical call back, gets the identical error, and does it again;
+ * nothing in the loop notices, and the round budget goes on it. Watched
+ * t-0087 make byte-identical `edit_file` calls three times against the same
+ * file and run out of rounds before writing anything, and the CRLF disaster
+ * before it had exactly this shape — the difference being that there the tool
+ * was wrong, and here the tool was right and unheard.
+ *
+ * So the repetition is named in the reply, where the model cannot read past it,
+ * and it escalates: the second time says the retry will not work and what to do
+ * instead, and the third says stop and declare the blockage. That is cheaper
+ * than a rung and very much cheaper than a round budget.
+ */
+export function repeatedToolFailure(priorCalls, record) {
+  if (record?.ok !== false) return null;
+  const before = priorCalls.filter(c =>
+    c?.ok === false && c.tool === record.tool && c.error === record.error).length;
+  if (before < REPEAT_NUDGE_AT - 1) return null;
+  const nth = before + 1;
+  if (nth >= 3) {
+    return `STOP. That is the same \`${record.tool}\` call failing the same way ${nth} times. `
+      + 'It will not start working. Do something materially different, or say plainly that you are '
+      + 'blocked and why — continuing to retry spends the rounds you need for the actual work.';
+  }
+  return `You have now made this exact \`${record.tool}\` call twice and had the same error twice. `
+    + 'Sending it again will fail again. Read the error above — it says precisely what did not match — '
+    + 'and either re-read the file to copy the text exactly as it is on disk, or work from a different '
+    + 'anchor. Do not repeat the call unchanged.';
 }
 
 // WHERE a file result came from, as a visible first line (DECISIONS.md D38).
@@ -546,8 +589,15 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
         await gateToolCall(ctx, name, args); // may throw toolRejected to abort the task
         record = await executeTool(name, args, ctx);
       }
+      const repeat = repeatedToolFailure(toolCalls, record);
+      if (repeat) {
+        ctx?.store?.appendLog?.(ctx.runId, {
+          event: 'tool_repeat', node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
+          tool: record.tool, error: String(record.error ?? '').slice(0, 200)
+        });
+      }
       toolCalls.push(record);
-      messages.push({ role: 'tool', tool_call_id: call.id, content: toolMessage(record) });
+      messages.push({ role: 'tool', tool_call_id: call.id, content: toolMessage(record, repeat) });
     }
   }
   return { text: lastText || '(agent stopped: tool-call iteration cap reached)', toolCalls, usage, rounds, capped: true };
@@ -636,13 +686,20 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
       record = { tool: '(unparsed)', ok: false, error: `Tool block was not valid JSON: ${err.message}`, ms: 0 };
       ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: ctx.taskId ? `executor:${ctx.taskId}` : undefined, ...record });
     }
+    const repeat = repeatedToolFailure(toolCalls, record);
+    if (repeat) {
+      ctx.store?.appendLog?.(ctx.runId, {
+        event: 'tool_repeat', node: ctx.taskId ? `executor:${ctx.taskId}` : undefined,
+        tool: record.tool, error: String(record.error ?? '').slice(0, 200)
+      });
+    }
     toolCalls.push(record);
     transcript += [
       '',
       '--- your previous reply ---',
       res.text.trim(),
       '',
-      `TOOL RESULT (${record.tool}): ${toolMessage(record)}`,
+      `TOOL RESULT (${record.tool}): ${toolMessage(record, repeat)}`,
       '',
       'Continue. Emit another ```tool block if needed, otherwise produce the final deliverable with no tool block.'
     ].join('\n');
