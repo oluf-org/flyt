@@ -79,8 +79,16 @@ test('stop aborts the in-flight call, cancels the run, and frees the live regist
 
   assert.deepEqual(runner.stop(runId), { ok: true });
   assert.equal(runner.live.has(runId), false, 'stop frees the live registry (run:delete unblocks)');
-  assert.deepEqual(runner.stop(runId), { ok: false, error: 'not-live' }, 'a stopped run is no longer live');
-  assert.deepEqual(runner.pause(runId), { ok: false, error: 'not-live' });
+  // A second stop is refused, and now says WHY rather than 'not-live': the run
+  // ended, which is a different fact from 'not in this process' and the one the
+  // reader needs. Both carry a message the CLI prints, so these check the
+  // fields that are the contract rather than the exact object shape.
+  const again = runner.stop(runId);
+  assert.equal(again.ok, false, 'a stopped run is no longer live');
+  assert.equal(again.error, 'already-ended');
+  const paused = runner.pause(runId);
+  assert.equal(paused.ok, false);
+  assert.equal(paused.error, 'not-live');
 
   await settle(); // let the unwind flush through fail()
   const meta = store.readMeta(runId);

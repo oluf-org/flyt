@@ -1429,7 +1429,14 @@ export class FlowRunner {
   // so the UI never claims a pause that hasn't happened. Idempotent: a second
   // request while pausing or paused is a no-op. Not live -> not-live.
   pause(runId) {
-    if (!this.live.has(runId)) return { ok: false, error: 'not-live' };
+    if (!this.live.has(runId)) {
+      // Deliberately NOT the stop() fallback: pausing a walk that exists
+      // only in some other process's memory means nothing - the pause
+      // request is consulted between waves by the walking loop itself, so
+      // there is no durable thing to hold. Say exactly that rather than a
+      // bare not-live that reads like a bug.
+      return { ok: false, error: "not-live", message: `Run ${runId} is not running in this process; there is nothing to pause.` };
+    }
     if (!this.pauseRequests.has(runId) && !this.pauseGates.has(runId)) {
       this.pauseRequests.add(runId);
       this.store.appendLog(runId, { event: 'run_pause_requested' });
@@ -1447,7 +1454,40 @@ export class FlowRunner {
   // nothing clobbers the cancelled state written here. Removing the run from
   // `live` is what unblocks run:delete. Not live -> not-live.
   stop(runId) {
-    if (!this.live.has(runId)) return { ok: false, error: 'not-live' };
+    if (!this.live.has(runId)) {
+      // Not walking it HERE hides two very different situations, and answering
+      // `not-live` for both is what let the CLI report success while touching
+      // nothing. Ask isRunLive — the cross-process lease check — and split:
+      if (this.isRunLive(runId)) {
+        // A live process somewhere else owns this run. Writing a terminal
+        // stage under it is two writers corrupting one run — the lease exists
+        // precisely to prevent that — so refuse, and name the owner.
+        const lease = this.store.readLease(runId);
+        const who = lease ? ` (pid ${lease.pid ?? '?'}${lease.host ? `, host ${lease.host}` : ''})` : '';
+        return {
+          ok: false,
+          error: 'owned-by-live-process',
+          message: `Run ${runId} belongs to a live process${who} — not stopping it from underneath.`
+        };
+      }
+      // Nobody anywhere is walking it: the starting CLI process died and left
+      // a stale (or missing) lease. Stop it from the files, the same way
+      // resolveGate falls back to resumeFromGate for approvals.
+      // readMeta THROWS for a run that is not there (readJson does a bare
+      // readFileSync), so the guard below could never fire — an unknown run
+      // came out as an ENOENT stack rather than the sentence this branch was
+      // written to produce.
+      let meta = null;
+      try { meta = this.store.readMeta(runId); } catch { meta = null; }
+      if (!meta) {
+        return { ok: false, error: 'unknown-run', message: `No such run: ${runId}` };
+      }
+      if (['done', 'failed', 'cancelled', 'rejected', 'retired'].includes(meta.stage)) {
+        return { ok: false, error: 'already-ended', message: `Run ${runId} already ended (${meta.stage}) — nothing left to stop.` };
+      }
+      this.stopFromFiles(runId, meta);
+      return { ok: true, fromFiles: true };
+    }
     this.stopRequests.add(runId);
     this.pauseRequests.delete(runId);
     // Wake a pause hold: the walk re-checks stopRequests right after the gate
@@ -1494,6 +1534,52 @@ export class FlowRunner {
     this.live.delete(runId);
     this.notify(runId);
     return { ok: true };
+  }
+
+  // The durable half of stop(): the same terminal state the in-process path
+  // writes (stage 'cancelled', unfinished nodes back to 'pending', stuck tasks
+  // requeued), driven from meta.json alone so a run whose starting process is
+  // long gone can still be stopped. Mirrors resumeFromGate() in shape: read
+  // meta, act on the recorded stage, write the result.
+  stopFromFiles(runId, meta = this.store.readMeta(runId)) {
+    const flow = this.store.readFlow(runId);
+    if (flow) {
+      const nodeStatus = { ...(meta.nodeStatus ?? {}) };
+      for (const n of flow.nodes) {
+        const s = nodeStatus[n.id];
+        if (s !== 'done' && s !== 'skipped') nodeStatus[n.id] = 'pending';
+      }
+      // A gate parked mid-executor belongs to a call stack that died with the
+      // process; nothing is left to approve and it must not look pending.
+      if (meta.pendingGateKind === 'tool' && meta.pendingNodeId) {
+        nodeStatus[meta.pendingNodeId] = 'failed';
+      }
+      this.store.writeMeta(runId, {
+        ...meta, nodeStatus,
+        currentTaskId: null, currentNodeId: null, paused: false,
+        pendingNodeId: null, pendingGateKind: null, pendingToolCall: null
+      });
+    } else {
+      this.store.writeMeta(runId, { ...meta, paused: false });
+    }
+    const doc = this.store.readTasks(runId);
+    if (doc) {
+      const requeued = doc.tasks.filter(t => t.status === 'running');
+      if (requeued.length) {
+        for (const t of requeued) t.status = 'pending';
+        this.store.writeTasks(runId, doc);
+      }
+    }
+    this.store.setStage(runId, 'cancelled', { cancelledAt: new Date().toISOString() });
+    this.store.appendLog(runId, { event: 'run_stopped', fromFiles: true });
+    // Both, and they are not the same thing. releaseLease drops a lease THIS
+    // process holds, which for a run stopped from files is nothing at all —
+    // the holder is a dead process elsewhere. The lease FILE is what makes
+    // isRunLive keep answering, so it has to go or the next reader still sees
+    // an owner for a run that has been cancelled.
+    this.releaseLease(runId);
+    this.store.clearLease(runId);
+    this.notify(runId);
   }
 
   // Restart one node and everything downstream of it, on a non-live run.

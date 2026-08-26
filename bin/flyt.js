@@ -1148,13 +1148,25 @@ async function main() {
       const projectId = openProject(api, engine);
       const runId = positional[1];
       if (!runId) return die(`flyt ${command} <runId>`);
-      await api.invoke(`run:${command}`, {
+      // The invoke result says whether anything actually happened - stop()
+      // answers not-live / owned-by-live-process when it could not act, and
+      // printing success anyway once reported stopping a run it never touched.
+      // A failed result dies non-zero with the reason; only a real success
+      // prints the new stage.
+      const res = await api.invoke(`run:${command}`, {
         projectId, runId,
         ...(command === 'reject' ? { reason: String(flags.reason ?? '') } : {})
       });
-      const stage = (await api.invoke('run:snapshot', { projectId, runId }))?.meta?.stage ?? 'unknown';
       const done = { approve: 'approved', reject: 'rejected', stop: 'stopped' }[command];
-      return out(asJson ? { ok: true, runId, action: done, stage } : `${runId} ${done} — now ${stage}`);
+      if (res && res.ok === false) {
+        const msg = res.message || res.error || `${command} failed`;
+        return die(`${runId} NOT ${done}: ${msg}`);
+      }
+      const stage = (await api.invoke('run:snapshot', { projectId, runId }))?.meta?.stage ?? 'unknown';
+      const note = res && res.fromFiles ? " (stopped from files - no live process)" : "";
+      return out(asJson
+        ? { ok: true, runId, action: done, stage, ...(note ? { how: note.trim() } : {}) }
+        : `${runId} ${done}${note} — now ${stage}`);
     }
 
     // A node that stops to ASK could not be answered from here, only approved
