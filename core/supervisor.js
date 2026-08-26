@@ -462,6 +462,10 @@ export class Supervisor {
       parked: this.parked.slice(-20),
       completed: this.history.length,
       landed: this.history.filter(h => h.landed).length,
+      // Starts that did no work. A bounded session that reports 0 completed
+      // and 0 landed cannot otherwise say whether it declined to work or
+      // found nothing to work on.
+      setAside: this.setAside ?? 0,
       // Recorded spend PLUS what the runs in flight have already cost. A panel
       // that shows only settled spend reads $0 through the whole stretch the
       // money is being spent, which is the one stretch somebody is watching it
@@ -541,10 +545,26 @@ export class Supervisor {
     this.stopping = null;
     this.startedAtMs = Date.now();
     let started = 0;
+    // Starts that produced no work, because the task was released back to the
+    // queue without spending an attempt: a rate-limited model, a model that did
+    // not answer, a lease held by someone else. `--tasks N` is a request for N
+    // tasks of WORK, and a set-aside is the loop declining to do any — so it
+    // gives the budget back rather than counting the start.
+    //
+    // Watched with `--tasks 1`: t-0087 was picked, the model returned an
+    // upstream 429, the loop correctly set the task aside without spending an
+    // attempt, and then stopped. The task was left exactly as it was found,
+    // which is right, and the operator who asked for one task of work got none,
+    // with a clean exit and nothing saying so. That is the case the flag exists
+    // for — somebody watching one task closely before trusting the loop with a
+    // night.
+    this.setAside = 0;
+    const budgetLeft = () => started - this.setAside < maxTasks;
     this.#publish();
 
     try {
-      while (this.running && started < maxTasks) {
+     for (;;) {
+      while (this.running && budgetLeft()) {
         // The hard cap is checked before anything new begins: finishing the
         // in-flight work and stopping cleanly is the promise (§9).
         const budget = this.#checkBudget();
@@ -602,6 +622,26 @@ export class Supervisor {
       // Wind down: let what is in flight finish rather than abandoning it
       // half-landed.
       while (this.inFlight.size) await this.#tick();
+
+      // A set-aside is decided while the attempt winds DOWN, so the refund
+      // lands after the loop above has already left on a bound that is no
+      // longer spent. Come back round rather than exiting on it. This
+      // terminates: a task may only be set aside UNAVAILABLE_RETRIES times
+      // before the ladder has it, and `#whyNothingReady()` sets `stopping`
+      // the moment there is nothing to take.
+      if (!this.running || this.stopping || !budgetLeft()) break;
+     }
+
+      // Asked for work and did none. Distinct from "the backlog is empty" and
+      // from a cap: the tasks are exactly as they were found, which is correct
+      // and is not what was asked for.
+      if (Number.isFinite(maxTasks) && this.setAside > 0 && started - this.setAside <= 0) {
+        const detail = `${maxTasks} task(s) of work were asked for and none was done: `
+          + `${this.setAside} start(s) set aside without spending an attempt. `
+          + 'The tasks are unchanged and still queued.';
+        this.stopping = this.stopping ? `${detail} ${this.stopping}` : detail;
+        this.log(this.stopping);
+      }
     } finally {
       this.running = false;
       // The last thing written says it stopped, so a reader does not inherit a
@@ -790,6 +830,7 @@ export class Supervisor {
           //   ↻ t-0071 set aside: already has a live attempt … Waiting.
           //   ⏸ t-0071 parked: Could not start …
           this.deferred.set(task.id, this.now() + LEASE_WAIT_MS);
+          this.setAside += 1;   // no attempt spent, so no budget spent either
           this.backlog.release(task.id, { status: 'queued' });
           this.log(`↻ ${task.id} set aside for ${Math.round(LEASE_WAIT_MS / 60000)} min:`
             + ` ${err.message} Waiting for that lease to go stale.`, { taskId: task.id });
@@ -1460,6 +1501,7 @@ export class Supervisor {
         this.unavailable.set(taskId, seen);
         if (seen <= UNAVAILABLE_RETRIES) {
           await this.#discard(taskId);
+          this.setAside += 1;   // no attempt spent, so no budget spent either
           this.backlog.release(taskId, { status: 'queued' });
           this.log(`↻ ${taskId} set aside: ${hb.worker?.model ?? 'the model'} did not answer`
             + ` (${unreachable}). Same band, no attempt spent — ${UNAVAILABLE_RETRIES - seen} more before it parks.`,

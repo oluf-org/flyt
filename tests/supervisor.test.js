@@ -709,10 +709,22 @@ test('a model that never answered costs a rung of the ladder, so it does not', a
 
   await sup.run({ maxTasks: 1 });
 
+  // `--tasks 1` is a request for one task of WORK, and a set-aside is the loop
+  // declining to do any — so it gives the budget back and tries again at the
+  // same band. It used to consume the budget and stop: watched it live, the
+  // operator asked for one task and got none, with a clean exit and nothing
+  // saying so (t-0105).
+  const status = sup.status();
+  assert.equal(status.setAside, UNAVAILABLE_RETRIES, 'every set-aside is counted, and none of them was work');
+
   const task = backlog.get('t-0001');
   assert.equal(task.status, 'queued', 'back in the queue, not parked and not in flight');
-  assert.equal(task.level, 'medium', 'same band — a bigger model is not the missing piece');
-  assert.equal(task.attempts, 0, 'and nothing was attempted, so nothing was spent');
+  // Patience is bounded, so the last one DID buy an attempt — but only after
+  // three that did not. That is the rung this test is about: silence is free
+  // until the loop stops believing the model is coming back.
+  assert.equal(task.attempts, 1, `${UNAVAILABLE_RETRIES} set-asides cost nothing; the ${UNAVAILABLE_RETRIES + 1}th is an attempt`);
+  assert.match(task.blockedReason, /did not answer/,
+    'and it is recorded as what it was, not as work that failed');
 });
 
 test('a model that never comes back stops being waited for', async () => {
@@ -724,12 +736,53 @@ test('a model that never comes back stops being waited for', async () => {
   const engine = fakeEngine({ backlog, stages: { default: ['failed'] }, error: rateLimited });
   const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
 
-  await sup.run({ maxTasks: UNAVAILABLE_RETRIES + 1 });
+  await sup.run({ maxTasks: 1 });
 
   const task = backlog.get('t-0001');
   assert.equal(task.attempts, 1, 'the last one counted, because patience is bounded');
   assert.match(task.blockedReason, /did not answer/,
     'and it is recorded as what it was, not as work that failed');
+});
+
+test('a bounded run that did no work says so, instead of exiting as though it had', async () => {
+  // The other half of t-0105. A set-aside leaves the task exactly as it was
+  // found, which is right — and a clean exit reporting 0 completed and 0 landed
+  // cannot be told apart from "the backlog was empty", which is not right. The
+  // case the flag exists for is somebody watching ONE task closely before
+  // trusting the loop with a night, and that is the person this misleads.
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g', value: 5, effort: 1, level: 'medium' });
+  const engine = fakeEngine({ backlog });
+  const held = Object.assign(
+    new Error('Task "t-0001" already has a live attempt (t-0001-abc).'),
+    { code: 'attempt_live' },
+  );
+  const inner = engine.invoke;
+  engine.invoke = async (name, args) => {
+    if (name === 'work:start') throw held;
+    return inner(name, args);
+  };
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
+  // The clock never moves, so the deferral never expires and the loop is still
+  // waiting when it is asked to stop — a night that ended with nothing done.
+  sup.now = () => 0;
+
+  const run = sup.run({ maxTasks: 1 });
+  await new Promise(r => setTimeout(r, 30));
+  sup.stop('stopped by request');
+  const status = await run;
+
+  assert.equal(status.completed, 0);
+  assert.equal(status.landed, 0);
+  assert.equal(status.setAside, 1, 'one start, and it did no work');
+  assert.match(status.stopping, /1 task\(s\) of work were asked for and none was done/,
+    `the exit says what happened: ${status.stopping}`);
+  assert.match(status.stopping, /set aside without spending an attempt/);
+  assert.match(status.stopping, /unchanged and still queued/);
+
+  const task = backlog.get('t-0001');
+  assert.equal(task.status, 'queued', 'and the task really is exactly as it was found');
+  assert.equal(task.attempts, 0);
 });
 
 test('a lease left by a stopped loop is waited out, not spun on', async () => {

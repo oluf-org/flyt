@@ -828,7 +828,10 @@ async function main() {
           const st = await api.invoke('loop:status', { projectId });
           if (!st.running) { say(`loop stopped: ${st.stopping ?? 'done'}`); return out(st); }
           say(`  ${st.inFlight.length} in flight, ${st.landed}/${st.completed} landed`
-            + (st.spend ? `, $${st.spend.usd.toFixed(2)}` : ''));
+            // Starts that did no work. Without it a bounded session reporting
+            // 0/0 cannot be told from one that found nothing to do (t-0105).
+            + (st.setAside ? `, ${st.setAside} set aside` : '')
+            + (st.spend ? `, ${st.spend.usd.toFixed(2)}` : ''));
         }
       }
       if (sub === 'log') {
