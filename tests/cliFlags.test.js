@@ -63,6 +63,34 @@ test('every flag the help documents is accepted where it is documented', () => {
   assert.deepEqual(problems, [], 'documented but not accepted');
 });
 
+// A diagnostic that names a command must name one that exists.
+//
+// `flyt doctor` told people to run `flyt incident resolve <id>` from the day
+// incidents landed. The API handler existed; the CLI command did not, so the
+// answer was "Unknown command \"incident\"". An operator who is told to run
+// something that does not exist stops believing the diagnostics — which is
+// expensive for a subsystem whose entire job is to be believed.
+test('every flyt command a diagnostic advertises is a command', () => {
+  const source = fs.readFileSync(cli, 'utf8');
+  // The switch is the list. Reading it from the file keeps this honest when a
+  // command is added or removed, instead of pinning a copy that goes stale.
+  const known = new Set([...source.matchAll(/^ {4}case '([a-z:]+)':/gm)].map(m => m[1]));
+  assert.ok(known.size > 15, `expected the command switch, found ${known.size}`);
+
+  const dir = fileURLToPath(new URL('../core', import.meta.url));
+  const files = fs.readdirSync(dir, { recursive: true })
+    .filter(f => String(f).endsWith('.js'))
+    .map(f => path.join(dir, String(f)));
+
+  const problems = [];
+  for (const file of files) {
+    for (const [, verb] of fs.readFileSync(file, 'utf8').matchAll(/\bflyt ([a-z][a-z:]*)/g)) {
+      if (!known.has(verb)) problems.push(`${path.basename(file)}: "flyt ${verb}"`);
+    }
+  }
+  assert.deepEqual([...new Set(problems)], [], 'advertised but not implemented');
+});
+
 test('the refusal happens before anything is bound or spent', () => {
   const bad = run(['loop', 'start', '--capusd', '2']);
   assert.equal(bad.status, 2);

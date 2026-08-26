@@ -57,6 +57,9 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt task revive <id>               bring a retired task back, queued
   flyt task reset <id>... [--reason r] [--keep-work]  undo an escalation nothing about the work earned
   flyt task reset --incident <id>     ...for every task one incident charged
+  flyt incident list [--all]          what is blocking the loop (--all: resolved too)
+  flyt incident show <id>             one incident, and the tasks it charged
+  flyt incident resolve <id>          say it is fixed; the loop may run again
   flyt task rm <id>... [--all]        take tasks out of the queue for good
   flyt task take                      claim the top-scoring ready task
   flyt loop start [--parallel N] [--model <id> | --models low=a,high=b] [--reviewer <id>]
@@ -152,6 +155,7 @@ const COMMAND_FLAGS = {
   call: ['arg', 'arg-json'],
   doctor: ['flow', 'model', 'probe'],
   feedback: ['enqueue'],
+  incident: ['all', 'by'],
   log: ['event', 'node', 'quiet', 'tail'],
   loop: ['cap-usd', 'date', 'dry-run', 'model', 'models', 'only', 'parallel',
     'reviewer', 'soft-usd', 'tail', 'task', 'task-usd', 'tasks'],
@@ -943,6 +947,57 @@ async function main() {
         }
         default:
           return die(`Unknown bench subcommand "${sub}".`);
+      }
+    }
+
+    // Incidents (core/incidents.js). `flyt doctor` has been telling people to
+    // run `flyt incident resolve <id>` since the day incidents landed, and the
+    // command did not exist — the API handlers did, and nothing reached them.
+    // An operator told to run a command that answers "Unknown command" learns
+    // that the diagnostics are not to be trusted, which is expensive for a
+    // subsystem whose whole job is to be believed.
+    case 'incident': {
+      const sub = positional[1] ?? 'list';
+      const projectId = openProject(api, engine);
+      switch (sub) {
+        case 'list': {
+          const { incidents } = await api.invoke('incident:list', {
+            projectId, open: !flags.all
+          });
+          if (asJson) return out(incidents);
+          if (!incidents.length) return out(flags.all ? '(no incidents recorded)' : '(nothing open)');
+          return out(incidents.map(i =>
+            `${i.resolvedAt ? '·' : '!'} ${i.id}\t${i.kind}/${i.code}\t${i.detail}`
+            + (i.damaged?.length ? `\n    charged: ${i.damaged.map(d => d.taskId).join(', ')}` : '')
+            + (i.remedy ? `\n    ${i.remedy}` : '')).join('\n'));
+        }
+        case 'show': {
+          const id = positional[2];
+          if (!id) return die('flyt incident show <id>');
+          const { incidents } = await api.invoke('incident:list', { projectId, open: false });
+          const one = incidents.find(i => i.id === id);
+          if (!one) return die(`No incident "${id}".`);
+          return out(asJson ? one : JSON.stringify(one, null, 2));
+        }
+        case 'resolve': {
+          const id = positional[2];
+          if (!id) return die('flyt incident resolve <id> — say it is fixed, and the loop may run again');
+          const r = await api.invoke('incident:resolve', {
+            projectId, id, by: typeof flags.by === 'string' ? flags.by : 'human'
+          });
+          say(`resolved ${id}`);
+          // Named rather than left to be discovered: resolving the incident
+          // says the PROVIDER is fixed, and says nothing about the tasks it
+          // charged. Those keep the rung they were wrongly moved to until
+          // somebody resets them, which is a separate, deliberate act.
+          if (r.damaged?.length) {
+            say(`${r.damaged.length} task(s) still carry the escalation it caused —`
+              + ` \`flyt task reset --incident ${id}\` gives them back their level`);
+          }
+          return out(asJson ? r : `${id} resolved`);
+        }
+        default:
+          return die(`Unknown incident subcommand "${sub}".`);
       }
     }
 
