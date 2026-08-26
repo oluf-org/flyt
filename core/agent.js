@@ -8,7 +8,7 @@
 // Both paths share the same registry, the same validation, the same
 // executeTool wrapper, and the same iteration cap.
 import { callModel } from './adapters/index.js';
-import { classifyAdapterError, mayFallThrough } from './adapters/failures.js';
+import { classifyAdapterError, mayFallThrough, unparsedToolDialect } from './adapters/failures.js';
 import { executeTool, isDestructive } from './tools/index.js';
 import { writesWorkspace } from './effect.js';
 
@@ -176,6 +176,19 @@ const RECOVERY_MAX_TOKENS = 32000;
  * treating it as unanswered retries a turn whose tool call was about to run.
  * (Written that way first; three tests said so immediately.)
  */
+/**
+ * Which unparsed tool-call dialect this turn carried, if any.
+ *
+ * Distinct from `toolCallShaped`, which asks whether the WHOLE turn was one:
+ * that drives a nudge back to the model and only matches when there is nothing
+ * else in the reply. This asks whether markup appears ALONGSIDE prose, which is
+ * what actually happened — `I believe.<｜DSML｜tool_calls>…` — and drives a
+ * problem on the node rather than a retry.
+ */
+function dialectOf(res) {
+  return res?.unparsedToolCall ?? unparsedToolDialect(res?.text);
+}
+
 export function toolCallShaped(text) {
   const s = String(text ?? '').trim();
   if (!s) return false;
@@ -423,6 +436,11 @@ async function runAgentOnce({ worker, apiKey, system, prompt, tools = [], ctx, o
     return {
       text: r.text, toolCalls: [], usage: r.usage, durationMs: r.durationMs,
       finishReason: r.finishReason ?? null,
+      // A node holding no tools can still be handed markup by a model that
+      // thinks it has some — and this is the path such a node takes, bypassing
+      // both loops. Missing it meant the detection worked everywhere except the
+      // node kind that produced the original failure.
+      ...(dialectOf(r) ? { unparsedToolCall: dialectOf(r) } : {}),
       ...(r.emptyTurn ? { emptyTurn: r.emptyTurn } : {}),
       ...(r.recoveredFromEmptyTurn ? { recoveredFromEmptyTurn: r.recoveredFromEmptyTurn } : {})
     };
@@ -570,6 +588,16 @@ async function nativeLoop({ worker, apiKey, system, prompt, tools, ctx, onText, 
         text: res.text || lastText, toolCalls, usage,
         finishReason: res.finishReason ?? null,
         rounds: i + 1,
+        // The dialect the ADAPTER could not parse, carried up so the node can
+        // report it. Set on the model-call result and nothing propagated it, so
+        // the runner read undefined and the problem was never recorded — the
+        // detection worked and its only consumer never saw it.
+        // The dialect nothing could parse, carried up so the node can report
+        // it. Computed HERE rather than taken from the adapter: only the HTTP
+        // one sets it, so a registered provider, the mock and the CLI delegates
+        // produced none of it. This is the single place every provider's turn
+        // passes through, which is where a fact about every provider belongs.
+        ...(!toolCalls.length && dialectOf(res) ? { unparsedToolCall: dialectOf(res) } : {}),
         ...(res.emptyTurn ? { emptyTurn: res.emptyTurn } : {}),
         ...(res.recoveredFromEmptyTurn ? { recoveredFromEmptyTurn: res.recoveredFromEmptyTurn } : {}),
         ...(last ? { capped: true } : {})
@@ -671,6 +699,16 @@ async function textLoop({ worker, apiKey, system, prompt, tools, ctx, onText, on
         finishReason: res.finishReason ?? null,
         rounds: i + 1,
         ...(last ? { capped: true } : {}),
+        // The dialect the ADAPTER could not parse, carried up so the node can
+        // report it. Set on the model-call result and nothing propagated it, so
+        // the runner read undefined and the problem was never recorded — the
+        // detection worked and its only consumer never saw it.
+        // The dialect nothing could parse, carried up so the node can report
+        // it. Computed HERE rather than taken from the adapter: only the HTTP
+        // one sets it, so a registered provider, the mock and the CLI delegates
+        // produced none of it. This is the single place every provider's turn
+        // passes through, which is where a fact about every provider belongs.
+        ...(!toolCalls.length && dialectOf(res) ? { unparsedToolCall: dialectOf(res) } : {}),
         ...(res.emptyTurn ? { emptyTurn: res.emptyTurn } : {}),
         ...(res.recoveredFromEmptyTurn ? { recoveredFromEmptyTurn: res.recoveredFromEmptyTurn } : {})
       };

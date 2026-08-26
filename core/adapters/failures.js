@@ -197,3 +197,59 @@ export function withFailureCode(err, code, { executable = null } = {}) {
   }
   return err;
 }
+
+// --- a tool call nothing could parse ---------------------------------------
+
+// --- Unparsable tool-call markup -------------------------------------------
+//
+// Some models emit their NATIVE tool-call syntax as ordinary message content
+// instead of through the API's tool_calls field. This adapter only assembles
+// choice.delta.tool_calls / message.tool_calls, so such a turn records zero
+// tool calls, none of them run, and the raw markup flows downstream as if it
+// were the deliverable (observed on deepseek-v4-flash: an interrogate node
+// delivered `<｜DSML｜tool_calls>` as its specification).
+//
+// This is detection only, deliberately NOT recovery: parsing a dialect we do
+// not speak well enough to execute is how a wrong tool call gets made
+// confidently. What callers get is `result.unparsedToolCall` — the dialect
+// name — so the failure is VISIBLE (GOALS principle 5) rather than silent.
+//
+// The separator below is U+FF5C FULLWIDTH VERTICAL LINE (｜), not an ASCII
+// pipe. Written from memory this detection once matched nothing, because the
+// remembered string used ASCII '|'. The literals here come from the run that
+// exhibited the failure; do not "fix" them back to ASCII.
+//
+// Quoted markup must not fire: prose that EXPLAINS these dialects (this
+// repository's own source, tests and docs are full of the words `tool_call`
+// and `<invoke`) is a legitimate answer. Fenced code blocks and inline code
+// spans are stripped before matching — a real attempted call arrives as bare
+// markup, not wrapped in backticks.
+export const UNPARSED_TOOL_DIALECTS = [
+  // DeepSeek DSML: <｜DSML｜tool_calls> … <｜DSML｜invoke name="...">
+  ['deepseek-dsml', /<\u{FF5C}(?:DSML\u{FF5C})?(?:tool_calls?|invoke)\b|<\u{FF5C}DSML\u{FF5C}/u],
+  // Hermes / Qwen / several open-weight families. The opening tag alone is not
+  // enough: a real emission is followed by its JSON payload, and a sentence
+  // ABOUT the format writes "<tool_call>...</tool_call>" with an ellipsis. This
+  // repository's own prose does exactly that, and a run reading it must not
+  // report itself broken.
+  ['hermes-qwen-tool-call', /<\s*tool_calls?\s*>\s*[[{]/i],
+  // Anthropic-style XML. Already specific — the attribute has to be there.
+  ['anthropic-xml-invoke', /<\s*function_calls\s*>|<\s*invoke\s+name\s*=\s*["']/i],
+  // Llama 3.x (ASCII pipes here). Same rule: a real one is followed by the call
+  // it is tagging, prose by a full stop or a comma.
+  ['llama3-python-tag', /<\|python_tag\|>\s*[\w{[("']/]
+];
+
+// Returns the NAME of the first dialect whose markup appears as live content,
+// or null when the text is clean. Cheap exit first: no '<', nothing to find.
+export function unparsedToolDialect(text) {
+  const s = String(text ?? '');
+  if (!s.includes('<')) return null;
+  const live = s
+    .replace(/```[\s\S]*?(?:```|$)/g, '\n') // fenced blocks (incl. unclosed)
+    .replace(/`[^`\n]*`/g, ' ');            // inline code spans
+  for (const [dialect, re] of UNPARSED_TOOL_DIALECTS) {
+    if (re.test(live)) return dialect;
+  }
+  return null;
+}

@@ -52,6 +52,13 @@ export function isAbortError(err) {
   return Boolean(err?.aborted || err?.name === 'AbortError');
 }
 
+// The dialect table and its detector live in ./failures.js, so EVERY adapter
+// is covered rather than only the HTTP ones. Detection sitting here meant the
+// mock adapter, the CLI-delegate adapters and any registered provider got
+// none of it. Re-exported because this is where callers found them first.
+import { unparsedToolDialect } from './failures.js';
+export { UNPARSED_TOOL_DIALECTS, unparsedToolDialect } from './failures.js';
+
 // Parse an SSE byte stream into the `data:` payload strings.
 export async function* sseEvents(readable) {
   const decoder = new TextDecoder();
@@ -202,6 +209,11 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       onText(renderTurn(text, frags, reasoning), { final: true });
 
       const toolCalls = [...frags.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c);
+      // Zero parsed tool calls + known native markup in the content = the model
+      // tried to act and the harness did not understand it. Surface the dialect
+      // on the result; only when something DID parse is silence correct.
+      const unparsedToolCall = toolCalls.length ? null : unparsedToolDialect(text);
+
       // A stream that delivered nothing at all — no content, no tool call, no
       // finish reason — did not complete: the upstream opened it and dropped it.
       // Returning { text: '' } looked like a successful empty answer. Fail
@@ -215,6 +227,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       }
       return {
         text, reasoning, usage, finishReason, resolvedModel,
+        ...(unparsedToolCall ? { unparsedToolCall } : {}),
         message: {
           role: 'assistant',
           content: text || null,
@@ -226,6 +239,8 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
     const data = await res.json();
     const choice = data.choices?.[0];
     if (!choice?.message) throw new Error(`${provider} returned no choices: ${JSON.stringify(data).slice(0, 300)}`);
+    const unparsedToolCall = choice.message.tool_calls?.length
+      ? null : unparsedToolDialect(choice.message.content);
     return {
       text: choice.message.content ?? '',
       reasoning: typeof choice.message.reasoning === 'string' ? choice.message.reasoning : '',
@@ -234,6 +249,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       // See the streaming branch: the Auto Router answers as a different model
       // than the one requested, and that is the only place it says which.
       resolvedModel: data.model ?? null,
+      ...(unparsedToolCall ? { unparsedToolCall } : {}),
       message: choice.message
     };
   };
