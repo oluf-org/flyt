@@ -630,17 +630,28 @@ export async function doctor(engine, { probe = false, models = [], project = nul
     if (or) or.credit = credit;
     if (credit.limit != null && credit.usage != null) {
       const left = credit.limit - credit.usage;
+      // WHICH ceiling this is, because the repairs differ: a spent key wants
+      // its limit raised, a spent account wants credit added.
+      const what = credit.scope === 'account' ? 'account' : 'key';
+      const fix = credit.scope === 'account'
+        ? 'Add credit, or use another key.'
+        : 'Raise the key limit, or use another key.';
+      // Said only when they disagree, which is when it is the interesting fact
+      // on the page — and silent when they agree, which is nearly always.
+      const disagrees = credit.other && Math.abs(credit.other.left - left) > 0.01
+        ? ` The ${credit.other.scope} has $${credit.other.left.toFixed(2)}; the smaller of the two is what binds.`
+        : '';
       if (left <= 0) {
         findings.push({
           level: 'error',
-          message: `The OpenRouter key is spent: $${credit.usage.toFixed(2)} used of a $${credit.limit.toFixed(2)} limit. `
-            + 'Every call will 403 until the limit is raised or another key is set.'
+          message: `The OpenRouter ${what} is spent: $${credit.usage.toFixed(2)} used of a $${credit.limit.toFixed(2)} limit. `
+            + `Every call will fail until that changes. ${fix}${disagrees}`
         });
       } else if (left < credit.limit * 0.1) {
         findings.push({
           level: 'warn',
-          message: `The OpenRouter key has $${left.toFixed(2)} left of $${credit.limit.toFixed(2)}. `
-            + 'A long run will end partway through.'
+          message: `The OpenRouter ${what} has $${left.toFixed(2)} left of $${credit.limit.toFixed(2)}. `
+            + `A long run will end partway through.${disagrees}`
         });
       }
       // Can what is left fund a normal request? A dollar figure does not
@@ -786,16 +797,72 @@ export function priceOfTheNextCall(runtimeConfig = {}) {
 async function openrouterCredit(engine) {
   const key = engine.settings?.providers?.openrouter?.apiKey;
   if (!key) return null;
-  try {
-    const res = await fetch('https://openrouter.ai/api/v1/key', {
-      headers: { Authorization: `Bearer ${key}` },
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!res.ok) return { error: `HTTP ${res.status}` };
-    const d = (await res.json())?.data ?? {};
-    const num = v => (typeof v === 'number' ? v : null);
-    return { limit: num(d.limit), usage: num(d.usage), freeTier: Boolean(d.is_free_tier) };
-  } catch (err) { return { error: String(err?.message ?? err).slice(0, 120) }; }
+  const num = v => (typeof v === 'number' ? v : null);
+  const ask = async (url, shape) => {
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(8000)
+      });
+      if (!res.ok) return { error: `HTTP ${res.status}` };
+      return shape((await res.json())?.data ?? {});
+    } catch (err) { return { error: String(err?.message ?? err).slice(0, 120) }; }
+  };
+
+  // TWO ceilings, and a call fails when either is exhausted.
+  //
+  // `/key` describes THIS KEY: its limit and what has been spent against it.
+  // `/credits` describes the ACCOUNT. They are not the same number and on
+  // 2026-08-26 they disagreed by a factor of five — $1.73 left of a $65 key
+  // limit against $9.79 left of $102 in the account. Doctor read the first and
+  // called it "the OpenRouter key has $1.73 left", which is literally true and
+  // reads to every operator as "this is what you have".
+  //
+  // Getting it wrong is expensive both ways. Believing $9.79 when the key caps
+  // at $1.73 starts a night that dies partway through. Believing $1.73 when the
+  // account holds $9.79 stops a night that could have finished. And the two
+  // repairs are different: "add credit" against "raise the key limit".
+  const [keyed, account] = await Promise.all([
+    ask('https://openrouter.ai/api/v1/key',
+      d => ({ limit: num(d.limit), usage: num(d.usage), freeTier: Boolean(d.is_free_tier) })),
+    ask('https://openrouter.ai/api/v1/credits',
+      d => ({ limit: num(d.total_credits), usage: num(d.total_usage) }))
+  ]);
+  return bindingCredit(keyed, account);
+}
+
+/**
+ * The ceiling that actually binds, and what the other one said.
+ *
+ * The SMALLER remaining balance wins, because a call fails when either is
+ * exhausted. An endpoint that could not be reached simply does not vote — one
+ * source failing must degrade to the other rather than take doctor down, which
+ * is the property `openrouterCredit` has always had and must keep.
+ */
+export function bindingCredit(keyed, account) {
+  const left = c => (c && c.limit != null && c.usage != null ? c.limit - c.usage : null);
+  const keyLeft = left(keyed);
+  const accountLeft = left(account);
+
+  if (keyLeft == null && accountLeft == null) {
+    // Neither could be read. Report the key's error, which is the one every
+    // previous version of this reported.
+    return keyed ?? account ?? null;
+  }
+  if (keyLeft == null) return { ...account, scope: 'account' };
+  if (accountLeft == null) return { ...keyed, scope: 'key' };
+
+  const binding = keyLeft <= accountLeft
+    ? { ...keyed, scope: 'key' }
+    : { ...account, scope: 'account' };
+  // The other number, kept, so a report can say the two disagree. They usually
+  // will not; when they do, it is the interesting thing on the page.
+  return {
+    ...binding,
+    other: keyLeft <= accountLeft
+      ? { scope: 'account', left: accountLeft, limit: account.limit }
+      : { scope: 'key', left: keyLeft, limit: keyed.limit }
+  };
 }
 
 /**

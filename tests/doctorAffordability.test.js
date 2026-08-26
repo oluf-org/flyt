@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createEngine } from '../core/engine.js';
-import { affordability, priceOfTheNextCall, doctor } from '../core/diagnostics.js';
+import { affordability, priceOfTheNextCall, bindingCredit, doctor } from '../core/diagnostics.js';
 import { effortBudget, DEFAULT_EFFORT } from '../src/flowTypes.js';
 
 const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -100,13 +100,21 @@ function tmpEngine(loopModels, modelFacts) {
   return { engine, dataRoot };
 }
 
-// Only the credit endpoint is answered, so a doctor that starts fetching
-// something else fails loudly here instead of quietly reading a credit payload.
-async function withCredit({ limit, usage }, fn) {
+// Only OpenRouter's two balance endpoints are answered, so a doctor that starts
+// fetching something else fails loudly here instead of quietly reading a
+// balance payload. `account` defaults to the same numbers as the key, which is
+// the ordinary case: the two agree and nothing is said about it.
+async function withCredit({ limit, usage, account = null }, fn) {
   const real = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
-    if (String(url).includes('openrouter.ai/api/v1/key')) {
+    const at = String(url);
+    if (at.includes('openrouter.ai/api/v1/key')) {
       return { ok: true, json: async () => ({ data: { limit, usage, is_free_tier: false } }) };
+    }
+    if (at.includes('openrouter.ai/api/v1/credits')) {
+      const a = account ?? { limit, usage };
+      if (a === 'unreachable') throw new Error('ECONNREFUSED');
+      return { ok: true, json: async () => ({ data: { total_credits: a.limit, total_usage: a.usage } }) };
     }
     return real(url, init);
   };
@@ -147,4 +155,90 @@ test('a balance that cannot be checked says so, once it is low enough to matter'
     () => doctor(tmpEngine({ high: 'unpriced/model' }, {}).engine));
   assert.ok(!healthy.findings.some(f => /could not be checked/.test(f.message)),
     'a healthy key is not worth a note about pricing');
+});
+
+// --- two ceilings, and the smaller binds (t-0109) ---------------------------
+//
+// `/key` describes THIS KEY; `/credits` describes the ACCOUNT. They are not the
+// same number, and on 2026-08-26 they disagreed by a factor of five: $1.73 left
+// of a $65 key limit against $9.79 left of $102 in the account. Doctor read the
+// first and called it "the OpenRouter key has $1.73 left", which is literally
+// true and reads to every operator as "this is what you have". A call fails
+// when EITHER is exhausted, so the smaller one is the answer — and the two
+// repairs are different: "add credit" against "raise the key limit".
+
+test('the smaller remaining balance is the one that binds', () => {
+  const key = { limit: 65, usage: 63.27 };        // $1.73 left
+  const account = { limit: 102, usage: 92.21 };   // $9.79 left
+
+  const bound = bindingCredit(key, account);
+  assert.equal(bound.scope, 'key');
+  assert.equal((bound.limit - bound.usage).toFixed(2), '1.73');
+  assert.equal(bound.other.scope, 'account');
+  assert.equal(bound.other.left.toFixed(2), '9.79');
+
+  // And the other way round, when the account is the tighter of the two.
+  const flipped = bindingCredit({ limit: 500, usage: 100 }, { limit: 102, usage: 100 });
+  assert.equal(flipped.scope, 'account');
+  assert.equal(flipped.other.scope, 'key');
+});
+
+test('an endpoint that could not be read does not vote, and does not take doctor down', () => {
+  // The property openrouterCredit has always had and must keep: one source
+  // failing degrades to the other rather than reporting nothing.
+  const key = { limit: 65, usage: 63.27 };
+  assert.equal(bindingCredit(key, { error: 'HTTP 500' }).scope, 'key');
+  assert.equal(bindingCredit({ error: 'ECONNREFUSED' }, { limit: 102, usage: 92.21 }).scope, 'account');
+
+  // Neither readable: the key's error is reported, as every previous version did.
+  assert.deepEqual(bindingCredit({ error: 'HTTP 500' }, { error: 'HTTP 500' }), { error: 'HTTP 500' });
+  assert.equal(bindingCredit(null, null), null);
+});
+
+test('doctor names both ceilings when they disagree, and neither when they do not', async () => {
+  const { engine, dataRoot } = tmpEngine({ high: 'ordinary/model' }, { 'ordinary/model': { outUsdPerM: 10 } });
+  const apart = await withCredit(
+    { limit: 65, usage: 63.27, account: { limit: 102, usage: 92.21 } },
+    () => doctor(engine));
+  const said = apart.findings.map(f => f.message).join('\n');
+  assert.match(said, /The OpenRouter key has \$1\.73 left of \$65\.00/);
+  assert.match(said, /The account has \$9\.79; the smaller of the two is what binds/);
+
+  // Agreeing is the ordinary case, and it is not worth a sentence.
+  const together = await withCredit({ limit: 65, usage: 63.27 }, () => doctor(engine));
+  const also = together.findings.map(f => f.message).join('\n');
+  assert.match(also, /has \$1\.73 left/);
+  assert.ok(!/smaller of the two/.test(also), also);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('a spent ceiling says which one, because the two repairs differ', async () => {
+  const { engine, dataRoot } = tmpEngine({ high: 'ordinary/model' }, { 'ordinary/model': { outUsdPerM: 10 } });
+
+  const keySpent = await withCredit(
+    { limit: 65, usage: 65, account: { limit: 102, usage: 50 } }, () => doctor(engine));
+  const k = keySpent.findings.find(f => /is spent/.test(f.message));
+  assert.match(k.message, /The OpenRouter key is spent/);
+  assert.match(k.message, /Raise the key limit/);
+
+  const accountSpent = await withCredit(
+    { limit: 500, usage: 100, account: { limit: 102, usage: 102 } }, () => doctor(engine));
+  const a = accountSpent.findings.find(f => /is spent/.test(f.message));
+  assert.match(a.message, /The OpenRouter account is spent/);
+  assert.match(a.message, /Add credit/);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('the affordability check reads the binding number, not the roomier one', async () => {
+  // The check inherits whatever balance is in front of it, so it has to be the
+  // one that binds — otherwise it answers "can this fund a request" against a
+  // ceiling that is not the one about to stop the call.
+  const { engine, dataRoot } = tmpEngine({ high: 'dear/model' }, { 'dear/model': { outUsdPerM: 1310.77 } });
+  const report = await withCredit(
+    // The key is nearly out; the account has plenty. The key binds.
+    { limit: 65, usage: 63.15, account: { limit: 1000, usage: 0 } },
+    () => doctor(engine));
+  assert.ok(report.findings.some(f => /cannot fund an ordinary request/.test(f.message)),
+    report.findings.map(f => f.message).join('\n'));
+  fs.rmSync(dataRoot, { recursive: true, force: true });
 });
