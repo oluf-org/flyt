@@ -643,6 +643,48 @@ export async function doctor(engine, { probe = false, models = [], project = nul
             + 'A long run will end partway through.'
         });
       }
+      // Affordability: can the remaining dollars fund a normal request?
+      // A balance of $1.85 reads as "some money left" but 402 says
+      // "You requested up to 12288 tokens, but can only afford 1411".
+      // The useful finding is the token ratio, not the dollar figure.
+      // The threshold is derived from what the loop actually requests
+      // (effortBudget) so it stays true as models and budgets change.
+      if (left > 0) {
+        const typicalTokens = effortBudget(DEFAULT_EFFORT);
+        let pricePerM = null;
+        try {
+          const route = planDefaultRoute({ type: 'agentTask', data: { role: 'execute', category: 'Code general', effort: DEFAULT_EFFORT } }, engine.runtimeConfig ?? {});
+          if (route?.model) {
+            const facts = engine.runtimeConfig?.modelFacts?.[route.model] ?? engine.settings?.modelFacts?.[route.model] ?? null;
+            if (facts && Number.isFinite(facts.outUsdPerM)) pricePerM = facts.outUsdPerM;
+            else if (facts && Number.isFinite(facts.inUsdPerM)) pricePerM = facts.inUsdPerM;
+          }
+        } catch {}
+        if (pricePerM == null) {
+          const factsMap = engine.runtimeConfig?.modelFacts ?? engine.settings?.modelFacts ?? {};
+          let cheapest = Infinity;
+          for (const f of Object.values(factsMap)) {
+            const v = f?.outUsdPerM ?? f?.inUsdPerM ?? null;
+            if (Number.isFinite(v) && v > 0 && v < cheapest) cheapest = v;
+          }
+          if (Number.isFinite(cheapest) && cheapest !== Infinity) pricePerM = cheapest;
+        }
+        if (pricePerM == null && engine.runtimeConfig?.loop?.prices) {
+          for (const v of Object.values(engine.runtimeConfig.loop.prices)) {
+            const p = v?.out ?? v?.outUsdPerM ?? v?.in ?? null;
+            if (Number.isFinite(p) && p > 0 && (pricePerM == null || p < pricePerM)) pricePerM = p;
+          }
+        }
+        if (Number.isFinite(pricePerM) && pricePerM > 0) {
+          const affordTokens = Math.floor((left * 1e6) / pricePerM);
+          if (affordTokens < typicalTokens) {
+            findings.push({
+              level: 'error',
+              message: `The OpenRouter balance of $${left.toFixed(2)} cannot fund a normal request: you requested up to ${typicalTokens} tokens but can only afford ${affordTokens}. Add credit, lower max_tokens, or move to a model that costs nothing.`
+            });
+          }
+        }
+      }
     }
   }
 
