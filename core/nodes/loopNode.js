@@ -84,6 +84,10 @@ export function enqueuePlan(backlog, tasks, { runId, nodeId, budgetUsd = null, r
       ...(references.length ? { references: references.map(r => (typeof r === 'string' ? r : r.name)) } : {})
     });
     byTitle.set(t.title, task.id);
+    // The ref too, so a plan that used one resolves by it. Both live in the
+    // same map: they are two spellings of "which task in this plan", and the
+    // parser has already refused a plan where either is ambiguous.
+    if (t.ref) byTitle.set(t.ref, task.id);
     created.push({ plan: t, task });
   }
   // Second pass: now every title has an id.

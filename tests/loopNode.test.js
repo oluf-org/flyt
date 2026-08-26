@@ -68,10 +68,88 @@ test('a task with no goal is rejected, and says which one', () => {
   assert.match(r.errors.join(' '), /"Do the thing" says what to do but not what done looks like/);
 });
 
-test('dependsOn must name a task in the same plan', () => {
-  const r = parseBacklogPlan(fenced([{ ...PLAN[0], dependsOn: ['A task that does not exist'] }]));
+// --- one bad edge does not throw away four good tasks (t-0099) --------------
+//
+// Run 2026-08-23T20-13-13-426Z-l0df spent 16 model calls and produced five
+// well-researched tasks for Phase 3, each with confirmed file paths and real
+// acceptance criteria. It enqueued none of them, because ONE task's dependsOn
+// read "Repeat container in kernel" while the task it meant was titled "Add
+// Repeat N container to parser, types, scheduler". Two things were wrong: a
+// plan's internal dependencies were matched by free-text TITLE, so the model
+// had to reproduce a long sentence exactly in a second place; and a violation
+// affecting one edge of one task rejected the whole document.
+
+test('a dependency nothing matches drops that edge and queues the rest', () => {
+  const r = parseBacklogPlan(fenced([
+    { ...PLAN[0], dependsOn: ['A task that does not exist'] },
+    PLAN[1]
+  ]));
+  assert.equal(r.ok, true, 'the plan still stands: ' + JSON.stringify(r.errors));
+  assert.equal(r.tasks.length, 2, 'and every task in it is still there');
+  assert.deepEqual(r.tasks[0].dependsOn, [], 'the one edge nothing matched is gone');
+  assert.match(r.warnings.join(' '), /is not the ref or title of any task in/);
+  assert.match(r.warnings.join(' '), /queued without it/);
+});
+
+test('a near miss is resolved, and says that it was', () => {
+  // The shape that actually happened: a shortened title. Resolving it silently
+  // would be a guess rewiring a dependency graph, so it is said out loud.
+  const long = { ...PLAN[1], title: 'Add Repeat N container to parser, types, scheduler' };
+  const r = parseBacklogPlan(fenced([
+    { ...PLAN[0], dependsOn: ['Repeat N container'] },
+    long
+  ]));
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.tasks[0].dependsOn, [long.title], 'read as the task it obviously meant');
+  assert.match(r.warnings.join(' '), /did not match anything exactly/);
+  assert.match(r.warnings.join(' '), /the only close match in this plan/);
+});
+
+test('an ambiguous near miss is dropped, not guessed at', () => {
+  // "I could not tell which you meant" is an honest answer, and picking one is
+  // not. Two candidates both contain the wanted string.
+  const r = parseBacklogPlan(fenced([
+    { ...PLAN[0], dependsOn: ['parser'] },
+    { ...PLAN[1], title: 'Teach the parser about Repeat' },
+    { ...PLAN[1], title: 'Teach the parser about Until' }
+  ]));
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.tasks[0].dependsOn, []);
+  assert.match(r.warnings.join(' '), /is not the ref or title of any task/);
+});
+
+test('a ref is one word the planner cannot get wrong twice', () => {
+  // The real fix: dependsOn names something the model CHOSE, not a long title
+  // it has to reproduce exactly in a second place.
+  const r = parseBacklogPlan(fenced([
+    { ...PLAN[0], ref: 'parser', dependsOn: [] },
+    { ...PLAN[1], ref: 'scheduler', dependsOn: ['parser'] }
+  ]));
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(r.warnings, [], 'an exact ref match is not worth a word');
+  assert.equal(r.tasks[0].ref, 'parser');
+  assert.deepEqual(r.tasks[1].dependsOn, ['parser']);
+});
+
+test('two tasks may not claim the same ref', () => {
+  // A ref that is ambiguous is a real error, unlike a dependency that is: it
+  // makes every edge naming it meaningless, and the planner can simply fix it.
+  const r = parseBacklogPlan(fenced([
+    { ...PLAN[0], ref: 'same' },
+    { ...PLAN[1], ref: 'same' }
+  ]));
   assert.equal(r.ok, false);
-  assert.match(r.errors.join(' '), /is not the title of any task in this plan/);
+  assert.match(r.errors.join(' '), /duplicate ref "same"/);
+});
+
+test('titles still work, so a plan written the old way is unchanged', () => {
+  const r = parseBacklogPlan(fenced([
+    PLAN[0],
+    { ...PLAN[1], dependsOn: [PLAN[0].title] }
+  ]));
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.warnings, []);
+  assert.deepEqual(r.tasks[1].dependsOn, [PLAN[0].title]);
 });
 
 test('near-misses are accepted rather than failed on a technicality', () => {

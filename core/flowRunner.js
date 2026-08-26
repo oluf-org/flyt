@@ -64,7 +64,7 @@ import { narrowCeiling } from '../src/toolGrants.js';
 import { checkToolCall } from './safetyCheck.js';
 import { parsePlanEval, parseStepEvalVerdict, parseStitchDirectives, parseTriage, parseFeedbackReview, parseRefineQuestions, parseLanePlan, parseOrientation, parseInterrogation, stripRefineQuestions, stripJsonBlock, extractJson } from './planEval.js';
 import { JUDGE_SYSTEM, buildJudgePrompt, parseJudgeVerdict } from './judge.js';
-import { deriveRunName } from './state.js';
+import { deriveRunName, safeName } from './state.js';
 import {
   createNodeFromTemplate, getTemplate, resolveFlow, resolveInstance, primaryPort,
   effectiveRole, isFeedbackEdge, forwardEdges, EFFORT_MAX_TOKENS, effortBudget, REASONING_HEADROOM, LEGACY_TEMPLATE_MAP,
@@ -5072,12 +5072,25 @@ ${menu}`;
       const parts = this.upstreamContext(runId, flow, node, opts.taskIdByNode);
       const parsed = parseBacklogPlan(parts.join('\n\n'));
       if (!parsed.ok) {
+        // WHERE the work is. Sixteen model calls of research survive in the
+        // run folder whether or not any of it was enqueued, and a reader told
+        // only "the plan violated the contract" has no reason to look there.
+        const planAt = `runs/${runId}/nodes/${safeName(node.id)}.md`;
         this.store.writeNodeOutput(runId, `${node.id}.errors`, [
           '# Backlog contract violations', '',
           'The upstream plan did not satisfy the backlog task contract; nothing was enqueued.', '',
+          `The plan itself is still here: ${planAt}. Nothing about it was lost.`, '',
           ...parsed.errors.map(e => `- ${e}`)
         ].join('\n'));
-        throw failNode('the upstream plan violated the backlog task contract', parsed.errors);
+        throw failNode(
+          `the upstream plan violated the backlog task contract — the plan is at ${planAt}`,
+          parsed.errors);
+      }
+      // Edges that could not be resolved, and near misses that were. Neither
+      // stops the plan: one bad dependency out of five tasks used to throw
+      // the other four away with it.
+      for (const w of parsed.warnings ?? []) {
+        this.store.appendLog(runId, { event: 'backlog_plan_warning', node: node.id, warning: w });
       }
       const runReferences = this.store.readMeta(runId)?.references ?? [];
       const evidence = validateBacklogEvidence(parsed.tasks, {

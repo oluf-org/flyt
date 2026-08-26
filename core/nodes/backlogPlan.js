@@ -41,7 +41,8 @@ array of backlog tasks:
     "gates": ["npm test"],
     "blastRadius": ["src/thing.js"],
     "skills": ["a skill this project has"],
-    "dependsOn": ["title of another task in this list"],
+    "ref": "a-short-slug-you-choose",
+    "dependsOn": ["ref of another task in this list"],
     "evidence": [{
       "claim": "the specific behavior this task transfers",
       "ref": "reference:repo/full/path/to/file.js",
@@ -52,7 +53,10 @@ array of backlog tasks:
 ]
 
 Every task must be claimable on its own: a title, a goal, and at least one
-checkable "done when". A task nobody can verify is not a task. blastRadius is
+checkable "done when". A task nobody can verify is not a task. Give each task a
+short "ref" and use THAT in dependsOn — a ref is one word you chose and it is
+one you cannot get wrong twice; repeating a long title in a second place is how
+a whole good plan gets refused. A title still works if you leave "ref" out. blastRadius is
 what the task may TOUCH; skills is what its worker must KNOW, named from the
 skills this project actually has — an invented name resolves to nothing. When a task
 mentions a reference repository, every referenced file needs a matching
@@ -125,6 +129,7 @@ export function parseBacklogPlan(text) {
 
   const tasks = [];
   const titles = new Set();
+  const refs = new Set();
   list.forEach((t, i) => {
     const at = `tasks[${i}]`;
     if (!t || typeof t !== 'object' || Array.isArray(t)) { errors.push(`${at}: must be an object`); return; }
@@ -138,6 +143,12 @@ export function parseBacklogPlan(text) {
     const title = t.title.trim().slice(0, 120);
     if (titles.has(title)) { errors.push(`${at}.title: duplicate title "${title}"`); return; }
     titles.add(title);
+    // A ref the planner chose. One word, in the task's own hands, and the thing
+    // dependsOn should name — a title has to be reproduced exactly in a second
+    // place, and that is the failure this exists to remove.
+    const ref = isStr(t.ref) ? t.ref.trim().slice(0, 60) : null;
+    if (ref && refs.has(ref)) { errors.push(`${at}.ref: duplicate ref "${ref}"`); return; }
+    if (ref) refs.add(ref);
 
     const level = isStr(t.level) && LEVELS.includes(t.level.trim()) ? t.level.trim() : null;
     if (t.level != null && !level) errors.push(`${at}.level: must be one of ${LEVELS.join(', ')}`);
@@ -157,25 +168,51 @@ export function parseBacklogPlan(text) {
       // logged as a miss at run time, which is a better failure than refusing
       // a whole plan over one slug.
       skills: strList(t.skills, at, 'skills', errors),
+      ...(ref ? { ref } : {}),
       dependsOn: strList(t.dependsOn, at, 'dependsOn', errors),
       evidence: evidenceList(t.evidence, at, errors),
       ...(isStr(t.notes) ? { notes: t.notes.trim() } : {})
     });
   });
 
-  // dependsOn names another task IN THIS PLAN, by title. Ids do not exist yet
-  // — they are allocated by Backlog.add — so the resolution happens after
-  // enqueue (see resolveDependsOn). A name nothing matches is an error here,
-  // because the alternative is a task that waits forever on a ghost.
+  // dependsOn names another task IN THIS PLAN — by its `ref` if it has one, or
+  // by its title. Real ids do not exist yet (Backlog.add allocates them), so
+  // the resolution happens after enqueue (see resolveDependsOn).
+  //
+  // A name nothing matches used to reject the WHOLE document. Run
+  // 2026-08-23T20-13-13-426Z-l0df spent 16 model calls and produced five
+  // well-researched tasks for Phase 3, each with confirmed file paths and real
+  // acceptance criteria, and enqueued none of them — because one task's
+  // dependsOn read "Repeat container in kernel" while the task it meant was
+  // titled "Add Repeat N container to parser, types, scheduler". Four perfectly
+  // valid tasks were thrown away with the one bad edge.
+  //
+  // So an unresolvable edge is now a WARNING and the edge is dropped. That is
+  // the honest trade: a missing dependency makes a task start sooner than it
+  // should, which the task itself will notice; a refused plan loses sixteen
+  // calls of research that survives only inside the run folder.
+  const warnings = [];
   for (const t of tasks) {
+    const kept = [];
     for (const d of t.dependsOn) {
-      if (!titles.has(d)) {
-        errors.push(`tasks["${t.title}"].dependsOn: "${d}" is not the title of any task in this plan`);
+      if (refs.has(d) || titles.has(d)) { kept.push(d); continue; }
+      // A near miss is resolved and SAID, rather than dropped in silence. The
+      // planner writes a shortened or reworded title far more often than it
+      // invents one, and an unambiguous match is not a guess.
+      const near = nearestName(d, [...refs, ...titles]);
+      if (near) {
+        kept.push(near);
+        warnings.push(`tasks["${t.title}"].dependsOn: "${d}" did not match anything exactly; `
+          + `read as "${near}", which is the only close match in this plan`);
+      } else {
+        warnings.push(`tasks["${t.title}"].dependsOn: "${d}" is not the ref or title of any task in `
+          + 'this plan, so that one dependency was dropped. The task was queued without it.');
       }
     }
+    t.dependsOn = kept;
   }
 
-  return { ok: errors.length === 0, tasks, errors };
+  return { ok: errors.length === 0, tasks, errors, warnings };
 }
 
 // Validate external evidence at the final hand-off boundary. Parsing proves
@@ -258,6 +295,43 @@ export function validateBacklogEvidence(tasks, {
 
 // Rewrite title-based dependsOn into the real ids Backlog.add allocated.
 // `byTitle` maps plan title -> task id.
-export function resolveDependsOn(planTask, byTitle) {
-  return (planTask.dependsOn ?? []).map(title => byTitle.get(title)).filter(Boolean);
+export function resolveDependsOn(planTask, byName) {
+  return (planTask.dependsOn ?? []).map(name => byName.get(name)).filter(Boolean);
+}
+
+/**
+ * The one name in `names` that `want` obviously meant, or null.
+ *
+ * Deliberately narrow. Two rules, both of which a person would accept without
+ * argument: one name CONTAINS the other (a shortened title), or the two differ
+ * by a single edit. Anything looser is a guess, and a guess that silently
+ * rewires a dependency graph is worse than a dropped edge.
+ *
+ * Ambiguity is not resolved: if two names are equally close, nothing is
+ * returned. "I could not tell which you meant" is an honest answer and
+ * picking one is not.
+ */
+export function nearestName(want, names) {
+  const w = String(want ?? '').trim().toLowerCase();
+  if (!w) return null;
+  const hits = names.filter(n => {
+    const c = String(n).trim().toLowerCase();
+    if (!c) return false;
+    if (c.includes(w) || w.includes(c)) return true;
+    return withinOneEdit(c, w);
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/** Levenshtein distance of at most one, without computing the distance. */
+function withinOneEdit(a, b) {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  let i = 0, j = 0, edits = 0;
+  while (i < short.length && j < long.length) {
+    if (short[i] === long[j]) { i++; j++; continue; }
+    if (++edits > 1) return false;
+    if (short.length === long.length) { i++; j++; } else { j++; }
+  }
+  return edits + (long.length - j) + (short.length - i) <= 1;
 }
