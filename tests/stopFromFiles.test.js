@@ -86,14 +86,23 @@ test('stop of an unknown or already-ended run reports failure honestly', async (
   const store = makeStore();
   setScript(() => 'step output');
   const runner = new FlowRunner(store, testConfig());
-  assert.deepEqual(runner.stop('no-such-run'), { ok: false, error: 'unknown-run' });
+  // Fields, not deepEqual: the result also carries a `message`, which is the
+  // half the CLI prints, and an exact-shape assertion here would make adding a
+  // better sentence look like a regression. The rest of this test already
+  // checks fields.
+  const unknown = runner.stop('no-such-run');
+  assert.equal(unknown.ok, false);
+  assert.equal(unknown.error, 'unknown-run');
+  assert.match(unknown.message, /no-such-run/);
 
-  const { runId } = await parkedRunWithStaleLease();
-  store.setStage(runId, 'done', {});
-  const res = runner.stop(runId);
+  // Its OWN store: parkedRunWithStaleLease makes a fresh one, and using the
+  // outer store here read a run that only exists in the other.
+  const parked = await parkedRunWithStaleLease();
+  parked.store.setStage(parked.runId, 'done', {});
+  const res = new FlowRunner(parked.store, testConfig()).stop(parked.runId);
   assert.equal(res.ok, false);
   assert.equal(res.error, 'already-ended');
-  assert.equal(store.readMeta(runId).stage, 'done', 'a done run is not rewritten as cancelled');
+  assert.equal(parked.store.readMeta(parked.runId).stage, 'done', 'a done run is not rewritten as cancelled');
 });
 
 test('approve falls back to resumeFromGate for a run whose process is gone', async () => {

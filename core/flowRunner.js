@@ -1454,7 +1454,6 @@ export class FlowRunner {
   // nothing clobbers the cancelled state written here. Removing the run from
   // `live` is what unblocks run:delete. Not live -> not-live.
   stop(runId) {
-  stop(runId) {
     if (!this.live.has(runId)) {
       // Not walking it HERE hides two very different situations, and answering
       // `not-live` for both is what let the CLI report success while touching
@@ -1474,7 +1473,12 @@ export class FlowRunner {
       // Nobody anywhere is walking it: the starting CLI process died and left
       // a stale (or missing) lease. Stop it from the files, the same way
       // resolveGate falls back to resumeFromGate for approvals.
-      const meta = this.store.readMeta(runId);
+      // readMeta THROWS for a run that is not there (readJson does a bare
+      // readFileSync), so the guard below could never fire — an unknown run
+      // came out as an ENOENT stack rather than the sentence this branch was
+      // written to produce.
+      let meta = null;
+      try { meta = this.store.readMeta(runId); } catch { meta = null; }
       if (!meta) {
         return { ok: false, error: 'unknown-run', message: `No such run: ${runId}` };
       }
@@ -1568,7 +1572,13 @@ export class FlowRunner {
     }
     this.store.setStage(runId, 'cancelled', { cancelledAt: new Date().toISOString() });
     this.store.appendLog(runId, { event: 'run_stopped', fromFiles: true });
+    // Both, and they are not the same thing. releaseLease drops a lease THIS
+    // process holds, which for a run stopped from files is nothing at all —
+    // the holder is a dead process elsewhere. The lease FILE is what makes
+    // isRunLive keep answering, so it has to go or the next reader still sees
+    // an owner for a run that has been cancelled.
     this.releaseLease(runId);
+    this.store.clearLease(runId);
     this.notify(runId);
   }
 
