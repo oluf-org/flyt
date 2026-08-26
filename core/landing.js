@@ -13,7 +13,7 @@
 // last, or the loop is just re-rolling dice.
 import fs from 'node:fs';
 import path from 'node:path';
-import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation, testCountUncheckable, testCountFrom, suiteExpectationProblem, suiteExpectationMismatch } from './gates.js';
+import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation, testCountUncheckable, testCountFrom, suiteExpectationProblem, suiteExpectationMismatch, scratchArtefacts, scratchArtefactProblem } from './gates.js';
 import { WorktreePool, land as gitLand, git } from './worktree.js';
 import { reviewDiff, reviewWorker } from './diffReview.js';
 import { assessRepair, NO_CHANGE_GUIDANCE } from './repair.js';
@@ -47,7 +47,7 @@ export async function verifyTask({ pool, taskId, task = {}, log = () => {} }) {
  * because they cost nothing and because a model should not be asked to
  * adjudicate something a rule already settles.
  */
-export function mechanicalChecks({ changedFiles, deletedFiles = [], task = {}, baselineOutput = null, currentOutput = null }) {
+export function mechanicalChecks({ changedFiles, deletedFiles = [], addedFiles = [], task = {}, baselineOutput = null, currentOutput = null }) {
   const problems = [];
 
   // A declaration nobody can act on is a mistake, not a default. Checked first
@@ -62,6 +62,12 @@ export function mechanicalChecks({ changedFiles, deletedFiles = [], task = {}, b
   if (violations.length) {
     problems.push(`Touched protected path(s) no task may change on its own: ${violations.join(', ')}.`);
   }
+
+  // A scratch script is not a deliverable, and the symptom must not depend on a
+  // reviewer noticing next time — or on the same cause.
+  const scratch = scratchArtefactProblem(
+    scratchArtefacts({ addedFiles, blastRadius: task.blastRadius ?? [] }));
+  if (scratch) problems.push(scratch);
 
   // Green with fewer tests is the most convincing way to fail.
   const regression = testCountRegression({ task, deletedFiles, baselineOutput, currentOutput });
@@ -191,8 +197,9 @@ export async function landTask({
   // the reviewer, so the two can never disagree about the same run.
   const gateOutput = gateRun.results.map(r => r.output).join('\n');
   const deletedFiles = await pool.deletedFiles(taskId, { base }).catch(() => []);
+  const addedFiles = await pool.addedFiles(taskId, { base }).catch(() => []);
   const mech = record('checks', mechanicalChecks({
-    changedFiles, deletedFiles, task,
+    changedFiles, deletedFiles, addedFiles, task,
     baselineOutput,
     currentOutput: gateOutput
   }));

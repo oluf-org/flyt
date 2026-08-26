@@ -516,6 +516,23 @@ export class WorktreePool {
     return [...files].sort();
   }
 
+  // Which files the task ADDED — committed or still untracked. The untracked
+  // half matters as much as the committed half: on t-0092 five artefacts were
+  // sitting unstaged in the worktree when the attempt parked, and a check that
+  // only read the commit would have seen none of them.
+  async addedFiles(taskId, { base }) {
+    const dir = this.dirFor(taskId);
+    const [committed, untracked] = await Promise.all([
+      git(['diff', '--diff-filter=A', '--name-only', `${base}...HEAD`], { cwd: dir }).catch(() => ''),
+      git(['ls-files', '--others', '--exclude-standard'], { cwd: dir }).catch(() => '')
+    ]);
+    const files = new Set();
+    for (const out of [committed, untracked]) {
+      for (const line of out.split('\n')) { const f = line.trim(); if (f) files.add(f); }
+    }
+    return [...files].sort();
+  }
+
   // Which files the task DELETED. Asked separately because `changedFiles`
   // returns names with no status, so a removal and an edit look identical
   // there — and the difference is the whole of whether a declared fall in the

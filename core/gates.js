@@ -238,6 +238,57 @@ export function protectedViolations(files, { allow = [] } = {}) {
 }
 
 /**
+ * A NEW file at the repository root that no task asked for.
+ *
+ * Eleven of these have been committed or left behind across six attempts:
+ * `scratch_edit.py`, `scratch_edit2.py` and `scratch_edit3.py` on t-0093;
+ * `fix.cjs`, `patch-parse.mjs` and `patch-parse2.mjs` on t-0097; `_dump.js`,
+ * `_dump2.js`, `_extract_revive.py` and `_revive.txt` on t-0092; and the
+ * zero-byte `3925`, `1035` and `516` — which are not scripts at all but shell
+ * redirects that went somewhere unintended. A reviewer caught one set and parked
+ * the task; nothing caught the others, so the pattern was one landing away from
+ * main three times. On t-0092 it did worse than litter: the attempt spent its
+ * tool-call budget writing programs to inspect the repository instead of editing
+ * it, and parked having changed nothing.
+ *
+ * So the rule is not about extensions — a list of `.py` and `.mjs` would have
+ * caught four of eleven. What the eleven share is that the task DECLARED what it
+ * would touch, these are outside that, they are new, and they sit at the root
+ * where nothing generated belongs. Every part is needed: modified root files are
+ * ordinary (`package.json`), new files under a directory are ordinary
+ * (`tests/backlogRevive.test.js`, written by the same attempt, is exactly the
+ * deliverable), and a new root file a task DECLARED is a deliverable too —
+ * `STACK_LANG.md` arrived that way.
+ *
+ * Deterministic, like every §7.3 closure: three set operations over paths git
+ * already distinguishes. Whether a file is "really" scratch is an opinion, it
+ * needs a model, and it is what this path keeps out.
+ */
+export function scratchArtefacts({ addedFiles = [], blastRadius = [] } = {}) {
+  const declared = blastRadius.map(String).filter(Boolean);
+  // A task that declared NOTHING has nothing for a file to be outside of, and
+  // this rule is "outside what the task said it would touch". Every one of the
+  // eleven came from a task that DID declare a radius, so this costs nothing
+  // real; an undeclared task is judged by the reviewer, as it already was.
+  if (!declared.length) return [];
+  const inRadius = f => declared.some(a => f === a || f.startsWith(a.endsWith('/') ? a : `${a}/`));
+  return addedFiles
+    .map(f => String(f).replace(/\\/g, '/'))
+    .filter(f => f && !f.includes('/'))       // the repository root, and only there
+    .filter(f => !inRadius(f))
+    .sort();
+}
+
+/** The refusal, in the same voice as the other landing refusals. */
+export function scratchArtefactProblem(found = []) {
+  if (!found.length) return null;
+  return `Created ${found.length} new file(s) at the repository root that this task did not `
+    + `declare: ${nameSome(found)}. Scratch and patch scripts, and redirects that landed on the `
+    + 'wrong side of a shell command, are not deliverables. Edit the files directly; if one of '
+    + 'these really is the deliverable, name it in the task\'s blastRadius.';
+}
+
+/**
  * The test count a gate reported, when it says so.
  *
  * `node --test` prints "# tests N", and most runners print something countable.

@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WorktreePool, git, slugify, branchFor, land, defaultWorktreeRoot, isInside } from '../core/worktree.js';
-import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, testCountUncheckable, suiteExpectation, suiteExpectationProblem, suiteExpectationMismatch, SUITE_EXPECTATIONS, gateProblem, unrunnableGates } from '../core/gates.js';
+import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, testCountUncheckable, scratchArtefacts, scratchArtefactProblem, suiteExpectation, suiteExpectationProblem, suiteExpectationMismatch, SUITE_EXPECTATIONS, gateProblem, unrunnableGates } from '../core/gates.js';
 import { parseReview, buildReviewPrompt, reviewDiff, reviewWorker } from '../core/diffReview.js';
 import { landTask, mechanicalChecks, advancePin, readPin } from '../core/landing.js';
 import { setScript } from './helpers.js';
@@ -158,6 +158,95 @@ test('the message is bounded: a blockedReason is read on a board', () => {
   });
   assert.match(said, /and 26 more/);
   assert.ok(said.length < 400, `${said.length} characters is not a board notice`);
+});
+
+// --- scratch scripts are not deliverables (t-0100) --------------------------
+//
+// Eleven artefacts across six attempts. A reviewer caught one set and parked
+// the task; nothing caught the others, so the pattern was one landing away from
+// main three times.
+
+test('the eleven that actually happened are caught, and the deliverable beside them is not', () => {
+  // t-0092's real worktree, verbatim: five artefacts and one genuine new test
+  // file, written by the same attempt in the same minutes.
+  const found = scratchArtefacts({
+    addedFiles: ['516', '_dump.js', '_dump2.js', '_extract_revive.py', '_revive.txt',
+      'tests/backlogRevive.test.js'],
+    blastRadius: ['core/backlog.js', 'core/archive.js', 'tests']
+  });
+  assert.deepEqual(found, ['516', '_dump.js', '_dump2.js', '_extract_revive.py', '_revive.txt']);
+
+  // And the other two attempts, whose artefacts share no extension with these.
+  assert.deepEqual(scratchArtefacts({
+    addedFiles: ['scratch_edit.py', 'scratch_edit2.py', 'scratch_edit3.py'],
+    blastRadius: ['kernel/src/blocks/types.ts', 'tests']
+  }).length, 3);
+  assert.deepEqual(scratchArtefacts({
+    addedFiles: ['fix.cjs', 'patch-parse.mjs', 'patch-parse2.mjs', '3925', '1035'],
+    blastRadius: ['kernel/src/stack/parse.ts', 'tests']
+  }).length, 5, 'a zero-byte file named for a number is a redirect, not a script');
+});
+
+test('a new file the task DECLARED is a deliverable, wherever it sits', () => {
+  // STACK_LANG.md arrived exactly this way and must keep being able to.
+  assert.deepEqual(scratchArtefacts({
+    addedFiles: ['STACK_LANG.md'], blastRadius: ['core/flowlang/', 'STACK_LANG.md']
+  }), []);
+  // A directory in the radius covers what is under it, and only what is under it.
+  assert.deepEqual(scratchArtefacts({ addedFiles: ['docs/x.md'], blastRadius: ['docs/'] }), []);
+  assert.deepEqual(scratchArtefacts({ addedFiles: ['docs/x.md'], blastRadius: ['docs'] }), []);
+  assert.deepEqual(scratchArtefacts({ addedFiles: ['docsy.md'], blastRadius: ['docs'] }), ['docsy.md'],
+    'a prefix is not a directory');
+});
+
+test('a task that declared no blast radius has nothing to be outside of', () => {
+  // The rule is "outside what the task said it would touch". With no
+  // declaration there is no outside, and every one of the eleven came from a
+  // task that did declare one — so this costs nothing real. An undeclared task
+  // is judged by the reviewer, exactly as it already was.
+  assert.deepEqual(scratchArtefacts({ addedFiles: ['_dump.js', '516'], blastRadius: [] }), []);
+});
+
+test('a legitimately new script under scripts/ is not the thing being refused', () => {
+  // The other half of the rule, and the one that keeps it usable: this is about
+  // files at the ROOT that nobody asked for, not about new scripts.
+  assert.deepEqual(scratchArtefacts({
+    addedFiles: ['scripts/release.mjs', 'scripts/bench.py'], blastRadius: ['core/']
+  }), []);
+});
+
+test('a root file that was MODIFIED is ordinary, and only additions are judged', () => {
+  // package.json, config.json and the living docs are edited constantly. Only
+  // git-added paths reach this check, so nothing else has to be excluded by name.
+  assert.deepEqual(scratchArtefacts({ addedFiles: [], blastRadius: [] }), []);
+});
+
+test('the refusal names the files, is bounded, and says what to do instead', () => {
+  assert.equal(scratchArtefactProblem([]), null);
+  const said = scratchArtefactProblem(['516', '_dump.js', '_dump2.js', '_extract_revive.py', '_revive.txt']);
+  assert.match(said, /Created 5 new file\(s\) at the repository root/);
+  assert.match(said, /and 1 more/, 'a blockedReason is read on a board');
+  assert.match(said, /name it in the task's blastRadius/);
+  assert.ok(said.length < 500, `${said.length} characters is not a board notice`);
+});
+
+test('mechanicalChecks refuses the landing, as a named problem and not a generic failure', () => {
+  const mech = mechanicalChecks({
+    changedFiles: ['core/archive.js', '_dump.js'],
+    addedFiles: ['_dump.js'],
+    task: { blastRadius: ['core/archive.js', 'tests'] },
+    baselineOutput: '# tests 10', currentOutput: '# tests 11'
+  });
+  assert.equal(mech.ok, false);
+  assert.ok(mech.problems.some(p => /_dump\.js/.test(p) && /not deliverables/.test(p)),
+    mech.problems.join(' | '));
+
+  // And the same change without the artefact lands.
+  assert.equal(mechanicalChecks({
+    changedFiles: ['core/archive.js'], addedFiles: ['tests/archive.test.js'],
+    task: { blastRadius: ['core/archive.js', 'tests'] },
+    baselineOutput: '# tests 10', currentOutput: '# tests 11'
+  }).ok, true);
 });
 
 // --- what a task may declare the suite will do (t-0107) ---------------------
