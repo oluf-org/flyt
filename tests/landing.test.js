@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WorktreePool, git, slugify, branchFor, land, defaultWorktreeRoot, isInside } from '../core/worktree.js';
-import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, testCountUncheckable, gateProblem, unrunnableGates } from '../core/gates.js';
+import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, testCountUncheckable, suiteExpectation, suiteExpectationProblem, suiteExpectationMismatch, SUITE_EXPECTATIONS, gateProblem, unrunnableGates } from '../core/gates.js';
 import { parseReview, buildReviewPrompt, reviewDiff, reviewWorker } from '../core/diffReview.js';
 import { landTask, mechanicalChecks, advancePin, readPin } from '../core/landing.js';
 import { setScript } from './helpers.js';
@@ -90,10 +90,12 @@ test('deleting tests to go green is caught, and an unknowable count is not "fine
   assert.equal(testCountFrom('Tests: 3 failed, 40 passed'), 40);
   assert.equal(testCountFrom('all good'), null);
 
-  assert.match(testCountRegression('# tests 621', '# tests 604'), /fell from 621 to 604/);
-  assert.equal(testCountRegression('# tests 621', '# tests 640'), null);
+  const fell = (baselineOutput, currentOutput, rest = {}) =>
+    testCountRegression({ baselineOutput, currentOutput, ...rest });
+  assert.match(fell('# tests 621', '# tests 604'), /fell from 621 to 604/);
+  assert.equal(fell('# tests 621', '# tests 640'), null);
   // Unknowable must not silently pass as "no decrease" — that is the hole.
-  assert.equal(testCountRegression('no counts here', '# tests 5'), null);
+  assert.equal(fell('no counts here', '# tests 5'), null);
 });
 
 test('the count standing still while source moved is the finding', () => {
@@ -140,7 +142,7 @@ test('a count that FELL is left to testCountRegression, which says it better', (
   assert.equal(testCountStagnation({
     changedFiles: ['core/a.js'], baselineOutput: '# tests 10', currentOutput: '# tests 8',
   }), null);
-  assert.match(testCountRegression('# tests 10', '# tests 8'), /fell from 10 to 8/);
+  assert.match(testCountRegression({ baselineOutput: '# tests 10', currentOutput: '# tests 8' }), /fell from 10 to 8/);
 });
 
 test('a growing suite says nothing', () => {
@@ -156,6 +158,151 @@ test('the message is bounded: a blockedReason is read on a board', () => {
   });
   assert.match(said, /and 26 more/);
   assert.ok(said.length < 400, `${said.length} characters is not a board notice`);
+});
+
+// --- what a task may declare the suite will do (t-0107) ---------------------
+//
+// Both count checks were right about the common case and wrong about three
+// real ones: a pure refactor needs no new test, a deletion should take its
+// tests with it, and four near-identical tests consolidated into one is an
+// improvement that reads as vandalism. t-0040 is the case that forced it —
+// "flip the flag, delete the old surfaces" removes the v1 DSL and the files
+// that cover it, and as things stood it could not land.
+
+test('the vocabulary is closed, and a value outside it is a mistake, not a default', () => {
+  // The failure a declaration must not have: a typo that silently restores
+  // strict checking, so the author believes they declared something and the
+  // gate believes they declared nothing.
+  assert.deepEqual(SUITE_EXPECTATIONS, ['grows', 'unchanged', 'shrinks']);
+  for (const v of SUITE_EXPECTATIONS) assert.equal(suiteExpectation({ suiteExpectation: v }), v);
+  assert.equal(suiteExpectation({ suiteExpectation: 'SHRINKS' }), 'shrinks', 'case is not the point');
+  assert.equal(suiteExpectation({}), null, 'declaring nothing is the strict default');
+
+  assert.equal(suiteExpectationProblem({}), null);
+  assert.equal(suiteExpectationProblem({ suiteExpectation: 'grows' }), null);
+  assert.match(suiteExpectationProblem({ suiteExpectation: 'fewer' }), /"fewer".*not one of grows, unchanged, shrinks/s);
+});
+
+test('a task that declares nothing is checked exactly as it was before', () => {
+  // Forgetting to declare must never silently disable a check.
+  assert.match(testCountRegression({ baselineOutput: '# tests 10', currentOutput: '# tests 8' }),
+    /green because there is less of it/);
+  assert.match(testCountStagnation({
+    changedFiles: ['core/a.js'], baselineOutput: '# tests 10', currentOutput: '# tests 10'
+  }), /did not move/);
+});
+
+test('a declared fall is earned by deleting test FILES, not by removing assertions', () => {
+  // The blank cheque this must not be. Tests taken out of a file that still
+  // exists is precisely how the gate would be gamed, and the count cannot tell
+  // that apart from a feature leaving — but git can.
+  const task = { suiteExpectation: 'shrinks' };
+  const io = { baselineOutput: '# tests 1936', currentOutput: '# tests 1919' };
+
+  assert.equal(testCountRegression({ ...io, task, deletedFiles: ['tests/flowlang.test.js'] }), null,
+    'the v1 DSL leaving takes its tests with it');
+
+  const gamed = testCountRegression({ ...io, task, deletedFiles: [] });
+  assert.match(gamed, /no file under tests\/ was deleted/);
+  assert.match(gamed, /removing the tests with the feature, not by removing assertions/);
+
+  // A deletion somewhere else does not account for it either.
+  assert.match(testCountRegression({ ...io, task, deletedFiles: ['src/FlowCanvas.jsx'] }),
+    /no file under tests\/ was deleted/);
+});
+
+test('a declared "unchanged" is what a refactor needs, and only that', () => {
+  const io = { changedFiles: ['core/flowRunner.js', 'core/gates.js'] };
+  assert.equal(testCountStagnation({
+    ...io, task: { suiteExpectation: 'unchanged' },
+    baselineOutput: '# tests 10', currentOutput: '# tests 10'
+  }), null);
+
+  // It buys the count standing still, not the count falling: that is the other
+  // check's business and it has its own declaration.
+  assert.match(testCountRegression({
+    task: { suiteExpectation: 'unchanged' }, deletedFiles: ['tests/a.test.js'],
+    baselineOutput: '# tests 10', currentOutput: '# tests 8'
+  }), /green because there is less of it/);
+});
+
+test('a prediction that was wrong is reported, and does not block the landing', () => {
+  // Refusing a landing because the suite grew MORE than predicted would punish
+  // the better outcome. It must not pass unremarked either — a prediction
+  // nobody checks is not a prediction.
+  const wrong = suiteExpectationMismatch({
+    task: { suiteExpectation: 'shrinks' }, changedFiles: ['core/a.js'],
+    baselineOutput: '# tests 10', currentOutput: '# tests 14'
+  });
+  assert.match(wrong, /declared the suite would be "shrinks" and it grew \(10 → 14\)/);
+  assert.match(wrong, /the landing stands/);
+
+  assert.match(suiteExpectationMismatch({
+    task: { suiteExpectation: 'grows' }, changedFiles: ['core/a.js'],
+    baselineOutput: '# tests 10', currentOutput: '# tests 10'
+  }), /would be "grows" and it did not move/);
+
+  // Right, or undeclared, or unreadable: nothing to say.
+  assert.equal(suiteExpectationMismatch({
+    task: { suiteExpectation: 'shrinks' }, baselineOutput: '# tests 10', currentOutput: '# tests 8'
+  }), null);
+  assert.equal(suiteExpectationMismatch({ task: {}, baselineOutput: '# tests 10', currentOutput: '# tests 8' }), null);
+  assert.equal(suiteExpectationMismatch({
+    task: { suiteExpectation: 'grows' }, baselineOutput: null, currentOutput: '# tests 8'
+  }), null);
+  // A docs-only change predicted to grow is not a wrong prediction about the
+  // suite; it is a change that was only prose.
+  assert.equal(suiteExpectationMismatch({
+    task: { suiteExpectation: 'grows' }, changedFiles: ['README.md'],
+    baselineOutput: '# tests 10', currentOutput: '# tests 10'
+  }), null);
+});
+
+test('t-0040 is the worked example: it declares a fall and it lands', () => {
+  // The task that forced this to exist, run through the checks it was blocked
+  // by. Read from the real backlog file, so the declaration and the code that
+  // reads it cannot drift apart.
+  const file = fs.readFileSync(path.join(process.cwd(), '.flyt', 'backlog', 't-0040.task.md'), 'utf8');
+  assert.match(file, /^suiteExpectation: shrinks$/m,
+    't-0040 must declare the fall it is going to cause');
+
+  const t0040 = { suiteExpectation: 'shrinks', blastRadius: ['src/', 'core/'] };
+  const cutover = {
+    // Deleting the v1 DSL takes flowlang's four files with it — 17 tests in
+    // flowlang alone, out of 143 files.
+    deletedFiles: ['tests/flowlang.test.js', 'tests/flowlangLint.test.js', 'src/FlowCanvas.jsx'],
+    baselineOutput: '# tests 1936', currentOutput: '# tests 1901'
+  };
+  assert.equal(testCountRegression({ task: t0040, ...cutover }), null, 'and so it can land');
+  assert.equal(suiteExpectationMismatch({
+    task: t0040, changedFiles: ['core/flowstore.js'],
+    baselineOutput: cutover.baselineOutput, currentOutput: cutover.currentOutput
+  }), null, 'and the prediction was right');
+});
+
+test('mechanicalChecks reads one declaration for both checks, and reports a bad one', () => {
+  const strict = mechanicalChecks({
+    changedFiles: ['core/a.js'], deletedFiles: ['tests/a.test.js'], task: {},
+    baselineOutput: '# tests 10', currentOutput: '# tests 8'
+  });
+  assert.equal(strict.ok, false);
+  assert.ok(strict.problems.some(p => /green because there is less of it/.test(p)));
+
+  const declared = mechanicalChecks({
+    changedFiles: ['core/a.js'], deletedFiles: ['tests/a.test.js'],
+    task: { suiteExpectation: 'shrinks' },
+    baselineOutput: '# tests 10', currentOutput: '# tests 8'
+  });
+  assert.equal(declared.ok, true, declared.problems.join(' '));
+
+  const typo = mechanicalChecks({
+    changedFiles: ['core/a.js'], deletedFiles: ['tests/a.test.js'],
+    task: { suiteExpectation: 'shrink' },
+    baselineOutput: '# tests 10', currentOutput: '# tests 8'
+  });
+  assert.equal(typo.ok, false);
+  assert.ok(typo.problems.some(p => /not one of grows, unchanged, shrinks/.test(p)),
+    'the typo is the finding, not silent strictness');
 });
 
 test('a check that could not run says so, rather than nothing', () => {

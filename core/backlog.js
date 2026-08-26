@@ -69,6 +69,16 @@ const DEFAULTS = () => ({
   dependsOn: [],
   gates: [],         // extra gate commands beyond the project defaults
   blastRadius: [],   // paths this task expects to touch
+  // What the SUITE should do when this lands: 'grows' | 'unchanged' |
+  // 'shrinks'. null is the strict default, checked exactly as before.
+  //
+  // Declared by whoever wrote the task, before the attempt, which is the
+  // whole of it: a prediction that can be wrong, not an excuse invented
+  // afterwards (GOALS principle 8). A worker mid-attempt cannot set it —
+  // the backlog lives outside every worktree and is not writable from one —
+  // and that is the property that stops the hatch becoming a way for a
+  // model to excuse itself. Keep it true.
+  suiteExpectation: null,
   // Reference repositories this task was LEARNED FROM (§16), by name. A task
   // written from reading someone else's code names that code's files, and the
   // agent that claims it is standing somewhere those paths do not exist —

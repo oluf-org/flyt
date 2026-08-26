@@ -259,16 +259,73 @@ export function testCountFrom(output) {
 }
 
 /**
+ * What a task may say the suite will do. Closed, and three words long.
+ *
+ * Both count checks are right about the common case and wrong about three real
+ * ones: a pure refactor changes source and needs no new test, a deletion should
+ * take its tests with it, and four near-identical tests consolidated into one
+ * table-driven test reads as vandalism. t-0040 — "flip the flag, delete the old
+ * surfaces" — removes the v1 DSL and the files that cover it, so as things
+ * stood it could not land and nothing said so until an attempt was spent
+ * finding out.
+ *
+ * A closed vocabulary rather than free text, for the same reason predicates are
+ * `source / operator / literal` and not expressions (D56): three values can be
+ * enumerated by a test, and a fourth cannot appear without somebody deciding it
+ * should. A value outside the set is a MISTAKE, reported by
+ * {@link suiteExpectationProblem}, never quietly read as "no declaration" — a
+ * typo that silently restores strict checking is the one failure mode a
+ * declaration must not have.
+ */
+export const SUITE_EXPECTATIONS = ['grows', 'unchanged', 'shrinks'];
+
+/** The declaration, or null when there is none. One field, read in one place. */
+export function suiteExpectation(task = {}) {
+  const raw = task?.suiteExpectation;
+  if (raw == null || raw === '') return null;
+  const v = String(raw).trim().toLowerCase();
+  return SUITE_EXPECTATIONS.includes(v) ? v : null;
+}
+
+/** A declaration nobody can act on, said out loud rather than ignored. */
+export function suiteExpectationProblem(task = {}) {
+  const raw = task?.suiteExpectation;
+  if (raw == null || raw === '') return null;
+  const v = String(raw).trim().toLowerCase();
+  if (SUITE_EXPECTATIONS.includes(v)) return null;
+  return `The task declares suiteExpectation "${raw}", which is not one of `
+    + `${SUITE_EXPECTATIONS.join(', ')}. Nothing can act on it, and a declaration `
+    + 'that is silently ignored is worse than none.';
+}
+
+/** Test files this change DELETED, which is what accounts for a declared fall. */
+const deletedTests = (deletedFiles = []) =>
+  deletedFiles.map(f => String(f).replace(/\\/g, '/')).filter(f => /^tests?\//.test(f));
+
+/**
  * Did the change delete tests to go green? Returns a problem string or null.
  *
  * Green-with-fewer-tests is the most convincing way to fail: everything the
  * harness checks says pass.
  */
-export function testCountRegression(baselineOutput, currentOutput) {
+export function testCountRegression({ task = {}, deletedFiles = [], baselineOutput, currentOutput } = {}) {
   const before = testCountFrom(baselineOutput);
   const after = testCountFrom(currentOutput);
   if (before == null || after == null) return null; // unknowable, not "fine"
   if (after >= before) return null;
+
+  // A declared fall is not a blank cheque. It is earned by DELETING test files:
+  // a feature that goes takes its tests with it, and git can say whether that
+  // happened. Tests removed from inside a file that still exists are exactly
+  // how this gate would be gamed, so they are still reported — the declaration
+  // buys the count going down, not the assertions going away.
+  if (suiteExpectation(task) === 'shrinks') {
+    const gone = deletedTests(deletedFiles);
+    if (gone.length) return null;
+    return `Test count fell from ${before} to ${after}. The task declared the suite would shrink, `
+      + 'but no file under tests/ was deleted, so the tests went out of files that are still there. '
+      + 'A declared fall is accounted for by removing the tests with the feature, not by removing assertions.';
+  }
   return `Test count fell from ${before} to ${after}: the suite is green because there is less of it.`;
 }
 
@@ -320,11 +377,16 @@ function nameSome(files) {
  * A FALL is left to testCountRegression, which says it better; reporting both
  * would put two sentences about one number into the same blockedReason.
  */
-export function testCountStagnation({ changedFiles = [], baselineOutput, currentOutput }) {
+export function testCountStagnation({ task = {}, changedFiles = [], baselineOutput, currentOutput }) {
   const before = testCountFrom(baselineOutput);
   const after = testCountFrom(currentOutput);
   if (before == null || after == null) return null;   // unknowable — see testCountUncheckable
   if (after !== before) return null;                  // grew, or fell and regression owns it
+
+  // A refactor or a rename moves source and needs no new test, and saying so
+  // in advance is what this exists for. The same declaration both checks
+  // read — there is one place a task says this.
+  if (suiteExpectation(task) === 'unchanged') return null;
 
   if (changedFiles.some(f => /^tests?\//.test(String(f).replace(/\\/g, '/')))) return null;
 
@@ -334,6 +396,34 @@ export function testCountStagnation({ changedFiles = [], baselineOutput, current
   return `The test count did not move (${before}) while ${behavioural.length} source file(s) changed `
     + `and nothing under tests/ was touched: ${nameSome(behavioural)}. `
     + 'The suite is green because it is the same suite, not because this change is covered.';
+}
+
+/**
+ * A declaration that turned out to be wrong, said out loud.
+ *
+ * A NOTE and not a problem, deliberately: predicting a fall and getting a rise
+ * means the suite grew, and refusing a landing for that would punish the better
+ * outcome. What it must not do is pass unremarked — a prediction nobody ever
+ * checks is not a prediction, and the next task written from this one's example
+ * should inherit an accurate habit.
+ */
+export function suiteExpectationMismatch({ task = {}, changedFiles = [], baselineOutput, currentOutput } = {}) {
+  const want = suiteExpectation(task);
+  if (!want) return null;
+  const before = testCountFrom(baselineOutput);
+  const after = testCountFrom(currentOutput);
+  if (before == null || after == null) return null;
+
+  const got = after > before ? 'grows' : after < before ? 'shrinks' : 'unchanged';
+  if (got === want) return null;
+  // 'grows' predicted and nothing moved, with nothing behavioural changed, is
+  // not a wrong prediction about the suite — it is a change that was only prose.
+  if (want === 'grows' && got === 'unchanged' && !changedFiles.some(couldChangeBehaviour)) return null;
+
+  return `The task declared the suite would be "${want}" and it ${
+    got === 'unchanged' ? 'did not move' : got === 'grows' ? 'grew' : 'shrank'
+  } (${before} → ${after}). The declaration was a prediction and it was wrong; `
+    + 'the landing stands, the habit is worth correcting.';
 }
 
 /**

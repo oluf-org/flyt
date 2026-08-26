@@ -13,7 +13,7 @@
 // last, or the loop is just re-rolling dice.
 import fs from 'node:fs';
 import path from 'node:path';
-import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation, testCountUncheckable, testCountFrom } from './gates.js';
+import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation, testCountUncheckable, testCountFrom, suiteExpectationProblem, suiteExpectationMismatch } from './gates.js';
 import { WorktreePool, land as gitLand, git } from './worktree.js';
 import { reviewDiff, reviewWorker } from './diffReview.js';
 import { assessRepair, NO_CHANGE_GUIDANCE } from './repair.js';
@@ -47,8 +47,14 @@ export async function verifyTask({ pool, taskId, task = {}, log = () => {} }) {
  * because they cost nothing and because a model should not be asked to
  * adjudicate something a rule already settles.
  */
-export function mechanicalChecks({ changedFiles, task = {}, baselineOutput = null, currentOutput = null }) {
+export function mechanicalChecks({ changedFiles, deletedFiles = [], task = {}, baselineOutput = null, currentOutput = null }) {
   const problems = [];
+
+  // A declaration nobody can act on is a mistake, not a default. Checked first
+  // so the reason the two checks below behaved strictly is in front of the
+  // reader, rather than left to be inferred from their silence.
+  const declared = suiteExpectationProblem(task);
+  if (declared) problems.push(declared);
 
   // A task may touch a protected path only when it is explicitly about it, in
   // which case it lands with a human's approval, never unattended.
@@ -58,12 +64,12 @@ export function mechanicalChecks({ changedFiles, task = {}, baselineOutput = nul
   }
 
   // Green with fewer tests is the most convincing way to fail.
-  const regression = testCountRegression(baselineOutput, currentOutput);
+  const regression = testCountRegression({ task, deletedFiles, baselineOutput, currentOutput });
   if (regression) problems.push(regression);
 
   // Test count stagnation: source changed but test count didn't rise.
   // This catches "green because same tests pass, not because new code is exercised".
-  const stagnation = testCountStagnation({ changedFiles, baselineOutput, currentOutput });
+  const stagnation = testCountStagnation({ task, changedFiles, baselineOutput, currentOutput });
   if (stagnation) problems.push(stagnation);
 
   // Said, not swallowed. A check that could not run is not a check that
@@ -71,6 +77,8 @@ export function mechanicalChecks({ changedFiles, task = {}, baselineOutput = nul
   const notes = [];
   const uncheckable = testCountUncheckable(baselineOutput, currentOutput);
   if (uncheckable) notes.push(uncheckable);
+  const mismatch = suiteExpectationMismatch({ task, changedFiles, baselineOutput, currentOutput });
+  if (mismatch) notes.push(mismatch);
 
   return { ok: problems.length === 0, problems, notes };
 }
@@ -182,8 +190,9 @@ export async function landTask({
   // One reading of what the suite said, shared by the mechanical checks and
   // the reviewer, so the two can never disagree about the same run.
   const gateOutput = gateRun.results.map(r => r.output).join('\n');
+  const deletedFiles = await pool.deletedFiles(taskId, { base }).catch(() => []);
   const mech = record('checks', mechanicalChecks({
-    changedFiles, task,
+    changedFiles, deletedFiles, task,
     baselineOutput,
     currentOutput: gateOutput
   }));

@@ -516,6 +516,16 @@ export class WorktreePool {
     return [...files].sort();
   }
 
+  // Which files the task DELETED. Asked separately because `changedFiles`
+  // returns names with no status, so a removal and an edit look identical
+  // there — and the difference is the whole of whether a declared fall in the
+  // test count was earned (core/gates.js testCountRegression).
+  async deletedFiles(taskId, { base }) {
+    const out = await git(['diff', '--diff-filter=D', '--name-only', `${base}...HEAD`],
+      { cwd: this.dirFor(taskId) }).catch(() => '');
+    return out.split('\n').map(s => s.trim()).filter(Boolean).sort();
+  }
+
   /**
    * Files the task wrote that git is ignoring.
    *
