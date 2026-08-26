@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseYaml, formatInline } from './flowlang/yaml.js';
 import { normalizeLevel, escalate as escalateLevel, DEFAULT_LEVEL } from './levels.js';
-import { retiredDir, relocateRetiredRuns, readRetirement } from './archive.js';
+import { retiredDir, relocateRetiredRuns, readRetirement, markRevived } from './archive.js';
 
 export const TASK_STATUSES = [
   'queued',     // ready to be picked
@@ -609,7 +609,14 @@ export class Backlog {
       body: archived?.body ?? ''
     };
     const fields = Object.fromEntries(Object.entries(patch).filter(([, v]) => v != null));
-    return this.add({ id: safe, ...fields });
+    const revived = this.add({ id: safe, ...fields });
+    // The record and the runs are amended AFTER the task file exists, so a
+    // failure to write the task never leaves stubs claiming a revival that did
+    // not happen. The runs stay where they are (core/archive.js markRevived);
+    // what changes is that they stop describing a retirement that is over.
+    try { markRevived({ root, runsDir: path.join(path.dirname(this.rootDir), 'runs'), taskId: safe }); }
+    catch { /* the task is back; an un-amended stub is a smaller loss */ }
+    return revived;
   }
   // --- claiming ------------------------------------------------------------
   //

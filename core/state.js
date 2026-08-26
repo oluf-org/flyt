@@ -37,7 +37,7 @@ export class RunStore {
 
   // A retired task's run folder is MOVED to the archive and replaced with a
   // pointer stub written by core/archive.js relocateRetiredRuns:
-  //   { taskId, retiredAt, archivePath }
+  //   { taskId, retiredAt, archivePath, revivedAt? }
   // Readers resolve this before treating the path as a run, so a retired run
   // reads as relocated rather than as missing. The stub is the spec's carrier,
   // not a second registry: nothing here reads the archived run data itself.
@@ -46,11 +46,17 @@ export class RunStore {
     try {
       if (!fs.existsSync(p) || !fs.statSync(p).isFile()) return null;
       const stub = JSON.parse(fs.readFileSync(p, 'utf8'));
-      const { taskId, retiredAt, archivePath } = stub ?? {};
+      const { taskId, retiredAt, archivePath, revivedAt } = stub ?? {};
       if (typeof taskId !== 'string' || !taskId) return null;
       if (typeof retiredAt !== 'string' || !retiredAt) return null;
       if (typeof archivePath !== 'string' || !archivePath) return null;
-      return { taskId, retiredAt, archivePath };
+      // The run stayed in the archive; the TASK came back. A reader told only
+      // that the run was "retired with task t-0092" is being told something that
+      // stopped being true, so the revival travels with it.
+      return {
+        taskId, retiredAt, archivePath,
+        ...(typeof revivedAt === 'string' && revivedAt ? { revivedAt } : {})
+      };
     } catch { return null; }
   }
 

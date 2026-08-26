@@ -18,7 +18,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Backlog } from '../core/backlog.js';
-import { listArchive, readRetirement, retiredDir } from '../core/archive.js';
+import { listArchive, readRetirement, retiredDir, markRevived } from '../core/archive.js';
+import { RunStore } from '../core/state.js';
 
 // A project state root with a backlog and a runs directory under it, the same
 // shape `.flyt/` has on disk.
@@ -169,6 +170,112 @@ test('reviving a task that is already in the queue is refused', () => {
   backlog.revive(task.id);
 
   assert.throws(() => backlog.revive(task.id), /already/);
+});
+
+// --- a revival is a second life, not an erasure (t-0092) --------------------
+//
+// revive() restored the task file and nothing else. The run folders stayed in
+// `archive/retired/<id>/runs/` and the pointer stubs at `.flyt/runs/<runId>`
+// still said the run was retired with a task that was back in the queue and
+// queued for work. Nothing was lost, so this was a seam rather than a bug — but
+// a revived task's own history read as belonging to a retirement that had
+// stopped describing it.
+//
+// The contract chosen: the runs STAY in the archive and both records say the
+// revival happened. Moving folders back is the operation that already fails on
+// this platform (a held handle, EPERM), and it would risk a half-moved task for
+// nothing the stubs do not already give.
+
+test('retire, revive, then read one of the task\x27s runs', () => {
+  const { backlog, runs, archive } = project();
+  const task = backlog.add({ title: 'Add a density toggle', goal: 'x' });
+  backlog.update(task.id, { runIds: ['r-1', 'r-2'] });
+  seedRun(runs, 'r-1', 'first');
+  seedRun(runs, 'r-2', 'second');
+
+  backlog.retire(task.id, { reason: 'not now', by: 'olav' });
+  const store = new RunStore(runs);
+  assert.equal(store.runRetirement('r-1').revivedAt, undefined, 'nothing to say yet');
+
+  const back = backlog.revive(task.id);
+  assert.equal(back.status, 'queued');
+
+  // The question the task asks: open one of its runs and see a story that
+  // matches the task being in the queue again.
+  const seen = store.runRetirement('r-1');
+  assert.equal(seen.taskId, task.id);
+  assert.match(seen.revivedAt, /^\d{4}-\d{2}-\d{2}T/, 'the stub says when the task came back');
+  assert.ok(seen.archivePath.includes('retired'), 'and that the run itself stayed put');
+  assert.match(store.runRetirement('r-2').revivedAt, /^\d{4}-\d{2}-\d{2}T/, 'every stub, not the first');
+
+  // The runs really did stay where they were.
+  assert.ok(fs.existsSync(path.join(archive, 'retired', task.id, 'runs', 'r-1', 'meta.json')));
+  assert.ok(fs.statSync(path.join(runs, 'r-1')).isFile(), 'the pointer is still a pointer');
+});
+
+test('the retirement still records that the retirement happened', () => {
+  const { backlog, runs, archive } = project();
+  const task = backlog.add({ title: 'Show live AI activity', goal: 'x' });
+  backlog.update(task.id, { runIds: ['r-1'] });
+  seedRun(runs, 'r-1', 'work');
+
+  backlog.retire(task.id, { reason: 'blocked on a decision', by: 'olav' });
+  const retired = readRetirement(archive, task.id);
+  backlog.revive(task.id);
+
+  const after = readRetirement(archive, task.id);
+  assert.equal(after.retiredAt, retired.retiredAt, 'a revival does not rewrite when it was retired');
+  assert.equal(after.reason, 'blocked on a decision', 'nor why');
+  assert.deepEqual(after.movedRunIds, ['r-1']);
+  assert.match(after.revivedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(after.revivedCount, 1);
+});
+
+test('retire, revive, retire again: the new retirement supersedes, the count remembers', () => {
+  const { backlog, runs, archive } = project();
+  const task = backlog.add({ title: 'Second thoughts', goal: 'x' });
+  backlog.update(task.id, { runIds: ['r-1'] });
+  seedRun(runs, 'r-1', 'work');
+
+  backlog.retire(task.id, { reason: 'first time', by: 'olav' });
+  backlog.revive(task.id);
+  backlog.retire(task.id, { reason: 'and again', by: 'olav' });
+
+  const record = readRetirement(archive, task.id);
+  assert.equal(record.reason, 'and again');
+  assert.equal(record.revivedAt, undefined,
+    '"retired, and also back" is the one thing it is not');
+  assert.equal(record.revivedCount, 1, 'but it did happen once, and that is history');
+
+  // A third cycle counts again.
+  backlog.revive(task.id);
+  assert.equal(readRetirement(archive, task.id).revivedCount, 2);
+});
+
+test('a revival never rewrites a stub belonging to another task', () => {
+  // markRevived amends records. A revival that corrupted an unrelated run's
+  // pointer would be a far worse bug than the one it fixes.
+  const { backlog, runs, archive } = project();
+  const mine = backlog.add({ title: 'Mine', goal: 'x' });
+  backlog.update(mine.id, { runIds: ['r-1'] });
+  seedRun(runs, 'r-1', 'work');
+  backlog.retire(mine.id, { reason: 'x', by: 'olav' });
+
+  // Somebody else's stub, sitting at a path this retirement's record names.
+  const foreign = path.join(runs, 'r-other');
+  fs.writeFileSync(foreign, JSON.stringify({ taskId: 't-9999', retiredAt: 'then', archivePath: 'elsewhere' }));
+  const record = readRetirement(archive, mine.id);
+  fs.writeFileSync(path.join(retiredDir(archive, mine.id), 'retirement.json'),
+    JSON.stringify({ ...record, movedRunIds: [...record.movedRunIds, 'r-other'] }));
+
+  backlog.revive(mine.id);
+  assert.deepEqual(JSON.parse(fs.readFileSync(foreign, 'utf8')),
+    { taskId: 't-9999', retiredAt: 'then', archivePath: 'elsewhere' });
+});
+
+test('markRevived on a task that was never retired says nothing happened', () => {
+  const { runs, archive } = project();
+  assert.equal(markRevived({ root: archive, runsDir: runs, taskId: 't-0001' }), null);
 });
 
 test('reviving something that was never retired says so rather than inventing it', () => {

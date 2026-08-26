@@ -63,10 +63,63 @@ export function writeRetirement({
 } = {}) {
   const dir = retiredDir(root, taskId);
   fs.mkdirSync(dir, { recursive: true });
-  const record = { taskId, reason, retiredBy, retiredAt, movedRunIds, resumeFrom };
+  // A task retired AGAIN after a revival starts a fresh retirement: the new
+  // `retiredAt` is the current fact and a stale `revivedAt` beside it would
+  // read as "retired, and also back", which is the one thing it is not. The
+  // count survives, because how many times this has happened is the history.
+  const before = readRetirement(root, String(taskId));
+  const record = {
+    taskId, reason, retiredBy, retiredAt, movedRunIds, resumeFrom,
+    ...(before?.revivedCount ? { revivedCount: before.revivedCount } : {})
+  };
   const file = path.join(dir, RETIRE_FILE);
   fs.writeFileSync(file, JSON.stringify(record, null, 2));
   return { dir, file, record };
+}
+
+/**
+ * Record that a retired task came back, without pretending it was never gone.
+ *
+ * The contract, decided here rather than left implicit: **the runs stay in the
+ * archive and the record says the revival happened.** The alternative — moving
+ * every run folder back — is the operation that already fails on this platform
+ * (see moveRunFolder: Flyt's own watcher holds `.flyt/runs` open, and t-0033's
+ * eleven folders failed EPERM on the first one), it risks a half-moved task for
+ * no gain, and the pointer stubs already resolve. A revival is a second life,
+ * not an erasure.
+ *
+ * So both halves are amended in place. The retirement record keeps `retiredAt`
+ * and gains `revivedAt`; every pointer stub the retirement wrote gains the same
+ * date, so a reader who opens one of the task's runs is told the task is back in
+ * the queue rather than being told it was retired — which stopped being true.
+ *
+ * `revivedCount` is what makes a repeat cycle legible: retire, revive, retire
+ * again is a real sequence, and a record that only ever holds the last pair
+ * cannot show it happened three times.
+ */
+export function markRevived({ root, runsDir, taskId, revivedAt = new Date().toISOString() } = {}) {
+  const record = readRetirement(root, String(taskId));
+  if (!record) return null;
+
+  const next = { ...record, revivedAt, revivedCount: (record.revivedCount ?? 0) + 1 };
+  fs.writeFileSync(path.join(retiredDir(root, String(taskId)), RETIRE_FILE), JSON.stringify(next, null, 2));
+
+  // Each stub the retirement left behind. A stub that is missing, unreadable or
+  // belongs to another task is skipped rather than rewritten — this is amending
+  // a record, and a revival that corrupted an unrelated run's pointer would be
+  // a far worse bug than the one it fixes.
+  const stubs = [];
+  for (const runId of Array.isArray(next.movedRunIds) ? next.movedRunIds : []) {
+    const at = path.join(runsDir, String(runId));
+    try {
+      if (!fs.existsSync(at) || !fs.statSync(at).isFile()) continue;
+      const stub = JSON.parse(fs.readFileSync(at, 'utf8'));
+      if (stub?.taskId !== String(taskId)) continue;
+      fs.writeFileSync(at, JSON.stringify({ ...stub, revivedAt }, null, 2));
+      stubs.push(String(runId));
+    } catch { /* an unreadable stub is not a reason to fail the revival */ }
+  }
+  return { record: next, revivedAt, stubs };
 }
 
 export function readRetirement(root, taskId) {

@@ -354,8 +354,13 @@ async function waitForRun(api, projectId, runId, { timeoutSec, autoApprove, answ
 // full specification printed its own transcript of questions instead, which
 // reads exactly like the run having produced nothing but chatter.
 //
+// A revived task's runs stay in the archive, so this line has to say both
+// things: where the run is, and that the task it went with is back. Saying only
+// "retired with task t-0092" describes a retirement that is over.
 const renderRetirement = r =>
-  `run ${r.runId} retired with task ${r.taskId} on ${r.retiredAt}, now at ${r.archivePath}`;
+  `run ${r.runId} retired with task ${r.taskId} on ${r.retiredAt}, now at ${r.archivePath}`
+  + (r.revivedAt ? `
+${r.taskId} was revived on ${r.revivedAt}; the run stayed in the archive` : '');
 
 // The flow already says where the result is. Take the output node's content;
 // failing that, the last real NODE's output, never a sidecar.
