@@ -272,6 +272,62 @@ export function testCountRegression(baselineOutput, currentOutput) {
   return `Test count fell from ${before} to ${after}: the suite is green because there is less of it.`;
 }
 
+/**
+ * Did the change modify source without adding tests and without increasing the test count?
+ * Returns a problem string or null.
+ *
+ * This catches the case where behavior changes (source modified) but the test suite
+ * didn't grow to cover it — the gate is green because it's the same tests passing,
+ * not because the new code is exercised.
+ */
+export function testCountStagnation({ changedFiles, baselineOutput, currentOutput }) {
+  // No baseline = cannot know. Same as testCountRegression: skip with null.
+  // The caller will note this was uncheckable; an unknowable is not a pass but
+  // it is also not a mechanical failure we can act on.
+  if (baselineOutput == null) {
+    return null;
+  }
+
+  const before = testCountFrom(baselineOutput);
+  const after = testCountFrom(currentOutput);
+
+  // If we can't read counts, we can't decide — but we already have a baseline
+  // so this should be rare. Treat as unknowable rather than a pass.
+  if (before == null || after == null) {
+    return null; // Unknowable, not a pass
+  }
+
+  // If test count increased, the suite grew — that's what we want to see
+  if (after > before) {
+    return null;
+  }
+
+  // Test count didn't increase. Now check if the change even needed tests:
+  // - Only docs/config changed → no test expected
+  // - Touches tests/ → satisfied (tests were added/modified)
+  // - Otherwise source changed without test growth → finding
+
+  // Check if any changed file is under tests/
+  const touchesTests = changedFiles.some(f => f.startsWith('tests/') || f.startsWith('test/'));
+
+  if (touchesTests) {
+    return null; // Tests touched, count delta whatever it is
+  }
+
+  // Check if ALL changed files are only docs/config
+  const onlyDocsOrConfig = changedFiles.every(f => {
+    const ext = f.slice(f.lastIndexOf('.')).toLowerCase();
+    return ['.md', '.json', '.txt', '.yaml', '.yml', '.toml'].includes(ext);
+  });
+
+  if (onlyDocsOrConfig) {
+    return null; // Only docs/config changed, no test expected
+  }
+
+  // Source changed, no tests touched, test count didn't rise
+  return `Test count did not increase (${before} → ${after}) while source files changed without touching tests/: ${changedFiles.join(', ')}. New behavior needs new tests.`;
+}
+
 // The project's gate configuration, read from .flyt/config.json when present.
 export function readProjectGateConfig(workspaceRoot) {
   try {
