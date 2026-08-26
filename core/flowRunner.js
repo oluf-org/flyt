@@ -84,6 +84,10 @@ import { homeSeed, projectGates } from './homeSeed.js';
 import { taskNodeStatus } from '../src/runGraph.js';
 import { layoutPositions, containerLayout } from '../src/flowLayout.js';
 import { lintFlow, RUNTIME_RULES } from './flowlang/lint.js';
+import {
+  APPROVAL_MODES, normalizeApprovalMode,
+  editsProject, toolGating, screensToolCalls, skipsNodePreGate, assumesItsOwnAnswers
+} from './approval.js';
 
 const DEFAULT_SYSTEM = {
   plan: [
@@ -933,9 +937,10 @@ export function upstreamSet(flow, nodeId) {
 // — so it keeps the historical behavior, 'node'. Anything else unrecognized is
 // a bug or a corrupted settings file and becomes 'ask': neither is a reason to
 // start running shell commands unattended.
-export const APPROVAL_MODES = ['ask', 'smart', 'always', 'node'];
-export const normalizeApprovalMode = m =>
-  (m == null ? 'node' : APPROVAL_MODES.includes(m) ? m : 'ask');
+// Re-exported so every existing importer keeps working. The table and the five
+// named decisions live in core/approval.js, which is where a sixth reader has
+// to go to find out what this flag already means.
+export { APPROVAL_MODES, normalizeApprovalMode };
 
 export class FlowRunner {
   constructor(store, config, onUpdate = () => {}, nodeStore = null, flowStore = null) {
@@ -1180,7 +1185,7 @@ export class FlowRunner {
     try {
       const ws = this.workspaceFor(runId);
       if (!ws) return;
-      if (this.approvalMode(runId) === 'always') {
+      if (!editsProject(this.approvalMode(runId))) {
         this.store.appendLog(runId, { event: 'context_file_skipped', node: node.id, reason: 'unattended run does not edit the project' });
         return;
       }
@@ -3027,10 +3032,10 @@ export class FlowRunner {
     //   'smart'  — everything is gated too; the gate then screens the call and
     //              lets safe ones through without bothering the human. The task
     //              still runs solo, since it may pause.
-    const mode = this.approvalMode(runId);
+    const gating = toolGating(this.approvalMode(runId));
     const isGated = task => {
-      if (mode === 'always') return false;
-      if (mode === 'ask' || mode === 'smart') return true;
+      if (gating === 'none') return false;
+      if (gating === 'every') return true;
       return Boolean(task.approveToolCalls ?? nodeFor(task)?.data?.approveToolCalls);
     };
 
@@ -3112,7 +3117,7 @@ export class FlowRunner {
     // fails closed, so a broken or unreachable classifier degrades this mode
     // into plain "ask permission" rather than into "approve everything".
     let verdict = null;
-    if (this.approvalMode(runId) === 'smart') {
+    if (screensToolCalls(this.approvalMode(runId))) {
       verdict = await this.screenToolCall(runId, nodeId, call);
       if (verdict.risk === 'safe') return true;
     }
@@ -3298,7 +3303,7 @@ export class FlowRunner {
     // So an unset value falls back to the rule this replaces, and the flag only
     // ever OVERRIDES it. Nothing changes for a caller that has not been taught
     // to say.
-    return this.approvalMode(runId) !== 'always';
+    return !assumesItsOwnAnswers(this.approvalMode(runId));
   }
 
   // Role-agnostic since D38: `refine` asks about the request, `orient` asks
@@ -3417,7 +3422,7 @@ export class FlowRunner {
     // rather than passing them silently. 'ask' and 'smart' fall through and
     // pause exactly as before; no mode's meaning changes, and no gate becomes
     // skippable under any other mode.
-    if (this.approvalMode(runId) === 'always') {
+    if (skipsNodePreGate(this.approvalMode(runId))) {
       this.store.appendLog(runId, {
         event: 'approval_gate_skipped', node: node.id,
         reason: 'unattended run (approvalMode: always)'
