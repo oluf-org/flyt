@@ -643,47 +643,32 @@ export async function doctor(engine, { probe = false, models = [], project = nul
             + 'A long run will end partway through.'
         });
       }
-      // Affordability: can the remaining dollars fund a normal request?
-      // A balance of $1.85 reads as "some money left" but 402 says
-      // "You requested up to 12288 tokens, but can only afford 1411".
-      // The useful finding is the token ratio, not the dollar figure.
-      // The threshold is derived from what the loop actually requests
-      // (effortBudget) so it stays true as models and budgets change.
-      if (left > 0) {
-        const typicalTokens = effortBudget(DEFAULT_EFFORT);
-        let pricePerM = null;
-        try {
-          const route = planDefaultRoute({ type: 'agentTask', data: { role: 'execute', category: 'Code general', effort: DEFAULT_EFFORT } }, engine.runtimeConfig ?? {});
-          if (route?.model) {
-            const facts = engine.runtimeConfig?.modelFacts?.[route.model] ?? engine.settings?.modelFacts?.[route.model] ?? null;
-            if (facts && Number.isFinite(facts.outUsdPerM)) pricePerM = facts.outUsdPerM;
-            else if (facts && Number.isFinite(facts.inUsdPerM)) pricePerM = facts.inUsdPerM;
-          }
-        } catch {}
-        if (pricePerM == null) {
-          const factsMap = engine.runtimeConfig?.modelFacts ?? engine.settings?.modelFacts ?? {};
-          let cheapest = Infinity;
-          for (const f of Object.values(factsMap)) {
-            const v = f?.outUsdPerM ?? f?.inUsdPerM ?? null;
-            if (Number.isFinite(v) && v > 0 && v < cheapest) cheapest = v;
-          }
-          if (Number.isFinite(cheapest) && cheapest !== Infinity) pricePerM = cheapest;
-        }
-        if (pricePerM == null && engine.runtimeConfig?.loop?.prices) {
-          for (const v of Object.values(engine.runtimeConfig.loop.prices)) {
-            const p = v?.out ?? v?.outUsdPerM ?? v?.in ?? null;
-            if (Number.isFinite(p) && p > 0 && (pricePerM == null || p < pricePerM)) pricePerM = p;
-          }
-        }
-        if (Number.isFinite(pricePerM) && pricePerM > 0) {
-          const affordTokens = Math.floor((left * 1e6) / pricePerM);
-          if (affordTokens < typicalTokens) {
-            findings.push({
-              level: 'error',
-              message: `The OpenRouter balance of $${left.toFixed(2)} cannot fund a normal request: you requested up to ${typicalTokens} tokens but can only afford ${affordTokens}. Add credit, lower max_tokens, or move to a model that costs nothing.`
-            });
-          }
-        }
+      // Can what is left fund a normal request? A dollar figure does not
+      // answer that, and the 402 does: "You requested up to 12288 tokens, but
+      // can only afford 1411". The threshold is `effortBudget` — what this
+      // machine actually asks for — so it stays true as budgets and models
+      // change, rather than being a dollar figure somebody guessed once.
+      const price = priceOfTheNextCall(engine.runtimeConfig ?? {});
+      const wanted = effortBudget(DEFAULT_EFFORT);
+      const short = price && affordability({
+        usdLeft: left, usdPerMillion: price.usdPerMillion, tokensWanted: wanted
+      });
+      if (short) {
+        findings.push({
+          level: 'error',
+          message: `The OpenRouter balance of $${left.toFixed(2)} cannot fund an ordinary request on `
+            + `${price.model}: one asks for up to ${short.tokensWanted} tokens and this balance affords `
+            + `${short.affordTokens}. Add credit, lower the token budget, or move to a model that costs nothing.`
+        });
+      } else if (!price && left < credit.limit * 0.1) {
+        // Said rather than swallowed, and only where it changes what to do: a
+        // balance already in the warning band, with no price to check it
+        // against. Silence here would read as "checked, and it is fine".
+        findings.push({
+          level: 'info',
+          message: 'Whether that balance can still fund a request could not be checked: no price is '
+            + 'known for the model this machine would call. Refresh the model list to price it.'
+        });
       }
     }
   }
@@ -742,6 +727,54 @@ export async function doctor(engine, { probe = false, models = [], project = nul
     }
   }
   return report;
+}
+
+/**
+ * The tokens a balance can pay for, against the tokens an ordinary request
+ * asks for. Returns null when the balance is fine — a finding or nothing.
+ *
+ * This is the comparison the 402 itself makes ("You requested up to 12288
+ * tokens, but can only afford 1411"), and it is the useful one: a balance of
+ * $1.85 reads as "some money left" and cannot serve a single ordinary call.
+ * Pure, and separate from the reporting, because the arithmetic is the part
+ * worth pinning and it should not need a network to test.
+ */
+export function affordability({ usdLeft, usdPerMillion, tokensWanted }) {
+  if (!Number.isFinite(usdLeft) || usdLeft <= 0) return null;
+  if (!Number.isFinite(usdPerMillion) || usdPerMillion <= 0) return null;   // free, or unknown
+  if (!Number.isFinite(tokensWanted) || tokensWanted <= 0) return null;
+  const affordTokens = Math.floor((usdLeft * 1e6) / usdPerMillion);
+  return affordTokens < tokensWanted ? { affordTokens, tokensWanted } : null;
+}
+
+/**
+ * What a token of completion costs on the model this machine will actually
+ * call, in dollars per million.
+ *
+ * The MOST expensive of the loop's bands when the loop has been given models
+ * by name, because that is the one whose `max_tokens` reservation 402s first
+ * and the one a balance has to clear. Otherwise the default route — what an
+ * unpinned node would use. Returns null when nothing here can be priced, which
+ * is a distinct answer from "it is free" and is reported as such.
+ *
+ * Completion price rather than prompt price on purpose: the refusal is about
+ * `max_tokens`, which the provider reserves at the completion rate.
+ */
+export function priceOfTheNextCall(runtimeConfig = {}) {
+  const facts = runtimeConfig.modelFacts ?? {};
+  const priced = id => {
+    const f = facts[id];
+    const v = Number.isFinite(f?.outUsdPerM) ? f.outUsdPerM : f?.inUsdPerM;
+    return Number.isFinite(v) ? { model: id, usdPerMillion: v } : null;
+  };
+
+  const bands = Object.values(runtimeConfig.loop?.models ?? {})
+    .map(priced).filter(Boolean);
+  if (bands.length) return bands.reduce((a, b) => (b.usdPerMillion > a.usdPerMillion ? b : a));
+
+  const route = planDefaultRoute(
+    { type: 'agentTask', data: { role: 'execute', category: 'Code general' } }, runtimeConfig);
+  return route?.model ? priced(route.model) : null;
 }
 
 /**
