@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { WorktreePool, git, slugify, branchFor, land, defaultWorktreeRoot, isInside } from '../core/worktree.js';
 import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, testCountUncheckable, scratchArtefacts, scratchArtefactProblem, suiteExpectation, suiteExpectationProblem, suiteExpectationMismatch, SUITE_EXPECTATIONS, gateProblem, unrunnableGates } from '../core/gates.js';
 import { parseReview, buildReviewPrompt, reviewDiff, reviewWorker } from '../core/diffReview.js';
@@ -348,25 +349,29 @@ test('a prediction that was wrong is reported, and does not block the landing', 
 });
 
 test('t-0040 is the worked example: it declares a fall and it lands', () => {
-  // The task that forced this to exist, run through the checks it was blocked
-  // by. Read from the real backlog file, so the declaration and the code that
-  // reads it cannot drift apart.
-  const file = fs.readFileSync(path.join(process.cwd(), '.flyt', 'backlog', 't-0040.task.md'), 'utf8');
-  assert.match(file, /^suiteExpectation: shrinks$/m,
-    't-0040 must declare the fall it is going to cause');
-
+  // The task that forced this to exist, run through the checks it was blocked by.
+  //
+  // Read as DATA, not from .flyt/backlog/t-0040.task.md — and that is the point
+  // rather than a shortcut. The backlog lives outside every worktree, which is
+  // what stops a worker declaring its own escape hatch mid-attempt; a test that
+  // reads it therefore passes on main and fails in every worktree the loop
+  // creates. This one did, and the loop found it on the next task: ENOENT on a
+  // path that is deliberately not in the checkout.
   const t0040 = { suiteExpectation: 'shrinks', blastRadius: ['src/', 'core/'] };
   const cutover = {
-    // Deleting the v1 DSL takes flowlang's four files with it — 17 tests in
-    // flowlang alone, out of 143 files.
+    // Deleting the v1 DSL takes flowlang's files with it — 17 tests in flowlang
+    // alone, out of 143 files.
     deletedFiles: ['tests/flowlang.test.js', 'tests/flowlangLint.test.js', 'src/FlowCanvas.jsx'],
-    baselineOutput: '# tests 1936', currentOutput: '# tests 1901'
+    baselineOutput: '# tests 1956', currentOutput: '# tests 1921'
   };
   assert.equal(testCountRegression({ task: t0040, ...cutover }), null, 'and so it can land');
   assert.equal(suiteExpectationMismatch({
     task: t0040, changedFiles: ['core/flowstore.js'],
     baselineOutput: cutover.baselineOutput, currentOutput: cutover.currentOutput
   }), null, 'and the prediction was right');
+
+  // Without the declaration it is refused, which is where t-0040 stood before.
+  assert.match(testCountRegression({ task: {}, ...cutover }), /green because there is less of it/);
 });
 
 test('mechanicalChecks reads one declaration for both checks, and reports a bad one', () => {
@@ -740,6 +745,30 @@ test('a rejected review stops the landing and says what to change', async () => 
   assert.equal(result.stage, 'review');
   assert.match(result.guidance, /Drop the rename/);
   assert.ok(!fs.existsSync(path.join(root, 'extra.js')));
+});
+
+// The suite runs inside a worktree on every loop task, and `.flyt/` is not in
+// one — the backlog, the ledger and the incidents live beside the repository,
+// not in it, which is what stops a worker editing the queue that ranks it. So a
+// test that reads `.flyt/` passes on main and fails on every task the loop
+// runs, and it fails as an ENOENT naming a path the reader has no reason to
+// expect. One did: t-0107's worked example read the real t-0040 task file, and
+// the next loop task found it.
+test('no test reads .flyt/ out of the checkout, because a worktree has none', () => {
+  const dir = fileURLToPath(new URL('.', import.meta.url));
+  const problems = [];
+  for (const name of fs.readdirSync(dir).filter(f => f.endsWith('.test.js'))) {
+    const source = fs.readFileSync(path.join(dir, name), 'utf8');
+    for (const line of source.split('\n')) {
+      // A literal '.flyt' joined onto cwd or a repo root. Temp-directory
+      // fixtures build their own `.flyt` and are the normal, correct thing —
+      // those never start from process.cwd().
+      if (/process\.cwd\(\)[^;\n]*['"]\.flyt['"]|['"]\.flyt['"][^;\n]*process\.cwd\(\)/.test(line)) {
+        problems.push(`${name}: ${line.trim().slice(0, 90)}`);
+      }
+    }
+  }
+  assert.deepEqual(problems, [], 'these pass on main and fail in every worktree');
 });
 
 test('a task cannot edit the queue that ranks it or the gates that judge it', () => {
