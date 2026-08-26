@@ -42,6 +42,8 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt log <runId> [--quiet]          the run's event log (--event a,b --node n --tail N)
   flyt approve|reject|stop <runId>    answer a gate or stop a run
   flyt answer <runId> "<text>"        reply to a node that stopped to ask
+  flyt retry <runId> <nodeId>         run one node again, and wait for the run
+                [--guidance "<what to do differently>"] [--model <id>]
                                       (waits for the run, and shows the next round)
   flyt why [<runId>]                  why a run failed or stalled (default: latest)
   flyt probe <model>...               call a model once and report what came back
@@ -157,6 +159,7 @@ const COMMAND_FLAGS = {
   feedback: ['enqueue'],
   incident: ['all', 'by'],
   log: ['event', 'node', 'quiet', 'tail'],
+  retry: ['gates', 'guidance', 'model', 'timeout'],
   loop: ['cap-usd', 'date', 'dry-run', 'model', 'models', 'only', 'parallel',
     'reviewer', 'soft-usd', 'tail', 'task', 'task-usd', 'tasks'],
   probe: ['max-tokens', 'provider', 'stream'],
@@ -1245,6 +1248,54 @@ async function main() {
       if (asJson) {
         return out({
           ok: stage === 'done', runId, stage,
+          ...(stage === 'awaiting_input' ? { questions: snapshot.meta?.pendingQuestions ?? [] } : {}),
+          snapshot
+        });
+      }
+      if (stage === 'awaiting_input') {
+        say(`run ${runId}: waiting on you`);
+        return out(renderQuestionGate(runId, snapshot.meta));
+      }
+      say(`run ${runId}: ${stage}`);
+      process.exitCode = stage === 'done' ? 0 : 1;
+      return out(runDeliverable(snapshot) ?? `(no output; stage ${stage})`);
+    }
+
+    // The way back from a node that finished badly (D39). `restartNode` has
+    // existed since then and nothing reached it but `flyt call`, which prints
+    // ok:true the instant the walk relaunches and returns — so the relaunched
+    // run lived only as long as nothing closed stdout, and piping the output to
+    // `head` killed it silently, leaving the run in a stage that did not
+    // reflect the restart. `flyt run` and `flyt answer` both wait for the run
+    // to settle; the one door to a retry did neither.
+    case 'retry': {
+      const runId = positional[1];
+      const nodeId = positional[2];
+      if (!runId || !nodeId) {
+        return die('flyt retry <runId> <nodeId> [--guidance "<what to do differently>"] [--model <id>]');
+      }
+      const projectId = openProject(api, engine);
+      // Multi-line guidance survives: the flag's value is passed through whole,
+      // and it is what the node actually receives as `retry-for-<nodeId>`.
+      const guidance = typeof flags.guidance === 'string' ? flags.guidance : '';
+      try {
+        await api.invoke('run:restartNode', {
+          projectId, runId, nodeId, guidance, worker: namedWorker(flags.model)
+        });
+      } catch (err) {
+        // The runner's own words. "run is live — stop or pause it first",
+        // `No node "x" in this run's flow`, and `does not call a model` are
+        // each a specific, actionable answer, and a stack trace is not.
+        return die(`${runId} not retried: ${String(err?.message ?? err)}`);
+      }
+      say(`${runId}: restarting ${nodeId}${flags.model ? ` on ${flags.model}` : ''}`);
+      const { stage, snapshot } = await waitForRun(api, projectId, runId, {
+        timeoutSec: Number(flags.timeout ?? 1800),
+        autoApprove: flags.gates === 'approve'
+      });
+      if (asJson) {
+        return out({
+          ok: stage === 'done', runId, node: nodeId, stage,
           ...(stage === 'awaiting_input' ? { questions: snapshot.meta?.pendingQuestions ?? [] } : {}),
           snapshot
         });

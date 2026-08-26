@@ -101,6 +101,38 @@ test('the refusal happens before anything is bound or spent', () => {
   assert.equal(good.status, 0, good.stderr);
 });
 
+// `flyt retry` (t-0088). `run:restartNode` has existed since D39 and the only
+// door to it was the generic `flyt call`, which printed ok:true the instant the
+// walk relaunched and returned — so the relaunched run survived only as long as
+// nothing closed stdout, and piping the output to `head` killed it silently.
+test('flyt retry is a command, takes its flags, and is documented', () => {
+  const source = fs.readFileSync(cli, 'utf8');
+  assert.match(source, /^ {4}case 'retry': \{$/m, 'the command exists');
+  for (const flag of ['guidance', 'model', 'gates']) {
+    assert.equal(checkFlags('retry', { [flag]: 'x' }), null, `--${flag}`);
+  }
+  assert.equal(checkFlags('retry', { timeout: '2400' }), null, '--timeout is a number');
+  assert.match(checkFlags('retry', { guidence: 'x' }), /Did you mean "--guidance"\?/);
+});
+
+test('flyt retry refuses a missing argument, and a run that is not there', () => {
+  // `die` exits 1; the pre-flight flag refusal is what exits 2.
+  const noArgs = run(['retry']);
+  assert.equal(noArgs.status, 1);
+  assert.match(noArgs.stderr + noArgs.stdout, /flyt retry <runId> <nodeId>/);
+
+  const noNode = run(['retry', 'some-run']);
+  assert.equal(noNode.status, 1, 'a runId alone is not enough');
+
+  // The runner's own message, not a stack trace. This used to be an ENOENT
+  // naming an internal .flyt path.
+  const missing = run(['retry', 'no-such-run-xyz', 'work']);
+  assert.equal(missing.status, 1);
+  const said = missing.stderr + missing.stdout;
+  assert.match(said, /No run "no-such-run-xyz"/);
+  assert.ok(!/ENOENT|at .*\.js:\d+/.test(said), `no stack trace:\n${said}`);
+});
+
 // A repeat is the same defect wearing different clothes: the flag is spelled
 // right, the command runs, and the value is not what was written. `--goal`
 // twice produced the brief "first,second" — `String(['first','second'])` —

@@ -185,6 +185,42 @@ test('an aiStep retry keeps honoring the same UI contract', async () => {
   assert.equal(calls[calls.length - 1], 'model-B');
 });
 
+test('multi-line guidance reaches the node as retry-for-<node>', async () => {
+  // `flyt retry --guidance` is only worth having if what is typed is what the
+  // node reads. The CLI passes the flag's value through whole; this is the
+  // other end of that, and a guidance that arrived flattened or truncated
+  // would be invisible from the command's own output.
+  const { store, runner, runId } = await failingAgentTaskRun();
+  const guidance = 'The first attempt used the wrong file.\n\nRead core/gates.js, not core/gate.js.\nThen edit it.';
+  runner.restartNode(runId, 'work', guidance, null);
+
+  const text = String(store.readNodeOutput(runId, 'retry-for-work') ?? '');
+  assert.match(text, /wrong file/);
+  assert.match(text, /core\/gates\.js, not core\/gate\.js/);
+  assert.ok(text.includes('\n'), 'the line breaks the person typed are still line breaks');
+});
+
+test('a run that does not exist is told so, not shown an ENOENT', async () => {
+  // The path a person actually mistypes. `readMeta` throws ENOENT naming an
+  // internal .flyt path, which is not an answer to "retry this node" — the
+  // same defect stop() and why() were fixed for.
+  const { runner } = await failingAgentTaskRun();
+  assert.throws(() => runner.restartNode('no-such-run', 'work', '', null), /No run "no-such-run"/);
+});
+
+test('a live run is refused in the runner\'s own words', async () => {
+  const { runner, runId } = await failingAgentTaskRun();
+  runner.live.add(runId);
+  try {
+    assert.throws(() => runner.restartNode(runId, 'work', '', null), /run is live — stop or pause it first/);
+  } finally { runner.live.delete(runId); }
+});
+
+test('a node this flow does not have is named, rather than failing obscurely', async () => {
+  const { runner, runId } = await failingAgentTaskRun();
+  assert.throws(() => runner.restartNode(runId, 'nope', '', null), /No node "nope" in this run's flow/);
+});
+
 test('re-pinning a node that calls no model is refused, not silently ignored', async () => {
   const { runner, runId } = await failingAgentTaskRun();
   assert.throws(

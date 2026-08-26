@@ -1598,8 +1598,13 @@ export class FlowRunner {
     if (this.live.has(runId) || this.stopRequests.has(runId)) {
       throw new Error('run is live — stop or pause it first');
     }
-    const meta = this.store.readMeta(runId);
-    if (!meta?.flowId) throw new Error('Only flow runs can restart a node.');
+    // A run that is not there reads as ENOENT on meta.json unless it is
+    // caught here, and 'no such file or directory' naming an internal path is
+    // not an answer to "retry this node". Same shape as stop() and why().
+    let meta = null;
+    try { meta = this.store.readMeta(runId); } catch { /* says so below */ }
+    if (!meta) throw new Error(`No run "${runId}".`);
+    if (!meta.flowId) throw new Error('Only flow runs can restart a node.');
     const flow = this.store.readFlow(runId);
     if (!flow) throw new Error(`Run ${runId} has no flow.json; cannot restart a node.`);
     const target = flow.nodes.find(n => n.id === nodeId);
