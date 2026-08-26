@@ -13,7 +13,7 @@
 // last, or the loop is just re-rolling dice.
 import fs from 'node:fs';
 import path from 'node:path';
-import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression } from './gates.js';
+import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation } from './gates.js';
 import { WorktreePool, land as gitLand, git } from './worktree.js';
 import { reviewDiff, reviewWorker } from './diffReview.js';
 import { assessRepair, NO_CHANGE_GUIDANCE } from './repair.js';
@@ -60,6 +60,11 @@ export function mechanicalChecks({ changedFiles, task = {}, baselineOutput = nul
   // Green with fewer tests is the most convincing way to fail.
   const regression = testCountRegression(baselineOutput, currentOutput);
   if (regression) problems.push(regression);
+
+  // Test count stagnation: source changed but test count didn't rise.
+  // This catches "green because same tests pass, not because new code is exercised".
+  const stagnation = testCountStagnation({ changedFiles, baselineOutput, currentOutput });
+  if (stagnation) problems.push(stagnation);
 
   return { ok: problems.length === 0, problems };
 }

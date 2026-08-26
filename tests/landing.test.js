@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WorktreePool, git, slugify, branchFor, land, defaultWorktreeRoot, isInside } from '../core/worktree.js';
-import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, gateProblem, unrunnableGates } from '../core/gates.js';
+import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, gateProblem, unrunnableGates } from '../core/gates.js';
 import { parseReview, buildReviewPrompt, reviewDiff, reviewWorker } from '../core/diffReview.js';
 import { landTask, mechanicalChecks, advancePin, readPin } from '../core/landing.js';
 import { setScript } from './helpers.js';
@@ -95,6 +95,37 @@ test('deleting tests to go green is caught, and an unknowable count is not "fine
   // Unknowable must not silently pass as "no decrease" — that is the hole.
   assert.equal(testCountRegression('no counts here', '# tests 5'), null);
 });
+
+test('testCountStagnation catches source changes without test growth', () => {
+  const baseline = '# tests 100';
+  const current = '# tests 100';
+
+  // No baseline -> skip (null, not a problem string)
+  assert.equal(testCountStagnation({ changedFiles: ['src/app.js'], baselineOutput: null, currentOutput: current }), null);
+
+  // Count increased -> ok
+  assert.equal(testCountStagnation({ changedFiles: ['src/app.js'], baselineOutput: baseline, currentOutput: '# tests 101' }), null);
+
+  // Touches tests/ -> ok regardless of count
+  assert.equal(testCountStagnation({ changedFiles: ['tests/new.test.js'], baselineOutput: baseline, currentOutput: current }), null);
+
+  // Only docs/config -> ok
+  assert.equal(testCountStagnation({ changedFiles: ['README.md', 'config.json'], baselineOutput: baseline, currentOutput: current }), null);
+
+  // Source changed, no tests, count same -> finding
+  const finding = testCountStagnation({ changedFiles: ['src/app.js'], baselineOutput: baseline, currentOutput: current });
+  assert.ok(finding);
+  assert.match(finding, /Test count did not increase \(100 → 100\) while source files changed without touching tests/);
+  assert.match(finding, /src\/app\.js/);
+
+  // Multiple source files
+  const finding2 = testCountStagnation({ changedFiles: ['src/app.js', 'core/helper.js'], baselineOutput: baseline, currentOutput: current });
+  assert.ok(finding2);
+  assert.match(finding2, /src\/app\.js, core\/helper\.js/);
+
+  // Unknowable counts (null from parser) -> skip
+  assert.equal(testCountStagnation({ changedFiles: ['src/app.js'], baselineOutput: 'no counts', currentOutput: current }), null);
+});;
 
 test('protected paths are the reflexive-modification hole, and are closed by rule', () => {
   const files = ['core/gates.js', '.flyt/config.json', '.flyt/backlog/t-0001.task.md', 'src/app.js'];
