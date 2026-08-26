@@ -291,6 +291,42 @@ function wtApi() {
   return { engine, api: createApi(engine), dataRoot };
 }
 
+// The owner record on disk, found by task id. Tests reach for it to simulate
+// the thing that cannot be simulated any other way: the process that wrote it
+// no longer existing.
+function ownerFile(dataRoot, taskId) {
+  const found = [];
+  const walk = dir => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const at = path.join(dir, e.name);
+      if (e.isDirectory()) walk(at);
+      else if (e.name.endsWith('.json')) found.push(at);
+    }
+  };
+  walk(path.join(dataRoot, 'worktrees'));
+  const file = found.find(f => JSON.parse(fs.readFileSync(f, 'utf8')).taskId === taskId);
+  if (!file) throw new Error(`no owner record for ${taskId}`);
+  return file;
+}
+
+function editOwner(dataRoot, taskId, fn) {
+  const file = ownerFile(dataRoot, taskId);
+  fs.writeFileSync(file, JSON.stringify(fn(JSON.parse(fs.readFileSync(file, 'utf8')))));
+}
+
+// A pid this large is not assignable on any platform the app runs on, so it
+// cannot be recycled onto something unrelated between writing it and reading it.
+const killOwner = (dataRoot, taskId) => editOwner(dataRoot, taskId, r => ({ ...r, pid: 0x7ffffffe }));
+
+async function releaseDeadOwnersFn(pool, taskId) {
+  const { releaseDeadOwners } = await import('../core/worktree.js');
+  return releaseDeadOwners({
+    pool,
+    backlog: { get: id => ({ id, status: 'running' }), release: () => {} },
+    log: () => {}
+  });
+}
+
 async function gitProject(api, dataRoot, name = 'repo-wt') {
   const repo = path.join(dataRoot, name);
   fs.mkdirSync(repo, { recursive: true });
@@ -343,6 +379,182 @@ test('work:start refuses to start over a live attempt and says who holds it', as
     && err.message.includes(a.attemptId));
   // Nothing was disturbed.
   assert.ok(fs.existsSync(a.dir));
+});
+
+// --- a dead owner is not a missing one (t-0101) ------------------------------
+//
+// The loop process running t-0095 and t-0096 died mid-flight. The status reader
+// detected it correctly — "the process that was running it (pid 23148) is gone"
+// — and both tasks stayed `running` with `claimedBy: supervisor` and a held
+// lock, both worktrees stayed on disk, and `flyt work reconcile` answered "no
+// orphaned worktrees", because a worktree WITH an owner record is not orphaned
+// by that definition. The owner was gone, not missing. Nothing else in the
+// queue could be worked either: a task stuck in `running` is not claimable and
+// never times out on its own.
+
+test('a worktree whose owning process is gone reads differently from one with no owner', async () => {
+  const { api, dataRoot } = wtApi();
+  const { projectId } = await gitProject(api, dataRoot, 'repo-wt-dead');
+  await api.invoke('task:add', { projectId, title: 'Held by a ghost', body: 'Because.' });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+  const a = await api.invoke('work:start', { projectId, taskId: task.id });
+
+  // Live: not an orphan, whatever else is true.
+  assert.equal((await api.invoke('work:reconcile', { projectId })).orphans.some(o => o.taskId === task.id), false);
+
+  // The owner record now names a process that does not exist. A pid this large
+  // is not assignable on any platform the app runs on, so it cannot be recycled
+  // onto something unrelated between writing this and reading it.
+  const owners = path.join(dataRoot, 'worktrees');
+  const found = [];
+  const walk = dir => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const at = path.join(dir, e.name);
+      if (e.isDirectory()) walk(at);
+      else if (e.name.endsWith('.json')) found.push(at);
+    }
+  };
+  walk(owners);
+  const file = found.find(f => JSON.parse(fs.readFileSync(f, 'utf8')).taskId === task.id);
+  assert.ok(file, 'the owner record exists');
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(record.pid, process.pid, 'the record says who holds it');
+  assert.equal(record.host, os.hostname(), 'and on which machine, so a pid means something');
+  fs.writeFileSync(file, JSON.stringify({ ...record, pid: 0x7ffffffe }));
+
+  const { orphans } = await api.invoke('work:reconcile', { projectId });
+  const mine = orphans.find(o => o.taskId === task.id);
+  assert.ok(mine, 'a dead owner IS an orphan — this is what used to say "no orphaned worktrees"');
+  assert.equal(mine.kind, 'dead-owner',
+    'and it is a different kind from a worktree that never had a record');
+  assert.equal(mine.owner.pid, 0x7ffffffe, 'naming the process that is gone');
+  assert.equal(mine.attemptId, a.attemptId);
+});
+
+test('a heartbeat that is merely stale is not the same news as a process that is gone', async () => {
+  // The pid check is the precise half; the heartbeat is the fallback for a
+  // record written by another machine. A record from elsewhere must not be
+  // called dead on the strength of a pid that means nothing here.
+  const { api, dataRoot } = wtApi();
+  const { projectId } = await gitProject(api, dataRoot, 'repo-wt-elsewhere');
+  await api.invoke('task:add', { projectId, title: 'Held far away', body: 'Because.' });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+  await api.invoke('work:start', { projectId, taskId: task.id });
+
+  const owners = path.join(dataRoot, 'worktrees');
+  const found = [];
+  const walk = dir => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const at = path.join(dir, e.name);
+      if (e.isDirectory()) walk(at);
+      else if (e.name.endsWith('.json')) found.push(at);
+    }
+  };
+  walk(owners);
+  const file = found.find(f => JSON.parse(fs.readFileSync(f, 'utf8')).taskId === task.id);
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  fs.writeFileSync(file, JSON.stringify({
+    ...record, pid: 0x7ffffffe, host: 'some-other-machine',
+    heartbeatAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  }));
+
+  const { orphans } = await api.invoke('work:reconcile', { projectId });
+  const mine = orphans.find(o => o.taskId === task.id);
+  assert.ok(mine, 'a day-old heartbeat is still an orphan');
+  assert.equal(mine.kind, 'abandoned-worktree', 'but not "dead-owner" — that pid is not ours to read');
+});
+
+test('a worktree holding work is kept; an empty one is not', async () => {
+  // What decides whether a dead owner's tree may be thrown away. Both halves
+  // count: on t-0092 five files were sitting UNSTAGED when the attempt died,
+  // and a check reading only the commit would have called that tree empty.
+  const { api, engine, dataRoot } = wtApi();
+  const { projectId } = await gitProject(api, dataRoot, 'repo-wt-holds');
+  await api.invoke('task:add', { projectId, title: 'Wrote something', body: 'Because.' });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+  const a = await api.invoke('work:start', { projectId, taskId: task.id });
+
+  // The project's own pool, so `dirFor` resolves to the same checkout
+  // `work:start` created rather than to a path built the same way by hand.
+  const pool = engine.poolFor(projectId);
+
+  assert.equal(await pool.holdsWork(task.id), false, 'a fresh checkout holds nothing');
+  fs.writeFileSync(path.join(a.dir, '_scratch.js'), 'console.log(1)\n');
+  assert.equal(await pool.holdsWork(task.id), true, 'an uncommitted file is somebody\'s attempt');
+
+  // Fails closed: a tree git cannot read is reported and kept, never deleted
+  // on a guess.
+  assert.equal(await pool.holdsWork('t-does-not-exist'), false, 'no directory is not "work"');
+});
+
+test('the next loop releases what a dead one was holding, and keeps its work', async () => {
+  // The recovery that had to be done by hand. Releasing the CLAIM is safe and
+  // reversible; deleting the TREE is not, so it happens only when there is
+  // provably nothing in it.
+  const { api, engine, dataRoot } = wtApi();
+  const { projectId } = await gitProject(api, dataRoot, 'repo-wt-recover');
+  await api.invoke('task:add', { projectId, title: 'Held by a corpse', body: 'Because.' });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+  const a = await api.invoke('work:start', { projectId, taskId: task.id });
+  await api.invoke('task:update', { projectId, id: task.id, status: 'running', claimedBy: 'supervisor' });
+
+  const pool = engine.poolFor(projectId);
+  killOwner(dataRoot, task.id);
+
+  // The tree holds an uncommitted file, so it is somebody's attempt.
+  fs.writeFileSync(path.join(a.dir, 'half-done.js'), 'export const x = 1\n');
+
+  const said = [];
+  const { releaseDeadOwners } = await import('../core/worktree.js');
+  const out = await releaseDeadOwners({
+    pool,
+    backlog: {
+      get: id => ({ id, status: 'running' }),
+      release: (id, patch) => { said.push(`released ${id} as ${patch.status}`); }
+    },
+    log: line => said.push(line)
+  });
+
+  assert.deepEqual(out.released, [task.id], 'the claim comes back');
+  assert.deepEqual(out.kept, [task.id], 'and the work stays');
+  assert.deepEqual(out.discarded, []);
+  assert.ok(fs.existsSync(path.join(a.dir, 'half-done.js')), 'nobody deleted somebody\'s attempt');
+  assert.ok(said.some(l => /pid \d+\) is gone/.test(l)), said.join(' | '));
+  assert.ok(said.some(l => /holds work and was kept/.test(l)), said.join(' | '));
+});
+
+test('a dead owner whose worktree is empty has it discarded', async () => {
+  const { api, engine, dataRoot } = wtApi();
+  const { projectId } = await gitProject(api, dataRoot, 'repo-wt-empty');
+  await api.invoke('task:add', { projectId, title: 'Wrote nothing', body: 'Because.' });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+  const a = await api.invoke('work:start', { projectId, taskId: task.id });
+  const pool = engine.poolFor(projectId);
+  killOwner(dataRoot, task.id);
+
+  const out = await releaseDeadOwnersFn(pool, task.id);
+  assert.deepEqual(out.discarded, [task.id], 'nothing in it, so nothing is lost by removing it');
+  assert.deepEqual(out.kept, []);
+  assert.equal(fs.existsSync(a.dir), false);
+});
+
+test('a stale heartbeat from another machine is reported, never acted on', async () => {
+  // Only 'dead-owner' is acted on. A stale beat might still be a live process
+  // somewhere else, and that is a report rather than a decision.
+  const { api, engine, dataRoot } = wtApi();
+  const { projectId } = await gitProject(api, dataRoot, 'repo-wt-far');
+  await api.invoke('task:add', { projectId, title: 'Held far away', body: 'Because.' });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+  const a = await api.invoke('work:start', { projectId, taskId: task.id });
+  const pool = engine.poolFor(projectId);
+  editOwner(dataRoot, task.id, r => ({
+    ...r, pid: 0x7ffffffe, host: 'some-other-machine',
+    heartbeatAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  }));
+
+  const out = await releaseDeadOwnersFn(pool, task.id);
+  assert.deepEqual(out, { released: [], kept: [], discarded: [] });
+  assert.ok(fs.existsSync(a.dir), 'and the tree is untouched');
 });
 
 test('work:touch keeps an attempt live, and work:reconcile reports orphans', async () => {

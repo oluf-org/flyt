@@ -28,6 +28,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Is this pid still running? `kill(pid, 0)` sends no signal and only asks — the
+// standard way, and the only one that needs no dependency. EPERM means the
+// process exists and belongs to someone else, which still counts as alive.
+// The same check core/api.js and FlowRunner.isRunLive() already make; this is
+// the third caller, and the one reconcile was missing.
+const isProcessAlive = pid => {
+  try { process.kill(pid, 0); return true; }
+  catch (err) { return err?.code === 'EPERM'; }
+};
+
 const GIT_TIMEOUT_MS = 2 * 60 * 1000;
 
 // --- Attempt identity (WR-02) ------------------------------------------------
@@ -156,6 +166,55 @@ export function isInside(root, dir) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+/**
+ * Give back what a dead loop was holding, on the next loop's way in.
+ *
+ * The loop running t-0095 and t-0096 died mid-flight. Both tasks stayed
+ * `running` with `claimedBy: supervisor` and a held lock, both worktrees stayed
+ * on disk, and reconcile answered "no orphaned worktrees" — because a worktree
+ * WITH an owner record is not orphaned by that definition. The owner was gone,
+ * not missing. Nothing else in the queue could be worked either: a task stuck
+ * in `running` is not claimable and never times out on its own, so everything
+ * had to be cleaned up by hand.
+ *
+ * Two different acts, and the difference is the whole design:
+ *
+ *   - releasing the CLAIM is safe and reversible. The task goes back to the
+ *     queue, its work stays exactly where it is, and no attempt is spent.
+ *   - deleting the TREE is neither, so it happens only when there is provably
+ *     nothing in it — no commit on the branch and no uncommitted edit. A tree
+ *     that holds work is reported and KEPT, and so is one git cannot read.
+ *
+ * Only `dead-owner` is acted on. A stale heartbeat might still be a live
+ * process on another machine, and that is a report, not a decision.
+ */
+export async function releaseDeadOwners({ pool, backlog, log = () => {} } = {}) {
+  const released = [];
+  const kept = [];
+  const discarded = [];
+  for (const o of pool.reconcile()) {
+    if (o.kind !== 'dead-owner') {
+      log(`· orphaned worktree (${o.kind}): ${o.taskId} at ${o.path}`);
+      continue;
+    }
+    const task = backlog?.get?.(o.taskId) ?? null;
+    if (task && task.status === 'running') {
+      backlog.release(o.taskId, { status: 'queued' });
+      released.push(o.taskId);
+      log(`↩ ${o.taskId} released: the loop that held it (pid ${o.owner?.pid ?? '?'}) is gone. No attempt spent.`);
+    }
+    if (await pool.holdsWork(o.taskId, { base: o.base ?? 'HEAD' })) {
+      kept.push(o.taskId);
+      log(`· ${o.taskId}'s worktree at ${o.path} holds work and was kept. Run: flyt work discard ${o.taskId}`);
+    } else {
+      await pool.remove(o.taskId, { deleteBranch: true, attemptId: o.attemptId });
+      discarded.push(o.taskId);
+      log(`· ${o.taskId}'s empty worktree was discarded`);
+    }
+  }
+  return { released, kept, discarded };
+}
+
 export class WorktreePool {
   /**
    * @param {string} repoRoot  The main checkout — the only place that merges.
@@ -208,6 +267,17 @@ export class WorktreePool {
    */
   isLive(record, { now = Date.now() } = {}) {
     if (!record || record.releasedAt) return false;
+    // The owner's PROCESS, when it is one on this host. A heartbeat is a
+    // timeout and it is the slow half: the loop running t-0095 and t-0096 died
+    // and both tasks stayed `running` with a held lock and a worktree on disk,
+    // because the record's last beat was still inside OWNER_LIVE_MS. The status
+    // reader already knew — "the process that was running it (pid 23148) is
+    // gone" — and reconcile could not say it. `kill(pid, 0)` asks without
+    // touching, and it is the same check core/api.js and isRunLive() make.
+    //
+    // The heartbeat stays as the fallback, for a record written on another
+    // machine and for a pid recycled onto something unrelated.
+    if (record.pid && record.host === os.hostname() && !isProcessAlive(record.pid)) return false;
     const beat = Date.parse(record.heartbeatAt ?? record.createdAt ?? '');
     if (!Number.isFinite(beat)) return false;
     return now - beat < OWNER_LIVE_MS;
@@ -273,6 +343,12 @@ export class WorktreePool {
     const record = {
       projectId, taskId: String(taskId), attemptId: attempt, runId,
       path: dir, branch, base: from,
+      // WHO holds it. The heartbeat says how recently somebody said so, which
+      // is a timeout; this says whether that somebody still exists, which is a
+      // fact. `host` is what keeps it honest — a pid means nothing on a record
+      // written by another machine.
+      pid: process.pid,
+      host: os.hostname(),
       createdAt: new Date(now).toISOString(),
       heartbeatAt: new Date(now).toISOString(),
       releasedAt: null
@@ -482,9 +558,18 @@ export class WorktreePool {
       if (!fs.existsSync(r.path)) {
         orphans.push({ kind: 'record-without-worktree', taskId: r.taskId, attemptId: r.attemptId, path: r.path });
       } else if (!this.isLive(r, { now })) {
+        // WHICH kind of gone, because they call for different words. A record
+        // whose process has exited is a dead owner and the task it holds is
+        // stuck in `running` for ever — a task in that state is not claimable
+        // and never times out on its own. A stale heartbeat might still be a
+        // live process on another machine.
+        const dead = Boolean(r.pid) && r.host === os.hostname() && !isProcessAlive(r.pid)
+          ? { pid: r.pid, host: r.host }
+          : null;
         orphans.push({
-          kind: r.releasedAt ? 'released-worktree' : 'abandoned-worktree',
-          taskId: r.taskId, attemptId: r.attemptId, path: r.path, runId: r.runId ?? null
+          kind: r.releasedAt ? 'released-worktree' : dead ? 'dead-owner' : 'abandoned-worktree',
+          taskId: r.taskId, attemptId: r.attemptId, path: r.path, runId: r.runId ?? null,
+          ...(dead ? { owner: dead } : {})
         });
       }
     }
@@ -498,6 +583,31 @@ export class WorktreePool {
       if (!owned.has(dir)) orphans.push({ kind: 'worktree-without-record', taskId: path.basename(dir), path: dir });
     }
     return orphans;
+  }
+
+  /**
+   * Is there anything in this worktree a person would miss?
+   *
+   * The question that decides whether a dead owner's tree may be thrown away.
+   * Both halves count: a commit on the task branch is somebody's attempt, and
+   * so is an uncommitted edit — on t-0092 five files were sitting unstaged
+   * when the attempt died, and a check that read only the commit would have
+   * called that tree empty.
+   *
+   * Fails CLOSED. If git cannot answer — no such directory, a broken index, a
+   * repository that is not one — the answer is "yes, there is work here", so
+   * an unreadable tree is reported and kept rather than deleted on a guess.
+   */
+  async holdsWork(taskId, { base = 'HEAD' } = {}) {
+    const dir = this.dirFor(taskId);
+    if (!fs.existsSync(dir)) return false;
+    try {
+      const [commits, dirty] = await Promise.all([
+        git(['rev-list', '--count', `${base}..HEAD`], { cwd: dir }),
+        git(['status', '--porcelain'], { cwd: dir })
+      ]);
+      return Number(String(commits).trim()) > 0 || String(dirty).trim().length > 0;
+    } catch { return true; }
   }
 
   // Which files the task actually touched, committed or not. This is what the

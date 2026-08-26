@@ -644,11 +644,46 @@ export class Supervisor {
       }
     } finally {
       this.running = false;
+      // Anything still held is let go on the way out.
+      //
+      // A stop issued mid-flight used to leave the task `running` with
+      // `claimedBy: supervisor` and a held lock, and a task in that state is not
+      // claimable and never times out on its own — so it vanished from
+      // `flyt task ready` and had to be recovered by hand. Watched it on
+      // 2026-08-26 with an ORDERLY shutdown: the loop acknowledged "stopped by
+      // request", exited 0, and left t-0092 exactly like that.
+      //
+      // So this is not only about a process that dies. A process that exits
+      // deliberately owes the queue the same thing.
+      await this.#releaseWhatIsStillHeld();
       // The last thing written says it stopped, so a reader does not inherit a
       // file claiming work is in flight after the process is gone.
       this.#publish();
     }
     return this.status();
+  }
+
+  /**
+   * Give back every task this loop still holds, without spending an attempt.
+   *
+   * The work is not thrown away: the worktree stays for forensics and for the
+   * next attempt to resume from, exactly as a park leaves it. What is released
+   * is the CLAIM, because the claim is the thing that outlives the process and
+   * blocks the queue.
+   */
+  async #releaseWhatIsStillHeld() {
+    for (const taskId of [...this.inFlight.keys()]) {
+      try {
+        this.inFlight.delete(taskId);
+        const task = this.backlog.get(taskId);
+        // Landed or failed while the loop was winding down: it is finished, and
+        // releasing it would put a done task back in the queue.
+        if (!task || task.status === 'landed' || task.status === 'failed' || task.status === 'parked') continue;
+        this.backlog.release(taskId, { status: 'queued' });
+        this.log(`↩ ${taskId} released: the loop stopped while it was in flight. No attempt spent; the work is still in its worktree.`,
+          { taskId });
+      } catch { /* a task we cannot release is not a reason to fail the shutdown */ }
+    }
   }
 
   stop(reason = 'stopped by request') {

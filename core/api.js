@@ -16,7 +16,7 @@ import path from 'node:path';
 import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
 import { correctionFields } from './repair.js';
-import { pushRefs, git } from './worktree.js';
+import { pushRefs, git, releaseDeadOwners } from './worktree.js';
 import { workerForLevel, workerForLevelMap, levelFor, LEVELS } from './levels.js';
 import { blockersAll, boardBlockers } from './blockers.js';
 import { ChatStore, runChatTurn, CHAT_TOOLS } from './chat.js';
@@ -1229,10 +1229,11 @@ export function createApi(engine) {
       // them and a person decides. A pool that cannot be built (not a repo)
       // simply has nothing to reconcile.
       try {
-        const orphans = poolFor(projectId).reconcile();
-        for (const o of orphans) {
-          engine.emitLoop?.(projectId, `· orphaned worktree (${o.kind}): ${o.taskId} at ${o.path}`);
-        }
+        await releaseDeadOwners({
+          pool: poolFor(projectId),
+          backlog: backlogFor(projectId),
+          log: line => engine.emitLoop?.(projectId, line)
+        });
       } catch { /* no pool: nothing to reconcile */ }
 
       const sup = new Supervisor({
