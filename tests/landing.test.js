@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WorktreePool, git, slugify, branchFor, land, defaultWorktreeRoot, isInside } from '../core/worktree.js';
-import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, gateProblem, unrunnableGates } from '../core/gates.js';
+import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, testCountUncheckable, gateProblem, unrunnableGates } from '../core/gates.js';
 import { parseReview, buildReviewPrompt, reviewDiff, reviewWorker } from '../core/diffReview.js';
 import { landTask, mechanicalChecks, advancePin, readPin } from '../core/landing.js';
 import { setScript } from './helpers.js';
@@ -96,36 +96,77 @@ test('deleting tests to go green is caught, and an unknowable count is not "fine
   assert.equal(testCountRegression('no counts here', '# tests 5'), null);
 });
 
-test('testCountStagnation catches source changes without test growth', () => {
-  const baseline = '# tests 100';
-  const current = '# tests 100';
+test('the count standing still while source moved is the finding', () => {
+  // t-0079 through t-0082: 271 lines across four tasks, count identical either
+  // side, gates green, two defects behind them. That shape is what this exists
+  // to catch, and it is the fixture worth naming.
+  const said = testCountStagnation({
+    changedFiles: ['core/backlog.js', 'core/archive.js', 'core/api.js'],
+    baselineOutput: '# tests 1721', currentOutput: '# tests 1721',
+  });
+  assert.match(said, /did not move \(1721\)/);
+  assert.match(said, /3 source file\(s\)/);
+  assert.match(said, /same suite, not because this change is covered/);
+});
 
-  // No baseline -> skip (null, not a problem string)
-  assert.equal(testCountStagnation({ changedFiles: ['src/app.js'], baselineOutput: null, currentOutput: current }), null);
+test('a definition file is behaviour, whatever its extension', () => {
+  // A tool definition carries a schema, its effects and its risk; a node
+  // template carries a role and a ceiling. Exempting every .json would have let
+  // the most safety-relevant edits in the repository through unchecked.
+  for (const file of ['tools/glob.json', 'nodes/backlog-plan.json', 'flows/x.flow.yaml', 'stacks/y.stack.yaml']) {
+    assert.ok(testCountStagnation({
+      changedFiles: [file], baselineOutput: '# tests 10', currentOutput: '# tests 10',
+    }), file);
+  }
+});
 
-  // Count increased -> ok
-  assert.equal(testCountStagnation({ changedFiles: ['src/app.js'], baselineOutput: baseline, currentOutput: '# tests 101' }), null);
+test('prose and ordinary configuration are exempt', () => {
+  for (const files of [['README.md'], ['DESIGN-SPEC.md', 'notes.txt'], ['package.json'], ['tsconfig.json']]) {
+    assert.equal(testCountStagnation({
+      changedFiles: files, baselineOutput: '# tests 10', currentOutput: '# tests 10',
+    }), null, files.join(','));
+  }
+});
 
-  // Touches tests/ -> ok regardless of count
-  assert.equal(testCountStagnation({ changedFiles: ['tests/new.test.js'], baselineOutput: baseline, currentOutput: current }), null);
+test('touching tests at all satisfies it, whatever the count did', () => {
+  assert.equal(testCountStagnation({
+    changedFiles: ['core/a.js', 'tests/a.test.js'],
+    baselineOutput: '# tests 10', currentOutput: '# tests 10',
+  }), null);
+});
 
-  // Only docs/config -> ok
-  assert.equal(testCountStagnation({ changedFiles: ['README.md', 'config.json'], baselineOutput: baseline, currentOutput: current }), null);
+test('a count that FELL is left to testCountRegression, which says it better', () => {
+  // Two sentences about one number in the same blockedReason is one too many.
+  assert.equal(testCountStagnation({
+    changedFiles: ['core/a.js'], baselineOutput: '# tests 10', currentOutput: '# tests 8',
+  }), null);
+  assert.match(testCountRegression('# tests 10', '# tests 8'), /fell from 10 to 8/);
+});
 
-  // Source changed, no tests, count same -> finding
-  const finding = testCountStagnation({ changedFiles: ['src/app.js'], baselineOutput: baseline, currentOutput: current });
-  assert.ok(finding);
-  assert.match(finding, /Test count did not increase \(100 → 100\) while source files changed without touching tests/);
-  assert.match(finding, /src\/app\.js/);
+test('a growing suite says nothing', () => {
+  assert.equal(testCountStagnation({
+    changedFiles: ['core/a.js'], baselineOutput: '# tests 10', currentOutput: '# tests 11',
+  }), null);
+});
 
-  // Multiple source files
-  const finding2 = testCountStagnation({ changedFiles: ['src/app.js', 'core/helper.js'], baselineOutput: baseline, currentOutput: current });
-  assert.ok(finding2);
-  assert.match(finding2, /src\/app\.js, core\/helper\.js/);
+test('the message is bounded: a blockedReason is read on a board', () => {
+  const many = Array.from({ length: 30 }, (_, i) => `core/file${i}.js`);
+  const said = testCountStagnation({
+    changedFiles: many, baselineOutput: '# tests 10', currentOutput: '# tests 10',
+  });
+  assert.match(said, /and 26 more/);
+  assert.ok(said.length < 400, `${said.length} characters is not a board notice`);
+});
 
-  // Unknowable counts (null from parser) -> skip
-  assert.equal(testCountStagnation({ changedFiles: ['src/app.js'], baselineOutput: 'no counts', currentOutput: current }), null);
-});;
+test('a check that could not run says so, rather than nothing', () => {
+  // Both count checks return null for "cannot tell", which is indistinguishable
+  // from "looked and it was fine". The first task of a session has no baseline
+  // at all — it comes from the previous task's canary output.
+  assert.match(testCountUncheckable(null, '# tests 10'), /no baseline/);
+  assert.match(testCountUncheckable('nothing parseable', '# tests 10'), /no test count could be read/);
+  assert.equal(testCountUncheckable('# tests 10', '# tests 10'), null);
+});
+
 
 test('protected paths are the reflexive-modification hole, and are closed by rule', () => {
   const files = ['core/gates.js', '.flyt/config.json', '.flyt/backlog/t-0001.task.md', 'src/app.js'];
@@ -243,6 +284,31 @@ test('a configured reviewer keeps the key it was stamped with', async () => {
   // An explicitly passed key still wins.
   await reviewDiff({ worker: { provider: 'script', model: 'm', apiKey: 'sk-stamped' }, apiKey: 'sk-explicit', task: {}, diff: 'x' });
   assert.equal(seen, 'sk-explicit');
+});
+
+test('the reviewer is told the test delta, and told when it is unknown', () => {
+  // A reviewer reading a diff cannot run the suite, so "green" and "green
+  // because it is the same suite" look identical from where it sits. The count
+  // standing still is the whole tell, and it has to be a fact in front of it
+  // rather than something it is expected to infer.
+  const stood = buildReviewPrompt({
+    task: { title: 'Add retirement' }, diff: 'diff --git a/core/backlog.js',
+    testDelta: { before: 1721, after: 1721 }
+  });
+  assert.match(stood, /TEST COUNT: 1721 before this change, 1721 after — UNCHANGED/);
+  assert.match(stood, /judge whether this change is actually covered/);
+
+  const grew = buildReviewPrompt({
+    task: {}, diff: 'x', testDelta: { before: 1721, after: 1730 }
+  });
+  assert.match(grew, /TEST COUNT: 1721 before this change, 1730 after$/m);
+  assert.ok(!/UNCHANGED/.test(grew));
+
+  // Unknown is said out loud. Saying nothing would read as "checked, fine".
+  for (const delta of [null, { before: null, after: 10 }, { before: 10, after: null }]) {
+    assert.match(buildReviewPrompt({ task: {}, diff: 'x', testDelta: delta }),
+      /TEST COUNT: not known for this change/);
+  }
 });
 
 test('the reviewer is told which files left the declared blast radius', () => {

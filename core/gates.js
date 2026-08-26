@@ -273,59 +273,87 @@ export function testCountRegression(baselineOutput, currentOutput) {
 }
 
 /**
- * Did the change modify source without adding tests and without increasing the test count?
- * Returns a problem string or null.
+ * Directories whose data files ARE behaviour, whatever their extension.
  *
- * This catches the case where behavior changes (source modified) but the test suite
- * didn't grow to cover it — the gate is green because it's the same tests passing,
- * not because the new code is exercised.
+ * A tool definition carries a schema, its effects and its risk; a node template
+ * carries a role and a tool ceiling; a flow or a stack is a program. Changing
+ * one changes what the system does, so exempting every `.json` would have let
+ * the most safety-relevant edits in the repository through unchecked.
  */
-export function testCountStagnation({ changedFiles, baselineOutput, currentOutput }) {
-  // No baseline = cannot know. Same as testCountRegression: skip with null.
-  // The caller will note this was uncheckable; an unknowable is not a pass but
-  // it is also not a mechanical failure we can act on.
-  if (baselineOutput == null) {
-    return null;
-  }
+const DEFINITION_DIRS = ['tools/', 'nodes/', 'flows/', 'stacks/', 'plugins/'];
 
+/** Prose. Never behaviour, whatever it says. */
+const PROSE_EXTS = ['.md', '.txt'];
+/** Data that is configuration UNLESS it sits in a definition directory. */
+const DATA_EXTS = ['.json', '.yaml', '.yml', '.toml'];
+
+/** Could this file have changed what the system does? */
+function couldChangeBehaviour(file) {
+  const f = String(file ?? '').replace(/\\/g, '/');
+  const dot = f.lastIndexOf('.');
+  const ext = dot > 0 ? f.slice(dot).toLowerCase() : '';
+  if (PROSE_EXTS.includes(ext)) return false;
+  if (DATA_EXTS.includes(ext)) return DEFINITION_DIRS.some(d => f.startsWith(d) || f.includes('/' + d));
+  return true;
+}
+
+/** At most four names; a blockedReason is read on a board, not in a terminal. */
+function nameSome(files) {
+  const xs = [...files];
+  return xs.length <= 4 ? xs.join(', ') : `${xs.slice(0, 4).join(', ')} and ${xs.length - 4} more`;
+}
+
+/**
+ * Source changed and the suite did not grow.
+ *
+ * The sibling of {@link testCountRegression}: that one catches the count going
+ * DOWN — green because there is less of it — and this catches it failing to go
+ * UP while behaviour moved. t-0079 through t-0082 landed 271 lines across four
+ * tasks with the count identical either side, gates green, and two defects
+ * behind them. A gate structurally incapable of failing on the change is not
+ * verification (GOALS principle 8).
+ *
+ * Deterministic, like every §7.3 closure: a set operation over the changed
+ * paths and two integers. Whether a source change is "really" behavioural is an
+ * opinion, it needs a model, and it is exactly what this path keeps out.
+ *
+ * A FALL is left to testCountRegression, which says it better; reporting both
+ * would put two sentences about one number into the same blockedReason.
+ */
+export function testCountStagnation({ changedFiles = [], baselineOutput, currentOutput }) {
   const before = testCountFrom(baselineOutput);
   const after = testCountFrom(currentOutput);
+  if (before == null || after == null) return null;   // unknowable — see testCountUncheckable
+  if (after !== before) return null;                  // grew, or fell and regression owns it
 
-  // If we can't read counts, we can't decide — but we already have a baseline
-  // so this should be rare. Treat as unknowable rather than a pass.
-  if (before == null || after == null) {
-    return null; // Unknowable, not a pass
+  if (changedFiles.some(f => /^tests?\//.test(String(f).replace(/\\/g, '/')))) return null;
+
+  const behavioural = changedFiles.filter(couldChangeBehaviour);
+  if (!behavioural.length) return null;
+
+  return `The test count did not move (${before}) while ${behavioural.length} source file(s) changed `
+    + `and nothing under tests/ was touched: ${nameSome(behavioural)}. `
+    + 'The suite is green because it is the same suite, not because this change is covered.';
+}
+
+/**
+ * Why the count checks could not run, when they could not.
+ *
+ * Both of them return null for "I cannot tell", which is indistinguishable from
+ * "I looked and it was fine" — and the first task of a loop session has no
+ * baseline at all, because it comes from the previous task's canary output. An
+ * unknowable reported as nothing is a check that quietly does not exist, which
+ * is the failure this whole task is about.
+ */
+export function testCountUncheckable(baselineOutput, currentOutput) {
+  if (baselineOutput == null) {
+    return 'The test-count checks could not run: no baseline to compare against '
+      + '(the first task of a session has none). Nothing here says the change is covered.';
   }
-
-  // If test count increased, the suite grew — that's what we want to see
-  if (after > before) {
-    return null;
+  if (testCountFrom(baselineOutput) == null || testCountFrom(currentOutput) == null) {
+    return 'The test-count checks could not run: no test count could be read from the gate output.';
   }
-
-  // Test count didn't increase. Now check if the change even needed tests:
-  // - Only docs/config changed → no test expected
-  // - Touches tests/ → satisfied (tests were added/modified)
-  // - Otherwise source changed without test growth → finding
-
-  // Check if any changed file is under tests/
-  const touchesTests = changedFiles.some(f => f.startsWith('tests/') || f.startsWith('test/'));
-
-  if (touchesTests) {
-    return null; // Tests touched, count delta whatever it is
-  }
-
-  // Check if ALL changed files are only docs/config
-  const onlyDocsOrConfig = changedFiles.every(f => {
-    const ext = f.slice(f.lastIndexOf('.')).toLowerCase();
-    return ['.md', '.json', '.txt', '.yaml', '.yml', '.toml'].includes(ext);
-  });
-
-  if (onlyDocsOrConfig) {
-    return null; // Only docs/config changed, no test expected
-  }
-
-  // Source changed, no tests touched, test count didn't rise
-  return `Test count did not increase (${before} → ${after}) while source files changed without touching tests/: ${changedFiles.join(', ')}. New behavior needs new tests.`;
+  return null;
 }
 
 // The project's gate configuration, read from .flyt/config.json when present.

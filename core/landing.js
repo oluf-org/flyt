@@ -13,7 +13,7 @@
 // last, or the loop is just re-rolling dice.
 import fs from 'node:fs';
 import path from 'node:path';
-import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation } from './gates.js';
+import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation, testCountUncheckable, testCountFrom } from './gates.js';
 import { WorktreePool, land as gitLand, git } from './worktree.js';
 import { reviewDiff, reviewWorker } from './diffReview.js';
 import { assessRepair, NO_CHANGE_GUIDANCE } from './repair.js';
@@ -66,7 +66,13 @@ export function mechanicalChecks({ changedFiles, task = {}, baselineOutput = nul
   const stagnation = testCountStagnation({ changedFiles, baselineOutput, currentOutput });
   if (stagnation) problems.push(stagnation);
 
-  return { ok: problems.length === 0, problems };
+  // Said, not swallowed. A check that could not run is not a check that
+  // passed, and the reviewer and the report both need to know which they got.
+  const notes = [];
+  const uncheckable = testCountUncheckable(baselineOutput, currentOutput);
+  if (uncheckable) notes.push(uncheckable);
+
+  return { ok: problems.length === 0, problems, notes };
 }
 
 /**
@@ -173,11 +179,19 @@ export async function landTask({
       guidance: NO_CHANGE_GUIDANCE
     };
   }
+  // One reading of what the suite said, shared by the mechanical checks and
+  // the reviewer, so the two can never disagree about the same run.
+  const gateOutput = gateRun.results.map(r => r.output).join('\n');
   const mech = record('checks', mechanicalChecks({
     changedFiles, task,
     baselineOutput,
-    currentOutput: gateRun.results.map(r => r.output).join('\n')
+    currentOutput: gateOutput
   }));
+  // A check that could not run is announced, not swallowed. `notes` carries the
+  // unknowables — no baseline, no readable count — and a note that only ever
+  // reached the step record would be a check that quietly does not exist, which
+  // is the failure this whole path is about.
+  for (const note of mech.notes ?? []) log(note);
   if (!mech.ok) {
     return { landed: false, stage: 'checks', steps, guidance: mech.problems.join(' ') };
   }
@@ -187,6 +201,9 @@ export async function landTask({
   const review = record('review', await reviewDiff({
     worker: reviewWorker(config), apiKey, task, diff,
     gates: gateRun.results, blastRadius: task.blastRadius ?? [], changedFiles,
+    // What the suite did, so "no new tests" is a fact in front of the reviewer
+    // rather than something it has to infer from a diff it cannot run.
+    testDelta: { before: testCountFrom(baselineOutput), after: testCountFrom(gateOutput) },
     retry: config.retry, timeout: config.timeout
   }));
   log(`review: ${review.verdict}${review.reason ? ` — ${review.reason}` : ''}`);

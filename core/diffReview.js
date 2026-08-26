@@ -68,7 +68,7 @@ export const REVIEW_SYSTEM = [
 
 export const VERDICTS = ['approve', 'request-changes', 'reject'];
 
-export function buildReviewPrompt({ task = {}, diff = '', gates = [], blastRadius = [], changedFiles = [] }) {
+export function buildReviewPrompt({ task = {}, diff = '', gates = [], blastRadius = [], changedFiles = [], testDelta = null }) {
   const clipped = diff.length > DIFF_BUDGET
     ? `${diff.slice(0, DIFF_BUDGET)}\n…[diff truncated at ${DIFF_BUDGET} characters — treat an incomplete diff as a reason to request changes rather than approve]`
     : diff;
@@ -86,6 +86,14 @@ export function buildReviewPrompt({ task = {}, diff = '', gates = [], blastRadiu
     gates.length
       ? `GATE RESULTS (run by the harness):\n${gates.map(g => `- ${g.command}: ${g.status}${g.code != null ? ` (exit ${g.code})` : ''}`).join('\n')}`
       : 'GATE RESULTS: none run.',
+    // The test delta, stated rather than left to be noticed. A reviewer
+    // reading a diff cannot see the suite, so "green" and "green because it is
+    // the same suite" look identical from here — which is how 271 lines landed
+    // across four tasks with the count unmoved and two defects behind it.
+    testDelta && testDelta.before != null && testDelta.after != null
+      ? `TEST COUNT: ${testDelta.before} before this change, ${testDelta.after} after`
+        + `${testDelta.after === testDelta.before ? ' — UNCHANGED. The gates are green because it is the same suite; judge whether this change is actually covered.' : ''}`
+      : 'TEST COUNT: not known for this change, so the gates say nothing about whether it is covered.',
     `DIFF:\n${clipped || '(empty diff)'}`
   ].filter(Boolean).join('\n\n');
 }
@@ -113,7 +121,7 @@ export function parseReview(text) {
  */
 export async function reviewDiff({
   worker, apiKey, task, diff, gates = [], blastRadius = [], changedFiles = [],
-  retry, timeout, signal, onRetry = null
+  testDelta = null, retry, timeout, signal, onRetry = null
 }) {
   if (!worker?.provider) {
     return {
@@ -136,7 +144,7 @@ export async function reviewDiff({
       // except inside the reviewer's own excuse.
       ...(apiKey ? { apiKey } : {}),
       system: REVIEW_SYSTEM,
-      prompt: buildReviewPrompt({ task, diff, gates, blastRadius, changedFiles }),
+      prompt: buildReviewPrompt({ task, diff, gates, blastRadius, changedFiles, testDelta }),
       maxTokens: MAX_TOKENS, retry, timeout, signal, onRetry
     });
     const parsed = parseReview(res.text);
