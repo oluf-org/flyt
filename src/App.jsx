@@ -2038,6 +2038,16 @@ export default function App() {
           >
             <span className="shell-activity-dot" aria-hidden="true" />
             <span className="shell-activity-phase">{activeProjectActivity.phaseLabel}</span>
+            {activeProjectActivity.workerLabel && (
+              <span className="shell-activity-worker" title={activeProjectActivity.workerLabel}>
+                {activeProjectActivity.workerLabel}
+              </span>
+            )}
+            {activeProjectActivity.nodeLabel && activeProjectActivity.nodeLabel !== activeProjectActivity.detail && (
+              <span className="shell-activity-node" title={activeProjectActivity.nodeLabel}>
+                {activeProjectActivity.nodeLabel}
+              </span>
+            )}
             {activeProjectActivity.detail && <span className="shell-activity-detail mono">{activeProjectActivity.detail}</span>}
             <span className="shell-activity-fresh">{activeProjectActivity.freshness}</span>
           </div>

@@ -273,7 +273,12 @@ body {
 .tab-live[data-phase="streaming"] .tab-live-dot,
 .tab-live[data-phase="tool"] .tab-live-dot { animation: activity-pulse 1.5s ease-in-out infinite; }
 .shell-activity-phase { color: var(--tx); font-weight: 650; white-space: nowrap; }
-.shell-activity-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shell-activity-worker, .shell-activity-node {
+  min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--dim); font-size: 10.5px;
+}
+.shell-activity-node { color: var(--tx); }
+.shell-activity-detail { min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shell-activity-fresh { flex: none; color: var(--faint); }
 .shell-activity[data-phase="failed"] .shell-activity-dot,
 .tab-live[data-phase="failed"] .tab-live-dot { background: var(--err); box-shadow: none; }
