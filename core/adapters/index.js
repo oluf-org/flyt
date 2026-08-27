@@ -60,6 +60,14 @@ export function canServe(provider, modelId) {
   return adapter?.canServe ? Boolean(adapter.canServe(modelId)) : false;
 }
 
+// Whether a provider can participate in Flyt's bounded agent tool loop. Most
+// adapters are plain model calls and therefore can use the native or text
+// protocol. A delegated coding agent may explicitly opt out when its own tool
+// runtime cannot be reconciled with Flyt's ceiling.
+export function canUseFlytTools(provider) {
+  return providers[provider]?.flytTools !== false;
+}
+
 // Transient failures worth an automatic retry: rate limits (429), timeouts
 // (408), server errors (5xx) — adapters embed the HTTP status in the error
 // message — and network-level fetch failures.

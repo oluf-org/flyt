@@ -22,6 +22,7 @@ import { blockersAll, boardBlockers } from './blockers.js';
 import { ChatStore, runChatTurn, CHAT_TOOLS } from './chat.js';
 import { breakdown, costOf, liveEntries, totalsWithLive } from './ledger.js';
 import { executeTool, getTools, registerDefinition } from './tools/index.js';
+import { canUseFlytTools } from './adapters/index.js';
 import { isDestructive } from '../src/toolTypes.js';
 import { pythonStatus, setupPython } from './python.js';
 import { loadToolSuite, runToolSuite, SUITE_DIR } from './toolbench.js';
@@ -62,6 +63,11 @@ export function loopLaunchModels({ worker = null, models = null, configuredModel
   if (Object.keys(requested).length) return requested;
   if (worker?.provider && worker?.model) return {};
   return normalizeLevelModels(configuredModels);
+}
+
+export function loopWorkerProblem(worker) {
+  if (!worker?.provider || canUseFlytTools(worker.provider)) return null;
+  return `The ${worker.provider} adapter cannot work a Loop task: it is a sandboxed model-call delegate and cannot use Flyt's file and shell tools. Choose a tool-capable API model for the worker; it can still be used as the reviewer.`;
 }
 import { Supervisor, renderReport } from './supervisor.js';
 import { reviewWorker } from './diffReview.js';
@@ -1216,11 +1222,17 @@ export function createApi(engine) {
         // otherwise surface hours later, on the task that most needed to work.
         for (const [band, id] of Object.entries(byLevel)) {
           const w = resolveWorkerArg({ provider: 'auto', model: id });
+          const capabilityProblem = loopWorkerProblem(w);
+          if (capabilityProblem) {
+            throw new ApiError(`The "${band}" band is set to "${id}". ${capabilityProblem}`,
+              { status: 400, code: 'worker_cannot_use_tools' });
+          }
           if (w && w.provider !== 'mock' && !engine.hasKey(w.provider)) {
             throw new Error(`The "${band}" band is set to "${id}", but its provider (${w.provider}) is not connected.`);
           }
         }
       } catch (err) {
+        if (err instanceof ApiError) throw err;
         throw new ApiError(String(err?.message ?? err), { status: 400, code: 'no_provider_key' });
       }
       if (Object.keys(byLevel).length) pinned = null; // the map answers per attempt
@@ -1241,6 +1253,10 @@ export function createApi(engine) {
         throw new ApiError(
           `The loop is set to run on "${pinned.model}", but its provider (${pinned.provider}) is not connected. Add a key in Settings, or choose another model.`,
           { status: 400, code: 'no_provider_key' });
+      }
+      const pinnedCapabilityProblem = loopWorkerProblem(pinned);
+      if (pinnedCapabilityProblem) {
+        throw new ApiError(pinnedCapabilityProblem, { status: 400, code: 'worker_cannot_use_tools' });
       }
       // Nothing lands unattended without a reviewer (§7.2) — also worth saying
       // before a night of work rather than after it. Asked of the same function

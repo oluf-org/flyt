@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createEngine } from '../core/engine.js';
-import { createApi, ApiError, loopLaunchModels } from '../core/api.js';
+import { createApi, ApiError, loopLaunchModels, loopWorkerProblem } from '../core/api.js';
 import { createServer } from '../core/server.js';
 import { waitFor } from './helpers.js';
 import { git } from '../core/worktree.js';
@@ -59,6 +59,15 @@ test('an explicit Loop model clears the saved band map before any task is claime
 
   assert.deepEqual(loopLaunchModels({ configuredModels: saved }), saved,
     'without a launch override the saved map still applies');
+});
+
+test('a sandboxed delegated agent is refused as a Loop worker before it can claim work', () => {
+  assert.match(loopWorkerProblem({ provider: 'codex', model: 'gpt-5.6-sol' }),
+    /cannot work a Loop task.*file and shell tools/);
+  assert.equal(loopWorkerProblem({ provider: 'openrouter', model: 'tool-model' }), null);
+  assert.equal(loopWorkerProblem({ provider: 'codex', model: 'gpt-5.6-sol', reviewer: true }),
+    loopWorkerProblem({ provider: 'codex', model: 'gpt-5.6-sol' }),
+    'the helper describes worker capability; reviewers do not call it');
 });
 
 test('a loop running in another process is visible here — and a dead one is not believed', async () => {

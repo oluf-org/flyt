@@ -167,5 +167,12 @@ export async function codexAdapter({ model, system, prompt, onText, signal, cliH
 // ChatGPT-side ids: gpt-* chat models, o-series, and the codex-tuned models.
 codexAdapter.canServe = modelId => /^(gpt-|o\d|codex)/.test(String(modelId));
 
+// Codex exec is itself an agent. We fence it into a neutral read-only
+// directory so it cannot bypass Flyt's tool ceiling, which also means it
+// cannot be used as a Flyt tool-loop worker: it will inspect that neutral
+// directory with its own tools instead of emitting Flyt's text-tool protocol.
+// It remains valid for plain model calls and diff review.
+codexAdapter.flytTools = false;
+
 // Self-bounded like the Claude CLI adapter — see the note there (DESIGN-SPEC.md §8).
 codexAdapter.selfTimed = true;

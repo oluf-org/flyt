@@ -544,12 +544,16 @@ test('an empty stream is retried, and recovers', async () => {
 // only be inferred from the model catalogue (V1 task 11).
 test('toolProtocol names the path a worker will take', async () => {
   const { toolProtocol } = await import('../core/agent.js');
+  const { canUseFlytTools } = await import('../core/adapters/index.js');
   assert.equal(toolProtocol({ provider: 'openrouter', supportsTools: true }), 'native');
   assert.equal(toolProtocol({ provider: 'openrouter', supportsTools: false }), 'text');
   assert.equal(toolProtocol({ provider: 'openrouter' }), 'text', 'unknown capability falls back to text');
   assert.equal(toolProtocol({ provider: 'anthropic', supportsTools: true }), 'text', 'native is openrouter-only today');
   assert.equal(toolProtocol({ provider: 'mock' }), 'text');
   assert.equal(toolProtocol(undefined), 'text');
+  assert.equal(canUseFlytTools('openrouter'), true);
+  assert.equal(canUseFlytTools('claude-code'), true, 'the plain-model CLI can emit the text protocol');
+  assert.equal(canUseFlytTools('codex'), false, 'the delegated Codex agent is fenced from Flyt tools');
 });
 
 // --- streaming a tool-using turn (V1 task 12) -----------------------------
