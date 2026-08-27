@@ -34,6 +34,7 @@
     "cross-env": "^7.0.3",
     "electron": "^33.2.0",
     "electron-builder": "^26.15.3",
+    "impeccable": "3.6.0",
     "typescript": "^7.0.2",
     "vite": "^6.0.3",
     "wait-on": "^8.0.1"

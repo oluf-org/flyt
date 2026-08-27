@@ -26,6 +26,7 @@ export * as flytTools from './plugins/tools.js';
 export * as flytApprovals from './plugins/approvals.js';
 export * as flytSkills from './plugins/skills.js';
 export * as flytUiExtensions from './plugins/ui-extensions.js';
+export * as impeccablePlugin from './plugins/impeccable.js';
 export * as flytApi from './plugins/commands.js';
 export * as flytStackCommands from './plugins/stack-commands.js';
 export * as flytBlocks from './plugins/blocks.js';
