@@ -4,5 +4,8 @@
   "description": "Flyt external-plugin adapter for the Impeccable provider payload",
   "type": "module",
   "exports": "./index.js",
+  "scripts": {
+    "verify": "node verify-provenance.mjs"
+  },
   "license": "Apache-2.0"
 }

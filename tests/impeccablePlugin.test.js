@@ -1,8 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createKernel, flytTools, flytApprovals } from '#kernel';
+import { verifyPayload } from '../plugins/impeccable-flyt-plugin/verify-provenance.mjs';
 
 const call = { runId: 'r', blockId: 'b', step: 1, call: { id: 'c', name: 'impeccable_detect', args: { paths: ['src/v2'] } }, ceiling: ['impeccable_detect'] };
+
+test('the bundled provider payload has reproducible upstream provenance', async () => {
+  const verified = await verifyPayload();
+  assert.equal(verified.fileCount, 153);
+  assert.equal(verified.sha256, '15b2b5e277aa401ef89c348639353aa709a00f96954068700b7385e28fdb1d5b');
+  assert.equal(verified.artifactSha256, '0d41426a06c9a4119980323d2a2dd4da7f278fb3cface84a8650b25b8b896626');
+});
 
 test('the detector is a real package resolvable by the ordinary external importer', async () => {
   const plugin = await import('impeccable-flyt-plugin');

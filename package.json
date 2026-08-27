@@ -16,6 +16,7 @@
     "start": "npm run build && electron .",
     "test": "node --test \"tests/**/*.test.js\"",
     "verify:workflow": "node --test tests/workflowReliability.test.js",
+    "verify:impeccable": "node plugins/impeccable-flyt-plugin/verify-provenance.mjs",
     "flow": "node core/flowlang/cli.js",
     "flyt": "node bin/flyt.js",
     "serve": "node bin/flyt.js serve",
