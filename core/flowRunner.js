@@ -986,6 +986,11 @@ export class FlowRunner {
   }
 
   notify(runId) { this.onUpdate(runId); }
+
+  recordToolActivity(runId, nodeId, state) {
+    this.store.writeActivity(runId, nodeId, state);
+    this.notify(runId);
+  }
   owns(runId) { try { return Boolean(this.store.readMeta(runId)?.flowId); } catch { return false; } }
 
   // Build an onText handler (the adapter contract in adapters/index.js) that
@@ -1133,6 +1138,7 @@ export class FlowRunner {
           // The worktree pool, so read_run can show what an earlier attempt
           // actually changed. Lazily borrowed the same way `backlog` is.
           pool: this.pool ?? null,
+          onToolState: state => this.recordToolActivity(runId, nodeId, state),
           // The repository this node was pointed at, when it was pointed at one
           // (DECISIONS.md D38). Scopes `search_references` and makes a
           // read of the wrong root visible.
@@ -2970,6 +2976,7 @@ export class FlowRunner {
       references: this.references ?? null,
       // read_run's diff: what an earlier attempt on this task actually changed.
       pool: this.pool ?? null,
+      onToolState: state => this.recordToolActivity(runId, `executor-${task.id}`, state),
       signal: abortCtl.signal,
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };
