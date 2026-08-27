@@ -188,20 +188,25 @@ test('mounting imports each row and applies it in order', async () => {
     apply(_ctx, config) { applied.push([name, config]); },
   });
   try {
+    await kernel.ctx.plugin(flytTools);
     const mounted = await mount(kernel.ctx, [
-      { id: 'sessions', name: '@flyt/session-jsonl', config: { root: './runs' } },
-      { id: 'tools', name: '@flyt/tools' },
+      { id: 'sessions', name: 'fixture:session-jsonl', config: { root: './runs' } },
+      { id: 'tools', name: 'fixture:tools' },
       { id: 'off', name: '@flyt/nope', disabled: true },
-    ], { import: importer });
+    ], {
+      import: importer,
+      toolReview: { attended: true, decide: () => ({}) },
+    });
 
     assert.deepEqual(mounted, ['sessions', 'tools']);
-    assert.deepEqual(applied, [['@flyt/session-jsonl', { root: './runs' }], ['@flyt/tools', undefined]]);
+    assert.deepEqual(applied, [['fixture:session-jsonl', { root: './runs' }], ['fixture:tools', undefined]]);
   } finally { await kernel.dispose(); }
 });
 
 test('a group mounts its children in an isolated context', async () => {
   const kernel = createKernel();
   try {
+    await kernel.ctx.plugin(flytTools);
     const importer = async name => ({
       name,
       apply(ctx) { ctx.provide('terminals', { name }); },
@@ -209,7 +214,10 @@ test('a group mounts its children in an isolated context', async () => {
     const mounted = await mount(kernel.ctx, [{
       id: 'shell', name: 'cordis:group', group: true, isolate: { terminals: true },
       config: [{ id: 'pty', name: '@flyt/terminal' }],
-    }], { import: importer });
+    }], {
+      import: importer,
+      toolReview: { attended: true, decide: () => ({}) },
+    });
 
     assert.deepEqual(mounted, ['shell', 'pty']);
     assert.equal(kernel.ctx.terminals, undefined, 'the isolated service did not leak into the root');
@@ -229,7 +237,7 @@ test('a row naming something that is not a plugin says which row', async () => {
   } finally { await kernel.dispose(); }
 });
 
-test('the Loop installer refuses even a tool plugin that declares no tools injection', async () => {
+test('the Loop installer refuses before import, including forged Flyt prefixes', async () => {
   const kernel = createKernel({ profile: 'flyt-loop-worker' });
   let applied = 0;
   let imported = 0;
@@ -241,11 +249,13 @@ test('the Loop installer refuses even a tool plugin that declares no tools injec
   };
   try {
     await kernel.ctx.plugin(flytTools);
-    await assert.rejects(
-      () => kernel.install([{ id: 'external', name: 'some-package' }], {
-        import: async () => { imported += 1; return external; },
-      }),
-      /requires an attended human classification review/);
+    for (const name of ['some-package', '@flyt/spoofed', 'flyt:spoofed']) {
+      await assert.rejects(
+        () => kernel.install([{ id: 'external', name }], {
+          import: async () => { imported += 1; return external; },
+        }),
+        /requires an attended human classification review/);
+    }
     assert.equal(applied, 0, 'the Loop/unattended path refuses before plugin execution');
     assert.equal(imported, 0, 'the package is refused before import-time code can execute');
   } finally { await kernel.dispose(); }

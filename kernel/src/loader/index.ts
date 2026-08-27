@@ -13,6 +13,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { parseYaml, type YamlValue } from './yaml.js';
 import { compose, type Entry, type Layer, type ResolvedEntry } from './compose.js';
 import { installPlugin, type AttendedPluginReview } from '../plugins/tools.js';
+import { builtinImporter, isBuiltin } from '../profiles.js';
 
 export * from './compose.js';
 export * from './yaml.js';
@@ -185,13 +186,15 @@ export async function mount(
       continue;
     }
 
-    const bundled = entry.name.startsWith('flyt:') || entry.name.startsWith('@flyt/');
+    const bundled = isBuiltin(entry.name);
     // Importing a package executes its top-level module body. An unattended
     // refusal therefore belongs before import(), not merely before apply().
     if (!bundled && (!options.toolReview?.attended || typeof options.toolReview.decide !== 'function')) {
       throw new Error('Refused: installing a tool-capable plugin requires an attended human classification review');
     }
-    const module: any = await load(entry.name);
+    // Exact built-in names are resolved by Flyt's own importer. A caller cannot
+    // attach a trusted name to an arbitrary module through the injectable one.
+    const module: any = await (bundled ? builtinImporter(entry.name) : load(entry.name));
     const plugin = module?.default ?? module;
     if (!plugin || (typeof plugin !== 'function' && typeof plugin.apply !== 'function')) {
       throw new Error(`"${entry.name}" (entry "${entry.id}") is not a plugin`);
