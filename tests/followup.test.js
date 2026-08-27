@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FlowRunner } from '../core/flowRunner.js';
+import { StackRunner } from '../core/stackRunner.js';
 import { makeStore, setScript, roleOf, testConfig, waitFor, waitForStage, makeFlow, node, edge } from './helpers.js';
 
 const goalOf = prompt => (prompt.match(/GOAL:\n(.+)/) ?? [])[1]?.trim();
@@ -41,7 +41,7 @@ async function finishedRun(store, handlers = {}) {
     if (handlers[role]) return handlers[role]({ system, prompt });
     return `output ${goalOf(prompt) ?? 'x'}`;
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(simpleFlow());
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
   return { runner, runId };
@@ -208,7 +208,7 @@ test('a failed run takes a follow-up and its failure path stays retired', async 
     if (goalOf(prompt) === 'B') throw new Error('boom');
     return `output ${goalOf(prompt) ?? 'x'}`;
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(makeFlow(
     [node('in', 'input', { text: 'brief' }),
       node('a', 'aiStep', { goal: 'A' }),
@@ -239,7 +239,7 @@ test('followUp refuses while the run is live or unfinished', async () => {
     if (role === 'feedback-review') return SOLVED;
     return `output ${goalOf(prompt) ?? 'x'}`;
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(simpleFlow());
 
   // Not terminal yet -> refused.

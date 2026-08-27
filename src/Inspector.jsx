@@ -609,7 +609,7 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
             <WorkerPicker worker={d.worker} models={models} activeModels={activeModels} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
           </section>
 
-          {/* Advanced example node fields (category, template, contextSpec) — see FLOW_NODES.md */}
+          {/* Advanced example node fields (category, template, contextSpec) — see BLOCKS.md */}
           {(node.type === 'agentTask' || node.type === 'aiStep') && (
             <>
               <section>
@@ -624,7 +624,7 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
                 </select>
               </section>
               <section>
-                <h3>Template (from catalog — see FLOW_NODES.md)</h3>
+                <h3>Template (from catalog — see BLOCKS.md)</h3>
                 <select
                   value={d.template ?? ''}
                   disabled={readOnly}
@@ -647,7 +647,7 @@ export function FlowInspector({ flow, selectedNode, models, activeModels, templa
               <section>
                 <h3>Context spec — explicit minimal files + descriptions (recommended for plan-start / generated nodes)</h3>
                 <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: 4 }}>
-                  Only these files (with the given descriptions) will be given to the node. See FLOW_NODES.md.
+                  Only these files (with the given descriptions) will be given to the node. See BLOCKS.md.
                 </div>
                 {(d.contextSpec?.files ?? []).map((f, i) => (
                   <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6 }}>

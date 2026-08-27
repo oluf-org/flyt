@@ -7,7 +7,7 @@
 // Execution is an INLINE SPLICE (B1), not a nested run: the referenced flow's
 // nodes are spliced into the run graph as children of the call-site node, so
 // there is one run folder, one snapshot, one canvas, and gates and resume work
-// exactly as they already do. A nested FlowRunner would fragment run state
+// exactly as they already do. A nested StackRunner would fragment run state
 // across run folders and break the live canvas — which is the transparency
 // window the whole product rests on (D1, D4).
 

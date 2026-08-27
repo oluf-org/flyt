@@ -22,7 +22,7 @@ const ipcMessage = err => String(err?.message ?? err)
   .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '');
 
 // Node types that resolve a model, i.e. the ones a retry can re-point (D39).
-// Mirrors WORKER_NODE_TYPES in core/flowRunner.js — duplicated rather than
+// Mirrors WORKER_NODE_TYPES in core/stackRunner.js — duplicated rather than
 // imported, the same way runProgress duplicates TERMINAL_STAGES: that module
 // reaches node:fs through its adapter imports and this one is the renderer.
 const MODEL_TYPES = new Set(['aiStep', 'agentTask', 'orchestrator', 'fanout']);

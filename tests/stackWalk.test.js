@@ -180,6 +180,21 @@ test('a lane cannot see what a sibling lane produced', async () => {
   await boot.kernel.dispose();
 });
 
+test('the block after a parallel receives every lane result, labeled, not only the last lane', async () => {
+  const source = `${PARALLEL}  - id: after\n    use: demo:work\n`;
+  const boot = await bootWalk(source, {
+    async execute(run) {
+      return { status: 'done', output: `${run.blockId} result` };
+    },
+  });
+  await (await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-aggregate' }, 'brief')).settled();
+  const after = boot.record.find(record => record.blockId === 'after');
+  for (const [lane, result] of [['left', 'la result'], ['middle', 'ma result'], ['right', 'ra result']]) {
+    assert.match(after.input, new RegExp(`## ${lane}\\n${result}`));
+  }
+  await boot.kernel.dispose();
+});
+
 test('a block that fails ends the run as failed, naming the block', async () => {
   const boot = await bootWalk(SEQUENCE, {
     async execute(run) {

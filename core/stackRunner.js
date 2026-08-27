@@ -20,7 +20,7 @@
 // stay sequential. Queued agent tasks are claimed atomically out of
 // tasks.json and drained with the same bound (see runPendingTasks).
 //
-// Reflective-pattern support (see FLOW_NODES.md for the contracts):
+// Reflective-pattern support (see BLOCKS.md for the contracts):
 //   plan-eval -> strict JSON contract parsed by core/planEval.js; valid nodes
 //                are materialized into the run's flow.json with provenance
 //   step-eval -> structured verdict: pass | retry (bounded, with enriched
@@ -82,8 +82,8 @@ export function countAnsweredRounds(meta, nodeId) {
 import { pickDefaultWorker, planDefaultRoute, providerModelsFor, taskKindOf, PROVIDER_ORDER } from './modelPriority.js';
 import { homeSeed, projectGates } from './homeSeed.js';
 import { taskNodeStatus } from '../src/runGraph.js';
-import { layoutPositions, containerLayout } from '../src/flowLayout.js';
-import { lintFlow, RUNTIME_RULES } from './flowlang/lint.js';
+import { layoutPositions, containerLayout } from '../src/stackLayout.js';
+import { lintFlow, RUNTIME_RULES } from './stacklang/lint.js';
 import {
   APPROVAL_MODES, normalizeApprovalMode,
   editsProject, toolGating, screensToolCalls, skipsNodePreGate, assumesItsOwnAnswers
@@ -116,7 +116,7 @@ const DEFAULT_SYSTEM = {
     'upstream context. Produce the deliverable as Markdown.'
   ].join('\n'),
 
-  // === Polished prompts for the documented standard example nodes (see FLOW_NODES.md) ===
+  // === Polished prompts for the documented standard example nodes (see BLOCKS.md) ===
   'plan-start': [
     'ROLE: plan-start',
     'You are the Start node of an advanced planning flowchart.',
@@ -942,7 +942,7 @@ export function upstreamSet(flow, nodeId) {
 // to go to find out what this flag already means.
 export { APPROVAL_MODES, normalizeApprovalMode };
 
-export class FlowRunner {
+export class StackRunner {
   constructor(store, config, onUpdate = () => {}, nodeStore = null, flowStore = null) {
     this.store = store;
     this.config = config;
@@ -2464,7 +2464,7 @@ export class FlowRunner {
   //   'smart'  — screen each call (core/safetyCheck.js); pause only on risk.
   //   'always' — never pause. The dangerous one.
   start(flow, { userInput = '', workspace = null, approvalMode = null, attended = null, modeId = null, overrides = null, compareGroup = null, inputs = null, loopTaskId = null, skills = null } = {}) {
-    // Pre-run gate (FLOW_LANG.md): refuse to start a structurally invalid
+    // Pre-run gate (STACK_LANG.md): refuse to start a structurally invalid
     // flow. Only RUNTIME_RULES — shape rules (no-input etc.) stay author-time
     // lint concerns; the runner has always tolerated partial flows.
     const gate = lintFlow(flow, {
@@ -3948,7 +3948,7 @@ ${menu}`;
         problems.push(`model emitted a ${dialect} tool call as message content, which this harness cannot parse — no tool ran and no result was returned; the raw markup is in the output below`);
       }
 
-      // Special handling for the documented example nodes (FLOW_NODES.md)
+      // Special handling for the documented example nodes (BLOCKS.md)
       if (role === 'plan' || role === 'plan-start') {
         // Write the primary planning artifact as tasks.md (plus classic plan for compat)
         this.store.writePlan(runId, outText); // keep compat

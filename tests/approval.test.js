@@ -1,6 +1,6 @@
 // One flag, five decisions, and a test that they agree (t-0106).
 //
-// `approvalMode: 'always'` was read in five places in core/flowRunner.js and
+// `approvalMode: 'always'` was read in five places in core/stackRunner.js and
 // settled five unrelated things. That overloading is the direct cause of
 // t-0083: three readers of one flag, two honouring the documented contract and
 // one not, and nothing noticed the third for months because there was nothing
@@ -43,7 +43,7 @@ test('every mode answers every decision, and the vocabulary is closed', () => {
 
 test('the table is exactly the behaviour that shipped before it existed', () => {
   // A refactor's test is that nothing moved. These five columns are read off
-  // the five call sites as they stood in core/flowRunner.js.
+  // the five call sites as they stood in core/stackRunner.js.
   //
   //   context file    writeContextFile   `=== 'always'` skips the project edit
   //   tool gating     runTasks isGated   'always' none, ask/smart all, node per-node
@@ -114,16 +114,16 @@ test('an unrecognised mode is "ask" and an absent one is "node", at every reader
   }
 });
 
-test('nothing in flowRunner reads the mode by comparing it to a literal any more', () => {
+test('nothing in stackRunner reads the mode by comparing it to a literal any more', () => {
   // The check with teeth. Five readers agreeing in a table is worth nothing if
   // a sixth goes back to `approvalMode(runId) === 'always'` — which is the
   // exact line t-0083 was, and it would pass every test above.
   const source = fs.readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'core', 'flowRunner.js'), 'utf8');
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'core', 'stackRunner.js'), 'utf8');
   const offenders = source.split('\n')
     .map((line, i) => [i + 1, line])
     .filter(([, line]) => /approvalMode\([^)]*\)\s*[!=]==\s*'/.test(line))
-    .map(([n, line]) => `flowRunner.js:${n}: ${line.trim()}`);
+    .map(([n, line]) => `stackRunner.js:${n}: ${line.trim()}`);
   assert.deepEqual(offenders, [],
     'ask core/approval.js for a named decision instead of comparing the mode here');
 });

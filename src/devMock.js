@@ -11,7 +11,7 @@ const snapshots = {
   'run-20260716-142200': {
     meta: {
       runId: 'run-20260716-142200', stage: 'done', error: null, turn: 1,
-      flowId: 'default-pipeline', flowName: 'Default pipeline',
+      flowId: 'loop-task', flowName: 'Work one backlog task',
       nodeStatus: {
         in: 'done', work: 'done', out: 'done',
         'fu1-input': 'done', 'fu1-patch': 'done', 'fu1-review': 'done'
@@ -19,7 +19,7 @@ const snapshots = {
     },
     prompt: 'Write a landing page hero section for the habit tracker.',
     flow: {
-      id: 'default-pipeline', name: 'Default pipeline',
+      id: 'loop-task', name: 'Work one backlog task',
       nodes: [
         { id: 'in', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
         { id: 'work', type: 'aiStep', kind: 'ai', position: { x: 0, y: 120 }, data: { title: 'Write hero', role: 'execute' } },
@@ -42,7 +42,7 @@ const snapshots = {
     },
     retrospectives: {},
     nodeOutputs: {
-      out: '# Result — Default pipeline\n\nBuild habits that stick.\nTrack today, see your streaks grow all week.',
+      out: '# Result — Work one backlog task\n\nBuild habits that stick.\nTrack today, see your streaks grow all week.',
       'fu1-patch': 'New headline: "Small habits. Big streaks."',
       'fu1-review': 'The revised headline is shorter and punchier, as requested.\n\n```json\n{ "verdict": "solved", "reason": "Headline tightened per feedback." }\n```'
     },
@@ -447,45 +447,23 @@ const mockRefs = [
 // In-memory Node Library mirroring core/nodestore.js (seed catalog).
 const mockTemplates = new Map(SEED_NODE_TEMPLATES.map(t => [t.id, structuredClone(t)]));
 
-// In-memory flow store mirroring core/flowstore.js, incl. the shipped
-// Default pipeline built from Node Library templates.
+// The browser preview retains only the internal projection Loop still uses.
 const mockFlows = {
-  'default-pipeline': {
-    id: 'default-pipeline',
-    name: 'Default pipeline',
+  'loop-task': {
+    id: 'loop-task',
+    name: 'Work one backlog task',
     nodes: [
-      { id: 'user-input', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
-      { id: 'plan', templateId: 'plan-start', position: { x: 0, y: 130 }, overrides: { title: 'Planning' } },
-      { id: 'route', templateId: 'evaluation', position: { x: 0, y: 260 }, overrides: { title: 'Routing', evalType: 'plan', requiresApproval: true } },
-      { id: 'verify', templateId: 'evaluation', position: { x: 0, y: 390 }, overrides: { title: 'Verification', evalType: 'final' } },
-      { id: 'result', type: 'output', kind: 'user', position: { x: 0, y: 520 }, data: {} }
+      { id: 'input', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
+      { id: 'work', templateId: 'work', position: { x: 0, y: 130 }, overrides: {
+        title: 'Do the task', category: 'Code general', effect: 'workspace-change',
+        toolCeiling: 'loop', tools: ['loop'],
+      } },
+      { id: 'output', type: 'output', kind: 'user', position: { x: 0, y: 260 }, data: {} }
     ],
     edges: [
-      { id: 'e-user-input-plan', source: 'user-input', target: 'plan' },
-      { id: 'e-plan-route', source: 'plan', target: 'route' },
-      { id: 'e-route-verify', source: 'route', target: 'verify' },
-      { id: 'e-verify-result', source: 'verify', target: 'result' }
+      { id: 'e-input-work', source: 'input', target: 'work' },
+      { id: 'e-work-output', source: 'work', target: 'output' }
     ]
-  },
-  // A second flow so the workflow picker has more than one option to preview.
-  'quick-fix': {
-    id: 'quick-fix',
-    name: 'Quick fix',
-    nodes: [
-      { id: 'user-input', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
-      { id: 'fix', templateId: 'work', position: { x: 0, y: 130 }, overrides: { title: 'Fix', category: 'Code general' } },
-      { id: 'result', type: 'output', kind: 'user', position: { x: 0, y: 260 }, data: {} }
-    ],
-    edges: [
-      { id: 'e-user-input-fix', source: 'user-input', target: 'fix' },
-      { id: 'e-fix-result', source: 'fix', target: 'result' }
-    ],
-    // Two example modes so the launch picker's expansion (DECISIONS.md D27) is
-    // exercised in the browser preview.
-    modes: {
-      fable: { name: 'Fable', overrides: { fix: { worker: { provider: 'anthropic', model: 'claude-fable-5' } } } },
-      gpt: { name: 'GPT', overrides: { fix: { worker: { provider: 'openai', model: 'gpt-5' } } } }
-    }
   }
 };
 

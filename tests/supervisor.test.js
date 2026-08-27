@@ -262,7 +262,7 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
         meta: {
           stage, error: stage === 'failed' ? error : null,
           pendingGateKind: stage === 'awaiting_approval' ? gateKind : null,
-          // 'active' is what FlowRunner.setNodeStatus actually writes for a node
+          // 'active' is what StackRunner.setNodeStatus actually writes for a node
           // it is executing. This fake said 'running', which nothing writes, so
           // the supervisor's currentNodeOf() matched here and matched NOTHING in
           // a real run — the nudge and restart rungs were dead in production and

@@ -1,4 +1,4 @@
-// Minimal YAML subset used by the Flow DSL (FLOW_LANG.md).
+// Minimal YAML subset used by the Flow DSL (STACK_LANG.md).
 //
 // The npm `yaml` package was the plan's first choice, but the DSL only needs
 // a small, well-defined slice of YAML, so this dependency-free implementation

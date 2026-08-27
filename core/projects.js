@@ -17,7 +17,7 @@
 // with the projectless lander. Opening a folder or running from that lander is
 // what creates the next tab.
 //
-// The registry owns one RunStore + FlowRunner per open project (created lazily,
+// The registry owns one RunStore + StackRunner per open project (created lazily,
 // permanent for the process so a closed tab's runner keeps executing, T13),
 // where per-project files live (T2a), tab lifecycle, and browser-style session
 // persistence into settings.json (T17). Engine wiring is injected via

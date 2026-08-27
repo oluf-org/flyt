@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Flow DSL command line — the AI/CI surface of the DSL (FLOW_LANG.md):
+// Flow DSL command line — the AI/CI surface of the DSL (STACK_LANG.md):
 //
 //   npm run flow -- lint [<file>] [--json]   validate a *.flow.yaml — or, with no
 //                                            file, every flow this repo ships (exit 1 on errors)

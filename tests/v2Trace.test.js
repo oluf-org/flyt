@@ -179,12 +179,4 @@ test('a request that was never made says so instead of rendering an empty one', 
   assert.equal(requestView(null), null);
 });
 
-test('Trace is behind the flag, like everything else under src/v2', () => {
-  // The flag-off promise is one test in v2Shell.test.js and it walks all of
-  // src/. This is the half that would break it: a static import of Trace from
-  // anywhere outside v2 puts it in the startup bundle.
-  const app = src('App.jsx');
-  assert.doesNotMatch(app, /Trace/, 'App.jsx knows nothing about it');
-  assert.match(src('v2/Shell.jsx'), /import Trace from '\.\/Trace\.jsx';/,
-    'and inside v2 it is an ordinary import, because the whole chunk is lazy');
-});
+

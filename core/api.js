@@ -82,8 +82,8 @@ export function loopWorkerProblem(worker) {
 }
 import { Supervisor, renderReport } from './supervisor.js';
 import { reviewWorker } from './diffReview.js';
-import { APPROVAL_MODES } from './flowRunner.js';
-import { lintFlow } from './flowlang/lint.js';
+import { APPROVAL_MODES } from './stackRunner.js';
+import { lintFlow } from './stacklang/lint.js';
 import {
   loadSuite, runBenchmark, saveCard, listCards, readCard, recentCards,
   compareCards, renderScorecard, renderComparison, DEFAULT_SUITE_DIR

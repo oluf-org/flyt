@@ -69,22 +69,18 @@ import { fileURLToPath } from 'node:url';
 
 const src = p => fs.readFileSync(fileURLToPath(new URL(`../src/${p}`, import.meta.url)), 'utf8');
 
-test('the window mounts Root, which is the only thing that reads the flag', () => {
+test('the window mounts the cutover Root and no renderer reads the retired flag', () => {
   assert.match(src('main.jsx'), /render\(<Root \/>\)/);
   const roots = fs.readdirSync(fileURLToPath(new URL('../src', import.meta.url)))
     .filter(f => f.endsWith('.jsx') || f.endsWith('.js'))
     .filter(f => f !== 'Root.jsx' && /getSettings\(\)[\s\S]{0,400}\.v2\b/.test(src(f)));
   assert.deepEqual(roots, [], 'a second reader of the flag is a second answer to it');
+  assert.doesNotMatch(src('Root.jsx'), /getSettings|settings\.v2|<App/);
 });
 
-test('with the flag off, App is what mounts — unchanged, not a branch inside it', () => {
-  const app = src('App.jsx');
-  assert.doesNotMatch(app, /from '\.\/v2\//, 'App.jsx knows nothing about v2');
-  assert.match(src('Root.jsx'), /if \(!v2\) return <App \/>;/,
-    'the off path is the whole of the old app, with nothing conditional in it');
-});
 
-test('nothing under src/v2 is statically imported, so the flag-off window never loads it', () => {
+
+test('the shipping shell keeps a lazy startup boundary', () => {
   const dir = fileURLToPath(new URL('../src', import.meta.url));
   const offenders = [];
   const walk = d => {
@@ -107,13 +103,7 @@ test('nothing under src/v2 is statically imported, so the flag-off window never 
   assert.match(src('Root.jsx'), /lazy\(\(\) => import\('\.\/v2\/Shell\.jsx'\)\)/);
 });
 
-test('the flag is not known until settings answer, and a failed read is not a yes', () => {
-  const root = src('Root.jsx');
-  assert.match(root, /if \(v2 === null\) return null;/,
-    'mounting v1 for an instant and then swapping tears the app down and rebuilds it');
-  assert.match(root, /\.catch\(\(\) => \{ if \(live\) setV2\(false\); \}\)/,
-    'a settings read that failed is not permission to turn a rebuild on');
-});
+
 
 test('an uncontrolled shell renders its own state, not the prop default', async () => {
   const { resolveLocation } = await import('../src/v2/shellRouting.js');

@@ -12,10 +12,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { FlowRunner } from '../core/flowRunner.js';
+import { StackRunner } from '../core/stackRunner.js';
 import { ReferenceLibrary } from '../core/references.js';
-import { parseFlow } from '../core/flowlang/parse.js';
-import { serializeFlow } from '../core/flowlang/serialize.js';
+import { parseFlow } from '../core/stacklang/parse.js';
+import { serializeFlow } from '../core/stacklang/serialize.js';
 import {
   INPUT_TYPES, INPUTS_NODE_ID, normalizeInputSpec, normalizeInputs,
   validateInputValues, renderInputValue, inputsNode, InputError
@@ -154,7 +154,7 @@ test('a node called "inputs" collides, and says so rather than being shadowed', 
 // --- end to end -------------------------------------------------------------
 
 function runnerWith(store, references = null) {
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   if (references) runner.references = references;
   return runner;
 }

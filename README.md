@@ -1,95 +1,56 @@
 # Flyt
 
-Flyt is a desktop app for building and running inspectable AI workflows. A user picks a flow, enters a request, and watches the work move through a live canvas. The same engine also powers the headless CLI and the autonomous Loop.
+Flyt is a desktop app for composing and running inspectable AI work. The shipping interface has two permanent surfaces: **Work** for running and watching, and **Build** for editing stacks and browsing contributions. **Trace** opens over either surface for the durable run record.
 
 ## What ships
 
-- **Projects** bind a tab to a workspace folder.
-- **Node templates** define reusable behavior, models, tools, and skills.
-- **Flows** connect templates and structural nodes in an AI-authorable `.flow.yaml` format.
-- **Runs** stream output, preserve artifacts, support approval gates, and can resume without repeating completed nodes.
-- **Composition** includes typed inputs, fan-out lanes, sub-flows, and a flow-to-backlog Loop handoff.
-- **Loop** works a file-backed backlog in isolated git worktrees, runs declared gates, requests review, tracks spend, and lands verified changes.
+- **Plugins** contribute blocks, tools, skills, and typed UI extensions.
+- **Stacks** compose blocks through bounded containment in `.stack.yaml` files.
+- **Runs** use an append-only session log and rebuildable artifact projection.
+- **Loop** works a file-backed backlog in isolated git worktrees, runs declared gates, requests independent review, tracks spend, and canaries every merge.
 
-The built-in `mock` provider works without credentials. Real models can be connected in Settings with provider API keys or explicitly enabled vendor CLI runtimes.
+The built-in `mock` provider works without credentials. Real models can be connected through provider API keys or explicitly enabled vendor CLI runtimes.
 
 ## Run locally
 
 ```sh
 npm install
-npm run dev       # Vite hot reload + Electron
-npm start         # production renderer build + Electron
-npm test          # headless test suite
+npm run dev
+npm start
+npm test
+npm run stack -- lint
 ```
 
 Build installers with `npm run dist`, or use `dist:win`, `dist:mac`, and `dist:linux` for one platform.
 
-## Headless use
-
-`flyt` exposes the same command surface as the desktop app. Machine-readable commands accept `--json`; structured output goes to stdout and human diagnostics go to stderr.
-
-```sh
-npx flyt flows
-npx flyt run learn-from-repo --in repo=<url> --in goal="What should we adopt?"
-npx flyt runs
-npx flyt why
-npx flyt doctor --flow <id>
-npx flyt probe <model>
-```
-
-`flyt why` inspects an existing run, `probe` tests one model at a realistic budget, and `doctor` checks provider and flow configuration without starting a full run.
-
-The tool library has the same headless surface, so a capability can be tried before a run pays to discover it:
-
-```sh
-npx flyt tools                              # the library, with effects and risk
-npx flyt tools show web_fetch               # one tool, schema included
-npx flyt tools run web_fetch --arg url=https://example.com --json
-npx flyt tools bench web-read               # the same cases through several tools
-npx flyt python status --packages scrapling # the sidecar interpreter, and what it has
-```
-
-A write or shell tool refuses from this door unless you pass `--yes`: the one-shot call narrows authority relative to a run and never widens it. [`TOOLS.md`](./TOOLS.md) is the authoring contract.
-
-## Files and storage
-
-Durable state is plain files:
+## Durable files
 
 ```text
-nodes/<id>.json                 reusable node templates
-tools/<id>.json                 tool definitions
-flows/<id>.flow.yaml            flow structure
-flows/<id>.layout.json          app-managed canvas positions
-runs/<runId>/                   run snapshot, outputs, logs, calls, and tool artifacts
-<workspace>/.flyt/              project config, skills, context, and optionally run data
+stacks/<id>.stack.yaml          canonical stack source; layout is derived
+plugins/<id>/                  bundled plugin contributions
+tools/<id>.json                tool definitions
+tools/sets/<id>.json           reusable ceilings
+runs/<runId>/session.jsonl     canonical run record
+runs/<runId>/                  rebuildable projections and artifacts
+<workspace>/.flyt/             project config, skills, backlog, and optional run data
 ```
 
-In development, global stores use the checkout. Packaged builds seed writable stores under Electron's user-data directory. Project run data follows the **Project storage** setting: inside `.flyt/` or in app data keyed by workspace path.
+An older project containing a linear `flows/*.flow.yaml` is readable through the migration path. Edge order becomes sequence order, supported structural Loop handoffs map to the registered block, and every generated `use` must resolve through the installed plugin registry before the flow can open or save. Opening does not mutate the source; the first stack write creates and validates `stacks/<id>.stack.yaml`, then retires the legacy file. A branched, disconnected, unknown, or unsupported structural graph is refused with its source intact instead of being flattened into different behavior. Layout sidecars are not carried forward because stack layout is derived.
 
-To promote a flow created in an installed build into the repository defaults:
+## Headless and Loop use
 
-```sh
-npm run flow -- adopt
-npm run flow -- adopt <id> --as <stable-id>
-npm run flow -- lint <file>
-```
+`flyt` exposes the core command map for diagnostics, providers, tools, projects, runs, and the Loop supervisor. Machine-readable commands accept `--json`. `flyt why`, `flyt doctor`, and `flyt probe` expose run and provider evidence without requiring the desktop UI.
+
+The compatibility execution path used by the current Loop supervisor retains its internal flow-shaped contracts while projects migrate; those names are isolated from the shipping Work/Build product model and from canonical stack files.
 
 ## Repository map
 
-- `core/` — orchestration, stores, adapters, tools, diagnostics, and the supervisor
-- `electron/` — desktop shell and IPC binding
-- `src/` — React renderer
-- `flows/`, `nodes/`, `tools/` — shipped file-backed libraries
-- `benchmark/` — independent Loop benchmark cases and probes, plus `benchmark/tools/` suites that measure one tool against another
-- `tests/` — headless contracts and regression tests
+- `kernel/` — typed Cordis services, stack grammar, block registry, runner, and session log
+- `core/` — stores, adapters, tools, diagnostics, and the Loop harness
+- `src/v2/` — Work, Build, Trace, Library, and typed contribution renderers
+- `electron/` — desktop host and IPC boundary
+- `stacks/` — shipped canonical stacks
+- `plugins/` — shipped block/tool/skill contributions
+- `tests/` — unit, integration, harness, and compatibility coverage
 
-## Living documentation
-
-- [`GOALS.md`](./GOALS.md) — product intent, principles, and boundaries
-- [`DESIGN-SPEC.md`](./DESIGN-SPEC.md) — current architecture and safety contracts
-- [`DECISIONS.md`](./DECISIONS.md) — concise durable decisions and unresolved choices
-- [`FLOW_LANG.md`](./FLOW_LANG.md) — flow DSL grammar and lint rules
-- [`FLOW_NODES.md`](./FLOW_NODES.md) — node roles, ports, and structured output contracts
-- [`TOOLS.md`](./TOOLS.md) — the tool contract: effects, trust, grants, and the Python sidecar
-
-Implementation plans are intentionally not kept as living documentation after they land. Git history preserves them; current work belongs in `.flyt/backlog/`.
+Read [`GOALS.md`](./GOALS.md), [`DESIGN-SPEC.md`](./DESIGN-SPEC.md), and [`DECISIONS.md`](./DECISIONS.md) before changing architecture. Stack grammar is in [`STACK_LANG.md`](./STACK_LANG.md); block contracts are summarized in [`BLOCKS.md`](./BLOCKS.md); tools are covered by [`TOOLS.md`](./TOOLS.md).
