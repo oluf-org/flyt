@@ -13,10 +13,36 @@
 // last, or the loop is just re-rolling dice.
 import fs from 'node:fs';
 import path from 'node:path';
-import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation, testCountUncheckable, testCountFrom, suiteExpectationProblem, suiteExpectationMismatch, scratchArtefacts, scratchArtefactProblem, weakenedAssertions, weakenedAssertionProblem } from './gates.js';
+import { runGate, runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation, testCountUncheckable, testCountFrom, suiteExpectationProblem, suiteExpectationMismatch, scratchArtefacts, scratchArtefactProblem, weakenedAssertions, weakenedAssertionProblem } from './gates.js';
 import { WorktreePool, land as gitLand, git } from './worktree.js';
 import { REVIEW_DIFF_BUDGET, reviewDiff, reviewWorker } from './diffReview.js';
 import { assessRepair, NO_CHANGE_GUIDANCE } from './repair.js';
+
+const DEPENDENCY_FILES = new Set(['package.json', 'package-lock.json']);
+
+/**
+ * Materialise a changed npm dependency graph before judging it.
+ *
+ * Worktrees normally share the base checkout's node_modules for speed. That is
+ * stale by definition when a task adds a dependency: its own gate and the
+ * post-merge canary otherwise test two different environments. Only a task
+ * that changed npm's manifest/lock pays this cost, and lifecycle scripts stay
+ * disabled at this trust boundary.
+ */
+export async function syncChangedDependencies({ dir, changedFiles = [], run = runGate, log = () => {} }) {
+  if (!changedFiles.some(file => DEPENDENCY_FILES.has(file))
+    || !fs.existsSync(path.join(dir, 'package-lock.json'))) {
+    return { ok: true, skipped: true, command: null };
+  }
+  const command = 'npm install --ignore-scripts --no-audit --no-fund';
+  log(`dependencies: ${command}`);
+  const result = await run(command, { cwd: dir });
+  return {
+    ...result,
+    ok: result.status === 'pass',
+    failure: result.status === 'pass' ? null : result,
+  };
+}
 
 /**
  * Run the gates against a task's worktree.
@@ -123,6 +149,7 @@ export async function landTask({
   // "the last thing this attempt did was fail its own gate" is a fact that
   // otherwise reaches nobody.
   workerGate = null,
+  syncDependencies = syncChangedDependencies,
   onStage = () => {},
   log = () => {}
 }) {
@@ -141,6 +168,24 @@ export async function landTask({
   catch { /* no sha is a smaller loss than a failed landing report */ }
   const withCommit = result => (attemptCommit ? { ...result, attemptCommit } : result);
 
+  const changedFiles = await pool.changedFiles(taskId, { base }).catch(() => []);
+
+  // A changed lockfile cannot be tested against the base checkout's old
+  // node_modules. Materialise it before the first gate, and do the same again
+  // on the merged checkout before the canary below.
+  const dependencyRun = await syncDependencies({
+    dir: pool.dirFor(taskId), changedFiles, log,
+  });
+  if (!dependencyRun.ok) {
+    record('dependencies', dependencyRun);
+    return withCommit({
+      landed: false, stage: 'dependencies', steps,
+      guidance: `The declared dependency graph could not be installed before verification. `
+        + `${dependencyRun.command ?? 'dependency setup'} failed:\n${dependencyRun.output ?? ''}`,
+    });
+  }
+  if (!dependencyRun.skipped) record('dependencies', dependencyRun);
+
   // 1. Gates, in the worktree.
   announce('gates');
   const gateRun = record('gates', await verifyTask({ pool, taskId, task, log }));
@@ -155,10 +200,9 @@ export async function landTask({
     // needs the diff — which is why `changedFiles` is read HERE and not only in
     // the branch below: "which files did this touch" is what separates a change
     // breaking its own tests from a change breaking the repository.
-    const changed = await pool.changedFiles(taskId, { base }).catch(() => []);
     const repair = assessRepair({
       failure: gateRun.failure,
-      changedFiles: changed,
+      changedFiles,
       repairs: task.repairs ?? 0,
       lastSignature: task.failureSignature ?? null,
       lastCount: task.failureCount ?? null,
@@ -166,7 +210,7 @@ export async function landTask({
     });
     log(`gates: ${repair.verdict} — ${repair.reason}`);
     return withCommit({
-      landed: false, stage: 'gates', steps, repair, changedFiles: changed,
+      landed: false, stage: 'gates', steps, repair, changedFiles,
       // The feedback IS the guidance now: the failures by name, place and
       // assertion, under an instruction not to start over. The guidance used to
       // be the gate's whole bounded output, which then became the task's
@@ -177,8 +221,6 @@ export async function landTask({
   }
 
   // 2. Mechanical checks — free, and not a model's judgment call.
-  const changedFiles = await pool.changedFiles(taskId, { base });
-
   // Nothing changed. That is not a diff to review, it is the absence of one,
   // and asking a model to review it buys a paragraph explaining that the diff
   // is empty — which we already know for free, and which every failed attempt
@@ -281,18 +323,29 @@ export async function landTask({
   // 4. Merge, canary, revert on red.
   announce('land');
   const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: pool.dirFor(taskId) });
+  const verifyMerged = verify ? async args => {
+    const dependencies = await syncDependencies({ dir: repoRoot, changedFiles, log });
+    if (!dependencies.ok) {
+      return { ok: false, results: [dependencies], failure: dependencies };
+    }
+    return verify(args);
+  } : null;
   const result = record('land', await gitLand({
     repoRoot, branch, base,
     message: `${task.title ?? taskId}\n\nTask ${taskId}. Landed by Flyt after gates and review.`,
-    verify, push, log
+    verify: verifyMerged, push, log
   }));
 
   if (!result.landed) {
+    // The merge revert restores the old manifest; restore its dependency tree
+    // too, so the next task does not inherit packages from a rejected change.
+    const restored = await syncDependencies({ dir: repoRoot, changedFiles, log });
     return {
       landed: false, stage: result.reason === 'conflict' ? 'merge' : 'canary', steps, review,
       guidance: result.reason === 'conflict'
         ? `The branch no longer merges cleanly into ${base}: ${result.error}. Rebase onto the current ${base} and re-run.`
         : `The change passed its own gates but broke ${base} once merged; the merge was reverted. ${canaryGuidance(result.canary)}`
+          + `${restored.ok ? '' : ` Dependency restoration also failed: ${restored.output ?? restored.command ?? 'unknown error'}`}`
     };
   }
   return {

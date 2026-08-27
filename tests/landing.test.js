@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { WorktreePool, git, slugify, branchFor, land, defaultWorktreeRoot, isInside } from '../core/worktree.js';
 import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, testCountUncheckable, scratchArtefacts, scratchArtefactProblem, weakenedAssertions, weakenedAssertionProblem, suiteExpectation, suiteExpectationProblem, suiteExpectationMismatch, SUITE_EXPECTATIONS, gateProblem, unrunnableGates } from '../core/gates.js';
 import { parseReview, buildReviewPrompt, packageReviewDiff, reviewDiff, reviewWorker } from '../core/diffReview.js';
-import { landTask, mechanicalChecks, advancePin, readPin } from '../core/landing.js';
+import { landTask, mechanicalChecks, syncChangedDependencies, advancePin, readPin } from '../core/landing.js';
 import { setScript } from './helpers.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-land-'));
@@ -675,6 +675,24 @@ test('a substantial cross-cutting diff reaches the reviewer whole', () => {
   assert.ok(!prompt.includes('diff truncated'), 'the old 60k blind spot must stay closed');
 });
 
+test('dependency setup runs only when an npm manifest changed', async () => {
+  const root = tmp();
+  fs.writeFileSync(path.join(root, 'package-lock.json'), '{}');
+  const calls = [];
+  const run = async (command, options) => {
+    calls.push({ command, cwd: options.cwd });
+    return { command, status: 'pass', code: 0, output: '', ms: 1 };
+  };
+  assert.equal((await syncChangedDependencies({ dir: root, changedFiles: ['src.js'], run })).skipped, true);
+  const synced = await syncChangedDependencies({ dir: root, changedFiles: ['package.json'], run });
+  assert.equal(synced.ok, true);
+  assert.equal(synced.skipped, undefined);
+  assert.deepEqual(calls, [{
+    command: 'npm install --ignore-scripts --no-audit --no-fund',
+    cwd: root,
+  }]);
+});
+
 test('a bulk added provider snapshot is manifested without hiding integration or tests', () => {
   const added = (file, body) => [
     `diff --git a/${file} b/${file}`,
@@ -844,6 +862,64 @@ test('a task lands on main by itself when the gates and the reviewer agree', asy
   // run — asking for it again would be a second full suite for a number we
   // already have.
   assert.match(result.canaryOutput, /# tests 2/);
+});
+
+test('a dependency-changing task syncs its worktree and merged canary environment', async () => {
+  const root = await makeRepo();
+  const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
+  await pool.create('t-0001', 'Add a dependency');
+  const dir = pool.dirFor('t-0001');
+  fs.writeFileSync(path.join(dir, 'package.json'), '{"dependencies":{"local":"file:plugins/local"}}\n');
+  fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}\n');
+  await pool.commit('t-0001', 'add dependency');
+  approving();
+  const synced = [];
+
+  const result = await landTask({
+    pool, repoRoot: root, taskId: 't-0001', base: 'main',
+    task: { title: 'Add a dependency', blastRadius: ['package.json', 'package-lock.json'] },
+    config: { workers: { reviewer: { provider: 'script', model: 'm' } }, retry: { attempts: 1, baseMs: 1 } },
+    syncDependencies: async ({ dir: target }) => {
+      synced.push(target);
+      return { ok: true, command: 'fake install', status: 'pass' };
+    },
+    verify: async () => runGates([SUITE], { cwd: root })
+  });
+
+  assert.equal(result.landed, true, JSON.stringify(result.steps));
+  assert.deepEqual(synced, [dir, root]);
+  assert.ok(result.steps.some(step => step.step === 'dependencies'));
+});
+
+test('a reverted dependency change restores the base dependency tree', async () => {
+  const root = await makeRepo();
+  const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
+  await pool.create('t-0001', 'Add a bad dependency');
+  const dir = pool.dirFor('t-0001');
+  fs.writeFileSync(path.join(dir, 'package.json'), '{}\n');
+  fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}\n');
+  await pool.commit('t-0001', 'add dependency');
+  approving();
+  const synced = [];
+
+  const result = await landTask({
+    pool, repoRoot: root, taskId: 't-0001', base: 'main',
+    task: { title: 'Add a bad dependency', blastRadius: ['package.json', 'package-lock.json'] },
+    config: { workers: { reviewer: { provider: 'script', model: 'm' } }, retry: { attempts: 1, baseMs: 1 } },
+    syncDependencies: async ({ dir: target }) => {
+      synced.push(target);
+      return { ok: true, command: 'fake install', status: 'pass' };
+    },
+    verify: async () => ({
+      ok: false,
+      results: [{ command: SUITE, status: 'fail', code: 1, output: 'dependency broke main' }],
+      failure: { command: SUITE, status: 'fail', code: 1, output: 'dependency broke main' },
+    })
+  });
+
+  assert.equal(result.landed, false);
+  assert.equal(result.stage, 'canary');
+  assert.deepEqual(synced, [dir, root, root]);
 });
 
 test('a change that passes alone but breaks main is reverted, not left behind', async () => {
