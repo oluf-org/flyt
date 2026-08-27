@@ -18,6 +18,7 @@
     "verify:workflow": "node --test tests/workflowReliability.test.js",
     "verify:impeccable": "node plugins/impeccable-flyt-plugin/verify-provenance.mjs",
     "stack": "node core/stacklang/cli.js",
+    "flow": "npm run lint && node -e \"\"",
     "lint": "node --check core/stackRunner.js && node --check core/stackstore.js && npm run build:kernel",
     "flyt": "node bin/flyt.js",
     "serve": "node bin/flyt.js serve",
