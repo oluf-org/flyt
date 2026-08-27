@@ -118,7 +118,8 @@ test('a Loop worker refuses a skill tool request unattended even if listed as gr
     granted: ['web_search'], ceiling: ['web_search'], unattended: true, resolve: resolveTools
   });
   assert.deepEqual(result.tools, []);
-  assert.match(result.ungranted[0].reason, /unattended workers cannot grant/);
+  assert.deepEqual(result.ungranted, []);
+  assert.match(result.refused[0].reason, /unattended workers cannot grant/);
 });
 
 test('a human grant cannot widen the block static ceiling', () => {
@@ -187,9 +188,9 @@ test('a real Loop run refuses a skill grant even when the node carries it', asyn
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
   assert.equal(store.readMeta(runId).attended, null, 'Loop does not promise a human listener');
   assert.deepEqual(store.readTasks(runId).tasks[0].skillToolGrants, ['read_file']);
-  const missing = store.readLog(runId).find(event => event.event === 'skill_tool_missing');
-  assert.equal(missing.tool, 'read_file');
-  assert.match(missing.reason, /unattended workers cannot grant/);
+  const refused = store.readLog(runId).find(event => event.event === 'skill_tool_refused');
+  assert.equal(refused.tool, 'read_file');
+  assert.match(refused.reason, /unattended workers cannot grant/);
   assert.match(store.readTaskOutput(runId, 'task-1'), /Missing skill tools[\s\S]*unattended workers cannot grant/);
   const retro = store.readRetrospectives(runId)['executor-task-1'];
   assert.ok(retro.problems.some(problem => /unattended workers cannot grant/.test(problem)));

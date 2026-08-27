@@ -115,10 +115,18 @@ export function resolveSkillToolRequests(found, { granted = [], ceiling = null, 
   for (const skill of found ?? []) {
     for (const tool of skill.requiresTools ?? []) requests.push({ skill: skill.name, tool });
   }
-  const humanGrants = new Set(unattended ? [] : (granted ?? []).map(String));
+  if (unattended) {
+    return {
+      tools: [], ungranted: [], missing: [], ceiling,
+      refused: requests.map(request => ({
+        ...request, reason: 'unattended workers cannot grant skill tool requests'
+      }))
+    };
+  }
+  const humanGrants = new Set((granted ?? []).map(String));
   const approved = requests.filter(r => humanGrants.has(r.tool));
   const ungranted = requests.filter(r => !humanGrants.has(r.tool)).map(r => ({
-    ...r, reason: unattended ? 'unattended workers cannot grant skill tool requests' : 'not granted by a human'
+    ...r, reason: 'not granted by a human'
   }));
   if (!approved.length || typeof resolve !== 'function') {
     return { tools: [], ungranted, refused: [], missing: [], ceiling };

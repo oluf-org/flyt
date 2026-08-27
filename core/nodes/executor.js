@@ -227,7 +227,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     store.appendLog(runId, { event: 'skill_tool_missing', node: `executor:${taskId}`, ...missing });
   }
   const unavailableSkillTools = [...skillTools.ungranted, ...skillTools.refused.map(r => ({
-    ...r, reason: 'outside this block\'s static tool ceiling'
+    ...r, reason: r.reason === 'ceiling' ? 'outside this block\'s static tool ceiling' : r.reason
   })), ...skillTools.missing.map(r => ({ ...r, reason: `requested tool is ${r.reason}` }))];
 
   let system = withSkillsSection([
