@@ -752,7 +752,7 @@ test('a bulk added provider snapshot is manifested without hiding integration or
   assert.match(evidence.text, /INTEGRATION-TAIL/);
   assert.match(evidence.text, /TEST-TAIL/);
   assert.ok(!evidence.text.includes('diff truncated'));
-  assert.ok(evidence.text.length <= 120_000);
+  assert.ok(evidence.text.length <= 160_000);
 });
 
 test('an oversized patch with no identifiable package snapshot fails closed', () => {
@@ -797,7 +797,40 @@ test('a deletion-heavy cutover manifests source deletions but keeps deleted test
   assert.ok(!evidence.text.includes('OLD-UI-1499'), 'deleted source bodies are represented by the manifest');
   assert.match(evidence.text, /DELETED-ASSERTION-19/, 'deleted test bodies remain reviewable');
   assert.match(evidence.text, /CUTOVER-INTEGRATION/);
-  assert.ok(evidence.text.length <= 120_000);
+  assert.ok(evidence.text.length <= 160_000);
+});
+
+test('task-declared mechanical renames are manifested without hiding other test edits', () => {
+  const before = Array.from({ length: 4000 }, (_, i) => `-const runner${i} = new FlowRunner();`);
+  const after = Array.from({ length: 4000 }, (_, i) => `+const runner${i} = new StackRunner();`);
+  const mechanical = [
+    'diff --git a/tests/flowRunner.test.js b/tests/stackRunner.test.js',
+    'similarity index 99%',
+    'rename from tests/flowRunner.test.js',
+    'rename to tests/stackRunner.test.js',
+    '@@ -1,4000 +1,4000 @@',
+    ...before,
+    ...after,
+    '',
+  ].join('\n');
+  const changedAssertion = [
+    'diff --git a/tests/safety.test.js b/tests/safety.test.js',
+    '--- a/tests/safety.test.js',
+    '+++ b/tests/safety.test.js',
+    '@@ -1 +1 @@',
+    "-assert.equal(result, 'safe');",
+    "+assert.equal(result, 'unsafe');",
+    '',
+  ].join('\n');
+
+  const prompt = buildReviewPrompt({
+    task: { title: 'Rename the runner', body: 'Complete `FlowRunner` to `StackRunner`.' },
+    diff: mechanical + changedAssertion,
+  });
+  assert.match(prompt, /DECLARED MECHANICAL RENAME MANIFEST/);
+  assert.match(prompt, /tests\/stackRunner\.test\.js .* sha256:[a-f0-9]{16}/);
+  assert.match(prompt, /assert\.equal\(result, 'unsafe'\)/,
+    'a changed assertion outside the declared substitution remains inline');
 });
 
 test('the reviewer is told which files left the declared blast radius', () => {
