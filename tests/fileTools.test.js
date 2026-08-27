@@ -42,9 +42,8 @@ test('read_file: reads an existing repo file from the bound workspace', async ()
   assert.equal(edge.active, false);
   assert.equal(edge.sequence, 2);
   assert.equal(notifications, 2, 'start and finish both wake snapshot consumers');
-  const events = logEvents(ctx.store, ctx.runId).filter(e => e.event === 'tool_start' || e.event === 'tool_call');
-  assert.deepEqual(events.map(e => e.event), ['tool_start', 'tool_call']);
-  assert.deepEqual(Object.keys(events[0]).sort(), ['event', 'node', 'tool', 'ts']);
+  const events = logEvents(ctx.store, ctx.runId).filter(e => e.event === 'tool_call');
+  assert.equal(events.length, 1);
 });
 
 test('read_file: missing file returns a self-correctable error, and is logged', async () => {
@@ -90,20 +89,18 @@ test('activity metadata failures cannot change tool outcomes', async () => {
   assert.equal(alsoCompleted.ok, true);
 });
 
-test('a failed start or completion audit still finalizes the live activity edge', async () => {
-  for (const failedEvent of ['tool_start', 'tool_call']) {
-    const ctx = boundCtx();
-    const states = [];
-    ctx.store.writeToolActivity = (_runId, _node, state) => {
-      states.push(state.active);
-      return state;
-    };
-    ctx.store.appendLog = (_runId, event) => {
-      if (event.event === failedEvent) throw new Error(`${failedEvent} audit unavailable`);
-    };
-    await assert.rejects(executeTool('read_file', { path: 'existing.txt' }, ctx), /audit unavailable/);
-    assert.deepEqual(states, [true, false], `${failedEvent} failure settles the edge`);
-  }
+test('a failed completion audit still finalizes the live activity edge', async () => {
+  const ctx = boundCtx();
+  const states = [];
+  ctx.store.writeToolActivity = (_runId, _node, state) => {
+    states.push(state.active);
+    return state;
+  };
+  ctx.store.appendLog = (_runId, event) => {
+    if (event.event === 'tool_call') throw new Error('audit unavailable');
+  };
+  await assert.rejects(executeTool('read_file', { path: 'existing.txt' }, ctx), /audit unavailable/);
+  assert.deepEqual(states, [true, false]);
 });
 
 test('create_file: creates a new file, refuses to clobber an existing one', async () => {

@@ -157,13 +157,6 @@ export async function executeTool(name, args, ctx) {
   const activityState = { tool: name, subject: activitySubject };
   const liveEdge = writeActivity(ctx, activityNode, { ...activityState, active: true });
   if (liveEdge) {
-    try {
-      ctx.store?.appendLog(ctx.runId, { event: 'tool_start', node: callerOf(ctx), tool: name });
-    } catch (err) {
-      writeActivity(ctx, activityNode, { ...activityState, active: false });
-      try { ctx?.notify?.(); } catch { /* observability cannot break auditing */ }
-      throw err;
-    }
     try { ctx?.notify?.(); } catch { /* observability cannot break a tool */ }
   }
   try {
