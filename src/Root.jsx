@@ -65,6 +65,7 @@ function V2Root() {
   // nothing had told anybody to take again.
   const [edits, setEdits] = useState(0);
   const [reviewRevision, setReviewRevision] = useState(0);
+  const [uiExtensionRevision, setUiExtensionRevision] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -85,6 +86,11 @@ function V2Root() {
     return build.subscribePluginReview(() => setReviewRevision(n => n + 1));
   }, [build]);
 
+  useEffect(() => {
+    if (!build?.subscribeUiExtensions) return undefined;
+    return build.subscribeUiExtensions(() => setUiExtensionRevision(n => n + 1));
+  }, [build]);
+
   // The run being watched, when the host has one. Trace is transient: it is
   // addressed by run rather than navigated to, so it arrives the same way the
   // stack does — from the host, not found by a component.
@@ -101,7 +107,7 @@ function V2Root() {
   // command surface owns, so taking it again is the point rather than an
   // accident of rendering.
   const view = build ? {
-    ...build, stack: build.stack, edits, reviewRevision,
+    ...build, stack: build.stack, edits, reviewRevision, uiExtensionRevision,
     pluginReview: build.pluginReview ?? null,
   } : null;
   return <V2Shell build={view} watching={watching} />;

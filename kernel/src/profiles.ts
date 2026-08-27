@@ -29,6 +29,7 @@ export const BUILTIN = {
   approvals: 'flyt:approvals',
   skills: 'flyt:skills',
   commands: 'flyt:api',
+  uiExtensions: 'flyt:ui-extensions',
 } as const;
 
 const BUILTIN_NAMES = new Set<string>(Object.values(BUILTIN));
@@ -46,6 +47,7 @@ export async function builtinImporter(name: string): Promise<unknown> {
     case BUILTIN.approvals: return import('./plugins/approvals.js');
     case BUILTIN.skills: return import('./plugins/skills.js');
     case BUILTIN.commands: return import('./plugins/commands.js');
+    case BUILTIN.uiExtensions: return import('./plugins/ui-extensions.js');
     default: return import(name);
   }
 }
@@ -58,6 +60,7 @@ const DESKTOP: Entry[] = [
   { id: 'tools', name: BUILTIN.tools },
   { id: 'skills', name: BUILTIN.skills },
   { id: 'commands', name: BUILTIN.commands },
+  { id: 'ui-extensions', name: BUILTIN.uiExtensions },
   { id: 'approvals', name: BUILTIN.approvals, config: { mode: 'ask' } },
 ];
 

@@ -28,6 +28,8 @@ export type * from './shell.js';
 export type * from './agents.js';
 export type * from './commands.js';
 export type * from './sandbox.js';
+// Typed host RPC declarations, not a ninth dsh capability seam.
+export * from './ui-extensions.js';
 
 /** Seam name to seam interface. The map a provider is checked against. */
 export interface Seams {

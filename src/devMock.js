@@ -744,11 +744,12 @@ export function installDevMock() {
     },
 
     v2Build: async () => {
-      const [{ parseStack, createKernel, flytApi, flytBlocks, registerStackCommands }] =
+      const [{ parseStack, createKernel, flytApi, flytBlocks, flytUiExtensions, registerStackCommands }] =
         await Promise.all([import('#kernel')]);
       const kernel = createKernel();
       await kernel.ctx.plugin(flytApi);
       await kernel.ctx.plugin(flytBlocks);
+      await kernel.ctx.plugin(flytUiExtensions);
       await kernel.ctx.plugin({
         name: 'preview-blocks',
         inject: ['blocks'],
@@ -759,6 +760,28 @@ export function installDevMock() {
               settings: { type: 'object' }, ceiling: null,
               async execute() { return { status: 'done', output: '' }; },
             });
+          }
+        },
+      });
+      await kernel.ctx.plugin({
+        name: 'preview-ui', inject: ['uiExtensions'],
+        apply(ctx) {
+          const declarations = [
+            {
+              point: 'block-configuration', id: 'preview.work.config', block: 'flyt:work',
+              schema: { type: 'object', properties: {
+                prompt: { type: 'string', title: 'Prompt', description: 'What should this block do?' },
+                careful: { type: 'boolean', title: 'Careful', default: true },
+              }, required: ['prompt'] },
+            },
+            {
+              point: 'tool-view', id: 'preview.bash.view', tool: 'bash',
+              view: { component: 'notice', tone: 'info', text: 'Shell result supplied by Flyt.' },
+            },
+          ];
+          for (const contribution of declarations) {
+            const accepted = ctx.uiExtensions.invoke({ method: 'ui.contribute', params: { contribution } });
+            if (!accepted.ok) throw new Error(accepted.error.message);
           }
         },
       });
@@ -816,6 +839,7 @@ blocks:
         blocks: kernel.ctx.blocks,
         library,
         pluginReviews: kernel.pluginReviews,
+        uiExtensions: kernel.ctx.uiExtensions.invoke({ method: 'ui.list', params: {} }).result,
         commands: {
           invoke: (name, args, caller) => kernel.ctx.commands.invoke(name, args, caller),
           subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); },

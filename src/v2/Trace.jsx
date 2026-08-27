@@ -17,6 +17,7 @@
 import React, { useState } from 'react';
 import { traceView } from './traceView.js';
 import { duration } from './traceView.js';
+import { ToolContributionView } from './PluginContributionView.jsx';
 import './traceStyles.css';
 
 /** A collapsible section that is closed until asked. */
@@ -73,8 +74,8 @@ function Request({ request }) {
   );
 }
 
-function ToolCall({ call }) {
-  const [open, setOpen] = useState(false);
+export function ToolCall({ call, uiExtensions = [], initiallyOpen = false }) {
+  const [open, setOpen] = useState(initiallyOpen);
   const detail = call.unfinished
     ? 'never returned'
     : call.error ? 'error' : null;
@@ -104,11 +105,15 @@ function ToolCall({ call }) {
           </p>
         )
         : <Pre value={call.error ? { error: call.error } : call.result} />}
+      {uiExtensions
+        .filter(row => row?.contribution?.point === 'tool-view' && row.contribution.tool === call.name)
+        .map(row => <ToolContributionView contribution={row.contribution} pluginId={row.pluginId}
+          key={`${row.pluginId}:${row.contribution.id}`} />)}
     </Fold>
   );
 }
 
-function Step({ step }) {
+function Step({ step, uiExtensions }) {
   const [open, setOpen] = useState(false);
   const bits = [
     step.request?.model,
@@ -131,7 +136,7 @@ function Step({ step }) {
         </details>
       )}
       <Request request={step.request} />
-      {step.tools.map(call => <ToolCall key={call.callId} call={call} />)}
+      {step.tools.map(call => <ToolCall key={call.callId} call={call} uiExtensions={uiExtensions} />)}
       {step.orphanDecisions.map(d => (
         <p key={`${d.callId}-${d.at}`} className={`tr-decision ${d.decision}`}>
           <span className="section-label">PERMISSION</span>
@@ -143,7 +148,7 @@ function Step({ step }) {
   );
 }
 
-function Turn({ turn }) {
+function Turn({ turn, uiExtensions }) {
   const [open, setOpen] = useState(false);
   const bits = [
     turn.blockId,
@@ -161,7 +166,7 @@ function Turn({ turn }) {
       open={open}
       onToggle={() => setOpen(o => !o)}
     >
-      {turn.steps.map(step => <Step key={step.id} step={step} />)}
+      {turn.steps.map(step => <Step key={step.id} step={step} uiExtensions={uiExtensions} />)}
     </Fold>
   );
 }
@@ -170,7 +175,7 @@ function Turn({ turn }) {
  * @param trace — a folded trace from `src/traceModel.js`, live or finished.
  * @param runId — which run this is the record of.
  */
-export default function Trace({ trace = null, runId = null }) {
+export default function Trace({ trace = null, runId = null, uiExtensions = [] }) {
   const view = traceView(trace);
   if (!view.turns.length) {
     return (
@@ -191,7 +196,7 @@ export default function Trace({ trace = null, runId = null }) {
         {view.costUsd != null ? ` · ${money(view.costUsd)}` : ''}
         {view.unfinished ? ' · still going' : ''}
       </p>
-      {view.turns.map(turn => <Turn key={turn.id} turn={turn} />)}
+      {view.turns.map(turn => <Turn key={turn.id} turn={turn} uiExtensions={uiExtensions} />)}
       {view.others.length > 0 && (
         <details className="tr-others">
           <summary>{view.others.length} event(s) this surface does not have a shape for</summary>

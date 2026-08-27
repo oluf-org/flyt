@@ -23,6 +23,8 @@ import {
 import { LEVELS } from '../core/levels.js';
 import { APP_NAME, LOG_TAG, LEGACY_APP_DIRS } from '../core/brand.js';
 import { migrateUserDataDir } from '../core/migrate.js';
+import { bootKernel } from '../core/v2.js';
+import { createV2HostBridge } from '../core/v2Host.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Where the app's own code and bundled assets live. When packaged this is
@@ -107,6 +109,27 @@ const CHROME = {
 };
 
 let win = null;
+let v2HostPromise = null;
+let detachV2UiExtensions = null;
+
+async function v2Host() {
+  if (!v2HostPromise) {
+    v2HostPromise = bootKernel({
+      settings,
+      profile: 'flyt-desktop',
+      runsRoot: registry.defaultRunsDir,
+      approvalMode: settings.approvalMode ?? 'ask',
+    }).then(booted => {
+      if (!booted) return null;
+      const bridge = createV2HostBridge(booted);
+      detachV2UiExtensions = bridge.subscribe(rows => {
+        if (win && !win.isDestroyed()) win.webContents.send('v2:ui-extensions-change', rows);
+      });
+      return { booted, bridge };
+    });
+  }
+  return v2HostPromise;
+}
 
 // --- Approval-gate nudge (CHAT-RUN rework) ---
 // A run parked at an approval gate waits forever if the user doesn't notice.
@@ -222,6 +245,10 @@ const proj = projectId => registry.get(projectId);
 const api = createApi(engine);
 const bindIpc = (name, toArgs = () => ({})) =>
   ipcMain.handle(name, (_e, ...args) => api.invoke(name, toArgs(...args)));
+
+// D61: this is the production host-to-renderer bridge. Only the host's cloned
+// list crosses IPC; the generic plugin RPC and Cordis context stay main-side.
+ipcMain.handle('v2:build', async () => (await v2Host())?.bridge.build() ?? null);
 
 bindIpc('flow:list');
 bindIpc('flow:load', id => ({ id }));
@@ -902,5 +929,10 @@ function setupAutoUpdate() {
 }
 
 app.whenReady().then(() => { createWindow(); setupAutoUpdate(); });
+app.on('before-quit', () => {
+  detachV2UiExtensions?.();
+  detachV2UiExtensions = null;
+  void v2HostPromise?.then(host => host?.booted.dispose());
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

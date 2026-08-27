@@ -29,6 +29,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { editorGeometry } from './blockGeometry.js';
 import { dragTo } from './stackEditing.js';
+import { BlockConfigurationView } from './PluginContributionView.jsx';
 import './blockEditorStyles.css';
 
 /** The label a stack file gives a block: title if any, else the use. */
@@ -51,7 +52,7 @@ const TOUCH_MS = 600;
  *   Omitted, the editor is read-only. This is the SAME surface a model reaches,
  *   which is the whole of D63 — there is no second path for either caller.
  */
-export default function BlockEditor({ stack, blocks = null, commands = null }) {
+export default function BlockEditor({ stack, blocks = null, commands = null, uiExtensions = [] }) {
   // What the last edit touched. Set from `commands/invoke`, which is the one
   // place both callers arrive: a person dragging and a model invoking produce
   // the same record, so they get the same animation for free.
@@ -113,6 +114,7 @@ export default function BlockEditor({ stack, blocks = null, commands = null }) {
 
   const { boxes, width, height } = editorGeometry(stack.root, blocks);
   const editable = Boolean(commands?.invoke);
+  const configurations = uiExtensions.filter(row => row?.contribution?.point === 'block-configuration');
 
   return (
     <div className="block-editor" data-v2 data-editable={editable || undefined}>
@@ -191,6 +193,25 @@ export default function BlockEditor({ stack, blocks = null, commands = null }) {
           })}
         </div>
       </div>
+      {configurations.flatMap(row => Object.entries(boxes)
+        .filter(([, { node }]) => node.kind === 'block' && node.use === row.contribution.block)
+        .map(([nodeId, { node }]) => (
+          <section className="plugin-block-panel" data-plugin={row.pluginId} data-node-id={nodeId}
+            key={`${row.pluginId}:${row.contribution.id}:${nodeId}`}>
+            <h3>{blockTitle(node)}</h3>
+            <BlockConfigurationView
+              contribution={row.contribution}
+              value={node.config}
+              onChange={editable ? async config => {
+                try {
+                  await commands.invoke('stack:configure-block', { nodeId, config }, 'human');
+                } catch (err) {
+                  setRefusal(String(err?.message ?? err));
+                }
+              } : null}
+            />
+          </section>
+        )))}
     </div>
   );
 }

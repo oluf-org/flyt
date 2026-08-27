@@ -3,6 +3,12 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Run-scoped calls take the projectId of the tab they act for (D22 T7); flows,
 // templates and settings are global (T2) and stay unscoped.
 const api = {
+  v2Build: () => ipcRenderer.invoke('v2:build'),
+  onV2UiExtensionsChange: (cb) => {
+    const handler = (_e, rows) => cb(rows);
+    ipcRenderer.on('v2:ui-extensions-change', handler);
+    return () => ipcRenderer.removeListener('v2:ui-extensions-change', handler);
+  },
   approvePlan: (pid, runId) => ipcRenderer.invoke('run:approve', pid, runId),
   rejectPlan: (pid, runId, reason) => ipcRenderer.invoke('run:reject', pid, runId, reason),
   resumeRun: (pid, runId) => ipcRenderer.invoke('run:resume', pid, runId),

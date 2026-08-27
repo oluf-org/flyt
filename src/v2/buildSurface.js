@@ -21,12 +21,22 @@ export async function buildSurface(host = globalThis.window?.flyt ?? null) {
   if (typeof host?.v2Build !== 'function') return null;
   try {
     const surface = await host.v2Build();
-    if (!surface?.stack) return null;
-    if (!surface.pluginReviews?.snapshot) return surface;
+    if (!surface || typeof surface !== 'object') return null;
+    let uiExtensions = Array.isArray(surface.uiExtensions) ? surface.uiExtensions : [];
+    const live = { ...surface };
+    Object.defineProperty(live, 'uiExtensions', { enumerable: true, get: () => uiExtensions });
+    if (typeof host.onV2UiExtensionsChange === 'function') {
+      live.subscribeUiExtensions = listener => host.onV2UiExtensionsChange(rows => {
+        uiExtensions = Array.isArray(rows) ? rows : [];
+        listener(uiExtensions);
+      });
+    }
+    if (!surface.pluginReviews?.snapshot) return live;
     // A live bridge, not a copied proposal: installation is awaiting the same
     // coordinator this getter reads and the modal settles.
     return {
-      ...surface,
+      ...live,
+      get uiExtensions() { return uiExtensions; },
       get pluginReview() { return surface.pluginReviews.snapshot(); },
       subscribePluginReview: listener => surface.pluginReviews.subscribe(listener),
     };
