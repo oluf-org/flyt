@@ -79,7 +79,7 @@ function latestActivityTool(snapshot) {
   // The meta edge says which node/tool is newest. Its completed retrospective
   // may add one conservative file subject; chronology never comes from object
   // insertion order or from calls belonging to another node.
-  const call = [...(snapshot?.retrospectives?.[nodeId]?.toolCalls ?? [])]
+  const call = edge.active ? null : [...(snapshot?.retrospectives?.[nodeId]?.toolCalls ?? [])]
     .reverse().find(item => item?.tool === name) ?? null;
   const field = {
     read_file: 'path', write_file: 'path', create_file: 'path', edit_file: 'path', glob: 'pattern'

@@ -174,11 +174,13 @@ export async function executeTool(name, args, ctx) {
   record.args = redactArgs(record.args, ctx?.secrets);
   archiveResult(record, tool, ctx);
 
-  // Stores predating the live projection still receive their completed audit
-  // record. A RunStore with no run metadata is a standalone tool invocation:
-  // it has nowhere truthful to persist either edge, so both are skipped.
-  if (!ctx.store?.writeToolActivity || liveEdge) {
+  // Completion keeps its original unconditional audit path. The only tolerated
+  // failure is ENOENT for a standalone invocation whose synthetic run directory
+  // never existed; a real run losing its audit trail still fails loudly.
+  try {
     ctx.store?.appendLog?.(ctx.runId, { event: 'tool_call', node: callerOf(ctx), ...record });
+  } catch (err) {
+    if (err?.code !== 'ENOENT' || liveEdge) throw err;
   }
   if (liveEdge) {
     ctx.store.writeToolActivity(ctx.runId, activityNode, { tool: name, active: false });

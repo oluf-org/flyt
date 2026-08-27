@@ -36,7 +36,7 @@ test('activity phases distinguish thinking, streaming, and safe tool use', () =>
     calls: [{ tool: 'read_file', args: { path: 'src/App.jsx' }, ok: true }]
   })), 10_100);
   assert.equal(tool.phase, 'tool');
-  assert.equal(tool.tool, 'read_file src/App.jsx');
+  assert.equal(tool.tool, 'read_file', 'an active call does not borrow a completed-call subject');
   assert.match(tool.ariaLabel, /Kimi|kimi-k3/i);
 });
 
@@ -58,6 +58,17 @@ test('completed tools remain useful history without impersonating current work',
   };
   assert.equal(runActivity(record(completed), 10_100).tool, 'read_file src/old.js',
     'the sequence identifies an earlier node revisited after a later-inserted retrospective');
+
+  const repeated = snapshot({ calls: [
+    { tool: 'read_file', args: { path: 'src/first.js' }, ok: true },
+    { tool: 'read_file', args: { path: 'src/second.js' }, ok: true }
+  ], toolActivity: {
+    work: { tool: 'read_file', active: true, sequence: 4 }
+  } });
+  assert.equal(runActivity(record(repeated), 10_100).tool, 'read_file',
+    'an in-progress same-named call never borrows the prior invocation subject');
+  repeated.meta.toolActivity.work.active = false;
+  assert.equal(runActivity(record(repeated), 10_100).tool, 'read_file src/second.js');
 });
 
 test('attention, terminal, and stale states settle deterministically', () => {

@@ -55,6 +55,16 @@ test('read_file: missing file returns a self-correctable error, and is logged', 
   assert.equal(calls.length, 1); // every call is logged, success or failure
 });
 
+test('completed audit logging does not depend on live activity metadata', async () => {
+  const ctx = boundCtx();
+  const events = [];
+  ctx.store.writeToolActivity = () => null;
+  ctx.store.appendLog = (_runId, event) => events.push(event);
+  const rec = await executeTool('read_file', { path: 'existing.txt' }, ctx);
+  assert.equal(rec.ok, true);
+  assert.deepEqual(events.map(e => e.event), ['tool_call']);
+});
+
 test('create_file: creates a new file, refuses to clobber an existing one', async () => {
   const ctx = boundCtx();
   const ok = await executeTool('create_file', { path: 'src/new.js', content: 'export const x = 1;\n' }, ctx);
