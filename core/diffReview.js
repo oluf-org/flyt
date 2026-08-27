@@ -23,9 +23,9 @@ import { createHash } from 'node:crypto';
 // final files nor their tests. Keep one shared budget with landing and make it
 // large enough for a substantial task while retaining the fail-closed marker
 // for genuinely oversized changes.
-// Roughly 40k tokens: enough for a cross-cutting release cutover after safe
+// Roughly 50k tokens: enough for a cross-cutting release cutover after safe
 // manifests, while leaving ample room for the task, gates, and reviewer reply.
-export const REVIEW_DIFF_BUDGET = 160_000;
+export const REVIEW_DIFF_BUDGET = 200_000;
 // The verdict is short; arriving at it, over 60k of diff, is not. Sending the
 // answer size as the whole completion budget starves a reasoning model into
 // returning nothing (D40) — and this reviewer is the last thing between an

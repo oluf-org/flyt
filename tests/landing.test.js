@@ -752,11 +752,11 @@ test('a bulk added provider snapshot is manifested without hiding integration or
   assert.match(evidence.text, /INTEGRATION-TAIL/);
   assert.match(evidence.text, /TEST-TAIL/);
   assert.ok(!evidence.text.includes('diff truncated'));
-  assert.ok(evidence.text.length <= 160_000);
+  assert.ok(evidence.text.length <= 200_000);
 });
 
 test('an oversized patch with no identifiable package snapshot fails closed', () => {
-  const evidence = packageReviewDiff('x'.repeat(160_001));
+  const evidence = packageReviewDiff('x'.repeat(200_001));
   assert.equal(evidence.complete, false);
   assert.match(evidence.text, /REVIEW EVIDENCE INCOMPLETE/);
   assert.match(evidence.text, /do not approve/i);
@@ -797,7 +797,7 @@ test('a deletion-heavy cutover manifests source deletions but keeps deleted test
   assert.ok(!evidence.text.includes('OLD-UI-1499'), 'deleted source bodies are represented by the manifest');
   assert.match(evidence.text, /DELETED-ASSERTION-19/, 'deleted test bodies remain reviewable');
   assert.match(evidence.text, /CUTOVER-INTEGRATION/);
-  assert.ok(evidence.text.length <= 160_000);
+  assert.ok(evidence.text.length <= 200_000);
 });
 
 test('task-declared mechanical renames are manifested without hiding other test edits', () => {
