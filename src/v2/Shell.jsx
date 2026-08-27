@@ -17,6 +17,7 @@ import Trace from './Trace.jsx';
 import Work from './Work.jsx';
 import Library from './Library.jsx';
 import PluginTrustReview from './PluginTrustReview.jsx';
+import { PluginContributionSection } from './PluginContributionView.jsx';
 
 /**
  * @param location — where the shell is, when a host is driving it. Omitted, the
@@ -95,7 +96,11 @@ export default function Shell({ location = null, onNavigate, build = null, watch
                 {/* Everything authored, in one place: the library above what
                     you are editing, because finding a block and putting it in
                     a stack is one motion and used to be two screens. */}
-                <Library sources={build?.library ?? {}} onAct={build?.onAct ?? null} />
+                <Library sources={build?.library ?? {}} onAct={build?.onAct ?? null}
+                  uiExtensions={build?.uiExtensions ?? []} />
+                {build?.uiExtensions?.filter(row => row?.contribution?.point === 'settings-section').map(row =>
+                  <PluginContributionSection key={`${row.pluginId}:${row.contribution.id}`}
+                    contribution={row.contribution} pluginId={row.pluginId} />)}
                 <BlockEditor
                   stack={build?.stack ?? null}
                   blocks={build?.blocks ?? null}

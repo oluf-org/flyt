@@ -13,6 +13,7 @@
 import React, { useMemo, useState } from 'react';
 import { KINDS, libraryEntries } from './libraryEntries.js';
 import { librarySearch } from './librarySearch.js';
+import { PluginContributionSection } from './PluginContributionView.jsx';
 import './libraryStyles.css';
 
 /** What each action says on its button. The verb is the whole point of the row. */
@@ -34,7 +35,7 @@ const VERB = {
  *   rows are readable and inert, which is what a library with nowhere to put
  *   things should be.
  */
-export default function Library({ sources = {}, onAct = null }) {
+export default function Library({ sources = {}, onAct = null, uiExtensions = [] }) {
   const [query, setQuery] = useState('');
   const [kinds, setKinds] = useState([]);
 
@@ -119,6 +120,9 @@ export default function Library({ sources = {}, onAct = null }) {
         </p>
       )}
       {total > matches.length && <p className="muted">{total} in total.</p>}
+      {uiExtensions.filter(row => row?.contribution?.point === 'library-entry').map(row =>
+        <PluginContributionSection key={`${row.pluginId}:${row.contribution.id}`}
+          contribution={row.contribution} pluginId={row.pluginId} />)}
     </div>
   );
 }
