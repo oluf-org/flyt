@@ -9,7 +9,11 @@ const snapshot = ({ stage = 'execution', stream = '', calls = [], meta = {}, too
   meta: {
     runId: 'run-1', stage, nodeStatus: { work: stage === 'execution' ? 'active' : 'done' },
     toolActivity: toolActivity ?? (calls.length ? {
-      work: { tool: calls.at(-1).tool, active: true, at: '2026-01-01T00:00:00.000Z', sequence: 1 }
+      work: {
+        tool: calls.at(-1).tool,
+        subject: calls.at(-1).args?.path ?? calls.at(-1).args?.pattern ?? null,
+        active: true, at: '2026-01-01T00:00:00.000Z', sequence: 1
+      }
     } : {}),
     ...meta
   },
@@ -36,7 +40,7 @@ test('activity phases distinguish thinking, streaming, and safe tool use', () =>
     calls: [{ tool: 'read_file', args: { path: 'src/App.jsx' }, ok: true }]
   })), 10_100);
   assert.equal(tool.phase, 'tool');
-  assert.equal(tool.tool, 'read_file', 'an active call does not borrow a completed-call subject');
+  assert.equal(tool.tool, 'read_file src/App.jsx');
   assert.match(tool.ariaLabel, /Kimi|kimi-k3/i);
 });
 
@@ -44,7 +48,7 @@ test('completed tools remain useful history without impersonating current work',
   const completed = snapshot({ calls: [
     { tool: 'read_file', args: { path: 'src/old.js' }, ok: true }
   ], toolActivity: {
-    work: { tool: 'read_file', active: false, at: '2026-01-01T00:00:01.000Z', sequence: 2 }
+    work: { tool: 'read_file', subject: 'src/old.js', active: false, at: '2026-01-01T00:00:01.000Z', sequence: 2 }
   } });
   assert.equal(runActivity(record(completed), 10_100).phase, 'thinking');
   assert.equal(runActivity(record(completed), 10_100).tool, 'read_file src/old.js');
@@ -53,7 +57,7 @@ test('completed tools remain useful history without impersonating current work',
 
   completed.retrospectives.later = { toolCalls: [{ tool: 'bash', args: { command: 'old' }, ok: true }] };
   completed.meta.toolActivity = {
-    work: { tool: 'read_file', active: false, sequence: 3 },
+    work: { tool: 'read_file', subject: 'src/old.js', active: false, sequence: 3 },
     later: { tool: 'bash', active: false, sequence: 2 }
   };
   assert.equal(runActivity(record(completed), 10_100).tool, 'read_file src/old.js',
@@ -63,10 +67,10 @@ test('completed tools remain useful history without impersonating current work',
     { tool: 'read_file', args: { path: 'src/first.js' }, ok: true },
     { tool: 'read_file', args: { path: 'src/second.js' }, ok: true }
   ], toolActivity: {
-    work: { tool: 'read_file', active: true, sequence: 4 }
+    work: { tool: 'read_file', subject: 'src/second.js', active: true, sequence: 4 }
   } });
-  assert.equal(runActivity(record(repeated), 10_100).tool, 'read_file',
-    'an in-progress same-named call never borrows the prior invocation subject');
+  assert.equal(runActivity(record(repeated), 10_100).tool, 'read_file src/second.js',
+    'an in-progress same-named call owns the exact current invocation subject');
   repeated.meta.toolActivity.work.active = false;
   assert.equal(runActivity(record(repeated), 10_100).tool, 'read_file src/second.js');
 });

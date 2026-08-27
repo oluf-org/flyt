@@ -17,6 +17,7 @@ import { redactArgs } from './redact.js';
 import { normalizeToolset, SEED_TOOLSETS } from '../toolsets.js';
 import { makeContext, resolveGrant } from '../../src/toolGrants.js';
 import { normalizeTool, isDestructive as effectsAreDestructive } from '../../src/toolTypes.js';
+import { safeActivityToolSubject } from '../../src/activitySafety.js';
 
 export { validateArgs, schemaProblems, MAX_SCHEMA_DEPTH } from './schema.js';
 import { validateArgs } from './schema.js';
@@ -152,7 +153,10 @@ export async function executeTool(name, args, ctx) {
   // The existing meta snapshot and audit log are the activity protocol. Keep
   // arguments out of the live edge; the completed tool_call below owns the
   // separately redacted detail record.
-  const liveEdge = ctx.store?.writeToolActivity?.(ctx.runId, activityNode, { tool: name, active: true });
+  const activitySubject = safeActivityToolSubject(name, args);
+  const liveEdge = ctx.store?.writeToolActivity?.(ctx.runId, activityNode, {
+    tool: name, subject: activitySubject, active: true
+  });
   if (liveEdge) {
     ctx.store?.appendLog?.(ctx.runId, { event: 'tool_start', node: callerOf(ctx), tool: name });
     try { ctx?.notify?.(); } catch { /* observability cannot break a tool */ }
@@ -174,16 +178,13 @@ export async function executeTool(name, args, ctx) {
   record.args = redactArgs(record.args, ctx?.secrets);
   archiveResult(record, tool, ctx);
 
-  // Completion keeps its original unconditional audit path. The only tolerated
-  // failure is ENOENT for a standalone invocation whose synthetic run directory
-  // never existed; a real run losing its audit trail still fails loudly.
-  try {
-    ctx.store?.appendLog?.(ctx.runId, { event: 'tool_call', node: callerOf(ctx), ...record });
-  } catch (err) {
-    if (err?.code !== 'ENOENT' || liveEdge) throw err;
-  }
+  // Completion keeps its original unconditional audit path. A configured
+  // store that cannot persist the audit record must fail loudly.
+  ctx.store?.appendLog?.(ctx.runId, { event: 'tool_call', node: callerOf(ctx), ...record });
   if (liveEdge) {
-    ctx.store.writeToolActivity(ctx.runId, activityNode, { tool: name, active: false });
+    ctx.store.writeToolActivity(ctx.runId, activityNode, {
+      tool: name, subject: activitySubject, active: false
+    });
     try { ctx?.notify?.(); } catch { /* observability cannot break a tool */ }
   }
   return record;

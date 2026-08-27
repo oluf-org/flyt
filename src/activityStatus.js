@@ -6,6 +6,11 @@
 // the allowlisted subject of the latest tool, and freshness.
 import { activeStreams } from './runStreams.js';
 import { currentNode } from './loopLive.js';
+import {
+  safeActivityFileSubject, safeActivityLabel, safeActivityToolName
+} from './activitySafety.js';
+
+export { safeActivityLabel } from './activitySafety.js';
 
 export const ACTIVITY_STALE_MS = 90_000;
 export const ACTIVITY_SETTLED_MS = 15_000;
@@ -23,83 +28,22 @@ const PHASE_LABELS = {
   idle: 'Idle'
 };
 
-const SECRET = new RegExp([
-  'bearer\\s+\\S+',
-  '\\b(?:sk|pk)-[a-z0-9_-]{8,}',
-  '\\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,})',
-  '\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b',
-  '\\bxox[baprs]-[a-z0-9-]{10,}',
-  '\\bAIza[a-z0-9_-]{30,}',
-  '\\beyJ[a-z0-9_-]{8,}\\.eyJ[a-z0-9_-]{8,}\\.[a-z0-9_-]{8,}',
-  '\\b(?:api[_-]?key|token|password|secret|authorization)\\s*[:=]\\s*[^\\s,;]+'
-].join('|'), 'gi');
-const SAFE_TOOL_SUBJECTS = new Set(['read_file', 'write_file', 'create_file', 'edit_file', 'glob']);
-// Tool names are metadata too: do not let an extension smuggle a prompt or
-// command into persistent chrome. Names remain useful even when their subject
-// is intentionally hidden (for example bash).
-const SAFE_TOOL_NAMES = new Set([
-  ...SAFE_TOOL_SUBJECTS,
-  'bash', 'run_gate', 'read_task', 'update_task', 'why_blocked', 'read_run',
-  'web_fetch', 'web_search', 'search_references', 'enqueue_task', 'create_task',
-  'ask_human'
-]);
-
-function safeFileSubject(value) {
-  if (typeof value !== 'string' || !value.trim() || value.length > 120) return null;
-  if (/\b(prompt|reasoning|output|stdout|stderr|api[_ -]?key|token|password|secret|authorization|bearer)\b/i.test(value)) return null;
-  // A structured `path` field is still model-produced input. Spaces make a
-  // sentence ending in a filename ("Summarize private report.txt")
-  // indistinguishable from a legitimate path, so persistent chrome omits it.
-  // The detailed run view remains the place to inspect unusual paths.
-  if (/\s/.test(value)) return null;
-  const subject = safeActivityLabel(value, 60);
-  if (!subject || subject.includes('[redacted]')) return null;
-  // File-operation subjects are deliberately narrower than generic labels:
-  // paths/patterns only, never arbitrary tool arguments or command text.
-  const allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./\\-*?[]{}@';
-  if ([...subject].some(char => !allowed.includes(char))) return null;
-  // A plain sentence made only of letters and spaces is not a path. Requiring
-  // a separator, a glob marker, a dotfile prefix, or a filename extension is
-  // conservative on purpose: persistent chrome may omit an unusual path, but
-  // it must never mistake prompt prose for one.
-  if (!/[\\/]/.test(subject) && !/[*?\[\]]/.test(subject)
-      && !/^\./.test(subject) && !/\.[a-z0-9]{1,12}$/i.test(subject)) return null;
-  return subject;
-}
-
 function latestActivityTool(snapshot) {
   const ordered = Object.entries(snapshot?.meta?.toolActivity ?? {})
     .filter(([, edge]) => edge && typeof edge === 'object')
     .sort(([, a], [, b]) => (Number(a.sequence) || 0) - (Number(b.sequence) || 0));
   const current = ordered.filter(([, edge]) => edge.active === true).at(-1) ?? ordered.at(-1) ?? null;
   if (!current) return { present: false, label: null };
-  const [nodeId, edge] = current;
-  const name = SAFE_TOOL_NAMES.has(edge.tool) ? edge.tool : null;
+  const [, edge] = current;
+  const name = safeActivityToolName(edge.tool);
   if (!name) return { present: edge.active === true, label: null };
-  // The meta edge says which node/tool is newest. Its completed retrospective
-  // may add one conservative file subject; chronology never comes from object
-  // insertion order or from calls belonging to another node.
-  const call = edge.active ? null : [...(snapshot?.retrospectives?.[nodeId]?.toolCalls ?? [])]
-    .reverse().find(item => item?.tool === name) ?? null;
-  const field = {
-    read_file: 'path', write_file: 'path', create_file: 'path', edit_file: 'path', glob: 'pattern'
-  }[name];
-  const subject = field ? safeFileSubject(call?.args?.[field]) : null;
+  // The edge owns the exact invocation's already-sanitized subject. Validate
+  // it again here; never infer current work from historical same-named calls.
+  const subject = safeActivityFileSubject(edge.subject);
   return {
     present: edge.active === true,
     label: safeActivityLabel(`${name}${subject ? ` ${subject}` : ''}`, 76)
   };
-}
-
-export function safeActivityLabel(value, max = 64) {
-  if (value == null) return null;
-  const clean = String(value)
-    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
-    .replace(SECRET, '[redacted]')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!clean) return null;
-  return clean.length > max ? `${clean.slice(0, Math.max(1, max - 1))}…` : clean;
 }
 
 function workerFor(snapshot, node) {

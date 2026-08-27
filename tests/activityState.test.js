@@ -9,14 +9,15 @@ test('tool edges live in existing meta, are ordered, argument-free, and lifecycl
   const runId = store.createRun('activity state');
 
   store.writeToolActivity(runId, 'node-b', { tool: 'bash', active: true, args: { command: 'PRIVATE' } });
-  store.writeToolActivity(runId, 'node-a', { tool: 'read_file', active: true, args: { path: 'secret.txt' } });
+  store.writeToolActivity(runId, 'node-a', { tool: 'read_file', subject: 'src/safe.txt', active: true, args: { path: 'secret.txt' } });
   store.writeToolActivity(runId, 'node-b', { tool: 'bash', active: false });
 
   let activity = store.snapshot(runId).meta.toolActivity;
   assert.equal(activity['node-a'].active, true);
   assert.equal(activity['node-a'].sequence, 2);
   assert.equal(activity['node-b'].sequence, 3, 'a revisited node receives the newest ordering edge');
-  assert.deepEqual(Object.keys(activity['node-a']).sort(), ['active', 'at', 'sequence', 'tool']);
+  assert.equal(activity['node-a'].subject, 'src/safe.txt');
+  assert.deepEqual(Object.keys(activity['node-a']).sort(), ['active', 'at', 'sequence', 'subject', 'tool']);
 
   const persisted = fs.readFileSync(path.join(store.runDir(runId), 'meta.json'), 'utf8');
   assert.doesNotMatch(persisted, /PRIVATE|secret\.txt/);

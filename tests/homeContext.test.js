@@ -192,7 +192,7 @@ test('glob lists the project and skips what is not the project', async () => {
     'node_modules/pkg/index.js': '3', '.git/config': '4'
   });
   const store = makeStore();
-  const ctx = { workspace: new Workspace(dir), store, runId: 'r1' };
+  const ctx = { workspace: new Workspace(dir), store, runId: store.createRun('glob project files') };
   const all = await executeTool('glob', { pattern: '**/*.js' }, ctx);
   assert.deepEqual(all.result.paths, ['src/a.js', 'src/deep/b.js']);
   assert.equal(all.result.target, 'workspace', 'the result says which root it came from');

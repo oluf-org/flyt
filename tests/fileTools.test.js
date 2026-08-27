@@ -38,6 +38,7 @@ test('read_file: reads an existing repo file from the bound workspace', async ()
   assert.equal(rec.result.target, 'workspace');
   const edge = ctx.store.readMeta(ctx.runId).toolActivity['executor-task-1'];
   assert.equal(edge.tool, 'read_file');
+  assert.equal(edge.subject, 'existing.txt');
   assert.equal(edge.active, false);
   assert.equal(edge.sequence, 2);
   assert.equal(notifications, 2, 'start and finish both wake snapshot consumers');

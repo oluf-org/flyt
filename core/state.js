@@ -168,6 +168,7 @@ export class RunStore {
     const sequence = Math.max(0, ...Object.values(activity).map(x => Number(x?.sequence) || 0)) + 1;
     const edge = {
       tool: String(state?.tool ?? '').slice(0, 100),
+      subject: typeof state?.subject === 'string' ? state.subject.slice(0, 60) : null,
       active: state?.active === true,
       at: new Date().toISOString(),
       sequence
