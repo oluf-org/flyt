@@ -19,7 +19,7 @@ import { effortBudget } from '../../src/flowTypes.js';
 // AbortSignal the runner fires on stop(); the agent loop's model calls reject
 // with an AbortError, which lands in the catch below as a STOPPED task —
 // requeued to 'pending', never marked failed.
-export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, notify = null, retry = null, timeout = null, backlog = null, feedback = null, references = null, pool = null, signal = null, unattended = false } = {}) {
+export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, notify = null, retry = null, timeout = null, backlog = null, feedback = null, references = null, pool = null, signal = null, unattended = true } = {}) {
   const tasksDoc = store.readTasks(runId);
   const task = tasksDoc.tasks.find(t => t.id === taskId);
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
@@ -212,7 +212,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     granted: task.skillToolGrants ?? [], unattended,
     // A request is dynamic authority: unlike the legacy absent-grant behavior,
     // it has no ceiling unless the block author wrote one (or a static grant).
-    ceiling: task.toolCeiling ?? task.tools ?? [], resolve: resolveTools
+    ceiling: task.toolCeiling ?? task.tools ?? [], available: tools, resolve: resolveTools
   });
   const byName = new Map(tools.map(t => [t.name, t]));
   for (const tool of skillTools.tools) byName.set(tool.name, tool);

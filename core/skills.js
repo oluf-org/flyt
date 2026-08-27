@@ -110,10 +110,16 @@ export function withSkillsSection(system, found) {
  * Resolve skill tool requests. `granted` is an explicit human decision, never a
  * default. Even granted requests pass through the block's authored ceiling.
  */
-export function resolveSkillToolRequests(found, { granted = [], ceiling = null, unattended = false, resolve } = {}) {
+export function resolveSkillToolRequests(found, {
+  granted = [], ceiling = null, unattended = true, available = [], resolve
+} = {}) {
+  const alreadyReachable = new Set((available ?? []).map(tool =>
+    typeof tool === 'string' ? tool : tool?.name).filter(Boolean));
   const requests = [];
   for (const skill of found ?? []) {
-    for (const tool of skill.requiresTools ?? []) requests.push({ skill: skill.name, tool });
+    for (const tool of skill.requiresTools ?? []) {
+      if (!alreadyReachable.has(tool)) requests.push({ skill: skill.name, tool });
+    }
   }
   if (unattended) {
     return {
