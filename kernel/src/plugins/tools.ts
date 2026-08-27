@@ -8,7 +8,7 @@
  *
  * @module #kernel/plugins/tools
  */
-import { Service, type Context } from '@deepseek-ai/cordis';
+import { Service, type Context, type Fiber } from '@deepseek-ai/cordis';
 import type { JsonValue, ToolResult } from '../types.js';
 import type { ToolClassification, ToolDefinition, ToolsSeam } from '../seams/tools.js';
 import type { PostToolDecision, PreToolDecision, ToolExecution } from '../events.js';
@@ -33,6 +33,29 @@ export type PluginReview = (
   proposals: readonly ToolClassificationProposal[],
 ) => Promise<Readonly<Record<string, ToolClassification | null>>> | Readonly<Record<string, ToolClassification | null>>;
 
+export interface AttendedPluginReview {
+  /** A literal so an unattended composition cannot accidentally inherit a default. */
+  attended: true;
+  /** Called exactly once, with every contributed tool in one decision. */
+  decide: PluginReview;
+}
+
+interface PendingReview {
+  /** Original declarations, retained as inference evidence while reach is stripped. */
+  declarations: Map<string, ToolDefinition>;
+}
+
+// Keyed by the contributing fiber, not by a global "installing" boolean: two
+// contexts may mount concurrently and a tool must inherit only its own review.
+const reviewedFibers = new WeakMap<Fiber, PendingReview>();
+
+/** Cordis accepts injection names as either an array or a keyed config map. */
+export function pluginInjections(inject: unknown): string[] {
+  if (Array.isArray(inject)) return inject.map(String);
+  if (inject && typeof inject === 'object') return Object.keys(inject);
+  return [];
+}
+
 /**
  * Install a plugin only when a human review callback is supplied. The plugin is
  * left installed on a refusal, but its tools remain unclassified and therefore
@@ -41,21 +64,42 @@ export type PluginReview = (
  */
 export async function installPlugin(
   ctx: Context,
-  plugin: { name?: string; inject?: readonly string[] },
-  review?: PluginReview,
-): Promise<unknown> {
-  if (!review) throw new Error('Refused: installing a plugin requires a human classification review');
+  plugin: { name?: string; inject?: readonly string[] | Record<string, unknown> },
+  review?: AttendedPluginReview,
+  config?: unknown,
+): Promise<Fiber> {
+  if (!review?.attended || typeof review.decide !== 'function') {
+    throw new Error('Refused: installing a tool-capable plugin requires an attended human classification review');
+  }
   const tools = ctx.tools;
   const before = new Set(tools.list().map(tool => tool.name));
-  const fiber = await ctx.plugin(plugin as any);
-  const requested = [...(plugin.inject ?? [])];
+  const loading = ctx.plugin(plugin as any, config as any);
+  // Cordis defers apply() to a microtask. Mark the real fiber before that turn,
+  // so a plugin-supplied `source: confirmed` is stripped at register(), never
+  // briefly reachable while an async apply() is still running.
+  const owner = loading.ctx.fiber;
+  const pending: PendingReview = { declarations: new Map() };
+  reviewedFibers.set(owner, pending);
+  const fiber = await loading;
+  const requested = pluginInjections(plugin.inject);
   const seams = requested.filter((name): name is SeamName =>
     (SEAM_NAMES as readonly string[]).includes(name));
   const installed = tools.list().filter(tool => !before.has(tool.name));
   // A plugin cannot smuggle in a grant by supplying a pre-confirmed claim.
   tools.unclassify(installed.map(tool => tool.name));
-  const proposals = installed.map(tool => proposalFor(tool, requested, seams));
-  const decisions = await review(proposals);
+  const proposals = installed.map(tool => proposalFor(pending.declarations.get(tool.name) ?? tool, requested, seams));
+  const decisions = await review.decide(proposals);
+
+  // Validate the whole pass before applying any of it. One attempted loosening
+  // must not leave the tools earlier in the list half-classified.
+  for (const proposal of proposals) {
+    const decided = decisions?.[proposal.name];
+    if (decided && !atLeastAsStrict(decided, proposal)) {
+      throw new Error(
+        `"${proposal.name}" cannot be classified more loosely than it was inferred: `
+        + `inferred ${describe(proposal)}, asked for ${describe(decided)}`);
+    }
+  }
   for (const proposal of proposals) {
     const decided = decisions?.[proposal.name];
     if (decided) tools.classify(proposal.name, decided, seams);
@@ -68,9 +112,9 @@ function proposalFor(tool: ToolDefinition, requested: readonly string[], seams: 
   return Object.assign(inferred, {
     name: tool.name,
     requested: [...requested],
-    inferredFrom: { seams: [...requested], tool: { name: tool.name, description: tool.description } },
-    permits: `${describe(inferred)} capability for this tool when a ceiling names it`,
-    doesNotPermit: 'execution, a toolset, or access through a ceiling until separately granted',
+    inferredFrom: { seams: [...seams], tool: { name: tool.name, description: tool.description } },
+    permits: `makes this ${describe(inferred)} tool eligible for a later, explicit ceiling grant`,
+    doesNotPermit: 'execution, membership in a toolset, or addition to any ceiling',
   });
 }
 
@@ -97,6 +141,7 @@ export function refusal(reason: string): ToolResult {
  */
 export class ToolRegistry extends Service implements ToolsSeam {
   private registered = new Map<string, ToolDefinition>();
+  private owners = new Map<string, symbol>();
 
   constructor(ctx: Context) {
     super(ctx, 'tools');
@@ -107,13 +152,23 @@ export class ToolRegistry extends Service implements ToolsSeam {
     if (!tool?.name) throw new Error('A tool needs a name');
     if (this.registered.has(tool.name)) throw new Error(`A tool named "${tool.name}" is already registered`);
     const registered = this.registered;
+    const owners = this.owners;
     const ctx = this.ctx;
+    const ownership = Symbol(tool.name);
+    const review = reviewedFibers.get(ctx.fiber);
+    if (review) review.declarations.set(tool.name, tool);
+    const safeTool = review && tool.classification ? { ...tool, classification: undefined } : tool;
     return ctx.effect(() => {
-      registered.set(tool.name, tool);
+      registered.set(tool.name, safeTool);
+      owners.set(tool.name, ownership);
       ctx.emit('tools/change');
       return () => {
-        if (registered.get(tool.name) !== tool) return;
+        // Classification replaces the stored definition. Ownership is separate
+        // so that confirm/edit cannot accidentally make the tool outlive the
+        // plugin fiber that contributed it.
+        if (owners.get(tool.name) !== ownership) return;
         registered.delete(tool.name);
+        owners.delete(tool.name);
         ctx.emit('tools/change');
       };
     }) as () => void;
@@ -177,7 +232,15 @@ export class ToolRegistry extends Service implements ToolsSeam {
         `"${toolName}" cannot be classified more loosely than it was inferred: `
         + `inferred ${describe(floor)}, asked for ${describe(decided)}`);
     }
-    this.registered.set(toolName, { ...tool, classification: { ...decided, source: 'confirmed' } });
+    this.registered.set(toolName, {
+      ...tool,
+      classification: {
+        effect: decided.effect,
+        destructive: Boolean(decided.destructive),
+        untrustedInput: Boolean(decided.untrustedInput),
+        source: 'confirmed',
+      },
+    });
     this.ctx.emit('tools/change');
   }
 

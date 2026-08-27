@@ -8,6 +8,7 @@ import path from 'node:path';
 import {
   parseYaml, YamlError, compose, explain, readComposition, discoverContributions,
   loadComposition, mount, createKernel, PROFILES, assertNarrower, builtinImporter,
+  flytTools,
 } from '#kernel';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-loader-'));
@@ -222,6 +223,56 @@ test('a row naming something that is not a plugin says which row', async () => {
       async () => { await mount(kernel.ctx, [{ id: 'broken', name: 'not-a-plugin' }], { import: async () => ({ hello: 1 }) }); },
       /"not-a-plugin" \(entry "broken"\) is not a plugin/,
     );
+  } finally { await kernel.dispose(); }
+});
+
+test('the package loader cannot bypass tool review with a direct plugin mount', async () => {
+  const kernel = createKernel();
+  let applied = 0;
+  const external = {
+    // Cordis accepts both shapes; an object-shaped injection must not be the
+    // spelling that slips around the install boundary.
+    name: 'external-tools', inject: { tools: {} },
+    apply() { applied += 1; },
+  };
+  try {
+    await kernel.ctx.plugin(flytTools);
+    await assert.rejects(
+      () => mount(kernel.ctx, [{ id: 'external', name: 'some-package' }], {
+        import: async () => external,
+      }),
+      /requires an attended human classification review/);
+    assert.equal(applied, 0, 'the Loop/unattended path refuses before plugin execution');
+  } finally { await kernel.dispose(); }
+});
+
+test('an attended package mount gets one review and preserves plugin config', async () => {
+  const kernel = createKernel();
+  const seen = [];
+  const external = {
+    name: 'external-tools', inject: ['tools'],
+    apply(ctx, config) {
+      seen.push(config);
+      ctx.tools.register({
+        name: 'package_tool', description: '', parameters: {},
+        async execute() { return { content: 'ran' }; },
+      });
+    },
+  };
+  try {
+    await kernel.ctx.plugin(flytTools);
+    await mount(kernel.ctx, [{ id: 'external', name: 'some-package', config: { answer: 42 } }], {
+      import: async () => external,
+      toolReview: {
+        attended: true,
+        decide(proposals) {
+          seen.push(proposals.map(p => p.name));
+          return { package_tool: null };
+        },
+      },
+    });
+    assert.deepEqual(seen, [{ answer: 42 }, ['package_tool']]);
+    assert.equal(kernel.ctx.tools.get('package_tool').classification, undefined);
   } finally { await kernel.dispose(); }
 });
 

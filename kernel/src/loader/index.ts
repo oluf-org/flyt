@@ -12,6 +12,7 @@ import path from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
 import { parseYaml, type YamlValue } from './yaml.js';
 import { compose, type Entry, type Layer, type ResolvedEntry } from './compose.js';
+import { installPlugin, pluginInjections, type AttendedPluginReview } from '../plugins/tools.js';
 
 export * from './compose.js';
 export * from './yaml.js';
@@ -140,6 +141,12 @@ export function loadComposition(sources: CompositionSources = {}): { entries: Re
 /** How a row's module is turned into a plugin. Injectable, so tests need no packages on disk. */
 export type Importer = (name: string) => Promise<unknown>;
 
+export interface MountOptions {
+  import?: Importer;
+  /** The one human decision used for external plugins that can reach ctx.tools. */
+  toolReview?: AttendedPluginReview;
+}
+
 const defaultImporter: Importer = name => import(name);
 
 /** The specifier a group row uses, matching dsh. */
@@ -160,7 +167,7 @@ export const GROUP = 'cordis:group';
 export async function mount(
   ctx: Context,
   entries: readonly Entry[],
-  options: { import?: Importer } = {},
+  options: MountOptions = {},
 ): Promise<string[]> {
   const load = options.import ?? defaultImporter;
   const mounted: string[] = [];
@@ -183,7 +190,16 @@ export async function mount(
     if (!plugin || (typeof plugin !== 'function' && typeof plugin.apply !== 'function')) {
       throw new Error(`"${entry.name}" (entry "${entry.id}") is not a plugin`);
     }
-    await ctx.plugin(plugin, entry.config as any);
+    // `mount` is the package installation boundary. Flyt's own logical
+    // `flyt:*` rows are composition, not third-party installs; every external
+    // plugin that asks for the tools seam goes through the attended review.
+    // With no reviewer (the Loop profile), refusal happens before apply().
+    const injected = pluginInjections(plugin.inject);
+    if (!entry.name.startsWith('flyt:') && injected.includes('tools')) {
+      await installPlugin(ctx, plugin, options.toolReview, entry.config);
+    } else {
+      await ctx.plugin(plugin, entry.config as any);
+    }
     mounted.push(entry.id);
   }
 

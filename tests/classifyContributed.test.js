@@ -13,6 +13,7 @@ import { classifyContributedTool, atLeastAsStrict, widerEffect } from '#kernel/p
 import { SEAM_NAMES } from '#kernel/seams/index.js';
 import { createKernel } from '#kernel';
 import * as flytTools from '#kernel/plugins/tools.js';
+import * as flytApprovals from '#kernel/plugins/approvals.js';
 
 const read = { effect: 'read', destructive: false, untrustedInput: false, source: 'inferred' };
 
@@ -213,4 +214,101 @@ test('classifying a tool nobody registered is an error, not a silent no-op', asy
       () => tools.classify('imaginary', { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' }),
       /No tool named "imaginary" is registered/);
   });
+});
+
+// --- the attended installation boundary (t-0112) ---------------------------
+
+const contributedPlugin = (ran, tools = [{
+  name: 'package_tool', description: 'A tool from a package.', parameters: {},
+  async execute() { ran.push('tool'); return { content: 'ran' }; },
+}]) => ({
+  name: 'third-party-package', inject: ['tools'],
+  apply(ctx) { ran.push('plugin'); for (const tool of tools) ctx.tools.register(tool); },
+});
+
+test('an unattended plugin install refuses before plugin code executes', async () => {
+  const kernel = createKernel();
+  const ran = [];
+  try {
+    await kernel.ctx.plugin(flytTools);
+    await assert.rejects(
+      () => flytTools.installPlugin(kernel.ctx, contributedPlugin(ran)),
+      /requires an attended human classification review/);
+    assert.deepEqual(ran, [], 'refusal happens before apply(), not after an untrusted side effect');
+    assert.equal(kernel.ctx.tools.get('package_tool'), undefined);
+  } finally { await kernel.dispose(); }
+});
+
+test('declining keeps the plugin installed but its tools unclassified and unreachable', async () => {
+  const kernel = createKernel();
+  const ran = [];
+  let shown;
+  try {
+    await kernel.ctx.plugin(flytTools);
+    await kernel.ctx.plugin(flytApprovals, { mode: 'always' });
+    await flytTools.installPlugin(kernel.ctx, contributedPlugin(ran), {
+      attended: true,
+      decide(proposals) {
+        shown = proposals;
+        return Object.fromEntries(proposals.map(p => [p.name, null]));
+      },
+    });
+
+    assert.deepEqual(ran, ['plugin'], 'the installed plugin remains active');
+    assert.equal(shown.length, 1, 'all contributed tools are shown in one pass');
+    assert.deepEqual(shown[0].requested, ['tools'], 'what the plugin asked for is visible');
+    assert.deepEqual(shown[0].inferredFrom.seams, ['tools'], 'the exact inference evidence is visible');
+    assert.match(shown[0].permits, /eligible for a later, explicit ceiling grant/);
+    assert.match(shown[0].doesNotPermit, /execution.*toolset.*ceiling/);
+    assert.equal(kernel.ctx.tools.get('package_tool').classification, undefined);
+
+    const result = await kernel.ctx.tools.execute({
+      runId: 'r', blockId: 'b', step: 1,
+      call: { id: 'c', name: 'package_tool', args: {} }, ceiling: ['package_tool'],
+    });
+    assert.match(result.error, /unclassified/);
+    assert.deepEqual(ran, ['plugin'], 'declining never calls the tool');
+  } finally { await kernel.dispose(); }
+});
+
+test('the install pass rejects a looser edit atomically', async () => {
+  const kernel = createKernel();
+  const ran = [];
+  const claimedShell = name => ({
+    name, description: '', parameters: {},
+    classification: { effect: 'shell', destructive: true, untrustedInput: false, source: 'confirmed' },
+    async execute() { return { content: 'ran' }; },
+  });
+  try {
+    await kernel.ctx.plugin(flytTools);
+    await assert.rejects(
+      () => flytTools.installPlugin(kernel.ctx,
+        contributedPlugin(ran, [claimedShell('first'), claimedShell('second')]), {
+          attended: true,
+          decide: proposals => ({
+            first: proposals[0],
+            second: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+          }),
+        }),
+      /"second" cannot be classified more loosely/);
+    assert.equal(kernel.ctx.tools.get('first').classification, undefined,
+      'validation finishes before any decision is applied');
+    assert.equal(kernel.ctx.tools.get('second').classification, undefined);
+  } finally { await kernel.dispose(); }
+});
+
+test('a confirmed tool still leaves when its plugin is disposed', async () => {
+  const kernel = createKernel();
+  const ran = [];
+  try {
+    await kernel.ctx.plugin(flytTools);
+    const fiber = await flytTools.installPlugin(kernel.ctx, contributedPlugin(ran), {
+      attended: true,
+      decide: proposals => ({ package_tool: proposals[0] }),
+    });
+    assert.equal(kernel.ctx.tools.get('package_tool').classification.source, 'confirmed');
+    await fiber.dispose();
+    assert.equal(kernel.ctx.tools.get('package_tool'), undefined,
+      'classification must not sever the registry disposer from its plugin');
+  } finally { await kernel.dispose(); }
 });
