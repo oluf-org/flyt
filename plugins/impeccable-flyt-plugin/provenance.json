@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "project": "https://github.com/pbakaus/impeccable",
+    "installerPackage": "impeccable",
+    "installerVersion": "3.6.0",
+    "installerNpmIntegrity": "sha512-nysc6/2OHTWqLrcSxTxZk4r4QMufhU8NTIuG2ic6p5zzyZe45AWBX3/18OA5S88pCWq+4z8pKsjUxhAM990RKg==",
+    "bundleUrl": "https://impeccable.style/api/download/bundle/universal",
+    "artifactFilename": "impeccable-style-universal.zip",
+    "artifactRetrievedAt": "2026-08-27T17:46:21Z",
+    "artifactSha256": "0d41426a06c9a4119980323d2a2dd4da7f278fb3cface84a8650b25b8b896626",
+    "embeddedSkillVersion": "4.1.1",
+    "contextualReleaseTag": "skill-v4.1.1",
+    "contextualReleaseCommit": "5a149f3fdb1b5793f10567233b1dcab98fc305fd",
+    "releaseRelationship": "Context only: the bundle endpoint payload is not byte-identical to the tagged repository tree. The downloaded artifact checksum and normalized payload digest are canonical."
+  },
+  "payload": {
+    "path": ".flyt/skills/impeccable",
+    "fileCount": 153,
+    "normalizedTreeSha256": "15b2b5e277aa401ef89c348639353aa709a00f96954068700b7385e28fdb1d5b",
+    "canonicalization": "Files sorted by slash-separated relative path; CRLF normalized to LF; each path and content framed by UTF-8 byte length; the declared Flyt metadata line removed exactly once.",
+    "flytDelta": {
+      "file": "SKILL.md",
+      "exactLine": "requiresTools: [impeccable_detect]"
+    }
+  }
+}
