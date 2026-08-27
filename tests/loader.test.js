@@ -220,7 +220,10 @@ test('a row naming something that is not a plugin says which row', async () => {
   const kernel = createKernel();
   try {
     await assert.rejects(
-      async () => { await mount(kernel.ctx, [{ id: 'broken', name: 'not-a-plugin' }], { import: async () => ({ hello: 1 }) }); },
+      async () => { await mount(kernel.ctx, [{ id: 'broken', name: 'not-a-plugin' }], {
+        import: async () => ({ hello: 1 }),
+        toolReview: { attended: true, decide: () => ({}) },
+      }); },
       /"not-a-plugin" \(entry "broken"\) is not a plugin/,
     );
   } finally { await kernel.dispose(); }
@@ -229,6 +232,7 @@ test('a row naming something that is not a plugin says which row', async () => {
 test('the Loop installer refuses even a tool plugin that declares no tools injection', async () => {
   const kernel = createKernel({ profile: 'flyt-loop-worker' });
   let applied = 0;
+  let imported = 0;
   const external = {
     // It declares no injection at all. The external-package boundary must not
     // trust that omission enough to execute it unattended.
@@ -239,10 +243,11 @@ test('the Loop installer refuses even a tool plugin that declares no tools injec
     await kernel.ctx.plugin(flytTools);
     await assert.rejects(
       () => kernel.install([{ id: 'external', name: 'some-package' }], {
-        import: async () => external,
+        import: async () => { imported += 1; return external; },
       }),
       /requires an attended human classification review/);
     assert.equal(applied, 0, 'the Loop/unattended path refuses before plugin execution');
+    assert.equal(imported, 0, 'the package is refused before import-time code can execute');
   } finally { await kernel.dispose(); }
 });
 

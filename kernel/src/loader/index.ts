@@ -185,6 +185,12 @@ export async function mount(
       continue;
     }
 
+    const bundled = entry.name.startsWith('flyt:') || entry.name.startsWith('@flyt/');
+    // Importing a package executes its top-level module body. An unattended
+    // refusal therefore belongs before import(), not merely before apply().
+    if (!bundled && (!options.toolReview?.attended || typeof options.toolReview.decide !== 'function')) {
+      throw new Error('Refused: installing a tool-capable plugin requires an attended human classification review');
+    }
     const module: any = await load(entry.name);
     const plugin = module?.default ?? module;
     if (!plugin || (typeof plugin !== 'function' && typeof plugin.apply !== 'function')) {
@@ -194,7 +200,6 @@ export async function mount(
     // are composition. EVERY external package goes through review because a
     // plugin that omitted or disguised `inject: ['tools']` must not earn a
     // bypass. With no reviewer (the Loop profile), refusal precedes apply().
-    const bundled = entry.name.startsWith('flyt:') || entry.name.startsWith('@flyt/');
     if (!bundled) {
       await installPlugin(ctx, plugin, options.toolReview, entry.config);
     } else {
