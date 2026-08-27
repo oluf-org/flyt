@@ -45,6 +45,26 @@ import { LoopLog } from './loopLog.js';
 
 const PUSH_COALESCE_MS = 80;
 
+export async function probeSubscriptionCapability({ provider, model }, { call = callModel } = {}) {
+  try {
+    // callModel's public contract is one request object. Pin that shape here so
+    // the tiny prompt, single attempt and hard deadline cannot be dropped by a
+    // future refactor of this preflight.
+    await call({
+      provider, model, prompt: 'Reply with OK.', maxTokens: 1, stream: false,
+      retry: { attempts: 1 }, timeout: { hardMs: 15_000, idleMs: 15_000 }
+    });
+    return { ok: true, status: 'usable' };
+  } catch (error) {
+    // Only the shared classifier's actual model-rejection category is
+    // unsupported. Auth, quota, network and runtime failures are inconclusive.
+    const failure = classifyAdapterError(error, { provider, model });
+    return failure.code === 'capability'
+      ? { ok: false, status: 'unsupported', reason: 'The provider rejected this model.' }
+      : { ok: false, status: 'unknown', reason: 'The capability check did not complete.' };
+  }
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.projectRoot   The app's own code + bundled assets (read-only when packaged).
@@ -252,21 +272,7 @@ export function createEngine({
   // subscription CLIs. It is intentionally not automatic during ordinary model
   // resolution; Loop/doctor invoke it only for selected models and the cache
   // bounds repeats.
-  const effectiveCapabilityProbe = capabilityProbe ?? (async ({ provider, model }) => {
-    try {
-      await callModel({ provider, model, prompt: 'Reply with OK.', maxTokens: 1,
-        stream: false, retry: { attempts: 1 }, timeout: { hardMs: 15000, idleMs: 15000 } });
-      return { ok: true, status: 'usable' };
-    } catch (error) {
-      // A failed probe is not automatically a rejected model: auth, network,
-      // quota, and CLI/runtime failures remain unknown. Use the shared stable
-      // classifier, but expose only a generic, credential-safe reason.
-      const failure = classifyAdapterError(error, { provider, model });
-      return failure.code === 'capability'
-        ? { ok: false, status: 'unsupported', reason: 'The provider rejected this model.' }
-        : { ok: false, status: 'unknown', reason: 'The capability check did not complete.' };
-    }
-  });
+  const effectiveCapabilityProbe = capabilityProbe ?? probeSubscriptionCapability;
   function resolveModelSource(modelId, pinned = null) {
     const entry = (settings.activeModels ?? []).find(m => m.id === modelId);
     const source = pinned ?? entry?.source ?? 'auto';

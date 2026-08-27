@@ -23,6 +23,7 @@ import { ChatStore, runChatTurn, CHAT_TOOLS } from './chat.js';
 import { breakdown, costOf, liveEntries, totalsWithLive } from './ledger.js';
 import { executeTool, getTools, registerDefinition } from './tools/index.js';
 import { canUseFlytTools } from './adapters/index.js';
+import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
 import { isDestructive } from '../src/toolTypes.js';
 import { pythonStatus, setupPython } from './python.js';
 import { loadToolSuite, runToolSuite, SUITE_DIR } from './toolbench.js';
@@ -1267,21 +1268,31 @@ export function createApi(engine) {
           const w = resolveWorkerArg({ provider: 'auto', model: id });
           if (w) checks.push({ provider: w.provider, model: id, band });
         }
-        for (const target of checks) {
+        // The reviewer is the most common subscription CLI in a Loop session.
+        // Validate it now too; finding out after a worker has changed the repo
+        // is precisely the late failure this preflight exists to prevent.
+        const selectedReviewer = sessionReviewer ?? reviewWorker(runtimeConfig);
+        if (selectedReviewer) checks.push({
+          provider: selectedReviewer.provider, model: selectedReviewer.model, reviewer: true
+        });
+        const uniqueChecks = [...new Map(checks.map(target => [
+          `${target.provider}:${target.model}`, target
+        ])).values()];
+        for (const target of uniqueChecks) {
           if (!SUBSCRIPTION_PROVIDERS.includes(target.provider)) continue;
           const result = await engine.capabilityCache.check(
             `${target.provider}:${target.model}`,
             () => engine.capabilityProbe({ provider: target.provider, model: target.model }));
           if (result.status === 'unsupported') {
             throw new ApiError(
-              `The configured ${target.provider} model "${target.model}" is not usable by this signed-in account. ` +
-              `Choose a supported model in Settings, refresh subscription capabilities, or set an explicit manual model override.`,
+              `The configured ${target.provider} ${target.reviewer ? 'reviewer ' : ''}model "${target.model}" is not usable by this signed-in account. ` +
+              `Choose a supported model in Settings, run "flyt call subscription:refresh", or set an explicit manual model override.`,
               { status: 400, code: 'model_unsupported' });
           }
           if (result.status === 'unknown') {
             throw new ApiError(
               `Could not confirm that the configured ${target.provider} model "${target.model}" is usable. ` +
-              `Refresh subscription capabilities and try again, or set an explicit manual model override.`,
+              `Run "flyt call subscription:refresh" and try again, or set an explicit manual model override.`,
               { status: 503, code: 'model_capability_unknown' });
           }
         }

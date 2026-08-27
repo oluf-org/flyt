@@ -449,12 +449,11 @@ export function createResolver({ hasKey, canServe, priority }) {
 // probe function (normally one tiny CLI call per selected model). The cache is
 // process-local: credentials and probe responses never become settings or logs.
 export const CAPABILITY_CACHE_TTL_MS = 15 * 60 * 1000;
-export const CAPABILITY_MAX_PROBES = 3;
 
-export function createCapabilityCache({ ttlMs = CAPABILITY_CACHE_TTL_MS, maxProbes = CAPABILITY_MAX_PROBES, now = () => Date.now() } = {}) {
+export function createCapabilityCache({ ttlMs = CAPABILITY_CACHE_TTL_MS, now = () => Date.now() } = {}) {
   const entries = new Map();
-  let refreshStarted = 0;
-  let probes = 0;
+  const pending = new Map();
+  let generation = 0;
   return {
     async check(key, probe) {
       const k = String(key);
@@ -462,36 +461,36 @@ export function createCapabilityCache({ ttlMs = CAPABILITY_CACHE_TTL_MS, maxProb
       const cached = entries.get(k);
       if (cached && cached.expiresAt > current) return { ...cached.value, cached: true };
       if (typeof probe !== 'function') return { ok: false, status: 'unknown', reason: 'No capability probe is configured.' };
-      // A single cache instance bounds work per refresh. Never include probe
-      // arguments or errors verbatim: CLIs sometimes echo auth/config details.
-      if (!refreshStarted || current - refreshStarted >= ttlMs) {
-        refreshStarted = current;
-        probes = 0;
-      }
-      if (probes >= maxProbes) return { ok: false, status: 'unknown', reason: 'Capability discovery limit reached; retry later.' };
-      probes += 1;
-      let value;
-      try {
-        const result = await probe();
-        // Probes must distinguish a provider rejection from auth, runtime,
-        // network, and other inconclusive failures. Only an explicit capability
-        // result is safe to advertise as unsupported.
-        const status = result?.status === 'unsupported' ? 'unsupported'
-          : result?.status === 'unknown' || result?.status === 'error' ? 'unknown'
-            : result?.ok ? 'usable' : 'unsupported';
-        value = { ok: status === 'usable', status,
-          ...(result?.reason ? { reason: String(result.reason).slice(0, 160) } : {}) };
-      } catch {
-        value = { ok: false, status: 'unknown', reason: 'Capability check failed without exposing CLI details.' };
-      }
-      const stamp = now();
-      entries.set(k, { value, expiresAt: stamp + ttlMs, refreshAt: stamp });
-      return value;
+      // Bound per selected model, not per process: one short probe per key per
+      // TTL, with concurrent readers sharing the same promise. A global count
+      // made the fourth configured Loop model impossible to validate forever.
+      if (pending.has(k)) return pending.get(k);
+      const startedIn = generation;
+      const work = (async () => {
+        let value;
+        try {
+          const result = await probe();
+          // Only an explicit provider model rejection is unsupported. A bare
+          // false, auth error, timeout or runtime failure remains unknown.
+          const status = result?.status === 'unsupported' ? 'unsupported'
+            : result?.status === 'usable' || result?.ok === true ? 'usable'
+              : 'unknown';
+          value = { ok: status === 'usable', status,
+            ...(result?.reason ? { reason: String(result.reason).slice(0, 160) } : {}) };
+        } catch {
+          value = { ok: false, status: 'unknown', reason: 'Capability check failed without exposing CLI details.' };
+        }
+        const stamp = now();
+        if (generation === startedIn) entries.set(k, { value, expiresAt: stamp + ttlMs, refreshAt: stamp });
+        return value;
+      })();
+      pending.set(k, work);
+      try { return await work; }
+      finally { if (pending.get(k) === work) pending.delete(k); }
     },
-    // Refresh is an explicit operator action: discard results and restart the
-    // bounded probe window together. Otherwise a refresh after the limit was
-    // reached would remain permanently unknown until the TTL elapsed.
-    clear() { entries.clear(); probes = 0; refreshStarted = 0; }
+    // In-flight probes may finish, but a refresh generation prevents their old
+    // answers from repopulating the new cache.
+    clear() { generation += 1; entries.clear(); pending.clear(); }
   };
 }
 
