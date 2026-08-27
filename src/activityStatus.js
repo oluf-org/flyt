@@ -5,7 +5,7 @@
 // detailed run view, while the persistent chrome only needs identity, phase,
 // the allowlisted subject of the latest tool, and freshness.
 import { activeStreams } from './runStreams.js';
-import { currentNode, toolCalls } from './loopLive.js';
+import { currentNode } from './loopLive.js';
 
 export const ACTIVITY_STALE_MS = 90_000;
 
@@ -35,13 +35,36 @@ const SAFE_TOOL_NAMES = new Set([
 ]);
 
 function safeFileSubject(value) {
+  if (typeof value !== 'string' || !value.trim() || value.length > 120) return null;
+  if (/\b(prompt|reasoning|output|stdout|stderr|api[_ -]?key|token|password|secret|authorization|bearer)\b/i.test(value)) return null;
   const subject = safeActivityLabel(value, 60);
   if (!subject) return null;
   // File-operation subjects are deliberately narrower than generic labels:
   // paths/patterns only, never arbitrary tool arguments or command text.
   const allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./\\:*?()[]{}+@#% -';
   if ([...subject].some(char => !allowed.includes(char))) return null;
+  // A plain sentence made only of letters and spaces is not a path. Requiring
+  // a separator, a glob marker, a dotfile prefix, or a filename extension is
+  // conservative on purpose: persistent chrome may omit an unusual path, but
+  // it must never mistake prompt prose for one.
+  if (!/[\\/]/.test(subject) && !/[*?\[\]]/.test(subject)
+      && !/^\./.test(subject) && !/\.[a-z0-9]{1,12}$/i.test(subject)) return null;
   return subject;
+}
+
+function latestActivityTool(snapshot) {
+  const calls = [];
+  for (const retro of Object.values(snapshot?.retrospectives ?? {})) {
+    for (const call of retro?.toolCalls ?? []) calls.push(call);
+  }
+  const call = calls.at(-1) ?? null;
+  const name = SAFE_TOOL_NAMES.has(call?.tool) ? call.tool : null;
+  if (!name) return null;
+  const field = {
+    read_file: 'path', write_file: 'path', create_file: 'path', edit_file: 'path', glob: 'pattern'
+  }[name];
+  const subject = field ? safeFileSubject(call?.args?.[field]) : null;
+  return safeActivityLabel(`${name}${subject ? ` ${subject}` : ''}`, 76);
 }
 
 export function safeActivityLabel(value, max = 64) {
@@ -92,23 +115,18 @@ export function runActivity(record, now = Date.now(), { staleMs = ACTIVITY_STALE
   const ageMs = Math.max(0, now - updatedAt);
   const live = record.live !== false;
   const node = currentNode(snapshot);
-  const call = toolCalls(snapshot, 1)[0] ?? null;
+  const tool = latestActivityTool(snapshot);
   const streamPresent = activeStreams(snapshot).some(s => Boolean(s.text));
   const phase = phaseFor(snapshot, {
-    live, ageMs, staleMs, hasTool: Boolean(call), hasStream: streamPresent, node
+    live, ageMs, staleMs, hasTool: Boolean(tool), hasStream: streamPresent, node
   });
   const worker = workerFor(snapshot, node);
   const provider = safeActivityLabel(worker?.provider, 28);
   const model = safeActivityLabel(worker?.model, 56);
   const nodeLabel = safeActivityLabel(node?.label, 52);
-  const toolName = SAFE_TOOL_NAMES.has(call?.name) ? call.name : null;
   // Commands, questions, searches and URLs can contain prompt text or
-  // credentials. Persistent chrome shows their tool name only; a small
-  // allowlist of local file operations may also show the path/pattern.
-  const toolSubject = SAFE_TOOL_SUBJECTS.has(call?.name)
-    ? safeFileSubject(call?.argsPreview)
-    : null;
-  const tool = toolName ? safeActivityLabel(`${toolName}${toolSubject ? ` ${toolSubject}` : ''}`, 76) : null;
+  // credentials. latestActivityTool exposes their allowlisted tool name only;
+  // file tools may additionally expose one exact structured path field.
   const phaseLabel = PHASE_LABELS[phase];
   const workerLabel = safeActivityLabel([provider, model].filter(Boolean).join('/'), 72);
   const detail = safeActivityLabel(tool ?? nodeLabel ?? model ?? provider, 80);

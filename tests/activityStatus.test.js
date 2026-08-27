@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { projectActivity, runActivity, safeActivityLabel } from '../src/activityStatus.js';
 
 const snapshot = ({ stage = 'execution', stream = '', calls = [], meta = {} } = {}) => ({
@@ -81,12 +82,47 @@ test('persistent activity never exposes prompts, streams, results, controls, or 
   const extensionView = runActivity(record(extension), 10_100);
   assert.equal(extensionView.tool, null);
   assert.doesNotMatch(extensionView.ariaLabel, /PRIVATE|raw output/i);
+
+  // Even an allowlisted file tool gets no generic argsPreview escape hatch.
+  // Only its exact path/pattern field is considered, and it must look like a
+  // path rather than prompt prose, a secret, raw output, or a giant argument.
+  for (const path of [
+    'PRIVATE USER PROMPT',
+    'stdout PRIVATE COMMAND OUTPUT',
+    'api_key=super-secret-value.txt',
+    `${'x'.repeat(200)}.txt`
+  ]) {
+    const hostile = runActivity(record(snapshot({ calls: [{
+      tool: 'read_file', args: { path, argsPreview: 'src/decoy.js' }, ok: true
+    }] })), 10_100);
+    assert.equal(hostile.tool, 'read_file');
+    assert.doesNotMatch(JSON.stringify(hostile), /PRIVATE|COMMAND OUTPUT|super-secret|decoy|x{40}/i);
+  }
 });
 
-test('activity labels remain useful and non-animated under reduced motion', () => {
+test('activity labels remain useful and accessible without relying on motion', () => {
   const view = runActivity(record(snapshot()), 10_100);
   assert.equal(view.phaseLabel, 'Thinking');
   assert.match(view.ariaLabel, /AI activity: Thinking/);
   assert.match(view.ariaLabel, /Updated now/);
   assert.ok(view.shortLabel.length <= 72);
+});
+
+test('reduced-motion CSS disables both persistent activity animations', () => {
+  const css = fs.readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+  const blocks = [];
+  for (const match of css.matchAll(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{/g)) {
+    let depth = 1;
+    let end = match.index + match[0].length;
+    for (; end < css.length && depth; end += 1) {
+      if (css[end] === '{') depth += 1;
+      else if (css[end] === '}') depth -= 1;
+    }
+    blocks.push(css.slice(match.index, end));
+  }
+  const reduced = blocks.find(block => block.includes('.shell-activity-dot')) ?? '';
+  assert.match(reduced, /\.shell-activity-dot/);
+  assert.match(reduced, /\.tab-live-dot/);
+  assert.match(reduced, /animation:\s*none\s*!important/);
+  assert.match(reduced, /transform:\s*none\s*!important/);
 });
