@@ -2026,8 +2026,7 @@ export default function App() {
           </>}
         </nav>
         {runView && stage && <span className="stage-chip">{stage.replace(/_/g, ' ')}</span>}
-        {activeProjectActivity && activeProjectActivity.phase !== 'idle'
-          && (activeProjectActivity.active || activeProjectActivity.ageMs < 15_000) && (
+        {activeProjectActivity && activeProjectActivity.phase !== 'idle' && (
           <div
             className="shell-activity"
             data-phase={activeProjectActivity.phase}

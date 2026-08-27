@@ -24,6 +24,25 @@ const PHASE_LABELS = {
 
 const SECRET = /(bearer\s+\S+|\b(?:sk|pk)-[a-z0-9_-]{8,}|\b(?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*[^\s,;]+)/gi;
 const SAFE_TOOL_SUBJECTS = new Set(['read_file', 'write_file', 'create_file', 'edit_file', 'glob']);
+// Tool names are metadata too: do not let an extension smuggle a prompt or
+// command into persistent chrome. Names remain useful even when their subject
+// is intentionally hidden (for example bash).
+const SAFE_TOOL_NAMES = new Set([
+  ...SAFE_TOOL_SUBJECTS,
+  'bash', 'run_gate', 'read_task', 'update_task', 'why_blocked', 'read_run',
+  'web_fetch', 'web_search', 'search_references', 'enqueue_task', 'create_task',
+  'ask_human'
+]);
+
+function safeFileSubject(value) {
+  const subject = safeActivityLabel(value, 60);
+  if (!subject) return null;
+  // File-operation subjects are deliberately narrower than generic labels:
+  // paths/patterns only, never arbitrary tool arguments or command text.
+  const allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./\\:*?()[]{}+@#% -';
+  if ([...subject].some(char => !allowed.includes(char))) return null;
+  return subject;
+}
 
 export function safeActivityLabel(value, max = 64) {
   if (value == null) return null;
@@ -82,12 +101,12 @@ export function runActivity(record, now = Date.now(), { staleMs = ACTIVITY_STALE
   const provider = safeActivityLabel(worker?.provider, 28);
   const model = safeActivityLabel(worker?.model, 56);
   const nodeLabel = safeActivityLabel(node?.label, 52);
-  const toolName = safeActivityLabel(call?.name, 28);
+  const toolName = SAFE_TOOL_NAMES.has(call?.name) ? call.name : null;
   // Commands, questions, searches and URLs can contain prompt text or
   // credentials. Persistent chrome shows their tool name only; a small
   // allowlist of local file operations may also show the path/pattern.
   const toolSubject = SAFE_TOOL_SUBJECTS.has(call?.name)
-    ? safeActivityLabel(call?.argsPreview, 60)
+    ? safeFileSubject(call?.argsPreview)
     : null;
   const tool = toolName ? safeActivityLabel(`${toolName}${toolSubject ? ` ${toolSubject}` : ''}`, 76) : null;
   const phaseLabel = PHASE_LABELS[phase];

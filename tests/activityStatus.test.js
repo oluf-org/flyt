@@ -73,4 +73,20 @@ test('persistent activity never exposes prompts, streams, results, controls, or 
   assert.match(safeActivityLabel('api_key=super-secret-value'), /redacted/);
   assert.equal(safeActivityLabel('line\nwith\u0000controls', 40), 'line with controls');
   assert.ok(safeActivityLabel('x'.repeat(200), 20).length <= 20);
+
+  // Unknown tools and argument-shaped metadata never become persistent UI.
+  const extension = snapshot({ calls: [{ tool: 'custom_tool', args: {
+    subject: 'PRIVATE USER PROMPT', command: 'echo raw output'
+  } }] });
+  const extensionView = runActivity(record(extension), 10_100);
+  assert.equal(extensionView.tool, null);
+  assert.doesNotMatch(extensionView.ariaLabel, /PRIVATE|raw output/i);
+});
+
+test('activity labels remain useful and non-animated under reduced motion', () => {
+  const view = runActivity(record(snapshot()), 10_100);
+  assert.equal(view.phaseLabel, 'Thinking');
+  assert.match(view.ariaLabel, /AI activity: Thinking/);
+  assert.match(view.ariaLabel, /Updated now/);
+  assert.ok(view.shortLabel.length <= 72);
 });

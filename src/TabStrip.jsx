@@ -73,7 +73,10 @@ export default function TabStrip({ tabs, activeId, live, activity = {}, saveStat
         const active = t.id === activeId;
         const liveN = live[t.id] ?? 0;
         const status = activity[t.id] ?? null;
-        const showActivity = liveN > 0 || (status && status.phase !== 'idle' && status.ageMs < 15_000);
+        // Activity is intentionally not tied to the selected document. Keep a
+        // settled/stalled summary in the tab until a newer snapshot replaces it
+        // so leaving a run never turns the project back into an anonymous dot.
+        const showActivity = liveN > 0 || (status && status.phase !== 'idle');
         const dirty = active && saveState !== 'saved';
         const editing = editingId === t.id;
         return (
@@ -110,7 +113,10 @@ export default function TabStrip({ tabs, activeId, live, activity = {}, saveStat
                 aria-label={status?.ariaLabel ?? `${liveN} live run${liveN === 1 ? '' : 's'}`}
               >
                 <span className="tab-live-dot" aria-hidden="true" />
-                {active && <span className="tab-live-text">{status?.shortLabel ?? `${liveN} running`}</span>}
+                <span className="tab-live-text">{
+                  status?.shortLabel
+                    ?? (liveN === 1 ? 'AI running' : `${liveN} AI runs`)
+                }</span>
               </span>
             )}
             {editing ? (
