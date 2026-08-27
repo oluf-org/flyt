@@ -332,11 +332,12 @@ export async function landTask({
   announce('land');
   const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: pool.dirFor(taskId) });
   const verifyMerged = verify ? async args => {
-    const dependencies = await syncDependencies({ dir: repoRoot, changedFiles, log });
+    const canaryRoot = args?.repoRoot ?? repoRoot;
+    const dependencies = await syncDependencies({ dir: canaryRoot, changedFiles, log });
     if (!dependencies.ok) {
       return { ok: false, results: [dependencies], failure: dependencies };
     }
-    return verify(args);
+    return verify({ ...args, repoRoot: canaryRoot });
   } : null;
   const result = record('land', await gitLand({
     repoRoot, branch, base,

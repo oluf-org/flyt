@@ -910,7 +910,7 @@ test('a task that changed nothing is a failure, and does not cost a review to no
     pool, repoRoot: root, taskId: 't-0001', base: 'main',
     task: { title: 'Change nothing' },
     config: { workers: { reviewer: { provider: 'script', model: 'm' } }, retry: { attempts: 1, baseMs: 1 } },
-    verify: async () => runGates([SUITE], { cwd: root })
+    verify: async ({ repoRoot: canaryRoot }) => runGates([SUITE], { cwd: canaryRoot })
   });
 
   assert.equal(result.landed, false);
@@ -952,7 +952,7 @@ test('a deliverable git is ignoring is not "no change", and says so', async () =
     pool, repoRoot: root, taskId: 't-0001', base: 'main',
     task: { title: 'Write the note' },
     config: { workers: { reviewer: { provider: 'script', model: 'm' } }, retry: { attempts: 1, baseMs: 1 } },
-    verify: async () => runGates([SUITE], { cwd: root })
+    verify: async ({ repoRoot: canaryRoot }) => runGates([SUITE], { cwd: canaryRoot })
   });
 
   assert.equal(result.landed, false);
@@ -993,6 +993,42 @@ test('a task lands on main by itself when the gates and the reviewer agree', asy
   // run — asking for it again would be a second full suite for a number we
   // already have.
   assert.match(result.canaryOutput, /# tests 2/);
+  assert.equal(result.steps.at(-1).canary.isolation, 'detached-worktree');
+});
+
+test('the merged canary is isolated from ignored state in the main checkout', async () => {
+  const root = await makeRepo();
+  fs.writeFileSync(path.join(root, '.gitignore'), 'local-state/\n');
+  await git(['add', '.gitignore'], { cwd: root });
+  await git(['commit', '-m', 'ignore local state'], { cwd: root });
+  const localState = path.join(root, 'local-state', 'seeded.json');
+  fs.mkdirSync(path.dirname(localState), { recursive: true });
+  fs.writeFileSync(localState, '{"checkout":"contaminant"}\n');
+  const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
+  await pool.create('t-0001', 'Add an isolated feature');
+  fs.writeFileSync(path.join(pool.dirFor('t-0001'), 'feature.js'), 'export const isolated = true;\n');
+  await pool.commit('t-0001', 'add isolated feature');
+  approving();
+  let observedRoot = null;
+
+  const result = await landTask({
+    pool, repoRoot: root, taskId: 't-0001', base: 'main',
+    task: { title: 'Add an isolated feature', blastRadius: ['feature.js'] },
+    config: { workers: { reviewer: { provider: 'script', model: 'm' } }, retry: { attempts: 1, baseMs: 1 } },
+    verify: async ({ repoRoot: canaryRoot }) => {
+      observedRoot = canaryRoot;
+      assert.notEqual(canaryRoot, root);
+      assert.ok(fs.existsSync(path.join(canaryRoot, 'feature.js')));
+      assert.ok(!fs.existsSync(path.join(canaryRoot, 'local-state', 'seeded.json')),
+        'ignored checkout state does not leak into the merged revision under test');
+      return runGates([SUITE], { cwd: canaryRoot });
+    },
+  });
+
+  assert.equal(result.landed, true, JSON.stringify(result.steps));
+  assert.equal(result.steps.at(-1).canary.isolation, 'detached-worktree');
+  assert.ok(observedRoot && !fs.existsSync(observedRoot), 'the detached canary is cleaned up');
+  assert.ok(fs.existsSync(localState), 'the user checkout contaminant is preserved, not deleted');
 });
 
 test('a dependency-changing task syncs its worktree and merged canary environment', async () => {
@@ -1014,11 +1050,12 @@ test('a dependency-changing task syncs its worktree and merged canary environmen
       synced.push(target);
       return { ok: true, command: 'fake install', status: 'pass' };
     },
-    verify: async () => runGates([SUITE], { cwd: root })
+    verify: async ({ repoRoot: canaryRoot }) => runGates([SUITE], { cwd: canaryRoot })
   });
 
   assert.equal(result.landed, true, JSON.stringify(result.steps));
-  assert.deepEqual(synced, [dir, root]);
+  assert.equal(synced[0], dir);
+  assert.notEqual(synced[1], root, 'the merged dependency graph is materialised in the canary checkout');
   assert.ok(result.steps.some(step => step.step === 'dependencies'));
 });
 
@@ -1050,7 +1087,9 @@ test('a reverted dependency change restores the base dependency tree', async () 
 
   assert.equal(result.landed, false);
   assert.equal(result.stage, 'canary');
-  assert.deepEqual(synced, [dir, root, root]);
+  assert.equal(synced[0], dir);
+  assert.notEqual(synced[1], root, 'the bad merged graph is tested away from checkout state');
+  assert.equal(synced[2], root, 'the reverted base dependency tree is restored in the main checkout');
 });
 
 test('a change that passes alone but breaks main is reverted, not left behind', async () => {
@@ -1069,7 +1108,8 @@ test('a change that passes alone but breaks main is reverted, not left behind', 
     // The canary: green in the worktree, red once merged. Two branches that
     // each pass in isolation can fail together, and with tasks landing hourly
     // that will happen.
-    verify: async () => runGates([SUITE], { cwd: root, env: { ...process.env, BREAK: '1' } })
+    verify: async ({ repoRoot: canaryRoot }) =>
+      runGates([SUITE], { cwd: canaryRoot, env: { ...process.env, BREAK: '1' } })
   });
 
   assert.equal(result.landed, false);

@@ -166,6 +166,24 @@ export function isInside(root, dir) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+function linkDependencyTree(repoRoot, dir) {
+  const target = path.join(repoRoot, 'node_modules');
+  const link = path.join(dir, 'node_modules');
+  try {
+    if (!fs.existsSync(target) || fs.existsSync(link)) return;
+    fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch { /* the gate reports a dependency tree it cannot use */ }
+}
+
+function unlinkDependencyTree(dir) {
+  const link = path.join(dir, 'node_modules');
+  let stat;
+  try { stat = fs.lstatSync(link); } catch { return; }
+  if (!stat.isSymbolicLink()) return;
+  try { fs.unlinkSync(link); }
+  catch { try { fs.rmdirSync(link); } catch { /* cleanup reports through git below */ } }
+}
+
 /**
  * Give back what a dead loop was holding, on the next loop's way in.
  *
@@ -404,12 +422,7 @@ export class WorktreePool {
    * @param dir — the worktree.
    */
   #linkDependencies(dir) {
-    const target = path.join(this.repoRoot, 'node_modules');
-    const link = path.join(dir, 'node_modules');
-    try {
-      if (!fs.existsSync(target) || fs.existsSync(link)) return;
-      fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
-    } catch { /* no link: the gate reports what it could not find */ }
+    linkDependencyTree(this.repoRoot, dir);
   }
 
   /**
@@ -423,12 +436,7 @@ export class WorktreePool {
    * @param dir — the worktree.
    */
   #unlinkDependencies(dir) {
-    const link = path.join(dir, 'node_modules');
-    let stat;
-    try { stat = fs.lstatSync(link); } catch { return; }
-    if (!stat.isSymbolicLink()) return;
-    try { fs.unlinkSync(link); }
-    catch { try { fs.rmdirSync(link); } catch { /* leave it; the caller reports what it could not remove */ } }
+    unlinkDependencyTree(dir);
   }
 
   /**
@@ -764,9 +772,10 @@ export async function pushRefs({ repoRoot, base, branch = null, remote = 'origin
 /**
  * Merge a task branch into the base, then verify the RESULT.
  *
- * `verify` runs the gates against the main checkout after the merge — the
- * canary. It is passed in rather than imported so the caller decides what
- * "green" means and so this stays testable without a suite.
+ * `verify` runs the gates against a clean detached worktree at the merge
+ * revision — the canary. The main checkout may contain ignored editor or
+ * runtime state, which is not part of the revision being judged and must not
+ * produce either a false pass or a false failure.
  *
  * On a red canary the merge commit is reverted and the failure is returned; the
  * caller re-files the task with the evidence. Nothing is left half-landed.
@@ -792,7 +801,7 @@ export async function land({
 
   let canary = null;
   if (verify) {
-    canary = await verify({ repoRoot, mergeSha });
+    canary = await verifyMergedInIsolation({ repoRoot, mergeSha, verify, log });
     if (!canary.ok) {
       // Revert rather than reset: the merge may already have been pushed, and
       // rewriting published history is a worse problem than an extra commit.
@@ -820,4 +829,48 @@ export async function land({
   // and it has just been run — asking for it again would be a second full suite
   // for a number we already have.
   return { landed: true, pushed: Boolean(push), mergeSha, canary };
+}
+
+async function verifyMergedInIsolation({ repoRoot, mergeSha, verify, log }) {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-canary-'));
+  const checkout = path.join(parent, 'checkout');
+  let registered = false;
+  let canary;
+  log(`canary: isolated detached worktree at ${mergeSha.slice(0, 8)}`);
+  try {
+    await git(['worktree', 'add', '--detach', checkout, mergeSha], { cwd: repoRoot });
+    registered = true;
+    linkDependencyTree(repoRoot, checkout);
+    canary = await verify({ repoRoot: checkout, mergeSha });
+  } catch (error) {
+    canary = {
+      ok: false,
+      results: [],
+      failure: {
+        command: 'isolated canary', status: 'fail', code: null,
+        output: String(error?.message ?? error),
+      },
+    };
+  }
+
+  let cleanupError = null;
+  unlinkDependencyTree(checkout);
+  if (registered) {
+    try { await git(['worktree', 'remove', '--force', checkout], { cwd: repoRoot }); }
+    catch (error) { cleanupError = error; }
+  }
+  try { fs.rmdirSync(parent); }
+  catch (error) { cleanupError ??= error; }
+  if (cleanupError) {
+    return {
+      ok: false,
+      results: canary?.results ?? [],
+      failure: {
+        command: 'isolated canary cleanup', status: 'fail', code: null,
+        output: String(cleanupError?.message ?? cleanupError),
+      },
+      isolation: 'detached-worktree', revision: mergeSha,
+    };
+  }
+  return { ...canary, isolation: 'detached-worktree', revision: mergeSha };
 }

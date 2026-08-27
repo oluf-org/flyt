@@ -1106,7 +1106,8 @@ export function createApi(engine) {
         push: wantPush ? (args => pushRefs({ ...args, log: () => {} })) : null,
         // The canary: the gates again, on the merged result in the main
         // checkout. Two branches that each pass alone can fail together.
-        verify: async () => verifyTask({ pool: { dirFor: () => entry.folder }, taskId, task })
+        verify: async ({ repoRoot: canaryRoot = entry.folder } = {}) =>
+          verifyTask({ pool: { dirFor: () => canaryRoot }, taskId, task })
       });
       if (result.landed) {
         backlog.update(taskId, {
