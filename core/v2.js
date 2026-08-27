@@ -71,7 +71,7 @@ export async function bootKernel({
   if (!flag.enabled) return null;
 
   const kernelModule = await load();
-  const { createKernel, loadComposition, mount, PROFILES, builtinImporter } = kernelModule;
+  const { createKernel, loadComposition, PROFILES, builtinImporter } = kernelModule;
 
   const kernel = createKernel({ profile });
   const profileEntries = (PROFILES[profile] ?? PROFILES['flyt-cli']).map(entry => {
@@ -83,7 +83,11 @@ export async function bootKernel({
   });
 
   const { entries } = loadComposition({ profile, profileEntries });
-  await mount(kernel.ctx, entries, { import: builtinImporter });
+  await kernel.install(entries, { import: builtinImporter });
 
-  return { kernel, ctx: kernel.ctx, dispose: () => kernel.dispose(), source: flag.source, profile };
+  return {
+    kernel, ctx: kernel.ctx, pluginReviews: kernel.pluginReviews,
+    install: (pluginEntries, installOptions) => kernel.install(pluginEntries, installOptions),
+    dispose: () => kernel.dispose(), source: flag.source, profile,
+  };
 }

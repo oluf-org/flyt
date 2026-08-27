@@ -12,7 +12,7 @@ import path from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
 import { parseYaml, type YamlValue } from './yaml.js';
 import { compose, type Entry, type Layer, type ResolvedEntry } from './compose.js';
-import { installPlugin, pluginInjections, type AttendedPluginReview } from '../plugins/tools.js';
+import { installPlugin, type AttendedPluginReview } from '../plugins/tools.js';
 
 export * from './compose.js';
 export * from './yaml.js';
@@ -190,12 +190,12 @@ export async function mount(
     if (!plugin || (typeof plugin !== 'function' && typeof plugin.apply !== 'function')) {
       throw new Error(`"${entry.name}" (entry "${entry.id}") is not a plugin`);
     }
-    // `mount` is the package installation boundary. Flyt's own logical
-    // `flyt:*` rows are composition, not third-party installs; every external
-    // plugin that asks for the tools seam goes through the attended review.
-    // With no reviewer (the Loop profile), refusal happens before apply().
-    const injected = pluginInjections(plugin.inject);
-    if (!entry.name.startsWith('flyt:') && injected.includes('tools')) {
+    // `mount` is the package installation boundary. Flyt's own logical rows
+    // are composition. EVERY external package goes through review because a
+    // plugin that omitted or disguised `inject: ['tools']` must not earn a
+    // bypass. With no reviewer (the Loop profile), refusal precedes apply().
+    const bundled = entry.name.startsWith('flyt:') || entry.name.startsWith('@flyt/');
+    if (!bundled) {
       await installPlugin(ctx, plugin, options.toolReview, entry.config);
     } else {
       await ctx.plugin(plugin, entry.config as any);

@@ -103,6 +103,7 @@ export default function Shell({ location = null, onNavigate, build = null, watch
                 />
                 {build?.pluginReview?.proposals?.length > 0 && (
                   <PluginTrustReview
+                    key={`${build.pluginReview.pluginName}:${build.pluginReview.proposals.map(p => p.name).join(',')}`}
                     pluginName={build.pluginReview.pluginName}
                     proposals={build.pluginReview.proposals}
                     onDecide={build.pluginReview.decide}

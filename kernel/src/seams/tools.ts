@@ -48,12 +48,8 @@ export interface ToolsSeam {
   get(name: string): ToolDefinition | undefined;
   /** Every registered tool, including unclassified ones. */
   list(): ToolDefinition[];
-  /** Remove any plugin-supplied classification before the human review pass. */
-  unclassify(names: readonly string[]): void;
   /** The inferred proposal, without changing reachability. */
   propose(name: string, seams?: readonly string[]): ToolClassification | null;
-  /** Apply a human-confirmed classification, never looser than inference. */
-  classify(name: string, decided: ToolClassification, seams?: readonly string[]): void;
   /**
    * Run a call through the gate.
    *

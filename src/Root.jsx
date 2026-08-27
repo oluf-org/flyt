@@ -64,6 +64,7 @@ function V2Root() {
   // the geometry came from a `stack` prop captured on the render before, which
   // nothing had told anybody to take again.
   const [edits, setEdits] = useState(0);
+  const [reviewRevision, setReviewRevision] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -77,6 +78,11 @@ function V2Root() {
   useEffect(() => {
     if (!build?.commands?.subscribe) return undefined;
     return build.commands.subscribe(() => setEdits(n => n + 1));
+  }, [build]);
+
+  useEffect(() => {
+    if (!build?.subscribePluginReview) return undefined;
+    return build.subscribePluginReview(() => setReviewRevision(n => n + 1));
   }, [build]);
 
   // The run being watched, when the host has one. Trace is transient: it is
@@ -94,6 +100,9 @@ function V2Root() {
   // Read through on every edit. `stack` may be a live view of a tree the
   // command surface owns, so taking it again is the point rather than an
   // accident of rendering.
-  const view = build ? { ...build, stack: build.stack, edits } : null;
+  const view = build ? {
+    ...build, stack: build.stack, edits, reviewRevision,
+    pluginReview: build.pluginReview ?? null,
+  } : null;
   return <V2Shell build={view} watching={watching} />;
 }

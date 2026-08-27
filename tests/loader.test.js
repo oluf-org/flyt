@@ -226,19 +226,19 @@ test('a row naming something that is not a plugin says which row', async () => {
   } finally { await kernel.dispose(); }
 });
 
-test('the package loader cannot bypass tool review with a direct plugin mount', async () => {
-  const kernel = createKernel();
+test('the Loop installer refuses even a tool plugin that declares no tools injection', async () => {
+  const kernel = createKernel({ profile: 'flyt-loop-worker' });
   let applied = 0;
   const external = {
-    // Cordis accepts both shapes; an object-shaped injection must not be the
-    // spelling that slips around the install boundary.
-    name: 'external-tools', inject: { tools: {} },
+    // It declares no injection at all. The external-package boundary must not
+    // trust that omission enough to execute it unattended.
+    name: 'external-tools',
     apply() { applied += 1; },
   };
   try {
     await kernel.ctx.plugin(flytTools);
     await assert.rejects(
-      () => mount(kernel.ctx, [{ id: 'external', name: 'some-package' }], {
+      () => kernel.install([{ id: 'external', name: 'some-package' }], {
         import: async () => external,
       }),
       /requires an attended human classification review/);
@@ -265,7 +265,7 @@ test('an attended package mount gets one review and preserves plugin config', as
       import: async () => external,
       toolReview: {
         attended: true,
-        decide(proposals) {
+        decide(_pluginName, proposals) {
           seen.push(proposals.map(p => p.name));
           return { package_tool: null };
         },

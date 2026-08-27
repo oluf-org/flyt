@@ -30,6 +30,7 @@ export interface ToolClassificationProposal extends ToolClassification {
 }
 
 export type PluginReview = (
+  pluginName: string,
   proposals: readonly ToolClassificationProposal[],
 ) => Promise<Readonly<Record<string, ToolClassification | null>>> | Readonly<Record<string, ToolClassification | null>>;
 
@@ -48,6 +49,50 @@ interface PendingReview {
 // Keyed by the contributing fiber, not by a global "installing" boolean: two
 // contexts may mount concurrently and a tool must inherit only its own review.
 const reviewedFibers = new WeakMap<Fiber, PendingReview>();
+
+export interface PendingPluginReview {
+  pluginName: string;
+  proposals: readonly ToolClassificationProposal[];
+  /** Settle this pass. Returns false when it was already settled. */
+  decide(decisions: Readonly<Record<string, ToolClassification | null>>): boolean;
+}
+
+/**
+ * The attended bridge between kernel installation and Flyt's Build surface.
+ * `review` is handed to the installer; `snapshot`/`subscribe` are handed to the
+ * host. The install promise does not settle until the visible request settles.
+ */
+export class PluginReviewCoordinator {
+  #pending: PendingPluginReview | null = null;
+  #listeners = new Set<() => void>();
+
+  readonly review: AttendedPluginReview = {
+    attended: true,
+    decide: (pluginName, proposals) => new Promise(resolve => {
+      if (this.#pending) throw new Error(`A plugin review for "${this.#pending.pluginName}" is already pending`);
+      let settled = false;
+      const decide = (decisions: Readonly<Record<string, ToolClassification | null>>) => {
+        if (settled) return false;
+        settled = true;
+        this.#pending = null;
+        resolve(decisions);
+        this.#emit();
+        return true;
+      };
+      this.#pending = { pluginName, proposals, decide };
+      this.#emit();
+    }),
+  };
+
+  snapshot(): PendingPluginReview | null { return this.#pending; }
+
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  #emit(): void { for (const listener of this.#listeners) listener(); }
+}
 
 /** Cordis accepts injection names as either an array or a keyed config map. */
 export function pluginInjections(inject: unknown): string[] {
@@ -72,6 +117,7 @@ export async function installPlugin(
     throw new Error('Refused: installing a tool-capable plugin requires an attended human classification review');
   }
   const tools = ctx.tools;
+  if (!tools) throw new Error('Refused: the tool registry must be mounted before external plugins');
   const before = new Set(tools.list().map(tool => tool.name));
   const loading = ctx.plugin(plugin as any, config as any);
   // Cordis defers apply() to a microtask. Mark the real fiber before that turn,
@@ -86,9 +132,11 @@ export async function installPlugin(
     (SEAM_NAMES as readonly string[]).includes(name));
   const installed = tools.list().filter(tool => !before.has(tool.name));
   // A plugin cannot smuggle in a grant by supplying a pre-confirmed claim.
-  tools.unclassify(installed.map(tool => tool.name));
+  unclassify(tools, installed.map(tool => tool.name));
+  if (installed.length) ctx.emit('tools/change');
   const proposals = installed.map(tool => proposalFor(pending.declarations.get(tool.name) ?? tool, requested, seams));
-  const decisions = await review.decide(proposals);
+  if (!proposals.length) return fiber;
+  const decisions = await review.decide(plugin.name ?? 'plugin', proposals);
 
   // Validate the whole pass before applying any of it. One attempted loosening
   // must not leave the tools earlier in the list half-classified.
@@ -102,8 +150,9 @@ export async function installPlugin(
   }
   for (const proposal of proposals) {
     const decided = decisions?.[proposal.name];
-    if (decided) tools.classify(proposal.name, decided, seams);
+    if (decided) applyClassification(tools, proposal.name, decided, seams);
   }
+  if (proposals.some(proposal => Boolean(decisions?.[proposal.name]))) ctx.emit('tools/change');
   return fiber;
 }
 
@@ -126,6 +175,56 @@ export function refusal(reason: string): ToolResult {
   return { content: `Refused: ${reason}`, error: reason };
 }
 
+interface RegistryState {
+  registered: Map<string, ToolDefinition>;
+  owners: Map<string, symbol>;
+}
+
+// The mutation capability is module-private. Cordis derives service views with
+// proxies/Object.create, so an inherited private symbol is the stable identity
+// shared by those views without exposing a mutator on ToolsSeam.
+const REGISTRY_STATE = Symbol('flyt.tools.registry-state');
+
+function stateOf(view: object): RegistryState {
+  const state = (view as { [REGISTRY_STATE]?: RegistryState })[REGISTRY_STATE];
+  if (!state) throw new Error('The tools seam is not Flyt\'s registry');
+  return state;
+}
+
+function unclassify(tools: ToolsSeam, names: readonly string[]): void {
+  const state = stateOf(tools as object);
+  for (const toolName of names) {
+    const tool = state.registered.get(toolName);
+    if (tool?.classification) state.registered.set(toolName, { ...tool, classification: undefined });
+  }
+}
+
+function applyClassification(
+  tools: ToolsSeam,
+  toolName: string,
+  decided: ToolClassification,
+  seams: readonly SeamName[],
+): void {
+  const state = stateOf(tools as object);
+  const tool = state.registered.get(toolName);
+  if (!tool) throw new Error(`No tool named "${toolName}" is registered`);
+  const floor = classifyContributedTool(tool, seams);
+  if (!atLeastAsStrict(decided, floor)) {
+    throw new Error(
+      `"${toolName}" cannot be classified more loosely than it was inferred: `
+      + `inferred ${describe(floor)}, asked for ${describe(decided)}`);
+  }
+  state.registered.set(toolName, {
+    ...tool,
+    classification: {
+      effect: decided.effect,
+      destructive: Boolean(decided.destructive),
+      untrustedInput: Boolean(decided.untrustedInput),
+      source: 'confirmed',
+    },
+  });
+}
+
 /**
  * The registry.
  *
@@ -140,19 +239,18 @@ export function refusal(reason: string): ToolResult {
  * a derived object.
  */
 export class ToolRegistry extends Service implements ToolsSeam {
-  private registered = new Map<string, ToolDefinition>();
-  private owners = new Map<string, symbol>();
-
   constructor(ctx: Context) {
     super(ctx, 'tools');
+    Object.defineProperty(this, REGISTRY_STATE, {
+      value: { registered: new Map(), owners: new Map() } satisfies RegistryState,
+    });
   }
 
   /** Register a tool, owned by the calling plugin's fiber. Emits `tools/change`. */
   register(tool: ToolDefinition): () => void {
     if (!tool?.name) throw new Error('A tool needs a name');
-    if (this.registered.has(tool.name)) throw new Error(`A tool named "${tool.name}" is already registered`);
-    const registered = this.registered;
-    const owners = this.owners;
+    const { registered, owners } = stateOf(this);
+    if (registered.has(tool.name)) throw new Error(`A tool named "${tool.name}" is already registered`);
     const ctx = this.ctx;
     const ownership = Symbol(tool.name);
     const review = reviewedFibers.get(ctx.fiber);
@@ -176,21 +274,12 @@ export class ToolRegistry extends Service implements ToolsSeam {
 
   /** One tool by name, or undefined. */
   get(toolName: string): ToolDefinition | undefined {
-    return this.registered.get(toolName);
+    return stateOf(this).registered.get(toolName);
   }
 
   /** Every registered tool, including unclassified ones. */
   list(): ToolDefinition[] {
-    return [...this.registered.values()];
-  }
-
-  /** Keep plugin claims from becoming an implicit grant during installation. */
-  unclassify(names: readonly string[]): void {
-    for (const toolName of names) {
-      const tool = this.registered.get(toolName);
-      if (tool?.classification) this.registered.set(toolName, { ...tool, classification: undefined });
-    }
-    if (names.length) this.ctx.emit('tools/change');
+    return [...stateOf(this).registered.values()];
   }
 
   /**
@@ -210,38 +299,9 @@ export class ToolRegistry extends Service implements ToolsSeam {
    * propose about a decision somebody has taken.
    */
   propose(toolName: string, seams: readonly SeamName[] = []): ToolClassification | null {
-    const tool = this.registered.get(toolName);
+    const tool = stateOf(this).registered.get(toolName);
     if (!tool || tool.classification) return null;
     return classifyContributedTool(tool, seams);
-  }
-
-  /**
-   * Apply a classification a human confirmed.
-   *
-   * Refuses anything looser than the proposal for the same seams: the pass is
-   * confirm-or-EDIT, and an edit may make a classification stricter and never
-   * weaker. Without that, "edit" is a way to grant by hand what the inference
-   * declined to grant, which is the whole thing D57 is guarding.
-   */
-  classify(toolName: string, decided: ToolClassification, seams: readonly SeamName[] = []): void {
-    const tool = this.registered.get(toolName);
-    if (!tool) throw new Error(`No tool named "${toolName}" is registered`);
-    const floor = classifyContributedTool(tool, seams);
-    if (!atLeastAsStrict(decided, floor)) {
-      throw new Error(
-        `"${toolName}" cannot be classified more loosely than it was inferred: `
-        + `inferred ${describe(floor)}, asked for ${describe(decided)}`);
-    }
-    this.registered.set(toolName, {
-      ...tool,
-      classification: {
-        effect: decided.effect,
-        destructive: Boolean(decided.destructive),
-        untrustedInput: Boolean(decided.untrustedInput),
-        source: 'confirmed',
-      },
-    });
-    this.ctx.emit('tools/change');
   }
 
   /**
@@ -267,7 +327,7 @@ export class ToolRegistry extends Service implements ToolsSeam {
       return refusal(reason);
     }
 
-    const tool = this.registered.get(exec.call.name);
+    const tool = stateOf(this).registered.get(exec.call.name);
     if (!tool) return refusal(`there is no tool named "${exec.call.name}"`);
 
     let result: ToolResult;

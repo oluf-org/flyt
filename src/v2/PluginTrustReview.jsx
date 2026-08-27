@@ -10,6 +10,7 @@ import './pluginTrustReview.css';
 export default function PluginTrustReview({ pluginName = 'Plugin', proposals = [], onDecide }) {
   const initial = useMemo(() => initialPluginDecisions(proposals), [proposals]);
   const [decisions, setDecisions] = useState(initial);
+  const [settled, setSettled] = useState(false);
 
   const edit = (proposal, patch) => setDecisions(all => ({
     ...all,
@@ -73,11 +74,15 @@ export default function PluginTrustReview({ pluginName = 'Plugin', proposals = [
         })}
 
         <footer>
-          <button type="button" className="reject"
-            onClick={() => onDecide?.(declinePluginDecisions(proposals))}>
+          <button type="button" className="reject" disabled={settled}
+            onClick={() => {
+              if (onDecide?.(declinePluginDecisions(proposals)) !== false) setSettled(true);
+            }}>
             Keep installed; leave tools unreachable
           </button>
-          <button type="button" className="primary" onClick={() => onDecide?.(decisions)}>
+          <button type="button" className="primary" disabled={settled} onClick={() => {
+            if (onDecide?.(decisions) !== false) setSettled(true);
+          }}>
             Confirm classifications
           </button>
         </footer>
