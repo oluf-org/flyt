@@ -2973,6 +2973,9 @@ export class FlowRunner {
       pool: this.pool ?? null,
       notify: () => this.notify(runId),
       signal: abortCtl.signal,
+      // Loop workers are unattended. A skill request cannot turn `always` into
+      // an implicit grant; runExecutorTask records the refusal visibly.
+      unattended: !this.isAttended(runId),
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };
     ledger.begin(task.id);
@@ -3660,6 +3663,7 @@ export class FlowRunner {
         // ⇒ the ceiling is the grant (DESIGN-SPEC.md §5), so a task written
         // before ceilings existed keeps exactly its envelope.
         ...(node.data?.toolCeiling ? { toolCeiling: node.data.toolCeiling } : {}),
+        ...(Array.isArray(node.data?.skillToolGrants) ? { skillToolGrants: node.data.skillToolGrants } : {}),
         // Skills ride on the task for the same reason tools do: the executor
         // runs from tasks.json alone and never sees the node. Resolved against
         // the bound project at execution time, not here (V1 task 10).

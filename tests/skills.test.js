@@ -9,11 +9,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { FlowRunner } from '../core/flowRunner.js';
+import { runExecutorTask } from '../core/nodes/executor.js';
+import { resolveTools } from '../core/tools/index.js';
 import { Workspace } from '../core/workspace.js';
 import {
-  loadSkills, skillsSection, withSkillsSection, skillPath, listSkills, availableSkillsSection
+  loadSkills, skillsSection, withSkillsSection, skillPath, listSkills, availableSkillsSection,
+  resolveSkillToolRequests, missingSkillToolsSection
 } from '../core/skills.js';
 import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
+import { SEED_NODE_TEMPLATES, resolveInstance } from '../src/flowTypes.js';
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'llm-flow-skill-'));
 
@@ -81,6 +85,155 @@ test('an empty skill file counts as missing, not as silent success', () => {
   const { found, missing } = loadSkills(ws, ['blank']);
   assert.deepEqual(found, []);
   assert.equal(missing.length, 1);
+});
+
+// --- D58 tool requests -------------------------------------------------------
+
+test('requiresTools frontmatter is metadata, not injected instructions', () => {
+  const ws = wsWithSkills({ research: '---\nrequiresTools: [read_file, web_search]\n---\n# Research\nCheck sources.' });
+  const { found } = loadSkills(ws, ['research']);
+  assert.deepEqual(found[0].requiresTools, ['read_file', 'web_search']);
+  assert.doesNotMatch(found[0].content, /requiresTools/);
+});
+
+test('a human-granted skill request makes a tool reachable within the static ceiling', () => {
+  const skill = [{ name: 'research', requiresTools: ['read_file'] }];
+  const result = resolveSkillToolRequests(skill, {
+    granted: ['read_file'], ceiling: ['read_file'], unattended: false, resolve: resolveTools
+  });
+  assert.deepEqual(result.tools.map(t => t.name), ['read_file']);
+  assert.deepEqual(result.refused, []);
+});
+
+test('an ungranted request runs degraded with an artifact-ready visible notice', () => {
+  const result = resolveSkillToolRequests([{ name: 'research', requiresTools: ['web_search'] }], {
+    granted: [], ceiling: ['web_search'], unattended: false, resolve: resolveTools
+  });
+  assert.deepEqual(result.tools, []);
+  assert.match(missingSkillToolsSection(result.ungranted), /research is missing tool web_search: not granted by a human/);
+});
+
+test('a Loop worker refuses a skill tool request unattended even if listed as granted', () => {
+  const result = resolveSkillToolRequests([{ name: 'research', requiresTools: ['web_search'] }], {
+    granted: ['web_search'], ceiling: ['web_search'], unattended: true, resolve: resolveTools
+  });
+  assert.deepEqual(result.tools, []);
+  assert.deepEqual(result.ungranted, []);
+  assert.match(result.refused[0].reason, /unattended workers cannot grant/);
+});
+
+test('a human grant cannot widen the block static ceiling', () => {
+  const result = resolveSkillToolRequests([{ name: 'shell-help', requiresTools: ['bash'] }], {
+    granted: ['bash'], ceiling: ['read_file'], unattended: false, resolve: resolveTools
+  });
+  assert.deepEqual(result.tools, []);
+  assert.deepEqual(result.refused.map(r => r.tool), ['bash']);
+  assert.deepEqual(result.ceiling, ['read_file']);
+});
+
+test('a granted missing tool still degrades visibly', () => {
+  const result = resolveSkillToolRequests([{ name: 'research', requiresTools: ['vanished_tool'] }], {
+    granted: ['vanished_tool'], ceiling: ['vanished_tool'], unattended: false, resolve: resolveTools
+  });
+  assert.deepEqual(result.tools, []);
+  assert.deepEqual(result.missing, [{ tool: 'vanished_tool', reason: 'unknown', skill: 'research' }]);
+});
+
+test('template resolution preserves the human skill-tool grant', () => {
+  const work = SEED_NODE_TEMPLATES.find(template => template.id === 'work');
+  const resolved = resolveInstance({
+    id: 'work', templateId: 'work', position: { x: 0, y: 0 },
+    overrides: { skills: ['research'], skillToolGrants: ['read_file'] }
+  }, work);
+  assert.deepEqual(resolved.data.skillToolGrants, ['read_file']);
+});
+
+test('executor records an ungranted request in its prompt, artifact, log, and retrospective', async () => {
+  const store = makeStore();
+  const ws = wsWithSkills({ research: '---\nrequiresTools: [read_file]\n---\n# Research\nRead carefully.' });
+  const runId = store.createRun('work without the requested tool');
+  store.writeMeta(runId, { ...store.readMeta(runId), workspace: ws.root });
+  store.writeTasks(runId, { tasks: [{
+    id: 'task-1', title: 'Research', goal: 'Research.', inputs: ['prompt.md'], constraints: [],
+    tools: [], toolCeiling: ['read_file'], skills: ['research'], skillToolGrants: [],
+    worker: { provider: 'script', model: 'test-model' }, status: 'pending'
+  }] });
+  let system = '';
+  setScript(call => { system = call.system; return 'Completed with the stated limitation.'; });
+
+  const retro = await runExecutorTask(store, runId, 'task-1', testConfig(), { unattended: false });
+  assert.equal(retro.status, 'success');
+  assert.match(system, /SKILL TOOL REQUESTS NOT GRANTED/);
+  assert.match(store.readTaskOutput(runId, 'task-1'), /Missing skill tools[\s\S]*research is missing tool read_file/);
+  assert.ok(store.readLog(runId).some(event => event.event === 'skill_tool_missing'
+    && event.tool === 'read_file' && /not granted by a human/.test(event.reason)));
+  assert.ok(retro.problems.some(problem => /research[\s\S]*read_file[\s\S]*not granted by a human/.test(problem)));
+});
+
+test('a real Loop run refuses a skill grant even when the node carries it', async () => {
+  const store = makeStore();
+  const ws = wsWithSkills({ research: '---\nrequiresTools: [read_file]\n---\n# Research\nRead carefully.' });
+  const runner = new FlowRunner(store, testConfig({ approvalMode: 'always' }));
+  setScript(() => 'Loop work completed without the requested tool.');
+  const flow = makeFlow(
+    [node('in', 'input', { text: 'brief' }), node('work', 'agentTask', {
+      title: 'Loop work', goal: 'Do it.', tools: [], toolCeiling: ['read_file'],
+      skills: ['research'], skillToolGrants: ['read_file']
+    }), node('out', 'output')],
+    [edge('in', 'work'), edge('work', 'out')]);
+
+  const runId = runner.start(flow, {
+    workspace: ws.root, approvalMode: 'always', loopTaskId: 't-loop'
+  });
+  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
+  assert.equal(store.readMeta(runId).attended, null, 'Loop does not promise a human listener');
+  assert.deepEqual(store.readTasks(runId).tasks[0].skillToolGrants, ['read_file']);
+  const refused = store.readLog(runId).find(event => event.event === 'skill_tool_refused');
+  assert.equal(refused.tool, 'read_file');
+  assert.match(refused.reason, /unattended workers cannot grant/);
+  assert.match(store.readTaskOutput(runId, 'task-1'), /Missing skill tools[\s\S]*unattended workers cannot grant/);
+  const retro = store.readRetrospectives(runId)['executor-task-1'];
+  assert.ok(retro.problems.some(problem => /unattended workers cannot grant/.test(problem)));
+});
+
+test('executor defaults a persisted skill grant to refused without affirmative attendance', async () => {
+  const store = makeStore();
+  const ws = wsWithSkills({ research: '---\nrequiresTools: [read_file]\n---\n# Research\nRead carefully.' });
+  const runId = store.createRun('no attendance context');
+  store.writeMeta(runId, { ...store.readMeta(runId), workspace: ws.root });
+  store.writeTasks(runId, { tasks: [{
+    id: 'task-1', title: 'Research', goal: 'Research.', inputs: ['prompt.md'], constraints: [],
+    tools: [], toolCeiling: ['read_file'], skills: ['research'], skillToolGrants: ['read_file'],
+    worker: { provider: 'script', model: 'test-model' }, status: 'pending'
+  }] });
+  setScript(() => 'Completed without implicit authority.');
+
+  const retro = await runExecutorTask(store, runId, 'task-1', testConfig());
+  const refused = store.readLog(runId).find(event => event.event === 'skill_tool_refused');
+  assert.equal(refused.tool, 'read_file');
+  assert.match(refused.reason, /unattended workers cannot grant/);
+  assert.match(store.readTaskOutput(runId, 'task-1'), /Missing skill tools[\s\S]*unattended workers cannot grant/);
+  assert.ok(retro.problems.some(problem => /unattended workers cannot grant/.test(problem)));
+});
+
+test('a requested tool already in the static grant produces no false missing diagnostics', async () => {
+  const store = makeStore();
+  const ws = wsWithSkills({ research: '---\nrequiresTools: [read_file]\n---\n# Research\nRead carefully.' });
+  const runId = store.createRun('already statically granted');
+  store.writeMeta(runId, { ...store.readMeta(runId), workspace: ws.root });
+  store.writeTasks(runId, { tasks: [{
+    id: 'task-1', title: 'Research', goal: 'Research.', inputs: ['prompt.md'], constraints: [],
+    tools: ['read_file'], toolCeiling: ['read_file'], skills: ['research'],
+    worker: { provider: 'script', model: 'test-model' }, status: 'pending'
+  }] });
+  let system = '';
+  setScript(call => { system = call.system; return 'Completed with the static tool.'; });
+
+  const retro = await runExecutorTask(store, runId, 'task-1', testConfig());
+  assert.doesNotMatch(system, /SKILL TOOL REQUESTS NOT GRANTED/);
+  assert.doesNotMatch(store.readTaskOutput(runId, 'task-1'), /Missing skill tools/);
+  assert.ok(!store.readLog(runId).some(event => event.event.startsWith('skill_tool_')));
+  assert.ok(!retro.problems.some(problem => /requested tool/.test(problem)));
 });
 
 // --- prompt assembly ---
@@ -342,13 +495,15 @@ test('run-level skills are a union with the node\'s own, never a replacement', a
 test('listSkills reports what the project has, with a one-line summary', () => {
   const ws = wsWithSkills({
     'tool-authoring': '# Authoring a Flyt tool\n\nUse this when...',
-    'house-style': 'Tabs, never spaces.',
+    'house-style': '---\nrequiresTools: [read_file]\n---\nTabs, never spaces.',
     'not-a-skill.txt': 'ignored'
   });
   const found = listSkills(ws);
   assert.deepEqual(found.map(s => s.name), ['house-style', 'tool-authoring'], 'alphabetical, .md only');
   assert.equal(found.find(s => s.name === 'tool-authoring').summary, 'Authoring a Flyt tool',
     'the heading is the summary, without its hashes');
+  assert.deepEqual(found.find(s => s.name === 'house-style').requiresTools, ['read_file'],
+    'the library makes a skill\'s tool request visible before attachment');
 });
 
 test('a project with no skills directory has no skills, which is not an error', () => {
@@ -359,7 +514,10 @@ test('a project with no skills directory has no skills, which is not an error', 
 });
 
 test('the menu tells the planner not to invent a name', () => {
-  const section = availableSkillsSection([{ name: 'house-style', summary: 'Tabs, never spaces.' }]);
+  const section = availableSkillsSection([{
+    name: 'house-style', summary: 'Tabs, never spaces.', requiresTools: ['read_file']
+  }]);
   assert.match(section, /- house-style — Tabs, never spaces\./);
+  assert.match(section, /requests tools: read_file/);
   assert.match(section, /do not invent one/i);
 });

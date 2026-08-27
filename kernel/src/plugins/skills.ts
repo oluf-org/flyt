@@ -34,6 +34,8 @@ export interface SkillInvocationPolicy {
 /** What a catalog lists. */
 export interface SkillSummary {
   readonly name: string;
+  /** Capability request only. Hosts must require a human grant and enforce the block ceiling. */
+  readonly requiresTools?: readonly string[];
   readonly description: string;
   readonly whenToUse?: string;
   readonly invocation: SkillInvocationPolicy;

@@ -825,7 +825,7 @@ export const SEED_NODE_TEMPLATES = [
     baseType: 'aiStep', role: 'translate', effort: 'medium', language: 'English',
     description: 'Faithful translation preserving meaning, tone, register, and formatting. Set the target language on the node.'
   }
-].map(t => ({ worker: null, instructions: '', tools: null, skills: [], requiresApproval: false, approveToolCalls: false, ...t }));
+].map(t => ({ worker: null, instructions: '', tools: null, skills: [], skillToolGrants: [], requiresApproval: false, approveToolCalls: false, ...t }));
 
 // Seed ids retired by the node rework: their files are removed from the
 // library on startup (core/nodestore.js) and stored flows referencing them are
@@ -868,6 +868,7 @@ export function normalizeTemplate(tpl) {
     ...(normalizeEffect(tpl.effect) ? { effect: normalizeEffect(tpl.effect) } : {}),
     ...(normalizeEffectScope(tpl.effectScope) ? { effectScope: normalizeEffectScope(tpl.effectScope) } : {}),
     skills: Array.isArray(tpl.skills) ? tpl.skills.map(String) : [],
+    skillToolGrants: Array.isArray(tpl.skillToolGrants) ? [...new Set(tpl.skillToolGrants.map(String))] : [],
     requiresApproval: Boolean(tpl.requiresApproval),
     approveToolCalls: Boolean(tpl.approveToolCalls),
     outputs: normalizeOutputs(tpl.outputs)
@@ -905,6 +906,9 @@ export function resolveInstance(node, tpl) {
   // the template's, else absent (⇒ inferred downstream).
   const effect = normalizeEffect(ov.effect) ?? t?.effect ?? null;
   const effectScope = normalizeEffectScope(ov.effectScope) ?? t?.effectScope ?? null;
+  const skillToolGrants = Array.isArray(ov.skillToolGrants)
+    ? [...new Set(ov.skillToolGrants.map(String))]
+    : t?.skillToolGrants ?? [];
   const workGate = isWork && (tools ?? []).includes('bash');
   const data = {
     templateId: node.templateId,
@@ -933,6 +937,7 @@ export function resolveInstance(node, tpl) {
     ...(effect ? { effect } : {}),
     ...(effectScope ? { effectScope } : {}),
     ...((ov.skills ?? t?.skills)?.length ? { skills: ov.skills ?? t.skills } : {}),
+    ...(skillToolGrants.length ? { skillToolGrants } : {}),
     requiresApproval: ov.requiresApproval ?? t?.requiresApproval ?? false,
     approveToolCalls: ov.approveToolCalls ?? (workGate ? true : t?.approveToolCalls ?? false),
     ...(t?.outputs?.length ? { outputs: t.outputs } : {}),
@@ -1042,7 +1047,10 @@ export function overridableFields(node) {
   // `tools` is the grant. agentTask nodes hold any of them; an aiStep may hold
   // read-effect ones (a planner that can check the time or read a page plans
   // better — DESIGN-SPEC.md §5), which the linter polices by effect.
-  if (type === 'agentTask' || type === 'aiStep') fields.add('tools');
+  if (type === 'agentTask' || type === 'aiStep') {
+    fields.add('tools');
+    fields.add('skillToolGrants');
+  }
   // `toolCeiling` is the hard limit the grant lives inside. On an orchestrator
   // it is the envelope its generated children inherit (§6.3).
   if (type === 'agentTask' || type === 'aiStep' || isContainerType(type)) fields.add('toolCeiling');
@@ -1115,7 +1123,7 @@ export function mergeOverrideMaps(...maps) {
 // node yields a single 'unknown-node' entry (the linter also warns).
 const DIFF_FIELD_ORDER = [
   'worker', 'effort', 'category', 'evalType', 'language', 'minNodes', 'maxNodes',
-  'system', 'instructions', 'tools', 'requiresApproval', 'approveToolCalls'
+  'system', 'instructions', 'tools', 'skillToolGrants', 'requiresApproval', 'approveToolCalls'
 ];
 
 export function diffOverrides(resolvedFlow, overrides) {

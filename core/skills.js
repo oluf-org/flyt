@@ -8,10 +8,9 @@
 // per repo: the same "Code (general)" node follows this project's conventions
 // because this project committed them next to its code.
 //
-// A skill contributes INSTRUCTIONS ONLY. It deliberately cannot grant tools:
-// the template's `tools` allowlist and the approval gates are the safety
-// envelope (V1 task 4), and a skill that could widen the tool set would let
-// expertise quietly expand what an agent is allowed to do.
+// A skill may REQUEST tools, but never grants them. A human must make that
+// request effective, and resolution still intersects it with the block's static
+// ceiling (D58). Unanswered requests are returned as visible degradation facts.
 import fs from 'node:fs';
 import { CONFIG_DIR } from './brand.js';
 
@@ -25,6 +24,33 @@ const SAFE_NAME = /^[a-zA-Z0-9_-]+$/;
 // skills keep resolving either way (core/workspace.js).
 export const SKILLS_DIR = `${CONFIG_DIR}/skills`;
 export const skillPath = (name, dir = CONFIG_DIR) => `${dir}/skills/${name}.md`;
+
+// Minimal YAML frontmatter for D58. Tool ids/selectors are plain strings; both
+// an inline list and a block list are accepted. The frontmatter is metadata and
+// is not injected into the model's instructions.
+function parseSkill(text) {
+  const match = String(text).match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
+  if (!match) return { content: String(text).trim(), requiresTools: [] };
+  const lines = match[1].split(/\r?\n/);
+  const requiresTools = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const field = lines[i].match(/^requiresTools\s*:\s*(.*)$/);
+    if (!field) continue;
+    const inline = field[1].trim();
+    if (inline) {
+      const body = inline.replace(/^\[/, '').replace(/\]$/, '');
+      requiresTools.push(...body.split(',').map(v => v.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean));
+    } else {
+      while (i + 1 < lines.length) {
+        const item = lines[i + 1].match(/^\s+-\s+(.+?)\s*$/);
+        if (!item) break;
+        requiresTools.push(item[1].replace(/^['"]|['"]$/g, ''));
+        i += 1;
+      }
+    }
+  }
+  return { content: text.slice(match[0].length).trim(), requiresTools: [...new Set(requiresTools)] };
+}
 
 // Resolve attached skill names against a bound workspace.
 // Returns { found: [{ name, content }], missing: [{ name, reason }] }.
@@ -56,7 +82,7 @@ export function loadSkills(workspace, names) {
       missing.push({ name, reason: String(err?.message ?? err) });
       continue;
     }
-    if (content) found.push({ name, content });
+    if (content) found.push({ name, ...parseSkill(content) });
     else missing.push({ name, reason: `no ${rel} in the workspace` });
   }
   return { found, missing };
@@ -78,6 +104,54 @@ export function skillsSection(found) {
 export function withSkillsSection(system, found) {
   const section = skillsSection(found);
   return section ? `${system}\n\n${section}` : system;
+}
+
+/**
+ * Resolve skill tool requests. `granted` is an explicit human decision, never a
+ * default. Even granted requests pass through the block's authored ceiling.
+ */
+export function resolveSkillToolRequests(found, {
+  granted = [], ceiling = null, unattended = true, available = [], resolve
+} = {}) {
+  const alreadyReachable = new Set((available ?? []).map(tool =>
+    typeof tool === 'string' ? tool : tool?.name).filter(Boolean));
+  const requests = [];
+  for (const skill of found ?? []) {
+    for (const tool of skill.requiresTools ?? []) {
+      if (!alreadyReachable.has(tool)) requests.push({ skill: skill.name, tool });
+    }
+  }
+  if (unattended) {
+    return {
+      tools: [], ungranted: [], missing: [], ceiling,
+      refused: requests.map(request => ({
+        ...request, reason: 'unattended workers cannot grant skill tool requests'
+      }))
+    };
+  }
+  const humanGrants = new Set((granted ?? []).map(String));
+  const approved = requests.filter(r => humanGrants.has(r.tool));
+  const ungranted = requests.filter(r => !humanGrants.has(r.tool)).map(r => ({
+    ...r, reason: 'not granted by a human'
+  }));
+  if (!approved.length || typeof resolve !== 'function') {
+    return { tools: [], ungranted, refused: [], missing: [], ceiling };
+  }
+  const resolved = resolve({ grant: [...new Set(approved.map(r => r.tool))], ceiling });
+  const attribute = issues => (issues ?? []).flatMap(issue =>
+    approved.filter(request => request.tool === issue.tool).map(request => ({ ...issue, skill: request.skill })));
+  return {
+    tools: resolved.tools ?? [], ungranted,
+    refused: attribute(resolved.refused),
+    missing: attribute(resolved.missing),
+    ceiling: resolved.ceiling
+  };
+}
+
+export function missingSkillToolsSection(missing) {
+  if (!missing?.length) return '';
+  return ['SKILL TOOL REQUESTS NOT GRANTED — continue without these tools and state the limitation in the artifact.',
+    ...missing.map(m => `- skill ${m.skill} is missing tool ${m.tool}: ${m.reason}`)].join('\n');
 }
 
 /**
@@ -105,12 +179,15 @@ export function listSkills(workspace, { limit = 40 } = {}) {
     const name = file.slice(0, -3);
     if (!SAFE_NAME.test(name)) continue;
     let summary = '';
+    let requiresTools = [];
     try {
       const text = fs.readFileSync(`${dir}/${file}`, 'utf8');
-      const line = text.split(/\r?\n/).map(l => l.trim()).find(l => l && !l.startsWith('---'));
+      const parsed = parseSkill(text);
+      requiresTools = parsed.requiresTools;
+      const line = parsed.content.split(/\r?\n/).map(l => l.trim()).find(Boolean);
       summary = (line ?? '').replace(/^#+\s*/, '').slice(0, 120);
     } catch { /* unreadable: the name is still worth listing */ }
-    out.push({ name, summary });
+    out.push({ name, summary, requiresTools });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -123,6 +200,7 @@ export function availableSkillsSection(skills) {
     'SKILLS THIS PROJECT HAS — names you may put in a task\'s `skills` list.',
     'Attach one when the job needs that knowledge to be done right. A name that',
     'is not on this list resolves to nothing at run time, so do not invent one.',
-    ...skills.map(s => `- ${s.name}${s.summary ? ` — ${s.summary}` : ''}`)
+    ...skills.map(s => `- ${s.name}${s.summary ? ` — ${s.summary}` : ''}`
+      + `${s.requiresTools?.length ? ` (requests tools: ${s.requiresTools.join(', ')})` : ''}`)
   ].join('\n');
 }
