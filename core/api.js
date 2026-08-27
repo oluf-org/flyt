@@ -1245,6 +1245,13 @@ export function createApi(engine) {
       // at its first node with a provider error and the whole backlog would
       // end the night parked for a reason that has nothing to do with the work.
       const useLevels = runtimeConfig.loop?.levels !== false && !pinned && !Object.keys(byLevel).length;
+      // With levels disabled and no Loop-specific pin, Supervisor passes no
+      // worker override to the flow. The authored work node then takes the
+      // configured executor default. It is just as real a launch choice as an
+      // explicit --model and must be preflighted before the queue is touched.
+      const defaultWorker = !useLevels && !pinned && !Object.keys(byLevel).length
+        ? resolveWorkerArg(runtimeConfig.workers?.executor)
+        : null;
       if (useLevels && !engine.hasKey('openrouter')) {
         throw new ApiError(
           'Effort levels route through OpenRouter, and no OpenRouter key is set. Add one in Settings, pick a model for the loop, or set loop.levels to false to run on the configured workers instead.',
@@ -1258,12 +1265,20 @@ export function createApi(engine) {
           `The loop is set to run on "${pinned.model}", but its provider (${pinned.provider}) is not connected. Add a key in Settings, or choose another model.`,
           { status: 400, code: 'no_provider_key' });
       }
+      if (defaultWorker && defaultWorker.provider !== 'mock' && !engine.hasKey(defaultWorker.provider)) {
+        throw new ApiError(
+          `The loop's default worker is "${defaultWorker.model}", but its provider (${defaultWorker.provider}) is not connected. Add a key in Settings, or choose another model.`,
+          { status: 400, code: 'no_provider_key' });
+      }
       // A connected subscription account can still reject a catalog id. When
       // the host supplies a bounded preflight, validate every explicit choice
       // before Supervisor is created (and therefore before any task is taken).
       if (engine.capabilityProbe) {
         const checks = [];
         if (pinned) checks.push({ provider: pinned.provider, model: pinned.model });
+        if (defaultWorker) checks.push({
+          provider: defaultWorker.provider, model: defaultWorker.model, defaultWorker: true
+        });
         for (const [band, id] of Object.entries(byLevel)) {
           const w = resolveWorkerArg({ provider: 'auto', model: id });
           if (w) checks.push({ provider: w.provider, model: id, band });
@@ -1284,8 +1299,9 @@ export function createApi(engine) {
             `${target.provider}:${target.model}`,
             () => engine.capabilityProbe({ provider: target.provider, model: target.model }));
           if (result.status === 'unsupported') {
+            const role = target.reviewer ? 'reviewer ' : target.defaultWorker ? 'default worker ' : '';
             throw new ApiError(
-              `The configured ${target.provider} ${target.reviewer ? 'reviewer ' : ''}model "${target.model}" is not usable by this signed-in account. ` +
+              `The configured ${target.provider} ${role}model "${target.model}" is not usable by this signed-in account. ` +
               `Choose a supported model in Settings, run "flyt call subscription:refresh", or set an explicit manual model override.`,
               { status: 400, code: 'model_unsupported' });
           }
@@ -1300,6 +1316,10 @@ export function createApi(engine) {
       const pinnedCapabilityProblem = loopWorkerProblem(pinned);
       if (pinnedCapabilityProblem) {
         throw new ApiError(pinnedCapabilityProblem, { status: 400, code: 'worker_cannot_use_tools' });
+      }
+      const defaultCapabilityProblem = loopWorkerProblem(defaultWorker);
+      if (defaultCapabilityProblem) {
+        throw new ApiError(defaultCapabilityProblem, { status: 400, code: 'worker_cannot_use_tools' });
       }
       // Nothing lands unattended without a reviewer (§7.2) — also worth saying
       // before a night of work rather than after it. Asked of the same function

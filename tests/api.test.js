@@ -108,6 +108,41 @@ test('Loop preflights a subscription reviewer before claiming and accepts a supp
   ]);
 });
 
+test('Loop preflights the effective default worker and a manual override bypasses it', async () => {
+  const probes = [];
+  const { api, engine, dataRoot } = makeApi({
+    capabilityProbe: async ({ model }) => {
+      probes.push(model);
+      return model === 'gpt-5.2-codex'
+        ? { status: 'unsupported' }
+        : { status: 'usable', ok: true };
+    }
+  });
+  engine.hasKey = id => id === 'codex' || id === 'mock';
+  engine.runtimeConfig.loop.levels = false;
+  engine.runtimeConfig.workers.loop = { provider: null, model: null };
+  engine.runtimeConfig.workers.executor = { provider: 'codex', model: 'gpt-5.2-codex' };
+  const workspace = path.join(dataRoot, 'work');
+  fs.mkdirSync(workspace, { recursive: true });
+  const { id: projectId } = await api.invoke('project:open', { folder: workspace });
+  const task = await api.invoke('task:add', { projectId, title: 'default must be checked', goal: 'g' });
+
+  await assert.rejects(api.invoke('loop:start', {
+    projectId, dryRun: true, only: [task.id]
+  }), error => error.code === 'model_unsupported' && /default worker.*gpt-5\.2-codex/.test(error.message));
+  assert.equal((await api.invoke('task:get', { projectId, id: task.id })).status, 'queued');
+
+  const started = await api.invoke('loop:start', {
+    projectId,
+    worker: { provider: 'mock', model: 'mock-large' },
+    dryRun: true,
+    only: ['t-not-present']
+  });
+  assert.equal(started.started, true);
+  assert.equal(started.model, 'mock-large');
+  assert.deepEqual(probes, ['gpt-5.2-codex'], 'the explicit worker replaces, rather than supplements, the stale default');
+});
+
 test('doctor returns connected and usable states through the capability probe', async () => {
   const { api, engine } = makeApi({
     capabilityProbe: async ({ model }) => model === 'gpt-5.2-codex'
