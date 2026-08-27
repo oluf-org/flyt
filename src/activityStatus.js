@@ -23,16 +23,7 @@ const PHASE_LABELS = {
   idle: 'Idle'
 };
 
-const SECRET = new RegExp([
-  'bearer\\s+\\S+',
-  '\\b(?:sk|pk)-[a-z0-9_-]{8,}',
-  '\\b(?:gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,})',
-  '\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b',
-  '\\bxox[baprs]-[a-z0-9-]{10,}',
-  '\\bAIza[a-z0-9_-]{30,}',
-  '\\beyJ[a-z0-9_-]{8,}\\.eyJ[a-z0-9_-]{8,}\\.[a-z0-9_-]{8,}',
-  '\\b(?:api[_-]?key|token|password|secret|authorization)\\s*[:=]\\s*[^\\s,;]+'
-].join('|'), 'gi');
+const SECRET = /(bearer\s+\S+|\b(?:sk|pk)-[a-z0-9_-]{8,}|\b(?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*[^\s,;]+)/gi;
 const SAFE_TOOL_SUBJECTS = new Set(['read_file', 'write_file', 'create_file', 'edit_file', 'glob']);
 // Tool names are metadata too: do not let an extension smuggle a prompt or
 // command into persistent chrome. Names remain useful even when their subject
@@ -53,7 +44,7 @@ function safeFileSubject(value) {
   // The detailed run view remains the place to inspect unusual paths.
   if (/\s/.test(value)) return null;
   const subject = safeActivityLabel(value, 60);
-  if (!subject || subject.includes('[redacted]')) return null;
+  if (!subject) return null;
   // File-operation subjects are deliberately narrower than generic labels:
   // paths/patterns only, never arbitrary tool arguments or command text.
   const allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./\\-*?[]{}@';
@@ -68,25 +59,19 @@ function safeFileSubject(value) {
 }
 
 function latestActivityTool(snapshot) {
-  const ordered = Object.entries(snapshot?.activity ?? {})
-    .filter(([, state]) => state && typeof state === 'object')
-    .sort(([, a], [, b]) => (Number(a.sequence) || 0) - (Number(b.sequence) || 0));
-  const current = ordered.filter(([, state]) => state.active === true).at(-1) ?? ordered.at(-1) ?? null;
-  if (!current) return { present: false, label: null };
-  const [nodeId, state] = current;
-  const name = SAFE_TOOL_NAMES.has(state.tool) ? state.tool : null;
-  if (!name) return { present: state.active === true, label: null };
-  // The ordered activity edge says WHICH completed record is newest. Looking
-  // up that exact node/tool may add a safe file subject without ever guessing
-  // chronology from retrospective object insertion order.
-  const retro = snapshot?.retrospectives?.[nodeId];
-  const call = [...(retro?.toolCalls ?? [])].reverse().find(item => item?.tool === name) ?? null;
+  const calls = [];
+  for (const retro of Object.values(snapshot?.retrospectives ?? {})) {
+    for (const call of retro?.toolCalls ?? []) calls.push(call);
+  }
+  const call = calls.at(-1) ?? null;
+  const name = SAFE_TOOL_NAMES.has(call?.tool) ? call.tool : null;
+  if (!name) return { present: Boolean(call), label: null };
   const field = {
     read_file: 'path', write_file: 'path', create_file: 'path', edit_file: 'path', glob: 'pattern'
   }[name];
   const subject = field ? safeFileSubject(call?.args?.[field]) : null;
   return {
-    present: state.active === true,
+    present: true,
     label: safeActivityLabel(`${name}${subject ? ` ${subject}` : ''}`, 76)
   };
 }

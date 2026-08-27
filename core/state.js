@@ -578,29 +578,6 @@ export class RunStore {
     fs.appendFileSync(path.join(this.runDir(runId), 'log.jsonl'), line + '\n', 'utf8');
   }
 
-  // Small, file-backed live activity state for renderer chrome. Tool arguments
-  // never enter this file: the audit log owns details, while this answers only
-  // which node/tool is active and which transition happened last. A sequence
-  // is used instead of filesystem/object order so parallel and revisited nodes
-  // remain deterministic even when two transitions share a millisecond.
-  readActivity(runId) {
-    try { return readJson(path.join(this.runDir(runId), 'activity.json')); }
-    catch { return {}; }
-  }
-
-  writeActivity(runId, nodeId, state) {
-    const activity = this.readActivity(runId);
-    const sequence = Math.max(0, ...Object.values(activity).map(x => Number(x?.sequence) || 0)) + 1;
-    activity[String(nodeId ?? 'run')] = {
-      tool: String(state?.tool ?? '').slice(0, 100),
-      active: state?.active === true,
-      at: new Date().toISOString(),
-      sequence
-    };
-    writeJson(path.join(this.runDir(runId), 'activity.json'), activity);
-    return activity[String(nodeId ?? 'run')];
-  }
-
   // --- the liveness lease (D40) --------------------------------------------
   //
   // Which PROCESS is walking this run, refreshed while it walks.
@@ -663,7 +640,6 @@ export class RunStore {
       plan: this.readPlan(runId),
       tasks,
       retrospectives: this.readRetrospectives(runId),
-      activity: this.readActivity(runId),
       taskOutputs: Object.fromEntries(
         (tasks?.tasks ?? []).map(t => [t.id, this.readTaskOutput(runId, t.id)])
       ),

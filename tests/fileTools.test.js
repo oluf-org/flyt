@@ -30,16 +30,10 @@ const logEvents = (store, runId) =>
 
 test('read_file: reads an existing repo file from the bound workspace', async () => {
   const ctx = boundCtx();
-  const activity = [];
-  ctx.onToolState = state => activity.push(state);
   const rec = await executeTool('read_file', { path: 'existing.txt' }, ctx);
   assert.equal(rec.ok, true);
   assert.equal(rec.result.content, 'original contents\n');
   assert.equal(rec.result.target, 'workspace');
-  assert.deepEqual(activity, [
-    { tool: 'read_file', active: true },
-    { tool: 'read_file', active: false }
-  ]);
 });
 
 test('read_file: missing file returns a self-correctable error, and is logged', async () => {

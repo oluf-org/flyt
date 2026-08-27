@@ -148,10 +148,6 @@ export async function executeTool(name, args, ctx) {
   const started = Date.now();
   const record = { tool: name, args, ok: false };
   const tool = registry.get(name);
-  // Observability is advisory and must never be able to break the tool it is
-  // observing. Only the tool name and active edge cross this seam; arguments
-  // stay in the separately redacted audit record below.
-  try { ctx?.onToolState?.({ tool: name, active: true }); } catch { /* observer failure */ }
   try {
     if (!tool) throw new Error(`Unknown tool "${name}". Available: ${[...registry.keys()].join(', ')}`);
     const errors = validateArgs(tool.parameters, args ?? {});
@@ -170,7 +166,6 @@ export async function executeTool(name, args, ctx) {
   archiveResult(record, tool, ctx);
 
   ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: callerOf(ctx), ...record });
-  try { ctx?.onToolState?.({ tool: name, active: false }); } catch { /* observer failure */ }
   return record;
 }
 
