@@ -12,6 +12,9 @@ import path from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
 import { parseYaml, type YamlValue } from './yaml.js';
 import { compose, type Entry, type Layer, type ResolvedEntry } from './compose.js';
+import { installPlugin, type AttendedPluginReview } from '../plugins/tools.js';
+import { builtinImporter, isBuiltin } from '../profiles.js';
+import { installTrustedPlugin } from '../plugins/trusted-install.js';
 
 export * from './compose.js';
 export * from './yaml.js';
@@ -140,6 +143,12 @@ export function loadComposition(sources: CompositionSources = {}): { entries: Re
 /** How a row's module is turned into a plugin. Injectable, so tests need no packages on disk. */
 export type Importer = (name: string) => Promise<unknown>;
 
+export interface MountOptions {
+  import?: Importer;
+  /** The one human decision used for external plugins that can reach ctx.tools. */
+  toolReview?: AttendedPluginReview;
+}
+
 const defaultImporter: Importer = name => import(name);
 
 /** The specifier a group row uses, matching dsh. */
@@ -160,7 +169,7 @@ export const GROUP = 'cordis:group';
 export async function mount(
   ctx: Context,
   entries: readonly Entry[],
-  options: { import?: Importer } = {},
+  options: MountOptions = {},
 ): Promise<string[]> {
   const load = options.import ?? defaultImporter;
   const mounted: string[] = [];
@@ -178,12 +187,28 @@ export async function mount(
       continue;
     }
 
-    const module: any = await load(entry.name);
+    const bundled = isBuiltin(entry.name);
+    // Importing a package executes its top-level module body. An unattended
+    // refusal therefore belongs before import(), not merely before apply().
+    if (!bundled && (!options.toolReview?.attended || typeof options.toolReview.decide !== 'function')) {
+      throw new Error('Refused: installing a tool-capable plugin requires an attended human classification review');
+    }
+    // Exact built-in names are resolved by Flyt's own importer. A caller cannot
+    // attach a trusted name to an arbitrary module through the injectable one.
+    const module: any = await (bundled ? builtinImporter(entry.name) : load(entry.name));
     const plugin = module?.default ?? module;
     if (!plugin || (typeof plugin !== 'function' && typeof plugin.apply !== 'function')) {
       throw new Error(`"${entry.name}" (entry "${entry.id}") is not a plugin`);
     }
-    await ctx.plugin(plugin, entry.config as any);
+    // `mount` is the package installation boundary. Flyt's own logical rows
+    // are composition. EVERY external package goes through review because a
+    // plugin that omitted or disguised `inject: ['tools']` must not earn a
+    // bypass. With no reviewer (the Loop profile), refusal precedes apply().
+    if (!bundled) {
+      await installPlugin(ctx, plugin, options.toolReview, entry.config);
+    } else {
+      await installTrustedPlugin(ctx, plugin, entry.config);
+    }
     mounted.push(entry.id);
   }
 

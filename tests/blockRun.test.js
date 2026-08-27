@@ -68,10 +68,13 @@ async function bootFor(script, { tools = [], ceiling = [] } = {}) {
     apply(ctx) { return provideSeam(ctx, 'llm', llm.seam); },
   });
   if (tools.length) {
-    await kernel.ctx.plugin({
+    await flytTools.installPlugin(kernel.ctx, {
       name: 'some-tools',
       inject: ['tools'],
       apply(ctx) { for (const t of tools) ctx.tools.register(t); },
+    }, {
+      attended: true,
+      decide: (_pluginName, proposals) => Object.fromEntries(proposals.map(p => [p.name, p])),
     });
   }
   const session = await kernel.ctx.sessions.open('run-1');

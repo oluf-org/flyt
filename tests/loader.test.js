@@ -8,6 +8,7 @@ import path from 'node:path';
 import {
   parseYaml, YamlError, compose, explain, readComposition, discoverContributions,
   loadComposition, mount, createKernel, PROFILES, assertNarrower, builtinImporter,
+  flytTools,
 } from '#kernel';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-loader-'));
@@ -187,20 +188,25 @@ test('mounting imports each row and applies it in order', async () => {
     apply(_ctx, config) { applied.push([name, config]); },
   });
   try {
+    await kernel.ctx.plugin(flytTools);
     const mounted = await mount(kernel.ctx, [
-      { id: 'sessions', name: '@flyt/session-jsonl', config: { root: './runs' } },
-      { id: 'tools', name: '@flyt/tools' },
+      { id: 'sessions', name: 'fixture:session-jsonl', config: { root: './runs' } },
+      { id: 'tools', name: 'fixture:tools' },
       { id: 'off', name: '@flyt/nope', disabled: true },
-    ], { import: importer });
+    ], {
+      import: importer,
+      toolReview: { attended: true, decide: () => ({}) },
+    });
 
     assert.deepEqual(mounted, ['sessions', 'tools']);
-    assert.deepEqual(applied, [['@flyt/session-jsonl', { root: './runs' }], ['@flyt/tools', undefined]]);
+    assert.deepEqual(applied, [['fixture:session-jsonl', { root: './runs' }], ['fixture:tools', undefined]]);
   } finally { await kernel.dispose(); }
 });
 
 test('a group mounts its children in an isolated context', async () => {
   const kernel = createKernel();
   try {
+    await kernel.ctx.plugin(flytTools);
     const importer = async name => ({
       name,
       apply(ctx) { ctx.provide('terminals', { name }); },
@@ -208,7 +214,10 @@ test('a group mounts its children in an isolated context', async () => {
     const mounted = await mount(kernel.ctx, [{
       id: 'shell', name: 'cordis:group', group: true, isolate: { terminals: true },
       config: [{ id: 'pty', name: '@flyt/terminal' }],
-    }], { import: importer });
+    }], {
+      import: importer,
+      toolReview: { attended: true, decide: () => ({}) },
+    });
 
     assert.deepEqual(mounted, ['shell', 'pty']);
     assert.equal(kernel.ctx.terminals, undefined, 'the isolated service did not leak into the root');
@@ -219,9 +228,66 @@ test('a row naming something that is not a plugin says which row', async () => {
   const kernel = createKernel();
   try {
     await assert.rejects(
-      async () => { await mount(kernel.ctx, [{ id: 'broken', name: 'not-a-plugin' }], { import: async () => ({ hello: 1 }) }); },
+      async () => { await mount(kernel.ctx, [{ id: 'broken', name: 'not-a-plugin' }], {
+        import: async () => ({ hello: 1 }),
+        toolReview: { attended: true, decide: () => ({}) },
+      }); },
       /"not-a-plugin" \(entry "broken"\) is not a plugin/,
     );
+  } finally { await kernel.dispose(); }
+});
+
+test('the Loop installer refuses before import, including forged Flyt prefixes', async () => {
+  const kernel = createKernel({ profile: 'flyt-loop-worker' });
+  let applied = 0;
+  let imported = 0;
+  const external = {
+    // It declares no injection at all. The external-package boundary must not
+    // trust that omission enough to execute it unattended.
+    name: 'external-tools',
+    apply() { applied += 1; },
+  };
+  try {
+    await kernel.ctx.plugin(flytTools);
+    for (const name of ['some-package', '@flyt/spoofed', 'flyt:spoofed']) {
+      await assert.rejects(
+        () => kernel.install([{ id: 'external', name }], {
+          import: async () => { imported += 1; return external; },
+        }),
+        /requires an attended human classification review/);
+    }
+    assert.equal(applied, 0, 'the Loop/unattended path refuses before plugin execution');
+    assert.equal(imported, 0, 'the package is refused before import-time code can execute');
+  } finally { await kernel.dispose(); }
+});
+
+test('an attended package mount gets one review and preserves plugin config', async () => {
+  const kernel = createKernel();
+  const seen = [];
+  const external = {
+    name: 'external-tools', inject: ['tools'],
+    apply(ctx, config) {
+      seen.push(config);
+      ctx.tools.register({
+        name: 'package_tool', description: '', parameters: {},
+        async execute() { return { content: 'ran' }; },
+      });
+    },
+  };
+  try {
+    await kernel.ctx.plugin(flytTools);
+    await mount(kernel.ctx, [{ id: 'external', name: 'some-package', config: { answer: 42 } }], {
+      import: async () => external,
+      toolReview: {
+        attended: true,
+        decide(_pluginName, proposals) {
+          seen.push(proposals.map(p => p.name));
+          return { package_tool: null };
+        },
+      },
+    });
+    assert.deepEqual(seen, [{ answer: 42 }, ['package_tool']]);
+    assert.equal(kernel.ctx.tools.get('package_tool').classification, undefined);
   } finally { await kernel.dispose(); }
 });
 

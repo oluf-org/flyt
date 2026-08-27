@@ -815,6 +815,7 @@ blocks:
         get stack() { return { id: 'preview', root }; },
         blocks: kernel.ctx.blocks,
         library,
+        pluginReviews: kernel.pluginReviews,
         commands: {
           invoke: (name, args, caller) => kernel.ctx.commands.invoke(name, args, caller),
           subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); },

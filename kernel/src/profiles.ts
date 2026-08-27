@@ -31,6 +31,13 @@ export const BUILTIN = {
   commands: 'flyt:api',
 } as const;
 
+const BUILTIN_NAMES = new Set<string>(Object.values(BUILTIN));
+
+/** Trust is an exact shipped identity, never a forgeable package-name prefix. */
+export function isBuiltin(name: string): boolean {
+  return BUILTIN_NAMES.has(name);
+}
+
 /** Resolve `flyt:*` specifiers to the bundled plugin modules. */
 export async function builtinImporter(name: string): Promise<unknown> {
   switch (name) {

@@ -21,7 +21,15 @@ export async function buildSurface(host = globalThis.window?.flyt ?? null) {
   if (typeof host?.v2Build !== 'function') return null;
   try {
     const surface = await host.v2Build();
-    return surface?.stack ? surface : null;
+    if (!surface?.stack) return null;
+    if (!surface.pluginReviews?.snapshot) return surface;
+    // A live bridge, not a copied proposal: installation is awaiting the same
+    // coordinator this getter reads and the modal settles.
+    return {
+      ...surface,
+      get pluginReview() { return surface.pluginReviews.snapshot(); },
+      subscribePluginReview: listener => surface.pluginReviews.subscribe(listener),
+    };
   } catch {
     // A host that cannot answer leaves Build empty rather than broken. There is
     // nothing a person can do about it from inside the editor, and an error

@@ -59,19 +59,21 @@ export const isV2Enabled = options => v2Flag(options).enabled;
  * @param {string} [options.profile] — which surface profile to compose.
  * @param {string} [options.runsRoot] — where session logs live.
  * @param {'ask'|'smart'|'always'} [options.approvalMode] — how this surface approves.
+ * @param {Function} [options.onReviewReady] — synchronously attach the host review surface before startup plugins install.
  * @param {Function} [options.load] — the importer, injectable so a test can watch the door.
  * @returns {Promise<null|{ kernel: object, ctx: object, dispose: Function }>} null when the flag is off.
  */
 export async function bootKernel({
   call = null, settings = null, env = process.env,
   profile = 'flyt-cli', runsRoot = null, approvalMode = 'ask',
+  onReviewReady = null,
   load = () => import('#kernel')
 } = {}) {
   const flag = v2Flag({ call, settings, env });
   if (!flag.enabled) return null;
 
   const kernelModule = await load();
-  const { createKernel, loadComposition, mount, PROFILES, builtinImporter } = kernelModule;
+  const { createKernel, loadComposition, PROFILES, builtinImporter } = kernelModule;
 
   const kernel = createKernel({ profile });
   const profileEntries = (PROFILES[profile] ?? PROFILES['flyt-cli']).map(entry => {
@@ -83,7 +85,21 @@ export async function bootKernel({
   });
 
   const { entries } = loadComposition({ profile, profileEntries });
-  await mount(kernel.ctx, entries, { import: builtinImporter });
+  const prepared = {
+    kernel, ctx: kernel.ctx, pluginReviews: kernel.pluginReviews,
+    install: (pluginEntries, installOptions) => kernel.install(pluginEntries, installOptions),
+    dispose: () => kernel.dispose(), source: flag.source, profile,
+  };
+  try {
+    // This hook is deliberately synchronous: the host attaches its listener
+    // and returns, then startup installation may publish a pending review. It
+    // gives UI code the coordinator before boot's promise can be parked on it.
+    if (typeof onReviewReady === 'function') onReviewReady(prepared);
+    await kernel.install(entries, { import: builtinImporter });
+  } catch (error) {
+    await kernel.dispose();
+    throw error;
+  }
 
-  return { kernel, ctx: kernel.ctx, dispose: () => kernel.dispose(), source: flag.source, profile };
+  return prepared;
 }

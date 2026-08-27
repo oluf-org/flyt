@@ -7,6 +7,9 @@
  * @module #kernel
  */
 import { Context } from '@deepseek-ai/cordis';
+import { mount, type Importer } from './loader/index.js';
+import type { Entry } from './loader/compose.js';
+import { PluginReviewCoordinator } from './plugins/tools.js';
 
 export * from './seams/index.js';
 export * from './loader/index.js';
@@ -63,6 +66,10 @@ export interface Kernel {
   readonly ctx: Context;
   /** The profile this kernel composed. */
   readonly profile: ProfileName;
+  /** The one pending attended plugin review, observable by the host UI. */
+  readonly pluginReviews: PluginReviewCoordinator;
+  /** Install package rows through this surface's attended/unattended policy. */
+  install(entries: readonly Entry[], options?: { import?: Importer }): Promise<string[]>;
   /**
    * Tear the plugin tree down, running every fiber's disposers.
    *
@@ -85,12 +92,22 @@ export interface Kernel {
 export function createKernel(options: KernelOptions = {}): Kernel {
   const ctx = new Context();
   const profile = options.profile ?? 'flyt-cli';
+  const pluginReviews = new PluginReviewCoordinator();
   if (options.baseUrl) ctx.baseUrl = options.baseUrl;
 
   let disposed: Promise<void> | null = null;
   return {
     ctx,
     profile,
+    pluginReviews,
+    install(entries, installOptions = {}) {
+      return mount(ctx, entries, {
+        ...installOptions,
+        // A Loop worker cannot manufacture a human callback. The shared mount
+        // path therefore refuses every external package before it executes.
+        toolReview: profile === 'flyt-loop-worker' ? undefined : pluginReviews.attendedReview(),
+      });
+    },
     dispose() {
       disposed ??= ctx.fiber.dispose();
       return disposed;

@@ -16,6 +16,7 @@ import BlockEditor from './BlockEditor.jsx';
 import Trace from './Trace.jsx';
 import Work from './Work.jsx';
 import Library from './Library.jsx';
+import PluginTrustReview from './PluginTrustReview.jsx';
 
 /**
  * @param location — where the shell is, when a host is driving it. Omitted, the
@@ -100,6 +101,14 @@ export default function Shell({ location = null, onNavigate, build = null, watch
                   blocks={build?.blocks ?? null}
                   commands={build?.commands ?? null}
                 />
+                {build?.pluginReview?.proposals?.length > 0 && (
+                  <PluginTrustReview
+                    key={`${build.pluginReview.pluginName}:${build.pluginReview.proposals.map(p => p.name).join(',')}`}
+                    pluginName={build.pluginReview.pluginName}
+                    proposals={build.pluginReview.proposals}
+                    onDecide={build.pluginReview.decide}
+                  />
+                )}
               </>
             )
             : <Work

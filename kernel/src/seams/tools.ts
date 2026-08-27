@@ -48,6 +48,8 @@ export interface ToolsSeam {
   get(name: string): ToolDefinition | undefined;
   /** Every registered tool, including unclassified ones. */
   list(): ToolDefinition[];
+  /** The inferred proposal, without changing reachability. */
+  propose(name: string, seams?: readonly string[]): ToolClassification | null;
   /**
    * Run a call through the gate.
    *

@@ -74,15 +74,20 @@ test('a plugin withdraws cleanly, taking its contribution with it', async () => 
 
 test('a dsh plugin loads through our loader, not only through a direct import', async () => {
   const kernel = createKernel();
+  const detachReviewSurface = kernel.pluginReviews.subscribe(() => {});
   try {
-    const mounted = await mount(kernel.ctx, [
+    const mounted = await kernel.install([
+      { id: 'tools', name: 'flyt:tools' },
       { id: 'skills', name: 'flyt:skills' },
       { id: 'badge', name: '@deepseek-ai/dsh-skill-badge' },
     ], { import: name => (name === 'flyt:skills' ? Promise.resolve(flytSkills) : builtinImporter(name)) });
 
-    assert.deepEqual(mounted, ['skills', 'badge']);
+    assert.deepEqual(mounted, ['tools', 'skills', 'badge']);
     assert.ok((await kernel.ctx.skills.list()).some(s => s.name === 'dsh-badge'));
-  } finally { await kernel.dispose(); }
+  } finally {
+    detachReviewSurface();
+    await kernel.dispose();
+  }
 });
 
 test('the policy band spans third-party tools too', async () => {
