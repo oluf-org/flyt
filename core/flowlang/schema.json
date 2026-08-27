@@ -362,6 +362,13 @@
             "type": "string"
           }
         },
+        "skillToolGrants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Explicit human grants for tools requested by attached skills; still bounded by toolCeiling and ignored unattended."
+        },
         "requiresApproval": {
           "type": "boolean"
         },
@@ -555,6 +562,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "skillToolGrants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Explicit human grants for tools requested by attached skills; still bounded by toolCeiling and ignored unattended."
         },
         "constraints": {
           "type": "array"

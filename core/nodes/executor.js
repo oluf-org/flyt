@@ -223,9 +223,12 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   for (const refused of skillTools.refused) {
     store.appendLog(runId, { event: 'skill_tool_refused', node: `executor:${taskId}`, ...refused, ceiling: skillTools.ceiling });
   }
+  for (const missing of skillTools.missing) {
+    store.appendLog(runId, { event: 'skill_tool_missing', node: `executor:${taskId}`, ...missing });
+  }
   const unavailableSkillTools = [...skillTools.ungranted, ...skillTools.refused.map(r => ({
     ...r, reason: 'outside this block\'s static tool ceiling'
-  }))];
+  })), ...skillTools.missing.map(r => ({ ...r, reason: `requested tool is ${r.reason}` }))];
 
   let system = withSkillsSection([
     'ROLE: executor',

@@ -120,11 +120,16 @@ export function resolveSkillToolRequests(found, { granted = [], ceiling = null, 
   const ungranted = requests.filter(r => !humanGrants.has(r.tool)).map(r => ({
     ...r, reason: unattended ? 'unattended workers cannot grant skill tool requests' : 'not granted by a human'
   }));
-  if (!approved.length || typeof resolve !== 'function') return { tools: [], ungranted, refused: [], ceiling };
-  const resolved = resolve({ grant: approved.map(r => r.tool), ceiling });
+  if (!approved.length || typeof resolve !== 'function') {
+    return { tools: [], ungranted, refused: [], missing: [], ceiling };
+  }
+  const resolved = resolve({ grant: [...new Set(approved.map(r => r.tool))], ceiling });
+  const attribute = issues => (issues ?? []).flatMap(issue =>
+    approved.filter(request => request.tool === issue.tool).map(request => ({ ...issue, skill: request.skill })));
   return {
     tools: resolved.tools ?? [], ungranted,
-    refused: (resolved.refused ?? []).map(r => ({ ...r, skill: requests.find(q => q.tool === r.tool)?.skill })),
+    refused: attribute(resolved.refused),
+    missing: attribute(resolved.missing),
     ceiling: resolved.ceiling
   };
 }
@@ -160,12 +165,15 @@ export function listSkills(workspace, { limit = 40 } = {}) {
     const name = file.slice(0, -3);
     if (!SAFE_NAME.test(name)) continue;
     let summary = '';
+    let requiresTools = [];
     try {
       const text = fs.readFileSync(`${dir}/${file}`, 'utf8');
-      const line = text.split(/\r?\n/).map(l => l.trim()).find(l => l && !l.startsWith('---'));
+      const parsed = parseSkill(text);
+      requiresTools = parsed.requiresTools;
+      const line = parsed.content.split(/\r?\n/).map(l => l.trim()).find(Boolean);
       summary = (line ?? '').replace(/^#+\s*/, '').slice(0, 120);
     } catch { /* unreadable: the name is still worth listing */ }
-    out.push({ name, summary });
+    out.push({ name, summary, requiresTools });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -178,6 +186,7 @@ export function availableSkillsSection(skills) {
     'SKILLS THIS PROJECT HAS — names you may put in a task\'s `skills` list.',
     'Attach one when the job needs that knowledge to be done right. A name that',
     'is not on this list resolves to nothing at run time, so do not invent one.',
-    ...skills.map(s => `- ${s.name}${s.summary ? ` — ${s.summary}` : ''}`)
+    ...skills.map(s => `- ${s.name}${s.summary ? ` — ${s.summary}` : ''}`
+      + `${s.requiresTools?.length ? ` (requests tools: ${s.requiresTools.join(', ')})` : ''}`)
   ].join('\n');
 }
