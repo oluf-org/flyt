@@ -51,6 +51,9 @@ export const REVIEW_SYSTEM = [
   'all integration, test, modified and deleted patches remain inline. This is deliberate',
   'structured evidence, not a truncated diff. Judge provenance and integration from the',
   'inline lockfile/metadata. If correctness truly depends on an omitted body, say which one.',
+  'A deletion-heavy cutover may contain a BULK DELETION MANIFEST. Every manifested patch is',
+  'a whole-file deletion, identified by path, size, and fingerprint; modified and renamed',
+  'files stay inline, as do deleted tests/specs so weakened coverage remains visible.',
   'For a roll-up task, LANDED DEPENDENCY EVIDENCE names work already present on the base',
   'branch. That code is absent from the incremental diff because it was separately gated,',
   'reviewed and canaried before this task became ready. Judge the base plus this delta; do',
@@ -100,10 +103,15 @@ function diffSections(diff) {
       path,
       text,
       added: /^new file mode /m.test(text) || /^--- \/dev\/null$/m.test(text),
+      deleted: /^deleted file mode /m.test(text) || /^\+\+\+ \/dev\/null$/m.test(text),
       hash: createHash('sha256').update(text).digest('hex').slice(0, 16),
       lines: text.split('\n').length - 1,
     };
   });
+}
+
+function isTestEvidence(path) {
+  return /(^|\/)(tests?|specs?)(\/|$)|\.(?:test|spec)\.[^/]+$/i.test(path);
 }
 
 function snapshotRoots(sections) {
@@ -129,17 +137,22 @@ function snapshotRoots(sections) {
  * cutting that patch hides both the integration and the tests at its tail. For
  * a recognisable added-only package snapshot, keep the entrypoint plus every
  * change outside the snapshot verbatim and replace the payload with a complete
- * path/size/hash manifest. Modified and deleted files are never summarised.
+ * path/size/hash manifest. A deletion-heavy cutover gets the same treatment
+ * for whole-file deletions, because a deletion patch's only operation is
+ * already represented by its path. Deleted tests/specs remain verbatim so a
+ * reviewer can still detect coverage being weakened. Modified and renamed
+ * files are never summarised.
  */
 export function packageReviewDiff(diff = '') {
   if (diff.length <= REVIEW_DIFF_BUDGET) return { text: diff, summarized: false, complete: true };
   const sections = diffSections(diff);
   const roots = snapshotRoots(sections);
-  if (!sections.length || !roots.length) {
+  const deletionSections = sections.filter(section => section.deleted && !isTestEvidence(section.path));
+  if (!sections.length || (!roots.length && !deletionSections.length)) {
     return {
       text: `REVIEW EVIDENCE INCOMPLETE: the ${diff.length}-character diff exceeds the `
-        + `${REVIEW_DIFF_BUDGET}-character review budget and no added-only package snapshot `
-        + 'could be identified safely. Request that the change be split; do not approve it.',
+        + `${REVIEW_DIFF_BUDGET}-character review budget and no safely manifestable added package `
+        + 'or whole-file deletion could be identified. Request that the change be split; do not approve it.',
       summarized: false,
       complete: false,
     };
@@ -148,29 +161,41 @@ export function packageReviewDiff(diff = '') {
   const membership = new Map();
   for (const group of roots) for (const section of group.members) membership.set(section, group);
   const kept = sections.filter(section => !membership.has(section)
-    || roots.some(group => group.marker === section));
+    || roots.some(group => group.marker === section))
+    .filter(section => !deletionSections.includes(section));
   const manifests = roots.map(group => [
     `BULK ADDED SNAPSHOT: ${group.root}/`,
     `${group.members.length} added files; contents represented by a complete SHA-256 patch manifest.`,
-    'The package entrypoint is inlined below. No modified or deleted file is summarised.',
+    'The package entrypoint is inlined below. No modified file or deleted test/spec is summarised.',
     ...group.members.map(section => `- ${section.path} | ${section.lines} patch lines | sha256:${section.hash}`),
   ].join('\n'));
+  const deletionManifest = deletionSections.length ? [
+    'BULK DELETION MANIFEST',
+    `${deletionSections.length} whole files deleted; each entry represents the complete deletion patch.`,
+    'Deleted tests/specs are excluded from this manifest and remain inline.',
+    ...deletionSections.map(section => `- ${section.path} | ${section.lines} patch lines | sha256:${section.hash}`),
+  ].join('\n') : '';
   const text = [
-    'REVIEW EVIDENCE: structured complete change set (bulk added package contents are manifested, not truncated).',
+    'REVIEW EVIDENCE: structured complete change set (eligible whole-file payloads are manifested, not truncated).',
     ...manifests,
-    'FULL PATCH FOR INTEGRATION, TESTS, MODIFICATIONS, DELETIONS, AND PACKAGE ENTRYPOINTS:',
+    deletionManifest,
+    'FULL PATCH FOR INTEGRATION, TESTS, MODIFICATIONS, NON-MANIFESTED DELETIONS, AND PACKAGE ENTRYPOINTS:',
     ...kept.map(section => section.text),
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
   if (text.length > REVIEW_DIFF_BUDGET) {
     return {
-      text: `REVIEW EVIDENCE INCOMPLETE: even after manifesting ${roots.map(r => `${r.root}/`).join(', ')}, `
+      text: `REVIEW EVIDENCE INCOMPLETE: even after manifesting eligible added payloads and whole-file deletions, `
         + `the evidence is ${text.length} characters, above the ${REVIEW_DIFF_BUDGET}-character budget. `
         + 'Request that the change be split; do not approve it.',
       summarized: true,
       complete: false,
     };
   }
-  return { text, summarized: true, complete: true, roots: roots.map(group => group.root) };
+  return {
+    text, summarized: true, complete: true,
+    roots: roots.map(group => group.root),
+    deleted: deletionSections.map(section => section.path),
+  };
 }
 
 export function buildReviewPrompt({

@@ -762,6 +762,44 @@ test('an oversized patch with no identifiable package snapshot fails closed', ()
   assert.match(evidence.text, /do not approve/i);
 });
 
+test('a deletion-heavy cutover manifests source deletions but keeps deleted tests and integration inline', () => {
+  const deleted = (file, marker, lines = 8000) => [
+    `diff --git a/${file} b/${file}`,
+    'deleted file mode 100644',
+    `--- a/${file}`,
+    '+++ /dev/null',
+    `@@ -1,${lines} +0,0 @@`,
+    ...Array.from({ length: lines }, (_, i) => `-${marker}-${i}`),
+    '',
+  ].join('\n');
+  const changed = (file, marker) => [
+    `diff --git a/${file} b/${file}`,
+    `--- a/${file}`,
+    `+++ b/${file}`,
+    '@@ -1 +1 @@',
+    '-old',
+    `+${marker}`,
+    '',
+  ].join('\n');
+  const payload = [
+    deleted('src/OldApp.jsx', 'OLD-UI'),
+    deleted('src/OldCanvas.jsx', 'OLD-CANVAS'),
+    deleted('tests/oldApp.test.js', 'DELETED-ASSERTION', 20),
+    changed('src/Root.jsx', 'CUTOVER-INTEGRATION'),
+  ].join('');
+
+  const evidence = packageReviewDiff(payload);
+  assert.equal(evidence.complete, true);
+  assert.equal(evidence.summarized, true);
+  assert.deepEqual(evidence.deleted, ['src/OldApp.jsx', 'src/OldCanvas.jsx']);
+  assert.match(evidence.text, /BULK DELETION MANIFEST/);
+  assert.match(evidence.text, /src\/OldApp\.jsx .* sha256:[a-f0-9]{16}/);
+  assert.ok(!evidence.text.includes('OLD-UI-1499'), 'deleted source bodies are represented by the manifest');
+  assert.match(evidence.text, /DELETED-ASSERTION-19/, 'deleted test bodies remain reviewable');
+  assert.match(evidence.text, /CUTOVER-INTEGRATION/);
+  assert.ok(evidence.text.length <= 120_000);
+});
+
 test('the reviewer is told which files left the declared blast radius', () => {
   const prompt = buildReviewPrompt({
     task: { title: 'Add tag filtering' },
@@ -1054,6 +1092,26 @@ test('a task cannot edit the queue that ranks it or the gates that judge it', ()
   });
   assert.equal(fewer.ok, false);
   assert.match(fewer.problems[0], /less of it/);
+});
+
+test('a failed mechanical check preserves the exact attempt commit for correction', async () => {
+  const root = await makeRepo({ tests: 2 });
+  const pool = new WorktreePool(root, path.join(tmp(), 'worktrees'));
+  await pool.create('t-0006', 'Keep failed check work');
+  fs.appendFileSync(path.join(pool.dirFor('t-0006'), 'src.js'), 'export const changed = true;\n');
+  const head = await pool.commit('t-0006', 'useful work before check failure');
+
+  const result = await landTask({
+    pool, repoRoot: root, taskId: 't-0006', base: 'main',
+    task: { title: 'Keep failed check work' },
+    baselineOutput: '# tests 3',
+    config: { workers: { reviewer: { provider: 'script', model: 'm' } }, retry: { attempts: 1, baseMs: 1 } },
+  });
+
+  assert.equal(result.landed, false);
+  assert.equal(result.stage, 'checks');
+  assert.equal(result.attemptCommit, head.trim());
+  assert.match(result.guidance, /fell from 3 to 2/);
 });
 
 test('dry run approves without merging — the posture for the first nights', async () => {
