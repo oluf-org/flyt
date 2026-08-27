@@ -39,3 +39,13 @@ export function ToolContributionView({ contribution, pluginId = null }) {
     <FlytUiNode node={contribution.view} />
   </section>;
 }
+
+/** The remaining declaration points share the same Flyt-owned chrome. */
+export function PluginContributionSection({ contribution, pluginId = null, label = null }) {
+  return <section className={`plugin-${contribution.point}`} data-plugin={pluginId ?? undefined}
+    aria-label={label ?? contribution.title ?? contribution.id}>
+    {contribution.title && <h3>{contribution.title}</h3>}
+    {contribution.description && <p>{contribution.description}</p>}
+    {contribution.view && <FlytUiNode node={contribution.view} />}
+  </section>;
+}

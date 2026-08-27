@@ -106,6 +106,7 @@ test('unknown components and executable renderer payloads are refused before lis
 
 test('trace, settings and library extension points use the same closed boundary', async () => {
   const kernel = createKernel();
+  let vite;
   try {
     await kernel.ctx.plugin(flytUiExtensions);
     await kernel.ctx.plugin({
@@ -118,9 +119,34 @@ test('trace, settings and library extension points use the same closed boundary'
         ]) assert.equal(contribute(ctx, contribution).ok, true);
       },
     });
-    assert.deepEqual(kernel.ctx.uiExtensions.invoke({ method: 'ui.list', params: {} }).result
-      .map(row => row.contribution.point), ['trace-decoration', 'settings-section', 'library-entry']);
-  } finally { await kernel.dispose(); }
+    const rows = kernel.ctx.uiExtensions.invoke({ method: 'ui.list', params: {} }).result;
+    assert.deepEqual(rows.map(row => row.contribution.point),
+      ['trace-decoration', 'settings-section', 'library-entry']);
+
+    vite = await createViteServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'silent' });
+    const [{ default: Library }, { default: Trace }, { PluginContributionSection }] = await Promise.all([
+      vite.ssrLoadModule('/src/v2/Library.jsx'),
+      vite.ssrLoadModule('/src/v2/Trace.jsx'),
+      vite.ssrLoadModule('/src/v2/PluginContributionView.jsx'),
+    ]);
+    const libraryHtml = renderToStaticMarkup(React.createElement(Library, { uiExtensions: rows }));
+    assert.match(libraryHtml, /Example block/);
+    assert.match(libraryHtml, /data-plugin="future.plugin"/);
+    const traceHtml = renderToStaticMarkup(React.createElement(Trace, {
+      runId: 'r', uiExtensions: rows,
+      trace: { turns: [{ id: 't', blockId: 'b', steps: [], finished: true }], others: [{ event: 'tool.call' }] },
+    }));
+    assert.match(traceHtml, /External/);
+    const settings = rows.find(row => row.contribution.point === 'settings-section');
+    const settingsHtml = renderToStaticMarkup(React.createElement(PluginContributionSection, {
+      contribution: settings.contribution, pluginId: settings.pluginId,
+    }));
+    assert.match(settingsHtml, /Managed by the plugin/);
+    assert.doesNotMatch(`${libraryHtml}${traceHtml}${settingsHtml}`, /dangerouslySetInnerHTML/);
+  } finally {
+    await vite?.close();
+    await kernel.dispose();
+  }
 });
 
 test('an external plugin crosses kernel host RPC and reaches Build and Trace Flyt renderers', async () => {

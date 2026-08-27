@@ -17,7 +17,7 @@
 import React, { useState } from 'react';
 import { traceView } from './traceView.js';
 import { duration } from './traceView.js';
-import { ToolContributionView } from './PluginContributionView.jsx';
+import { ToolContributionView, PluginContributionSection } from './PluginContributionView.jsx';
 import './traceStyles.css';
 
 /** A collapsible section that is closed until asked. */
@@ -197,6 +197,11 @@ export default function Trace({ trace = null, runId = null, uiExtensions = [] })
         {view.unfinished ? ' · still going' : ''}
       </p>
       {view.turns.map(turn => <Turn key={turn.id} turn={turn} uiExtensions={uiExtensions} />)}
+      {uiExtensions.filter(row => row?.contribution?.point === 'trace-decoration'
+        && view.others.some(event => event?.event === row.contribution.event)).map(row =>
+          <PluginContributionSection key={`${row.pluginId}:${row.contribution.id}`}
+            contribution={row.contribution} pluginId={row.pluginId}
+            label={`${row.contribution.event} trace decoration`} />)}
       {view.others.length > 0 && (
         <details className="tr-others">
           <summary>{view.others.length} event(s) this surface does not have a shape for</summary>
