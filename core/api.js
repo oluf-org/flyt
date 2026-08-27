@@ -1089,9 +1089,20 @@ export function createApi(engine) {
       // here — which is exactly what t-0103 did before it widened the failing
       // assertion to make it pass.
       const workerGate = lastWorkerGate(proj(projectId).store, task.runIds);
+      // A roll-up task's dependency work is already in `base`, so it cannot
+      // appear in this task's incremental diff. Give the reviewer the contracts
+      // that made the task ready and the harness-attested landing state rather
+      // than asking it to infer five prior merges from their absence.
+      const dependencyEvidence = (task.dependsOn ?? []).map(id => backlog.get(id))
+        .filter(Boolean)
+        .map(dependency => ({
+          id: dependency.id, title: dependency.title, status: dependency.status,
+          body: dependency.body,
+        }));
       const result = await landTask({
         pool, repoRoot: entry.folder, taskId, task, base, dryRun, baselineOutput,
-        config, workerGate, onStage: typeof onStage === 'function' ? onStage : undefined,
+        config, workerGate, dependencyEvidence,
+        onStage: typeof onStage === 'function' ? onStage : undefined,
         push: wantPush ? (args => pushRefs({ ...args, log: () => {} })) : null,
         // The canary: the gates again, on the merged result in the main
         // checkout. Two branches that each pass alone can fail together.

@@ -144,6 +144,7 @@ export async function landTask({
   push = null,
   dryRun = false,
   baselineOutput = null,
+  dependencyEvidence = [],
   // The gate the ATTEMPT ran itself, when it ran one — read from the run log by
   // the caller. The landing re-runs the gates and sees only its own result, so
   // "the last thing this attempt did was fail its own gate" is a fact that
@@ -293,6 +294,7 @@ export async function landTask({
   const review = record('review', await reviewDiff({
     worker: reviewWorker(config), apiKey, task, diff,
     gates: gateRun.results, blastRadius: task.blastRadius ?? [], changedFiles,
+    dependencyEvidence,
     // What the suite did, so "no new tests" is a fact in front of the reviewer
     // rather than something it has to infer from a diff it cannot run.
     testDelta: { before: testCountFrom(baselineOutput), after: testCountFrom(gateOutput) },
