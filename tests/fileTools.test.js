@@ -30,10 +30,20 @@ const logEvents = (store, runId) =>
 
 test('read_file: reads an existing repo file from the bound workspace', async () => {
   const ctx = boundCtx();
+  let notifications = 0;
+  ctx.notify = () => { notifications += 1; };
   const rec = await executeTool('read_file', { path: 'existing.txt' }, ctx);
   assert.equal(rec.ok, true);
   assert.equal(rec.result.content, 'original contents\n');
   assert.equal(rec.result.target, 'workspace');
+  const edge = ctx.store.readMeta(ctx.runId).toolActivity['executor-task-1'];
+  assert.equal(edge.tool, 'read_file');
+  assert.equal(edge.active, false);
+  assert.equal(edge.sequence, 2);
+  assert.equal(notifications, 2, 'start and finish both wake snapshot consumers');
+  const events = logEvents(ctx.store, ctx.runId).filter(e => e.event === 'tool_start' || e.event === 'tool_call');
+  assert.deepEqual(events.map(e => e.event), ['tool_start', 'tool_call']);
+  assert.deepEqual(Object.keys(events[0]).sort(), ['event', 'node', 'tool', 'ts']);
 });
 
 test('read_file: missing file returns a self-correctable error, and is logged', async () => {

@@ -148,6 +148,13 @@ export async function executeTool(name, args, ctx) {
   const started = Date.now();
   const record = { tool: name, args, ok: false };
   const tool = registry.get(name);
+  const activityNode = ctx?.taskId ? `executor-${ctx.taskId}` : (ctx?.nodeId ?? 'run');
+  // The existing meta snapshot and audit log are the activity protocol. Keep
+  // arguments out of the live edge; the completed tool_call below owns the
+  // separately redacted detail record.
+  ctx.store?.writeToolActivity?.(ctx.runId, activityNode, { tool: name, active: true });
+  ctx.store?.appendLog?.(ctx.runId, { event: 'tool_start', node: callerOf(ctx), tool: name });
+  try { ctx?.notify?.(); } catch { /* observability cannot break a tool */ }
   try {
     if (!tool) throw new Error(`Unknown tool "${name}". Available: ${[...registry.keys()].join(', ')}`);
     const errors = validateArgs(tool.parameters, args ?? {});
@@ -166,6 +173,8 @@ export async function executeTool(name, args, ctx) {
   archiveResult(record, tool, ctx);
 
   ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: callerOf(ctx), ...record });
+  ctx.store?.writeToolActivity?.(ctx.runId, activityNode, { tool: name, active: false });
+  try { ctx?.notify?.(); } catch { /* observability cannot break a tool */ }
   return record;
 }
 

@@ -1133,6 +1133,7 @@ export class FlowRunner {
           // The worktree pool, so read_run can show what an earlier attempt
           // actually changed. Lazily borrowed the same way `backlog` is.
           pool: this.pool ?? null,
+          notify: () => this.notify(runId),
           // The repository this node was pointed at, when it was pointed at one
           // (DECISIONS.md D38). Scopes `search_references` and makes a
           // read of the wrong root visible.
@@ -2970,6 +2971,7 @@ export class FlowRunner {
       references: this.references ?? null,
       // read_run's diff: what an earlier attempt on this task actually changed.
       pool: this.pool ?? null,
+      notify: () => this.notify(runId),
       signal: abortCtl.signal,
       ...(gate ? { approveToolCall: call => this.toolGate(runId, gate.node, call) } : {})
     };
