@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation, testCountUncheckable, testCountFrom, suiteExpectationProblem, suiteExpectationMismatch, scratchArtefacts, scratchArtefactProblem, weakenedAssertions, weakenedAssertionProblem } from './gates.js';
 import { WorktreePool, land as gitLand, git } from './worktree.js';
-import { reviewDiff, reviewWorker } from './diffReview.js';
+import { REVIEW_DIFF_BUDGET, reviewDiff, reviewWorker } from './diffReview.js';
 import { assessRepair, NO_CHANGE_GUIDANCE } from './repair.js';
 
 /**
@@ -225,7 +225,7 @@ export async function landTask({
   const addedFiles = await pool.addedFiles(taskId, { base }).catch(() => []);
   // The diff is read by the checks as well as by the reviewer, so it is
   // computed before them rather than between them.
-  const diff = await pool.diff(taskId, { base });
+  const diff = await pool.diff(taskId, { base, maxChars: REVIEW_DIFF_BUDGET });
   announce('checks');
   const mech = record('checks', mechanicalChecks({
     changedFiles, deletedFiles, addedFiles, diff, workerGate,

@@ -667,6 +667,14 @@ test('the reviewer is told the test delta, and told when it is unknown', () => {
   }
 });
 
+test('a substantial cross-cutting diff reaches the reviewer whole', () => {
+  const tail = 'THE-FINAL-TEST-AND-FILE';
+  const diff = `${'x'.repeat(90_000)}${tail}`;
+  const prompt = buildReviewPrompt({ task: { title: 'Large task' }, diff });
+  assert.match(prompt, new RegExp(tail));
+  assert.ok(!prompt.includes('diff truncated'), 'the old 60k blind spot must stay closed');
+});
+
 test('the reviewer is told which files left the declared blast radius', () => {
   const prompt = buildReviewPrompt({
     task: { title: 'Add tag filtering' },

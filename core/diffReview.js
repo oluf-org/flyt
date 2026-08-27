@@ -17,7 +17,12 @@ import { classifyAdapterError, needsHuman } from './adapters/failures.js';
 import { extractJson } from './planEval.js';
 import { REASONING_HEADROOM } from '../src/flowTypes.js';
 
-const DIFF_BUDGET = 60_000;
+// Large cross-cutting tasks commonly exceed 60k characters. The previous cap
+// silently removed the tail before review, so a reviewer could see neither the
+// final files nor their tests. Keep one shared budget with landing and make it
+// large enough for a substantial task while retaining the fail-closed marker
+// for genuinely oversized changes.
+export const REVIEW_DIFF_BUDGET = 120_000;
 // The verdict is short; arriving at it, over 60k of diff, is not. Sending the
 // answer size as the whole completion budget starves a reasoning model into
 // returning nothing (D40) — and this reviewer is the last thing between an
@@ -69,8 +74,8 @@ export const REVIEW_SYSTEM = [
 export const VERDICTS = ['approve', 'request-changes', 'reject'];
 
 export function buildReviewPrompt({ task = {}, diff = '', gates = [], blastRadius = [], changedFiles = [], testDelta = null }) {
-  const clipped = diff.length > DIFF_BUDGET
-    ? `${diff.slice(0, DIFF_BUDGET)}\n…[diff truncated at ${DIFF_BUDGET} characters — treat an incomplete diff as a reason to request changes rather than approve]`
+  const clipped = diff.length > REVIEW_DIFF_BUDGET
+    ? `${diff.slice(0, REVIEW_DIFF_BUDGET)}\n…[diff truncated at ${REVIEW_DIFF_BUDGET} characters — treat an incomplete diff as a reason to request changes rather than approve]`
     : diff;
   const outside = blastRadius.length
     ? changedFiles.filter(f => !blastRadius.some(b => f === b || f.startsWith(b)))
