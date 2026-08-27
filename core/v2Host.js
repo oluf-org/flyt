@@ -52,7 +52,13 @@ export async function createV2BuildController(booted, {
 } = {}) {
   if (!booted?.ctx?.commands) throw new Error('A Build controller needs a booted command seam');
   const kernel = await import('#kernel');
-  if (!stacks && stackRoot) stacks = new StackStore(stackRoot, { parseStack: kernel.parseStack });
+  if (!stacks && stackRoot) stacks = new StackStore(stackRoot, {
+    parseStack: kernel.parseStack,
+    // Resolve at migration time, after the plugins below mount. Canonical
+    // files may still open with a missing plugin so Build can show the broken
+    // reference; a v1 conversion may not create one silently.
+    resolveBlock: use => booted.ctx.blocks.resolve(use),
+  });
   if (!stacks?.list || !stacks?.load || !stacks?.saveStack) {
     throw new Error('A Build controller needs a file-backed stack store');
   }

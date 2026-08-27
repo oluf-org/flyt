@@ -11,6 +11,15 @@ import { apply as loopBlocks } from '../kernel/dist/plugins/blocks-loop.js';
 import { StackStore, serializeStack } from '../core/stackstore.js';
 
 const root = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-stackstore-'));
+const knownUses = new Set([
+  'flyt-blocks-core:work', 'flyt-blocks-core:general-analysis',
+  'flyt-blocks-judgement:evaluation', 'flyt-blocks-inquiry:orient',
+  'flyt-blocks-loop:backlog-plan', 'flyt-blocks-loop:loop-handoff',
+]);
+const migrationOptions = {
+  parseStack,
+  resolveBlock: use => knownUses.has(use) ? { use } : null,
+};
 const allBlocks = async () => {
   const kernel = createKernel();
   await kernel.ctx.plugin(flytBlocks);
@@ -39,7 +48,7 @@ test('a legacy flow opens read-only, then retires only after a validated first s
   fs.mkdirSync(flows);
   const oldFile = path.join(flows, 'old-project.flow.yaml');
   fs.writeFileSync(oldFile, legacy);
-  const store = new StackStore(stacks, { parseStack });
+  const store = new StackStore(stacks, migrationOptions);
 
   assert.deepEqual(store.list(), [{ id: 'old-project', legacy: true }]);
   const opened = store.load('old-project');
@@ -81,7 +90,7 @@ nodes:
 flow:
   - input -> first -> second -> output
 `);
-  const store = new StackStore(path.join(dir, 'stacks'), { parseStack });
+  const store = new StackStore(path.join(dir, 'stacks'), migrationOptions);
   const opened = store.load('ordered');
   assert.deepEqual(opened.root.children.map(node => node.id), ['first', 'second']);
 });
@@ -102,7 +111,7 @@ flow:
   - input -> left -> merge -> output
   - input -> right -> merge
 `);
-  const store = new StackStore(path.join(dir, 'stacks'), { parseStack });
+  const store = new StackStore(path.join(dir, 'stacks'), migrationOptions);
   assert.throws(() => store.load('branched'), /cannot be flattened safely/);
   assert.ok(fs.existsSync(oldFile), 'a migration refusal never retires the only source');
   assert.ok(!fs.existsSync(path.join(dir, 'stacks', 'branched.stack.yaml')));
@@ -124,7 +133,7 @@ nodes:
 flow:
   - input -> queue -> output
 `);
-  const store = new StackStore(path.join(dir, 'stacks'), { parseStack });
+  const store = new StackStore(path.join(dir, 'stacks'), migrationOptions);
   const queue = store.load('handoff').root.children[0];
   assert.equal(queue.use, 'flyt-blocks-loop:loop-handoff');
   assert.equal(queue.config.maxTasks, 6);
@@ -147,13 +156,44 @@ nodes:
 flow:
   - input -> orient -> analyse -> judge -> plan -> handoff -> output
 `);
-  const store = new StackStore(path.join(dir, 'stacks'), { parseStack });
-  const stack = store.load('resolves');
   const kernel = await allBlocks();
+  const store = new StackStore(path.join(dir, 'stacks'), {
+    parseStack,
+    resolveBlock: use => kernel.ctx.blocks.resolve(use),
+  });
+  const stack = store.load('resolves');
   for (const node of stack.root.children) {
     assert.ok(kernel.ctx.blocks.resolve(node.use), `${node.id}: ${node.use} must resolve`);
   }
   await kernel.dispose();
+});
+
+test('an unknown retired template cannot become a dead canonical stack', () => {
+  const dir = root();
+  const flows = path.join(dir, 'flows');
+  fs.mkdirSync(flows);
+  const oldFile = path.join(flows, 'translate.flow.yaml');
+  fs.writeFileSync(oldFile, `version: 1
+id: translate
+name: Translate
+nodes:
+  translation:
+    use: translation
+flow:
+  - input -> translation -> output
+`);
+  const stackFile = path.join(dir, 'stacks', 'translate.stack.yaml');
+  const store = new StackStore(path.join(dir, 'stacks'), migrationOptions);
+
+  assert.throws(
+    () => store.load('translate'),
+    /translation.*flyt-blocks-core:translation.*no installed plugin contributes/s,
+  );
+  assert.ok(fs.existsSync(oldFile), 'the only source survives a missing block');
+  assert.ok(!fs.existsSync(stackFile), 'no dead canonical stack is written');
+  assert.throws(() => store.save('translate'), /no installed plugin contributes/);
+  assert.ok(fs.existsSync(oldFile), 'a failed first save also preserves the legacy source');
+  assert.ok(!fs.existsSync(stackFile));
 });
 
 test('saving an edited containment tree stays parseable and stores no layout sidecar', () => {

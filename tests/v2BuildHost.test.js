@@ -56,3 +56,33 @@ blocks:
     detach(); controller.dispose(); await booted.dispose();
   }
 });
+
+test('the production Build controller refuses a legacy template absent from its installed registry', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-v2-migration-'));
+  const stacks = path.join(dir, 'stacks');
+  const flows = path.join(dir, 'flows');
+  fs.mkdirSync(flows);
+  const legacy = path.join(flows, 'translate.flow.yaml');
+  fs.writeFileSync(legacy, `version: 1
+id: translate
+name: Translate
+nodes:
+  translation: { use: translation }
+flow:
+  - input -> translation -> output
+`);
+  const booted = await bootKernel({
+    call: true, env: {}, profile: 'flyt-desktop', runsRoot: path.join(dir, 'runs'),
+  });
+
+  try {
+    await assert.rejects(
+      createV2BuildController(booted, { stackRoot: stacks, preferredId: 'translate' }),
+      /flyt-blocks-core:translation.*no installed plugin contributes/s,
+    );
+    assert.ok(fs.existsSync(legacy), 'production refusal preserves the only source');
+    assert.ok(!fs.existsSync(path.join(stacks, 'translate.stack.yaml')));
+  } finally {
+    await booted.dispose();
+  }
+});

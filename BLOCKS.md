@@ -6,7 +6,7 @@ A block is one executable step contributed by a plugin. A stack references it wi
 
 | Plugin | Blocks | Purpose |
 |---|---|---|
-| `flyt-blocks-core` | `work`, `research`, `reference-reader`, `general-analysis`, `combine`, `split`, `plan-start` | Bounded repository work, untrusted web/reference reading, and general transformations |
+| `flyt-blocks-core` | `work`, `research`, `general-analysis`, `combine`, `split`, `plan-start` | Bounded repository work, untrusted web reading, and general transformations |
 | `flyt-blocks-judgement` | `evaluation`, `compare`, `prompt-refiner` | Review, comparison, and brief refinement |
 | `flyt-blocks-inquiry` | `interrogate`, `orient` | Bounded questioning and grounded project orientation |
 | `flyt-blocks-loop` | `backlog-plan`, `loop-handoff` | Produce claimable tasks and hand them to Loop |

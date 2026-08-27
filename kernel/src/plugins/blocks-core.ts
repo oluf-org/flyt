@@ -56,11 +56,6 @@ export const RESEARCH_CEILING = [
   'read_file', 'glob', 'search_files', 'search_references', 'read_tool_result',
 ] as const;
 
-/** A reference-repository lane can inspect both repositories and change neither. */
-export const REFERENCE_READER_CEILING = [
-  'read_file', 'glob', 'search_files', 'search_references', 'read_tool_result',
-] as const;
-
 /** What the work block is told before the task's own brief. */
 export const WORK_SYSTEM = [
   'You are working one task, alone and unattended.',
@@ -173,19 +168,6 @@ export const researchBlock: BlockDefinition = {
   ].join('\n')),
 };
 
-export const referenceReaderBlock: BlockDefinition = {
-  use: 'flyt-blocks-core:reference-reader',
-  title: 'Reference reader',
-  description: 'Inspect a reference repository and this project without changing either.',
-  category: 'inquiry',
-  settings: WORK_SETTINGS as unknown as JsonValue,
-  ceiling: REFERENCE_READER_CEILING,
-  execute: run => executeAgentWork(run, [
-    'Read the named reference repository and this project. Ground every claim in a file and line you opened.',
-    'Search before reading, keep the scope assigned to this lane, and state any gap rather than inventing it.',
-  ].join('\n')),
-};
-
 /**
  * Contribute the core blocks.
  *
@@ -235,7 +217,6 @@ export const planStartBlock = aiStep('flyt-blocks-core:plan-start', 'Plan',
 export function apply(ctx: Context): void {
   ctx.blocks.register(workBlock);
   ctx.blocks.register(researchBlock);
-  ctx.blocks.register(referenceReaderBlock);
   ctx.blocks.register(generalAnalysisBlock);
   ctx.blocks.register(combineBlock);
   ctx.blocks.register(splitBlock);

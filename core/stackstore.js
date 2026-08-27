@@ -169,11 +169,13 @@ export class StackStore {
   constructor(rootDir, {
     legacyRoot = path.join(path.dirname(rootDir), LEGACY_FLOWS_DIR),
     parseStack,
+    resolveBlock = null,
   } = {}) {
     if (typeof parseStack !== 'function') throw new Error('StackStore needs the canonical stack parser');
     this.rootDir = rootDir;
     this.legacyRoot = legacyRoot;
     this.parseStack = parseStack;
+    this.resolveBlock = resolveBlock;
     fs.mkdirSync(rootDir, { recursive: true });
   }
   stackPath(id) {
@@ -205,8 +207,9 @@ export class StackStore {
     const parsed = this.parseStack(source, id);
     if (parsed.id !== id) throw new Error(`Stack id "${parsed.id}" does not match file id "${id}"`);
     const target = this.stackPath(id);
-    fs.writeFileSync(target, source.endsWith('\n') ? source : `${source}\n`, 'utf8');
     const legacy = path.join(this.legacyRoot, `${id}${LEGACY_FLOW_EXTENSION}`);
+    if (fs.existsSync(legacy)) this.#assertMigratedBlocksResolve(parsed, id);
+    fs.writeFileSync(target, source.endsWith('\n') ? source : `${source}\n`, 'utf8');
     if (fs.existsSync(legacy)) fs.rmSync(legacy);
     return target;
   }
@@ -229,7 +232,21 @@ export class StackStore {
       if (Object.keys(config).length) mapping(lines, 4, 'config', config);
     }
     const converted = `${lines.join('\n')}\n`;
-    this.parseStack(converted, flow.id || fallbackId);
+    const parsed = this.parseStack(converted, flow.id || fallbackId);
+    this.#assertMigratedBlocksResolve(parsed, flow.id || fallbackId);
     return converted;
+  }
+  #assertMigratedBlocksResolve(stack, id) {
+    if (typeof this.resolveBlock !== 'function') {
+      throw new Error(`Legacy flow "${id}" needs the installed block registry before it can be migrated`);
+    }
+    const pending = [...(stack.root?.children ?? [])];
+    while (pending.length) {
+      const node = pending.shift();
+      pending.unshift(...(node.children ?? []), ...(node.else ?? []));
+      if (node.kind === 'block' && !this.resolveBlock(node.use)) {
+        throw new Error(`Legacy node "${node.id}" maps to "${node.use}", but no installed plugin contributes that block`);
+      }
+    }
   }
 }

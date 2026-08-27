@@ -82,37 +82,30 @@ test('research reaches every web reader and no write, shell, destructive, or que
   await k.dispose();
 });
 
-test('learn-from-repo keeps the bounded reading, synthesis, planning, and evidenced handoff contract', async () => {
+test('learn-from-repo keeps its canonical orientation, parallel reading, synthesis, planning, and handoff', () => {
   const stack = parseStack(read('stacks/learn-from-repo.stack.yaml'), 'learn-from-repo');
   const [orient, readers, synthesise, plan, handoff] = stack.root.children;
-  assert.equal(orient.id, 'orient');
-  assert.equal(orient.config.maxSteps, 6);
-  assert.equal(orient.config.model, '~deepseek/deepseek-v4-flash-latest');
+  assert.deepEqual(stack.root.children.map(node => node.id), [
+    'orient', 'read', 'synthesise', 'plan', 'handoff',
+  ]);
+  assert.equal(orient.use, 'flyt-blocks-inquiry:orient');
+  assert.equal(orient.config.effort, 'high');
+  assert.match(orient.config.instructions, /bounded survey/i);
   assert.equal(readers.kind, 'parallel');
-  assert.equal(readers.maxParallel, 4, 'reference synthesis remains bounded');
   assert.deepEqual(readers.children.map(node => node.id), [
-    'read-architecture', 'read-practices', 'read-adversarial', 'read-contrarian',
+    'read-architecture', 'read-practices', 'read-adversarial',
   ]);
   for (const reader of readers.children) {
-    assert.equal(reader.use, 'flyt-blocks-core:reference-reader');
-    assert.equal(reader.config.maxSteps, 10);
+    assert.equal(reader.use, 'flyt-blocks-core:general-analysis');
+    assert.match(reader.config.instructions, /file and a line you actually opened/);
   }
-  assert.deepEqual(synthesise.config.skills, ['reference-transfer']);
-  assert.equal(synthesise.config.effort, 'medium');
-  assert.match(synthesise.config.instructions, /under 1,800 words/);
-  assert.deepEqual(plan.config.skills, ['skill-authoring']);
-  assert.equal(plan.config.maxSteps, 10);
-  assert.equal(plan.config.model, '~deepseek/deepseek-v4-flash-latest');
+  assert.equal(synthesise.use, 'flyt-blocks-core:general-analysis');
+  assert.match(synthesise.config.instructions, /Where two lanes disagree/);
+  assert.match(synthesise.config.instructions, /what is relevant here/);
+  assert.equal(plan.use, 'flyt-blocks-loop:backlog-plan');
+  assert.match(plan.config.instructions, /Confirm every path in blastRadius/);
+  assert.match(plan.config.instructions, /reference:<name>\/<path>/);
   assert.equal(handoff.use, 'flyt-blocks-loop:loop-handoff');
-  assert.equal(handoff.config.maxTasks, 6);
-  assert.equal(handoff.config.requireEvidence, true);
-  assert.equal(handoff.config.waitFor, 'none');
-
-  const k = await registryWithAll();
-  const readCeiling = new Set(k.ctx.blocks.resolve('flyt-blocks-core:reference-reader').ceiling);
-  for (const required of ['glob', 'search_references', 'read_file']) assert.ok(readCeiling.has(required));
-  for (const forbidden of ['write_file', 'bash', 'enqueue_task']) assert.ok(!readCeiling.has(forbidden));
-  await k.dispose();
 });
 
 test('the pipeline stack is one stack with an effort dial', () => {
