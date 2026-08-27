@@ -1,14 +1,11 @@
-/** Impeccable's detector CLI exposed through the ordinary contributed-tool seam. */
+/** Impeccable's bundled detector exposed through Flyt's external plugin seam. */
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import type { Context } from '@deepseek-ai/cordis';
 
 export const name = 'impeccable';
 export const inject = ['tools'];
 
-interface Config { cwd?: string; cli?: string }
-
-export function apply(ctx: Context, config: Config = {}): void {
+export function apply(ctx, config = {}) {
   const cwd = path.resolve(config.cwd ?? process.cwd());
   // The CLI travels with the provider payload. Do not silently substitute a
   // separately trusted package: the skill and tool must be the same install.
@@ -27,8 +24,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     // A claim can only raise inference's floor. Spawning the packaged CLI is a
     // shell effect even though this plugin only needs the registry service.
     classification: { effect: 'shell', destructive: false, untrustedInput: false, source: 'declared' },
-    async execute(args: any) {
-      const requested: string[] = Array.isArray(args?.paths) ? args.paths.map(String) : [];
+    async execute(args) {
+      const requested = Array.isArray(args?.paths) ? args.paths.map(String) : [];
       if (!requested.length) return { content: 'Error: paths must contain at least one path', error: 'paths is required' };
       const paths = requested.map(value => {
         const resolved = path.resolve(cwd, value);
@@ -45,7 +42,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   });
 }
 
-function run(command: string, args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
+function run(command, args, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, windowsHide: true });
     let stdout = '';

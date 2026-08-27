@@ -1,0 +1,8 @@
+{
+  "name": "impeccable-flyt-plugin",
+  "version": "1.0.0",
+  "description": "Flyt external-plugin adapter for the Impeccable provider payload",
+  "type": "module",
+  "exports": "./index.js",
+  "license": "Apache-2.0"
+}
