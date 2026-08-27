@@ -93,6 +93,10 @@ export const REVIEW_SYSTEM = [
 export const VERDICTS = ['approve', 'request-changes', 'reject'];
 
 const SNAPSHOT_MARKERS = new Set(['SKILL.md', 'package.json', 'plugin.json', 'pyproject.toml']);
+// Manifest rows occur once per omitted whole patch, so keep their schema terse:
+// `L` is the complete patch-line count and the fingerprint covers that patch.
+// This preserves the same evidence while spending context on semantic diffs.
+const manifestRow = section => `- ${section.path} | ${section.lines}L | sha256:${section.hash}`;
 
 function diffSections(diff) {
   const starts = [...diff.matchAll(/^diff --git /gm)].map(match => match.index);
@@ -221,20 +225,20 @@ export function packageReviewDiff(diff = '', { renamePairs = [] } = {}) {
     `BULK ADDED SNAPSHOT: ${group.root}/`,
     `${group.members.length} added files; contents represented by a complete SHA-256 patch manifest.`,
     'The package entrypoint is inlined below. No modified file or deleted test/spec is summarised.',
-    ...group.members.map(section => `- ${section.path} | ${section.lines} patch lines | sha256:${section.hash}`),
+    ...group.members.map(manifestRow),
   ].join('\n'));
   const deletionManifest = deletionSections.length ? [
     'BULK DELETION MANIFEST',
     `${deletionSections.length} whole files deleted; each entry represents the complete deletion patch.`,
     'Deleted tests/specs are excluded from this manifest and remain inline.',
-    ...deletionSections.map(section => `- ${section.path} | ${section.lines} patch lines | sha256:${section.hash}`),
+    ...deletionSections.map(manifestRow),
   ].join('\n') : '';
   const mechanicalManifest = mechanicalSections.length ? [
     'DECLARED MECHANICAL RENAME MANIFEST',
     `${mechanicalSections.length} modified or renamed files contain only the task-declared substitutions below.`,
     `Rules: ${renamePairs.map(([from, to]) => `${JSON.stringify(from)} -> ${JSON.stringify(to)}`).join('; ')}`,
     'Each patch was verified line-for-line after applying those substitutions; tests with any other edit remain inline.',
-    ...mechanicalSections.map(section => `- ${section.path} | ${section.lines} patch lines | sha256:${section.hash}`),
+    ...mechanicalSections.map(manifestRow),
   ].join('\n') : '';
   const text = [
     'REVIEW EVIDENCE: structured complete change set (eligible whole-file payloads are manifested, not truncated).',

@@ -747,7 +747,7 @@ test('a bulk added provider snapshot is manifested without hiding integration or
   assert.equal(evidence.complete, true);
   assert.equal(evidence.summarized, true);
   assert.match(evidence.text, /BULK ADDED SNAPSHOT: \.flyt\/skills\/impeccable\//);
-  assert.match(evidence.text, /generated-29\.md .* sha256:[a-f0-9]{16}/);
+  assert.match(evidence.text, /generated-29\.md \| \d+L \| sha256:[a-f0-9]{16}/);
   assert.match(evidence.text, /provider entrypoint/);
   assert.match(evidence.text, /INTEGRATION-TAIL/);
   assert.match(evidence.text, /TEST-TAIL/);
@@ -832,7 +832,7 @@ test('a deletion-heavy cutover manifests source deletions but keeps deleted test
   assert.equal(evidence.summarized, true);
   assert.deepEqual(evidence.deleted, ['src/OldApp.jsx', 'src/OldCanvas.jsx']);
   assert.match(evidence.text, /BULK DELETION MANIFEST/);
-  assert.match(evidence.text, /src\/OldApp\.jsx .* sha256:[a-f0-9]{16}/);
+  assert.match(evidence.text, /src\/OldApp\.jsx \| \d+L \| sha256:[a-f0-9]{16}/);
   assert.ok(!evidence.text.includes('OLD-UI-1499'), 'deleted source bodies are represented by the manifest');
   assert.match(evidence.text, /DELETED-ASSERTION-19/, 'deleted test bodies remain reviewable');
   assert.match(evidence.text, /CUTOVER-INTEGRATION/);
@@ -867,7 +867,7 @@ test('task-declared mechanical renames are manifested without hiding other test 
     diff: mechanical + changedAssertion,
   });
   assert.match(prompt, /DECLARED MECHANICAL RENAME MANIFEST/);
-  assert.match(prompt, /tests\/stackRunner\.test\.js .* sha256:[a-f0-9]{16}/);
+  assert.match(prompt, /tests\/stackRunner\.test\.js \| \d+L \| sha256:[a-f0-9]{16}/);
   assert.match(prompt, /assert\.equal\(result, 'unsafe'\)/,
     'a changed assertion outside the declared substitution remains inline');
 });
