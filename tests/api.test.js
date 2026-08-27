@@ -128,6 +128,26 @@ test('doctor returns connected and usable states through the capability probe', 
   assert.ok(report.findings.some(item => /gpt-5\.2-codex.*account rejects/.test(item.message)));
 });
 
+test('doctor bounds subscription capability calls and marks the remainder unknown', async () => {
+  const probes = [];
+  const { api, engine } = makeApi({
+    capabilityProbe: async ({ model }) => {
+      probes.push(model);
+      return { status: 'usable', ok: true };
+    }
+  });
+  engine.hasKey = id => id === 'codex';
+  engine.resolveModelSource = model => ({ provider: 'codex', model });
+  engine.settings.activeModels = [];
+  const models = Array.from({ length: 12 }, (_, index) => `gpt-selected-${index}`);
+
+  const report = await api.invoke('diag:doctor', { models });
+  assert.equal(probes.length, 8, 'one doctor operation cannot make an arbitrary number of real calls');
+  assert.deepEqual(report.selected.slice(8).map(item => [item.capability, item.usable]),
+    Array.from({ length: 4 }, () => ['unknown', null]));
+  assert.ok(report.findings.some(item => /at most 8 subscription models/.test(item.message)));
+});
+
 test('a loop running in another process is visible here — and a dead one is not believed', async () => {
   // The status file outlives the process that wrote it. A reader that trusts it
   // blindly reports work in flight that stopped hours ago, which is worse than

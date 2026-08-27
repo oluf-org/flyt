@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { callModel } from './adapters/index.js';
 import { incidentHeadline } from './incidents.js';
-import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
+import { CAPABILITY_MAX_MODELS_PER_OPERATION, SUBSCRIPTION_PROVIDERS } from './modelSource.js';
 import { planDefaultRoute, TASK_KINDS } from './modelPriority.js';
 import { effortBudget, DEFAULT_EFFORT } from '../src/flowTypes.js';
 import { v2Flag } from './v2.js';
@@ -592,8 +592,17 @@ export async function doctor(engine, { probe = false, models = [], project = nul
       }
     });
   if (engine.capabilityProbe) {
+    let capabilityChecks = 0;
     for (const item of selected) {
       if (!item.connected || !SUBSCRIPTION_PROVIDERS.includes(item.provider)) continue;
+      if (capabilityChecks >= CAPABILITY_MAX_MODELS_PER_OPERATION) {
+        item.capability = 'unknown';
+        item.usable = null;
+        item.reason = 'Capability check skipped because this operation reached its probe limit.';
+        findings.push({ level: 'warn', message: `"${item.model}" was not probed because doctor checks at most ${CAPABILITY_MAX_MODELS_PER_OPERATION} subscription models per operation. Run doctor again with a smaller explicit model set.` });
+        continue;
+      }
+      capabilityChecks += 1;
       const result = await engine.capabilityCache.check(
         `${item.provider}:${item.model}`,
         () => engine.capabilityProbe({ provider: item.provider, model: item.model }));

@@ -9,7 +9,8 @@ import {
   usdPerMillion, catalogFromOpenRouter, factsFromCatalog, normalizeModelFacts,
   popularityFromOpenRouter, normalizeModelPopularity,
   normalizeModelSets, modelSetId, resolveModelSet, MODEL_SET_MAX,
-  proposeStarterSet, STARTER_ROLES, createCapabilityCache
+  proposeStarterSet, STARTER_ROLES, createCapabilityCache,
+  CAPABILITY_CACHE_MAX_ENTRIES
 } from '../core/modelSource.js';
 import { canServe, callModel } from '../core/adapters/index.js';
 import { probeSubscriptionCapability } from '../core/engine.js';
@@ -352,6 +353,19 @@ test('capability refresh cannot be overwritten by an older in-flight probe', asy
   assert.equal((await old).status, 'unsupported');
   assert.deepEqual(await cache.check('codex:selected', async () => ({ status: 'unknown' })),
     { ok: true, status: 'usable', cached: true }, 'the refreshed generation remains authoritative');
+});
+
+test('capability cache has a fixed LRU capacity', async () => {
+  let calls = 0;
+  const cache = createCapabilityCache({ maxEntries: 2 });
+  const probe = async () => { calls += 1; return { status: 'usable', ok: true }; };
+  await cache.check('codex:a', probe);
+  await cache.check('codex:b', probe);
+  assert.equal((await cache.check('codex:a', probe)).cached, true, 'a hit makes a the most-recent entry');
+  await cache.check('codex:c', probe);
+  assert.equal((await cache.check('codex:b', probe)).cached, undefined, 'the least-recent entry was evicted');
+  assert.equal(calls, 4);
+  assert.ok(CAPABILITY_CACHE_MAX_ENTRIES >= 8, 'the shipped cache holds at least one complete Loop preflight');
 });
 
 test('the default subscription probe is tiny, single-attempt, timed, and classifies safely', async () => {
