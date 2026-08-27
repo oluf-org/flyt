@@ -8,6 +8,7 @@ import { activeStreams } from './runStreams.js';
 import { currentNode } from './loopLive.js';
 
 export const ACTIVITY_STALE_MS = 90_000;
+export const ACTIVITY_SETTLED_MS = 15_000;
 
 const PHASE_LABELS = {
   thinking: 'Thinking',
@@ -116,7 +117,10 @@ function freshness(ageMs) {
   return `${Math.floor(ageMs / 3_600_000)}h ago`;
 }
 
-export function runActivity(record, now = Date.now(), { staleMs = ACTIVITY_STALE_MS } = {}) {
+export function runActivity(record, now = Date.now(), {
+  staleMs = ACTIVITY_STALE_MS,
+  settledMs = ACTIVITY_SETTLED_MS
+} = {}) {
   const snapshot = record?.snapshot ?? null;
   if (!snapshot?.meta) return null;
   const updatedAt = Number(record.updatedAt ?? now);
@@ -129,6 +133,9 @@ export function runActivity(record, now = Date.now(), { staleMs = ACTIVITY_STALE
   const phase = phaseFor(snapshot, {
     live, ageMs, staleMs, hasTool: latestTool.present, hasStream: streamPresent, node
   });
+  // A terminal outcome is useful feedback, but it is not ongoing activity.
+  // Retain it long enough to be noticed, then let both shell consumers clear.
+  if (!live && ['failed', 'cancelled', 'complete'].includes(phase) && ageMs >= settledMs) return null;
   const worker = workerFor(snapshot, node);
   const provider = safeActivityLabel(worker?.provider, 28);
   const model = safeActivityLabel(worker?.model, 56);
@@ -155,6 +162,10 @@ export function runActivity(record, now = Date.now(), { staleMs = ACTIVITY_STALE
     updatedAt, ageMs, freshness: freshnessLabel, ariaLabel,
     shortLabel: safeActivityLabel(detail ? `${phaseLabel} · ${detail}` : phaseLabel, 72)
   };
+}
+
+export function showPersistentActivity(status, liveCount = 0) {
+  return Number(liveCount) > 0 || Boolean(status && status.phase !== 'idle');
 }
 
 export function projectActivity(records, now = Date.now(), options = {}) {

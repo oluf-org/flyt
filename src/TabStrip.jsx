@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { showPersistentActivity } from './activityStatus.js';
 
 // The project tab strip (D22, tabs demo A): one tab per open project, living
 // in the custom titlebar between the brand and the document name. Anatomy per
@@ -73,10 +74,10 @@ export default function TabStrip({ tabs, activeId, live, activity = {}, saveStat
         const active = t.id === activeId;
         const liveN = live[t.id] ?? 0;
         const status = activity[t.id] ?? null;
-        // Activity is intentionally not tied to the selected document. Keep a
-        // settled/stalled summary in the tab until a newer snapshot replaces it
-        // so leaving a run never turns the project back into an anonymous dot.
-        const showActivity = liveN > 0 || (status && status.phase !== 'idle');
+        // Activity is intentionally not tied to the selected document. The
+        // shared projection keeps active states persistent and terminal states
+        // visible only for their bounded acknowledgement window.
+        const showActivity = showPersistentActivity(status, liveN);
         const dirty = active && saveState !== 'saved';
         const editing = editingId === t.id;
         return (

@@ -14,7 +14,7 @@ import RunResult from './RunResult.jsx';
 import RunsList from './RunsList.jsx';
 import NodeFocus from './NodeFocus.jsx';
 import { isTerminal } from './runProgress.js';
-import { projectActivity } from './activityStatus.js';
+import { projectActivity, showPersistentActivity } from './activityStatus.js';
 import { resolveFlow, namedFlow, UNTITLED_FLOW, isInstance, isStructuralNode, setKnownTools, setToolCatalog } from './flowTypes.js';
 import { comparePair } from './compareRun.js';
 import { layoutPositions, shrinkOrchBox } from './flowLayout.js';
@@ -2026,7 +2026,7 @@ export default function App() {
           </>}
         </nav>
         {runView && stage && <span className="stage-chip">{stage.replace(/_/g, ' ')}</span>}
-        {activeProjectActivity && activeProjectActivity.phase !== 'idle' && (
+        {showPersistentActivity(activeProjectActivity) && (
           <div
             className="shell-activity"
             data-phase={activeProjectActivity.phase}

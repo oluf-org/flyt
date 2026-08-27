@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { projectActivity, runActivity, safeActivityLabel } from '../src/activityStatus.js';
+import {
+  ACTIVITY_SETTLED_MS, projectActivity, runActivity, safeActivityLabel, showPersistentActivity
+} from '../src/activityStatus.js';
 
 const snapshot = ({ stage = 'execution', stream = '', calls = [], meta = {} } = {}) => ({
   meta: {
@@ -100,6 +102,21 @@ test('persistent activity never exposes prompts, streams, results, controls, or 
     assert.equal(hostile.tool, 'read_file');
     assert.doesNotMatch(JSON.stringify(hostile), /PRIVATE|COMMAND OUTPUT|super-secret|decoy|x{40}/i);
   }
+});
+
+test('terminal chrome is acknowledged briefly, then clears from shell and tabs', () => {
+  for (const stage of ['done', 'failed', 'cancelled']) {
+    const terminal = record(snapshot({ stage }), { live: false });
+    const fresh = runActivity(terminal, 10_000 + ACTIVITY_SETTLED_MS - 1);
+    assert.ok(fresh, `${stage} remains visible inside the acknowledgement window`);
+    assert.equal(showPersistentActivity(fresh), true, `${stage} is shown by shell and tabs`);
+    const expired = runActivity(terminal, 10_000 + ACTIVITY_SETTLED_MS);
+    assert.equal(expired, null, `${stage} expires at the retention boundary`);
+    assert.equal(showPersistentActivity(expired), false, `${stage} then clears from shell and tabs`);
+  }
+  assert.equal(showPersistentActivity({ phase: 'paused' }), true);
+  assert.equal(showPersistentActivity({ phase: 'stalled' }), true);
+  assert.equal(showPersistentActivity(null, 1), true, 'a live membership signal remains visible while its snapshot loads');
 });
 
 test('activity labels remain useful and accessible without relying on motion', () => {
