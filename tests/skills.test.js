@@ -47,21 +47,6 @@ test('loadSkills reads attached skills from the workspace', () => {
   assert.match(found[0].content, /Tabs, never spaces/);
 });
 
-test('provider-shaped skill directories install without flattening their resources', () => {
-  const ws = wsWithSkills({});
-  const dir = path.join(ws.root, '.flyt', 'skills', 'impeccable');
-  fs.mkdirSync(path.join(dir, 'reference'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'SKILL.md'),
-    '---\nrequiresTools: [impeccable_detect]\n---\n# Impeccable\nRead [rules](reference/rules.md).', 'utf8');
-  fs.writeFileSync(path.join(dir, 'reference', 'rules.md'), 'detector rules', 'utf8');
-
-  const { found, missing } = loadSkills(ws, ['impeccable']);
-  assert.deepEqual(missing, []);
-  assert.deepEqual(found[0].requiresTools, ['impeccable_detect']);
-  assert.match(found[0].content, /reference\/rules\.md/);
-  assert.ok(listSkills(ws).some(skill => skill.name === 'impeccable'));
-});
-
 test('loadSkills reports a missing file with a reason instead of throwing', () => {
   const ws = wsWithSkills({});
   const { found, missing } = loadSkills(ws, ['nope']);

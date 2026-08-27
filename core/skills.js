@@ -24,10 +24,6 @@ const SAFE_NAME = /^[a-zA-Z0-9_-]+$/;
 // skills keep resolving either way (core/workspace.js).
 export const SKILLS_DIR = `${CONFIG_DIR}/skills`;
 export const skillPath = (name, dir = CONFIG_DIR) => `${dir}/skills/${name}.md`;
-// Provider-shaped payloads (Impeccable, Agent Skills) keep the entrypoint and
-// its relative resources together in a directory. The flat form remains the
-// native shorthand; both resolve through the same confined workspace path.
-export const providerSkillPath = (name, dir = CONFIG_DIR) => `${dir}/skills/${name}/SKILL.md`;
 
 // Minimal YAML frontmatter for D58. Tool ids/selectors are plain strings; both
 // an inline list and a block list are accepted. The frontmatter is metadata and
@@ -75,24 +71,19 @@ export function loadSkills(workspace, names) {
       missing.push({ name, reason: 'no workspace bound to this run' });
       continue;
     }
-    const candidates = [
-      skillPath(name, workspace.configDirName),
-      providerSkillPath(name, workspace.configDirName),
-    ];
+    const rel = skillPath(name, workspace.configDirName);
     let content = null;
     try {
-      for (const rel of candidates) {
-        const p = workspace.resolve(rel);
-        if (!fs.existsSync(p) || !fs.statSync(p).isFile()) continue;
-        content = fs.readFileSync(p, 'utf8').trim();
-        if (content) break;
-      }
+      const p = workspace.resolve(rel);
+      content = fs.existsSync(p) && fs.statSync(p).isFile()
+        ? fs.readFileSync(p, 'utf8').trim()
+        : null;
     } catch (err) {
       missing.push({ name, reason: String(err?.message ?? err) });
       continue;
     }
     if (content) found.push({ name, ...parseSkill(content) });
-    else missing.push({ name, reason: `no ${candidates.join(' or ')} in the workspace` });
+    else missing.push({ name, reason: `no ${rel} in the workspace` });
   }
   return { found, missing };
 }
@@ -180,26 +171,17 @@ export function listSkills(workspace, { limit = 40 } = {}) {
   let dir;
   try { dir = workspace.resolve(`${workspace.configDirName}/skills`); }
   catch { return []; }
-  let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+  let names;
+  try { names = fs.readdirSync(dir).filter(n => n.endsWith('.md')); }
   catch { return []; }
-  const files = entries.flatMap(entry => {
-    if (entry.isFile() && entry.name.endsWith('.md')) {
-      return [{ name: entry.name.slice(0, -3), path: `${dir}/${entry.name}` }];
-    }
-    if (entry.isDirectory() && fs.existsSync(`${dir}/${entry.name}/SKILL.md`)) {
-      return [{ name: entry.name, path: `${dir}/${entry.name}/SKILL.md` }];
-    }
-    return [];
-  });
   const out = [];
-  for (const file of files.slice(0, limit)) {
-    const name = file.name;
+  for (const file of names.slice(0, limit)) {
+    const name = file.slice(0, -3);
     if (!SAFE_NAME.test(name)) continue;
     let summary = '';
     let requiresTools = [];
     try {
-      const text = fs.readFileSync(file.path, 'utf8');
+      const text = fs.readFileSync(`${dir}/${file}`, 'utf8');
       const parsed = parseSkill(text);
       requiresTools = parsed.requiresTools;
       const line = parsed.content.split(/\r?\n/).map(l => l.trim()).find(Boolean);
