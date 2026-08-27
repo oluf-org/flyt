@@ -11,7 +11,8 @@ import path from 'node:path';
 import { FlowRunner } from '../core/flowRunner.js';
 import { Workspace } from '../core/workspace.js';
 import {
-  loadSkills, skillsSection, withSkillsSection, skillPath, listSkills, availableSkillsSection
+  loadSkills, skillsSection, withSkillsSection, skillPath, listSkills, availableSkillsSection,
+  resolveSkillToolRequests, missingSkillToolsSection
 } from '../core/skills.js';
 import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
@@ -81,6 +82,58 @@ test('an empty skill file counts as missing, not as silent success', () => {
   const { found, missing } = loadSkills(ws, ['blank']);
   assert.deepEqual(found, []);
   assert.equal(missing.length, 1);
+});
+
+// --- D58 tool requests -------------------------------------------------------
+
+test('requiresTools frontmatter is metadata, not injected instructions', () => {
+  const ws = wsWithSkills({ research: '---\nrequiresTools: [read_file, web_search]\n---\n# Research\nCheck sources.' });
+  const { found } = loadSkills(ws, ['research']);
+  assert.deepEqual(found[0].requiresTools, ['read_file', 'web_search']);
+  assert.doesNotMatch(found[0].content, /requiresTools/);
+});
+
+const fakeResolve = ({ grant, ceiling }) => {
+  const allowed = new Set(ceiling ?? []);
+  return {
+    tools: grant.filter(t => allowed.has(t)).map(name => ({ name })),
+    refused: grant.filter(t => !allowed.has(t)).map(tool => ({ tool, reason: 'ceiling' })),
+    ceiling
+  };
+};
+
+test('a human-granted skill request makes a tool reachable within the static ceiling', () => {
+  const skill = [{ name: 'research', requiresTools: ['read_file'] }];
+  const result = resolveSkillToolRequests(skill, {
+    granted: ['read_file'], ceiling: ['read_file'], resolve: fakeResolve
+  });
+  assert.deepEqual(result.tools.map(t => t.name), ['read_file']);
+  assert.deepEqual(result.refused, []);
+});
+
+test('an ungranted request runs degraded with an artifact-ready visible notice', () => {
+  const result = resolveSkillToolRequests([{ name: 'research', requiresTools: ['web_search'] }], {
+    granted: [], ceiling: ['web_search'], resolve: fakeResolve
+  });
+  assert.deepEqual(result.tools, []);
+  assert.match(missingSkillToolsSection(result.ungranted), /research is missing tool web_search: not granted by a human/);
+});
+
+test('a Loop worker refuses a skill tool request unattended even if listed as granted', () => {
+  const result = resolveSkillToolRequests([{ name: 'research', requiresTools: ['web_search'] }], {
+    granted: ['web_search'], ceiling: ['web_search'], unattended: true, resolve: fakeResolve
+  });
+  assert.deepEqual(result.tools, []);
+  assert.match(result.ungranted[0].reason, /unattended workers cannot grant/);
+});
+
+test('a human grant cannot widen the block static ceiling', () => {
+  const result = resolveSkillToolRequests([{ name: 'shell-help', requiresTools: ['bash'] }], {
+    granted: ['bash'], ceiling: ['read_file'], resolve: fakeResolve
+  });
+  assert.deepEqual(result.tools, []);
+  assert.deepEqual(result.refused.map(r => r.tool), ['bash']);
+  assert.deepEqual(result.ceiling, ['read_file']);
 });
 
 // --- prompt assembly ---

@@ -7,7 +7,7 @@ import { makeRetrospective } from '../retrospective.js';
 import { recordToolUsage } from '../feedback.js';
 import { runRetrospectiveTurn, retroWorker, retroEnabled } from '../retroTurn.js';
 import { Workspace } from '../workspace.js';
-import { loadSkills, withSkillsSection } from '../skills.js';
+import { loadSkills, withSkillsSection, resolveSkillToolRequests, missingSkillToolsSection } from '../skills.js';
 import { resolveCallTarget, autoFallbackTargets } from '../modelSource.js';
 import { effectContractFor, captureWorkspaceSignature, evaluateTaskEffect, describeEffect, EffectMissingError } from '../effect.js';
 import { effortBudget } from '../../src/flowTypes.js';
@@ -19,7 +19,7 @@ import { effortBudget } from '../../src/flowTypes.js';
 // AbortSignal the runner fires on stop(); the agent loop's model calls reject
 // with an AbortError, which lands in the catch below as a STOPPED task —
 // requeued to 'pending', never marked failed.
-export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, notify = null, retry = null, timeout = null, backlog = null, feedback = null, references = null, pool = null, signal = null } = {}) {
+export async function runExecutorTask(store, runId, taskId, config = {}, { approveToolCall = null, ledger = null, onText = null, onRetry = null, notify = null, retry = null, timeout = null, backlog = null, feedback = null, references = null, pool = null, signal = null, unattended = false } = {}) {
   const tasksDoc = store.readTasks(runId);
   const task = tasksDoc.tasks.find(t => t.id === taskId);
   if (!task) throw new Error(`Task ${taskId} not found in tasks.json`);
@@ -57,7 +57,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   // REFUSED one means something tried to exceed its envelope and is recorded
   // as a problem on the retrospective as well as in the log.
   const grant = resolveTools({ grant: task.tools ?? null, ceiling: task.toolCeiling ?? null });
-  const tools = grant.tools;
+  let tools = grant.tools;
   store.appendLog(runId, {
     event: 'tool_resolved', node: `executor:${taskId}`,
     tools: tools.map(t => t.name), ceiling: grant.ceiling, source: 'static'
@@ -208,14 +208,34 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
   for (const m of missingSkills) {
     store.appendLog(runId, { event: 'skill_missing', node: `executor:${taskId}`, skill: m.name, reason: m.reason });
   }
+  const skillTools = resolveSkillToolRequests(skills, {
+    granted: task.skillToolGrants ?? [], unattended,
+    // A request is dynamic authority: unlike the legacy absent-grant behavior,
+    // it has no ceiling unless the block author wrote one (or a static grant).
+    ceiling: task.toolCeiling ?? task.tools ?? [], resolve: resolveTools
+  });
+  const byName = new Map(tools.map(t => [t.name, t]));
+  for (const tool of skillTools.tools) byName.set(tool.name, tool);
+  tools = [...byName.values()];
+  for (const miss of skillTools.ungranted) {
+    store.appendLog(runId, { event: 'skill_tool_missing', node: `executor:${taskId}`, ...miss });
+  }
+  for (const refused of skillTools.refused) {
+    store.appendLog(runId, { event: 'skill_tool_refused', node: `executor:${taskId}`, ...refused, ceiling: skillTools.ceiling });
+  }
+  const unavailableSkillTools = [...skillTools.ungranted, ...skillTools.refused.map(r => ({
+    ...r, reason: 'outside this block\'s static tool ceiling'
+  }))];
 
-  const system = withSkillsSection([
+  let system = withSkillsSection([
     'ROLE: executor',
     'You are an execution worker in an AI orchestration pipeline.',
     'Complete exactly the task described. Produce the deliverable as Markdown.',
     'Do not do work belonging to other tasks. Respect every constraint.',
     tools.length ? 'You have tools to write files, spawn follow-up tasks, and record a task spec — use them when they help the task.' : ''
   ].filter(Boolean).join('\n'), skills);
+  const missingToolNotice = missingSkillToolsSection(unavailableSkillTools);
+  if (missingToolNotice) system += `\n\n${missingToolNotice}`;
 
   const userMsg = [
     `USER PROMPT:\n${store.readPrompt(runId)}`,
@@ -308,7 +328,8 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
     // change is missing the prose is still the best evidence of what the model
     // believed it did, and a reader needs it to decide whether to retry, re-aim
     // or rewrite the task. It is kept as evidence — never as a completion.
-    store.writeTaskOutput(runId, taskId, result.text.trim());
+    const artifact = [result.text.trim(), missingToolNotice ? `\n\n## Missing skill tools\n\n${missingToolNotice}` : ''].join('');
+    store.writeTaskOutput(runId, taskId, artifact);
 
     // Did the task actually do what it owed? A confident paragraph is not a
     // repository change, and treating it as one is how a green node ends up
@@ -353,6 +374,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
       // asked for more than its ceiling allows, and that must be visible
       // rather than merely absent (DESIGN-SPEC.md §5).
       ...grant.refused.map(r => `Tool "${r.tool}" was refused: outside this node's toolCeiling.`),
+      ...unavailableSkillTools.map(r => `Skill "${r.skill}" is missing requested tool "${r.tool}": ${r.reason}.`),
       ...failedCalls.map(c => `Tool call ${c.tool} failed: ${c.error}`),
       ...redCommands.map(c => `Command exited ${c.result.exitCode}: ${String(c.result.command ?? '').slice(0, 120)}`)
     ];
