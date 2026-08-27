@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WorktreePool, git, slugify, branchFor, land, defaultWorktreeRoot, isInside } from '../core/worktree.js';
-import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, testCountUncheckable, scratchArtefacts, scratchArtefactProblem, suiteExpectation, suiteExpectationProblem, suiteExpectationMismatch, SUITE_EXPECTATIONS, gateProblem, unrunnableGates } from '../core/gates.js';
+import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, testCountUncheckable, scratchArtefacts, scratchArtefactProblem, weakenedAssertions, weakenedAssertionProblem, suiteExpectation, suiteExpectationProblem, suiteExpectationMismatch, SUITE_EXPECTATIONS, gateProblem, unrunnableGates } from '../core/gates.js';
 import { parseReview, buildReviewPrompt, reviewDiff, reviewWorker } from '../core/diffReview.js';
 import { landTask, mechanicalChecks, advancePin, readPin } from '../core/landing.js';
 import { setScript } from './helpers.js';
@@ -159,6 +159,121 @@ test('the message is bounded: a blockedReason is read on a board', () => {
   });
   assert.match(said, /and 26 more/);
   assert.ok(said.length < 400, `${said.length} characters is not a board notice`);
+});
+
+// --- an assertion that stopped asking (t-0108) -------------------------------
+//
+// t-0103's attempt ran the suite as a tool, saw ONE failing assertion, and
+// edited the TEST to accept both values, then declared itself done without
+// re-running the gate. The landing gate passed, because the assertion now
+// accepted the wrong answer, and the reviewer approved it — REVIEW_SYSTEM says
+// in as many words that "Deleted, skipped, or weakened assertions are a
+// REJECT", and this was one, and it was one line in a diff.
+//
+// testCountStagnation cannot help: a test file WAS touched, which is what
+// exempts a change from it. So the diff has to be read.
+
+const hunk = (file, minus, plus) => [
+  `diff --git a/${file} b/${file}`,
+  `--- a/${file}`,
+  `+++ b/${file}`,
+  '@@ -1,3 +1,3 @@',
+  '   const x = 1;',
+  ...[].concat(minus).map(l => `-${l}`),
+  ...[].concat(plus).map(l => `+${l}`),
+  '   done();'
+].join('\n');
+
+test('the t-0103 shape: an exact match widened to accept the old wrong answer', () => {
+  const found = weakenedAssertions(hunk('tests/doctorAffordability.test.js',
+    '  assert.match(findings, /can only afford 1411/);',
+    '  assert.match(findings, /can only afford 14(10|11)/);'));
+
+  assert.equal(found.length, 1, JSON.stringify(found));
+  assert.equal(found[0].file, 'tests/doctorAffordability.test.js');
+  assert.match(found[0].why, /widened to accept more/);
+
+  const said = weakenedAssertionProblem(found);
+  assert.match(said, /made weaker rather than made to pass/);
+  assert.match(said, /14\(10\|11\)/, 'quoting what it became');
+  assert.match(said, /Fix the behaviour, or say in the task why the expectation itself was wrong/);
+});
+
+test('an expectation that merely CHANGED is not weaker', () => {
+  // The common, legitimate edit: a test updated because the behaviour it pins
+  // moved. Treating that as vandalism would make this unusable.
+  assert.deepEqual(weakenedAssertions(hunk('tests/x.test.js',
+    "  assert.match(out, /affords 1411/);",
+    "  assert.match(out, /affords 2500/);")), []);
+  assert.deepEqual(weakenedAssertions(hunk('tests/x.test.js',
+    '  assert.equal(count, 10);',
+    '  assert.equal(count, 12);')), []);
+  // And one that got STRICTER is certainly not.
+  assert.deepEqual(weakenedAssertions(hunk('tests/x.test.js',
+    '  assert.match(out, /affords \\d+/);',
+    '  assert.match(out, /affords 1411/);')), []);
+});
+
+test('an equality check that became a looser one is named for what it is', () => {
+  const equalToOk = weakenedAssertions(hunk('tests/x.test.js',
+    '  assert.equal(report.verdict, "approve");',
+    '  assert.ok(report.verdict);'));
+  assert.equal(equalToOk.length, 1);
+  assert.match(equalToOk[0].why, /equality check became a looser one/);
+
+  const matchToOk = weakenedAssertions(hunk('tests/x.test.js',
+    '  assert.match(said, /exactly this/);',
+    '  assert.ok(said);'));
+  assert.equal(matchToOk.length, 1);
+  assert.match(matchToOk[0].why, /pattern check became a truthiness check/);
+});
+
+test('only test files, and only assertions', () => {
+  // A widened regex in application code is somebody's parser getting more
+  // permissive, which is not this check's business.
+  assert.deepEqual(weakenedAssertions(hunk('core/gates.js',
+    '  const re = /tests 10/;',
+    '  const re = /tests (10|11)/;')), []);
+  // And a line with no assertion on either side is not one.
+  assert.deepEqual(weakenedAssertions(hunk('tests/x.test.js',
+    '  const re = /tests 10/;',
+    '  const re = /tests (10|11)/;')), []);
+  assert.deepEqual(weakenedAssertions(''), []);
+  assert.equal(weakenedAssertionProblem([]), null);
+});
+
+test('mechanicalChecks refuses a landing whose assertion stopped asking', () => {
+  const mech = mechanicalChecks({
+    changedFiles: ['core/diagnostics.js', 'tests/doctorAffordability.test.js'],
+    diff: hunk('tests/doctorAffordability.test.js',
+      '  assert.match(findings, /can only afford 1411/);',
+      '  assert.match(findings, /can only afford 14(10|11)/);'),
+    task: { blastRadius: ['core/', 'tests'] },
+    baselineOutput: '# tests 10', currentOutput: '# tests 12'
+  });
+  assert.equal(mech.ok, false);
+  assert.ok(mech.problems.some(p => /made weaker rather than made to pass/.test(p)),
+    mech.problems.join(' | '));
+});
+
+test('a gate the attempt ran itself and left red reaches the report', () => {
+  // The landing re-runs the gates and sees only its OWN result, so an attempt
+  // that ran the suite, watched it fail, and stopped is invisible from here.
+  // It is a note rather than a refusal: the harness's own gate is the verdict,
+  // and this says what the attempt knew before it handed the work over.
+  const green = mechanicalChecks({
+    changedFiles: ['core/a.js'], baselineOutput: '# tests 10', currentOutput: '# tests 12',
+    workerGate: { command: 'npm test', status: 'pass', code: 0 }
+  });
+  assert.ok(!green.notes.some(n => /left it FAILING/.test(n)));
+
+  const red = mechanicalChecks({
+    changedFiles: ['core/a.js'], baselineOutput: '# tests 10', currentOutput: '# tests 12',
+    workerGate: { command: 'npm test', status: 'fail', code: 1 }
+  });
+  assert.ok(red.notes.some(n => /ran "npm test" itself and left it FAILING/.test(n)),
+    red.notes.join(' | '));
+  assert.equal(red.ok, true, 'a note, not a refusal — the harness gate is the verdict');
 });
 
 // --- scratch scripts are not deliverables (t-0100) --------------------------

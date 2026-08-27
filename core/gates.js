@@ -478,6 +478,112 @@ export function suiteExpectationMismatch({ task = {}, changedFiles = [], baselin
 }
 
 /**
+ * An assertion that got LOOSER between base and head.
+ *
+ * t-0103's attempt ran the suite as a tool, saw one failing assertion, and
+ * edited the TEST to accept both values — `/can only afford 14(10|11)/` where
+ * it had been `/can only afford 1411/` — then declared itself done without
+ * re-running the gate. The landing gate passed, because the assertion now
+ * accepted the wrong answer, and the reviewer approved it. REVIEW_SYSTEM tells
+ * the reviewer in as many words that "Deleted, skipped, or weakened assertions
+ * are a REJECT"; this is exactly one, and it is one line in a diff.
+ *
+ * {@link testCountStagnation} cannot help: a test file WAS touched, which is
+ * what exempts a change from it. So the diff itself has to be read.
+ *
+ * Deterministic, and narrow on purpose. Only the shapes where "looser" is not a
+ * matter of opinion:
+ *
+ *   - a regex literal gained an alternation, a wildcard or a quantifier that
+ *     was not there before, on the same line
+ *   - `assert.equal` / `assert.deepEqual` / `assert.strictEqual` became
+ *     `assert.match` or `assert.ok`
+ *   - `assert.match` became `assert.ok`
+ *
+ * An expected value that merely CHANGED is not weaker, and does not fire: the
+ * common, legitimate edit is a test updated because the behaviour it pins moved,
+ * and treating that as vandalism would make this unusable. Nor does adding a
+ * whole new assertion, or removing one — that is the reviewer's business and
+ * {@link testCountRegression}'s.
+ *
+ * Reads a unified diff, because the diff is what the landing already has.
+ */
+const LOOSENED = [
+  // The order matters: the first match wins, and the specific reasons should be
+  // preferred over "the pattern got looser".
+  [/\bassert\.(?:deep)?(?:strict)?[Ee]qual\b/, /\bassert\.(?:ok|match)\b/,
+    'an equality check became a looser one'],
+  [/\bassert\.match\b/, /\bassert\.ok\b/,
+    'a pattern check became a truthiness check'],
+  [/\bassert\.throws\b/, /\bassert\.ok\b/,
+    'a throws check became a truthiness check']
+];
+
+/** Did this regex literal gain something that matches strictly more? */
+function patternLoosened(before, after) {
+  const rx = /\/((?:[^/\\\n]|\\.)+)\/[gimsuy]*/g;
+  const pats = text => [...String(text).matchAll(rx)].map(m => m[1]);
+  const b = pats(before);
+  const a = pats(after);
+  if (!b.length || !a.length) return false;
+  // Count the constructs that widen what a pattern accepts. A literal that
+  // gains one has been loosened; one that merely changed has not.
+  const width = pat => (pat.match(/\((?:\?:)?[^)]*\|/g) ?? []).length   // an alternation
+    + (pat.match(/(?<!\\)\.(?![*+?])/g) ?? []).length                  // a bare dot
+    + (pat.match(/(?<!\\)[.\w\]\)][*+?]/g) ?? []).length                // a quantifier
+    + (pat.match(/\\[dws]/gi) ?? []).length;                            // a character class
+  return Math.max(...a.map(width)) > Math.max(...b.map(width));
+}
+
+export function weakenedAssertions(diff) {
+  const found = [];
+  let file = null;
+  const removed = [];
+  const added = [];
+  const flush = () => {
+    // Pair them up by position within the hunk, which is what a one-line edit
+    // looks like and is the only pairing that is not a guess.
+    for (let i = 0; i < Math.min(removed.length, added.length); i++) {
+      const before = removed[i];
+      const after = added[i];
+      if (!/\bassert\b/.test(before) && !/\bassert\b/.test(after)) continue;
+      const rule = LOOSENED.find(([from, to]) => from.test(before) && to.test(after));
+      if (rule) { found.push({ file, before: before.trim(), after: after.trim(), why: rule[2] }); continue; }
+      if (patternLoosened(before, after)) {
+        found.push({
+          file, before: before.trim(), after: after.trim(),
+          why: 'the expected pattern was widened to accept more than it did'
+        });
+      }
+    }
+    removed.length = 0;
+    added.length = 0;
+  };
+
+  for (const line of String(diff ?? '').split('\n')) {
+    if (line.startsWith('+++ ')) { flush(); file = line.slice(4).replace(/^b\//, '').trim(); continue; }
+    if (line.startsWith('--- ') || line.startsWith('diff --git') || line.startsWith('index ')) continue;
+    if (line.startsWith('@@')) { flush(); continue; }
+    if (line.startsWith('-')) { removed.push(line.slice(1)); continue; }
+    if (line.startsWith('+')) { added.push(line.slice(1)); continue; }
+    flush();   // a context line ends the run of changes
+  }
+  flush();
+  // Only ever about test files. A widened regex in application code is not this.
+  return found.filter(f => /(^|\/)tests?\//.test(String(f.file).replace(/\\/g, '/')));
+}
+
+/** The refusal, in the same voice as the other landing refusals. */
+export function weakenedAssertionProblem(found = []) {
+  if (!found.length) return null;
+  const one = found[0];
+  return `${found.length} assertion(s) were made weaker rather than made to pass. In ${one.file}: `
+    + `${one.why} — "${one.before.slice(0, 70)}" became "${one.after.slice(0, 70)}". `
+    + 'A gate that goes green because the assertion stopped asking is not a gate. '
+    + 'Fix the behaviour, or say in the task why the expectation itself was wrong.';
+}
+
+/**
  * Why the count checks could not run, when they could not.
  *
  * Both of them return null for "I cannot tell", which is indistinguishable from

@@ -69,6 +69,27 @@ function isProcessAlive(pid) {
   catch (err) { return err?.code === 'EPERM'; }
 }
 
+/**
+ * The last gate an ATTEMPT ran for itself, from its own run log.
+ *
+ * The attempt has `run_gate` available as a tool and is encouraged to use it.
+ * When it runs the suite, sees a failure, and then stops — or worse, edits the
+ * failing assertion until it passes — the landing's own gate run says nothing
+ * about that, because by then the assertion accepts the wrong answer.
+ *
+ * Reads only the newest run, and never throws: a log that cannot be read is not
+ * a reason to fail a landing.
+ */
+function lastWorkerGate(store, runIds) {
+  const runId = Array.isArray(runIds) ? runIds[runIds.length - 1] : null;
+  if (!store || !runId) return null;
+  try {
+    const gates = (store.readLog(runId) ?? []).filter(e => e.event === 'gate_run');
+    const last = gates[gates.length - 1];
+    return last ? { command: last.command, status: last.status, code: last.code ?? null } : null;
+  } catch { return null; }
+}
+
 export class ApiError extends Error {
   constructor(message, { status = 400, code = 'bad_request' } = {}) {
     super(message);
@@ -1026,9 +1047,15 @@ export function createApi(engine) {
       const config = named
         ? { ...runtimeConfig, workers: { ...runtimeConfig.workers, reviewer: named } }
         : runtimeConfig;
+      // The LAST gate this attempt ran itself, from its own run log. The
+      // landing re-runs the gates and sees only its own result, so an attempt
+      // that ran the suite, saw it fail, and stopped anyway is invisible from
+      // here — which is exactly what t-0103 did before it widened the failing
+      // assertion to make it pass.
+      const workerGate = lastWorkerGate(proj(projectId).store, task.runIds);
       const result = await landTask({
         pool, repoRoot: entry.folder, taskId, task, base, dryRun, baselineOutput,
-        config,
+        config, workerGate,
         push: wantPush ? (args => pushRefs({ ...args, log: () => {} })) : null,
         // The canary: the gates again, on the merged result in the main
         // checkout. Two branches that each pass alone can fail together.

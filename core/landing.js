@@ -13,7 +13,7 @@
 // last, or the loop is just re-rolling dice.
 import fs from 'node:fs';
 import path from 'node:path';
-import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation, testCountUncheckable, testCountFrom, suiteExpectationProblem, suiteExpectationMismatch, scratchArtefacts, scratchArtefactProblem } from './gates.js';
+import { runGates, gatesFor, readProjectGateConfig, protectedViolations, testCountRegression, testCountStagnation, testCountUncheckable, testCountFrom, suiteExpectationProblem, suiteExpectationMismatch, scratchArtefacts, scratchArtefactProblem, weakenedAssertions, weakenedAssertionProblem } from './gates.js';
 import { WorktreePool, land as gitLand, git } from './worktree.js';
 import { reviewDiff, reviewWorker } from './diffReview.js';
 import { assessRepair, NO_CHANGE_GUIDANCE } from './repair.js';
@@ -47,7 +47,7 @@ export async function verifyTask({ pool, taskId, task = {}, log = () => {} }) {
  * because they cost nothing and because a model should not be asked to
  * adjudicate something a rule already settles.
  */
-export function mechanicalChecks({ changedFiles, deletedFiles = [], addedFiles = [], task = {}, baselineOutput = null, currentOutput = null }) {
+export function mechanicalChecks({ changedFiles, deletedFiles = [], addedFiles = [], diff = '', workerGate = null, task = {}, baselineOutput = null, currentOutput = null }) {
   const problems = [];
 
   // A declaration nobody can act on is a mistake, not a default. Checked first
@@ -69,6 +69,12 @@ export function mechanicalChecks({ changedFiles, deletedFiles = [], addedFiles =
     scratchArtefacts({ addedFiles, blastRadius: task.blastRadius ?? [] }));
   if (scratch) problems.push(scratch);
 
+  // An assertion that stopped asking, rather than a behaviour that started
+  // answering. The suite cannot see this — it is green either way — so the
+  // diff has to be read.
+  const weakened = weakenedAssertionProblem(weakenedAssertions(diff));
+  if (weakened) problems.push(weakened);
+
   // Green with fewer tests is the most convincing way to fail.
   const regression = testCountRegression({ task, deletedFiles, baselineOutput, currentOutput });
   if (regression) problems.push(regression);
@@ -85,6 +91,15 @@ export function mechanicalChecks({ changedFiles, deletedFiles = [], addedFiles =
   if (uncheckable) notes.push(uncheckable);
   const mismatch = suiteExpectationMismatch({ task, changedFiles, baselineOutput, currentOutput });
   if (mismatch) notes.push(mismatch);
+  // What the attempt's OWN gate said, if it ran one and left it red. The
+  // landing re-runs the gates itself and sees only its own result; "the last
+  // thing this attempt did was fail its own gate" is a different fact, and on
+  // t-0103 it was the one that mattered — the attempt saw the failure, edited
+  // the test to accept the wrong answer, and stopped without re-running.
+  if (workerGate && workerGate.status === 'fail') {
+    notes.push(`The attempt ran "${workerGate.command}" itself and left it FAILING, then stopped. `
+      + 'Whatever it did after that was not verified by the attempt.');
+  }
 
   return { ok: problems.length === 0, problems, notes };
 }
@@ -103,6 +118,11 @@ export async function landTask({
   push = null,
   dryRun = false,
   baselineOutput = null,
+  // The gate the ATTEMPT ran itself, when it ran one — read from the run log by
+  // the caller. The landing re-runs the gates and sees only its own result, so
+  // "the last thing this attempt did was fail its own gate" is a fact that
+  // otherwise reaches nobody.
+  workerGate = null,
   log = () => {}
 }) {
   const steps = [];
@@ -198,8 +218,12 @@ export async function landTask({
   const gateOutput = gateRun.results.map(r => r.output).join('\n');
   const deletedFiles = await pool.deletedFiles(taskId, { base }).catch(() => []);
   const addedFiles = await pool.addedFiles(taskId, { base }).catch(() => []);
+  // The diff is read by the checks as well as by the reviewer, so it is
+  // computed before them rather than between them.
+  const diff = await pool.diff(taskId, { base });
   const mech = record('checks', mechanicalChecks({
-    changedFiles, deletedFiles, addedFiles, task,
+    changedFiles, deletedFiles, addedFiles, diff, workerGate,
+    task,
     baselineOutput,
     currentOutput: gateOutput
   }));
@@ -213,7 +237,6 @@ export async function landTask({
   }
 
   // 3. The reviewer.
-  const diff = await pool.diff(taskId, { base });
   const review = record('review', await reviewDiff({
     worker: reviewWorker(config), apiKey, task, diff,
     gates: gateRun.results, blastRadius: task.blastRadius ?? [], changedFiles,
