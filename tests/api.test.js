@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createEngine } from '../core/engine.js';
-import { createApi, ApiError } from '../core/api.js';
+import { createApi, ApiError, loopLaunchModels } from '../core/api.js';
 import { createServer } from '../core/server.js';
 import { waitFor } from './helpers.js';
 import { git } from '../core/worktree.js';
@@ -41,6 +41,24 @@ test('an unopened project is a caller error, not a crash', async () => {
   const { api } = makeApi();
   await assert.rejects(() => api.invoke('run:list', { projectId: '/nope' }), err =>
     err instanceof ApiError && err.status === 404 && err.code === 'no_project');
+});
+
+test('an explicit Loop model clears the saved band map before any task is claimed', () => {
+  const saved = { low: 'cheap', high: 'strong' };
+
+  assert.deepEqual(loopLaunchModels({
+    worker: { provider: 'auto', model: 'chosen-for-this-session' },
+    configuredModels: saved,
+  }), {}, 'the explicit worker must not be shadowed by settings');
+
+  assert.deepEqual(loopLaunchModels({
+    worker: { provider: 'auto', model: 'single' },
+    models: { medium: 'explicit-band' },
+    configuredModels: saved,
+  }), { medium: 'explicit-band' }, 'an explicit band map remains the most specific choice');
+
+  assert.deepEqual(loopLaunchModels({ configuredModels: saved }), saved,
+    'without a launch override the saved map still applies');
 });
 
 test('a loop running in another process is visible here — and a dead one is not believed', async () => {

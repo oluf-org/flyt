@@ -785,6 +785,32 @@ test('a bounded run that did no work says so, instead of exiting as though it ha
   assert.equal(task.attempts, 0);
 });
 
+test('a requested stop stays visibly running until in-flight work has wound down', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'finish cleanly', goal: 'g' });
+  const engine = fakeEngine({ backlog, stages: { default: [...Array(20).fill('execution'), 'done'] } });
+  const published = [];
+  const sup = new Supervisor({
+    ...engine, projectId: 'p', backlog, pollMs: 2,
+    writeStatus: status => published.push(status),
+  });
+
+  const run = sup.run({ maxTasks: 1 });
+  while (!sup.status().inFlight.length) await new Promise(resolve => setTimeout(resolve, 1));
+  sup.stop('stopped by request');
+
+  assert.equal(sup.status().running, true, 'the process still owns the in-flight task');
+  assert.equal(sup.status().stopping, 'stopped by request');
+  assert.equal(sup.status().inFlight.length, 1);
+
+  const settled = await run;
+  assert.equal(settled.running, false);
+  assert.equal(settled.inFlight.length, 0);
+  assert.equal(backlog.get('t-0001').status, 'landed', 'the in-flight task was allowed to settle');
+  assert.ok(published.some(status => status.running && status.stopping && status.inFlight.length),
+    'an external watcher can see the winding-down state');
+});
+
 test('a lease left by a stopped loop is waited out, not spun on', async () => {
   // Watched both halves of this go wrong. First a park: a loop stopped
   // mid-attempt leaves the worktree lease held, and the next session parked the

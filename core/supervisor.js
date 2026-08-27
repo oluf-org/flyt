@@ -564,7 +564,7 @@ export class Supervisor {
 
     try {
      for (;;) {
-      while (this.running && budgetLeft()) {
+      while (this.running && !this.stopping && budgetLeft()) {
         // The hard cap is checked before anything new begins: finishing the
         // in-flight work and stopping cleanly is the promise (§9).
         const budget = this.#checkBudget();
@@ -688,7 +688,12 @@ export class Supervisor {
 
   stop(reason = 'stopped by request') {
     this.stopping = reason;
-    this.running = false;
+    // `running` describes whether this process still owns live Loop work, not
+    // whether it will claim another task. Keep it true while in-flight work
+    // winds down so status readers and the CLI do not announce "stopped" and
+    // detach from a worker that is still changing a worktree. The intake loop
+    // also checks `stopping`; run() clears `running` in its finally block after
+    // every held task has settled or been released.
   }
 
   /** Caps named on THIS start call, as opposed to the project's standing ones. */

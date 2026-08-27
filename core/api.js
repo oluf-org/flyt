@@ -48,6 +48,21 @@ function normalizeLevelModels(raw) {
   }
   return out;
 }
+
+/**
+ * Resolve the two launch-time ways of choosing Loop workers.
+ *
+ * An explicit per-band map is the most specific choice. An explicit single
+ * worker is next and must clear a saved per-band map; otherwise the map wins
+ * later in Supervisor.#workerFor and the CLI can acknowledge one model while
+ * starting another. With neither launch override, keep the saved map.
+ */
+export function loopLaunchModels({ worker = null, models = null, configuredModels = null } = {}) {
+  const requested = normalizeLevelModels(models);
+  if (Object.keys(requested).length) return requested;
+  if (worker?.provider && worker?.model) return {};
+  return normalizeLevelModels(configuredModels);
+}
 import { Supervisor, renderReport } from './supervisor.js';
 import { reviewWorker } from './diffReview.js';
 import { APPROVAL_MODES } from './flowRunner.js';
@@ -1181,7 +1196,11 @@ export function createApi(engine) {
       // the cheap one does the ordinary work and escalation is what reaches the
       // expensive one. It wins over a single pin, because it is strictly more
       // specific — a caller that sent both meant the map.
-      const byLevel = normalizeLevelModels(models ?? runtimeConfig.loop?.models);
+      const byLevel = loopLaunchModels({
+        worker,
+        models,
+        configuredModels: runtimeConfig.loop?.models,
+      });
       // Only the caps actually named: an absent one keeps the project's, and a
       // zero is a real ceiling ("spend nothing more"), not an absent one.
       const sessionCaps = Object.fromEntries(
