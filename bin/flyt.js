@@ -12,7 +12,7 @@
 // access" requirement: an AI already knows how to run a CLI and parse JSON, and
 // keeping the two streams apart means it never has to.
 //
-// The precedent is core/stacklang/cli.js — an AI authors a flow, lints until
+// The precedent is core/flowlang/cli.js — an AI authors a flow, lints until
 // `ok: true`, and the app picks it up.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +20,7 @@ import { createEngine } from '../core/engine.js';
 import { createApi, ApiError } from '../core/api.js';
 import { createServer } from '../core/server.js';
 import { defaultUserDataDir } from '../core/brand.js';
-import { renderQuestions } from '../core/stackRunner.js';
+import { renderQuestions } from '../core/flowRunner.js';
 
 const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 

@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pickDefaultWorker, planDefaultRoute } from '../core/modelPriority.js';
-import { resolveWorker, resolveWorkerRoute } from '../core/stackRunner.js';
+import { resolveWorker, resolveWorkerRoute } from '../core/flowRunner.js';
 import { routeFor } from '../src/providerMirror.js';
 import { createEngine } from '../core/engine.js';
 

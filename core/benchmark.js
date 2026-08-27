@@ -36,7 +36,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseYaml } from './stacklang/yaml.js';
+import { parseYaml } from './flowlang/yaml.js';
 import { git, isInside } from './worktree.js';
 import { runGate, runGates, gatesFor, readProjectGateConfig } from './gates.js';
 import { Backlog } from './backlog.js';

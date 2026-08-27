@@ -306,7 +306,7 @@ test('the eleven that actually happened are caught, and the deliverable beside t
 test('a new file the task DECLARED is a deliverable, wherever it sits', () => {
   // STACK_LANG.md arrived exactly this way and must keep being able to.
   assert.deepEqual(scratchArtefacts({
-    addedFiles: ['STACK_LANG.md'], blastRadius: ['core/stacklang/', 'STACK_LANG.md']
+    addedFiles: ['STACK_LANG.md'], blastRadius: ['core/flowlang/', 'STACK_LANG.md']
   }), []);
   // A directory in the radius covers what is under it, and only what is under it.
   assert.deepEqual(scratchArtefacts({ addedFiles: ['docs/x.md'], blastRadius: ['docs/'] }), []);
@@ -404,7 +404,7 @@ test('a declared fall is earned by deleting test FILES, not by removing assertio
   const task = { suiteExpectation: 'shrinks' };
   const io = { baselineOutput: '# tests 1936', currentOutput: '# tests 1919' };
 
-  assert.equal(testCountRegression({ ...io, task, deletedFiles: ['tests/stacklang.test.js'] }), null,
+  assert.equal(testCountRegression({ ...io, task, deletedFiles: ['tests/flowlang.test.js'] }), null,
     'the v1 DSL leaving takes its tests with it');
 
   const gamed = testCountRegression({ ...io, task, deletedFiles: [] });
@@ -417,7 +417,7 @@ test('a declared fall is earned by deleting test FILES, not by removing assertio
 });
 
 test('a declared "unchanged" is what a refactor needs, and only that', () => {
-  const io = { changedFiles: ['core/stackRunner.js', 'core/gates.js'] };
+  const io = { changedFiles: ['core/flowRunner.js', 'core/gates.js'] };
   assert.equal(testCountStagnation({
     ...io, task: { suiteExpectation: 'unchanged' },
     baselineOutput: '# tests 10', currentOutput: '# tests 10'
@@ -474,9 +474,9 @@ test('t-0040 is the worked example: it declares a fall and it lands', () => {
   // path that is deliberately not in the checkout.
   const t0040 = { suiteExpectation: 'shrinks', blastRadius: ['src/', 'core/'] };
   const cutover = {
-    // Deleting the v1 DSL takes stacklang's files with it — 17 tests in stacklang
+    // Deleting the v1 DSL takes flowlang's files with it — 17 tests in flowlang
     // alone, out of 143 files.
-    deletedFiles: ['tests/stacklang.test.js', 'tests/stacklangLint.test.js', 'src/FlowCanvas.jsx'],
+    deletedFiles: ['tests/flowlang.test.js', 'tests/flowlangLint.test.js', 'src/FlowCanvas.jsx'],
     baselineOutput: '# tests 1956', currentOutput: '# tests 1921'
   };
   assert.equal(testCountRegression({ task: t0040, ...cutover }), null, 'and so it can land');

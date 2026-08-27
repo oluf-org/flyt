@@ -11,7 +11,7 @@
 // because that is the only part that actually differs. Everything from "the
 // container goes active" to "the aggregate output is written" lives here.
 //
-// `runner` is the StackRunner. Passing it in rather than inheriting from it
+// `runner` is the FlowRunner. Passing it in rather than inheriting from it
 // keeps the dependency edge visible: this module needs exactly store,
 // setNodeStatus, runNode, runPendingTasks, stopRequests and config.maxParallel,
 // and nothing else.

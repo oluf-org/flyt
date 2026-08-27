@@ -7,9 +7,9 @@
 // doing, and that a supervisor can pick from tomorrow.
 //
 // A task is a file, for the same reason a tool is (DESIGN-SPEC.md §5) and a flow
-// is (STACK_LANG.md): markdown with YAML frontmatter, because a human writes
+// is (FLOW_LANG.md): markdown with YAML frontmatter, because a human writes
 // these and an agent writes these and both have to read them. Zero dependencies
-// (D24) — the frontmatter goes through core/stacklang/yaml.js.
+// (D24) — the frontmatter goes through core/flowlang/yaml.js.
 //
 // WHERE IT LIVES, and why it matters more than it looks (§5.2). The backlog is
 // owned by the SUPERVISOR and lives in the main checkout's `.flyt/backlog/`,
@@ -20,7 +20,7 @@
 // resolves the canonical directory from outside every worktree.
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseYaml, formatInline } from './stacklang/yaml.js';
+import { parseYaml, formatInline } from './flowlang/yaml.js';
 import { normalizeLevel, escalate as escalateLevel, DEFAULT_LEVEL } from './levels.js';
 import { retiredDir, relocateRetiredRuns, readRetirement, markRevived } from './archive.js';
 

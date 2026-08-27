@@ -123,7 +123,7 @@ test('ownership walks a chain of spawns back to the node', () => {
 
 // createdBy names a NODE, not a task, when the runner spawns on a node's behalf
 // — stitch fix tasks pass the node id as ctx.taskId (postProcess in
-// core/stackRunner.js). Both shapes have to resolve.
+// core/flowRunner.js). Both shapes have to resolve.
 test('a stitch fix task, whose createdBy is a node id, resolves to that node', () => {
   const s = snap({
     nodes: [node('stitch-1', 'aiStep', { role: 'stitch' })],

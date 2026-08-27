@@ -68,7 +68,7 @@ export async function mockAdapter({ system, prompt, onText, signal }) {
       summary: 'All task outputs present and consistent with the plan (mock verification).'
     }, null, 2),
 
-    // === Roles for the documented standard example nodes (BLOCKS.md) ===
+    // === Roles for the documented standard example nodes (FLOW_NODES.md) ===
     'plan-start': `# Tasks
 
 ## task-1: Design the public API for config loading

@@ -20,7 +20,7 @@ import { FlowStore } from './flowstore.js';
 import { NodeStore } from './nodestore.js';
 import { ToolStore } from './toolstore.js';
 import { loadLibrary } from './tools/index.js';
-import { StackRunner, normalizeApprovalMode } from './stackRunner.js';
+import { FlowRunner, normalizeApprovalMode } from './flowRunner.js';
 import { pickSafetyModel, SAFETY_MODEL_CANDIDATES } from './safetyCheck.js';
 import { ProjectRegistry } from './projects.js';
 import { Backlog } from './backlog.js';
@@ -126,20 +126,13 @@ export function createEngine({
 
   const baseConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'config.json'), 'utf8'));
 
-  // The legacy flow store and generated node library remain only for the
-  // compatibility runner that currently drives Loop and opens old runs.
-  // Canonical authored definitions live in stacks/ and plugins.
-  const compatibilityRoot = path.join(userDataDir, 'compatibility');
-  const flows = new FlowStore(path.join(compatibilityRoot, 'flows'));
-  // Canonical v2 stacks live beside the legacy flow directory. StackStore can
-  // read an existing flows/*.flow.yaml without mutation and retires that file
-  // only when the stack is first written.
-  // Keep the headless harness independent of the compiled v2 kernel. Electron
-  // constructs StackStore after bootKernel's dynamic import supplies the one
-  // canonical parser; the CLI can still manage Loop without kernel/dist.
-  const stackRoot = seedFromBundle('stacks');
-  const nodeLibrary = new NodeStore(path.join(compatibilityRoot, 'nodes'));
-  flows.ensureLoopTask();        // compatibility projection until Loop uses the kernel runner
+  // Flows and Node Library templates stay global for v1 (D22 T2) — reusable
+  // expertise shared across every project tab. Runs are per-project; their
+  // stores live in the project registry below.
+  const flows = new FlowStore(seedFromBundle('flows'));
+  const nodeLibrary = new NodeStore(dataDir('nodes')); // seeds itself from code on first launch
+  flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable workflow
+  flows.ensureSeedPipelines();   // the tiered Low/Medium/High/Ultra pipelines (DECISIONS.md D27)
 
   // The tool library is files too (DESIGN-SPEC.md §5): tools/<id>.json seeds from
   // the built-in modules, and the runtime registry is loaded FROM the files — so
@@ -306,7 +299,7 @@ export function createEngine({
 
   // Runtime config = config.json defaults merged with settings.json overrides,
   // with each worker's provider key injected. Rebuilt IN PLACE on every settings
-  // save so a running StackRunner picks up changes without a restart (it holds a
+  // save so a running FlowRunner picks up changes without a restart (it holds a
   // reference to this object).
   const runtimeConfig = { ...baseConfig };
 
@@ -690,7 +683,7 @@ export function createEngine({
   }
 
   // Filled in by core/api.js, which owns the per-project Supervisor map. The
-  // engine holds the slot so a StackRunner can reach the loop without either
+  // engine holds the slot so a FlowRunner can reach the loop without either
   // module importing the other.
   const loopDriver = { start: null, status: null };
   const setLoopDriver = d => Object.assign(loopDriver, d);
@@ -701,9 +694,9 @@ export function createEngine({
     // T2a: the storage location is a Settings choice, read at project-open time.
     getStorage: () => (settings.projectStorage === 'appdata' ? 'appdata' : 'workspace'),
     createRunner: (store, projectId) => {
-      const runner = new StackRunner(store, runtimeConfig, pushUpdateFor(projectId), nodeLibrary, flows);
+      const runner = new FlowRunner(store, runtimeConfig, pushUpdateFor(projectId), nodeLibrary, flows);
       // Lazy for the reason above, and a property rather than a constructor
-      // argument so every existing StackRunner call site is untouched.
+      // argument so every existing FlowRunner call site is untouched.
       Object.defineProperty(runner, 'backlog', { get: () => backlogFor(projectId), configurable: true });
       Object.defineProperty(runner, 'ledger', { get: () => ledgerFor(projectId), configurable: true });
       // The worktree pool, for read_run's diff. Lazy for the same reason the
@@ -742,7 +735,7 @@ export function createEngine({
     // Paths
     projectRoot, dataRoot, userDataDir, settingsPath, dataDir, seedFromBundle,
     // Stores
-    flows, stackRoot, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor, poolFor, ledgerFor, references,
+    flows, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor, poolFor, ledgerFor, references,
     configDirOf,
     // Config + settings
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,

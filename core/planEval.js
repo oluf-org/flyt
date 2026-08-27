@@ -1,5 +1,5 @@
 // Strict parsing + validation for the structured outputs of the reflective
-// planning pattern (see BLOCKS.md):
+// planning pattern (see FLOW_NODES.md):
 //   - plan-eval  -> { nodes, parallelGroups, categories, order } (node materialization)
 //   - step-eval  -> { verdict: pass|retry|escalate, reason, guidance }
 //   - stitch     -> { fixTasks: [{title, goal, ...}] }
@@ -101,7 +101,7 @@ function validateNodeSpecs(rawNodes, extraTemplateIds, errors) {
       errors.push(`${at}.category: "${n.category}" is not one of: ${NODE_CATEGORIES.join(', ')}`);
     }
     const effort = n.effort != null ? canonical(n.effort, EFFORT_LEVELS) : null;
-    // Category and template are documented 1:1 (BLOCKS.md): the category
+    // Category and template are documented 1:1 (FLOW_NODES.md): the category
     // picks the model, the template picks the tools and the base type. Pairing
     // them wrongly hands a node work its template isn't shaped for, and the
     // planner does it — a live run emitted { category: 'Code general', template:

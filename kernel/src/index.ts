@@ -36,10 +36,7 @@ export * as flytBlocksCore from './plugins/blocks-core.js';
 export * as flytBlocksJudgement from './plugins/blocks-judgement.js';
 export * as flytBlocksInquiry from './plugins/blocks-inquiry.js';
 export * as flytBlocksLoop from './plugins/blocks-loop.js';
-export {
-  workBlock, researchBlock,
-  LOOP_CEILING, RESEARCH_CEILING, WORK_SYSTEM,
-} from './plugins/blocks-core.js';
+export { workBlock, LOOP_CEILING, WORK_SYSTEM } from './plugins/blocks-core.js';
 export { routeOf } from './plugins/llm-adapters.js';
 export { StackRunner } from './plugins/stack-runner.js';
 export type { StackSource, StackRunnerConfig } from './plugins/stack-runner.js';

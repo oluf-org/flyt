@@ -2,12 +2,12 @@
 // and resuming continues the walk from the right point instead of redoing work.
 //
 // A crash is simulated the way the app actually experiences one: the model call
-// in flight never resolves (its call stack is gone), and a FRESH StackRunner is
+// in flight never resolves (its call stack is gone), and a FRESH FlowRunner is
 // constructed over the SAME store — process state lost, file state intact.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
-import { StackRunner } from '../core/stackRunner.js';
+import { FlowRunner } from '../core/flowRunner.js';
 import { makeStore, setScript, roleOf, testConfig, waitFor, waitForStage, makeFlow, node, edge } from './helpers.js';
 
 const goalOf = prompt => (prompt.match(/GOAL:\n(.+)/) ?? [])[1]?.trim();
@@ -34,7 +34,7 @@ test('resume continues an interrupted run without re-executing completed nodes',
     return `output ${goal}`;
   });
 
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(crashingFlow());
   await waitFor(() => store.readMeta(runId).nodeStatus.b === 'active', { label: 'b in flight' });
   assert.equal(store.readMeta(runId).nodeStatus.a, 'done', 'a finished before the crash');
@@ -46,7 +46,7 @@ test('resume continues an interrupted run without re-executing completed nodes',
   // live, and a second runner must leave it alone. Dropping the lease is what a
   // dead process's would do on its own.
   store.clearLease(runId);
-  const restarted = new StackRunner(store, testConfig());
+  const restarted = new FlowRunner(store, testConfig());
   assert.deepEqual(restarted.reconcileInterrupted(), [runId], 'the run should be flagged interrupted');
   assert.equal(store.readMeta(runId).interrupted, true);
   // Reopening an interrupted run must read honestly: the node that died
@@ -69,7 +69,7 @@ test('resume continues an interrupted run without re-executing completed nodes',
 test('reconcileInterrupted flags only runs that were actually cut off', async () => {
   const store = makeStore();
   setScript(async ({ prompt }) => `output ${goalOf(prompt)}`);
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
 
   // A run that finished cleanly.
   const doneRun = runner.start(makeFlow(
@@ -85,7 +85,7 @@ test('reconcileInterrupted flags only runs that were actually cut off', async ()
     [edge('in', 'g'), edge('g', 'out')]));
   await waitForStage(store, gateRun, ['awaiting_approval']);
 
-  const restarted = new StackRunner(store, testConfig());
+  const restarted = new FlowRunner(store, testConfig());
   assert.deepEqual(restarted.reconcileInterrupted(), [], 'neither run was interrupted');
   assert.ok(!store.readMeta(doneRun).interrupted);
   assert.ok(!store.readMeta(gateRun).interrupted);
@@ -96,7 +96,7 @@ test('reconcileInterrupted flags only runs that were actually cut off', async ()
 test('a live run is never resumable from underneath itself', async () => {
   const store = makeStore();
   setScript(async ({ prompt }) => (goalOf(prompt) === 'B' ? NEVER() : `output ${goalOf(prompt)}`));
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(crashingFlow());
   await waitFor(() => store.readMeta(runId).nodeStatus.b === 'active', { label: 'b in flight' });
 
@@ -117,7 +117,7 @@ test('resume requeues tasks that were mid-flight, including agent-spawned ones',
     return `output ${goalOf(prompt)}`;
   });
 
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
       node('at', 'agentTask', { title: 'T', goal: 'do it' }),
@@ -135,7 +135,7 @@ test('resume requeues tasks that were mid-flight, including agent-spawned ones',
   });
   store.writeTasks(runId, doc);
 
-  const restarted = new StackRunner(store, testConfig());
+  const restarted = new FlowRunner(store, testConfig());
   restarted.reconcileInterrupted();
   restarted.resume(runId);
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
@@ -153,7 +153,7 @@ test('an agentTask whose task already finished is not re-run on resume', async (
     return `output ${goalOf(prompt)}`;
   });
 
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
       node('at', 'agentTask', { title: 'T', goal: 'do it' }),
@@ -171,7 +171,7 @@ test('an agentTask whose task already finished is not re-run on resume', async (
     nodeStatus: { ...meta.nodeStatus, at: 'active', out: 'pending' }
   });
 
-  const restarted = new StackRunner(store, testConfig());
+  const restarted = new FlowRunner(store, testConfig());
   assert.deepEqual(restarted.reconcileInterrupted(), [runId]);
   restarted.resume(runId);
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
@@ -198,13 +198,13 @@ test('a second process must not mark a LIVE run interrupted', async () => {
   let release;
   setScript(async ({ prompt }) => (goalOf(prompt) === 'B' ? NEVER() : `output ${goalOf(prompt)}`));
 
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(crashingFlow());
   await waitFor(() => store.readMeta(runId).nodeStatus.b === 'active', { label: 'b in flight' });
 
-  // A whole separate StackRunner over the same store — a `flyt` invocation, or
+  // A whole separate FlowRunner over the same store — a `flyt` invocation, or
   // the desktop app opening the same project.
-  const observer = new StackRunner(store, testConfig());
+  const observer = new FlowRunner(store, testConfig());
   assert.deepEqual(observer.reconcileInterrupted(), [], 'a live run is not an interrupted one');
   assert.notEqual(store.readMeta(runId).interrupted, true);
   assert.equal(store.readMeta(runId).nodeStatus.b, 'active', 'the in-flight node must not be rewound');
@@ -221,7 +221,7 @@ test('a second process must not mark a LIVE run interrupted', async () => {
 // run as live forever — the whole recovery path depends on being able to tell.
 test('a lease whose holder is gone does not keep a dead run looking alive', () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = store.createRun('p');
   store.writeMeta(runId, { ...store.readMeta(runId), flowId: 'f', stage: 'execution' });
 

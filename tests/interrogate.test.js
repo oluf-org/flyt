@@ -6,7 +6,7 @@
 // node instead of being hard-coded at one.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { StackRunner, countAnsweredRounds, renderQuestions, renderOpenItems } from '../core/stackRunner.js';
+import { FlowRunner, countAnsweredRounds, renderQuestions, renderOpenItems } from '../core/flowRunner.js';
 import { parseInterrogation, MAX_INTERROGATION_QUESTIONS } from '../core/planEval.js';
 import { answered, describeEmptyTurn } from '../core/agent.js';
 import {
@@ -107,7 +107,7 @@ test('an interrogation runs several rounds and each round sees the ones before i
     return '# Specification\n\n## Goal\nBuild the interrogation node.\n' + settled({ assumptions: ['none needed'] });
   });
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(interrogateFlow(), { userInput: 'a thing' });
 
   await waitForRound(store, runId, 'What is it for?');
@@ -146,7 +146,7 @@ test('the round budget is a hard stop: the last round settles instead of asking 
     return '# Specification\n\n## Goal\nTBD\n' + asking([{ id: 'more', text: 'And what else?' }]);
   });
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(interrogateFlow({ maxRounds: 2 }), { userInput: 'x' });
 
   await waitForRounds(store, runId, 1);
@@ -174,7 +174,7 @@ test('the last round is announced, so the model can settle rather than be cut of
       : '# Spec\n' + settled();
   });
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(interrogateFlow({ maxRounds: 2 }), { userInput: 'x' });
   await waitForStage(store, runId, 'awaiting_input');
   runner.answerInput(runId, 'this one');
@@ -188,7 +188,7 @@ test('unattended, an interrogation never parks — it records the forks it took 
   setScript(({ system }) => (roleOf(system) !== 'interrogate' ? 'downstream'
     : '# Specification\n\n## Goal\nTBD\n' + asking([{ id: 'a', text: 'Web or CLI?' }])));
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(interrogateFlow(), { userInput: 'x', approvalMode: 'always' });
   await waitForStage(store, runId, ['done', 'failed']);
 
@@ -203,7 +203,7 @@ test('an unparseable contract settles on the spec as written rather than failing
     ? 'downstream'
     : '# Specification\n\n## Goal\nA thing.\n\nno fence at all'));
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(interrogateFlow(), { userInput: 'x' });
   await waitForStage(store, runId, ['done', 'failed']);
 
@@ -217,7 +217,7 @@ test('an interrogation that is never asked anything still says so in its transcr
   setScript(({ system }) => (roleOf(system) !== 'interrogate'
     ? 'downstream' : '# Specification\n\n## Goal\nClear already.\n' + settled()));
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(interrogateFlow(), { userInput: 'x' });
   await waitForStage(store, runId, ['done', 'failed']);
 
@@ -299,7 +299,7 @@ test('a run started attended parks on its question, whatever approvalMode says',
   // the run was started, not about what the mode means.
   const store = makeStore();
   setScript(() => asking([{ text: 'What is it for?' }]));
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(interrogateFlow(), {
     userInput: 'x', approvalMode: 'always', attended: true
   });
@@ -314,7 +314,7 @@ test('an attended run still passes node checkpoints: t-0084 must not undo t-0083
   // deadlock t-0083 was written to fix.
   const store = makeStore();
   setScript(() => 'work output');
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const flow = makeFlow(
     [node('input', 'input', { text: 'brief' }),
      node('step', 'aiStep', { role: 'execute', requiresApproval: true }),
@@ -334,7 +334,7 @@ test('a caller that says nothing gets exactly what it got before the flag existe
   // in the UI would silently stop asking, with a person sitting in front of it.
   const store = makeStore();
   setScript(() => asking([{ text: 'What is it for?' }]));
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
 
   // Unset + a mode that is not 'always' — asks, as it always did.
   const asks = runner.start(interrogateFlow(), { userInput: 'x', approvalMode: 'ask' });
@@ -350,7 +350,7 @@ test('a run started unattended assumes, whatever approvalMode says', async () =>
   // The loop, and any scripted caller: `--gates approve` promises no reader.
   const store = makeStore();
   setScript(() => asking([{ text: 'What is it for?' }]));
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(interrogateFlow(), {
     userInput: 'x', approvalMode: 'ask', attended: false
   });

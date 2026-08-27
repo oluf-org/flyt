@@ -5,7 +5,7 @@
 // produced.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { StackRunner } from '../core/stackRunner.js';
+import { FlowRunner } from '../core/flowRunner.js';
 import {
   normalizeLane, normalizeLaneWorker, resolveLanes, laneBrief, laneInventory,
   sharedPreamble, applyPreamble, assignWorkers, renderBrief,
@@ -277,7 +277,7 @@ test('a fan-out materializes one child per lane inside its box and aggregates pe
     seen.push(lane);
     return `findings from ${lane}`;
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(fanoutFlow({
     goal: 'Read this repo.',
     lanes: [
@@ -321,7 +321,7 @@ test('a fan-out materializes one child per lane inside its box and aggregates pe
 test('materialized lanes inherit the fan-out agent-round budget', async () => {
   const store = makeStore();
   setScript(() => 'done');
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(fanoutFlow({
     goal: 'Read it.', lanes: ['standard', 'wildcard'], maxToolIterations: 7
   }), { userInput: 'brief' });
@@ -340,7 +340,7 @@ test('each lane is briefed on its siblings and sees none of their output', async
     const lane = (prompt.match(/YOUR LANE: ([^\n—]+)/) ?? [])[1]?.trim() ?? '?';
     return `SECRET-OUTPUT-OF-${lane}`;
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(fanoutFlow({
     goal: 'Assess it.',
     lanes: ['standard', 'contrarian']
@@ -358,7 +358,7 @@ test('each lane is briefed on its siblings and sees none of their output', async
 test('a fan-out from a model set runs one lane per active member', async () => {
   const store = makeStore();
   setScript(() => 'ok');
-  const runner = new StackRunner(store, testConfig({
+  const runner = new FlowRunner(store, testConfig({
     modelSets: { analysts: { name: 'Analysts', models: ['mock-large', 'mock-small', 'gone/model'] } },
     activeModels: [{ id: 'mock-large', enabled: true }, { id: 'mock-small', enabled: true }]
   }));
@@ -375,7 +375,7 @@ test('a fan-out from a model set runs one lane per active member', async () => {
 test('a fan-out with no lanes is refused at the pre-run gate, not discovered mid-run', () => {
   const store = makeStore();
   setScript(() => 'ok');
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   // fanout-lanes is a RUNTIME_RULE: a container that cannot produce a single
   // child would wedge the run rather than degrade it, so start() refuses.
   assert.throws(() => runner.start(fanoutFlow({ goal: 'g' }), { userInput: 'brief' }),
@@ -390,7 +390,7 @@ test('a lane may name its own template; otherwise the node\'s, otherwise the def
     roles.set(lane, roleOf(system));
     return 'ok';
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(fanoutFlow({
     goal: 'g',
     template: 'work',
@@ -419,7 +419,7 @@ test("a lane receives the fan-out's upstream output, not just its goal", async (
      node('fan', 'fanout', { title: 'Read it', goal: 'Read it.', lanes: ['standard', 'wildcard'] }),
      node('out', 'output')],
     [edge('in', 'prep'), edge('prep', 'fan'), edge('fan', 'out')]);
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(flow, { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -451,7 +451,7 @@ test('an edge into a fan-out keeps its port when it reaches the lanes', async ()
     [edge('in', 'work'), edge('work', 'ev'),
      { id: 'e-ev-fan-verdict', source: 'ev', target: 'fan', sourceHandle: 'verdict' },
      edge('fan', 'out')]);
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(flow, { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -472,7 +472,7 @@ test("lanes inherit the fan-out's tool grant when they declare none", async () =
      }),
      node('out', 'output')],
     [edge('in', 'fan'), edge('fan', 'out')]);
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(flow, { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -501,7 +501,7 @@ test('a granted aiStep actually reaches its tools', async () => {
      node('step', 'aiStep', { role: 'analyze', title: 'Read', tools: ['read_file'] }),
      node('out', 'output')],
     [edge('in', 'step'), edge('step', 'out')]);
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(flow, { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -552,7 +552,7 @@ test('without "plan: auto" nothing peeks and nothing plans', async () => {
   const store = makeStore();
   const roles = [];
   setScript(call => { roles.push(roleOf(call.system)); return 'ok'; });
-  const runner = new StackRunner(store, POOL_CONFIG());
+  const runner = new FlowRunner(store, POOL_CONFIG());
   const runId = runner.start(planFlow({ lanes: ['standard', 'wildcard'] }), { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done');
@@ -570,7 +570,7 @@ test("a preset's role prompt reaches the lane, replacing the template's default"
   const store = makeStore();
   const systems = new Map();
   setScript(call => { systems.set(roleOf(call.system), call.system); return 'ok'; });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(planFlow({ lanes: ['architecture', 'adversarial'] }), { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done');
@@ -585,7 +585,7 @@ test('a lane with no preset still falls through to its template role', async () 
   const store = makeStore();
   const roles = [];
   setScript(call => { roles.push(roleOf(call.system)); return 'ok'; });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(planFlow({ lanes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] }), { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done');
@@ -609,7 +609,7 @@ test('a planned roster of three same-preset lanes runs on three different models
     }),
     onLane: call => laneModels.push(call.model)
   });
-  const runner = new StackRunner(store, POOL_CONFIG());
+  const runner = new FlowRunner(store, POOL_CONFIG());
   const runId = runner.start(planFlow({
     plan: 'auto', maxLanes: 6, tools: ['read_file'], lanes: ['standard', 'wildcard']
   }), { userInput: 'Focus entirely on how it is put together.' });
@@ -640,7 +640,7 @@ test('a roster larger than the pool is truncated, and every drop is logged', asy
     })
   });
   // Two models, four same-preset lanes.
-  const runner = new StackRunner(store, testConfig({
+  const runner = new FlowRunner(store, testConfig({
     activeModels: [{ id: 'm/one', enabled: true }, { id: 'm/two', enabled: true }],
     resolveModelSource: model => ({ provider: 'script', model, apiKey: null })
   }));
@@ -662,7 +662,7 @@ test('an unusable plan falls back to the authored lanes and the run still comple
   // still read the repo.
   const store = makeStore();
   planningScript({ plan: 'I reckon about three lanes. Maybe four.' });
-  const runner = new StackRunner(store, POOL_CONFIG());
+  const runner = new FlowRunner(store, POOL_CONFIG());
   const runId = runner.start(planFlow({
     plan: 'auto', tools: ['read_file'],
     lanes: [{ id: 'arch', preset: 'architecture', worker: 'm/one' }, { id: 'wild', preset: 'wildcard', worker: 'm/two' }]
@@ -703,7 +703,7 @@ test('the planner is staffed from the lanes, not from the app-wide default', asy
     return 'lane output';
   });
 
-  const runner = new StackRunner(store, POOL_CONFIG({
+  const runner = new FlowRunner(store, POOL_CONFIG({
     workers: { ...testConfig().workers, executor: { provider: 'script', model: 'the-app-default' } }
   }));
   const runId = runner.start(planFlow({
@@ -737,14 +737,14 @@ test('a resumed fan-out re-plans zero times and re-peeks zero times', async () =
     return 'lane output';
   });
 
-  const runner = new StackRunner(store, POOL_CONFIG());
+  const runner = new FlowRunner(store, POOL_CONFIG());
   const runId = runner.start(planFlow({ plan: 'auto', tools: ['read_file'], lanes: ['standard'] }), { userInput: 'brief' });
   await waitFor(() => store.readMeta(runId).nodeStatus['fan-odd'] === 'active', { label: 'the odd lane in flight' });
   assert.equal(roles.filter(r => r === 'lane-planner').length, 1);
   assert.equal(roles.filter(r => r === 'subject-peek').length, 1);
 
   // --- app restart ---
-  const restarted = new StackRunner(store, POOL_CONFIG());
+  const restarted = new FlowRunner(store, POOL_CONFIG());
   restarted.reconcileInterrupted();
   restarted.resume(runId);
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done', store.readMeta(runId).error ?? '');
@@ -770,7 +770,7 @@ test("the peek cannot reach past the fan-out's ceiling", async () => {
     }),
     onPeek: call => { peekSystem = call.system; }
   });
-  const runner = new StackRunner(store, POOL_CONFIG());
+  const runner = new FlowRunner(store, POOL_CONFIG());
   const runId = runner.start(planFlow({
     plan: 'auto',
     // A node that decides what other nodes may do must not be able to do more
@@ -804,7 +804,7 @@ test('a fan-out with no tools to look with plans blind rather than not at all', 
       ]
     })
   });
-  const runner = new StackRunner(store, POOL_CONFIG());
+  const runner = new FlowRunner(store, POOL_CONFIG());
   const runId = runner.start(planFlow({ plan: 'auto', lanes: ['standard'] }), { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -833,7 +833,7 @@ test('an ignored area is advice in every lane, and costs no lane its place', asy
     }),
     onLane: call => laneSystems.push(call.system)
   });
-  const runner = new StackRunner(store, POOL_CONFIG());
+  const runner = new FlowRunner(store, POOL_CONFIG());
   const runId = runner.start(planFlow({ plan: 'auto', tools: ['read_file'], lanes: ['standard'] }),
     { userInput: 'Focus on retries, ignore test coverage.' });
   await waitForStage(store, runId, ['done', 'failed']);
@@ -855,7 +855,7 @@ test('a system prompt on the node wins outright, and skips the planner (P3.8)', 
   const roles = [];
   const systems = [];
   setScript(call => { roles.push(roleOf(call.system)); systems.push(call.system); return 'ok'; });
-  const runner = new StackRunner(store, POOL_CONFIG());
+  const runner = new FlowRunner(store, POOL_CONFIG());
   const runId = runner.start(planFlow({
     plan: 'auto', tools: ['read_file'],
     system: 'AUTHOR-PREAMBLE: you are two readers of one small repo.',

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { StackRunner } from '../core/stackRunner.js';
+import { FlowRunner } from '../core/flowRunner.js';
 import { Workspace } from '../core/workspace.js';
 import { makeStore, setScript, testConfig, waitFor, waitForStage, makeFlow, node, edge } from './helpers.js';
 
@@ -38,7 +38,7 @@ function boundRunner() {
   const proj = tmpDir();
   fs.writeFileSync(path.join(proj, 'existing.txt'), 'seed\n');
   const ws = new Workspace(proj).ensure();
-  return { store, proj, ws, runner: new StackRunner(store, testConfig()) };
+  return { store, proj, ws, runner: new FlowRunner(store, testConfig()) };
 }
 
 const waitForToolGate = (store, runId) => waitFor(() => {

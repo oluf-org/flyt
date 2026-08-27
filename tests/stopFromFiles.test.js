@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { StackRunner } from '../core/stackRunner.js';
+import { FlowRunner } from '../core/flowRunner.js';
 import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
 const settle = (ms = 100) => new Promise(r => setTimeout(r, ms));
@@ -27,7 +27,7 @@ function gateFlow() {
 async function parkedRunWithStaleLease() {
   const store = makeStore();
   setScript(() => 'step output');
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(gateFlow());
   await waitForStage(store, runId, ['awaiting_approval']);
   store.writeLease(runId, {
@@ -40,7 +40,7 @@ async function parkedRunWithStaleLease() {
 
 test('stop stops a headless run parked at a gate whose process is gone (stale lease)', async () => {
   const { store, runId } = await parkedRunWithStaleLease();
-  const runner = new StackRunner(store, testConfig()); // a fresh process's worth of nothing live
+  const runner = new FlowRunner(store, testConfig()); // a fresh process's worth of nothing live
 
   assert.deepEqual(runner.stop(runId), { ok: true, fromFiles: true });
 
@@ -54,7 +54,7 @@ test('stop stops a headless run parked at a gate whose process is gone (stale le
 
 test('stop from files requeues stuck tasks and resets unfinished nodes', async () => {
   const { store, runId } = await parkedRunWithStaleLease();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   store.writeTasks(runId, { tasks: [{ id: 'task-1', status: 'running' }] });
 
   assert.deepEqual(runner.stop(runId), { ok: true, fromFiles: true });
@@ -66,7 +66,7 @@ test('stop from files requeues stuck tasks and resets unfinished nodes', async (
 
 test('stop refuses a run owned by a live foreign process instead of writing over it', async () => {
   const { store, runId } = await parkedRunWithStaleLease();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   // A fresh beat from a live holder: isRunLive probes this very pid and
   // finds it alive — because it is; it is this test.
   store.writeLease(runId, { pid: process.pid, host: os.hostname(), beatAt: Date.now() });
@@ -85,7 +85,7 @@ test('stop refuses a run owned by a live foreign process instead of writing over
 test('stop of an unknown or already-ended run reports failure honestly', async () => {
   const store = makeStore();
   setScript(() => 'step output');
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   // Fields, not deepEqual: the result also carries a `message`, which is the
   // half the CLI prints, and an exact-shape assertion here would make adding a
   // better sentence look like a regression. The rest of this test already
@@ -99,7 +99,7 @@ test('stop of an unknown or already-ended run reports failure honestly', async (
   // outer store here read a run that only exists in the other.
   const parked = await parkedRunWithStaleLease();
   parked.store.setStage(parked.runId, 'done', {});
-  const res = new StackRunner(parked.store, testConfig()).stop(parked.runId);
+  const res = new FlowRunner(parked.store, testConfig()).stop(parked.runId);
   assert.equal(res.ok, false);
   assert.equal(res.error, 'already-ended');
   assert.equal(parked.store.readMeta(parked.runId).stage, 'done', 'a done run is not rewritten as cancelled');
@@ -107,7 +107,7 @@ test('stop of an unknown or already-ended run reports failure honestly', async (
 
 test('approve falls back to resumeFromGate for a run whose process is gone', async () => {
   const { store, runId } = await parkedRunWithStaleLease();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   runner.approvePlan(runId); // no in-process gate -> resumeFromGate drives it from meta.json
   await waitForStage(store, runId, ['execution', 'awaiting_approval', 'done']);
   await settle();

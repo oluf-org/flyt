@@ -6,7 +6,7 @@
 //   - edges with sourceHandle receive the source's auxiliary port artifact
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { StackRunner } from '../core/stackRunner.js';
+import { FlowRunner } from '../core/flowRunner.js';
 import { makeStore, setScript, roleOf, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
 const CONTRACT = plan => '```json\n' + JSON.stringify(plan) + '\n```';
@@ -34,7 +34,7 @@ test('orchestrator materializes children inside its box and aggregates their out
     const goal = (prompt.match(/GOAL:\n(.+)/) ?? [])[1] ?? '?';
     return `completed: ${goal}`;
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(orchFlow(), { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
 
@@ -82,7 +82,7 @@ test('orchestrator honors dependsOn ordering between children', async () => {
     order.push((prompt.match(/GOAL:\n(step-\w+)/) ?? [])[1]);
     return 'ok';
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(orchFlow(), { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done');
@@ -96,7 +96,7 @@ test('orchestrator fails honestly when the plan stays invalid after the re-ask',
     if (roleOf(system) === 'orchestrate') { calls += 1; return 'no contract here'; }
     return 'ok';
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(orchFlow(), { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   const meta = store.readMeta(runId);
@@ -128,7 +128,7 @@ test('an edge with sourceHandle carries the auxiliary port artifact (step-eval v
     [edge('in', 'work'), edge('work', 'eval'),
      { id: 'e-eval-sink-verdict', source: 'eval', target: 'sink', sourceHandle: 'verdict' },
      edge('sink', 'out')]);
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(flow, { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done');
@@ -161,7 +161,7 @@ test('orchestrator with authored children skips planning and runs exactly them',
        data: { title: 'Authored B', role: 'execute', goal: 'goal-b' } },
      node('out', 'output')],
     [edge('in', 'orch'), edge('orch', 'a'), edge('orch', 'b'), edge('orch', 'out')]);
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(flow, { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
 
@@ -195,7 +195,7 @@ test('authored children are never scheduled by the outer walk', async () => {
        data: { title: 'Kid', role: 'execute', goal: 'kid-goal' } },
      node('out', 'output')],
     [edge('in', 'orch'), edge('orch', 'kid'), edge('orch', 'out')]);
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(flow, { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done');

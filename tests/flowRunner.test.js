@@ -1,4 +1,4 @@
-// Integration + unit tests for the flow graph runner (core/stackRunner.js):
+// Integration + unit tests for the flow graph runner (core/flowRunner.js):
 // topology, worker resolution, plan-eval materialization (incl. the bounded
 // re-ask), the step-eval retry loop, and approval-gate persistence across a
 // simulated app restart.
@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { StackRunner, topoSort, resolveWorker } from '../core/stackRunner.js';
+import { FlowRunner, topoSort, resolveWorker } from '../core/flowRunner.js';
 import { Ledger } from '../core/ledger.js';
 import os from 'node:os';
 import { makeStore, setScript, roleOf, testConfig, waitFor, waitForStage, makeFlow, node, edge } from './helpers.js';
@@ -108,7 +108,7 @@ test('agentTask nodes get their category worker (unified resolution)', async () 
   const store = makeStore();
   const config = testConfig({ categoryWorkers: { 'Test-creation': { provider: 'script', model: 'cat-model' } } });
   setScript(() => 'Task complete.');
-  const runner = new StackRunner(store, config);
+  const runner = new FlowRunner(store, config);
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
      node('at', 'agentTask', { title: 'Make tests', goal: 'Write tests.', category: 'Test-creation' }),
@@ -126,7 +126,7 @@ const planEvalDoc = nodes => '```json\n' + JSON.stringify({ nodes }, null, 2) + 
 
 test('materializeGeneratedNodes rejects dependency cycles among generated nodes', () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = store.createRun('brief');
   const pe = node('pe', 'aiStep', { role: 'plan-eval' });
   const flow = makeFlow([pe, node('out', 'output')], [edge('pe', 'out')]);
@@ -142,7 +142,7 @@ test('materializeGeneratedNodes rejects dependency cycles among generated nodes'
 
 test('materializeGeneratedNodes skips specs whose id already exists in the flow', () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = store.createRun('brief');
   const pe = node('pe', 'aiStep', { role: 'plan-eval' });
   const flow = makeFlow([pe, node('out', 'output')], [edge('pe', 'out')]);
@@ -163,7 +163,7 @@ test('smoke: full advanced-planning flow runs to done on the mock provider', asy
   const config = testConfig({
     workers: { executor: { provider: 'mock', model: 'mock-large' } }
   });
-  const runner = new StackRunner(store, config);
+  const runner = new FlowRunner(store, config);
   const flow = makeFlow(
     [node('in', 'input', { text: 'Build a config loader' }),
      node('ps', 'aiStep', { role: 'plan-start', title: 'Start' }),
@@ -187,7 +187,7 @@ test('smoke: full advanced-planning flow runs to done on the mock provider', asy
 
 test('plan-eval re-asks once with the validation errors on malformed output', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   let peCalls = 0;
   let sawErrorsInReask = false;
   setScript(({ system, prompt }) => {
@@ -218,7 +218,7 @@ test('plan-eval re-asks once with the validation errors on malformed output', as
 
 test('independent aiSteps run concurrently as one wave', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   let inFlight = 0;
   let maxInFlight = 0;
   setScript(async () => {
@@ -245,7 +245,7 @@ test('independent aiSteps run concurrently as one wave', async () => {
 
 test('maxParallel caps the wave size', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig({ maxParallel: 2 }));
+  const runner = new FlowRunner(store, testConfig({ maxParallel: 2 }));
   let inFlight = 0;
   let maxInFlight = 0;
   setScript(async () => {
@@ -268,7 +268,7 @@ test('maxParallel caps the wave size', async () => {
 
 test('a failure inside a wave fails the run', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   setScript(async ({ prompt }) => {
     if (prompt.includes('GOAL:\nboom')) throw new Error('provider exploded');
     return 'ok';
@@ -288,7 +288,7 @@ test('a failure inside a wave fails the run', async () => {
 
 test('aiStep streams partial output into the node file while the call runs', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   setScript(async ({ onText }) => {
     onText('partial text so far');
     await new Promise(r => setTimeout(r, 400));
@@ -310,7 +310,7 @@ test('aiStep streams partial output into the node file while the call runs', asy
 // and it was the silent one — runAgent never forwarded onText.
 test('agentTask streams the agent turn into the task output while the call runs', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   setScript(async ({ onText }) => {
     onText('partial agent reply');
     await new Promise(r => setTimeout(r, 400));
@@ -333,7 +333,7 @@ test('agentTask streams the agent turn into the task output while the call runs'
 // the agent decide), and the executor's write after the loop is what lands.
 test('a tool-calling turn streams, then the final reply supersedes it', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const turn1 = 'Recording the spec first.\n```tool\n{"tool":"write_task_md","args":{"content":"# Spec"}}\n```';
   setScript(async ({ prompt, onText }) => {
     if (prompt.includes('TOOL RESULT')) return 'final deliverable';
@@ -361,7 +361,7 @@ test('a tool-calling turn streams, then the final reply supersedes it', async ()
 
 test('step-eval retry re-runs the work node with persisted guidance, then passes', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   let workCalls = 0;
   let evalCalls = 0;
   setScript(({ system }) => {
@@ -396,7 +396,7 @@ test('pre-node approval gate survives a restart: approve resumes to done', async
   const store = makeStore();
   const config = testConfig();
   setScript(() => 'step output');
-  const runner1 = new StackRunner(store, config);
+  const runner1 = new FlowRunner(store, config);
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
      node('step', 'aiStep', { role: 'execute', requiresApproval: true }),
@@ -407,7 +407,7 @@ test('pre-node approval gate survives a restart: approve resumes to done', async
   assert.equal(store.readMeta(runId).pendingGateKind, 'pre');
 
   // "Restart": a fresh runner with empty in-memory gates, same file state.
-  const runner2 = new StackRunner(store, config);
+  const runner2 = new FlowRunner(store, config);
   runner2.approvePlan(runId);
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
   assert.match(store.readNodeOutput(runId, 'step'), /step output/);
@@ -419,7 +419,7 @@ test('pre-node approval gate survives a restart: reject marks the run rejected',
   const store = makeStore();
   const config = testConfig();
   setScript(() => 'step output');
-  const runner1 = new StackRunner(store, config);
+  const runner1 = new FlowRunner(store, config);
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
      node('step', 'aiStep', { role: 'execute', requiresApproval: true }),
@@ -428,7 +428,7 @@ test('pre-node approval gate survives a restart: reject marks the run rejected',
   const runId = runner1.start(flow);
   await waitForStage(store, runId, ['awaiting_approval']);
 
-  const runner2 = new StackRunner(store, config);
+  const runner2 = new FlowRunner(store, config);
   runner2.rejectPlan(runId, 'not like this');
   const meta = store.readMeta(runId);
   assert.equal(meta.stage, 'rejected');
@@ -442,7 +442,7 @@ test('step-eval escalation gate survives a restart: approve resumes to done', as
     roleOf(system) === 'step-eval'
       ? '```json\n{ "verdict": "escalate", "reason": "human should look at this" }\n```'
       : 'work output');
-  const runner1 = new StackRunner(store, config);
+  const runner1 = new FlowRunner(store, config);
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
      node('work', 'aiStep', { role: 'execute' }),
@@ -454,7 +454,7 @@ test('step-eval escalation gate survives a restart: approve resumes to done', as
   assert.equal(store.readMeta(runId).pendingGateKind, 'escalation');
   assert.equal(store.readMeta(runId).pendingNodeId, 'seval');
 
-  const runner2 = new StackRunner(store, config);
+  const runner2 = new FlowRunner(store, config);
   runner2.approvePlan(runId);
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
   const statuses = store.readMeta(runId).nodeStatus;
@@ -473,7 +473,7 @@ test('step-eval escalation gate survives a restart: approve resumes to done', as
 // live runs died on it with no way forward but to run them again.
 test('an aiStep whose model returns an empty response fails instead of succeeding', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   setScript(() => '   \n  ');
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }), node('step', 'aiStep', { role: 'execute' }), node('out', 'output')],
@@ -496,7 +496,7 @@ test('an aiStep whose model returns an empty response fails instead of succeedin
 
 test('an aiStep whose output is truncated preserves the partial but fails before downstream work', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   setScript(() => ({ text: '# Report\n\n## Cut off', finishReason: 'length', usage: null }));
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }), node('step', 'aiStep', { role: 'execute' }), node('out', 'output')],
@@ -513,7 +513,7 @@ test('an aiStep whose output is truncated preserves the partial but fails before
 
 test('an agentTask whose agent returns an empty response fails instead of succeeding', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   setScript(() => '');
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
@@ -529,7 +529,7 @@ test('an agentTask whose agent returns an empty response fails instead of succee
 // is auditable after the fact rather than inferred (V1 task 11).
 test('the executor logs which tool protocol it used', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   setScript(() => 'done');
   const flow = makeFlow(
     [node('in', 'input', { text: 'b' }),
@@ -551,7 +551,7 @@ test('the executor logs which tool protocol it used', async () => {
 test('streamInto never throttles away the final emit of a call', () => {
   const store = makeStore();
   const runId = store.createRun('b');
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const written = [];
   const sink = runner.streamInto(runId, t => written.push(t));
 
@@ -565,7 +565,7 @@ test('streamInto never throttles away the final emit of a call', () => {
 test('streamInto still throttles the noisy middle of a stream', () => {
   const store = makeStore();
   const runId = store.createRun('b');
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const written = [];
   const sink = runner.streamInto(runId, t => written.push(t));
   for (let i = 0; i < 50; i++) sink('chunk ' + i);
@@ -576,7 +576,7 @@ test('streamInto still throttles the noisy middle of a stream', () => {
 
 test('the runner records per-edge context bytes into meta (thick full-context, thin contextSpec)', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   setScript(() => 'a step output long enough to carry weight downstream');
   const flow = makeFlow(
     [node('in', 'input', { text: 'the brief for the run' }),
@@ -607,7 +607,7 @@ test('a flow run that nobody supervised still reaches the ledger', async () => {
   const store = makeStore();
   const recorded = [];
   setScript(() => 'done');
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   runner.ledger = { recordRun: (_store, args) => recorded.push(args) };
 
   const flow = makeFlow(

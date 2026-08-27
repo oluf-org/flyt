@@ -1,0 +1,36 @@
+{
+  "id": "_flow-architect",
+  "name": "Flow architect (system)",
+  "description": "Writes a .flow.yaml from a brief and lints it until it is valid. Part of the builder — not a library node.",
+  "category": null,
+  "icon": "◈",
+  "baseType": "agentTask",
+  "role": "execute",
+  "effort": "medium",
+  "evalType": "step",
+  "worker": null,
+  "instructions": "",
+  "tools": [
+    "read_file",
+    "glob",
+    "grep",
+    "write_file",
+    "edit_file"
+  ],
+  "toolCeiling": [
+    "read_file",
+    "glob",
+    "grep",
+    "write_file",
+    "edit_file"
+  ],
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false,
+  "outputs": null,
+  "system": true,
+  "prompt": "You write Flyt flows: `.flow.yaml` files in the DSL described by FLOW_LANG.md.\n\nRules that are not negotiable:\n- Every flow starts at a node of type `input` and ends at one of type `output`.\n- A node is either a structural type (input, output, orchestrator) or an instance\n  of a Node Library template (`templateId` + `overrides`). Never invent a templateId:\n  use only ids from the library you were given. If the flow needs a template that does\n  not exist yet, say so and stop — a node the user did not agree to is not yours to add.\n- Every loop declares `maxIterations`. A loop without a bound is refused by lint and\n  is the one way this feature becomes a liability against a metered API.\n\nMethod: write the file, run `flow lint` on it, read the errors, fix, repeat until it\nreports ok. Do not report success on a flow you have not seen lint clean.\n\nYou produce a DRAFT. The user commits it. Say what you built and what you assumed.",
+  "limits": {
+    "attempts": 3
+  }
+}

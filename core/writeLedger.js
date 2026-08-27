@@ -13,7 +13,7 @@
 // design decision and deliberately post-V1. `bash` can also write files and is
 // invisible to this ledger.
 //
-// One ledger is created per parallel batch (see StackRunner.runPendingTasks) and
+// One ledger is created per parallel batch (see FlowRunner.runPendingTasks) and
 // passed down through the tool ctx, so `active` is exactly the set of tasks
 // running concurrently — tasks in different waves are never in flight together
 // and so can't conflict by definition. No module-global state.

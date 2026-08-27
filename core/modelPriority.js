@@ -3,7 +3,7 @@
 // kind, its effort level, and which providers actually have keys.
 //
 // Pure data + pure functions, no Electron imports — resolveWorker
-// (core/stackRunner.js) calls pickDefaultWorker with the runtime config, and
+// (core/flowRunner.js) calls pickDefaultWorker with the runtime config, and
 // the unit tests exercise the tables directly.
 //
 // The rankings encode the mid-2026 consensus from public benchmarks and

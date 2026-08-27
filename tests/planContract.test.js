@@ -273,12 +273,12 @@ test('an undeclared missing input still degrades quietly, as it always did', asy
 
 test('a spinning planner is interrupted and fails with its reason, not requeued', async () => {
   const { makeStore, setScript, testConfig, waitForStage } = await import('./helpers.js');
-  const { StackRunner } = await import('../core/stackRunner.js');
+  const { FlowRunner } = await import('../core/flowRunner.js');
 
   const store = makeStore();
   // Thresholds tightened so the test does not wait a real minute; the SHAPE of
   // the failure is what is under test, not the wall-clock constant.
-  const runner = new StackRunner(store, testConfig({
+  const runner = new FlowRunner(store, testConfig({
     planner: { spin: { minLines: 10, minMs: 0, minNovelty: 0.25 } }
   }));
 
@@ -345,10 +345,10 @@ test('a spinning planner is interrupted and fails with its reason, not requeued'
 // long.
 test('a long plan that keeps saying new things is not a spin', async () => {
   const { makeStore, setScript, testConfig, waitForStage } = await import('./helpers.js');
-  const { StackRunner } = await import('../core/stackRunner.js');
+  const { FlowRunner } = await import('../core/flowRunner.js');
 
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig({
+  const runner = new FlowRunner(store, testConfig({
     planner: { spin: { minLines: 10, minMs: 0, minNovelty: 0.25 } }
   }));
 

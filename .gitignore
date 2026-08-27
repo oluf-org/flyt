@@ -6,7 +6,7 @@ runs/
 .env
 settings.json
 # Runtime flow store. The four tiered pipelines are built from code
-# (core/flowstore.js compatibility seeding), and anything else here is the user's
+# (core/flowstore.js ensureSeedPipelines), and anything else here is the user's
 # own. A flow the app SHIPS is tracked explicitly: `git add -f flows/<id>.flow.yaml`.
 flows/
 .flyt/

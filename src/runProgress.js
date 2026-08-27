@@ -3,7 +3,7 @@
 // the canvas or opening the run folder. Pure over a run snapshot, so it tests
 // without a DOM — same split as flowTypes.js / runStreams.js.
 
-// Mirrors TERMINAL_STAGES in core/stackRunner.js (RUN-CONTROL added 'cancelled':
+// Mirrors TERMINAL_STAGES in core/flowRunner.js (RUN-CONTROL added 'cancelled':
 // a stopped run is done moving, and its finished nodes stay inspectable).
 // Duplicated rather than imported: that module reaches node:fs through its
 // adapter/tool imports, and this one runs in the renderer.

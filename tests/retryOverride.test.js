@@ -12,7 +12,7 @@
 // what let this ship.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { StackRunner, effectiveWorkerFor } from '../core/stackRunner.js';
+import { FlowRunner, effectiveWorkerFor } from '../core/flowRunner.js';
 import { makeStore, setScript, testConfig, waitForStage } from './helpers.js';
 
 const node = (id, type, data = {}) => ({ id, type, data, position: { x: 0, y: 0 } });
@@ -50,7 +50,7 @@ test('a manual retry override outranks the persisted task worker', () => {
 
 async function failingAgentTaskRun() {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const flow = makeFlow(
     [node('in', 'input', { text: 'do the thing' }),
      node('work', 'agentTask', { title: 'Work', goal: 'Do it', worker: { provider: 'script', model: 'model-A' } }),
@@ -119,7 +119,7 @@ test('the run log records the requested and effective route, without a key', asy
 
 test('a plain retry with no model change keeps the original effective worker', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const flow = makeFlow(
     [node('in', 'input', { text: 'go' }),
      node('work', 'agentTask', { title: 'Work', goal: 'Do it', worker: { provider: 'script', model: 'model-A' } }),
@@ -163,7 +163,7 @@ test('clearing a retry pin restores the originally planned worker', async () => 
 
 test('an aiStep retry keeps honoring the same UI contract', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const flow = makeFlow(
     [node('in', 'input', { text: 'go' }),
      node('step', 'aiStep', { role: 'execute', worker: { provider: 'script', model: 'model-A' } }),

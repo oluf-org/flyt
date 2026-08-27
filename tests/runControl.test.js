@@ -1,6 +1,6 @@
 // RUN-CONTROL: stop / pause / restartNode / branch / investigateNode — the
 // execution-core half of the run-control IPC contract (electron/main.js is a
-// thin pass-through to these StackRunner methods).
+// thin pass-through to these FlowRunner methods).
 //
 // Covers: abort threading through callModel (no retry after abort, abort-aware
 // backoff), stop() semantics against both a synthetic hanging call and the
@@ -9,7 +9,7 @@
 // pruning. Same harness as the other runner tests (tests/helpers.js).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { StackRunner, downstreamSet, upstreamSet } from '../core/stackRunner.js';
+import { FlowRunner, downstreamSet, upstreamSet } from '../core/flowRunner.js';
 import { callModel } from '../core/adapters/index.js';
 import { makeStore, setScript, roleOf, testConfig, waitFor, waitForStage, makeFlow, node, edge } from './helpers.js';
 
@@ -73,7 +73,7 @@ test('stop aborts the in-flight call, cancels the run, and frees the live regist
   const store = makeStore();
   setScript(({ prompt, signal }) =>
     goalOf(prompt) === 'B' ? untilAborted(signal) : Promise.resolve(`output ${goalOf(prompt)}`));
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(linearFlow());
   await waitFor(() => store.readMeta(runId).nodeStatus.b === 'active', { label: 'b in flight' });
 
@@ -104,7 +104,7 @@ test('stop aborts the in-flight call, cancels the run, and frees the live regist
 
 test('stop works against the mock adapter (a real adapter abort path)', async () => {
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
       node('a', 'aiStep', { goal: 'A', worker: { provider: 'mock', model: 'mock-small' } }),
@@ -123,7 +123,7 @@ test('stop works against the mock adapter (a real adapter abort path)', async ()
 test('stop settles a pending approval gate without hanging the walk', async () => {
   const store = makeStore();
   setScript(() => 'step output');
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(makeFlow(
     [node('in', 'input', { text: 'brief' }),
       node('g', 'aiStep', { goal: 'G', requiresApproval: true }),
@@ -150,7 +150,7 @@ test('stop releases a pause hold and cancels cleanly', async () => {
     if (g === 'B') return new Promise(resolve => { releaseB = () => resolve('output B'); });
     return Promise.resolve(`output ${g}`);
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(makeFlow(
     [node('in', 'input', { text: 'brief' }),
       node('a', 'aiStep', { goal: 'A' }),
@@ -175,7 +175,7 @@ test('stop requeues an agentTask that was mid-flight', async () => {
   const store = makeStore();
   setScript(({ system, signal }) =>
     roleOf(system) === 'executor' ? untilAborted(signal) : Promise.resolve('output'));
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(makeFlow(
     [node('in', 'input', { text: 'brief' }),
       node('at', 'agentTask', { title: 'T', goal: 'do it' }),
@@ -201,7 +201,7 @@ test('pause holds after the current wave; resume continues the walk', async () =
     if (g === 'B') return new Promise(resolve => { releaseB = () => resolve('output B'); });
     return Promise.resolve(`output ${g}`);
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(makeFlow(
     [node('in', 'input', { text: 'brief' }),
       node('a', 'aiStep', { goal: 'A' }),
@@ -253,7 +253,7 @@ test('restartNode resets the node and its downstream, keeps ancestors, re-runs w
     prompts.push(prompt);
     return Promise.resolve(`output ${g}`);
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(linearFlow());
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
   assert.deepEqual(calls, ['A', 'B']);
@@ -280,7 +280,7 @@ test('restartNode re-points the failed step at a different model, for this run o
     if (model === 'test-model') throw new Error('Codex CLI failed: unknown variant `priority`');
     return Promise.resolve(`output from ${model}`);
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const authored = makeFlow(
     [node('in', 'input', { text: 'brief' }),
       node('a', 'aiStep', { goal: 'A' }),
@@ -315,7 +315,7 @@ test('restartNode clears a pin back to the default, and refuses one on a node wi
   const store = makeStore();
   const seen = [];
   setScript(({ model }) => { seen.push(model); return Promise.resolve('ok'); });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(makeFlow(
     [node('in', 'input', { text: 'brief' }),
       node('a', 'aiStep', { goal: 'A', worker: { provider: 'script', model: 'pinned' } }),
@@ -339,7 +339,7 @@ test('restartNode clears a pin back to the default, and refuses one on a node wi
 test('restartNode and branch refuse a live run', async () => {
   const store = makeStore();
   setScript(({ signal }) => untilAborted(signal));
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(makeFlow(
     [node('in', 'input', { text: 'brief' }), node('a', 'aiStep', { goal: 'A' }), node('out', 'output')],
     [edge('in', 'a'), edge('a', 'out')]));
@@ -369,7 +369,7 @@ test('branch forks a finished run: ancestors preserved, downstream re-runs', asy
     if (g) calls.push(g);
     return Promise.resolve(`output ${g}`);
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(linearFlow());
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
   calls.length = 0;
@@ -402,7 +402,7 @@ test('branch forks a finished run: ancestors preserved, downstream re-runs', asy
 test('branch of a branch works and points at its immediate source', async () => {
   const store = makeStore();
   setScript(({ prompt }) => Promise.resolve(`output ${goalOf(prompt)}`));
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(linearFlow());
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
 
@@ -425,7 +425,7 @@ test('investigateNode returns raw artifacts plus a model summary', async () => {
     }
     return Promise.resolve(`output ${goalOf(prompt)}`);
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(makeFlow(
     [node('in', 'input', { text: 'brief' }), node('b', 'aiStep', { goal: 'B' }), node('out', 'output')],
     [edge('in', 'b'), edge('b', 'out')]));
@@ -451,7 +451,7 @@ test('investigateNode returns raw artifacts plus a model summary', async () => {
 test('investigateNode degrades to summaryError no-model without a configured model', async () => {
   const store = makeStore();
   setScript(({ prompt }) => Promise.resolve(`output ${goalOf(prompt)}`));
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(makeFlow(
     [node('in', 'input', { text: 'brief' }), node('b', 'aiStep', { goal: 'B' }), node('out', 'output')],
     [edge('in', 'b'), edge('b', 'out')]));

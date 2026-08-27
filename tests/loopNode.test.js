@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { StackRunner } from '../core/stackRunner.js';
+import { FlowRunner } from '../core/flowRunner.js';
 import { Backlog } from '../core/backlog.js';
 import {
   parseBacklogPlan, resolveDependsOn, validateBacklogEvidence
@@ -423,7 +423,7 @@ function chainFlow(loopData = {}) {
 // A runner whose loopHost is a real backlog plus a stub supervisor: the
 // supervisor's own behaviour is D35's, tested there.
 function runnerWith(store, backlog, { onStart = () => ({ started: true }), ledger = null } = {}) {
-  const runner = new StackRunner(store, testConfig({ loop: { pollMs: 10 } }));
+  const runner = new FlowRunner(store, testConfig({ loop: { pollMs: 10 } }));
   Object.defineProperty(runner, 'loopHost', {
     get: () => ({ projectId: 'p', backlog, ledger, start: onStart, status: () => null }),
     configurable: true
@@ -587,7 +587,7 @@ test('a failed task is reported, not fatal — three landed and one failed is a 
 test('a loop node with no backlog to enqueue into fails honestly', async () => {
   const store = makeStore();
   setScript(({ system }) => (roleOf(system) === 'plan-backlog' ? fenced(PLAN) : 'ok'));
-  const runner = new StackRunner(store, testConfig({ loop: { pollMs: 10 } }));
+  const runner = new FlowRunner(store, testConfig({ loop: { pollMs: 10 } }));
   const runId = runner.start(chainFlow(), { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'failed');

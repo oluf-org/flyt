@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { StackRunner } from '../core/stackRunner.js';
+import { FlowRunner } from '../core/flowRunner.js';
 import { createWriteLedger } from '../core/writeLedger.js';
 import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
@@ -62,7 +62,7 @@ test('two independent agentTasks execute concurrently', async () => {
     return `Done: ${taskTitle(prompt)}`;
   });
 
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   runId = runner.start(fanOutFlow(2));
   const stage = await waitForStage(store, runId, ['done', 'failed']);
 
@@ -84,7 +84,7 @@ test('parallelism is bounded by maxParallel', async () => {
     return 'Done.';
   });
 
-  const runner = new StackRunner(store, testConfig({ maxParallel: 2 }));
+  const runner = new FlowRunner(store, testConfig({ maxParallel: 2 }));
   const runId = runner.start(fanOutFlow(5));
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
   assert.equal(peak, 2, `expected at most 2 tasks in flight, saw ${peak}`);
@@ -99,7 +99,7 @@ test('each task is claimed exactly once under concurrency', async () => {
     return `Done: ${taskTitle(prompt)}`;
   });
 
-  const runner = new StackRunner(store, testConfig({ maxParallel: 4 }));
+  const runner = new FlowRunner(store, testConfig({ maxParallel: 4 }));
   const runId = runner.start(fanOutFlow(4));
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
 
@@ -128,7 +128,7 @@ test('log.jsonl stays parseable and attributable with concurrent writers', async
     return `Done: ${title}`;
   });
 
-  const runner = new StackRunner(store, testConfig({ maxParallel: 3 }));
+  const runner = new FlowRunner(store, testConfig({ maxParallel: 3 }));
   const runId = runner.start(fanOutFlow(3));
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
 
@@ -161,7 +161,7 @@ test('concurrent writes to the same path are flagged as interference', async () 
     return `Done: ${title}`;
   });
 
-  const runner = new StackRunner(store, testConfig({ maxParallel: 2 }));
+  const runner = new FlowRunner(store, testConfig({ maxParallel: 2 }));
   const runId = runner.start(fanOutFlow(2));
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
 
@@ -191,7 +191,7 @@ test('independent tasks writing different paths do not interfere', async () => {
     return `Done: ${title}`;
   });
 
-  const runner = new StackRunner(store, testConfig({ maxParallel: 2 }));
+  const runner = new FlowRunner(store, testConfig({ maxParallel: 2 }));
   const runId = runner.start(fanOutFlow(2));
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
 
@@ -217,7 +217,7 @@ test('a task gated on tool approval runs alone', async () => {
 
   // t1 gates every tool call; t2/t3 do not. The gate promise is per-run, so the
   // gated task must never share the stage with another task.
-  const runner = new StackRunner(store, testConfig({ maxParallel: 3 }));
+  const runner = new FlowRunner(store, testConfig({ maxParallel: 3 }));
   const flow = fanOutFlow(3, i => (i === 0 ? { approveToolCalls: true } : {}));
   const runId = runner.start(flow);
 

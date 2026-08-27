@@ -29,7 +29,7 @@ export function spawnedTasks(snapshot) {
 
   // Walk createdBy up to the flow node responsible for this task — the same
   // ownership walk the runner uses to attribute a tool gate (gateFor in
-  // core/stackRunner.js). createdBy names EITHER a node or a task: create_task
+  // core/flowRunner.js). createdBy names EITHER a node or a task: create_task
   // records ctx.taskId, which is a parent task id when an agent calls the tool
   // from inside the loop, but a NODE id when the runner spawns on a node's
   // behalf (stitch fix tasks — see postProcess). Both shapes resolve here.

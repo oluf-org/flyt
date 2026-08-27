@@ -5,10 +5,10 @@
 // the engine".
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { StackRunner } from '../core/stackRunner.js';
-import { lintFlow, RUNTIME_RULES } from '../core/stacklang/lint.js';
-import { parseFlow } from '../core/stacklang/parse.js';
-import { serializeFlow } from '../core/stacklang/serialize.js';
+import { FlowRunner } from '../core/flowRunner.js';
+import { lintFlow, RUNTIME_RULES } from '../core/flowlang/lint.js';
+import { parseFlow } from '../core/flowlang/parse.js';
+import { serializeFlow } from '../core/flowlang/serialize.js';
 import {
   spliceSubflow, spliceAllSubflows, subflowChildId, subflowPorts, resultNodesOf,
   findFlowCycle, flowDepth, SubflowError, MAX_SUBFLOW_DEPTH, SUBFLOW_SEP
@@ -256,7 +256,7 @@ test('a sub-flow runs inline: one run, namespaced children, the inner result as 
     seen.push(goal);
     return `did ${goal}`;
   });
-  const runner = new StackRunner(store, testConfig(), () => {}, null, { load: loaderFor(innerFlow()) });
+  const runner = new FlowRunner(store, testConfig(), () => {}, null, { load: loaderFor(innerFlow()) });
   const runId = runner.start(outerFlow(), { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
 
@@ -286,14 +286,14 @@ test('a sub-flow runs inline: one run, namespaced children, the inner result as 
 test('a sub-flow with no flow library refuses to start rather than running an empty box', () => {
   const store = makeStore();
   setScript(() => 'ok');
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   assert.throws(() => runner.start(outerFlow(), { userInput: 'brief' }), /no flow library/);
 });
 
 test('an unresolvable reference fails at start, naming the flow', () => {
   const store = makeStore();
   setScript(() => 'ok');
-  const runner = new StackRunner(store, testConfig(), () => {}, null, { load: loaderFor(innerFlow()) });
+  const runner = new FlowRunner(store, testConfig(), () => {}, null, { load: loaderFor(innerFlow()) });
   assert.throws(() => runner.start(outerFlow({ flowId: 'ghost' }), { userInput: 'brief' }),
     /could not be assembled[\s\S]*"ghost" does not exist/);
 });
@@ -305,7 +305,7 @@ test('nested sub-flows splice in one pass', async () => {
   const mid = innerFlow('mid');
   mid.nodes.push({ id: 'deeper', type: 'subflow', kind: 'ai', data: { flowId: 'inner' } });
   mid.edges.push({ id: 'em', source: 'a', target: 'deeper' });
-  const runner = new StackRunner(store, testConfig(), () => {}, null, { load: loaderFor(mid, innerFlow()) });
+  const runner = new FlowRunner(store, testConfig(), () => {}, null, { load: loaderFor(mid, innerFlow()) });
   const runId = runner.start(outerFlow({ flowId: 'mid' }), { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
 

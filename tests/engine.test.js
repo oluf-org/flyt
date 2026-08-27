@@ -77,13 +77,6 @@ test('publicSettings never leaks a key', () => {
   assert.ok(!JSON.stringify(pub).includes('sk-secret-value'), 'the key itself stays inside');
 });
 
-test('fresh engine startup seeds only the Loop compatibility projection', () => {
-  const { engine } = makeEngine();
-  assert.deepEqual(engine.flows.list(), [
-    { id: 'loop-task', name: 'Work one backlog task' },
-  ]);
-});
-
 test('a flow runs end to end headlessly, and emits the same events the UI consumes', async () => {
   const events = [];
   const { engine, dataRoot } = makeEngine({ emit: (type, payload) => events.push({ type, payload }) });
@@ -97,7 +90,7 @@ test('a flow runs end to end headlessly, and emits the same events the UI consum
   const { project } = engine.registry.open(workspace);
   const { runner, store } = engine.registry.get(project.id);
 
-  const flow = engine.flows.load('loop-task');
+  const flow = engine.flows.load('default-pipeline');
   const runId = runner.start(flow, { userInput: 'headless smoke', workspace, approvalMode: 'always' });
   assert.ok(runId, 'a run id came back synchronously');
 
@@ -125,7 +118,7 @@ test('shouldPush gates the expensive half without silencing activity', async () 
   fs.mkdirSync(workspace, { recursive: true });
   const { project } = engine.registry.open(workspace);
   const { runner, store } = engine.registry.get(project.id);
-  const flow = engine.flows.load('loop-task');
+  const flow = engine.flows.load('default-pipeline');
   const runId = runner.start(flow, { userInput: 'background', workspace, approvalMode: 'always' });
 
   assert.equal(await settleRun(runner, store, runId), 'done');

@@ -6,12 +6,12 @@ import { runDocument } from '../src/runDocument.js';
 
 const snap = {
   meta: {
-    runId: 'run-abc', stage: 'done', flowName: 'Pipeline',
+    runId: 'run-abc', stage: 'done', flowName: 'Default pipeline',
     createdAt: '2026-07-18T18:18:32.0Z', updatedAt: '2026-07-18T18:18:47.0Z',
     nodeStatus: { in: 'done', work: 'done', out: 'done' },
   },
   prompt: 'Write a greeting.\nsecond line',
-  flow: { name: 'Pipeline', nodes: [
+  flow: { name: 'Default pipeline', nodes: [
     { id: 'in', type: 'input' },
     { id: 'work', type: 'agentTask', data: { taskId: 'task-1' } },
     { id: 'out', type: 'output' },

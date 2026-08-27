@@ -45,13 +45,13 @@ test('summaries name every run and come back newest first', () => {
   const store = makeStore();
   const a = store.createRun('First request');
   const b = store.createRun('Second request');
-  store.setStage(b, 'done', { flowName: 'Pipeline' });
+  store.setStage(b, 'done', { flowName: 'Default pipeline' });
 
   const list = store.runSummaries();
   assert.deepEqual(list.map(r => r.id), [b, a]);
   assert.deepEqual(list.map(r => r.name), ['Second request', 'First request']);
   assert.equal(list[0].stage, 'done');
-  assert.equal(list[0].flowName, 'Pipeline');
+  assert.equal(list[0].flowName, 'Default pipeline');
   assert.equal(list[0].named, false); // derived, not user-set
 });
 

@@ -3,7 +3,7 @@
 // applied to two finished runs' final outputs, framed as A vs B. This module
 // is the pure half — the prompt contract, the user-message builder, and the
 // verdict parser — so it tests without a store, a runner, or a model. The
-// StackRunner owns the actual call (judgeComparison), the way investigateNode
+// FlowRunner owns the actual call (judgeComparison), the way investigateNode
 // owns its direct call.
 //
 // The judge is deliberately BLIND: the prompt names the alternatives A and B

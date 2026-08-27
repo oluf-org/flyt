@@ -1,0 +1,18 @@
+{
+  "id": "compare",
+  "name": "Compare",
+  "description": "Compare multiple upstream alternatives (same task done by different models, drafts, plans): agreements, differences, per-alternative strengths, and a keep-the-best recommendation.",
+  "category": null,
+  "icon": "⇄",
+  "baseType": "aiStep",
+  "role": "compare",
+  "effort": "medium",
+  "evalType": "step",
+  "worker": null,
+  "instructions": "",
+  "tools": null,
+  "skills": [],
+  "requiresApproval": false,
+  "approveToolCalls": false,
+  "outputs": null
+}

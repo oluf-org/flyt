@@ -31,7 +31,7 @@ import { createEngine } from '../core/engine.js';
 import { createApi, ApiError } from '../core/api.js';
 import { git } from '../core/worktree.js';
 import { runExecutorTask } from '../core/nodes/executor.js';
-import { StackRunner, resolveWorkerRoute } from '../core/stackRunner.js';
+import { FlowRunner, resolveWorkerRoute } from '../core/flowRunner.js';
 import { validatePlan, plannerLimits } from '../core/planContract.js';
 import { makeStore, setScript, testConfig, waitForStage } from './helpers.js';
 
@@ -151,7 +151,7 @@ test('WR-07/3: a no-effect executor fails, and the retry on worker B changes the
   await api.invoke('project:open', { folder: repo });
 
   const store = makeStore();
-  const runner = new StackRunner(store, testConfig({ workers: { executor: { provider: 'script', model: 'model-A' } } }));
+  const runner = new FlowRunner(store, testConfig({ workers: { executor: { provider: 'script', model: 'model-A' } } }));
   const flow = {
     id: 'f', name: 'Implement the banner',
     nodes: [

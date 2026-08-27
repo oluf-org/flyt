@@ -4,7 +4,7 @@
 // questions answered from the composer.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { StackRunner } from '../core/stackRunner.js';
+import { FlowRunner } from '../core/flowRunner.js';
 import { parseRefineQuestions, stripRefineQuestions } from '../core/planEval.js';
 import { makeStore, setScript, roleOf, testConfig, waitForStage, waitFor, makeFlow, node, edge } from './helpers.js';
 
@@ -53,7 +53,7 @@ test('a refine node with no questions passes its brief straight through', async 
     if (roleOf(system) === 'refine') return '# Brief\n\n## Goal\nMake a good thing.';
     return 'downstream';
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(refineFlow(), { userInput: 'make it good' });
   await waitForStage(store, runId, ['done', 'failed']);
 
@@ -72,7 +72,7 @@ test('refine questions park the run at awaiting_input; answering it finishes the
     if (prompt.includes('USER ANSWERS')) return '# Brief\n\n## Goal\nBuild the CLI tool.';
     return '# Brief (draft)\n\n' + Q([{ id: 'scope', text: 'Web or CLI?', why: 'changes everything' }]);
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(refineFlow(), { userInput: 'make it good' });
 
   await waitForStage(store, runId, 'awaiting_input');
@@ -100,7 +100,7 @@ test('a refiner that asks again after answering is capped and proceeds', async (
     if (roleOf(system) !== 'refine') return 'downstream';
     return '# Brief\n\n' + Q([{ id: 'again', text: 'And what else?' }]);
   });
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(refineFlow(), { userInput: 'x' });
 
   await waitForStage(store, runId, 'awaiting_input');
@@ -121,12 +121,12 @@ test('answering after a restart resumes the run from persisted gate state', asyn
     if (prompt.includes('USER ANSWERS')) return '# Brief\n\nFinal.';
     return '# Draft\n\n' + Q([{ id: 'q', text: 'Which one?' }]);
   });
-  const runnerA = new StackRunner(store, testConfig());
+  const runnerA = new FlowRunner(store, testConfig());
   const runId = runnerA.start(refineFlow(), { userInput: 'x' });
   await waitForStage(store, runId, 'awaiting_input');
 
   // A fresh runner (as after an app restart) has no live promise for this gate.
-  const runnerB = new StackRunner(store, testConfig());
+  const runnerB = new FlowRunner(store, testConfig());
   assert.equal(runnerB.inputGates.has(runId), false);
   runnerB.answerInput(runId, 'the second one');
   await waitFor(() => store.readMeta(runId).stage === 'done', { label: 'done after restart-answer' });
@@ -138,7 +138,7 @@ test('answering after a restart resumes the run from persisted gate state', asyn
 test('answerInput rejects a run that is not awaiting input', () => {
   const store = makeStore();
   setScript(() => 'ok');
-  const runner = new StackRunner(store, testConfig());
+  const runner = new FlowRunner(store, testConfig());
   const runId = runner.start(refineFlow(), { userInput: 'x' });
   // Not gated (or already finished) -> the call is refused.
   assert.throws(() => runner.answerInput(runId, 'hi'), /not waiting for input/);

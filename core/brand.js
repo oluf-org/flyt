@@ -1,6 +1,6 @@
-// The brand, in one place (D29). Flyt is the app; stacks and blocks are the
-// canonical product vocabulary. Legacy flow identifiers below exist only so an
-// existing project can be adopted on its first stack write.
+// The brand, in one place (D29). Flyt is the app; a *flow* is still the thing
+// you build in it, so nothing here touches the domain vocabulary — `.flow.yaml`,
+// `flowlang`, `FlowRunner` and friends keep their names deliberately.
 //
 // Everything that names the product should import from here rather than
 // repeating a literal, so the next rename is a three-line edit instead of an
@@ -47,12 +47,3 @@ export const LEGACY_CONFIG_DIR = '.llmflow';
 export const LEGACY_APP_DIRS = ['LLM Flow', 'llm-flow'];
 // localStorage prefix: `llmflow-theme`, `llmflow.col.left`, and friends.
 export const LEGACY_STORAGE_PREFIX = 'llmflow';
-
-// Pre-cutover stack vocabulary. These names are read only while adopting an
-// existing project on its first stack write (D52/D62).
-export const LEGACY_FLOWS_DIR = 'flows';
-export const LEGACY_FLOW_EXTENSION = '.flow.yaml';
-export const LEGACY_FLOW_NODES_KEY = 'nodes';
-export const LEGACY_FLOW_GRAPH_KEY = 'flow';
-export const LEGACY_RUNNER_NAME = 'FlowRunner';
-export const LEGACY_LANGUAGE_NAME = 'flowlang';

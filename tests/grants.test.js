@@ -11,7 +11,7 @@ import { makeContext, resolveGrant, narrowCeiling, expandRefs } from '../src/too
 import { normalizeToolset, SEED_TOOLSETS } from '../core/toolsets.js';
 import { normalizeTool } from '../src/toolTypes.js';
 import { builtinDefinitions } from '../core/tools/builtins.js';
-import { lintFlow } from '../core/stacklang/lint.js';
+import { lintFlow } from '../core/flowlang/lint.js';
 import { SEED_NODE_TEMPLATES, normalizeTemplate, resolveInstance } from '../src/flowTypes.js';
 import { runExecutorTask } from '../core/nodes/executor.js';
 import { ToolStore } from '../core/toolstore.js';

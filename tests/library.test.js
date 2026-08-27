@@ -8,11 +8,14 @@
 // defaults.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   SEED_NODE_TEMPLATES, AGENT_TOOLS, WORK_CATEGORIES, WORK_TOOLS, resolveInstance
 } from '../src/flowTypes.js';
 
 const seed = id => SEED_NODE_TEMPLATES.find(t => t.id === id);
+const onDisk = id => JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'nodes', `${id}.json`), 'utf8'));
 
 // A Work node resolved to one task type — the shape the runner executes.
 const workNode = category =>
@@ -77,4 +80,72 @@ test('bash implies the tool gate; write-only task types stay ungated and paralle
   }
 });
 
+// nodes/*.json is the live source of truth; the seed only writes them on a fresh
+// install (or the rework migration). They must not drift apart.
+test('the shipped template files match the seed they came from', () => {
+  for (const t of SEED_NODE_TEMPLATES) {
+    const f = onDisk(t.id);
+    assert.equal(f.baseType, t.baseType, `${t.id}: baseType drifted`);
+    assert.deepEqual(f.tools, t.tools, `${t.id}: tools drifted`);
+    assert.equal(f.approveToolCalls, t.approveToolCalls, `${t.id}: approval default drifted`);
+  }
+});
 
+// The web tools were added to the library and reachable from nowhere.
+//
+// `flyt tools run` could call them and the Library page would offer them as
+// checkboxes on an agentTask template — but no shipped flow granted one, so a
+// person opening the app could not search the web without first knowing to go
+// and tick four boxes on a node. A capability the front door cannot reach is a
+// capability that does not exist for most users.
+test('a shipped flow can reach the web out of the box', async () => {
+  const { FlowStore } = await import('../core/flowstore.js');
+  const flows = new FlowStore(path.join(import.meta.dirname, '..', 'flows'));
+  const { expandRefs, makeContext } = await import('../src/toolGrants.js');
+  const { normalizeToolset, SEED_TOOLSETS } = await import('../core/toolsets.js');
+  const { builtinDefinitions } = await import('../core/tools/builtins.js');
+  const { normalizeTool } = await import('../src/toolTypes.js');
+  const ctx = makeContext({
+    library: builtinDefinitions().map(normalizeTool),
+    sets: SEED_TOOLSETS.map(normalizeToolset)
+  });
+
+  const web = new Set([...expandRefs('uses:network', ctx).ids]);
+  const reaching = flows.list()
+    .map(f => { try { return flows.load(f.id); } catch { return null; } })
+    .filter(Boolean)
+    .filter(flow => (flow.nodes ?? []).some(n => {
+      const grant = n.overrides?.tools ?? n.data?.tools;
+      if (!Array.isArray(grant)) return false;
+      return [...expandRefs(grant, ctx).ids].some(id => web.has(id));
+    }))
+    .map(f => f.id);
+
+  assert.ok(reaching.length, 'no shipped flow grants a network tool — the app cannot search the web');
+  assert.ok(reaching.includes('research'), `expected the research flow among ${reaching.join(', ')}`);
+});
+
+// And it must not have picked up a writer on the way. A node holding untrusted
+// web content has no business also holding a file writer or a shell.
+test('the research flow reads the web and writes nothing', async () => {
+  const { FlowStore } = await import('../core/flowstore.js');
+  const flows = new FlowStore(path.join(import.meta.dirname, '..', 'flows'));
+  const { resolveTools } = await import('../core/tools/index.js');
+  const node = flows.load('research').nodes.find(n => n.id === 'look-it-up');
+  assert.ok(node, 'the flow must still have the node that does the looking');
+
+  const grant = node.overrides?.tools ?? node.data?.tools;
+  const ceiling = node.overrides?.toolCeiling ?? node.data?.toolCeiling;
+  const { tools, refused } = resolveTools({ grant, ceiling });
+  const names = tools.map(t => t.name).sort();
+
+  assert.ok(names.includes('web_search'), 'it has to be able to find a page');
+  assert.ok(names.includes('web_fetch') && names.includes('scrape_page') && names.includes('extract_page'),
+    'and all three readers, since which one fits is decided per page');
+  assert.ok(names.includes('read_file'), 'a question about this project is answered from this project');
+  for (const forbidden of ['bash', 'write_file', 'edit_file', 'create_file', 'enqueue_task']) {
+    assert.ok(!names.includes(forbidden),
+      `${forbidden} beside untrusted web content is the chain this ceiling exists to break`);
+  }
+  assert.deepEqual(refused, [], 'grant and ceiling agree, so nothing is silently dropped');
+});

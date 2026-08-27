@@ -302,7 +302,7 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
         })
       },
       // agentTask is the code-writing path. It must honor the same host-level
-      // tool budget as aiStep (StackRunner.callAgent), otherwise changing
+      // tool budget as aiStep (FlowRunner.callAgent), otherwise changing
       // config.maxToolIterations affects planners but leaves every executor
       // stuck on runAgent's small fallback cap.
       maxIterations: config.maxToolIterations ?? null,

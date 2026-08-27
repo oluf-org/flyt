@@ -35,7 +35,7 @@ import {
 const BLOCKING = new Set(['failed', 'active']);
 
 // What each approval-gate kind means, in one line a person can act on. The
-// kinds are the ones stackRunner parks with (pendingGateKind): there is no
+// kinds are the ones flowRunner parks with (pendingGateKind): there is no
 // fourth — an eval that wants a human is parked as `escalation`.
 const GATE_MEANING = {
   pre: 'a checkpoint: this node asks before it runs',

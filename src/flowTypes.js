@@ -1,7 +1,7 @@
 // Shared metadata for flow-definition node types, used by the canvas editor
 // and the inspector. kind 'user' = user-authored box, 'ai' = AI-run box.
 //
-// See also BLOCKS.md for the full human + AI-readable contracts of the
+// See also FLOW_NODES.md for the full human + AI-readable contracts of the
 // standard example nodes and the recommended reflective planning pattern.
 export const TYPE_META = {
   input:        { icon: '✎', kind: 'user', label: 'User Input',   sub: 'run request · from the run panel' },
@@ -274,7 +274,7 @@ export function questionRoundsFor(node) {
 }
 
 // The four (minimum) categories used by plan-eval nodes to drive model selection
-// and template choice. Extend only after updating BLOCKS.md and config examples.
+// and template choice. Extend only after updating FLOW_NODES.md and config examples.
 // --- The deliverable/effect contract (WR-01) --------------------------------
 //
 // What a node owes before it may call itself done. The modes and their
@@ -477,7 +477,7 @@ export function migrateLegacyTemplates(flow) {
 
 // NODE_TEMPLATES — the catalog that AI authors pick from when generating nodes.
 // Keys are the stable names referenced in plan-eval output and in flow data.template.
-// This is the machine-readable counterpart to the polished descriptions in BLOCKS.md.
+// This is the machine-readable counterpart to the polished descriptions in FLOW_NODES.md.
 // The combined nodes (work / evaluation / combine / split) are the primary set;
 // the retired per-category ids stay as aliases so plans and flows written
 // before the rework still materialize.
@@ -708,7 +708,7 @@ export function nodeSub(node, { worker: showWorker = true } = {}) {
 // position, data }) that the runner and canvas operate on. Structural nodes
 // (input/output) and legacy raw nodes pass through untouched.
 
-// Seed catalog for the Node Library — the BLOCKS.md standard nodes.
+// Seed catalog for the Node Library — the FLOW_NODES.md standard nodes.
 // core/nodestore.js writes these to nodes/<id>.json on first launch; after
 // that the files are the source of truth and the user can edit them freely.
 //

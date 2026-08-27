@@ -8,15 +8,15 @@ This is a compact register of rules that still shape the product. Detailed inter
 
 | ID | Decision | Status |
 |---|---|---|
-| D1 | Flyt is both a coding agent and a visual stack builder; neither is a separate product. | Current |
+| D1 | Flyt is both a coding agent and a visual workflow builder; neither is a separate product. | Current |
 | D2 | The thesis is that explicit structure can outperform or clarify an undifferentiated model turn. Claims require evidence. | Current |
 | D3 | Compete on mastery, control, and inspectability rather than promising the cheapest or fastest agent. | Provisional |
-| D4 | Text is the ordinary input; Work is the live transparency window and Build is the advanced authoring surface. | Current |
-| D5 | Build and the stack language are two views of one containment tree. Conversational stack authoring remains an optional extension. | Current / Provisional extension |
-| D6 | A run uses an explicitly selected reusable stack. Do not silently generate a new stack per request. | Current |
+| D4 | Text is the ordinary input; the canvas is the live transparency window and an advanced authoring surface. | Current |
+| D5 | Canvas and DSL are two views of one flow. Run view is shipped; a conversational flow builder remains an optional extension. | Current / Provisional extension |
+| D6 | A run uses an explicitly selected reusable flow. Do not silently generate a new workflow per request. | Current |
 | D9 | Motion should be deliberate and legible. Parallel active nodes may animate together. | Current |
 | D10 | Streaming is required so a real-model run never looks idle while producing output. | Current |
-| D25 | Every project tab opens on Work; Build is one hop away and Trace opens over either when a run is addressed. | Current; supersedes lander wording |
+| D25 | Every project tab opens on its lander; submitting from it unfolds into the run view. | Current |
 | D26 | Avoid large backdrop blur, animated mesh gradients, 3D tilt, and fake skeleton shimmer. Modern Chromium CSS is welcome when it improves clarity. | Current |
 
 ## Execution, composition, and data
@@ -31,14 +31,14 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D15 | Bind workspaces at project/run time. Shareable project configuration and skills use `.flyt/`; generated run storage follows the user's project-storage setting. | Current; replaces `.llmflow/` wording |
 | D17 | Preserve completed steps across crashes and require an explicit Resume before project tools run again. | Current |
 | D21 | Follow-ups extend a run with a visible continuation graph; completed prior work is not re-run. | Current |
-| D22 | A project is a workspace tab. Runs and backlog are project-scoped; stacks, plugins, tools, models, and references remain reusable global libraries. | Current |
-| D24 | Keep the stack language and core protocol infrastructure dependency-light and inspectable; the hand-written strict YAML subset is intentional. | Current; scoped by D53 to the parser and core command surface |
+| D22 | A project is a workspace tab. Runs and backlog are project-scoped; flows, templates, tools, models, and references remain reusable global libraries. | Current |
+| D24 | Keep the flow DSL and core protocol infrastructure dependency-light and inspectable; the hand-written strict YAML subset is intentional. | Current; scoped by D53 to the DSL parser and core command surface |
 | D27 | Runtime configuration is a per-node override map. Precedence is run input, mode/call-site override, node override, then template. Comparisons read immutable run snapshots. | Current |
 | D28 | Packaged assets are read-only seeds; all mutable stores resolve through writable data roots. | Current |
-| D29 | Flyt is the brand and `flow` remains the domain noun. `.flow.yaml`, `FlowRunner`, `flowlang`, and flow-named contracts are not unfinished rename work. | Superseded by D52; historical v1 rule |
-| D36 | Sequence, parallel lanes, bounded loops, structured predicates, and Loop handoff are one containment-based composition system. | Current; supersedes graph-node wording |
+| D29 | Flyt is the brand and `flow` remains the domain noun. `.flow.yaml`, `FlowRunner`, `flowlang`, and flow-named contracts are not unfinished rename work. | Superseded by D52; holds for v1 code until the Phase 5 cutover |
+| D36 | Typed inputs, fan-out, sub-flows, backlog-plan, and Loop nodes are one composition system. Sub-flows splice into one run graph; the Loop node hands work to the existing supervisor. | Current; implemented |
 | D37 | Adaptive fan-out may select only from fixed lane presets, degrades to the authored roster, and keeps lane outputs isolated until aggregation. | Current |
-| D38 | Repository-learning stacks orient to both the home workspace and the subject repository before planning; subject scope and attribution must be explicit. | Current |
+| D38 | Repository-learning flows orient to both the home workspace and the subject repository before planning; subject scope and attribution must be explicit. | Current |
 
 ## Tools, providers, and safety
 
@@ -57,7 +57,7 @@ This is a compact register of rules that still shape the product. Detailed inter
 | ID | Decision | Status |
 |---|---|---|
 | D19 | Installers, CI release builds, and auto-update are part of the current product. Signing and release policy remain deployment concerns. | Current; replaces distribution deferral |
-| D20 | Keep one current overview, one architecture reference, one compact decision register, and the stack/block/tool contracts. Retire completed plans to git history. | Current; replaces the prior documentation structure |
+| D20 | Keep one current overview, one architecture reference, one compact decision register, and the two flow contracts. Retire completed plans to git history. | Current; replaces the prior documentation structure |
 | D35 | The outermost autonomous loop is a supervisor over a durable backlog, isolated worktrees, harness-run gates, review, canary, spend caps, heartbeats, benchmarks, and references. | Current |
 | D39 | A failure must say what failed, preserve partial evidence, and offer a retry that may choose another model. | Current |
 | D40 | Every model call records finish reason, usage, timing, and content/reasoning split. Liveness leases and `why`/`probe`/`doctor` make live and failed runs diagnosable. | Current |
@@ -83,22 +83,22 @@ Decision numbers D30–D34 were never promoted from retired plan drafts and are 
 
 ## Flyt v2 — plugins, stacks and blocks
 
-Adopted 2026-08-21 and cut over in Phase 5. The implementation plan is retired to git history; `DESIGN-SPEC.md` describes what exists. Phases were tasks `t-0035`–`t-0040`.
+Adopted 2026-08-21. The working plan is [`.flyt/backlog/v2-plugin-stack-plan.md`](./.flyt/backlog/v2-plugin-stack-plan.md); it retires to git history at the Phase 5 cutover, when `DESIGN-SPEC.md` describes what exists. Phases are tasks `t-0035`–`t-0040`.
 
 | ID | Decision | Status |
 |---|---|---|
-| D52 | Plugin, Stack and Block are the three nouns. A plugin is installable and contributes; a stack is composed and run; a block is a step. | Current; supersedes D29 |
-| D53 | Cordis is the plugin kernel and a real dependency. D24's dependency-light rule is scoped to the parser and core command surface, which stay hand-written. TypeScript covers the seams; the boundary is the seam. | Current; scopes D24 |
-| D54 | dsh compatibility is a tested contract, not an intention: CI installs real published dsh plugins and asserts they load, register and execute. | Current |
-| D55 | The append-only session event log is the canonical durable record; the run folder is a projection materialised beside it. Model-visible means logged. | Current |
-| D56 | The block language admits bounded iteration (`Repeat N`, `For each`, `Until`) and structured predicates over declared outputs (`If`). Free expressions, arithmetic and boolean algebra remain out. | Current |
-| D57 | A third-party tool is classified by conservative inference plus one human confirmation, and classification is not a grant. Inference may only err toward restriction. | Current |
-| D58 | A skill may request tools; only a human grants, never above the static ceiling, and never unattended. | Current |
-| D59 | Stack layout is derived from containment. There is no stored layout file and no unparseable arrangement. | Current |
-| D60 | Trace is a transient surface that appears over Work or Build while work runs and persists as that run's record. | Current |
-| D61 | Plugin UI is limited to declared extension points rendered by Flyt over a typed RPC contract. No arbitrary renderer code. | Current |
-| D62 | The Work/Build cutover is complete. The Electron host always boots the kernel; old UI surfaces are retired; legacy flow files are migration inputs only. | Current |
-| D63 | Every Build operation is available to an agent through the command surface, and every agent operation renders in the editor. One code path, two callers. | Current |
+| D52 | Plugin, Stack and Block are the three nouns. A plugin is installable and contributes; a stack is composed and run; a block is a step. Renames happen at cutover in one commit, never opportunistically. | Provisional; supersedes D29 |
+| D53 | Cordis is the plugin kernel and a real dependency. D24's dependency-light rule is scoped to the DSL parser and core command surface, which stay hand-written. TypeScript covers the seams; the boundary is the seam. | Provisional; scopes D24 |
+| D54 | dsh compatibility is a tested contract, not an intention: a CI suite installs real published dsh plugins and asserts they load, register and execute. | Provisional |
+| D55 | The append-only session event log is the canonical durable record; the run folder is a projection materialised beside it. Model-visible means logged. | Provisional |
+| D56 | The block language admits bounded iteration (`Repeat N`, `For each`, `Until`) and structured predicates over declared outputs (`If`). Free expressions, arithmetic and boolean algebra remain out. | Provisional; amends a GOALS boundary |
+| D57 | A third-party tool is classified by conservative inference plus one human confirmation, and classification is not a grant. Inference may only err toward restriction. | Provisional |
+| D58 | A skill may request tools; only a human grants, never above the static ceiling, and never unattended. | Provisional; amends the skills standing rule |
+| D59 | Stack layout is derived from containment. There is no stored layout file and no unparseable arrangement. | Provisional |
+| D60 | Trace is a transient third surface that appears while work runs and persists as that run's record. Work stays calm; Trace holds the detail. | Provisional |
+| D61 | Plugin UI is limited to declared extension points rendered by Flyt over a typed RPC contract, mirroring dsh. No arbitrary renderer code. | Provisional |
+| D62 | v2 ships behind a flag in the shipping app; the old surfaces keep doing real work until `loop-task` runs end to end on the new kernel; cutover is one commit. | Provisional |
+| D63 | Every Build operation is available to an agent through the command surface, and every agent operation renders in the editor. One code path, two callers. | Provisional |
 
 ## Open decisions
 

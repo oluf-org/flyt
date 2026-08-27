@@ -10,7 +10,7 @@
 // prompt from the task + upstream context; the template constrains HOW
 // (model, tools, instructions, skills). See GOALS.md "Core Concepts".
 //
-// The library seeds itself from the BLOCKS.md catalog
+// The library seeds itself from the FLOW_NODES.md catalog
 // (src/flowTypes.js SEED_NODE_TEMPLATES) when the directory is empty; after
 // that the files are the single source of truth.
 import fs from 'node:fs';
