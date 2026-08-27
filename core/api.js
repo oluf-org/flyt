@@ -1257,6 +1257,29 @@ export function createApi(engine) {
           `The loop is set to run on "${pinned.model}", but its provider (${pinned.provider}) is not connected. Add a key in Settings, or choose another model.`,
           { status: 400, code: 'no_provider_key' });
       }
+      // A connected subscription account can still reject a catalog id. When
+      // the host supplies a bounded preflight, validate every explicit choice
+      // before Supervisor is created (and therefore before any task is taken).
+      if (engine.capabilityProbe) {
+        const checks = [];
+        if (pinned) checks.push({ provider: pinned.provider, model: pinned.model });
+        for (const [band, id] of Object.entries(byLevel)) {
+          const w = resolveWorkerArg({ provider: 'auto', model: id });
+          if (w) checks.push({ provider: w.provider, model: id, band });
+        }
+        for (const target of checks) {
+          if (!SUBSCRIPTION_PROVIDERS.includes(target.provider)) continue;
+          const result = await engine.capabilityCache.check(
+            `${target.provider}:${target.model}`,
+            () => engine.capabilityProbe({ provider: target.provider, model: target.model }));
+          if (result.status === 'unsupported') {
+            throw new ApiError(
+              `The configured ${target.provider} model "${target.model}" is not usable by this signed-in account. ` +
+              `Choose a supported model in Settings, refresh subscription capabilities, or set an explicit manual model override.`,
+              { status: 400, code: 'model_unsupported' });
+          }
+        }
+      }
       const pinnedCapabilityProblem = loopWorkerProblem(pinned);
       if (pinnedCapabilityProblem) {
         throw new ApiError(pinnedCapabilityProblem, { status: 400, code: 'worker_cannot_use_tools' });

@@ -573,12 +573,35 @@ export async function doctor(engine, { probe = false, models = [], project = nul
     return {
       id,
       connected,
+      // A signed-in CLI is only a runtime connection; its model catalog may be
+      // stale. Keep those facts separate so doctor never advertises a model as
+      // usable merely because auth.json exists.
       kind: SUBSCRIPTION_PROVIDERS.includes(id) ? 'subscription' : (id === 'mock' ? 'built-in' : 'api-key'),
       ...(sub ? { subscription: sub } : {})
     };
   });
 
   const findings = [];
+  const selected = [...new Set([...(models ?? []), ...(settings.activeModels ?? []).filter(m => m?.enabled !== false).map(m => m.id)])]
+    .filter(Boolean).map(model => {
+      try {
+        const target = engine.resolveModelSource(model);
+        return { model, provider: target.provider, connected: true, usable: !SUBSCRIPTION_PROVIDERS.includes(target.provider) ? true : null };
+      } catch (error) {
+        return { model, provider: null, connected: false, usable: false, error: String(error?.message ?? error).slice(0, 240) };
+      }
+    });
+  if (engine.capabilityProbe) {
+    for (const item of selected) {
+      if (!item.connected || !SUBSCRIPTION_PROVIDERS.includes(item.provider)) continue;
+      const result = await engine.capabilityCache.check(
+        `${item.provider}:${item.model}`,
+        () => engine.capabilityProbe({ provider: item.provider, model: item.model }));
+      item.usable = result.status === 'usable' ? true : result.status === 'unsupported' ? false : null;
+      if (result.status === 'unsupported') findings.push({ level: 'error', message: `"${item.model}" is connected through ${item.provider} but this account rejects it. Choose a supported model in Settings or set an explicit manual model override.` });
+    }
+  }
+
   // An open incident goes FIRST, above everything, because it is the reason
   // nothing else is working and every other finding below it is downstream of
   // that. Somebody running `doctor` after a loop stopped is asking exactly this

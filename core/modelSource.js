@@ -444,6 +444,47 @@ export function createResolver({ hasKey, canServe, priority }) {
 // on purpose (WR-05): unattended fallback that walks the whole priority list is
 // a way to spend a budget on a misconfiguration, and each attempt is a real
 // call on a real bill.
+// Capability discovery is deliberately small and provider-neutral. Subscription
+// CLIs do not expose a stable model-list API, so callers may supply a bounded
+// probe function (normally one tiny CLI call per selected model). The cache is
+// process-local: credentials and probe responses never become settings or logs.
+export const CAPABILITY_CACHE_TTL_MS = 15 * 60 * 1000;
+export const CAPABILITY_MAX_PROBES = 3;
+
+export function createCapabilityCache({ ttlMs = CAPABILITY_CACHE_TTL_MS, maxProbes = CAPABILITY_MAX_PROBES, now = () => Date.now() } = {}) {
+  const entries = new Map();
+  let refreshStarted = 0;
+  let probes = 0;
+  return {
+    async check(key, probe) {
+      const k = String(key);
+      const current = now();
+      const cached = entries.get(k);
+      if (cached && cached.expiresAt > current) return { ...cached.value, cached: true };
+      if (typeof probe !== 'function') return { ok: false, status: 'unknown', reason: 'No capability probe is configured.' };
+      // A single cache instance bounds work per refresh. Never include probe
+      // arguments or errors verbatim: CLIs sometimes echo auth/config details.
+      if (!refreshStarted || current - refreshStarted >= ttlMs) {
+        refreshStarted = current;
+        probes = 0;
+      }
+      if (probes >= maxProbes) return { ok: false, status: 'unknown', reason: 'Capability discovery limit reached; retry later.' };
+      probes += 1;
+      let value;
+      try {
+        const result = await probe();
+        value = { ok: Boolean(result?.ok), status: result?.ok ? 'usable' : 'unsupported' };
+      } catch {
+        value = { ok: false, status: 'unknown', reason: 'Capability check failed without exposing CLI details.' };
+      }
+      const stamp = now();
+      entries.set(k, { value, expiresAt: stamp + ttlMs, refreshAt: stamp });
+      return value;
+    },
+    clear() { entries.clear(); }
+  };
+}
+
 export const MAX_AUTO_FALLBACKS = 2;
 
 /**

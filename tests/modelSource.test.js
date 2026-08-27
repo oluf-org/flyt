@@ -9,7 +9,7 @@ import {
   usdPerMillion, catalogFromOpenRouter, factsFromCatalog, normalizeModelFacts,
   popularityFromOpenRouter, normalizeModelPopularity,
   normalizeModelSets, modelSetId, resolveModelSet, MODEL_SET_MAX,
-  proposeStarterSet, STARTER_ROLES
+  proposeStarterSet, STARTER_ROLES, createCapabilityCache
 } from '../core/modelSource.js';
 import { canServe, callModel } from '../core/adapters/index.js';
 
@@ -308,6 +308,21 @@ test('no match fails with a settings-pointing error', () => {
 test('mock serves its own ids without a key', () => {
   const resolve = resolverWith([], DEFAULT_PRIORITY);
   assert.deepEqual(resolve('mock-large'), { provider: 'mock', model: 'mock-large' });
+});
+
+// --- bounded subscription capability checks --------------------------------
+
+test('capability cache catches a stale Codex catalog model without credentials', async () => {
+  let now = 1000;
+  let calls = 0;
+  const cache = createCapabilityCache({ ttlMs: 100, maxProbes: 2, now: () => now });
+  const probe = async () => { calls += 1; return { ok: false }; };
+  assert.deepEqual(await cache.check('codex:gpt-5.2-codex', probe), { ok: false, status: 'unsupported' });
+  assert.deepEqual(await cache.check('codex:gpt-5.2-codex', probe), { ok: false, status: 'unsupported', cached: true });
+  assert.equal(calls, 1);
+  now = 1101;
+  assert.deepEqual(await cache.check('codex:gpt-5.3-codex', async () => ({ ok: true })), { ok: true, status: 'usable' });
+  assert.equal(calls, 1, 'the probe receives no credential and cache work is bounded');
 });
 
 // --- resolveCallTarget ------------------------------------------------------

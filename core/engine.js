@@ -31,10 +31,10 @@ import { ReferenceLibrary, DEFAULT_REFERENCES } from './references.js';
 import { configDirFor } from './workspace.js';
 import { setKnownTools } from '../src/flowTypes.js';
 import { diffSnapshot } from './snapshotDiff.js';
-import { canServe } from './adapters/index.js';
+import { canServe, callModel } from './adapters/index.js';
 import {
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
-  migrateSettings, createResolver
+  migrateSettings, createResolver, createCapabilityCache
 } from './modelSource.js';
 import { claudeCredentialStatus, resolveClaudeCli } from './adapters/claudeCode.js';
 import { codexCredentialStatus, resolveCodexCli } from './adapters/codexCli.js';
@@ -66,7 +66,10 @@ export function createEngine({
   canEmit = () => true,
   shouldPush = () => true,
   log = () => {},
-  warn = () => {}
+  warn = () => {},
+  // Optional host-supplied, credential-safe capability probe. It receives only
+  // provider/model and must return { ok }; the engine caches the result.
+  capabilityProbe = null
 } = {}) {
   const dataDir = name => {
     const dir = path.join(dataRoot, name);
@@ -240,6 +243,21 @@ export function createEngine({
   // key; 'auto' walks providerPriority, skipping disconnected providers and
   // providers that can't serve the id. Returns the fully-stamped call target.
   const resolveSource = createResolver({ hasKey, canServe, priority: () => settings.providerPriority });
+  // Short-lived, in-memory capability results. A probe implementation can be
+  // supplied by the host; keeping this cache out of settings prevents secrets
+  // and vendor CLI output from being persisted.
+  const capabilityCache = createCapabilityCache();
+  // One minimal authenticated call is the only reliable capability signal for
+  // subscription CLIs. It is intentionally not automatic during ordinary model
+  // resolution; Loop/doctor invoke it only for selected models and the cache
+  // bounds repeats.
+  const effectiveCapabilityProbe = capabilityProbe ?? (async ({ provider, model }) => {
+    try {
+      await callModel({ provider, model, prompt: 'Reply with OK.', maxTokens: 1,
+        stream: false, retry: { attempts: 1 }, timeout: { hardMs: 15000, idleMs: 15000 } });
+      return { ok: true };
+    } catch { return { ok: false }; }
+  });
   function resolveModelSource(modelId, pinned = null) {
     const entry = (settings.activeModels ?? []).find(m => m.id === modelId);
     const source = pinned ?? entry?.source ?? 'auto';
@@ -708,7 +726,8 @@ export function createEngine({
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,
     setLoopDriver,
     // Providers
-    hasKey, subscriptionStatus, resolveModelSource, effectiveSafetyModel,
+    hasKey, subscriptionStatus, resolveModelSource, capabilityCache,
+    capabilityProbe: effectiveCapabilityProbe, effectiveSafetyModel,
     // Push
     pushStateFor, broadcastActivity, pushUpdateFor, emitLoop, loopLog, loopLogFor, emitChat,
     // A project id that is gone for good (an appdata project adopted into a
