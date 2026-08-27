@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WorktreePool, git, slugify, branchFor, land, defaultWorktreeRoot, isInside } from '../core/worktree.js';
 import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, testCountUncheckable, scratchArtefacts, scratchArtefactProblem, weakenedAssertions, weakenedAssertionProblem, suiteExpectation, suiteExpectationProblem, suiteExpectationMismatch, SUITE_EXPECTATIONS, gateProblem, unrunnableGates } from '../core/gates.js';
-import { parseReview, buildReviewPrompt, reviewDiff, reviewWorker } from '../core/diffReview.js';
+import { parseReview, buildReviewPrompt, packageReviewDiff, reviewDiff, reviewWorker } from '../core/diffReview.js';
 import { landTask, mechanicalChecks, advancePin, readPin } from '../core/landing.js';
 import { setScript } from './helpers.js';
 
@@ -673,6 +673,54 @@ test('a substantial cross-cutting diff reaches the reviewer whole', () => {
   const prompt = buildReviewPrompt({ task: { title: 'Large task' }, diff });
   assert.match(prompt, new RegExp(tail));
   assert.ok(!prompt.includes('diff truncated'), 'the old 60k blind spot must stay closed');
+});
+
+test('a bulk added provider snapshot is manifested without hiding integration or tests', () => {
+  const added = (file, body) => [
+    `diff --git a/${file} b/${file}`,
+    'new file mode 100644',
+    '--- /dev/null',
+    `+++ b/${file}`,
+    '@@ -0,0 +1 @@',
+    `+${body}`,
+    '',
+  ].join('\n');
+  const changed = (file, marker) => [
+    `diff --git a/${file} b/${file}`,
+    `--- a/${file}`,
+    `+++ b/${file}`,
+    '@@ -1 +1 @@',
+    '-old',
+    `+${marker}`,
+    '',
+  ].join('\n');
+  const payload = [
+    added('.flyt/skills/impeccable/SKILL.md', 'provider entrypoint'),
+    ...Array.from({ length: 30 }, (_, i) => added(
+      `.flyt/skills/impeccable/reference/generated-${i}.md`,
+      `${i}-${'vendor payload '.repeat(500)}`,
+    )),
+    changed('core/skills.js', 'INTEGRATION-TAIL'),
+    added('tests/impeccablePlugin.test.js', 'TEST-TAIL'),
+  ].join('');
+
+  const evidence = packageReviewDiff(payload);
+  assert.equal(evidence.complete, true);
+  assert.equal(evidence.summarized, true);
+  assert.match(evidence.text, /BULK ADDED SNAPSHOT: \.flyt\/skills\/impeccable\//);
+  assert.match(evidence.text, /generated-29\.md .* sha256:[a-f0-9]{16}/);
+  assert.match(evidence.text, /provider entrypoint/);
+  assert.match(evidence.text, /INTEGRATION-TAIL/);
+  assert.match(evidence.text, /TEST-TAIL/);
+  assert.ok(!evidence.text.includes('diff truncated'));
+  assert.ok(evidence.text.length <= 120_000);
+});
+
+test('an oversized patch with no identifiable package snapshot fails closed', () => {
+  const evidence = packageReviewDiff('x'.repeat(120_001));
+  assert.equal(evidence.complete, false);
+  assert.match(evidence.text, /REVIEW EVIDENCE INCOMPLETE/);
+  assert.match(evidence.text, /do not approve/i);
 });
 
 test('the reviewer is told which files left the declared blast radius', () => {

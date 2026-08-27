@@ -225,7 +225,11 @@ export async function landTask({
   const addedFiles = await pool.addedFiles(taskId, { base }).catch(() => []);
   // The diff is read by the checks as well as by the reviewer, so it is
   // computed before them rather than between them.
-  const diff = await pool.diff(taskId, { base, maxChars: REVIEW_DIFF_BUDGET });
+  // Read the complete patch here. The reviewer packages a large added-only
+  // provider snapshot into an explicit manifest, but it cannot recover a tail
+  // the worktree layer already discarded. Mechanical checks also need the real
+  // patch rather than a prefix of it.
+  const diff = await pool.diff(taskId, { base, maxChars: Number.MAX_SAFE_INTEGER });
   announce('checks');
   const mech = record('checks', mechanicalChecks({
     changedFiles, deletedFiles, addedFiles, diff, workerGate,

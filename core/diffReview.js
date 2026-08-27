@@ -16,6 +16,7 @@ import { callModel } from './adapters/index.js';
 import { classifyAdapterError, needsHuman } from './adapters/failures.js';
 import { extractJson } from './planEval.js';
 import { REASONING_HEADROOM } from '../src/flowTypes.js';
+import { createHash } from 'node:crypto';
 
 // Large cross-cutting tasks commonly exceed 60k characters. The previous cap
 // silently removed the tail before review, so a reviewer could see neither the
@@ -45,6 +46,11 @@ export const REVIEW_SYSTEM = [
   'You are given the task the change was meant to accomplish, the diff, the gate results',
   '(tests and lint, already run by the harness — you do not need to verify them), and the',
   'paths the task declared it would touch.',
+  'A large added-only provider package may appear as a BULK ADDED SNAPSHOT: its complete',
+  'path/size/fingerprint manifest replaces vendored payload bodies, while its entrypoint and',
+  'all integration, test, modified and deleted patches remain inline. This is deliberate',
+  'structured evidence, not a truncated diff. Judge provenance and integration from the',
+  'inline lockfile/metadata. If correctness truly depends on an omitted body, say which one.',
   '',
   'Judge exactly these things:',
   '1. Does the change accomplish the task as stated?',
@@ -73,10 +79,96 @@ export const REVIEW_SYSTEM = [
 
 export const VERDICTS = ['approve', 'request-changes', 'reject'];
 
+const SNAPSHOT_MARKERS = new Set(['SKILL.md', 'package.json', 'plugin.json', 'pyproject.toml']);
+
+function diffSections(diff) {
+  const starts = [...diff.matchAll(/^diff --git /gm)].map(match => match.index);
+  if (!starts.length) return [];
+  return starts.map((start, i) => {
+    const text = diff.slice(start, starts[i + 1] ?? diff.length);
+    const header = text.split('\n', 1)[0];
+    const path = (/^\+\+\+ b\/(.+)$/m.exec(text)?.[1]
+      ?? /^diff --git a\/.+ b\/(.+)$/.exec(header)?.[1]
+      ?? '(unreadable path)').replace(/^"|"$/g, '');
+    return {
+      path,
+      text,
+      added: /^new file mode /m.test(text) || /^--- \/dev\/null$/m.test(text),
+      hash: createHash('sha256').update(text).digest('hex').slice(0, 16),
+      lines: text.split('\n').length - 1,
+    };
+  });
+}
+
+function snapshotRoots(sections) {
+  const added = sections.filter(section => section.added);
+  const roots = [];
+  for (const marker of added.filter(section => SNAPSHOT_MARKERS.has(section.path.split('/').at(-1)))) {
+    const root = marker.path.split('/').slice(0, -1).join('/');
+    if (!root) continue;
+    const members = added.filter(section => section.path.startsWith(`${root}/`));
+    if (members.length >= 20 && members.reduce((n, section) => n + section.text.length, 0) > REVIEW_DIFF_BUDGET / 2) {
+      roots.push({ root, members, marker });
+    }
+  }
+  // A nested package marker is more precise than its parent. Do not let one
+  // broad package directory hide a separately marked package below it.
+  return roots.filter(candidate => !roots.some(other => other.root.startsWith(`${candidate.root}/`)));
+}
+
+/**
+ * Build bounded but explicit evidence for the reviewer.
+ *
+ * A provider package can add thousands of generated or vendored lines. Blindly
+ * cutting that patch hides both the integration and the tests at its tail. For
+ * a recognisable added-only package snapshot, keep the entrypoint plus every
+ * change outside the snapshot verbatim and replace the payload with a complete
+ * path/size/hash manifest. Modified and deleted files are never summarised.
+ */
+export function packageReviewDiff(diff = '') {
+  if (diff.length <= REVIEW_DIFF_BUDGET) return { text: diff, summarized: false, complete: true };
+  const sections = diffSections(diff);
+  const roots = snapshotRoots(sections);
+  if (!sections.length || !roots.length) {
+    return {
+      text: `REVIEW EVIDENCE INCOMPLETE: the ${diff.length}-character diff exceeds the `
+        + `${REVIEW_DIFF_BUDGET}-character review budget and no added-only package snapshot `
+        + 'could be identified safely. Request that the change be split; do not approve it.',
+      summarized: false,
+      complete: false,
+    };
+  }
+
+  const membership = new Map();
+  for (const group of roots) for (const section of group.members) membership.set(section, group);
+  const kept = sections.filter(section => !membership.has(section)
+    || roots.some(group => group.marker === section));
+  const manifests = roots.map(group => [
+    `BULK ADDED SNAPSHOT: ${group.root}/`,
+    `${group.members.length} added files; contents represented by a complete SHA-256 patch manifest.`,
+    'The package entrypoint is inlined below. No modified or deleted file is summarised.',
+    ...group.members.map(section => `- ${section.path} | ${section.lines} patch lines | sha256:${section.hash}`),
+  ].join('\n'));
+  const text = [
+    'REVIEW EVIDENCE: structured complete change set (bulk added package contents are manifested, not truncated).',
+    ...manifests,
+    'FULL PATCH FOR INTEGRATION, TESTS, MODIFICATIONS, DELETIONS, AND PACKAGE ENTRYPOINTS:',
+    ...kept.map(section => section.text),
+  ].join('\n\n');
+  if (text.length > REVIEW_DIFF_BUDGET) {
+    return {
+      text: `REVIEW EVIDENCE INCOMPLETE: even after manifesting ${roots.map(r => `${r.root}/`).join(', ')}, `
+        + `the evidence is ${text.length} characters, above the ${REVIEW_DIFF_BUDGET}-character budget. `
+        + 'Request that the change be split; do not approve it.',
+      summarized: true,
+      complete: false,
+    };
+  }
+  return { text, summarized: true, complete: true, roots: roots.map(group => group.root) };
+}
+
 export function buildReviewPrompt({ task = {}, diff = '', gates = [], blastRadius = [], changedFiles = [], testDelta = null }) {
-  const clipped = diff.length > REVIEW_DIFF_BUDGET
-    ? `${diff.slice(0, REVIEW_DIFF_BUDGET)}\n…[diff truncated at ${REVIEW_DIFF_BUDGET} characters — treat an incomplete diff as a reason to request changes rather than approve]`
-    : diff;
+  const evidence = packageReviewDiff(diff);
   const outside = blastRadius.length
     ? changedFiles.filter(f => !blastRadius.some(b => f === b || f.startsWith(b)))
     : [];
@@ -99,7 +191,7 @@ export function buildReviewPrompt({ task = {}, diff = '', gates = [], blastRadiu
       ? `TEST COUNT: ${testDelta.before} before this change, ${testDelta.after} after`
         + `${testDelta.after === testDelta.before ? ' — UNCHANGED. The gates are green because it is the same suite; judge whether this change is actually covered.' : ''}`
       : 'TEST COUNT: not known for this change, so the gates say nothing about whether it is covered.',
-    `DIFF:\n${clipped || '(empty diff)'}`
+    `DIFF:\n${evidence.text || '(empty diff)'}`
   ].filter(Boolean).join('\n\n');
 }
 
