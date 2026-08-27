@@ -14,6 +14,7 @@ import { parseYaml, type YamlValue } from './yaml.js';
 import { compose, type Entry, type Layer, type ResolvedEntry } from './compose.js';
 import { installPlugin, type AttendedPluginReview } from '../plugins/tools.js';
 import { builtinImporter, isBuiltin } from '../profiles.js';
+import { installTrustedPlugin } from '../plugins/trusted-install.js';
 
 export * from './compose.js';
 export * from './yaml.js';
@@ -206,7 +207,7 @@ export async function mount(
     if (!bundled) {
       await installPlugin(ctx, plugin, options.toolReview, entry.config);
     } else {
-      await ctx.plugin(plugin, entry.config as any);
+      await installTrustedPlugin(ctx, plugin, entry.config);
     }
     mounted.push(entry.id);
   }

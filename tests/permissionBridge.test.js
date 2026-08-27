@@ -29,11 +29,20 @@ function aPluginContributing(tool, ran) {
   };
 }
 
+async function installReviewed(ctx, plugin, accept = true) {
+  return flytTools.installPlugin(ctx, plugin, {
+    attended: true,
+    decide: (_pluginName, proposals) => Object.fromEntries(
+      proposals.map(proposal => [proposal.name, accept ? proposal : null]),
+    ),
+  });
+}
+
 async function aKernel({ mode = 'always', ask, tool, ran = [] } = {}) {
   const kernel = createKernel();
   await kernel.ctx.plugin(flytTools);
   await kernel.ctx.plugin(flytApprovals, { mode, ...(ask ? { ask } : {}) });
-  if (tool) await kernel.ctx.plugin(aPluginContributing(tool, ran));
+  if (tool) await installReviewed(kernel.ctx, aPluginContributing(tool, ran), Boolean(tool.classification));
   return { kernel, ctx: kernel.ctx, ran };
 }
 
@@ -117,9 +126,9 @@ test('smart clears a read and stops at a write', async () => {
       mode: 'smart',
       ask: async (_exec, reason) => { asked.push(reason); return true; },
     });
-    await kernel.ctx.plugin(aPluginContributing({ name: 'read_it', classification: CLASSIFIED_READ }, ran));
-    await kernel.ctx.plugin(aPluginContributing({ name: 'write_it', classification: CLASSIFIED_WRITE }, ran));
-    await kernel.ctx.plugin(aPluginContributing({ name: 'shell_it', classification: CLASSIFIED_SHELL }, ran));
+    await installReviewed(kernel.ctx, aPluginContributing({ name: 'read_it', classification: CLASSIFIED_READ }, ran));
+    await installReviewed(kernel.ctx, aPluginContributing({ name: 'write_it', classification: CLASSIFIED_WRITE }, ran));
+    await installReviewed(kernel.ctx, aPluginContributing({ name: 'shell_it', classification: CLASSIFIED_SHELL }, ran));
 
     await kernel.ctx.tools.execute(aCall('read_it', ['read_it', 'write_it', 'shell_it']));
     assert.deepEqual(asked, [], 'reading did not wake anybody');
@@ -161,7 +170,7 @@ test('a tool that throws is a failed call, not a failed run', async () => {
   try {
     await kernel.ctx.plugin(flytTools);
     await kernel.ctx.plugin(flytApprovals, { mode: 'always' });
-    await kernel.ctx.plugin({
+    await installReviewed(kernel.ctx, {
       name: 'a-broken-plugin',
       inject: ['tools'],
       apply(ctx) {
@@ -184,7 +193,8 @@ test('a post-execute listener can block a result the tool already produced', asy
   try {
     await kernel.ctx.plugin(flytTools);
     await kernel.ctx.plugin(flytApprovals, { mode: 'always' });
-    await kernel.ctx.plugin(aPluginContributing({ name: 'reads_the_web', classification: CLASSIFIED_READ }, ran));
+    await installReviewed(kernel.ctx,
+      aPluginContributing({ name: 'reads_the_web', classification: CLASSIFIED_READ }, ran));
     kernel.ctx.on('tools/post-execute', async () => ({ decision: 'block', reason: 'it leaked a secret' }));
 
     const result = await kernel.ctx.tools.execute(aCall('reads_the_web', ['reads_the_web']));

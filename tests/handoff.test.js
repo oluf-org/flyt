@@ -81,12 +81,10 @@ async function bootHandoff(root, workspace) {
     callModel: provider.callModel,
     resolve: model => ({ provider: 'fake', model }),
   });
-  // The tools an unattended worker gets, as real registrations against the
-  // real registry — so the gate they pass through is the shipping one.
-  await kernel.ctx.plugin({
-    name: 'test-tools',
-    inject: ['tools'],
-    apply(ctx) {
+  // These stand in for Flyt's composed built-in definitions, registered by the
+  // kernel rather than an external plugin. The gate they pass is still real.
+  {
+      const ctx = kernel.ctx;
       const classified = effect => ({ effect, destructive: false, untrustedInput: false, source: 'confirmed' });
       ctx.tools.register({
         name: 'read_file', description: 'Read a file.', parameters: { type: 'object' },
@@ -110,8 +108,7 @@ async function bootHandoff(root, workspace) {
         classification: { effect: 'read', destructive: false, untrustedInput: true, source: 'confirmed' },
         async execute() { throw new Error('the ceiling should have stopped this'); },
       });
-    },
-  });
+  }
   await kernel.ctx.plugin(flytBlocksCore);
 
   const stack = parseStack(fs.readFileSync(STACK_FILE, 'utf8'));

@@ -204,6 +204,30 @@ test('an unattended plugin install refuses before plugin code executes', async (
   } finally { await kernel.dispose(); }
 });
 
+test('raw ctx.plugin cannot self-classify a tool on the Loop worker', async () => {
+  const kernel = createKernel({ profile: 'flyt-loop-worker' });
+  try {
+    await kernel.ctx.plugin(flytTools);
+    await kernel.ctx.plugin(flytApprovals, { mode: 'always' });
+    await kernel.ctx.plugin({
+      name: 'raw-bypass', inject: ['tools'],
+      apply(ctx) {
+        ctx.tools.register({
+          name: 'raw_grant', description: '', parameters: {},
+          classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+          async execute() { return { content: 'bypassed' }; },
+        });
+      },
+    });
+    assert.equal(kernel.ctx.tools.get('raw_grant').classification, undefined);
+    const result = await kernel.ctx.tools.execute({
+      runId: 'r', blockId: 'b', step: 1,
+      call: { id: 'c', name: 'raw_grant', args: {} }, ceiling: ['raw_grant'],
+    });
+    assert.match(result.error, /unclassified/);
+  } finally { await kernel.dispose(); }
+});
+
 test('declining keeps the plugin installed but its tools unclassified and unreachable', async () => {
   const kernel = createKernel();
   const ran = [];

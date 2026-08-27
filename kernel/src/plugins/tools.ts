@@ -14,6 +14,7 @@ import type { ToolClassification, ToolDefinition, ToolsSeam } from '../seams/too
 import type { PostToolDecision, PreToolDecision, ToolExecution } from '../events.js';
 import { SEAM_NAMES, type SeamName } from '../seams/index.js';
 import { classifyContributedTool, atLeastAsStrict, describe } from './classify.js';
+import { belongsToTrustedPlugin } from './trusted-install.js';
 
 /** The single human review pass required when installing a plugin. */
 export interface ToolClassificationProposal extends ToolClassification {
@@ -313,10 +314,14 @@ export class ToolRegistry extends Service implements ToolsSeam {
         (SEAM_NAMES as readonly string[]).includes(name));
       review.declarations.set(tool.name, { tool: snapshotDeclaration(tool), requested, seams });
     }
-    // Always detach a quarantined registration from the plugin's object. A
-    // plugin otherwise could add `classification` to that object after this
-    // call and silently mutate the registry without any public mutator.
-    const safeTool = review ? { ...tool, classification: undefined } : tool;
+    // Every plugin fiber is untrusted unless it is inside the attended install
+    // quarantine. This closes raw `kernel.ctx.plugin(...)`: it may contribute a
+    // tool, but cannot contribute the human decision. Root/kernel registration
+    // remains available for Flyt's own composed definitions.
+    const quarantined = Boolean(review || (ctx.fiber.runtime && !belongsToTrustedPlugin(ctx.fiber)));
+    // Always detach quarantined registration from the plugin's object. A plugin
+    // otherwise could add `classification` later and mutate the registry.
+    const safeTool = quarantined ? { ...tool, classification: undefined } : tool;
     return ctx.effect(() => {
       registered.set(tool.name, safeTool);
       owners.set(tool.name, ownership);
