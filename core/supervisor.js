@@ -36,6 +36,7 @@ import { classifyAdapterError, needsHuman } from './adapters/failures.js';
 import { whyNothingReady } from './blockers.js';
 import { CONFIG_DIR } from './brand.js';
 import { skillPath } from './skills.js';
+import { LOOP_TASK_ID } from './flowstore.js';
 
 // Which of a task's declared skills a checkout does not actually contain.
 // Deliberately a plain existence check against the worktree rather than a
@@ -819,7 +820,7 @@ export class Supervisor {
       }
       const runId = await this.invoke('flow:run', {
         projectId: this.projectId,
-        flowId: this.config.loop?.flowId ?? 'default-pipeline',
+        flowId: this.config.loop?.flowId ?? LOOP_TASK_ID,
         userInput: this.#briefFor(task),
         // THE WORKTREE, not the main checkout. Without this the isolation is
         // built and then bypassed: every task would edit the repo the loop is

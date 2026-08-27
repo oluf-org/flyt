@@ -90,8 +90,8 @@ test('parseEdgeExpr: simple, ported, chained', () => {
 // --- parse ----------------------------------------------------------------------
 
 const EXAMPLE = `version: 1
-id: default-pipeline
-name: Default pipeline
+id: legacy-linear
+name: Legacy linear
 description: Plan → route (approval) → verify.
 
 nodes:
@@ -113,10 +113,10 @@ flow:
   - verify -> output
 `;
 
-test('parseFlow: the FLOW_LANG.md example', () => {
+test('parseFlow: a retained linear compatibility example', () => {
   const flow = parseFlow(EXAMPLE);
-  assert.equal(flow.id, 'default-pipeline');
-  assert.equal(flow.name, 'Default pipeline');
+  assert.equal(flow.id, 'legacy-linear');
+  assert.equal(flow.name, 'Legacy linear');
   assert.deepEqual(flow.nodes.map(n => n.id), ['input', 'plan', 'route', 'verify', 'output']);
   // implicit built-ins materialize as structural nodes
   assert.deepEqual(flow.nodes[0], { id: 'input', type: 'input', kind: 'user', data: {} });

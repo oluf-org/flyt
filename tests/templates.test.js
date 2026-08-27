@@ -1,23 +1,20 @@
 // Node Library + template-instance model (GOALS.md refocus):
 //   - NodeStore seeds itself from the BLOCKS.md catalog and round-trips CRUD
 //   - resolveFlow merges template defaults with per-workflow overrides
-//   - FlowStore ships the classic pipeline as the editable "Default pipeline"
 //   - StackRunner: unified run entry (user input -> User Input node), library
-//     resolution, per-template instructions, and the post-planning gate
+//     resolution and per-template instructions
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { NodeStore } from '../core/nodestore.js';
-import { FlowStore, DEFAULT_PIPELINE_ID } from '../core/flowstore.js';
-import { StackRunner, topoSort } from '../core/stackRunner.js';
+import { StackRunner } from '../core/stackRunner.js';
 import { SEED_NODE_TEMPLATES, resolveFlow, resolveInstance, namedFlow, UNTITLED_FLOW } from '../src/flowTypes.js';
-import { makeStore, setScript, roleOf, testConfig, waitForStage } from './helpers.js';
+import { makeStore, setScript, testConfig, waitForStage } from './helpers.js';
 
 const tmpDir = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 const makeNodeStore = () => new NodeStore(tmpDir('llm-flow-nodes-'));
-const makeFlowStore = () => new FlowStore(tmpDir('llm-flow-flows-'));
 
 // --- NodeStore ---
 
@@ -85,80 +82,7 @@ test('resolveInstance flags a missing template instead of crashing', () => {
   assert.equal(n.data.title, 'gone');
 });
 
-// --- Default pipeline (classic sequence as a shipped, editable workflow) ---
-
-test('ensureDefaultPipeline ships an editable User Input → plan → gated route → verify → Output flow', () => {
-  const fsStore = makeFlowStore();
-  assert.equal(fsStore.ensureDefaultPipeline(), true);
-  assert.equal(fsStore.ensureDefaultPipeline(), false); // idempotent
-  const flow = fsStore.load(DEFAULT_PIPELINE_ID);
-  assert.equal(fsStore.list()[0].id, DEFAULT_PIPELINE_ID);
-
-  const resolved = resolveFlow(flow, SEED_NODE_TEMPLATES);
-  const order = topoSort(resolved).map(n => n.type);
-  assert.equal(order[0], 'input');
-  assert.equal(order.at(-1), 'output');
-  // The post-planning approval gate lives on the routing (plan-eval) node.
-  const route = resolved.nodes.find(n => n.data?.role === 'plan-eval');
-  assert.equal(route.data.requiresApproval, true);
-
-  // Editable like any other flow: overrides persist, template untouched.
-  flow.nodes.find(n => n.id === 'route').overrides.title = 'Renamed';
-  fsStore.save(flow);
-  assert.equal(fsStore.load(DEFAULT_PIPELINE_ID).nodes.find(n => n.id === 'route').overrides.title, 'Renamed');
-});
-
 // --- StackRunner + Node Library: the unified run entry, end to end ---
-
-test('default pipeline parity: user input, post-planning gate, retrospectives, historyDigest', async () => {
-  const store = makeStore();
-  const ns = makeNodeStore();
-  const flows = makeFlowStore();
-  flows.ensureDefaultPipeline();
-  const runner = new StackRunner(store, testConfig(), () => {}, ns);
-
-  const seenPrompts = {};
-  setScript(({ system, prompt }) => {
-    const role = roleOf(system);
-    seenPrompts[role] = prompt;
-    if (role === 'plan-eval') {
-      return '```json\n' + JSON.stringify({
-        nodes: [{ id: 'gen-docs', template: 'work', category: 'documentation', title: 'Docs', goal: 'Write the docs.' }]
-      }) + '\n```';
-    }
-    return `${role} output`;
-  });
-
-  const runId = runner.start(flows.load(DEFAULT_PIPELINE_ID), { userInput: 'Build me a widget' });
-  // The run panel input became the User Input node content / prompt.md.
-  assert.equal(store.readPrompt(runId), 'Build me a widget');
-
-  // Post-planning gate: planning is done, routing awaits approval.
-  assert.equal(await waitForStage(store, runId, ['awaiting_approval', 'failed', 'done']), 'awaiting_approval');
-  assert.ok(store.readPlan(runId), 'plan.md written before the gate');
-  runner.approvePlan(runId);
-  assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
-
-  // The generated node ran, the output collected, retrospectives emitted.
-  // documentation-step is an agentTask (V1 task 12), so its work IS a task: the
-  // output lands in tasks/<id>.md and the retrospective is executor-<taskId>.
-  const docsTask = store.readTasks(runId).tasks.find(t => t.title === 'Docs');
-  assert.ok(docsTask, 'the generated documentation node queued a task');
-  assert.ok(store.readTaskOutput(runId, docsTask.id), 'the generated node produced output');
-  const retros = store.readRetrospectives(runId);
-  for (const id of ['plan', 'route', 'verify', `executor-${docsTask.id}`]) {
-    assert.ok(retros[id], `retrospective for ${id}`);
-  }
-  assert.ok(fs.existsSync(path.join(store.runDir(runId), 'result.md')));
-  // historyDigest surfaces these retrospectives to future planning runs.
-  assert.match(store.historyDigest(), /Planning/);
-
-  // Second run: the planner sees lessons from the first run's retrospectives.
-  const runId2 = runner.start(flows.load(DEFAULT_PIPELINE_ID), { userInput: 'Another widget' });
-  await waitForStage(store, runId2, ['awaiting_approval', 'failed']);
-  assert.match(seenPrompts['plan-start'], /LESSONS FROM PREVIOUS RUNS/);
-  runner.rejectPlan(runId2, 'enough');
-});
 
 test('template + override instructions reach the model prompt; agentTask templates carry tools', async () => {
   const store = makeStore();

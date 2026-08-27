@@ -139,8 +139,6 @@ export function createEngine({
   // canonical parser; the CLI can still manage Loop without kernel/dist.
   const stackRoot = seedFromBundle('stacks');
   const nodeLibrary = new NodeStore(path.join(compatibilityRoot, 'nodes'));
-  flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable workflow
-  flows.ensureSeedPipelines();   // the tiered Low/Medium/High/Ultra pipelines (DECISIONS.md D27)
   flows.ensureLoopTask();        // compatibility projection until Loop uses the kernel runner
 
   // The tool library is files too (DESIGN-SPEC.md §5): tools/<id>.json seeds from
