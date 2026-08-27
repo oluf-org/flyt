@@ -141,7 +141,7 @@ Record a baseline at task start and evaluate the effect before setting `done`. I
 
 ### Likely code areas
 
-`core/nodes/executor.js`, `core/stackRunner.js`, `core/worktree.js`, `core/diagnostics.js`, `src/flowTypes.js`, `src/nodeFeedData.js`, `STACK_LANG.md`, `BLOCKS.md`, executor/flow/landing tests.
+`core/nodes/executor.js`, `core/flowRunner.js`, `core/worktree.js`, `core/diagnostics.js`, `src/flowTypes.js`, `src/nodeFeedData.js`, `FLOW_LANG.md`, `FLOW_NODES.md`, executor/flow/landing tests.
 
 ### Acceptance criteria
 
@@ -233,7 +233,7 @@ Alternatively, synchronizing `tasks.json` during `resetTasksForNodes` is accepta
 
 ### Likely code areas
 
-`core/stackRunner.js`, `core/nodes/executor.js`, `core/modelSource.js`, `core/api.js`, `electron/preload.cjs`, `src/RetryBox.jsx`, `src/App.jsx`, run-control tests.
+`core/flowRunner.js`, `core/nodes/executor.js`, `core/modelSource.js`, `core/api.js`, `electron/preload.cjs`, `src/RetryBox.jsx`, `src/App.jsx`, run-control tests.
 
 ### Acceptance criteria
 
@@ -318,7 +318,7 @@ Represent every manual or automatic retry as an attempt record with status `acti
 
 ### Likely code areas
 
-`core/adapters/cliDelegate.js`, Codex/Claude CLI adapters, `core/adapters/index.js`, `core/modelSource.js`, `core/stackRunner.js`, `src/nodeFeedData.js`, `src/RunFailure.jsx`, `src/activityStatus.js`, diagnostics and adapter tests.
+`core/adapters/cliDelegate.js`, Codex/Claude CLI adapters, `core/adapters/index.js`, `core/modelSource.js`, `core/flowRunner.js`, `src/nodeFeedData.js`, `src/RunFailure.jsx`, `src/activityStatus.js`, diagnostics and adapter tests.
 
 ### Acceptance criteria
 
@@ -372,7 +372,7 @@ Treat missing required context as a planner/graph error before an executor start
 
 ### Likely code areas
 
-`core/stackRunner.js` plan materialization/re-ask paths, `core/agent.js`, `core/heartbeat.js`, `core/nodes/executor.js`, `core/nodes/orchestrator.js`, `src/loop/*`, flow-contract tests, supervisor tests.
+`core/flowRunner.js` plan materialization/re-ask paths, `core/agent.js`, `core/heartbeat.js`, `core/nodes/executor.js`, `core/nodes/orchestrator.js`, `src/loop/*`, flow-contract tests, supervisor tests.
 
 ### Acceptance criteria
 

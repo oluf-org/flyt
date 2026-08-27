@@ -1,6 +1,6 @@
-// The brand, in one place (D29). Flyt is the app; a *flow* is still the thing
-// you build in it, so nothing here touches the domain vocabulary — `.flow.yaml`,
-// `stacklang`, `StackRunner` and friends keep their names deliberately.
+// The brand, in one place (D29). Flyt is the app; stacks and blocks are the
+// canonical product vocabulary. Legacy flow identifiers below exist only so an
+// existing project can be adopted on its first stack write.
 //
 // Everything that names the product should import from here rather than
 // repeating a literal, so the next rename is a three-line edit instead of an

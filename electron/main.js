@@ -24,7 +24,7 @@ import { LEVELS } from '../core/levels.js';
 import { APP_NAME, LOG_TAG, LEGACY_APP_DIRS } from '../core/brand.js';
 import { migrateUserDataDir } from '../core/migrate.js';
 import { bootKernel } from '../core/v2.js';
-import { createV2HostBridge } from '../core/v2Host.js';
+import { createV2BuildController, createV2HostBridge } from '../core/v2Host.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Where the app's own code and bundled assets live. When packaged this is
@@ -92,7 +92,7 @@ const engine = createEngine({
   warn: msg => console.warn(`${LOG_TAG} ${msg}`)
 });
 const {
-  baseConfig, flows, nodeLibrary, toolLibrary, registry, runtimeConfig, settings,
+  baseConfig, flows, stackRoot, nodeLibrary, toolLibrary, registry, runtimeConfig, settings,
   persistSettings, rebuildRuntimeConfig, publicSettings,
   hasKey, subscriptionStatus, resolveModelSource, effectiveSafetyModel,
   broadcastActivity, pushStateFor, dropPushState
@@ -111,17 +111,24 @@ const CHROME = {
 let win = null;
 let v2HostPromise = null;
 let detachV2UiExtensions = null;
+let v2BuildController = null;
 
 async function v2Host() {
   if (!v2HostPromise) {
     v2HostPromise = bootKernel({
-      settings,
+      // Phase 5 deleted the old renderer. A persisted pre-cutover `v2: false`
+      // can no longer be allowed to boot a window with no kernel behind it.
+      call: true,
       profile: 'flyt-desktop',
       runsRoot: registry.defaultRunsDir,
       approvalMode: settings.approvalMode ?? 'ask',
-    }).then(booted => {
+    }).then(async booted => {
       if (!booted) return null;
-      const bridge = createV2HostBridge(booted);
+      v2BuildController = await createV2BuildController(booted, { stackRoot });
+      const bridge = createV2HostBridge(booted, { build: () => v2BuildController.snapshot() });
+      v2BuildController.subscribe(record => {
+        if (win && !win.isDestroyed()) win.webContents.send('v2:command-invoke', record);
+      });
       detachV2UiExtensions = bridge.subscribe(rows => {
         if (win && !win.isDestroyed()) win.webContents.send('v2:ui-extensions-change', rows);
       });
@@ -249,6 +256,11 @@ const bindIpc = (name, toArgs = () => ({})) =>
 // D61: this is the production host-to-renderer bridge. Only the host's cloned
 // list crosses IPC; the generic plugin RPC and Cordis context stay main-side.
 ipcMain.handle('v2:build', async () => (await v2Host())?.bridge.build() ?? null);
+ipcMain.handle('v2:command', async (_event, name, args, caller = 'human') => {
+  await v2Host();
+  if (!v2BuildController) throw new Error('The Build command surface is not available');
+  return v2BuildController.invoke(String(name ?? ''), args ?? null, caller === 'agent' ? 'agent' : 'human');
+});
 
 bindIpc('flow:list');
 bindIpc('flow:load', id => ({ id }));
@@ -932,6 +944,8 @@ app.whenReady().then(() => { createWindow(); setupAutoUpdate(); });
 app.on('before-quit', () => {
   detachV2UiExtensions?.();
   detachV2UiExtensions = null;
+  v2BuildController?.dispose?.();
+  v2BuildController = null;
   void v2HostPromise?.then(host => host?.booted.dispose());
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

@@ -18,9 +18,6 @@ import { apply as core } from '../kernel/dist/plugins/blocks-core.js';
 import { apply as judgement } from '../kernel/dist/plugins/blocks-judgement.js';
 import { apply as inquiry } from '../kernel/dist/plugins/blocks-inquiry.js';
 import { apply as loop } from '../kernel/dist/plugins/blocks-loop.js';
-// What the v1 library still resolves from disk, and therefore what this phase
-// may not delete.
-import { SEED_NODE_TEMPLATES } from '../src/flowTypes.js';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
@@ -113,6 +110,18 @@ test('tool plugins are deliveries and the sets are ceilings, not conflated', () 
   // The six sets survive as ceilings.
   for (const set of ['none', 'read-only', 'repo-write', 'repo-full', 'web', 'loop']) {
     assert.ok(exists(`tools/sets/${set}.json`), `set ${set} survives`);
+  }
+});
+
+test('the cutover archives v1 file assets while retaining the canonical plugin set', () => {
+  const looseNodes = exists('nodes')
+    ? fs.readdirSync(path.join(ROOT, 'nodes'), { recursive: true }).filter(file => String(file).endsWith('.json'))
+    : [];
+  assert.deepEqual(looseNodes, [], 'blocks resolve from plugins, not loose nodes/*.json');
+  assert.equal(exists('flows'), false, 'v1 flow assets retire to git history');
+  for (const id of FIVE) assert.ok(exists(`stacks/${id}.stack.yaml`), `${id} remains canonical`);
+  for (const file of fs.readdirSync(path.join(ROOT, 'stacks'))) {
+    assert.ok(!file.endsWith('.layout.json'), `stacks/${file}: layout is derived`);
   }
 });
 

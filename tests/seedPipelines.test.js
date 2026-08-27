@@ -6,8 +6,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FlowStore, SEED_PIPELINE_IDS } from '../core/flowstore.js';
+import { FlowStore, LOOP_TASK_ID, SEED_PIPELINE_IDS } from '../core/flowstore.js';
 import { NodeStore } from '../core/nodestore.js';
+import { ToolStore } from '../core/toolstore.js';
 import { lintFlow } from '../core/stacklang/lint.js';
 import { resolveFlow, validateOverrideMap } from '../src/flowTypes.js';
 
@@ -33,6 +34,20 @@ test('seed pipelines parse, lint clean, resolve, and carry two modes', () => {
       assert.deepEqual(validateOverrideMap(resolved, mode.overrides, {}), [], `${id} mode valid`);
     }
   }
+});
+
+test('a fresh compatibility store can still run the Loop after shipped flow assets retire', () => {
+  const store = new FlowStore(tmp());
+  const nodes = new NodeStore(tmp());
+  const tools = new ToolStore(tmp());
+  assert.equal(store.ensureLoopTask(), true);
+  assert.equal(store.ensureLoopTask(), false, 'seeding never overwrites an existing projection');
+  const flow = store.load(LOOP_TASK_ID);
+  const work = flow.nodes.find(node => node.id === 'work');
+  assert.deepEqual(work.overrides.tools, ['loop']);
+  assert.equal(work.overrides.toolCeiling, 'loop');
+  assert.equal(work.overrides.effect, 'workspace-change');
+  assert.equal(lintFlow(flow, { templates: nodes.listFull(), library: tools.catalog() }).ok, true);
 });
 
 test('seeding is idempotent and never overwrites user edits', () => {

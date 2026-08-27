@@ -1,7 +1,7 @@
 {
   "name": "flyt",
   "version": "0.1.3",
-  "description": "Flyt — AI-first orchestration: a flowchart canvas over a file-based multi-model pipeline",
+  "description": "Flyt — AI-first orchestration with file-backed plugin stacks",
   "main": "electron/main.js",
   "type": "module",
   "imports": {
@@ -17,9 +17,9 @@
     "test": "node --test \"tests/**/*.test.js\"",
     "verify:workflow": "node --test tests/workflowReliability.test.js",
     "verify:impeccable": "node plugins/impeccable-flyt-plugin/verify-provenance.mjs",
-    "stack": "node core/stacklang/cli.js",
-    "flow": "npm run lint && node -e \"\"",
-    "lint": "node --check core/stackRunner.js && node --check core/stackstore.js && npm run build:kernel",
+    "stack": "npm run build:kernel --silent && node core/stacklint.js",
+    "flow": "npm run build:kernel --silent && node core/stacklint.js",
+    "lint": "npm run stack -- lint",
     "flyt": "node bin/flyt.js",
     "serve": "node bin/flyt.js serve",
     "icons": "node scripts/make-icons.mjs",

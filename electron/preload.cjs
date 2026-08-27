@@ -4,6 +4,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 // templates and settings are global (T2) and stay unscoped.
 const api = {
   v2Build: () => ipcRenderer.invoke('v2:build'),
+  v2InvokeCommand: (name, args, caller = 'human') =>
+    ipcRenderer.invoke('v2:command', name, args, caller),
+  onV2Command: (cb) => {
+    const handler = (_e, record) => cb(record);
+    ipcRenderer.on('v2:command-invoke', handler);
+    return () => ipcRenderer.removeListener('v2:command-invoke', handler);
+  },
   onV2UiExtensionsChange: (cb) => {
     const handler = (_e, rows) => cb(rows);
     ipcRenderer.on('v2:ui-extensions-change', handler);

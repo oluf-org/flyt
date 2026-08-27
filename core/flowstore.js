@@ -30,6 +30,7 @@ export const DEFAULT_PIPELINE_ID = 'default-pipeline';
 // flow, shipped with two example worker modes so the mode picker and the
 // comparison view have something to run day one.
 export const SEED_PIPELINE_IDS = ['pipeline-low', 'pipeline-medium', 'pipeline-high', 'pipeline-ultra'];
+export const LOOP_TASK_ID = 'loop-task';
 
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
@@ -356,6 +357,37 @@ export class FlowStore {
       if (this.#seedMissing(id)) { this.save(builders[id]()); created.push(id); }
     }
     return created;
+  }
+
+  // Compatibility execution for the current Loop supervisor. The shipping
+  // file is now stacks/loop-task.stack.yaml; until the supervisor itself is
+  // moved onto the kernel runner, a fresh install still needs one authored
+  // tool-holding node rather than a plan that can finish without doing work.
+  ensureLoopTask() {
+    if (!this.#seedMissing(LOOP_TASK_ID)) return false;
+    const pos = i => ({ x: 0, y: i * 130 });
+    this.save({
+      id: LOOP_TASK_ID,
+      name: 'Work one backlog task',
+      description: 'Compatibility projection of the canonical loop-task stack for the supervisor.',
+      nodes: [
+        { id: 'input', type: 'input', kind: 'user', position: pos(0), data: {} },
+        {
+          id: 'work', templateId: 'work', position: pos(1),
+          overrides: {
+            title: 'Do the task', category: 'Code general', effect: 'workspace-change',
+            toolCeiling: 'loop', tools: ['loop'],
+            instructions: 'Work the backlog task exactly as written. Read before writing, stay inside the blast radius, run the declared gates, inspect git status, and never report success over a red gate.',
+          },
+        },
+        { id: 'output', type: 'output', kind: 'user', position: pos(2), data: {} },
+      ],
+      edges: [
+        { id: 'e-input-work', source: 'input', target: 'work' },
+        { id: 'e-work-output', source: 'work', target: 'output' },
+      ],
+    });
+    return true;
   }
 
   // Low — refine → single work node. The quickest path for a well-scoped task.

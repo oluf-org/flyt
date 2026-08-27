@@ -126,13 +126,22 @@ export function createEngine({
 
   const baseConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'config.json'), 'utf8'));
 
-  // Flows and Node Library templates stay global for v1 (D22 T2) — reusable
-  // expertise shared across every project tab. Runs are per-project; their
-  // stores live in the project registry below.
-  const flows = new FlowStore(seedFromBundle('flows'));
-  const nodeLibrary = new NodeStore(dataDir('nodes')); // seeds itself from code on first launch
+  // The legacy flow store and generated node library remain only for the
+  // compatibility runner that currently drives Loop and opens old runs.
+  // Canonical authored definitions live in stacks/ and plugins.
+  const compatibilityRoot = path.join(userDataDir, 'compatibility');
+  const flows = new FlowStore(path.join(compatibilityRoot, 'flows'));
+  // Canonical v2 stacks live beside the legacy flow directory. StackStore can
+  // read an existing flows/*.flow.yaml without mutation and retires that file
+  // only when the stack is first written.
+  // Keep the headless harness independent of the compiled v2 kernel. Electron
+  // constructs StackStore after bootKernel's dynamic import supplies the one
+  // canonical parser; the CLI can still manage Loop without kernel/dist.
+  const stackRoot = seedFromBundle('stacks');
+  const nodeLibrary = new NodeStore(path.join(compatibilityRoot, 'nodes'));
   flows.ensureDefaultPipeline(); // the classic pipeline, shipped as an editable workflow
   flows.ensureSeedPipelines();   // the tiered Low/Medium/High/Ultra pipelines (DECISIONS.md D27)
+  flows.ensureLoopTask();        // compatibility projection until Loop uses the kernel runner
 
   // The tool library is files too (DESIGN-SPEC.md §5): tools/<id>.json seeds from
   // the built-in modules, and the runtime registry is loaded FROM the files — so
@@ -735,7 +744,7 @@ export function createEngine({
     // Paths
     projectRoot, dataRoot, userDataDir, settingsPath, dataDir, seedFromBundle,
     // Stores
-    flows, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor, poolFor, ledgerFor, references,
+    flows, stackRoot, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor, poolFor, ledgerFor, references,
     configDirOf,
     // Config + settings
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,

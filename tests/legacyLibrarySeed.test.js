@@ -8,14 +8,11 @@
 // defaults.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 import {
   SEED_NODE_TEMPLATES, AGENT_TOOLS, WORK_CATEGORIES, WORK_TOOLS, resolveInstance
 } from '../src/flowTypes.js';
 
 const seed = id => SEED_NODE_TEMPLATES.find(t => t.id === id);
-const onDisk = id => JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'nodes', `${id}.json`), 'utf8'));
 
 // A Work node resolved to one task type — the shape the runner executes.
 const workNode = category =>
@@ -80,21 +77,4 @@ test('bash implies the tool gate; write-only task types stay ungated and paralle
   }
 });
 
-// nodes/*.json is the live source of truth; the seed only writes them on a fresh
-// install (or the rework migration). They must not drift apart.
-test('the shipped template files match the seed they came from', () => {
-  for (const t of SEED_NODE_TEMPLATES) {
-    const f = onDisk(t.id);
-    assert.equal(f.baseType, t.baseType, `${t.id}: baseType drifted`);
-    assert.deepEqual(f.tools, t.tools, `${t.id}: tools drifted`);
-    assert.equal(f.approveToolCalls, t.approveToolCalls, `${t.id}: approval default drifted`);
-  }
-});
 
-// The web tools were added to the library and reachable from nowhere.
-//
-// `flyt tools run` could call them and the Library page would offer them as
-// checkboxes on an agentTask template — but no shipped flow granted one, so a
-// person opening the app could not search the web without first knowing to go
-// and tick four boxes on a node. A capability the front door cannot reach is a
-// capability that does not exist for most users.

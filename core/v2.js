@@ -1,14 +1,12 @@
 // The v2 flag (D62).
 //
-// One flag gates the whole v2 stack — the Cordis kernel, the seams, the
-// session log as the canonical record, and the Work/Build/Trace surfaces when
-// they arrive. It defaults OFF, and with it off the shipping app must behave
-// exactly as it did before any of that existed.
+// Phase 5 made v2 the default and the shipping Electron host now passes an
+// explicit `true`, because the old renderer no longer exists. The switch
+// remains for tests and non-desktop callers that deliberately need to avoid
+// booting a kernel.
 //
-// "Behaves exactly as before" is not a promise you keep by intending to. It is
-// kept by never importing the v2 tree at all: `bootKernel` below is the only
-// door, it is a DYNAMIC import, and it is not opened when the flag is off. A
-// test can watch that door.
+// `bootKernel` keeps its import dynamic, so an explicit off call still does not
+// load the tree merely by asking whether it should boot.
 //
 // Precedence, most specific first — the call, the environment, the settings,
 // then the default. A machine driving a loop is often not the machine whose
@@ -48,9 +46,8 @@ export const isV2Enabled = options => v2Flag(options).enabled;
 /**
  * Boot the v2 kernel, if the flag is on.
  *
- * The import is dynamic and conditional on purpose: with the flag off, no v2
- * module is loaded, so v2 cannot change the behaviour of a v1 run by existing.
- * That is the whole content of "ships behind a flag".
+ * The import stays dynamic so headless compatibility commands do not require a
+ * compiled renderer kernel merely to inspect or supervise the Loop queue.
  *
  * @param {object} [options]
  * @param {boolean|null} [options.call] — an explicit choice at the call site.

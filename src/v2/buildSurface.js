@@ -23,7 +23,25 @@ export async function buildSurface(host = globalThis.window?.flyt ?? null) {
     const surface = await host.v2Build();
     if (!surface || typeof surface !== 'object') return null;
     let uiExtensions = Array.isArray(surface.uiExtensions) ? surface.uiExtensions : [];
-    const live = { ...surface };
+    let stack = surface.stack ?? null;
+    const blockRows = Array.isArray(surface.blocks) ? surface.blocks : null;
+    const blocks = blockRows ? {
+      list: () => blockRows,
+      resolve: use => blockRows.find(block => block.use === use),
+    } : surface.blocks;
+    const commands = typeof host.v2InvokeCommand === 'function' ? {
+      invoke: (name, args, caller = 'human') => host.v2InvokeCommand(name, args, caller),
+      subscribe: listener => typeof host.onV2Command === 'function'
+        ? host.onV2Command(record => {
+          if (record?.stack?.root) stack = record.stack;
+          listener(record);
+        })
+        : () => {},
+    } : surface.commands;
+    const library = { ...(surface.library ?? {}) };
+    if (Array.isArray(library.blocks)) library.blocks = blocks;
+    const live = { ...surface, blocks, commands, library };
+    Object.defineProperty(live, 'stack', { enumerable: true, get: () => stack });
     Object.defineProperty(live, 'uiExtensions', { enumerable: true, get: () => uiExtensions });
     if (typeof host.onV2UiExtensionsChange === 'function') {
       live.subscribeUiExtensions = listener => host.onV2UiExtensionsChange(rows => {

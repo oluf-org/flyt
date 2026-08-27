@@ -353,23 +353,16 @@ test('walk yields parents before children, and isContainer tells them apart', ()
   assert.deepEqual(nodes.filter(n => !isContainer(n)).map(n => n.id), ['gather', 'judge']);
 });
 
-test('nothing under core/ imports the stack parser', () => {
-  // core/v2.js is the only door into the v2 tree and bootKernel() is the only
-  // import of it (D62). A static reach for the parser from core/ would load
-  // v2 on startup whatever the flag says.
-  const dir = fileURLToPath(new URL('../core/', import.meta.url));
-  const offenders = [];
-  const scan = at => {
-    for (const entry of fs.readdirSync(at, { withFileTypes: true })) {
-      const full = `${at}${entry.name}`;
-      if (entry.isDirectory()) { scan(`${full}/`); continue; }
-      if (!entry.name.endsWith('.js')) continue;
-      const source = fs.readFileSync(full, 'utf8');
-      if (/from\s+['"]#kernel/.test(source) || /parseStack/.test(source)) offenders.push(full);
-    }
-  };
-  scan(dir);
-  assert.deepEqual(offenders, []);
+test('the headless engine does not require the compiled kernel', () => {
+  // The cutover gives stacklint and the desktop host legitimate parser seams,
+  // but queue inspection and Loop supervision must still work in a source
+  // checkout where kernel/dist has not been built yet.
+  const engine = fs.readFileSync(new URL('../core/engine.js', import.meta.url), 'utf8');
+  const store = fs.readFileSync(new URL('../core/stackstore.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(engine, /#kernel|parseStack/);
+  assert.doesNotMatch(store, /from\s+['"]#kernel/);
+  assert.match(store, /StackStore needs the canonical stack parser/,
+    'the canonical parser is injected at the desktop boundary');
 });
 
 // --- If: a predicate that is not an expression (t-0095) --------------------

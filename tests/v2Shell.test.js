@@ -69,17 +69,18 @@ import { fileURLToPath } from 'node:url';
 
 const src = p => fs.readFileSync(fileURLToPath(new URL(`../src/${p}`, import.meta.url)), 'utf8');
 
-test('the window mounts Root, which is the only thing that reads the flag', () => {
+test('the window mounts the cutover Root and no renderer reads the retired flag', () => {
   assert.match(src('main.jsx'), /render\(<Root \/>\)/);
   const roots = fs.readdirSync(fileURLToPath(new URL('../src', import.meta.url)))
     .filter(f => f.endsWith('.jsx') || f.endsWith('.js'))
     .filter(f => f !== 'Root.jsx' && /getSettings\(\)[\s\S]{0,400}\.v2\b/.test(src(f)));
   assert.deepEqual(roots, [], 'a second reader of the flag is a second answer to it');
+  assert.doesNotMatch(src('Root.jsx'), /getSettings|settings\.v2|<App/);
 });
 
 
 
-test('nothing under src/v2 is statically imported, so the flag-off window never loads it', () => {
+test('the shipping shell keeps a lazy startup boundary', () => {
   const dir = fileURLToPath(new URL('../src', import.meta.url));
   const offenders = [];
   const walk = d => {

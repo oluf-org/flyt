@@ -189,23 +189,10 @@ test('the surface decides who it can ask, not the profile', async () => {
   }
 });
 
-test('nothing in core/ imports the v2 tree', () => {
-  // The flag is only trustworthy while this holds: a static import anywhere in
-  // core/ would load the kernel on startup whatever the flag says. core/v2.js
-  // is the one door, and its import is dynamic and behind the check.
-  const root = new URL('../core/', import.meta.url);
-  const offenders = [];
-  const walk = dir => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const child = new URL(entry.name + (entry.isDirectory() ? '/' : ''), dir);
-      if (entry.isDirectory()) { walk(child); continue; }
-      if (!entry.name.endsWith('.js')) continue;
-      const text = fs.readFileSync(child, 'utf8');
-      for (const match of text.matchAll(/^\s*import\s[^\n]*['"](#kernel[^'"]*)['"]/gm)) {
-        offenders.push(`${entry.name}: static import of ${match[1]}`);
-      }
-    }
-  };
-  walk(root);
-  assert.deepEqual(offenders, []);
+test('the optional boot switch still guards its own dynamic import', () => {
+  // Canonical stack stores may consume the kernel after cutover. The remaining
+  // promise is local: bootKernel(call:false) does not open its own dynamic door.
+  const source = fs.readFileSync(new URL('../core/v2.js', import.meta.url), 'utf8');
+  assert.match(source, /load = \(\) => import\('#kernel'\)/);
+  assert.doesNotMatch(source, /^\s*import\s[^\n]*#kernel/m);
 });
