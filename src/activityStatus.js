@@ -37,11 +37,16 @@ const SAFE_TOOL_NAMES = new Set([
 function safeFileSubject(value) {
   if (typeof value !== 'string' || !value.trim() || value.length > 120) return null;
   if (/\b(prompt|reasoning|output|stdout|stderr|api[_ -]?key|token|password|secret|authorization|bearer)\b/i.test(value)) return null;
+  // A structured `path` field is still model-produced input. Spaces make a
+  // sentence ending in a filename ("Summarize private report.txt")
+  // indistinguishable from a legitimate path, so persistent chrome omits it.
+  // The detailed run view remains the place to inspect unusual paths.
+  if (/\s/.test(value)) return null;
   const subject = safeActivityLabel(value, 60);
   if (!subject) return null;
   // File-operation subjects are deliberately narrower than generic labels:
   // paths/patterns only, never arbitrary tool arguments or command text.
-  const allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./\\:*?()[]{}+@#% -';
+  const allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./\\-*?[]{}@';
   if ([...subject].some(char => !allowed.includes(char))) return null;
   // A plain sentence made only of letters and spaces is not a path. Requiring
   // a separator, a glob marker, a dotfile prefix, or a filename extension is

@@ -88,6 +88,7 @@ test('persistent activity never exposes prompts, streams, results, controls, or 
   // path rather than prompt prose, a secret, raw output, or a giant argument.
   for (const path of [
     'PRIVATE USER PROMPT',
+    'Summarize private report.txt',
     'stdout PRIVATE COMMAND OUTPUT',
     'api_key=super-secret-value.txt',
     `${'x'.repeat(200)}.txt`
