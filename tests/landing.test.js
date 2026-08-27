@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WorktreePool, git, slugify, branchFor, land, defaultWorktreeRoot, isInside } from '../core/worktree.js';
 import { runGate, runGates, gatesFor, protectedViolations, testCountFrom, testCountRegression, testCountStagnation, testCountUncheckable, scratchArtefacts, scratchArtefactProblem, weakenedAssertions, weakenedAssertionProblem, suiteExpectation, suiteExpectationProblem, suiteExpectationMismatch, SUITE_EXPECTATIONS, gateProblem, unrunnableGates } from '../core/gates.js';
-import { parseReview, buildReviewPrompt, packageReviewDiff, reviewDiff, reviewWorker } from '../core/diffReview.js';
+import { REVIEW_DIFF_BUDGET, parseReview, buildReviewPrompt, packageReviewDiff, reviewDiff, reviewWorker } from '../core/diffReview.js';
 import { landTask, mechanicalChecks, syncChangedDependencies, advancePin, readPin } from '../core/landing.js';
 import { setScript } from './helpers.js';
 
@@ -752,14 +752,53 @@ test('a bulk added provider snapshot is manifested without hiding integration or
   assert.match(evidence.text, /INTEGRATION-TAIL/);
   assert.match(evidence.text, /TEST-TAIL/);
   assert.ok(!evidence.text.includes('diff truncated'));
-  assert.ok(evidence.text.length <= 200_000);
+  assert.ok(evidence.text.length <= REVIEW_DIFF_BUDGET);
 });
 
 test('an oversized patch with no identifiable package snapshot fails closed', () => {
-  const evidence = packageReviewDiff('x'.repeat(200_001));
+  const evidence = packageReviewDiff('x'.repeat(REVIEW_DIFF_BUDGET + 1));
   assert.equal(evidence.complete, false);
   assert.match(evidence.text, /REVIEW EVIDENCE INCOMPLETE/);
   assert.match(evidence.text, /do not approve/i);
+  assert.deepEqual(evidence.stats, {
+    rawChars: REVIEW_DIFF_BUDGET + 1, budget: REVIEW_DIFF_BUDGET, evidenceChars: null, sections: 0,
+  });
+});
+
+test('incomplete evidence is diagnosed locally without spending a reviewer call', async () => {
+  const changed = (file, marker, lines = 20_000) => [
+    `diff --git a/${file} b/${file}`,
+    `--- a/${file}`,
+    `+++ b/${file}`,
+    `@@ -1 +1,${lines} @@`,
+    ...Array.from({ length: lines }, (_, i) => `+${marker}-${i}`),
+    '',
+  ].join('\n');
+  const deleted = [
+    'diff --git a/src/retired.js b/src/retired.js',
+    'deleted file mode 100644',
+    '--- a/src/retired.js',
+    '+++ /dev/null',
+    '@@ -1,40000 +0,0 @@',
+    ...Array.from({ length: 40_000 }, (_, i) => `-RETIRED-${i}`),
+    '',
+  ].join('\n');
+  let called = false;
+  setScript(() => { called = true; return 'should not run'; });
+  const review = await reviewDiff({
+    worker: { provider: 'script', model: 'reviewer' },
+    task: { body: '' },
+    diff: deleted + changed('core/large.js', 'CORE') + changed('tests/large.test.js', 'TEST'),
+  });
+
+  assert.equal(review.verdict, 'request-changes');
+  assert.equal(review.evidenceIncomplete, true);
+  assert.equal(called, false, 'a placeholder is not sent to a paid reviewer');
+  assert.ok(review.evidence.evidenceChars > review.evidence.budget);
+  assert.deepEqual(review.evidence.largestInline.map(row => row.path), [
+    'tests/large.test.js', 'core/large.js',
+  ]);
+  assert.match(review.changes.join(' '), /Largest still-inline patches/);
 });
 
 test('a deletion-heavy cutover manifests source deletions but keeps deleted tests and integration inline', () => {
@@ -797,7 +836,7 @@ test('a deletion-heavy cutover manifests source deletions but keeps deleted test
   assert.ok(!evidence.text.includes('OLD-UI-1499'), 'deleted source bodies are represented by the manifest');
   assert.match(evidence.text, /DELETED-ASSERTION-19/, 'deleted test bodies remain reviewable');
   assert.match(evidence.text, /CUTOVER-INTEGRATION/);
-  assert.ok(evidence.text.length <= 200_000);
+  assert.ok(evidence.text.length <= REVIEW_DIFF_BUDGET);
 });
 
 test('task-declared mechanical renames are manifested without hiding other test edits', () => {
