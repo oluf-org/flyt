@@ -115,6 +115,13 @@ test('flyt retry is a command, takes its flags, and is documented', () => {
   assert.match(checkFlags('retry', { guidence: 'x' }), /Did you mean "--guidance"\?/);
 });
 
+test('manual landing can name the same independent reviewer as the loop', () => {
+  const source = fs.readFileSync(cli, 'utf8');
+  assert.equal(checkFlags('work', { reviewer: 'gpt-5.6-sol' }), null);
+  assert.match(source, /flyt work land <taskId>.*--reviewer <id>/);
+  assert.match(source, /reviewer: namedWorker\(flags\.reviewer\)/);
+});
+
 test('flyt retry refuses a missing argument, and a run that is not there', () => {
   // `die` exits 1; the pre-flight flag refusal is what exits 2.
   const noArgs = run(['retry']);

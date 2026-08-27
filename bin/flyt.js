@@ -82,7 +82,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt archive list|trend             the archived days, and the direction
   flyt work start <taskId>            worktree + branch for a task
   flyt work verify <taskId>           run the gates in it (the harness runs them)
-  flyt work land <taskId> [--dry-run|--push]  gates -> review -> merge -> canary
+  flyt work land <taskId> [--dry-run|--push] [--reviewer <id>]  gates -> review -> merge -> canary
   flyt work discard <taskId> [--attempt <id>]  throw the worktree away
   flyt work reconcile                 list orphaned worktrees and owner records
   flyt ref list                       the reference library (§16)
@@ -170,7 +170,7 @@ const COMMAND_FLAGS = {
   task: ['all', 'blast', 'by', 'dependsOn', 'done', 'effort', 'force', 'gates', 'goal', 'incident', 'keep-work',
     'level', 'note', 'reason', 'references', 'skill', 'skills', 'status', 'title', 'value'],
   tools: ['arg', 'arg-json', 'yes'],
-  work: ['attempt', 'dry-run', 'push']
+  work: ['attempt', 'dry-run', 'push', 'reviewer']
 };
 
 // Flags whose value has to be a number. A cap that silently becomes NaN is a
@@ -1094,7 +1094,12 @@ async function main() {
           return out(`${orphans.length} orphan(s) — discard the ones you no longer want`);
         }
         case 'land': {
-          const r = await api.invoke('work:land', { projectId, taskId, dryRun: Boolean(flags['dry-run']), push: flags.push ? true : null });
+          const r = await api.invoke('work:land', {
+            projectId, taskId,
+            dryRun: Boolean(flags['dry-run']),
+            push: flags.push ? true : null,
+            reviewer: namedWorker(flags.reviewer)
+          });
           if (asJson) return out(r);
           for (const step of r.steps) say(`  ${step.step}: ${step.ok ?? step.verdict ?? step.landed ?? ''}`);
           say(r.landed ? `landed as ${r.mergeSha?.slice(0, 8)}` : `did not land (${r.stage})`);
