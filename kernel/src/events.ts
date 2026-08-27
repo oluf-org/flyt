@@ -141,6 +141,8 @@ declare module '@deepseek-ai/cordis' {
      * watching an agent work needs to see. @mode emit
      */
     'commands/invoke'(record: CommandInvocation): void;
+    /** The validated UI declaration set changed. @mode emit */
+    'ui-extensions/change'(): void;
     /** A step ended, with what the model settled on. @mode emit */
     'step/end'(step: StepRef, settled: LlmSettled): void;
     /** A turn ended. @mode emit */

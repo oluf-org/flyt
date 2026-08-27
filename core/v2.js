@@ -88,6 +88,20 @@ export async function bootKernel({
   const prepared = {
     kernel, ctx: kernel.ctx, pluginReviews: kernel.pluginReviews,
     install: (pluginEntries, installOptions) => kernel.install(pluginEntries, installOptions),
+    // Host-only projection of the RPC service. Renderers receive the cloned
+    // rows this returns, never the Cordis context or an invoke capability.
+    uiExtensions: {
+      list(point = null) {
+        const rpc = kernel.ctx.uiExtensions;
+        if (!rpc) return [];
+        const response = rpc.invoke({ method: 'ui.list', params: point ? { point } : {} });
+        if (!response.ok) throw new Error(response.error.message);
+        return response.result;
+      },
+      subscribe(listener) {
+        return kernel.ctx.on('ui-extensions/change', listener);
+      },
+    },
     dispose: () => kernel.dispose(), source: flag.source, profile,
   };
   try {

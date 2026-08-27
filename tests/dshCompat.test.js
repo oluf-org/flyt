@@ -141,6 +141,11 @@ const COVERAGE = {
   // compatible with. Nothing to pin, and nothing missing.
   blocks: null,
 
+  // Ours, and deliberately narrower than a renderer plugin API. It is the
+  // typed data-only boundary D61 adds between a Flyt plugin and its host; dsh
+  // has no equivalent service whose compatibility could be pinned here.
+  uiExtensions: null,
+
   // Ours, provided, and with no dsh counterpart to pin. dsh replaces the agent
   // LOOP; this seam schedules a Flyt STACK, over containment dsh has no notion
   // of. A dsh plugin cannot be written against it, so there is nothing to

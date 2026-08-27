@@ -16,25 +16,26 @@ export function FlytUiNode({ node }) {
 }
 
 /** Flyt form controls generated from the contributed configuration schema. */
-export function BlockConfigurationView({ contribution, value = {}, onChange = () => {} }) {
+export function BlockConfigurationView({ contribution, value = {}, onChange = null }) {
   const set = (name, next) => onChange({ ...value, [name]: next });
   return <fieldset className="plugin-block-configuration">
     {Object.entries(contribution.schema.properties).map(([name, field]) => <label key={name}>
       <span>{field.title}</span>
       {field.description && <small>{field.description}</small>}
-      {field.type === 'boolean' ? <input type="checkbox" checked={Boolean(value[name] ?? field.default)} onChange={event => set(name, event.target.checked)} />
-        : field.type === 'select' ? <select value={value[name] ?? field.default ?? ''} onChange={event => set(name, event.target.value)}>
+      {field.type === 'boolean' ? <input type="checkbox" checked={Boolean(value[name] ?? field.default)} disabled={!onChange} onChange={event => set(name, event.target.checked)} />
+        : field.type === 'select' ? <select value={value[name] ?? field.default ?? ''} disabled={!onChange} required={contribution.schema.required?.includes(name)} onChange={event => set(name, event.target.value)}>
           {(field.options ?? []).map(option => <option key={option} value={option}>{option}</option>)}
         </select>
           : <input type={field.type === 'number' ? 'number' : 'text'} value={value[name] ?? field.default ?? ''}
+            disabled={!onChange} required={contribution.schema.required?.includes(name)}
             onChange={event => set(name, field.type === 'number' ? event.target.valueAsNumber : event.target.value)} />}
     </label>)}
   </fieldset>;
 }
 
 /** Tool results are data supplied by Flyt; the plugin only declared this view. */
-export function ToolContributionView({ contribution }) {
-  return <section className="plugin-tool-view" aria-label={`${contribution.tool} tool view`}>
+export function ToolContributionView({ contribution, pluginId = null }) {
+  return <section className="plugin-tool-view" data-plugin={pluginId ?? undefined} aria-label={`${contribution.tool} tool view`}>
     <FlytUiNode node={contribution.view} />
   </section>;
 }

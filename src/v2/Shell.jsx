@@ -88,7 +88,7 @@ export default function Shell({ location = null, onNavigate, build = null, watch
       <section className="v2-panel" data-surface={showTrace ? 'trace' : here.surface}>
         <h1>{showTrace ? 'Trace' : heading(loc.dest)}</h1>
         {showTrace
-          ? <Trace trace={watching?.trace ?? null} runId={trace.run} />
+          ? <Trace trace={watching?.trace ?? null} runId={trace.run} uiExtensions={build?.uiExtensions ?? []} />
           : loc.dest === BUILD
             ? (
               <>
@@ -100,6 +100,7 @@ export default function Shell({ location = null, onNavigate, build = null, watch
                   stack={build?.stack ?? null}
                   blocks={build?.blocks ?? null}
                   commands={build?.commands ?? null}
+                  uiExtensions={build?.uiExtensions ?? []}
                 />
                 {build?.pluginReview?.proposals?.length > 0 && (
                   <PluginTrustReview

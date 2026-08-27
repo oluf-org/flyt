@@ -12,6 +12,10 @@ import type { JsonValue } from '../types.js';
 
 export const UI_COMPONENTS = ['text', 'code', 'badge', 'notice', 'key-value', 'stack'] as const;
 export type UiComponentName = (typeof UI_COMPONENTS)[number];
+export const UI_EXTENSION_POINTS = [
+  'block-configuration', 'tool-view', 'trace-decoration', 'settings-section', 'library-entry',
+] as const;
+export type UiExtensionPoint = (typeof UI_EXTENSION_POINTS)[number];
 
 export interface UiNode {
   component: UiComponentName;
@@ -63,8 +67,12 @@ export type UiContribution = BlockConfigurationContribution | ToolViewContributi
   TraceDecorationContribution | SettingsSectionContribution | LibraryEntryContribution;
 
 export type UiExtensionRpcRequest =
-  | { method: 'ui.contribute'; params: { pluginId: string; contribution: UiContribution } }
+  | { method: 'ui.contribute'; params: { contribution: UiContribution } }
   | { method: 'ui.list'; params: { point?: UiContribution['point'] } };
+export interface UiContributionRecord {
+  pluginId: string;
+  contribution: UiContribution;
+}
 export type UiExtensionRpcResponse =
   | { ok: true; result: JsonValue }
   | { ok: false; error: { code: 'INVALID_UI_CONTRIBUTION' | 'METHOD_NOT_FOUND'; message: string } };
@@ -89,6 +97,7 @@ function assertData(value: unknown, at: string, seen = new Set<object>()): void 
   if (typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint' || value === undefined) {
     throw new Error(`${at} carries executable or non-serializable data`);
   }
+  if (typeof value === 'number' && !Number.isFinite(value)) throw new Error(`${at} is not a finite JSON number`);
   if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return;
   if (typeof value !== 'object') throw new Error(`${at} is not serializable data`);
   if (seen.has(value)) throw new Error(`${at} is cyclic`);
@@ -162,29 +171,21 @@ export function assertUiContribution(value: unknown): asserts value is UiContrib
   }
 }
 
-/** In-process implementation of the process/renderer RPC contract. */
-export function createUiExtensionRpcBoundary(): UiExtensionRpc {
-  const contributions: Array<{ pluginId: string; contribution: UiContribution }> = [];
-  return {
-    invoke(request: UiExtensionRpcRequest): UiExtensionRpcResponse {
-      if (!record(request) || !record(request.params)) return { ok: false, error: { code: 'INVALID_UI_CONTRIBUTION', message: 'RPC request must be plain data' } };
-      if (request.method === 'ui.contribute') {
-        try {
-          exact(request as unknown as Record<string, unknown>, ['method', 'params'], 'request');
-          exact(request.params as unknown as Record<string, unknown>, ['pluginId', 'contribution'], 'request.params');
-          text(request.params.pluginId, 'request.params.pluginId');
-          assertUiContribution(request.params.contribution);
-          contributions.push(structuredClone(request.params) as { pluginId: string; contribution: UiContribution });
-          return { ok: true, result: { accepted: true } };
-        } catch (error) {
-          return { ok: false, error: { code: 'INVALID_UI_CONTRIBUTION', message: String((error as Error).message ?? error) } };
-        }
-      }
-      if (request.method === 'ui.list') {
-        const point = request.params.point;
-        return { ok: true, result: structuredClone(contributions.filter(row => !point || row.contribution.point === point)) as unknown as JsonValue };
-      }
-      return { ok: false, error: { code: 'METHOD_NOT_FOUND', message: `Unknown UI RPC method "${String((request as { method?: unknown }).method)}"` } };
-    },
-  };
+/** Validate the wire shape before a host service reads any of it. */
+export function assertUiExtensionRpcRequest(value: unknown): asserts value is UiExtensionRpcRequest {
+  if (!record(value) || !record(value.params)) throw new Error('RPC request must be plain data');
+  exact(value, ['method', 'params'], 'request');
+  if (value.method === 'ui.contribute') {
+    exact(value.params, ['contribution'], 'request.params');
+    assertUiContribution(value.params.contribution);
+    return;
+  }
+  if (value.method === 'ui.list') {
+    exact(value.params, ['point'], 'request.params');
+    if (own(value.params, 'point') && !UI_EXTENSION_POINTS.includes(value.params.point as UiExtensionPoint)) {
+      throw new Error(`request.params.point names unknown extension point "${String(value.params.point)}"`);
+    }
+    return;
+  }
+  throw new Error(`Unknown UI RPC method "${String(value.method)}"`);
 }
