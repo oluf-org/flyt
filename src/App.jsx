@@ -14,7 +14,7 @@ import RunResult from './RunResult.jsx';
 import RunsList from './RunsList.jsx';
 import NodeFocus from './NodeFocus.jsx';
 import { isTerminal } from './runProgress.js';
-import { projectActivity } from './activityStatus.js';
+import { projectActivity, showPersistentActivity } from './activityStatus.js';
 import { resolveFlow, namedFlow, UNTITLED_FLOW, isInstance, isStructuralNode, setKnownTools, setToolCatalog } from './flowTypes.js';
 import { comparePair } from './compareRun.js';
 import { layoutPositions, shrinkOrchBox } from './flowLayout.js';
@@ -2026,8 +2026,7 @@ export default function App() {
           </>}
         </nav>
         {runView && stage && <span className="stage-chip">{stage.replace(/_/g, ' ')}</span>}
-        {activeProjectActivity && activeProjectActivity.phase !== 'idle'
-          && (activeProjectActivity.active || activeProjectActivity.ageMs < 15_000) && (
+        {showPersistentActivity(activeProjectActivity) && (
           <div
             className="shell-activity"
             data-phase={activeProjectActivity.phase}
@@ -2038,6 +2037,16 @@ export default function App() {
           >
             <span className="shell-activity-dot" aria-hidden="true" />
             <span className="shell-activity-phase">{activeProjectActivity.phaseLabel}</span>
+            {activeProjectActivity.workerLabel && (
+              <span className="shell-activity-worker" title={activeProjectActivity.workerLabel}>
+                {activeProjectActivity.workerLabel}
+              </span>
+            )}
+            {activeProjectActivity.nodeLabel && activeProjectActivity.nodeLabel !== activeProjectActivity.detail && (
+              <span className="shell-activity-node" title={activeProjectActivity.nodeLabel}>
+                {activeProjectActivity.nodeLabel}
+              </span>
+            )}
             {activeProjectActivity.detail && <span className="shell-activity-detail mono">{activeProjectActivity.detail}</span>}
             <span className="shell-activity-fresh">{activeProjectActivity.freshness}</span>
           </div>

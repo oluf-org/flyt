@@ -30,10 +30,20 @@ const logEvents = (store, runId) =>
 
 test('read_file: reads an existing repo file from the bound workspace', async () => {
   const ctx = boundCtx();
+  let notifications = 0;
+  ctx.notify = () => { notifications += 1; };
   const rec = await executeTool('read_file', { path: 'existing.txt' }, ctx);
   assert.equal(rec.ok, true);
   assert.equal(rec.result.content, 'original contents\n');
   assert.equal(rec.result.target, 'workspace');
+  const edge = ctx.store.readMeta(ctx.runId).toolActivity['executor-task-1'];
+  assert.equal(edge.tool, 'read_file');
+  assert.equal(edge.subject, 'existing.txt');
+  assert.equal(edge.active, false);
+  assert.equal(edge.sequence, 2);
+  assert.equal(notifications, 2, 'start and finish both wake snapshot consumers');
+  const events = logEvents(ctx.store, ctx.runId).filter(e => e.event === 'tool_call');
+  assert.equal(events.length, 1);
 });
 
 test('read_file: missing file returns a self-correctable error, and is logged', async () => {
@@ -43,6 +53,54 @@ test('read_file: missing file returns a self-correctable error, and is logged', 
   assert.match(rec.error, /not found/);
   const calls = logEvents(ctx.store, ctx.runId).filter(e => e.event === 'tool_call' && e.tool === 'read_file');
   assert.equal(calls.length, 1); // every call is logged, success or failure
+});
+
+test('completed audit logging does not depend on live activity metadata', async () => {
+  const ctx = boundCtx();
+  const events = [];
+  ctx.store.writeToolActivity = () => null;
+  ctx.store.appendLog = (_runId, event) => events.push(event);
+  const rec = await executeTool('read_file', { path: 'existing.txt' }, ctx);
+  assert.equal(rec.ok, true);
+  assert.deepEqual(events.map(e => e.event), ['tool_call']);
+});
+
+test('a configured store without an audit writer fails loudly', async () => {
+  const ctx = boundCtx();
+  await assert.rejects(
+    executeTool('read_file', { path: 'existing.txt' }, { ...ctx, store: {} }),
+    /appendLog/
+  );
+});
+
+test('activity metadata failures cannot change tool outcomes', async () => {
+  const startFailure = boundCtx();
+  startFailure.store.writeToolActivity = () => { throw new Error('meta unavailable'); };
+  const completed = await executeTool('read_file', { path: 'existing.txt' }, startFailure);
+  assert.equal(completed.ok, true);
+
+  const finishFailure = boundCtx();
+  const original = finishFailure.store.writeToolActivity.bind(finishFailure.store);
+  finishFailure.store.writeToolActivity = (runId, node, state) => {
+    if (!state.active) throw new Error('meta became unavailable');
+    return original(runId, node, state);
+  };
+  const alsoCompleted = await executeTool('read_file', { path: 'existing.txt' }, finishFailure);
+  assert.equal(alsoCompleted.ok, true);
+});
+
+test('a failed completion audit still finalizes the live activity edge', async () => {
+  const ctx = boundCtx();
+  const states = [];
+  ctx.store.writeToolActivity = (_runId, _node, state) => {
+    states.push(state.active);
+    return state;
+  };
+  ctx.store.appendLog = (_runId, event) => {
+    if (event.event === 'tool_call') throw new Error('audit unavailable');
+  };
+  await assert.rejects(executeTool('read_file', { path: 'existing.txt' }, ctx), /audit unavailable/);
+  assert.deepEqual(states, [true, false]);
 });
 
 test('create_file: creates a new file, refuses to clobber an existing one', async () => {

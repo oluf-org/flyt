@@ -5,9 +5,15 @@
 // detailed run view, while the persistent chrome only needs identity, phase,
 // the allowlisted subject of the latest tool, and freshness.
 import { activeStreams } from './runStreams.js';
-import { currentNode, toolCalls } from './loopLive.js';
+import { currentNode } from './loopLive.js';
+import {
+  safeActivityFileSubject, safeActivityLabel, safeActivityToolName
+} from './activitySafety.js';
+
+export { safeActivityLabel } from './activitySafety.js';
 
 export const ACTIVITY_STALE_MS = 90_000;
+export const ACTIVITY_SETTLED_MS = 15_000;
 
 const PHASE_LABELS = {
   thinking: 'Thinking',
@@ -22,18 +28,22 @@ const PHASE_LABELS = {
   idle: 'Idle'
 };
 
-const SECRET = /(bearer\s+\S+|\b(?:sk|pk)-[a-z0-9_-]{8,}|\b(?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*[^\s,;]+)/gi;
-const SAFE_TOOL_SUBJECTS = new Set(['read_file', 'write_file', 'create_file', 'edit_file', 'glob']);
-
-export function safeActivityLabel(value, max = 64) {
-  if (value == null) return null;
-  const clean = String(value)
-    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
-    .replace(SECRET, '[redacted]')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!clean) return null;
-  return clean.length > max ? `${clean.slice(0, Math.max(1, max - 1))}…` : clean;
+function latestActivityTool(snapshot) {
+  const ordered = Object.entries(snapshot?.meta?.toolActivity ?? {})
+    .filter(([, edge]) => edge && typeof edge === 'object')
+    .sort(([, a], [, b]) => (Number(a.sequence) || 0) - (Number(b.sequence) || 0));
+  const current = ordered.filter(([, edge]) => edge.active === true).at(-1) ?? ordered.at(-1) ?? null;
+  if (!current) return { present: false, label: null };
+  const [, edge] = current;
+  const name = safeActivityToolName(edge.tool);
+  if (!name) return { present: edge.active === true, label: null };
+  // The edge owns the exact invocation's already-sanitized subject. Validate
+  // it again here; never infer current work from historical same-named calls.
+  const subject = safeActivityFileSubject(edge.subject);
+  return {
+    present: edge.active === true,
+    label: safeActivityLabel(`${name}${subject ? ` ${subject}` : ''}`, 76)
+  };
 }
 
 function workerFor(snapshot, node) {
@@ -66,30 +76,32 @@ function freshness(ageMs) {
   return `${Math.floor(ageMs / 3_600_000)}h ago`;
 }
 
-export function runActivity(record, now = Date.now(), { staleMs = ACTIVITY_STALE_MS } = {}) {
+export function runActivity(record, now = Date.now(), {
+  staleMs = ACTIVITY_STALE_MS,
+  settledMs = ACTIVITY_SETTLED_MS
+} = {}) {
   const snapshot = record?.snapshot ?? null;
   if (!snapshot?.meta) return null;
   const updatedAt = Number(record.updatedAt ?? now);
   const ageMs = Math.max(0, now - updatedAt);
   const live = record.live !== false;
   const node = currentNode(snapshot);
-  const call = toolCalls(snapshot, 1)[0] ?? null;
+  const latestTool = latestActivityTool(snapshot);
+  const tool = latestTool.label;
   const streamPresent = activeStreams(snapshot).some(s => Boolean(s.text));
   const phase = phaseFor(snapshot, {
-    live, ageMs, staleMs, hasTool: Boolean(call), hasStream: streamPresent, node
+    live, ageMs, staleMs, hasTool: latestTool.present, hasStream: streamPresent, node
   });
+  // A terminal outcome is useful feedback, but it is not ongoing activity.
+  // Retain it long enough to be noticed, then let both shell consumers clear.
+  if (!live && ['failed', 'cancelled', 'complete'].includes(phase) && ageMs >= settledMs) return null;
   const worker = workerFor(snapshot, node);
   const provider = safeActivityLabel(worker?.provider, 28);
   const model = safeActivityLabel(worker?.model, 56);
   const nodeLabel = safeActivityLabel(node?.label, 52);
-  const toolName = safeActivityLabel(call?.name, 28);
   // Commands, questions, searches and URLs can contain prompt text or
-  // credentials. Persistent chrome shows their tool name only; a small
-  // allowlist of local file operations may also show the path/pattern.
-  const toolSubject = SAFE_TOOL_SUBJECTS.has(call?.name)
-    ? safeActivityLabel(call?.argsPreview, 60)
-    : null;
-  const tool = toolName ? safeActivityLabel(`${toolName}${toolSubject ? ` ${toolSubject}` : ''}`, 76) : null;
+  // credentials. latestActivityTool exposes their allowlisted tool name only;
+  // file tools may additionally expose one exact structured path field.
   const phaseLabel = PHASE_LABELS[phase];
   const workerLabel = safeActivityLabel([provider, model].filter(Boolean).join('/'), 72);
   const detail = safeActivityLabel(tool ?? nodeLabel ?? model ?? provider, 80);
@@ -109,6 +121,10 @@ export function runActivity(record, now = Date.now(), { staleMs = ACTIVITY_STALE
     updatedAt, ageMs, freshness: freshnessLabel, ariaLabel,
     shortLabel: safeActivityLabel(detail ? `${phaseLabel} · ${detail}` : phaseLabel, 72)
   };
+}
+
+export function showPersistentActivity(status, liveCount = 0) {
+  return Number(liveCount) > 0 || Boolean(status && status.phase !== 'idle');
 }
 
 export function projectActivity(records, now = Date.now(), options = {}) {

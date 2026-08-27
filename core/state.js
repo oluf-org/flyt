@@ -132,7 +132,52 @@ export class RunStore {
     return readJson(path.join(this.runDir(runId), 'meta.json'));
   }
   writeMeta(runId, meta) {
-    writeJson(path.join(this.runDir(runId), 'meta.json'), meta);
+    let current = null;
+    try { current = this.readMeta(runId); } catch { /* first write */ }
+    const incoming = meta?.toolActivity ?? {};
+    const existing = current?.toolActivity ?? {};
+    const toolActivity = { ...existing };
+    // A stale whole-meta write must not resurrect an older activity edge over
+    // a newer one produced by a parallel node.
+    for (const [node, edge] of Object.entries(incoming)) {
+      if ((Number(edge?.sequence) || 0) >= (Number(toolActivity[node]?.sequence) || 0)) {
+        toolActivity[node] = edge;
+      }
+    }
+    const lifecycleChanged = current && (
+      meta?.stage !== current.stage
+      || meta?.interrupted !== current.interrupted
+      || meta?.paused !== current.paused
+    );
+    if (lifecycleChanged) {
+      const at = new Date().toISOString();
+      for (const [node, edge] of Object.entries(toolActivity)) {
+        if (edge?.active) toolActivity[node] = { ...edge, active: false, at };
+      }
+    }
+    writeJson(path.join(this.runDir(runId), 'meta.json'), {
+      ...meta,
+      ...(Object.keys(toolActivity).length ? { toolActivity } : {})
+    });
+  }
+  writeToolActivity(runId, nodeId, state) {
+    let meta;
+    try { meta = this.readMeta(runId); }
+    catch { return null; } // standalone tool invocation: no run snapshot to update
+    const activity = meta.toolActivity ?? {};
+    const sequence = Math.max(0, ...Object.values(activity).map(x => Number(x?.sequence) || 0)) + 1;
+    const edge = {
+      tool: String(state?.tool ?? '').slice(0, 100),
+      subject: typeof state?.subject === 'string' ? state.subject.slice(0, 60) : null,
+      active: state?.active === true,
+      at: new Date().toISOString(),
+      sequence
+    };
+    this.writeMeta(runId, {
+      ...meta,
+      toolActivity: { ...activity, [String(nodeId ?? 'run')]: edge }
+    });
+    return edge;
   }
   setStage(runId, stage, extra = {}) {
     const meta = this.readMeta(runId);

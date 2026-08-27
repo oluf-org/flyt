@@ -1,10 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectActivity, runActivity, safeActivityLabel } from '../src/activityStatus.js';
+import fs from 'node:fs';
+import {
+  ACTIVITY_SETTLED_MS, projectActivity, runActivity, safeActivityLabel, showPersistentActivity
+} from '../src/activityStatus.js';
 
-const snapshot = ({ stage = 'execution', stream = '', calls = [], meta = {} } = {}) => ({
+const snapshot = ({ stage = 'execution', stream = '', calls = [], meta = {}, toolActivity = null } = {}) => ({
   meta: {
-    runId: 'run-1', stage, nodeStatus: { work: stage === 'execution' ? 'active' : 'done' }, ...meta
+    runId: 'run-1', stage, nodeStatus: { work: stage === 'execution' ? 'active' : 'done' },
+    toolActivity: toolActivity ?? (calls.length ? {
+      work: {
+        tool: calls.at(-1).tool,
+        subject: calls.at(-1).args?.path ?? calls.at(-1).args?.pattern ?? null,
+        active: true, at: '2026-01-01T00:00:00.000Z', sequence: 1
+      }
+    } : {}),
+    ...meta
   },
   flow: {
     nodes: [{
@@ -31,6 +42,37 @@ test('activity phases distinguish thinking, streaming, and safe tool use', () =>
   assert.equal(tool.phase, 'tool');
   assert.equal(tool.tool, 'read_file src/App.jsx');
   assert.match(tool.ariaLabel, /Kimi|kimi-k3/i);
+});
+
+test('completed tools remain useful history without impersonating current work', () => {
+  const completed = snapshot({ calls: [
+    { tool: 'read_file', args: { path: 'src/old.js' }, ok: true }
+  ], toolActivity: {
+    work: { tool: 'read_file', subject: 'src/old.js', active: false, at: '2026-01-01T00:00:01.000Z', sequence: 2 }
+  } });
+  assert.equal(runActivity(record(completed), 10_100).phase, 'thinking');
+  assert.equal(runActivity(record(completed), 10_100).tool, 'read_file src/old.js');
+  completed.nodeOutputs.work = 'new private stream';
+  assert.equal(runActivity(record(completed), 10_100).phase, 'streaming');
+
+  completed.retrospectives.later = { toolCalls: [{ tool: 'bash', args: { command: 'old' }, ok: true }] };
+  completed.meta.toolActivity = {
+    work: { tool: 'read_file', subject: 'src/old.js', active: false, sequence: 3 },
+    later: { tool: 'bash', active: false, sequence: 2 }
+  };
+  assert.equal(runActivity(record(completed), 10_100).tool, 'read_file src/old.js',
+    'the sequence identifies an earlier node revisited after a later-inserted retrospective');
+
+  const repeated = snapshot({ calls: [
+    { tool: 'read_file', args: { path: 'src/first.js' }, ok: true },
+    { tool: 'read_file', args: { path: 'src/second.js' }, ok: true }
+  ], toolActivity: {
+    work: { tool: 'read_file', subject: 'src/second.js', active: true, sequence: 4 }
+  } });
+  assert.equal(runActivity(record(repeated), 10_100).tool, 'read_file src/second.js',
+    'an in-progress same-named call owns the exact current invocation subject');
+  repeated.meta.toolActivity.work.active = false;
+  assert.equal(runActivity(record(repeated), 10_100).tool, 'read_file src/second.js');
 });
 
 test('attention, terminal, and stale states settle deterministically', () => {
@@ -73,4 +115,95 @@ test('persistent activity never exposes prompts, streams, results, controls, or 
   assert.match(safeActivityLabel('api_key=super-secret-value'), /redacted/);
   assert.equal(safeActivityLabel('line\nwith\u0000controls', 40), 'line with controls');
   assert.ok(safeActivityLabel('x'.repeat(200), 20).length <= 20);
+
+  // Unknown tools and argument-shaped metadata never become persistent UI.
+  const extension = snapshot({ calls: [{ tool: 'custom_tool', args: {
+    subject: 'PRIVATE USER PROMPT', command: 'echo raw output'
+  } }] });
+  const extensionView = runActivity(record(extension), 10_100);
+  assert.equal(extensionView.phase, 'tool');
+  assert.equal(extensionView.tool, null);
+  assert.doesNotMatch(extensionView.ariaLabel, /PRIVATE|raw output/i);
+
+  // Even an allowlisted file tool gets no generic argsPreview escape hatch.
+  // Only its exact path/pattern field is considered, and it must look like a
+  // path rather than prompt prose, a secret, raw output, or a giant argument.
+  for (const path of [
+    'PRIVATE USER PROMPT',
+    'Summarize private report.txt',
+    'stdout PRIVATE COMMAND OUTPUT',
+    'api_key=super-secret-value.txt',
+    `${'x'.repeat(200)}.txt`
+  ]) {
+    const hostile = runActivity(record(snapshot({ calls: [{
+      tool: 'read_file', args: { path, argsPreview: 'src/decoy.js' }, ok: true
+    }] })), 10_100);
+    assert.equal(hostile.tool, 'read_file');
+    assert.doesNotMatch(JSON.stringify(hostile), /PRIVATE|COMMAND OUTPUT|super-secret|decoy|x{40}/i);
+  }
+
+  const credentials = [
+    'ghp_abcdefghijklmnopqrstuvwxyz1234',
+    'AKIA1234567890ABCDEF',
+    'eyJabcdefghijk.eyJabcdefghijk.abcdefghijkl'
+  ];
+  for (const credential of credentials) {
+    assert.doesNotMatch(safeActivityLabel(`worker ${credential}`), new RegExp(credential));
+    const secretPath = runActivity(record(snapshot({ calls: [{
+      tool: 'read_file', args: { path: `src/${credential}.txt` }, ok: true
+    }] })), 10_100);
+    assert.equal(secretPath.tool, 'read_file');
+    assert.doesNotMatch(JSON.stringify(secretPath), new RegExp(credential));
+  }
+
+  const metadata = snapshot();
+  metadata.flow.nodes[0].data.title = 'Review ghp_abcdefghijklmnopqrstuvwxyz1234';
+  metadata.flow.nodes[0].data.worker = {
+    provider: 'AKIA1234567890ABCDEF',
+    model: 'eyJabcdefghijk.eyJabcdefghijk.abcdefghijkl'
+  };
+  assert.doesNotMatch(JSON.stringify(runActivity(record(metadata), 10_100)),
+    /ghp_abcdefghijklmnopqrstuvwxyz1234|AKIA1234567890ABCDEF|eyJabcdefghijk/i);
+});
+
+test('terminal chrome is acknowledged briefly, then clears from shell and tabs', () => {
+  for (const stage of ['done', 'failed', 'cancelled']) {
+    const terminal = record(snapshot({ stage }), { live: false });
+    const fresh = runActivity(terminal, 10_000 + ACTIVITY_SETTLED_MS - 1);
+    assert.ok(fresh, `${stage} remains visible inside the acknowledgement window`);
+    assert.equal(showPersistentActivity(fresh), true, `${stage} is shown by shell and tabs`);
+    const expired = runActivity(terminal, 10_000 + ACTIVITY_SETTLED_MS);
+    assert.equal(expired, null, `${stage} expires at the retention boundary`);
+    assert.equal(showPersistentActivity(expired), false, `${stage} then clears from shell and tabs`);
+  }
+  assert.equal(showPersistentActivity({ phase: 'paused' }), true);
+  assert.equal(showPersistentActivity({ phase: 'stalled' }), true);
+  assert.equal(showPersistentActivity(null, 1), true, 'a live membership signal remains visible while its snapshot loads');
+});
+
+test('activity labels remain useful and accessible without relying on motion', () => {
+  const view = runActivity(record(snapshot()), 10_100);
+  assert.equal(view.phaseLabel, 'Thinking');
+  assert.match(view.ariaLabel, /AI activity: Thinking/);
+  assert.match(view.ariaLabel, /Updated now/);
+  assert.ok(view.shortLabel.length <= 72);
+});
+
+test('reduced-motion CSS disables both persistent activity animations', () => {
+  const css = fs.readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+  const blocks = [];
+  for (const match of css.matchAll(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{/g)) {
+    let depth = 1;
+    let end = match.index + match[0].length;
+    for (; end < css.length && depth; end += 1) {
+      if (css[end] === '{') depth += 1;
+      else if (css[end] === '}') depth -= 1;
+    }
+    blocks.push(css.slice(match.index, end));
+  }
+  const reduced = blocks.find(block => block.includes('.shell-activity-dot')) ?? '';
+  assert.match(reduced, /\.shell-activity-dot/);
+  assert.match(reduced, /\.tab-live-dot/);
+  assert.match(reduced, /animation:\s*none\s*!important/);
+  assert.match(reduced, /transform:\s*none\s*!important/);
 });

@@ -17,6 +17,7 @@ import { redactArgs } from './redact.js';
 import { normalizeToolset, SEED_TOOLSETS } from '../toolsets.js';
 import { makeContext, resolveGrant } from '../../src/toolGrants.js';
 import { normalizeTool, isDestructive as effectsAreDestructive } from '../../src/toolTypes.js';
+import { safeActivityToolSubject } from '../../src/activitySafety.js';
 
 export { validateArgs, schemaProblems, MAX_SCHEMA_DEPTH } from './schema.js';
 import { validateArgs } from './schema.js';
@@ -148,6 +149,16 @@ export async function executeTool(name, args, ctx) {
   const started = Date.now();
   const record = { tool: name, args, ok: false };
   const tool = registry.get(name);
+  const activityNode = ctx?.taskId ? `executor-${ctx.taskId}` : (ctx?.nodeId ?? 'run');
+  // The existing meta snapshot and audit log are the activity protocol. Keep
+  // arguments out of the live edge; the completed tool_call below owns the
+  // separately redacted detail record.
+  const activitySubject = safeActivityToolSubject(name, args);
+  const activityState = { tool: name, subject: activitySubject };
+  const liveEdge = writeActivity(ctx, activityNode, { ...activityState, active: true });
+  if (liveEdge) {
+    try { ctx?.notify?.(); } catch { /* observability cannot break a tool */ }
+  }
   try {
     if (!tool) throw new Error(`Unknown tool "${name}". Available: ${[...registry.keys()].join(', ')}`);
     const errors = validateArgs(tool.parameters, args ?? {});
@@ -162,11 +173,27 @@ export async function executeTool(name, args, ctx) {
   // The audit trail must be safe to read, share and attach to a bug report:
   // credentials are redacted from the arguments before anything is written,
   // and the record the caller gets back is the redacted one.
-  record.args = redactArgs(record.args, ctx?.secrets);
-  archiveResult(record, tool, ctx);
+  try {
+    record.args = redactArgs(record.args, ctx?.secrets);
+    archiveResult(record, tool, ctx);
 
-  ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: callerOf(ctx), ...record });
-  return record;
+    // A store is optional; appendLog on a configured store is not. Losing the
+    // required completion audit is an execution failure, never silent.
+    ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: callerOf(ctx), ...record });
+    return record;
+  } finally {
+    if (liveEdge) {
+      writeActivity(ctx, activityNode, { ...activityState, active: false });
+      try { ctx?.notify?.(); } catch { /* observability cannot break a tool */ }
+    }
+  }
+}
+
+// Live chrome is auxiliary observability. A corrupt or read-only meta snapshot
+// must not change whether the underlying tool succeeds, fails, or is audited.
+function writeActivity(ctx, node, state) {
+  try { return ctx.store?.writeToolActivity?.(ctx.runId, node, state) ?? null; }
+  catch { return null; }
 }
 
 // Which node made this call. The executor path has always stamped its task; an
