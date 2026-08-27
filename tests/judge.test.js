@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RunStore } from '../core/state.js';
-import { FlowRunner } from '../core/flowRunner.js';
+import { StackRunner } from '../core/stackRunner.js';
 import { JUDGE_SYSTEM, buildJudgePrompt, parseJudgeVerdict } from '../core/judge.js';
 import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
@@ -150,7 +150,7 @@ test('saveComparisonVerdict sanitizes junk and rejects an unknown record', () =>
   assert.throws(() => store.saveComparisonVerdict('cmp-nope', { summary: 's' }), /not found/);
 });
 
-// --- FlowRunner.judgeComparison ----------------------------------------------
+// --- StackRunner.judgeComparison ----------------------------------------------
 
 function judgeFlow() {
   return makeFlow(
@@ -179,7 +179,7 @@ test('judgeComparison runs the compare judge over both outputs and parses the ve
     calls.push(call);
     return /compare-judge/.test(call.system) ? VERDICT_TEXT : 'work output';
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const [a, b] = await settledPair(store, runner);
 
   const verdict = await runner.judgeComparison(a, b);
@@ -217,7 +217,7 @@ test('judgeComparison honors a configured judge model over the default worker', 
   const config = testConfig({
     resolveModelSource: model => ({ provider: 'script', model, apiKey: null })
   });
-  const runner = new FlowRunner(store, config);
+  const runner = new StackRunner(store, config);
   const [a, b] = await settledPair(store, runner);
 
   const verdict = await runner.judgeComparison(a, b, { judgeModel: 'fancy-judge' });
@@ -228,7 +228,7 @@ test('judgeComparison honors a configured judge model over the default worker', 
 test('judgeComparison refuses unsettled runs and runs without a final output', async () => {
   const store = makeStore();
   setScript(() => 'ok');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const [a, b] = await settledPair(store, runner);
 
   const live = store.createRun('still going'); // meta has no terminal stage

@@ -31,7 +31,7 @@ import path from 'node:path';
 // Is this pid still running? `kill(pid, 0)` sends no signal and only asks — the
 // standard way, and the only one that needs no dependency. EPERM means the
 // process exists and belongs to someone else, which still counts as alive.
-// The same check core/api.js and FlowRunner.isRunLive() already make; this is
+// The same check core/api.js and StackRunner.isRunLive() already make; this is
 // the third caller, and the one reconcile was missing.
 const isProcessAlive = pid => {
   try { process.kill(pid, 0); return true; }

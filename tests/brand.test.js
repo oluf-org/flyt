@@ -1,15 +1,9 @@
-// The brand is Flyt; the domain noun is still "flow" (D29).
+// The brand is Flyt; stacks and blocks are the canonical domain nouns (D62).
 //
 // This file exists to stop the scope question from being relitigated. The
-// rename covered brand surfaces only — app name, appId, window titles, the IPC
-// bridge, storage keys, log prefixes, the .flyt/ config directory, the mark. It
-// deliberately did NOT touch the vocabulary of the thing you build: a *flow* is
-// still a flow, so `.flow.yaml`, `flowlang`, `FlowRunner` and `flow.nodes` keep
-// their names and `grep -i flow` keeps returning thousands of hits forever.
-//
-// So the test asserts BOTH halves. Forbidding the brand strings alone would be
-// half an argument; the second half pins the domain vocabulary in place, so a
-// future "let me finish the rename" pass fails just as loudly as a leak.
+// rename covered brand surfaces first; the v2 cutover later made `.stack.yaml`,
+// `stacklang`, `StackRunner`, and `stack.blocks` canonical. Compatibility flow
+// code remains intentionally isolated while existing projects migrate.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -80,7 +74,7 @@ test('brand: the scan actually covers the files it claims to', () => {
   // A walk that silently returns nothing would make the test above vacuous.
   assert.ok(files.length > 40, `expected a real file list, got ${files.length}`);
   for (const expected of ['index.html', 'package.json', 'electron-builder.yml',
-                          'electron/preload.cjs', 'electron/main.js', 'src/App.jsx',
+                          'electron/preload.cjs', 'electron/main.js', 'src/Root.jsx',
                           'core/projects.js', 'core/workspace.js']) {
     assert.ok(files.includes(expected), `${expected} is not being scanned`);
   }
@@ -117,35 +111,21 @@ test('brand: the new name is actually wired up, not just the old one removed', (
     /exposeInMainWorld\('flyt'/);
 });
 
-// --- The other half of the boundary: the domain noun stays put -------------
+// --- Canonical vocabulary and its explicit compatibility boundary ----------
 
-test('brand: "flow" is still the domain noun and was NOT renamed', () => {
-  // The DSL, its parser, and the runner keep their names on purpose.
-  for (const p of ['core/flowlang/parse.js', 'core/flowlang/serialize.js',
-                   'core/flowRunner.js', 'core/flowstore.js', 'FLOW_LANG.md', 'FLOW_NODES.md']) {
-    assert.ok(fs.existsSync(path.join(REPO, p)), `${p} must keep its name (D29)`);
-  }
-  // Flows on disk are still *.flow.yaml — renaming the extension would have
-  // meant a migration for every existing project, which D29 explicitly
-  // declined. Asserted against the store that mints the filenames, NOT against
-  // flows/ on disk: that directory is gitignored user data and simply does not
-  // exist on a fresh checkout (which is where CI runs).
-  const store = fs.readFileSync(path.join(REPO, 'core/flowstore.js'), 'utf8');
-  assert.match(store, /'\.flow\.yaml'/, 'the on-disk flow extension must not be rebranded');
-
-  // If a working copy does have flows/, they must match that extension too.
-  const flowsDir = path.join(REPO, 'flows');
-  if (fs.existsSync(flowsDir)) {
-    const stray = fs.readdirSync(flowsDir)
-      .filter(f => f.endsWith('.yaml') && !f.endsWith('.flow.yaml'));
-    assert.deepEqual(stray, [], 'flows/ should only hold *.flow.yaml files');
+test('brand: stack vocabulary is canonical after the v2 cutover', () => {
+  for (const p of ['core/stacklang/parse.js', 'core/stacklang/serialize.js',
+                   'core/stackRunner.js', 'core/stackstore.js', 'STACK_LANG.md', 'BLOCKS.md']) {
+    assert.ok(fs.existsSync(path.join(REPO, p)), `${p} is part of the canonical stack surface`);
   }
 
-  // And the word survives in code at scale: if some future pass "finished" the
-  // rename, this count would collapse.
-  let hits = 0;
-  for (const rel of scannedFiles()) {
-    hits += (fs.readFileSync(path.join(REPO, rel), 'utf8').match(/flow/gi) ?? []).length;
+  const store = fs.readFileSync(path.join(REPO, 'core/stackstore.js'), 'utf8');
+  assert.match(store, /\.stack\.yaml/, 'canonical stacks use the .stack.yaml extension');
+  assert.match(store, /parseFlow/, 'the stack store owns the legacy migration boundary');
+
+  const brand = fs.readFileSync(path.join(REPO, 'core/brand.js'), 'utf8');
+  for (const legacyName of ['LEGACY_FLOWS_DIR', 'LEGACY_FLOW_EXTENSION',
+                            'LEGACY_FLOW_NODES_KEY', 'LEGACY_FLOW_GRAPH_KEY']) {
+    assert.match(brand, new RegExp(`export const ${legacyName}`), `${legacyName} must remain explicit`);
   }
-  assert.ok(hits > 500, `expected "flow" to remain everywhere as the domain noun, saw ${hits}`);
 });

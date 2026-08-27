@@ -1,9 +1,9 @@
-// Unit tests for the shared layout/validation helpers (src/flowLayout.js):
+// Unit tests for the shared layout/validation helpers (src/stackLayout.js):
 // cycle detection used by the editor's connection validation, and the layered
 // auto-layout used by the editor button and the runner's materializer.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { wouldCreateCycle, layoutPositions, arrangeForCanvas, fitOrchBox, shrinkOrchBox } from '../src/flowLayout.js';
+import { wouldCreateCycle, layoutPositions, arrangeForCanvas, fitOrchBox, shrinkOrchBox } from '../src/stackLayout.js';
 import { makeFlow, node, edge } from './helpers.js';
 
 test('wouldCreateCycle: rejects self-loops and closing edges, allows forward edges', () => {

@@ -1,5 +1,5 @@
 // Flow definitions: user-editable workflow graphs in flows/, with the Flow
-// DSL (*.flow.yaml, see FLOW_LANG.md) as the source of truth for STRUCTURE
+// DSL (*.flow.yaml, see STACK_LANG.md) as the source of truth for STRUCTURE
 // (nodes, template refs, overrides, relations, ports, gates) and a sidecar
 // <id>.layout.json for PRESENTATION (canvas positions), written only here.
 //
@@ -14,22 +14,14 @@
 // Every runnable workflow starts from a User Input node (type 'input') and
 // ends in an Output node (type 'output').
 //
-// The classic linear pipeline ships as "Default pipeline" — a regular,
-// editable flow composed of Node Library templates, seeded on first launch
-// (and re-seeded if deleted; it is the app's built-in starting point).
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseFlow } from './flowlang/parse.js';
-import { serializeFlow } from './flowlang/serialize.js';
-import { layoutPositions } from '../src/flowLayout.js';
+import { parseFlow } from './stacklang/parse.js';
+import { serializeFlow } from './stacklang/serialize.js';
+import { layoutPositions } from '../src/stackLayout.js';
 import { UNTITLED_FLOW, ensureStructuralNodes, migrateLegacyTemplates } from '../src/flowTypes.js';
 
-export const DEFAULT_PIPELINE_ID = 'default-pipeline';
-
-// The tiered default pipelines (DECISIONS.md D27): each is a refiner-first
-// flow, shipped with two example worker modes so the mode picker and the
-// comparison view have something to run day one.
-export const SEED_PIPELINE_IDS = ['pipeline-low', 'pipeline-medium', 'pipeline-high', 'pipeline-ultra'];
+export const LOOP_TASK_ID = 'loop-task';
 
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
@@ -39,35 +31,6 @@ function slugModeId(name) {
   if (typeof name !== 'string') return null;
   const slug = name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
   return slug || null;
-}
-
-// The enriched planner brief the "High" and "Ultra" tiers run at high effort —
-// carried as node DATA (a `system` override) so the tier is pure content, not a
-// code fork (T8). It still opens with `ROLE: plan-start` so role detection and
-// the run's logging stay identical to the default planner.
-const HIGH_PLANNER_SYSTEM = [
-  'ROLE: plan-start',
-  'You are the Start node of an advanced planning flowchart, running at HIGH effort.',
-  'Given the user brief, produce ONLY a structured tasks.md.',
-  'Decompose the work into the smallest independently-verifiable tasks that still',
-  'carry real meaning. Prefer breadth: surface tasks that can run IN PARALLEL and',
-  'say so, and state dependencies explicitly so the orchestrator can widen each wave.',
-  'For every task include a "Context files:" section naming each file and, per file,',
-  'exactly which part is needed — the smallest sufficient context, never the whole repo.',
-  'Assign a Category from: Code general, Code design, documentation, Test-creation, and',
-  'suggest the "work" template. Call out risks, unknowns, and acceptance criteria per task.',
-  'Be exhaustive about structure and ruthless about context size.'
-].join('\n');
-
-// Two example worker bundles — the same graph on a Fable brain vs a GPT brain —
-// applied to the given "brain" node ids. Picked at launch; layered as launch
-// overrides at run start (T1).
-function workerModes(brainIds) {
-  const bundle = worker => Object.fromEntries(brainIds.map(id => [id, { worker }]));
-  return {
-    fable: { name: 'Fable', overrides: bundle({ provider: 'anthropic', model: 'claude-fable-5' }) },
-    gpt: { name: 'GPT', overrides: bundle({ provider: 'openai', model: 'gpt-5' }) }
-  };
 }
 
 export class FlowStore {
@@ -111,9 +74,7 @@ export class FlowStore {
       } catch { /* unparseable — ignore in the catalog */ }
     }
     return [...entries.values()]
-      .sort((a, b) =>
-        // Keep the shipped default pipeline at the top of the catalog.
-        (a.id === DEFAULT_PIPELINE_ID ? -1 : b.id === DEFAULT_PIPELINE_ID ? 1 : a.name.localeCompare(b.name) || a.id.localeCompare(b.id)));
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   }
 
   load(id) {
@@ -297,162 +258,39 @@ export class FlowStore {
     return { modeId: id, mode };
   }
 
-  // The classic plan → approve → route → execute → verify pipeline, rebuilt
-  // from Node Library templates (GOALS.md migration step 5):
-  //   User Input → Plan (plan-start) → [approval gate] Plan evaluation
-  //   (plan-eval, materializes the work nodes) → Final evaluation → Output.
-  // Seeded when missing; a regular editable flow like any other.
-  ensureDefaultPipeline() {
-    if (fs.existsSync(this.flowPath(DEFAULT_PIPELINE_ID)) || fs.existsSync(this.legacyPath(DEFAULT_PIPELINE_ID))) return false;
-    const pos = i => ({ x: 0, y: i * 130 });
-    this.save({
-      id: DEFAULT_PIPELINE_ID,
-      name: 'Default pipeline',
-      nodes: [
-        { id: 'user-input', type: 'input', kind: 'user', position: pos(0), data: {} },
-        { id: 'plan', templateId: 'plan-start', position: pos(1), overrides: { title: 'Planning' } },
-        // The post-planning human gate: pause for approval before routing.
-        //
-        // `toolCeiling: 'loop'` is set HERE and not only in the generated file,
-        // because `flows/` is gitignored and this builder is what a fresh
-        // install actually gets. This node is the one that materializes the
-        // work nodes, and a generated node inherits its owner's ceiling
-        // narrowed by its own (DESIGN-SPEC.md §5) — so setting it here sets it
-        // for the whole downstream walk. The `loop` set is repo-full plus the
-        // tools that let a worker understand the SYSTEM it is inside: the queue
-        // it was picked from, why something is stuck, the run that failed last
-        // time, the project's own gates, and a way to ask a question instead of
-        // guessing (D45).
-        { id: 'route', templateId: 'evaluation', position: pos(2), overrides: { title: 'Routing', evalType: 'plan', toolCeiling: 'loop', requiresApproval: true } },
-        { id: 'verify', templateId: 'evaluation', position: pos(3), overrides: { title: 'Verification', evalType: 'final' } },
-        { id: 'result', type: 'output', kind: 'user', position: pos(4), data: {} }
-      ],
-      edges: [
-        { id: 'e-user-input-plan', source: 'user-input', target: 'plan' },
-        { id: 'e-plan-route', source: 'plan', target: 'route' },
-        { id: 'e-route-verify', source: 'route', target: 'verify' },
-        { id: 'e-verify-result', source: 'verify', target: 'result' }
-      ]
-    });
-    return true;
-  }
-
   #seedMissing(id) {
     return !fs.existsSync(this.flowPath(id)) && !fs.existsSync(this.legacyPath(id));
   }
 
-  // The tiered default pipelines (DECISIONS.md D27). Each is seeded only when
-  // absent, so user edits (and deletions) are never overwritten. Returns the
-  // ids actually created.
-  ensureSeedPipelines() {
-    const builders = {
-      'pipeline-low': () => this.#lowPipeline(),
-      'pipeline-medium': () => this.#mediumPipeline(),
-      'pipeline-high': () => this.#highPipeline(),
-      'pipeline-ultra': () => this.#ultraPipeline()
-    };
-    const created = [];
-    for (const id of SEED_PIPELINE_IDS) {
-      if (this.#seedMissing(id)) { this.save(builders[id]()); created.push(id); }
-    }
-    return created;
-  }
-
-  // Low — refine → single work node. The quickest path for a well-scoped task.
-  #lowPipeline() {
+  // Compatibility execution for the current Loop supervisor. The shipping
+  // file is now stacks/loop-task.stack.yaml; until the supervisor itself is
+  // moved onto the kernel runner, a fresh install still needs one authored
+  // tool-holding node rather than a plan that can finish without doing work.
+  ensureLoopTask() {
+    if (!this.#seedMissing(LOOP_TASK_ID)) return false;
     const pos = i => ({ x: 0, y: i * 130 });
-    return {
-      id: 'pipeline-low', name: 'Low',
-      description: 'Refine the request, then one work node. The quickest path for a well-scoped task.',
+    this.save({
+      id: LOOP_TASK_ID,
+      name: 'Work one backlog task',
+      description: 'Compatibility projection of the canonical loop-task stack for the supervisor.',
       nodes: [
         { id: 'input', type: 'input', kind: 'user', position: pos(0), data: {} },
-        { id: 'refine', templateId: 'prompt-refiner', position: pos(1), overrides: {} },
-        { id: 'work', templateId: 'work', position: pos(2), overrides: { category: 'Code general', effort: 'medium' }, expose: ['worker', 'effort'] },
-        { id: 'output', type: 'output', kind: 'user', position: pos(3), data: {} }
+        {
+          id: 'work', templateId: 'work', position: pos(1),
+          overrides: {
+            title: 'Do the task', category: 'Code general', effect: 'workspace-change',
+            toolCeiling: 'loop', tools: ['loop'],
+            instructions: 'Work the backlog task exactly as written. Read before writing, stay inside the blast radius, run the declared gates, inspect git status, and never report success over a red gate.',
+          },
+        },
+        { id: 'output', type: 'output', kind: 'user', position: pos(2), data: {} },
       ],
       edges: [
-        { id: 'e-input-refine', source: 'input', target: 'refine' },
-        { id: 'e-refine-work', source: 'refine', target: 'work' },
-        { id: 'e-work-output', source: 'work', target: 'output' }
+        { id: 'e-input-work', source: 'input', target: 'work' },
+        { id: 'e-work-output', source: 'work', target: 'output' },
       ],
-      modes: workerModes(['refine', 'work'])
-    };
+    });
+    return true;
   }
 
-  // Medium — refine → plan → orchestrator (1–5). Planning with a bounded swarm.
-  #mediumPipeline() {
-    const pos = i => ({ x: 0, y: i * 130 });
-    return {
-      id: 'pipeline-medium', name: 'Medium',
-      description: 'Refine, plan, then an orchestrator that fans the plan out to a small swarm (1–5 nodes).',
-      nodes: [
-        { id: 'input', type: 'input', kind: 'user', position: pos(0), data: {} },
-        { id: 'refine', templateId: 'prompt-refiner', position: pos(1), overrides: {} },
-        { id: 'plan', templateId: 'plan-start', position: pos(2), overrides: { title: 'Plan', effort: 'medium' } },
-        { id: 'orchestrate', type: 'orchestrator', kind: 'ai', position: pos(3), data: { title: 'Orchestrate', minNodes: 1, maxNodes: 5 } },
-        { id: 'output', type: 'output', kind: 'user', position: pos(4), data: {} }
-      ],
-      edges: [
-        { id: 'e-input-refine', source: 'input', target: 'refine' },
-        { id: 'e-refine-plan', source: 'refine', target: 'plan' },
-        { id: 'e-plan-orchestrate', source: 'plan', target: 'orchestrate' },
-        { id: 'e-orchestrate-output', source: 'orchestrate', target: 'output' }
-      ],
-      modes: workerModes(['refine', 'plan', 'orchestrate'])
-    };
-  }
-
-  // High — Medium's graph at high effort: an enriched planner and a wider
-  // orchestrator budget (2–10), with that budget exposed as a run input.
-  #highPipeline() {
-    const pos = i => ({ x: 0, y: i * 130 });
-    return {
-      id: 'pipeline-high', name: 'High',
-      description: 'Refine, plan deeply, then a wider orchestrated swarm (2–10 nodes). For substantial, decomposable work.',
-      nodes: [
-        { id: 'input', type: 'input', kind: 'user', position: pos(0), data: {} },
-        { id: 'refine', templateId: 'prompt-refiner', position: pos(1), overrides: {} },
-        { id: 'plan', templateId: 'plan-start', position: pos(2), overrides: { title: 'Plan', effort: 'high', system: HIGH_PLANNER_SYSTEM } },
-        { id: 'orchestrate', type: 'orchestrator', kind: 'ai', position: pos(3), data: { title: 'Orchestrate', minNodes: 2, maxNodes: 10 }, expose: ['minNodes', 'maxNodes'] },
-        { id: 'output', type: 'output', kind: 'user', position: pos(4), data: {} }
-      ],
-      edges: [
-        { id: 'e-input-refine', source: 'input', target: 'refine' },
-        { id: 'e-refine-plan', source: 'refine', target: 'plan' },
-        { id: 'e-plan-orchestrate', source: 'plan', target: 'orchestrate' },
-        { id: 'e-orchestrate-output', source: 'orchestrate', target: 'output' }
-      ],
-      modes: workerModes(['refine', 'plan', 'orchestrate'])
-    };
-  }
-
-  // Ultra — High plus a final evaluation between the orchestrator and the
-  // output, wired back to the orchestrator by a feedback edge for one bounded
-  // retry when the work falls short of the plan.
-  #ultraPipeline() {
-    const pos = i => ({ x: 0, y: i * 130 });
-    return {
-      id: 'pipeline-ultra', name: 'Ultra',
-      description: 'High plus a final evaluation that can send the swarm back once for a bounded retry.',
-      nodes: [
-        { id: 'input', type: 'input', kind: 'user', position: pos(0), data: {} },
-        { id: 'refine', templateId: 'prompt-refiner', position: pos(1), overrides: {} },
-        { id: 'plan', templateId: 'plan-start', position: pos(2), overrides: { title: 'Plan', effort: 'high', system: HIGH_PLANNER_SYSTEM } },
-        { id: 'orchestrate', type: 'orchestrator', kind: 'ai', position: pos(3), data: { title: 'Orchestrate', minNodes: 2, maxNodes: 10 }, expose: ['minNodes', 'maxNodes'] },
-        { id: 'evaluate', templateId: 'evaluation', position: pos(4), overrides: { title: 'Final evaluation', evalType: 'final' } },
-        { id: 'output', type: 'output', kind: 'user', position: pos(5), data: {} }
-      ],
-      edges: [
-        { id: 'e-input-refine', source: 'input', target: 'refine' },
-        { id: 'e-refine-plan', source: 'refine', target: 'plan' },
-        { id: 'e-plan-orchestrate', source: 'plan', target: 'orchestrate' },
-        { id: 'e-orchestrate-evaluate', source: 'orchestrate', target: 'evaluate' },
-        { id: 'e-evaluate-output', source: 'evaluate', target: 'output' },
-        // Feedback channel: the final evaluation judges the swarm's aggregate
-        // and may send it back once (bounded retry) via a pass/retry verdict.
-        { id: 'e-evaluate-orchestrate-fb', source: 'evaluate', target: 'orchestrate', sourceHandle: 'feedback' }
-      ],
-      modes: workerModes(['refine', 'plan', 'orchestrate', 'evaluate'])
-    };
-  }
 }

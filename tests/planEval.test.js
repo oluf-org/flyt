@@ -132,7 +132,7 @@ test('parseStitchDirectives: valid tasks kept, invalid dropped with error', () =
   assert.match(r.errors[0], /fixTasks\[1\]/);
 });
 
-// Category and template are documented 1:1 (FLOW_NODES.md): the category picks
+// Category and template are documented 1:1 (BLOCKS.md): the category picks
 // the model, the template picks the tools and base type. A live run emitted
 // { category: 'Code general', template: 'code-design-step' } for "Implement and
 // export tag filtering" — nothing checked, and the node ran with the wrong

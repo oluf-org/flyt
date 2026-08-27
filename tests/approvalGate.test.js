@@ -1,6 +1,6 @@
 // The pre-node approval checkpoint must honour approvalMode the way the other
 // readers of it already do. The documented contract sits on the tool gate
-// (core/flowRunner.js, runPendingTasks/isGated): DESIGN-SPEC.md §5 — 'always'
+// (core/stackRunner.js, runPendingTasks/isGated): DESIGN-SPEC.md §5 — 'always'
 // IS "the agent runs unattended", so 'always' means nothing is gated, whatever
 // the node says. isGated() returned false under 'always' and the question
 // gates answered their own questions under it, but gate() read only the node
@@ -12,7 +12,7 @@
 // 'ask' and 'smart' pause exactly as before; no mode's meaning changes.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FlowRunner } from '../core/flowRunner.js';
+import { StackRunner } from '../core/stackRunner.js';
 import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge, roleOf } from './helpers.js';
 
 const gatedFlow = () => makeFlow(
@@ -24,7 +24,7 @@ const gatedFlow = () => makeFlow(
 test("approvalMode 'always': a requiresApproval node never parks — the checkpoint is passed and logged", async () => {
   const store = makeStore();
   setScript(() => 'step output');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   // Started unattended: nothing in this test ever answers a gate.
   const runId = runner.start(gatedFlow(), { approvalMode: 'always' });
 
@@ -51,7 +51,7 @@ test("approvalMode 'always': a requiresApproval node never parks — the checkpo
 test("approvalMode 'ask': a requiresApproval node still pauses for a human, then approves through", async () => {
   const store = makeStore();
   setScript(() => 'step output');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(gatedFlow(), { approvalMode: 'ask' });
 
   assert.equal(await waitForStage(store, runId, ['awaiting_approval', 'failed']), 'awaiting_approval');
@@ -69,7 +69,7 @@ test("approvalMode 'ask': a requiresApproval node still pauses for a human, then
 test("approvalMode 'smart': a requiresApproval node still pauses for a human", async () => {
   const store = makeStore();
   setScript(() => 'step output');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(gatedFlow(), { approvalMode: 'smart' });
 
   assert.equal(await waitForStage(store, runId, ['awaiting_approval', 'failed']), 'awaiting_approval');
@@ -88,7 +88,7 @@ test('without a node flag the pre-node gate stays inert in every mode', async ()
   for (const approvalMode of ['always', 'ask']) {
     const store = makeStore();
     setScript(() => 'step output');
-    const runner = new FlowRunner(store, testConfig());
+    const runner = new StackRunner(store, testConfig());
     const runId = runner.start(flow(), { approvalMode });
     assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done',
       `ungated node at ${approvalMode}`);
@@ -115,7 +115,7 @@ test("approvalMode 'always': an ESCALATION gate still parks — that one is not 
     roleOf(system) === 'step-eval'
       ? '```json\n{ "verdict": "escalate", "reason": "a human should look at this" }\n```'
       : 'work output');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
      node('work', 'aiStep', { role: 'execute' }),
@@ -137,7 +137,7 @@ test('an approvalMode nothing recognises gates, rather than assuming nobody is t
   // newer version must never read as "run unattended".
   const store = makeStore();
   setScript(() => 'step output');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(gatedFlow(), { approvalMode: 'alway' });
 
   assert.equal(await waitForStage(store, runId, ['awaiting_approval', 'done', 'failed']),

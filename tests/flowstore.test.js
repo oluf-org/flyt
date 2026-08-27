@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FlowStore, DEFAULT_PIPELINE_ID } from '../core/flowstore.js';
+import { FlowStore } from '../core/flowstore.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'llm-flow-store-'));
 
@@ -86,14 +86,4 @@ test('flowstore: create + remove use the DSL files', () => {
   store.remove(flow.id);
   assert.ok(!fs.existsSync(store.flowPath(flow.id)));
   assert.ok(!fs.existsSync(store.layoutPath(flow.id)));
-});
-
-test('flowstore: default pipeline seeds once, as DSL', () => {
-  const store = new FlowStore(tmp());
-  assert.equal(store.ensureDefaultPipeline(), true);
-  assert.equal(store.ensureDefaultPipeline(), false);
-  const flow = store.load(DEFAULT_PIPELINE_ID);
-  assert.deepEqual(flow.nodes.map(n => n.id), ['user-input', 'plan', 'route', 'verify', 'result']);
-  assert.equal(flow.nodes.find(n => n.id === 'route').overrides.requiresApproval, true);
-  assert.deepEqual(store.list()[0], { id: DEFAULT_PIPELINE_ID, name: 'Default pipeline' });
 });

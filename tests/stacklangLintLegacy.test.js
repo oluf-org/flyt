@@ -1,7 +1,7 @@
 // Flow DSL linter: schema layer + every semantic rule, valid/invalid pairs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lintText, lintFlow, RUNTIME_RULES } from '../core/flowlang/lint.js';
+import { lintText, lintFlow, RUNTIME_RULES } from '../core/stacklang/lint.js';
 import { SEED_NODE_TEMPLATES, normalizeTemplate } from '../src/flowTypes.js';
 import { builtinDefinitions } from '../core/tools/builtins.js';
 import { normalizeTool } from '../src/toolTypes.js';
@@ -121,7 +121,7 @@ test('lint: tools override IS valid on agentTask templates', () => {
 
 test('lint: object contextSpec is valid on a template node; a string is rejected', () => {
   // contextSpec is { files: [{ path, description? }] } everywhere in the runtime
-  // (core/planEval.js, core/flowRunner.js) — the schema must accept that shape
+  // (core/planEval.js, core/stackRunner.js) — the schema must accept that shape
   // on a `use:` instance, not force it to a string.
   const ok = lintText(
     doc('nodes:\n  a:\n    use: work\n    contextSpec: { files: [{ path: src/x.ts, description: only the exports }] }\nflow:\n  - input -> a -> output\n'),

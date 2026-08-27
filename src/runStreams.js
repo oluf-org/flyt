@@ -4,7 +4,7 @@
 // testable without a DOM — the same split as flowTypes.js / flowLayout.js.
 //
 // This needs no channel of its own: the runner streams partial model text into
-// the very files a finished node writes (core/flowRunner.js streamInto), so a
+// the very files a finished node writes (core/stackRunner.js streamInto), so a
 // snapshot already carries the live text, and a streaming flush ships only the
 // one changed entry (core/snapshotDiff.js).
 import { TYPE_META, nodeLabel } from './flowTypes.js';

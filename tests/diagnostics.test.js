@@ -272,7 +272,7 @@ test('a run that is not parked carries no question block', () => {
 
 // --- a run parked on an approval gate ---------------------------------------
 //
-// awaiting_approval parks for three different reasons (flowRunner's
+// awaiting_approval parks for three different reasons (stackRunner's
 // pendingGateKind), and every one of them used to render as bare stage +
 // call stats: not which node was waiting, not why, and not the command that
 // releases it — which is the only thing the person running `flyt why` needs.

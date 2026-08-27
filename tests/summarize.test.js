@@ -1,10 +1,10 @@
-// Summary nodes (DESIGN-SPEC.md §7, D5–D8): flowRunner.summarizeOutputs and
+// Summary nodes (DESIGN-SPEC.md §7, D5–D8): stackRunner.summarizeOutputs and
 // its persistence — summaries/<key>.md + summaries/index.json round-tripping
 // into the snapshot, prompt assembly (named sources, truncation budget),
 // no-model and call-error degradation, delete and position moves.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FlowRunner } from '../core/flowRunner.js';
+import { StackRunner } from '../core/stackRunner.js';
 import { makeStore, setScript, roleOf, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
 const goalOf = prompt => (prompt.match(/GOAL:\n(.+)/) ?? [])[1]?.trim();
@@ -19,7 +19,7 @@ function smallFlow() {
 }
 
 async function doneRun(store) {
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(smallFlow());
   assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
   return { runner, runId };

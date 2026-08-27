@@ -1,8 +1,8 @@
 # TOOLS — the tool contract (`core/tools/*.js`, `tools/*.json`)
 
 The AI-facing contract for adding, changing and trying a Flyt tool. Peer to
-[`FLOW_LANG.md`](./FLOW_LANG.md) (how flows are authored) and
-[`FLOW_NODES.md`](./FLOW_NODES.md) (what nodes do). The safety model these rules
+[`STACK_LANG.md`](./STACK_LANG.md) (how flows are authored) and
+[`BLOCKS.md`](./BLOCKS.md) (what nodes do). The safety model these rules
 serve lives in [`DESIGN-SPEC.md`](./DESIGN-SPEC.md) §5.
 
 A tool is **a capability a model may call**. It is app-level, not per project:

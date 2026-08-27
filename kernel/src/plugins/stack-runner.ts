@@ -60,6 +60,20 @@ interface BlockStep {
   outcome: BlockOutcome;
 }
 
+function blockIds(node: StackNode): Set<string> {
+  if (node.kind === 'block') return new Set([node.id]);
+  return new Set(node.children.flatMap(child => [...blockIds(child)]));
+}
+
+function parallelCarry(node: ParallelNode, steps: readonly BlockStep[]): string | null {
+  const outputs = node.children.map(lane => {
+    const ids = blockIds(lane);
+    const last = [...steps].reverse().find(step => ids.has(step.node.id));
+    return last ? `## ${lane.id}\n${last.outcome.output}` : null;
+  }).filter((value): value is string => value !== null);
+  return outputs.length ? outputs.join('\n\n') : null;
+}
+
 /**
  * One run in flight.
  *
@@ -321,7 +335,8 @@ export class StackRunner extends Service implements AgentsSeam {
       steps.push(...ran);
       const last = ran.at(-1);
       if (last?.outcome.status === 'failed') break;
-      if (last) carried = last.outcome.output;
+      if (child.kind === 'parallel') carried = parallelCarry(child, ran) ?? carried;
+      else if (last) carried = last.outcome.output;
     }
     return steps;
   }
