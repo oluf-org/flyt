@@ -124,6 +124,12 @@ test('manual landing can name the same independent reviewer as the loop', () => 
     'manual landing streams stage progress while preserving clean JSON output');
 });
 
+test('the live loop headline labels spend as belonging to this session', () => {
+  const source = fs.readFileSync(cli, 'utf8');
+  assert.match(source, /st\.spend\.usd\.toFixed\(2\).*this session/,
+    'an unlabelled rolling total previously looked like the cost of this run');
+});
+
 test('flyt retry refuses a missing argument, and a run that is not there', () => {
   // `die` exits 1; the pre-flight flag refusal is what exits 2.
   const noArgs = run(['retry']);

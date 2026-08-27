@@ -466,11 +466,15 @@ export class Supervisor {
       // and 0 landed cannot otherwise say whether it declined to work or
       // found nothing to work on.
       setAside: this.setAside ?? 0,
-      // Recorded spend PLUS what the runs in flight have already cost. A panel
-      // that shows only settled spend reads $0 through the whole stretch the
-      // money is being spent, which is the one stretch somebody is watching it
-      // for. `live` is broken out so a reader can tell the two apart.
+      // THIS session's recorded spend PLUS what its runs in flight have already
+      // cost. A bare rolling-day total here made the terminal say a fresh loop
+      // had spent money that belonged to earlier sessions. `live` is broken out
+      // so a reader can tell settled and in-flight cost apart.
       spend: this.#spendNow(),
+      // Keep the standing guard's rolling window visible as a separately named
+      // fact. Consumers that care about the project's cap can use this without
+      // pretending it is what the current session spent.
+      windowSpend: this.#windowSpendNow(),
       noEscalate: this.noEscalate
     };
   }
@@ -1333,15 +1337,27 @@ export class Supervisor {
       + ' raise --task-usd to work it again.';
   }
 
-  /** The window total as it stands right now, in-flight runs included. */
+  /** This session's total as it stands right now, in-flight runs included. */
   #spendNow() {
     if (!this.ledger) return null;
-    return totalsWithLive(this.ledger, { sinceMs: this.#windowMs() },
+    const now = Date.now();
+    const sinceStart = Math.max(1, now - (this.startedAtMs ?? now));
+    return totalsWithLive(this.ledger, { sinceMs: sinceStart },
       {
         store: this.store,
         // A finished run remains visible while gates/review/canary run, but its
         // spend has already moved into the ledger. Counting it as live here
         // would double the same calls for the entire landing phase.
+        runIds: [...this.inFlight.values()].filter(hb => !hb.accounted).map(hb => hb.runId)
+      });
+  }
+
+  /** The configured rolling-window total, separately labelled from the session. */
+  #windowSpendNow() {
+    if (!this.ledger) return null;
+    return totalsWithLive(this.ledger, { sinceMs: this.#windowMs() },
+      {
+        store: this.store,
         runIds: [...this.inFlight.values()].filter(hb => !hb.accounted).map(hb => hb.runId)
       });
   }

@@ -831,7 +831,7 @@ async function main() {
             // Starts that did no work. Without it a bounded session reporting
             // 0/0 cannot be told from one that found nothing to do (t-0105).
             + (st.setAside ? `, ${st.setAside} set aside` : '')
-            + (st.spend ? `, ${st.spend.usd.toFixed(2)}` : ''));
+            + (st.spend ? `, $${st.spend.usd.toFixed(2)} this session` : ''));
         }
       }
       if (sub === 'log') {

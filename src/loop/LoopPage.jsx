@@ -113,7 +113,7 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
       // with no loop running the supervisor reports nothing, and a panel that
       // then shows $0.00 against a $4.00 cap is lying about the one number
       // someone will check against a bank statement.
-      setSpend(spendCheck?.window ?? st?.spend ?? null);
+      setSpend(spendCheck?.window ?? st?.windowSpend ?? st?.spend ?? null);
       setError(null);
     } catch (err) {
       // A project with no folder has no backlog and no ledger, which is a

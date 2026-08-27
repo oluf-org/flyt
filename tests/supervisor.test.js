@@ -1135,6 +1135,8 @@ test('a cap named at the start counts what THIS loop spent, not what today did',
 
   assert.equal(status.landed, 1, 'money spent before the loop started is not this session ceiling');
   assert.ok(!/hard cap/.test(status.stopping ?? ''), `it should not refuse to start: ${status.stopping}`);
+  assert.equal(status.spend.usd, 0, 'status does not attribute earlier rolling spend to this session');
+  assert.equal(status.windowSpend.usd, 7.84, 'the standing rolling-window spend remains observable');
 });
 
 test('a standing cap already tripped says nothing was attempted, and over what span', async () => {
