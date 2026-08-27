@@ -64,12 +64,15 @@ function latestActivityTool(snapshot) {
   }
   const call = calls.at(-1) ?? null;
   const name = SAFE_TOOL_NAMES.has(call?.tool) ? call.tool : null;
-  if (!name) return null;
+  if (!name) return { present: Boolean(call), label: null };
   const field = {
     read_file: 'path', write_file: 'path', create_file: 'path', edit_file: 'path', glob: 'pattern'
   }[name];
   const subject = field ? safeFileSubject(call?.args?.[field]) : null;
-  return safeActivityLabel(`${name}${subject ? ` ${subject}` : ''}`, 76);
+  return {
+    present: true,
+    label: safeActivityLabel(`${name}${subject ? ` ${subject}` : ''}`, 76)
+  };
 }
 
 export function safeActivityLabel(value, max = 64) {
@@ -120,10 +123,11 @@ export function runActivity(record, now = Date.now(), { staleMs = ACTIVITY_STALE
   const ageMs = Math.max(0, now - updatedAt);
   const live = record.live !== false;
   const node = currentNode(snapshot);
-  const tool = latestActivityTool(snapshot);
+  const latestTool = latestActivityTool(snapshot);
+  const tool = latestTool.label;
   const streamPresent = activeStreams(snapshot).some(s => Boolean(s.text));
   const phase = phaseFor(snapshot, {
-    live, ageMs, staleMs, hasTool: Boolean(tool), hasStream: streamPresent, node
+    live, ageMs, staleMs, hasTool: latestTool.present, hasStream: streamPresent, node
   });
   const worker = workerFor(snapshot, node);
   const provider = safeActivityLabel(worker?.provider, 28);

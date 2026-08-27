@@ -80,6 +80,7 @@ test('persistent activity never exposes prompts, streams, results, controls, or 
     subject: 'PRIVATE USER PROMPT', command: 'echo raw output'
   } }] });
   const extensionView = runActivity(record(extension), 10_100);
+  assert.equal(extensionView.phase, 'tool');
   assert.equal(extensionView.tool, null);
   assert.doesNotMatch(extensionView.ariaLabel, /PRIVATE|raw output/i);
 
