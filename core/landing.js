@@ -286,7 +286,13 @@ export async function landTask({
   // is the failure this whole path is about.
   for (const note of mech.notes ?? []) log(note);
   if (!mech.ok) {
-    return { landed: false, stage: 'checks', steps, guidance: mech.problems.join(' ') };
+    // Mechanical failures are correction cases for exactly the same reason as
+    // red gates and review findings: the attempted commit already contains
+    // useful work. If its identity is dropped here, the supervisor cannot set
+    // resumeFrom and cleanup turns a cheap correction into a full rebuild.
+    return withCommit({
+      landed: false, stage: 'checks', steps, guidance: mech.problems.join(' ')
+    });
   }
 
   // 3. The reviewer.
