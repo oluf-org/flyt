@@ -13,6 +13,15 @@
 // blocked is a diagnosis — none of them are a request.
 export const PILE_ORDER = ['parked', 'landed', 'running', 'queued', 'failed'];
 
+// Drawer height is a per-project preference (stored with the project bundle),
+// projected into a safe range before it reaches layout.
+export const LOOP_DRAWER_HEIGHT = { min: 120, max: 560, default: 300 };
+export function clampLoopDrawerHeight(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return LOOP_DRAWER_HEIGHT.default;
+  return Math.min(LOOP_DRAWER_HEIGHT.max, Math.max(LOOP_DRAWER_HEIGHT.min, Math.round(n)));
+}
+
 export const PILE_LABELS = {
   parked: 'Waiting on you',
   landed: 'Landed',
