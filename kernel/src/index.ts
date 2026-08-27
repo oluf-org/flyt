@@ -105,7 +105,7 @@ export function createKernel(options: KernelOptions = {}): Kernel {
         ...installOptions,
         // A Loop worker cannot manufacture a human callback. The shared mount
         // path therefore refuses every external package before it executes.
-        toolReview: profile === 'flyt-loop-worker' ? undefined : pluginReviews.review,
+        toolReview: profile === 'flyt-loop-worker' ? undefined : pluginReviews.attendedReview(),
       });
     },
     dispose() {

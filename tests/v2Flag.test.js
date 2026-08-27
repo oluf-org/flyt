@@ -89,6 +89,40 @@ test('with the flag on, the kernel boots and the seams resolve', async () => {
   }
 });
 
+test('production boot refuses an external plugin when no review surface can answer', async () => {
+  const actual = await import('#kernel');
+  let applied = 0;
+  const external = {
+    name: 'boot-time-external', inject: ['tools'],
+    apply() { applied += 1; },
+  };
+  const load = async () => ({
+    ...actual,
+    PROFILES: {
+      ...actual.PROFILES,
+      'review-boot': [
+        { id: 'tools', name: 'flyt:tools' },
+        { id: 'external', name: 'external-package' },
+      ],
+    },
+    builtinImporter: name => name === 'external-package'
+      ? Promise.resolve(external)
+      : actual.builtinImporter(name),
+  });
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('boot hung waiting for an invisible review')), 250);
+  });
+  try {
+    await assert.rejects(
+      Promise.race([bootKernel({ call: true, env: noEnv, profile: 'review-boot', load }), timeout]),
+      /requires an attended human classification review/);
+    assert.equal(applied, 0, 'refusal precedes external plugin execution');
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
 test('the surface decides who it can ask, not the profile', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-v2-'));
   const booted = await bootKernel({ call: true, env: noEnv, profile: 'flyt-desktop', runsRoot: dir, approvalMode: 'ask' });

@@ -116,9 +116,25 @@ export class PluginReviewCoordinator {
 
   snapshot(): PendingPluginReview | null { return this.#pending; }
 
+  /** A review capability exists only while a real surface is listening. */
+  attendedReview(): AttendedPluginReview | undefined {
+    return this.#listeners.size ? this.review : undefined;
+  }
+
   subscribe(listener: () => void): () => void {
     this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.#listeners.delete(listener);
+      // A vanished last surface must not leave an install promise parked. The
+      // plugin is already quarantined at this point, so settling as an explicit
+      // decline preserves the safe, installed-but-unreachable outcome.
+      if (!this.#listeners.size && this.#pending) {
+        this.#pending.decide(Object.fromEntries(this.#pending.proposals.map(p => [p.name, null])));
+      }
+    };
   }
 
   #emit(): void { for (const listener of this.#listeners) listener(); }
@@ -174,20 +190,9 @@ export async function installPlugin(
   if (!proposals.length) return fiber;
   const decisions = await review.decide(plugin.name ?? 'plugin', proposals);
 
-  // Validate the whole pass before applying any of it. One attempted loosening
-  // must not leave the tools earlier in the list half-classified.
-  for (const proposal of proposals) {
-    const decided = decisions?.[proposal.name];
-    if (decided && !atLeastAsStrict(decided, proposal)) {
-      throw new Error(
-        `"${proposal.name}" cannot be classified more loosely than it was inferred: `
-        + `inferred ${describe(proposal)}, asked for ${describe(decided)}`);
-    }
-  }
-  for (const proposal of proposals) {
-    const decided = decisions?.[proposal.name];
-    if (decided) applyClassification(tools, proposal.name, decided, seams);
-  }
+  // One batch validates against the exact per-tool proposals the human saw,
+  // and verifies every registry target before mutating any of them.
+  applyClassifications(tools, proposals, decisions);
   if (proposals.some(proposal => Boolean(decisions?.[proposal.name]))) ctx.emit('tools/change');
   return fiber;
 }
@@ -243,30 +248,34 @@ function unclassify(tools: ToolsSeam, names: readonly string[]): void {
   }
 }
 
-function applyClassification(
+function applyClassifications(
   tools: ToolsSeam,
-  toolName: string,
-  decided: ToolClassification,
-  seams: readonly SeamName[],
+  proposals: readonly ToolClassificationProposal[],
+  decisions: Readonly<Record<string, ToolClassification | null>>,
 ): void {
   const state = stateOf(tools as object);
-  const tool = state.registered.get(toolName);
-  if (!tool) throw new Error(`No tool named "${toolName}" is registered`);
-  const floor = classifyContributedTool(tool, seams);
-  if (!atLeastAsStrict(decided, floor)) {
-    throw new Error(
-      `"${toolName}" cannot be classified more loosely than it was inferred: `
-      + `inferred ${describe(floor)}, asked for ${describe(decided)}`);
+  const updates: Array<[string, ToolDefinition]> = [];
+  for (const proposal of proposals) {
+    const decided = decisions?.[proposal.name];
+    if (!decided) continue;
+    if (!atLeastAsStrict(decided, proposal)) {
+      throw new Error(
+        `"${proposal.name}" cannot be classified more loosely than it was inferred: `
+        + `inferred ${describe(proposal)}, asked for ${describe(decided)}`);
+    }
+    const tool = state.registered.get(proposal.name);
+    if (!tool) throw new Error(`No tool named "${proposal.name}" is registered`);
+    updates.push([proposal.name, {
+      ...tool,
+      classification: {
+        effect: decided.effect,
+        destructive: Boolean(decided.destructive),
+        untrustedInput: Boolean(decided.untrustedInput),
+        source: 'confirmed',
+      },
+    }]);
   }
-  state.registered.set(toolName, {
-    ...tool,
-    classification: {
-      effect: decided.effect,
-      destructive: Boolean(decided.destructive),
-      untrustedInput: Boolean(decided.untrustedInput),
-      source: 'confirmed',
-    },
-  });
+  for (const [name, tool] of updates) state.registered.set(name, tool);
 }
 
 /**

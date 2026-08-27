@@ -83,7 +83,12 @@ export async function bootKernel({
   });
 
   const { entries } = loadComposition({ profile, profileEntries });
-  await kernel.install(entries, { import: builtinImporter });
+  try {
+    await kernel.install(entries, { import: builtinImporter });
+  } catch (error) {
+    await kernel.dispose();
+    throw error;
+  }
 
   return {
     kernel, ctx: kernel.ctx, pluginReviews: kernel.pluginReviews,

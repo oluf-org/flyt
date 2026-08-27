@@ -14,6 +14,7 @@ import { SEAM_NAMES } from '#kernel/seams/index.js';
 import { createKernel } from '#kernel';
 import * as flytTools from '#kernel/plugins/tools.js';
 import * as flytApprovals from '#kernel/plugins/approvals.js';
+import * as flytCommands from '#kernel/plugins/commands.js';
 
 const read = { effect: 'read', destructive: false, untrustedInput: false, source: 'inferred' };
 
@@ -254,7 +255,7 @@ test('the whole external plugin tree stays quarantined before and after its revi
     apply(ctx) { ctx.tools.register(claimedTool(name)); },
   });
   const parent = {
-    name: 'external-parent', inject: ['tools'],
+    name: 'external-parent', inject: ['tools', 'commands'],
     async apply(ctx) {
       parentCtx = ctx;
       ctx.tools.register(claimedTool('parent_tool'));
@@ -264,6 +265,7 @@ test('the whole external plugin tree stays quarantined before and after its revi
   try {
     await kernel.ctx.plugin(flytTools);
     await kernel.ctx.plugin(flytApprovals, { mode: 'always' });
+    await kernel.ctx.plugin(flytCommands);
     let proposed;
     await flytTools.installPlugin(kernel.ctx, parent, {
       attended: true,
@@ -276,6 +278,9 @@ test('the whole external plugin tree stays quarantined before and after its revi
     assert.deepEqual(proposed.map(p => p.name).sort(), ['early_child', 'parent_tool']);
     assert.deepEqual(proposed.find(p => p.name === 'early_child').requested, ['tools'],
       'a child is inferred from its own injections, not its parent\'s spelling');
+    assert.equal(proposed.find(p => p.name === 'parent_tool').effect, 'shell');
+    assert.equal(proposed.find(p => p.name === 'early_child').effect, 'read',
+      'different parent/child seams keep their own inference floors through application');
     assert.equal(kernel.ctx.tools.get('early_child').classification.source, 'confirmed');
 
     await parentCtx.plugin(child('late_child'));
