@@ -52,15 +52,26 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
   const beginDrawerResize = useCallback(e => {
     e.preventDefault();
     dragRef.current = { startY: e.clientY, startHeight: clampLoopDrawerHeight(drawerHeight) };
-    const move = ev => onDrawerHeightChange?.(clampLoopDrawerHeight(
-      dragRef.current.startHeight - (ev.clientY - dragRef.current.startY)));
-    const finish = () => {
-      document.removeEventListener('pointermove', move);
-      document.removeEventListener('pointerup', finish);
-      dragRef.current = null;
-    };
-    document.addEventListener('pointermove', move);
-    document.addEventListener('pointerup', finish);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  }, [drawerHeight]);
+  const resizeDrawer = useCallback(e => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    onDrawerHeightChange?.(clampLoopDrawerHeight(drag.startHeight - (e.clientY - drag.startY)));
+  }, [onDrawerHeightChange]);
+  const finishDrawerResize = useCallback(e => {
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+  }, []);
+  const resizeDrawerByKey = useCallback(e => {
+    const current = clampLoopDrawerHeight(drawerHeight);
+    const next = e.key === 'ArrowUp' ? current + 16
+      : e.key === 'ArrowDown' ? current - 16
+        : e.key === 'Home' ? LOOP_DRAWER_HEIGHT.min
+          : e.key === 'End' ? LOOP_DRAWER_HEIGHT.max : null;
+    if (next == null) return;
+    e.preventDefault();
+    onDrawerHeightChange?.(clampLoopDrawerHeight(next));
   }, [drawerHeight, onDrawerHeightChange]);
   // Removal is the one action here that cannot be undone, so it asks twice.
   // `phase: 'force'` is the narrower case — the backlog refused because a
@@ -524,15 +535,23 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
       {/* A drawer rather than two sections: the log is what you read when
           something has gone wrong, and the chat is what you use when you know
           what should happen next. Neither is the thing you read first. */}
-      <section className={`loop-drawer${drawer ? ' open' : ''}`} style={{ '--loop-drawer-height': `${clampLoopDrawerHeight(drawerHeight)}px` }}>
-        <div
+      <section className={`loop-drawer${drawer ? ' open' : ''}`} style={drawer ? { '--loop-drawer-height': `${clampLoopDrawerHeight(drawerHeight)}px` } : undefined}>
+        {drawer && <div
           className="loop-drawer-resizer"
           role="separator"
+          tabIndex={0}
           aria-orientation="horizontal"
           aria-label="Resize loop drawer"
+          aria-valuemin={LOOP_DRAWER_HEIGHT.min}
+          aria-valuemax={LOOP_DRAWER_HEIGHT.max}
+          aria-valuenow={clampLoopDrawerHeight(drawerHeight)}
           title="Drag to resize loop drawer"
           onPointerDown={beginDrawerResize}
-        />
+          onPointerMove={resizeDrawer}
+          onPointerUp={finishDrawerResize}
+          onPointerCancel={finishDrawerResize}
+          onKeyDown={resizeDrawerByKey}
+        />}
         <div className="loop-drawer-tabs" role="tablist">
           {[['tail', 'What it did'], ['chat', 'Ask']].map(([id, label]) => (
             <button
