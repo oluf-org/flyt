@@ -12,8 +12,67 @@ import { Service, type Context } from '@deepseek-ai/cordis';
 import type { JsonValue, ToolResult } from '../types.js';
 import type { ToolClassification, ToolDefinition, ToolsSeam } from '../seams/tools.js';
 import type { PostToolDecision, PreToolDecision, ToolExecution } from '../events.js';
-import type { SeamName } from '../seams/index.js';
+import { SEAM_NAMES, type SeamName } from '../seams/index.js';
 import { classifyContributedTool, atLeastAsStrict, describe } from './classify.js';
+
+/** The single human review pass required when installing a plugin. */
+export interface ToolClassificationProposal extends ToolClassification {
+  /** Tool being reviewed. */
+  name: string;
+  /** The capabilities the plugin requested while being installed. */
+  requested: readonly string[];
+  /** The evidence from which the inference was made. */
+  inferredFrom: { seams: readonly string[]; tool: { name: string; description: string } };
+  /** What accepting this classification changes. */
+  permits: string;
+  /** What accepting it still does not permit. */
+  doesNotPermit: string;
+}
+
+export type PluginReview = (
+  proposals: readonly ToolClassificationProposal[],
+) => Promise<Readonly<Record<string, ToolClassification | null>>> | Readonly<Record<string, ToolClassification | null>>;
+
+/**
+ * Install a plugin only when a human review callback is supplied. The plugin is
+ * left installed on a refusal, but its tools remain unclassified and therefore
+ * unreachable. A missing callback is an unattended install and is refused
+ * before the plugin is allowed to run.
+ */
+export async function installPlugin(
+  ctx: Context,
+  plugin: { name?: string; inject?: readonly string[] },
+  review?: PluginReview,
+): Promise<unknown> {
+  if (!review) throw new Error('Refused: installing a plugin requires a human classification review');
+  const tools = ctx.tools;
+  const before = new Set(tools.list().map(tool => tool.name));
+  const fiber = await ctx.plugin(plugin as any);
+  const requested = [...(plugin.inject ?? [])];
+  const seams = requested.filter((name): name is SeamName =>
+    (SEAM_NAMES as readonly string[]).includes(name));
+  const installed = tools.list().filter(tool => !before.has(tool.name));
+  // A plugin cannot smuggle in a grant by supplying a pre-confirmed claim.
+  tools.unclassify(installed.map(tool => tool.name));
+  const proposals = installed.map(tool => proposalFor(tool, requested, seams));
+  const decisions = await review(proposals);
+  for (const proposal of proposals) {
+    const decided = decisions?.[proposal.name];
+    if (decided) tools.classify(proposal.name, decided, seams);
+  }
+  return fiber;
+}
+
+function proposalFor(tool: ToolDefinition, requested: readonly string[], seams: readonly SeamName[]): ToolClassificationProposal {
+  const inferred = classifyContributedTool(tool, seams);
+  return Object.assign(inferred, {
+    name: tool.name,
+    requested: [...requested],
+    inferredFrom: { seams: [...requested], tool: { name: tool.name, description: tool.description } },
+    permits: `${describe(inferred)} capability for this tool when a ceiling names it`,
+    doesNotPermit: 'execution, a toolset, or access through a ceiling until separately granted',
+  });
+}
 
 /** Cordis plugin name. */
 export const name = 'flyt-tools';
@@ -68,6 +127,15 @@ export class ToolRegistry extends Service implements ToolsSeam {
   /** Every registered tool, including unclassified ones. */
   list(): ToolDefinition[] {
     return [...this.registered.values()];
+  }
+
+  /** Keep plugin claims from becoming an implicit grant during installation. */
+  unclassify(names: readonly string[]): void {
+    for (const toolName of names) {
+      const tool = this.registered.get(toolName);
+      if (tool?.classification) this.registered.set(toolName, { ...tool, classification: undefined });
+    }
+    if (names.length) this.ctx.emit('tools/change');
   }
 
   /**
