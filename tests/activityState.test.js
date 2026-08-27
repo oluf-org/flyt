@@ -29,3 +29,8 @@ test('tool edges live in existing meta, are ordered, argument-free, and lifecycl
   store.writeMeta(runId, { ...store.readMeta(runId), interrupted: false, stage: 'execution' });
   assert.equal(store.readMeta(runId).toolActivity['node-a'].active, false);
 });
+
+test('activity projection is a no-op when a standalone tool has no run metadata', () => {
+  const store = makeStore();
+  assert.equal(store.writeToolActivity('not-a-run', 'node', { tool: 'glob', active: true }), null);
+});

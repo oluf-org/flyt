@@ -161,7 +161,9 @@ export class RunStore {
     });
   }
   writeToolActivity(runId, nodeId, state) {
-    const meta = this.readMeta(runId);
+    let meta;
+    try { meta = this.readMeta(runId); }
+    catch { return null; } // standalone tool invocation: no run snapshot to update
     const activity = meta.toolActivity ?? {};
     const sequence = Math.max(0, ...Object.values(activity).map(x => Number(x?.sequence) || 0)) + 1;
     const edge = {
