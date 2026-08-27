@@ -35,7 +35,7 @@ runs/<runId>/                  rebuildable projections and artifacts
 <workspace>/.flyt/             project config, skills, backlog, and optional run data
 ```
 
-An older project containing `flows/*.flow.yaml` is readable through the migration path. Opening it does not mutate it; the first stack write creates `stacks/<id>.stack.yaml`, validates it, then retires the legacy source. Old layout sidecars are not carried forward because stack layout is derived.
+An older project containing a linear `flows/*.flow.yaml` is readable through the migration path. Edge order becomes sequence order, supported structural Loop handoffs map to the registered block, and every generated `use` is validated. Opening does not mutate the source; the first stack write creates and validates `stacks/<id>.stack.yaml`, then retires the legacy file. A branched, disconnected, or unsupported structural graph is refused with its source intact instead of being flattened into different behavior. Layout sidecars are not carried forward because stack layout is derived.
 
 ## Headless and Loop use
 

@@ -3,10 +3,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseStack } from '#kernel';
+import { createKernel, flytBlocks, parseStack } from '#kernel';
+import { apply as coreBlocks } from '../kernel/dist/plugins/blocks-core.js';
+import { apply as judgementBlocks } from '../kernel/dist/plugins/blocks-judgement.js';
+import { apply as inquiryBlocks } from '../kernel/dist/plugins/blocks-inquiry.js';
+import { apply as loopBlocks } from '../kernel/dist/plugins/blocks-loop.js';
 import { StackStore, serializeStack } from '../core/stackstore.js';
 
 const root = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-stackstore-'));
+const allBlocks = async () => {
+  const kernel = createKernel();
+  await kernel.ctx.plugin(flytBlocks);
+  await kernel.ctx.plugin({ name: 'migration-core', inject: ['blocks'], apply: coreBlocks });
+  await kernel.ctx.plugin({ name: 'migration-judgement', inject: ['blocks'], apply: judgementBlocks });
+  await kernel.ctx.plugin({ name: 'migration-inquiry', inject: ['blocks'], apply: inquiryBlocks });
+  await kernel.ctx.plugin({ name: 'migration-loop', inject: ['blocks'], apply: loopBlocks });
+  return kernel;
+};
 const legacy = `version: 1
 id: old-project
 name: Old project
@@ -51,6 +64,96 @@ test('a canonical stack wins over a same-id legacy flow', () => {
   const store = new StackStore(stacks, { parseStack });
   assert.deepEqual(store.list(), [{ id: 'same', legacy: false }]);
   assert.equal(store.load('same').name, 'Canonical');
+});
+
+test('legacy edge order, not YAML declaration order, becomes the canonical sequence', () => {
+  const dir = root();
+  const flows = path.join(dir, 'flows');
+  fs.mkdirSync(flows);
+  fs.writeFileSync(path.join(flows, 'ordered.flow.yaml'), `version: 1
+id: ordered
+name: Ordered
+nodes:
+  second:
+    use: general-analysis
+  first:
+    use: orient
+flow:
+  - input -> first -> second -> output
+`);
+  const store = new StackStore(path.join(dir, 'stacks'), { parseStack });
+  const opened = store.load('ordered');
+  assert.deepEqual(opened.root.children.map(node => node.id), ['first', 'second']);
+});
+
+test('a branching legacy graph is refused rather than silently flattened', () => {
+  const dir = root();
+  const flows = path.join(dir, 'flows');
+  fs.mkdirSync(flows);
+  const oldFile = path.join(flows, 'branched.flow.yaml');
+  fs.writeFileSync(oldFile, `version: 1
+id: branched
+name: Branched
+nodes:
+  left: { use: general-analysis }
+  right: { use: general-analysis }
+  merge: { use: combine }
+flow:
+  - input -> left -> merge -> output
+  - input -> right -> merge
+`);
+  const store = new StackStore(path.join(dir, 'stacks'), { parseStack });
+  assert.throws(() => store.load('branched'), /cannot be flattened safely/);
+  assert.ok(fs.existsSync(oldFile), 'a migration refusal never retires the only source');
+  assert.ok(!fs.existsSync(path.join(dir, 'stacks', 'branched.stack.yaml')));
+});
+
+test('the legacy Loop structural node maps to the registered handoff block', () => {
+  const dir = root();
+  const flows = path.join(dir, 'flows');
+  fs.mkdirSync(flows);
+  fs.writeFileSync(path.join(flows, 'handoff.flow.yaml'), `version: 1
+id: handoff
+name: Handoff
+nodes:
+  queue:
+    type: loop
+    maxTasks: 6
+    requireEvidence: true
+    waitFor: none
+flow:
+  - input -> queue -> output
+`);
+  const store = new StackStore(path.join(dir, 'stacks'), { parseStack });
+  const queue = store.load('handoff').root.children[0];
+  assert.equal(queue.use, 'flyt-blocks-loop:loop-handoff');
+  assert.equal(queue.config.maxTasks, 6);
+  assert.equal(queue.config.requireEvidence, true);
+});
+
+test('every use produced by a supported legacy migration resolves through installed plugins', async () => {
+  const dir = root();
+  const flows = path.join(dir, 'flows');
+  fs.mkdirSync(flows);
+  fs.writeFileSync(path.join(flows, 'resolves.flow.yaml'), `version: 1
+id: resolves
+name: Resolves
+nodes:
+  orient: { use: orient }
+  analyse: { use: general-analysis }
+  judge: { use: evaluation }
+  plan: { use: backlog-plan }
+  handoff: { type: loop }
+flow:
+  - input -> orient -> analyse -> judge -> plan -> handoff -> output
+`);
+  const store = new StackStore(path.join(dir, 'stacks'), { parseStack });
+  const stack = store.load('resolves');
+  const kernel = await allBlocks();
+  for (const node of stack.root.children) {
+    assert.ok(kernel.ctx.blocks.resolve(node.use), `${node.id}: ${node.use} must resolve`);
+  }
+  await kernel.dispose();
 });
 
 test('saving an edited containment tree stays parseable and stores no layout sidecar', () => {

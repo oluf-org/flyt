@@ -64,25 +64,55 @@ test('every block every stack names resolves through a plugin, not loose JSON', 
   await k.dispose();
 });
 
-test('research can write nothing: its ceiling names no write or shell tool', () => {
+test('research reaches every web reader and no write, shell, destructive, or queue capability', async () => {
   const stack = parseStack(read('stacks/research.stack.yaml'), 'research');
   const block = stack.root.children[0];
-  const ceiling = block.config.ceiling;
-  assert.deepEqual([...ceiling].sort(), ['read-only', 'web'], 'ceiling stays web + read-only');
-  // The sets those names resolve to contain no write/shell tool.
-  const setRead = id => JSON.parse(read(`tools/sets/${id}.json`));
-  const tools = new Set();
-  const expand = id => {
-    const s = setRead(id);
-    for (const inc of s.include ?? []) if (!inc.includes(':')) tools.add(inc);
-    for (const sub of s.includeSets ?? []) expand(sub);
-  };
-  ceiling.forEach(expand);
-  // read-only and web are selector-based (effects:/uses:), so the resolved
-  // concrete ids are few — but nothing in either set is a write or a shell.
-  const WRITE = new Set(['write_file', 'edit_file', 'create_file', 'bash', 'run_gate']);
-  for (const t of tools) assert.ok(!WRITE.has(t), `research ceiling must not reach ${t}`);
+  assert.equal(block.use, 'flyt-blocks-core:research');
+  const k = await registryWithAll();
+  const ceiling = new Set(k.ctx.blocks.resolve(block.use).ceiling);
+  for (const required of [
+    'web_search', 'web_fetch', 'scrape_page', 'extract_page',
+    'read_file', 'glob', 'search_files', 'search_references', 'read_tool_result',
+  ]) assert.ok(ceiling.has(required), `research must reach ${required}`);
+  for (const forbidden of [
+    'write_file', 'edit_file', 'create_file', 'bash', 'run_gate',
+    'create_task', 'enqueue_task', 'update_task', 'write_task_md',
+  ]) assert.ok(!ceiling.has(forbidden), `untrusted web content must not reach ${forbidden}`);
   assert.equal(block.config.effect, 'artifact', 'a research answer is an artifact');
+  await k.dispose();
+});
+
+test('learn-from-repo keeps the bounded reading, synthesis, planning, and evidenced handoff contract', async () => {
+  const stack = parseStack(read('stacks/learn-from-repo.stack.yaml'), 'learn-from-repo');
+  const [orient, readers, synthesise, plan, handoff] = stack.root.children;
+  assert.equal(orient.id, 'orient');
+  assert.equal(orient.config.maxSteps, 6);
+  assert.equal(orient.config.model, '~deepseek/deepseek-v4-flash-latest');
+  assert.equal(readers.kind, 'parallel');
+  assert.equal(readers.maxParallel, 4, 'reference synthesis remains bounded');
+  assert.deepEqual(readers.children.map(node => node.id), [
+    'read-architecture', 'read-practices', 'read-adversarial', 'read-contrarian',
+  ]);
+  for (const reader of readers.children) {
+    assert.equal(reader.use, 'flyt-blocks-core:reference-reader');
+    assert.equal(reader.config.maxSteps, 10);
+  }
+  assert.deepEqual(synthesise.config.skills, ['reference-transfer']);
+  assert.equal(synthesise.config.effort, 'medium');
+  assert.match(synthesise.config.instructions, /under 1,800 words/);
+  assert.deepEqual(plan.config.skills, ['skill-authoring']);
+  assert.equal(plan.config.maxSteps, 10);
+  assert.equal(plan.config.model, '~deepseek/deepseek-v4-flash-latest');
+  assert.equal(handoff.use, 'flyt-blocks-loop:loop-handoff');
+  assert.equal(handoff.config.maxTasks, 6);
+  assert.equal(handoff.config.requireEvidence, true);
+  assert.equal(handoff.config.waitFor, 'none');
+
+  const k = await registryWithAll();
+  const readCeiling = new Set(k.ctx.blocks.resolve('flyt-blocks-core:reference-reader').ceiling);
+  for (const required of ['glob', 'search_references', 'read_file']) assert.ok(readCeiling.has(required));
+  for (const forbidden of ['write_file', 'bash', 'enqueue_task']) assert.ok(!readCeiling.has(forbidden));
+  await k.dispose();
 });
 
 test('the pipeline stack is one stack with an effort dial', () => {
@@ -124,4 +154,3 @@ test('the cutover archives v1 file assets while retaining the canonical plugin s
     assert.ok(!file.endsWith('.layout.json'), `stacks/${file}: layout is derived`);
   }
 });
-
