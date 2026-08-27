@@ -5,7 +5,14 @@
 // panel is a projection, and a projection you can test is one you can trust.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pilesOf, burndown, flightRow, headline, humanDuration, tailLines, trendBars, taskDetail, shortStamp, PILE_ORDER } from '../src/loopViewData.js';
+import { pilesOf, burndown, flightRow, headline, humanDuration, tailLines, trendBars, taskDetail, shortStamp, PILE_ORDER, clampLoopDrawerHeight } from '../src/loopViewData.js';
+
+test('loop drawer height is projected into its safe range', () => {
+  assert.equal(clampLoopDrawerHeight(undefined), 300);
+  assert.equal(clampLoopDrawerHeight(20), 120);
+  assert.equal(clampLoopDrawerHeight(999), 560);
+  assert.equal(clampLoopDrawerHeight(241.6), 242);
+});
 
 test('the pile that needs a person comes first', () => {
   // The only part of the screen that is ASKING for something. Landed is

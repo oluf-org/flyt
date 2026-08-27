@@ -262,6 +262,7 @@ export default function App() {
   const [models, setModels] = useState([]);
   const [flowViewMode, setFlowViewMode] = useState('canvas'); // 'canvas' | 'yaml'
   const [loopDensity, setLoopDensity] = useState('comfortable'); // D4: 'comfortable' | 'compact', per project
+  const [loopDrawerHeight, setLoopDrawerHeight] = useState(300); // per project, saved with loopDensity
   const [pickerOpen, setPickerOpen] = useState(false); // the add-node panel over the canvas
   // DECISIONS.md D27: the Configs panel (anchored at the modes chip) and the
   // Inspector's config edit target (null = editing the Flow, today's behavior).
@@ -814,7 +815,7 @@ export default function App() {
     compareOn, compareB, compareRunIds,
     undo: [...undoStack.current], redo: [...redoStack.current],
     runFlowId, runModeId, runInputs, runInput, workspaceDir, newRunOpen,
-    flowViewMode, runView2, loopDensity, runs
+    flowViewMode, runView2, loopDensity, loopDrawerHeight, runs
   });
 
   const slimOf = b => ({
@@ -832,6 +833,7 @@ export default function App() {
     workspaceDir: b.workspaceDir,
     flowViewMode: b.flowViewMode,
     loopDensity: b.loopDensity,
+    loopDrawerHeight: b.loopDrawerHeight,
     runView2: b.runView2
   });
 
@@ -863,6 +865,7 @@ export default function App() {
     setNewRunOpen(b.newRunOpen ?? false);
     setFlowViewMode(b.flowViewMode ?? 'canvas');
     setLoopDensity(b.loopDensity ?? 'comfortable');
+    setLoopDrawerHeight(b.loopDrawerHeight ?? 300);
     setRunView2(b.runView2 ?? 'canvas');
     setReplayFrames(null); setReplayIndex(null); setReplayPlaying(false);
     setRuns(b.runs ?? []);
@@ -883,6 +886,7 @@ export default function App() {
       workspaceDir: slim.workspaceDir,
       flowViewMode: slim.flowViewMode, runView2: slim.runView2,
       loopDensity: slim.loopDensity ?? 'comfortable',
+      loopDrawerHeight: slim.loopDrawerHeight ?? 300,
       runs: []
     };
     if (slim.activeFlowId) {
@@ -2439,6 +2443,8 @@ export default function App() {
                 onOpenRun={id => { setActiveActivity('runs'); openRun(id); }}
                 density={loopDensity}
                 onDensityChange={setLoopDensity}
+                drawerHeight={loopDrawerHeight}
+                onDrawerHeightChange={setLoopDrawerHeight}
               />
             : libraryView
             ? <NodesPage

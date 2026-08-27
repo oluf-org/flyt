@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { burndown, headline, tailLines, trendBars } from '../loopViewData.js';
+import { burndown, headline, tailLines, trendBars, clampLoopDrawerHeight, LOOP_DRAWER_HEIGHT } from '../loopViewData.js';
 import { columnsOf, boardBanner, filterTasks, moveCursor, allowedMoves } from '../loopBoardData.js';
 import { applyPatch } from '../loopLive.js';
 import Board from './Board.jsx';
@@ -20,7 +20,7 @@ import LoopChat from './LoopChat.jsx';
 
 const POLL_MS = 3000;
 
-export default function LoopPage({ projectId, activeModels = [], onOpenRun = null, density = 'comfortable', onDensityChange = null }) {
+export default function LoopPage({ projectId, activeModels = [], onOpenRun = null, density = 'comfortable', onDensityChange = null, drawerHeight = LOOP_DRAWER_HEIGHT.default, onDrawerHeightChange = null }) {
   const [status, setStatus] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [blockers, setBlockers] = useState({});
@@ -48,6 +48,20 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
   // and "what should it do next" — and two separate drawers would compete for
   // the same strip of screen.
   const [drawer, setDrawer] = useState('tail'); // 'tail' | 'chat' | null
+  const dragRef = useRef(null);
+  const beginDrawerResize = useCallback(e => {
+    e.preventDefault();
+    dragRef.current = { startY: e.clientY, startHeight: clampLoopDrawerHeight(drawerHeight) };
+    const move = ev => onDrawerHeightChange?.(clampLoopDrawerHeight(
+      dragRef.current.startHeight - (ev.clientY - dragRef.current.startY)));
+    const finish = () => {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', finish);
+      dragRef.current = null;
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', finish);
+  }, [drawerHeight, onDrawerHeightChange]);
   // Removal is the one action here that cannot be undone, so it asks twice.
   // `phase: 'force'` is the narrower case — the backlog refused because a
   // worker holds the lease — where the second press has to mean more.
@@ -510,7 +524,15 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
       {/* A drawer rather than two sections: the log is what you read when
           something has gone wrong, and the chat is what you use when you know
           what should happen next. Neither is the thing you read first. */}
-      <section className={`loop-drawer${drawer ? ' open' : ''}`}>
+      <section className={`loop-drawer${drawer ? ' open' : ''}`} style={{ '--loop-drawer-height': `${clampLoopDrawerHeight(drawerHeight)}px` }}>
+        <div
+          className="loop-drawer-resizer"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize loop drawer"
+          title="Drag to resize loop drawer"
+          onPointerDown={beginDrawerResize}
+        />
         <div className="loop-drawer-tabs" role="tablist">
           {[['tail', 'What it did'], ['chat', 'Ask']].map(([id, label]) => (
             <button
