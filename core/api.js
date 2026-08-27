@@ -27,6 +27,7 @@ import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
 import { isDestructive } from '../src/toolTypes.js';
 import { pythonStatus, setupPython } from './python.js';
 import { loadToolSuite, runToolSuite, SUITE_DIR } from './toolbench.js';
+import { bootLoopKernel, startStackRun, stopStackRun } from './kernelRunner.js';
 
 // Why a one-shot call to this tool needs the caller to say so. Reads off the
 // record rather than a name list, for the same reason isDestructive() does.
@@ -668,6 +669,48 @@ export function createApi(engine) {
         // unset and the run stays unattended no matter its approvalMode.
         attended
       });
+    },
+
+    // The kernel path (t-0117). Same shape as flow:run, but the run is walked
+    // by the production StackRunner over a v2 stack, with the session log and
+    // the fs/tools/llm/approvals seams doing what the compat runner faked.
+    // The supervisor tries this first and falls back to flow:run only when
+    // the kernel cannot boot (unknown_command / kernel_unavailable), so a
+    // project without a compiled kernel still runs the loop.
+    'stack:run': async ({ projectId, stackId, input = '', workspaceDir = null, approvalMode = 'always', runId = null }) => {
+      const entry = proj(projectId);
+      const workspace = workspaceDir
+        ? new Workspace(workspaceDir).ensure().root
+        : entry.folder
+          ? new Workspace(entry.folder).ensure().root
+          : new Workspace(entry.workspaceRoot).ensure().root;
+      // One kernel per project+worktree, memoized on the registry entry: the
+      // session store and run projection inside it must not be doubled.
+      const key = `loopKernel:${workspace}`;
+      entry.kernelByWorktree ??= new Map();
+      if (!entry.kernelByWorktree.has(key)) {
+        const booted = await bootLoopKernel({
+          runsRoot: entry.store.root,
+          workspaceDir: workspace,
+          approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : 'always',
+        });
+        entry.kernelByWorktree.set(key, booted);
+      }
+      const { ctx } = entry.kernelByWorktree.get(key);
+      const { runId: startedId } = await startStackRun({ ctx, stackId, input, runId });
+      return startedId;
+    },
+
+    'stack:stop': async ({ projectId, runId, workspaceDir = null }) => {
+      const entry = proj(projectId);
+      const workspace = workspaceDir
+        ? new Workspace(workspaceDir).ensure().root
+        : entry.folder
+          ? new Workspace(entry.folder).ensure().root
+          : new Workspace(entry.workspaceRoot).ensure().root;
+      const booted = entry.kernelByWorktree?.get(`loopKernel:${workspace}`);
+      if (!booted) return { ok: false, error: 'not-live', message: `No kernel run ${runId} in this process.` };
+      return stopStackRun(booted.ctx, runId);
     },
 
     'run:list': ({ projectId }) => proj(projectId).store.runSummaries(),

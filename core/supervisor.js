@@ -818,7 +818,20 @@ export class Supervisor {
           + ' — untracked, ignored, or misspelled. The worker runs without it.',
           { taskId: task.id });
       }
-      const runId = await this.invoke('flow:run', {
+      // The kernel StackRunner is the runner now (t-0117); flow:run is the
+      // fallback for a host whose kernel cannot boot, and nothing else.
+      let runId;
+      try {
+        runId = await this.invoke('stack:run', {
+          projectId: this.projectId,
+          stackId: this.config.loop?.stackId ?? 'loop-task',
+          input: this.#briefFor(task),
+          workspaceDir: wt.dir,
+          approvalMode: 'always',
+        });
+      } catch (e) {
+        if (e?.code !== 'unknown_command' && e?.code !== 'kernel_unavailable') throw e;
+        runId = await this.invoke('flow:run', {
         projectId: this.projectId,
         flowId: this.config.loop?.flowId ?? LOOP_TASK_ID,
         userInput: this.#briefFor(task),
@@ -842,7 +855,8 @@ export class Supervisor {
         // convention by trial and error is most expensive: nobody is watching
         // to say "we do it this way here", so the task has to.
         skills: task.skills ?? null
-      });
+        });
+      }
       const hb = new Heartbeat({ taskId: task.id, runId, level, now: this.now(), model: worker?.model ?? null });
       // Where the work is supposed to appear. The heartbeat reads it to tell
       // accomplishment from talking (workSignature).
