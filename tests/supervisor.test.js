@@ -1039,6 +1039,7 @@ test('gates and review remain visible as in-flight landing work', async () => {
   });
   supervisor = new Supervisor({
     ...engine, projectId: 'p', backlog, pollMs: 1,
+    config: { loop: { worker: { provider: 'openai', model: 'gpt-5.6-luna' }, models: {} } },
     writeStatus: status => published.push(status)
   });
 
@@ -1051,6 +1052,9 @@ test('gates and review remain visible as in-flight landing work', async () => {
   assert.ok(published.some(status => status.inFlight[0]?.stage === 'gates'));
   assert.ok(published.some(status => status.inFlight[0]?.stage === 'review'));
   assert.equal(supervisor.status().inFlight.length, 0, 'the edge clears only after landing settles');
+  const landArgs = engine.calls.find(call => call.name === 'work:land').args;
+  assert.deepEqual(landArgs.loopWorker, { provider: 'openai', model: 'gpt-5.6-luna' });
+  assert.deepEqual(landArgs.loopModels, {});
 });
 
 test('a dry run reaches the code that would have merged', async () => {

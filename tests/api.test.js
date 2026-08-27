@@ -11,7 +11,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createEngine } from '../core/engine.js';
-import { createApi, ApiError, loopLaunchModels, loopWorkerProblem } from '../core/api.js';
+import {
+  createApi, ApiError, landingWorkerAt, loopLaunchModels, loopWorkerProblem
+} from '../core/api.js';
 import { createServer } from '../core/server.js';
 import { waitFor } from './helpers.js';
 import { git } from '../core/worktree.js';
@@ -59,6 +61,18 @@ test('an explicit Loop model clears the saved band map before any task is claime
 
   assert.deepEqual(loopLaunchModels({ configuredModels: saved }), saved,
     'without a launch override the saved map still applies');
+});
+
+test('landing escalation compares this session worker, not a different saved model', () => {
+  const saved = { loop: { worker: { provider: 'kimi', model: 'moonshotai/kimi-k3' } } };
+  assert.equal(landingWorkerAt('high', {
+    loopWorker: { provider: 'openai', model: 'gpt-5.6-luna' }, loopModels: {}, config: saved
+  }), 'gpt-5.6-luna');
+  assert.equal(landingWorkerAt('high', {
+    loopWorker: null, loopModels: { low: 'cheap', high: 'strong' }, config: saved
+  }), 'strong');
+  assert.equal(landingWorkerAt('high', { config: saved }), 'moonshotai/kimi-k3',
+    'manual landing without session context keeps the saved-config fallback');
 });
 
 test('a sandboxed delegated agent is refused as a Loop worker before it can claim work', () => {

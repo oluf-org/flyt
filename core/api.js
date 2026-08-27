@@ -66,6 +66,16 @@ export function loopLaunchModels({ worker = null, models = null, configuredModel
   return normalizeLevelModels(configuredModels);
 }
 
+// The effort ladder must compare the workers from THIS Loop session. Landing
+// runs through the process-wide API, whose runtime config may name a different
+// saved model; using that one produced escalation/parking reasons about a model
+// that never ran the task.
+export function landingWorkerAt(level, { loopWorker, loopModels, config } = {}) {
+  const models = loopModels !== undefined ? loopModels : config?.loop?.models;
+  const worker = loopWorker !== undefined ? loopWorker : config?.loop?.worker;
+  return workerForLevelMap(level, models)?.model ?? worker?.model ?? null;
+}
+
 export function loopWorkerProblem(worker) {
   if (!worker?.provider || canUseFlytTools(worker.provider)) return null;
   return `The ${worker.provider} adapter cannot work a Loop task: it is a sandboxed model-call delegate and cannot use Flyt's file and shell tools. Choose a tool-capable API model for the worker; it can still be used as the reviewer.`;
@@ -1050,7 +1060,8 @@ export function createApi(engine) {
     // fails without telling the next attempt why is just re-rolling dice.
     'work:land': async ({
       projectId, taskId, dryRun = false, push = null, baselineOutput = null,
-      reviewer = null, attemptId = null, onStage = null
+      reviewer = null, attemptId = null, onStage = null,
+      loopWorker, loopModels
     }) => {
       const entry = proj(projectId);
       const backlog = backlogFor(projectId);
@@ -1101,8 +1112,7 @@ export function createApi(engine) {
         // fills downward, so a map naming one band answers for all five and
         // every rung is the same model — four more attempts by the same
         // worker, announced as more capability.
-        const workerAt = level =>
-          workerForLevelMap(level, config?.loop?.models)?.model ?? config?.loop?.worker?.model ?? null;
+        const workerAt = level => landingWorkerAt(level, { loopWorker, loopModels, config });
         // The REVIEWER failing is not the work failing.
         //
         // `reviewDiff` already distinguishes the two: `unavailable` means the

@@ -1094,11 +1094,20 @@ async function main() {
           return out(`${orphans.length} orphan(s) — discard the ones you no longer want`);
         }
         case 'land': {
+          let landingStage = null;
           const r = await api.invoke('work:land', {
             projectId, taskId,
             dryRun: Boolean(flags['dry-run']),
             push: flags.push ? true : null,
-            reviewer: namedWorker(flags.reviewer)
+            reviewer: namedWorker(flags.reviewer),
+            // JSON remains one clean document. The human-facing command gets
+            // live progress during long gates and model review instead of an
+            // empty terminal followed minutes later by the whole result.
+            onStage: asJson ? null : stage => {
+              if (stage === landingStage) return;
+              landingStage = stage;
+              say(`  now: ${stage}`);
+            }
           });
           if (asJson) return out(r);
           for (const step of r.steps) say(`  ${step.step}: ${step.ok ?? step.verdict ?? step.landed ?? ''}`);

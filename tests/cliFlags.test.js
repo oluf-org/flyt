@@ -120,6 +120,8 @@ test('manual landing can name the same independent reviewer as the loop', () => 
   assert.equal(checkFlags('work', { reviewer: 'gpt-5.6-sol' }), null);
   assert.match(source, /flyt work land <taskId>.*--reviewer <id>/);
   assert.match(source, /reviewer: namedWorker\(flags\.reviewer\)/);
+  assert.match(source, /onStage: asJson \? null : stage =>/,
+    'manual landing streams stage progress while preserving clean JSON output');
 });
 
 test('flyt retry refuses a missing argument, and a run that is not there', () => {

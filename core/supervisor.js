@@ -1690,6 +1690,11 @@ export class Supervisor {
         reviewer: this.config.workers?.reviewer
           ? { provider: this.config.workers.reviewer.provider, model: this.config.workers.reviewer.model }
           : null,
+        // Escalation is decided inside work:land, which otherwise sees only the
+        // process-wide saved config. Carry this session's actual routing so a
+        // park reason never names a model that did not run the task.
+        loopWorker: this.config.loop?.worker ?? null,
+        loopModels: this.config.loop?.models ?? {},
         // Landing runs inside one supervisor tick, so polling cannot expose
         // its internal progress. The landing sequence announces its own stage.
         onStage: landingStage => {
