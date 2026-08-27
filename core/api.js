@@ -1047,7 +1047,10 @@ export function createApi(engine) {
     // The whole sequence: gates → mechanical checks → review → merge → canary.
     // Every outcome that is not "landed" carries guidance, because a task that
     // fails without telling the next attempt why is just re-rolling dice.
-    'work:land': async ({ projectId, taskId, dryRun = false, push = null, baselineOutput = null, reviewer = null, attemptId = null }) => {
+    'work:land': async ({
+      projectId, taskId, dryRun = false, push = null, baselineOutput = null,
+      reviewer = null, attemptId = null, onStage = null
+    }) => {
       const entry = proj(projectId);
       const backlog = backlogFor(projectId);
       const pool = poolFor(projectId);
@@ -1076,7 +1079,7 @@ export function createApi(engine) {
       const workerGate = lastWorkerGate(proj(projectId).store, task.runIds);
       const result = await landTask({
         pool, repoRoot: entry.folder, taskId, task, base, dryRun, baselineOutput,
-        config, workerGate,
+        config, workerGate, onStage: typeof onStage === 'function' ? onStage : undefined,
         push: wantPush ? (args => pushRefs({ ...args, log: () => {} })) : null,
         // The canary: the gates again, on the merged result in the main
         // checkout. Two branches that each pass alone can fail together.

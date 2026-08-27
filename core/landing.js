@@ -123,10 +123,14 @@ export async function landTask({
   // "the last thing this attempt did was fail its own gate" is a fact that
   // otherwise reaches nobody.
   workerGate = null,
+  onStage = () => {},
   log = () => {}
 }) {
   const steps = [];
   const record = (step, result) => { steps.push({ step, ...result }); return result; };
+  // Progress is advisory observability. A broken listener must never change a
+  // landing outcome, just as an unwritable status file must not stop the loop.
+  const announce = stage => { try { onStage(stage); } catch { /* best effort */ } };
 
   // The commit this attempt is being judged on. `work:land` commits the
   // worktree before calling in, so there is one from here onward, and every
@@ -138,6 +142,7 @@ export async function landTask({
   const withCommit = result => (attemptCommit ? { ...result, attemptCommit } : result);
 
   // 1. Gates, in the worktree.
+  announce('gates');
   const gateRun = record('gates', await verifyTask({ pool, taskId, task, log }));
   if (!gateRun.ok) {
     // Red gates are a correction case, and the most specific one there is: the
@@ -221,6 +226,7 @@ export async function landTask({
   // The diff is read by the checks as well as by the reviewer, so it is
   // computed before them rather than between them.
   const diff = await pool.diff(taskId, { base });
+  announce('checks');
   const mech = record('checks', mechanicalChecks({
     changedFiles, deletedFiles, addedFiles, diff, workerGate,
     task,
@@ -237,6 +243,7 @@ export async function landTask({
   }
 
   // 3. The reviewer.
+  announce('review');
   const review = record('review', await reviewDiff({
     worker: reviewWorker(config), apiKey, task, diff,
     gates: gateRun.results, blastRadius: task.blastRadius ?? [], changedFiles,
@@ -268,6 +275,7 @@ export async function landTask({
   }
 
   // 4. Merge, canary, revert on red.
+  announce('land');
   const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: pool.dirFor(taskId) });
   const result = record('land', await gitLand({
     repoRoot, branch, base,

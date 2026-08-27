@@ -290,7 +290,8 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
       };
     }
     if (name === 'work:land') {
-      const result = land(args);
+      args.onStage?.('gates');
+      const result = await land(args);
       if (backlog) {
         if (result.landed) backlog.update(args.taskId, { status: 'landed', blockedReason: null });
         else backlog.escalate(args.taskId, { reason: 'failed', note: result.guidance ?? result.stage });
@@ -1020,6 +1021,36 @@ test('the loop publishes its status where another process can read it', async ()
     writeStatus: () => { throw new Error('disk full'); }
   });
   assert.equal((await noisy.run({ maxTasks: 1 })).landed, 1);
+});
+
+test('gates and review remain visible as in-flight landing work', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'observable landing', goal: 'g' });
+  let supervisor;
+  let duringReview = null;
+  const published = [];
+  const engine = fakeEngine({
+    backlog,
+    land: async args => {
+      args.onStage?.('review');
+      duringReview = supervisor.status();
+      return { landed: true, stage: 'landed', mergeSha: 'abc12345' };
+    }
+  });
+  supervisor = new Supervisor({
+    ...engine, projectId: 'p', backlog, pollMs: 1,
+    writeStatus: status => published.push(status)
+  });
+
+  await supervisor.run({ maxTasks: 1 });
+
+  assert.equal(duringReview.running, true);
+  assert.equal(duringReview.inFlight.length, 1);
+  assert.equal(duringReview.inFlight[0].phase, 'landing');
+  assert.equal(duringReview.inFlight[0].stage, 'review');
+  assert.ok(published.some(status => status.inFlight[0]?.stage === 'gates'));
+  assert.ok(published.some(status => status.inFlight[0]?.stage === 'review'));
+  assert.equal(supervisor.status().inFlight.length, 0, 'the edge clears only after landing settles');
 });
 
 test('a dry run reaches the code that would have merged', async () => {

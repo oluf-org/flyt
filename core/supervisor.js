@@ -1337,7 +1337,13 @@ export class Supervisor {
   #spendNow() {
     if (!this.ledger) return null;
     return totalsWithLive(this.ledger, { sinceMs: this.#windowMs() },
-      { store: this.store, runIds: [...this.inFlight.values()].map(hb => hb.runId) });
+      {
+        store: this.store,
+        // A finished run remains visible while gates/review/canary run, but its
+        // spend has already moved into the ledger. Counting it as live here
+        // would double the same calls for the entire landing phase.
+        runIds: [...this.inFlight.values()].filter(hb => !hb.accounted).map(hb => hb.runId)
+      });
   }
 
   /**
@@ -1468,7 +1474,6 @@ export class Supervisor {
 
   /** A finished run: record the spend, then verify, review and land it. */
   async #complete(taskId, hb, stage, error = null) {
-    this.inFlight.delete(taskId);
     // What an attempt usually costs in wall time, which is the only thing the
     // outlier detector can compare against — and only from attempts where a
     // model ANSWERED.
@@ -1487,7 +1492,8 @@ export class Supervisor {
     // how this went wrong to begin with.
     const spent = this.#liveUsageOf(hb);
     if ((spent?.tokens ?? 0) > 0) this.durations.push(Math.max(0, this.now() - hb.startedAt));
-    this.#recordSpend(taskId, hb, `run ${stage}`);
+    const recorded = this.#recordSpend(taskId, hb, `run ${stage}`);
+    if (recorded) hb.accounted = true;
     // Landing takes minutes — gates, a reviewer, a merge, a canary — and it all
     // happens inside one tick, so without this the published status keeps
     // saying whatever it said before the run finished. A watcher then shows a
@@ -1496,6 +1502,8 @@ export class Supervisor {
     this.#publish();
 
     if (stage === 'failed') {
+      this.inFlight.delete(taskId);
+      this.#publish();
       // The provider refusing everyone is not this task failing. A spent key or
       // an exhausted quota will do the same to every task after it, in seconds,
       // and the ladder would turn that into a parked backlog: the task goes up
@@ -1645,6 +1653,8 @@ export class Supervisor {
     // which is the one thing an agent cannot award itself.
     const impossible = await this.#saidImpossible(hb.runId);
     if (impossible) {
+      this.inFlight.delete(taskId);
+      this.#publish();
       await this.#discard(taskId);
       this.#park(taskId, `The agent reports this cannot be done in this repository: ${impossible}`);
       return;
@@ -1658,23 +1668,40 @@ export class Supervisor {
     // "before" the test-count check needs (§7.3). Without it that check never
     // fires unattended, and deleting tests to go green is the cheapest exit
     // there is.
-    const landed = await this.invoke('work:land', {
-      projectId: this.projectId, taskId, baselineOutput: this.lastCanaryOutput ?? null,
-      // Which attempt is being landed: a slow landing must not clean up after a
-      // restart that has already begun (WR-02).
-      attemptId: this.attempts.get(taskId) ?? null,
-      // The dry-run posture (§6.4): gates and a reviewer run, nothing merges.
-      // This was decided in `loop:start` and then never travelled — `work:land`
-      // defaults it to false, so a loop started with --dry-run merged anyway.
-      // The one flag whose whole job is "do not touch the base branch" has to
-      // reach the code that touches the base branch.
-      dryRun: this.config.loop?.dryRun === true,
-      // Who reviews this session's work, when the caller named someone. The key
-      // stays behind: `work:land` re-stamps it from the provider map.
-      reviewer: this.config.workers?.reviewer
-        ? { provider: this.config.workers.reviewer.provider, model: this.config.workers.reviewer.model }
-        : null
-    });
+    hb.phase = 'landing';
+    hb.stage = 'gates';
+    hb.lastPollAt = this.now();
+    this.#publish();
+    let landed;
+    try {
+      landed = await this.invoke('work:land', {
+        projectId: this.projectId, taskId, baselineOutput: this.lastCanaryOutput ?? null,
+        // Which attempt is being landed: a slow landing must not clean up after a
+        // restart that has already begun (WR-02).
+        attemptId: this.attempts.get(taskId) ?? null,
+        // The dry-run posture (§6.4): gates and a reviewer run, nothing merges.
+        // This was decided in `loop:start` and then never travelled — `work:land`
+        // defaults it to false, so a loop started with --dry-run merged anyway.
+        // The one flag whose whole job is "do not touch the base branch" has to
+        // reach the code that touches the base branch.
+        dryRun: this.config.loop?.dryRun === true,
+        // Who reviews this session's work, when the caller named someone. The key
+        // stays behind: `work:land` re-stamps it from the provider map.
+        reviewer: this.config.workers?.reviewer
+          ? { provider: this.config.workers.reviewer.provider, model: this.config.workers.reviewer.model }
+          : null,
+        // Landing runs inside one supervisor tick, so polling cannot expose
+        // its internal progress. The landing sequence announces its own stage.
+        onStage: landingStage => {
+          hb.stage = landingStage;
+          hb.lastPollAt = this.now();
+          this.#publish();
+        }
+      });
+    } finally {
+      this.inFlight.delete(taskId);
+      this.#publish();
+    }
     if (landed.canaryOutput) this.lastCanaryOutput = landed.canaryOutput;
 
     // A REVIEWER THAT COULD NOT RUN IS NOT A REVIEWER THAT OBJECTED.
