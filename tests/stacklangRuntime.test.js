@@ -4,17 +4,9 @@
 //   serializeFlow(parseFlow(y)) === y  (byte)  (for serializer-produced y)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { parseYaml, formatScalar, formatInline } from '../core/flowlang/yaml.js';
-import { parseFlow, parseEdgeExpr, FlowParseError } from '../core/flowlang/parse.js';
-import { serializeFlow } from '../core/flowlang/serialize.js';
-import { FlowStore } from '../core/flowstore.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const flowsDir = path.join(__dirname, '..', 'flows');
+import { parseYaml, formatScalar, formatInline } from '../core/stacklang/yaml.js';
+import { parseFlow, parseEdgeExpr, FlowParseError } from '../core/stacklang/parse.js';
+import { serializeFlow } from '../core/stacklang/serialize.js';
 
 // --- YAML subset -------------------------------------------------------------
 
@@ -98,8 +90,8 @@ test('parseEdgeExpr: simple, ported, chained', () => {
 // --- parse ----------------------------------------------------------------------
 
 const EXAMPLE = `version: 1
-id: default-pipeline
-name: Default pipeline
+id: legacy-linear
+name: Legacy linear
 description: Plan → route (approval) → verify.
 
 nodes:
@@ -121,10 +113,10 @@ flow:
   - verify -> output
 `;
 
-test('parseFlow: the FLOW_LANG.md example', () => {
+test('parseFlow: a retained linear compatibility example', () => {
   const flow = parseFlow(EXAMPLE);
-  assert.equal(flow.id, 'default-pipeline');
-  assert.equal(flow.name, 'Default pipeline');
+  assert.equal(flow.id, 'legacy-linear');
+  assert.equal(flow.name, 'Legacy linear');
   assert.deepEqual(flow.nodes.map(n => n.id), ['input', 'plan', 'route', 'verify', 'output']);
   // implicit built-ins materialize as structural nodes
   assert.deepEqual(flow.nodes[0], { id: 'input', type: 'input', kind: 'user', data: {} });
@@ -209,60 +201,6 @@ test('round-trip: parse(serialize(x)) ≡ x for a legacy-format flow', () => {
   assert.deepEqual(back, stripPositions(LEGACY_FIXTURE));
   // and the text itself is stable
   assert.equal(serializeFlow(back), yaml);
-});
-
-test('round-trip: every shipped .flow.yaml is byte-stable', () => {
-  // flows/ is user data (gitignored); on a fresh checkout it is empty, so seed
-  // the shipped pipelines into a temp dir and check those instead.
-  let dir = flowsDir;
-  let files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.flow.yaml')) : [];
-  if (files.length === 0) {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipped-flows-'));
-    const store = new FlowStore(dir);
-    store.ensureDefaultPipeline();
-    store.ensureSeedPipelines();
-    files = fs.readdirSync(dir).filter(f => f.endsWith('.flow.yaml'));
-  }
-  assert.ok(files.length >= 1, 'expected shipped DSL flows');
-  for (const f of files) {
-    const text = fs.readFileSync(path.join(dir, f), 'utf8');
-    assert.equal(serializeFlow(parseFlow(text)), text, `byte-stability mismatch for ${f}`);
-  }
-});
-
-test('learn-from-repo returns the research, proposed work, and queue outcome', () => {
-  const file = path.join(flowsDir, 'learn-from-repo.flow.yaml');
-  const flow = parseFlow(fs.readFileSync(file, 'utf8'));
-  const finalSources = flow.edges
-    .filter(edge => edge.target === 'output')
-    .map(edge => edge.source);
-  assert.deepEqual(finalSources, ['synthesise', 'plan', 'work'],
-    'the final result must not collapse back to the queue status alone');
-  const readInputs = flow.edges
-    .filter(edge => edge.target === 'read')
-    .map(edge => `${edge.source}.${edge.sourceHandle ?? ''}`);
-  assert.ok(readInputs.includes('inputs.repo'), 'the fan-out is explicitly scoped to the subject repository');
-  assert.ok(readInputs.includes('inputs.goal'), 'the fan-out receives the verbatim question, not only orientation\'s summary');
-  const byId = new Map(flow.nodes.map(node => [node.id, node]));
-  assert.equal(byId.get('orient').overrides.maxToolIterations, 6);
-  assert.equal(byId.get('read').data.maxLanes, 4,
-    'the shipped research flow must keep synthesis context bounded');
-  assert.equal(byId.get('read').data.maxToolIterations, 10);
-  assert.ok(byId.get('read').data.tools.includes('glob'),
-    'reference readers need tree discovery when text search is too broad');
-  assert.equal(byId.get('plan').overrides.maxToolIterations, 10,
-    'the evidence planner must not inherit the much wider host default');
-  assert.deepEqual(byId.get('synthesise').overrides.skills, ['reference-transfer']);
-  assert.equal(byId.get('synthesise').overrides.effort, 'medium',
-    'synthesis must condense the lane reports instead of receiving a 16k-token answer budget');
-  assert.match(byId.get('synthesise').overrides.instructions, /under\s+1,800 words/);
-  assert.equal(byId.get('synthesise').templateId, 'general-analysis',
-    'research synthesis must not invoke combine/stitch task materialization');
-  assert.deepEqual(byId.get('plan').overrides.skills, ['skill-authoring']);
-  assert.equal(byId.get('plan').overrides.worker.model, '~deepseek/deepseek-v4-flash-latest',
-    'the evidence planner must use the probed value model with a high-effort answer budget');
-  assert.equal(byId.get('work').data.requireEvidence, true,
-    'learn-from-repo must not queue a transfer task without verified source evidence');
 });
 
 test('round-trip: multiline strings and odd titles survive', () => {

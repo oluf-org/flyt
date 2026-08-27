@@ -1,5 +1,4 @@
 # Flyt — current design
-
 This document describes the architecture that exists now. It is not a roadmap. Proposed features belong in the backlog; durable changes to the rules belong in [`DECISIONS.md`](./DECISIONS.md).
 
 ## 1. Durable state and storage roots
@@ -15,18 +14,17 @@ Plain files are the durable source of truth. Process-local maps are allowed for 
 Important file contracts:
 
 ```text
-nodes/<id>.json                 node template
+stacks/<id>.stack.yaml          canonical stack source; no layout sidecar
+plugins/<id>/                   block, tool, skill, and UI contributions
 tools/<id>.json                 tool definition
 tools/sets/<id>.json            reusable tool ceiling/grant
-flows/<id>.flow.yaml            flow source
-flows/<id>.layout.json          presentation-only positions
-runs/<runId>/flow.json          resolved, self-contained run graph
+runs/<runId>/session.jsonl      canonical append-only run record
 runs/<runId>/meta.json          stage, statuses, gates, errors, workspace
-runs/<runId>/nodes/*.md         node output
+runs/<runId>/stack.json         projected resolved stack
+runs/<runId>/blocks/*.md        block output
 runs/<runId>/tasks/*.md         executor output
 runs/<runId>/calls/*.jsonl      model-call records
 runs/<runId>/tools/*.json       complete tool results
-runs/<runId>/log.jsonl          append-only audit trail
 .flyt/incidents/<id>.json       a refusal nothing gets past, open until resolved
 ```
 
@@ -34,30 +32,19 @@ runs/<runId>/log.jsonl          append-only audit trail
 
 A project tab identifies one workspace. The renderer is a single React tree; switching tabs swaps the project-scoped view state while work continues in the main process. IPC calls that act on project data carry `projectId`, and stale pushes for another project are ignored.
 
-Flows, node templates, tool definitions, model settings, and reference repositories are global reusable libraries. Runs, backlog tasks, context, skills, chats, spend, and Loop status are project-scoped.
+Stacks, plugins, tool definitions, model settings, and reference repositories are global reusable libraries. Runs, backlog tasks, context, skills, chats, spend, and Loop status are project-scoped.
 
-The main surfaces are the lander/composer, flow canvas, run feed/canvas, Nodes library, Models and Settings, Repositories, and the Loop board. There is no separate execution path behind each surface: Electron IPC, the CLI, and the loopback HTTP server bind the command map in `core/api.js`.
+The shipping renderer has Work and Build as permanent surfaces. Trace opens over either when a run is addressed. Build contains the unified contribution library and containment editor. There is no route to the retired canvas, node picker, or Nodes page. Electron IPC, the CLI, and the loopback HTTP server bind host command surfaces rather than implementing separate behavior.
 
-## 3. Flows and execution
+## 3. Stacks and execution
 
-`core/flowRunner.js` is the execution engine. At run start it resolves templates, modes, run overrides, typed inputs, model sources, tool grants, and sub-flow references into `flow.json`. Editing a library item later cannot change what an existing run records.
+The kernel stack runner walks the parsed containment tree and records the resolved stack before executing a block. It resolves every `use` through `ctx.blocks` before spending, then applies run and block ceilings through the tool seam. Editing a stack later cannot change the stack already recorded by a run.
+
+`core/stackRunner.js` remains the compatibility engine used by the current Loop supervisor and old run readers. Its old nouns are migration inputs owned by `core/brand.js`; it is not a desktop surface or the canonical stack grammar.
 
 The scheduler recomputes readiness after each wave and runs independent `aiStep` and `agentTask` nodes up to `maxParallel`. Nodes with approval interactions are serialized where simultaneous gates would be ambiguous. Task claims are persisted before execution so two drains cannot take the same task.
 
-Supported composition includes:
-
-- typed run inputs represented by a visible `inputs` node;
-- clarifying-question nodes that park the run at an input gate, for as many
-  rounds as the node declares — one for the refiner and the orientation, where
-  a question is an exception; several for the interrogation, whose contract is
-  to ask before it specifies;
-- template instances with local overrides;
-- bounded orchestrator containers;
-- fan-out lanes that share a brief but not each other's output;
-- sub-flows spliced into the resolved run graph with namespaced ids; and
-- backlog-plan and Loop nodes that enqueue project tasks and wait on file-backed status.
-
-Sub-flows are static composition. The DSL deliberately has no expression language or arbitrary conditional branching. See [`FLOW_LANG.md`](./FLOW_LANG.md) for grammar and lint rules and [`FLOW_NODES.md`](./FLOW_NODES.md) for roles, ports, and structured outputs.
+Supported composition is the closed container set `sequence`, `parallel`, `repeat`, `foreach`, `until`, and `if`. Containment is the graph, parallel lanes are isolated, every loop is statically bounded, and predicates are structured comparisons over declared outputs. The language has no arbitrary expressions. See [`STACK_LANG.md`](./STACK_LANG.md) for grammar and [`BLOCKS.md`](./BLOCKS.md) for block contracts.
 
 ## 4. Context and artifacts
 
@@ -71,7 +58,7 @@ Every model and tool interaction leaves evidence. Tool results are stored in ful
 
 Tools are file-backed definitions loaded by `core/toolstore.js`; built-ins bind those definitions to source modules. The current catalog covers workspace reads and edits, shell commands, run/task inspection, backlog operations, reference search, web fetch/search/scrape, gate execution, result retrieval, and asking a human. [`TOOLS.md`](./TOOLS.md) is the authoring contract.
 
-The shipped `research` flow is what makes the web tools reachable from the app rather than only from the CLI: it appears in the lander's flow picker, takes a typed question, and holds the `web` and `read-only` sets together — it can search, fetch, scrape and extract, and read the project, and it can write nothing. Untrusted network text and a file writer do not belong on the same node. The backlog chat deliberately does NOT reach the web: its `enqueue_task` writes the task file immediately, so a reader of untrusted pages beside it would be a path from a web page to unattended work. Giving chat the web means making that enqueue a real proposal first.
+The shipped `research` stack holds the `web` and `read-only` ceilings together: it can search, fetch, scrape, extract, and read the project while writing nothing. Untrusted network text and a file writer do not belong on the same block. Backlog chat does not receive web reach merely because that stack has it.
 
 A tool can be called once, outside a run, through `tool:run` (`flyt tools run`). That door deliberately narrows authority rather than widening it: a write, shell or destructive tool refuses unless the caller confirms, and with no run store the full result stays inline. `tool:problems` reports definitions the library holds but cannot bind, which is otherwise a silent failure — a listed tool that looks healthy and cannot run.
 
@@ -105,7 +92,7 @@ The Models page ranks a separate “Popular on OpenRouter” creator section fro
 
 ## 7. Run lifecycle and presentation
 
-Model output streams into run artifacts and reaches the renderer as incremental snapshot patches. Revision mismatches trigger a full resync. The canvas is editable before a run and read-only while showing the resolved run graph; node cards, the feed, and focused views share Markdown rendering.
+Model output streams into the session log and reaches the renderer as folded trace updates. Build edits the source stack through commands; Work renders the resolved stack read-only while it runs. Both use the same derived containment geometry.
 
 Completed nodes survive a crash. On startup, interrupted work is reconciled to a non-running state and the user chooses Resume. Completed nodes are reconstructed from persisted status and are not re-executed. A tool approval whose call stack died is failed honestly rather than pretending the pending call still exists.
 
@@ -130,7 +117,7 @@ A task declares what it may touch (`blastRadius`), how it is judged (`gates`), w
 For each claimable task the supervisor:
 
 1. claims the task and creates a git worktree outside the repository, minting an `attemptId` that owns it;
-2. starts a normal Flyt run of `flows/loop-task.flow.yaml` — one authored work node holding the Loop ceiling. The task file is already the plan, so the run does not plan it again, and the node that holds the tools exists before any model is called. Its grant names the `loop` set rather than inheriting the Work template's task-type grant, every one of which is a writer without a shell; `config.loop.flowId` points it elsewhere;
+2. starts the Loop compatibility projection of canonical `stacks/loop-task.stack.yaml` — one authored work block holding the Loop ceiling. The projection is seeded by code rather than shipped as a v1 asset, so a fresh cutover install can still work its backlog while the supervisor migrates to the kernel runner;
 3. records heartbeats, model calls, tool feedback, and spend;
 4. runs the task's declared gates itself;
 5. requests an independent diff review;
@@ -173,7 +160,7 @@ Current architectural gaps worth preserving as explicit choices:
 - context can still balloon when no `contextSpec` is supplied;
 - synchronous filesystem access assumes modest run and graph sizes;
 - shell execution is controlled but not securely sandboxed;
-- pending tool calls cannot be reconstructed after process death in the v1 runner (the v2 session log closes this, behind the flag — §10);
+- pending tool calls in runs written by the compatibility runner cannot be reconstructed; canonical stack runs reconstruct an unreturned tool result from the session log;
 - MCP/HTTP-imported tools, a full Tools management page, and code mode are not implemented; the tool library is reachable from the CLI (`flyt tools`) but has no desktop surface;
 - a killed call's spend is estimated from what it streamed, so it is bounded
   evidence rather than a measurement;
@@ -181,39 +168,20 @@ Current architectural gaps worth preserving as explicit choices:
 - sub-flow references follow the latest library version at the next run start; and
 - large-graph layout and rendering are not a current target.
 
-## 10. The v2 stack, behind a flag
+## 10. Plugin kernel, stacks, and shipping surfaces
 
-A rebuild onto a Cordis plugin kernel is under way (D52-D63; the plan is `.flyt/backlog/v2-plugin-stack-plan.md`). It ships behind one flag, off by default, and this section describes what exists today rather than what is planned.
+Phase 5 completed the cutover described by D52-D63. The Electron host explicitly boots the kernel and `Root.jsx` always mounts Work/Build; stale pre-cutover settings cannot select a renderer that has been deleted. `core/v2.js` keeps an optional boot switch for tests and non-desktop callers, with v2 as its default.
 
-**Reading the flag.** `FLYT_V2` in the environment, `v2` in settings, or an explicit choice at the call site; the call wins, then the environment, then settings, then off. `flyt doctor` prints the state and which of those decided it. `core/v2.js` is the only module that reads it, and `bootKernel()` there is the only door into the v2 tree.
+**Kernel and seams.** `kernel/` is TypeScript compiled to `kernel/dist` and imported as `#kernel`. Third-party capability boundaries are typed services: sessions, tools, models, filesystem, shell, agents, commands, and sandbox. `ctx.skills` and `ctx.blocks` are registries rather than capability seams. Cordis profile composition narrows surfaces; a Loop worker may never gain a row the desktop profile lacks.
 
-**What "off" means.** Not "disabled" — *unloaded*. The import in `bootKernel()` is dynamic and behind the check, nothing in `core/` imports `#kernel` statically, and a test asserts both. With the flag off, no v2 module is loaded, so v2 cannot alter a v1 run by existing.
+**Canonical stack source.** `StackStore` reads `stacks/<id>.stack.yaml`. An older linear `flows/<id>.flow.yaml` is converted in memory when opened: its edges determine sequence order, supported structural Loop nodes map to the registered handoff block, and every generated use must resolve through the installed plugin registry before open or save. The source remains untouched until the first validated stack write. A branch, disconnected graph, unknown block, unsupported container, or authority grant that cannot be narrowed equivalently is refused with the legacy source intact rather than silently changing behavior. Layout sidecars are never migrated because `kernel/src/stack/layout.ts` derives geometry from containment.
 
-**What the kernel is, with the flag on.** `kernel/` is TypeScript compiled to `kernel/dist` and imported as `#kernel`; the JS core and the renderer consume the generated types (D53). The boundary is the seam: anything a third-party plugin can touch is typed and lives there.
+**Build host boundary.** The kernel, block executors, and command handlers stay in Electron's main process. IPC returns cloneable stack and block metadata. The renderer rebuilds a read-only registry facade and invokes edits through `v2:command`; accepted commands persist the stack and push the resulting tree back with the invocation record. A human drag and an agent call therefore use the same `ctx.commands` handler and produce the same visible event (D63).
 
-- **Eight capability seams** — `ctx.sessions`, `ctx.tools`, `ctx.llm`, `ctx.fs`, `ctx.shell`, `ctx.agents`, `ctx.commands`, `ctx.sandbox`. Provided so far: `sessions`, `tools`, `commands`, `agents` and `llm`; `fs`, `shell` and `sandbox` are declared and waiting. A seam is a service definition, a provider, and consumers that never learn which provider they got. `ctx.skills` also exists: not a capability seam, but the service definition dsh's skill packages register into. `ctx.blocks` is ours in the same sense: a block is Flyt's noun, dsh has no equivalent, and the eight-name list is the contract a dsh plugin is entitled to find.
-- **The session log** — `runs/<id>/session.jsonl`, append-only, is the canonical record (D55). `deriveMessages()` reconstructs exactly what a model saw; a tool call with no result reconstructs as a synthetic never-returned result rather than disappearing. The run folder beside it (`meta.json`, `stack.json`, `blocks/*.md`, `tools/*.json`, `calls/*.jsonl`) is a projection, rebuildable from the log, and the ledger reads the log rather than the projection. Runs written before the log open through a read-only compatibility reader and are never converted.
-- **The permission bridge** — every tool, ours or a plugin's, reaches execution through `tools/pre-execute`. Unclassified tools are in no toolset and no ceiling can name them; classification is not a grant; `ask` with nobody to ask is a denial (D57).
-- **Composition** — bundles, then the profile patch, then the home patch, then the CLI overlay, a later layer replacing a row by id. One profile per surface (`flyt-desktop`, `flyt-cli`, `flyt-loop-worker`), and a narrower surface may never gain a row a broader one lacks.
-- **dsh compatibility** — a pinned, real published dsh plugin loads, registers and executes against these services in CI (D54). Services on that contract are Cordis `Service` subclasses using ordinary private fields, because cordis derives a per-caller view with `Object.create()` and `#private` state is unreachable through it.
+**Blocks and plugins.** `ctx.blocks` is the only resolution of a stack's `use`. Bundled core, judgement, inquiry, and Loop plugins register the canonical block set. The same definition supplies execution, Library metadata, configuration schema, outputs, and ceiling. External UI contributions cross a typed RPC registry and are rendered by Flyt components; executable values and unknown component kinds are refused before the renderer.
 
-**The stack, as far as it is built.** Phase 1 is under way. Its first four slices landed as `t-0056`–`t-0059`; what remained (`t-0060`–`t-0062`) was decomposed again into `t-0064`–`t-0077`, one commit each, because a slice whose done-when spans four files is a slice that arrives with a helper written and nothing wired to it. What follows is the model the surfaces will draw, rather than the surfaces.
+**Runs and Trace.** `runs/<id>/session.jsonl` is the canonical record. `deriveMessages()` reconstructs what the model saw, including a synthetic result for a tool call that never returned. The run folder is a projection that can be rebuilt from the log. Work and Trace fold the same event stream, so live state and forensic detail cannot disagree.
 
-- **Containment is the graph** — `kernel/src/stack/parse.ts` reads a `stacks/<id>.stack.yaml` whose nested `blocks:` list *is* the composition. There is no `flow:` edge list and no `.layout.json`, because an edge list can disagree with the nodes and a layout file can disagree with both (D59). Six containers: `Sequence`, `Parallel`, `Repeat N`, `For each`, `Until` and `If` (D56, Phase 3). Every one of them declares its bound statically, and worst-case expansion is folded over the whole tree and reported before a run starts. An `If` predicate and a `For each` roster are *source / operator / literal* over a field an upstream block declared, never an expression and never prose — the grammar and its refusals are [`STACK_LANG.md`](./STACK_LANG.md). A container named but not built is still refused by the name a person knows it by, with the phase that brings it. Hand-written on the loader's hand-written YAML subset, so the dependency-light rule holds (D24) and the contract is still typed (D53).
-- **Layout is computed, never stored** — `stack/layout.ts` is a pure function of the tree: a sequence stacks its children, a parallel places its lanes side by side, a container's box encloses every child's, and a point resolves to the innermost node under it. Nothing in it reads a file, so the CLI, the editor and an agent all get the same geometry.
-- **An edit may not produce what the parser rejects** — `stack/edit.ts` has insert, move, remove and configure, addressed by container and index rather than by coordinates. Moving a container into its own descendant is refused, and so is an edit that would empty a container. Every edit returns a new tree and a record of what changed, which is what the editor animates from.
-- **A `use` resolves to something** — `ctx.blocks` is the registry a plugin contributes a block to, and the other side of the string `parse.ts` stops at. One definition serves three readers: the scheduler needs its `execute`, the editor needs its settings schema to render a form, and the library needs its title, description and category — a second description of a block is a description that goes stale. A ceiling named on a block is a limit and never a grant (D57), and `missingBlocks()` answers the question a stack asks of the registry, so a run fails at the first block rather than at the ninth.
-- **One code path, two callers** — `flyt-api` provides `ctx.commands`, and the four edits are registered into it, in all three profiles. The caller (`human` or `agent`) is recorded rather than inferred, every invocation emits `commands/invoke` carrying the edit record — refusals included — and the tree an accepted edit produced becomes the tree in the same step (D63).
+**Safety.** Every tool reaches `tools/pre-execute`. Conservative effect inference may only make a plugin tool more restricted; classification is not a grant; a skill request is not a grant; and no grant may exceed the block's static ceiling. Attended `ask` can reach a person, while an unattended context with nobody to ask denies rather than guessing.
 
-- **A block runs, and the request is built from the log** — `blocks/run.ts` is the agent loop every block shares. It builds each request with `deriveMessages()`, so the list sent to the model IS the list the log holds and "model-visible means logged" is a property of the code rather than a rule to follow. `ctx.tools.execute` is the only path to a tool, so the ceiling and the approval gate bind exactly once; a refusal comes back as a result the model reads and answers.
-- **The walk** — `flyt-stack-runner` provides `ctx.agents`. A sequence runs its children in order; a parallel runs its lanes under `maxParallel`, each handed what entered the PARALLEL, which is lane isolation (D37) as a consequence of containment rather than a rule anything enforces. A block narrows the run's ceiling and never widens it. Stop lands between children and the log says where; resume reads the log, replays what settled, re-runs what did not, and reconstructs a tool call that never returned (D17).
-- **The run folder is written as the run goes** — `flyt-run-projection` listens to `session/append` and re-materialises at durable boundaries. Recomputed from the whole log each time rather than updated, so deleting the folder and rebuilding it from `session.jsonl` reproduces it byte for byte, which an incremental writer could not promise.
-- **Models** — `flyt-adapters` provides `ctx.llm` over the JS core's existing adapters, injected rather than imported so the dependency does not point backwards across the language boundary. It adds the route record (requested, effective, why, degraded) and turns the adapters' whole-turn emissions into deltas.
-
-**The surfaces, behind the flag.** `Root.jsx` is the only reader of the flag in the renderer, and the v2 tree is reached through a lazy import, so with the flag off the built chunk is never fetched and `App.jsx` mounts exactly what it always did — a test walks `src/` and fails on any static import of `./v2/`.
-
-- **Build** is the block editor. Geometry comes from the derived layout, containment renders as containment and there are no edges. A drag picks a SLOT — a container and an index — and invokes `stack:move-block`; a model invokes the same command, and the editor animates from `commands/invoke` either way, so an agent's edit animates like a dragged one because it is the same record (D63). Undo is the inverse command, never a saved tree.
-- **Work** is the running stack, drawn through the same editor rather than a second rendering of it. The active block is lit and its output streams inline; parallel lanes light together.
-- **Trace** opens over whichever surface you are on when a run is addressed, rather than being a third destination. Turns hold steps, collapsed until asked; every request shows finish reason, usage, timing and reasoning apart from content; every tool call shows its arguments and its complete result; a degraded route reads as degraded and a call that never returned reads as unfinished rather than as empty. It reopens from a finished run's log with no live process, and it shares one folded trace with Work so the two cannot disagree.
-
-**What the flag still does not switch.** The v1 surfaces do all the real work until the Phase 5 cutover (D62). With the flag on there are no stacks on disk to open (`stacks/` arrives in Phase 2), so Build renders an empty editor and Work renders the composer — the pieces are built and tested, and the handoff test (`t-0063`) is what will run one end to end.
+**Compatibility boundary.** The file-backed Loop harness still executes through the renamed JS `StackRunner` while it is migrated to the kernel runner. Its legacy graph/parser contracts are kept for that internal path and tested, but no v1 renderer, loose `nodes/*.json`, shipped `flows/` asset, or stored layout is part of the product surface.

@@ -11,8 +11,8 @@ This document describes what `kernel/src/stack/parse.ts` enforces, and nothing
 else. Every refusal named below is one the parser actually raises; if you find a
 rule here that the code does not make, the document is the bug.
 
-> This is the v2 language. The v1 flow DSL is [`FLOW_LANG.md`](./FLOW_LANG.md)
-> and keeps doing real work until the Phase 5 cutover.
+> This is the shipping language. Version 1 flow files are accepted only by the
+> migration/Loop compatibility path and are not a second product grammar.
 
 ## The file
 

@@ -1,7 +1,7 @@
 // Flow DSL parser: *.flow.yaml text → the canonical flow object the rest of
 // the app already consumes ({ id, name, description?, nodes[], edges[] }) —
 // minus positions, which are presentation and live in <id>.layout.json
-// (see core/flowstore.js). Deterministic, no side effects. See FLOW_LANG.md.
+// (see core/flowstore.js). Deterministic, no side effects. See STACK_LANG.md.
 import { parseYaml, YamlError } from './yaml.js';
 import { normalizeInputs, inputsNode, INPUTS_NODE_ID, InputError } from '../nodes/runInputs.js';
 
@@ -97,7 +97,7 @@ function parseNodeEntry(id, entry) {
 }
 
 // text → canonical flow object (no positions). Throws FlowParseError/YamlError
-// on malformed input; semantic problems are the linter's job (core/flowlang/lint.js).
+// on malformed input; semantic problems are the linter's job (core/stacklang/lint.js).
 export function parseFlow(text) {
   let doc;
   try { doc = parseYaml(text); }

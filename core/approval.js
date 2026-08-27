@@ -1,6 +1,6 @@
 // What an approval mode decides — one table, and five named questions (D—/§5).
 //
-// `approvalMode: 'always'` was read in five places in core/flowRunner.js and
+// `approvalMode: 'always'` was read in five places in core/stackRunner.js and
 // settled five unrelated things: whether the run edits the project's context
 // file, whether tool calls are gated at all, whether the gate screens them
 // first, whether a node's pre-gate parks, and whether an interrogation asks or

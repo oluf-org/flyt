@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RunStore } from '../core/state.js';
-import { FlowRunner } from '../core/flowRunner.js';
+import { StackRunner } from '../core/stackRunner.js';
 import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
 // A store whose comparisons/ dir lands inside the temp dir (sibling of runs/).
@@ -93,7 +93,7 @@ function cmpFlow() {
 test('start() records compareGroup in meta when given, omits it otherwise', async () => {
   const store = makeStore();
   setScript(() => 'ok');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
 
   const a = runner.start(cmpFlow(), { userInput: 'brief', compareGroup: { id: 'cmp-x', label: 'A' } });
   await waitForStage(store, a, ['done', 'failed']);
@@ -107,7 +107,7 @@ test('start() records compareGroup in meta when given, omits it otherwise', asyn
 test('start() normalizes a bogus label to A', async () => {
   const store = makeStore();
   setScript(() => 'ok');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(cmpFlow(), { userInput: 'brief', compareGroup: { id: 'cmp-y', label: 'C' } });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.deepEqual(store.readMeta(runId).compareGroup, { id: 'cmp-y', label: 'A' });

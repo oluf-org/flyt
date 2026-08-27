@@ -276,23 +276,4 @@ test('a STANDING per-task cap still counts the rolling window', async () => {
 // `gateProblem` checks that a gate's INTERPRETER exists, which `npm` does;
 // nothing checks that the command is well-formed, and nothing can in general.
 // So the command is what had to change.
-test('the documented bare `flow lint` lints every shipped flow', async () => {
-  const { execFile } = await import('node:child_process');
-  const { promisify } = await import('node:util');
-  const run = promisify(execFile);
-  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, '$1'), '..');
 
-  const bare = await run(process.execPath, ['core/flowlang/cli.js', 'lint', '--json'], { cwd: repo, maxBuffer: 8e6 });
-  const all = JSON.parse(bare.stdout);
-  assert.equal(all.ok, true, 'this repository ships flows that lint clean');
-  assert.ok(Array.isArray(all.files) && all.files.length > 1,
-    'the bare form covers the whole shipped library, not one file');
-
-  // And one file keeps exactly the shape it had — this is a CI surface.
-  const one = await run(process.execPath,
-    ['core/flowlang/cli.js', 'lint', 'flows/loop-task.flow.yaml', '--json'], { cwd: repo, maxBuffer: 8e6 });
-  const single = JSON.parse(one.stdout);
-  assert.equal(single.ok, true);
-  assert.ok(Array.isArray(single.errors), 'errors/warnings, not a files array');
-  assert.equal(single.files, undefined);
-});

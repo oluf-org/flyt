@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FlowRunner } from '../core/flowRunner.js';
+import { StackRunner } from '../core/stackRunner.js';
 import { runExecutorTask } from '../core/nodes/executor.js';
 import { resolveTools } from '../core/tools/index.js';
 import { Workspace } from '../core/workspace.js';
@@ -188,7 +188,7 @@ test('executor records an ungranted request in its prompt, artifact, log, and re
 test('a real Loop run refuses a skill grant even when the node carries it', async () => {
   const store = makeStore();
   const ws = wsWithSkills({ research: '---\nrequiresTools: [read_file]\n---\n# Research\nRead carefully.' });
-  const runner = new FlowRunner(store, testConfig({ approvalMode: 'always' }));
+  const runner = new StackRunner(store, testConfig({ approvalMode: 'always' }));
   setScript(() => 'Loop work completed without the requested tool.');
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }), node('work', 'agentTask', {
@@ -269,7 +269,7 @@ test('skillsSection labels each skill by name', () => {
 test('an aiStep template skill reaches the model and is logged', async () => {
   const store = makeStore();
   const ws = wsWithSkills({ 'house-style': 'Always open with the words BLUE HERON.' });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   let sawSystem = null;
   setScript(({ system }) => { sawSystem = system; return 'done'; });
 
@@ -293,7 +293,7 @@ test('an aiStep template skill reaches the model and is logged', async () => {
 test('a node with no skills leaves the prompt exactly as it was', async () => {
   const store = makeStore();
   const ws = wsWithSkills({ 'house-style': 'BLUE HERON' });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   let sawSystem = null;
   setScript(({ system }) => { sawSystem = system; return 'done'; });
   const flow = makeFlow(
@@ -310,7 +310,7 @@ test('a node with no skills leaves the prompt exactly as it was', async () => {
 test('an agentTask template skill rides the task to the executor', async () => {
   const store = makeStore();
   const ws = wsWithSkills({ 'test-style': 'Name every test after the bug it prevents.' });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   let sawSystem = null;
   setScript(({ system }) => { sawSystem = system; return 'Task complete.'; });
 
@@ -332,7 +332,7 @@ test('an agentTask template skill rides the task to the executor', async () => {
 test('an attached skill the project does not define is logged, and the run continues', async () => {
   const store = makeStore();
   const ws = wsWithSkills({});
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   setScript(() => 'done');
   const flow = makeFlow(
     [node('in', 'input', { text: 'brief' }),
@@ -362,7 +362,7 @@ test('the same template picks up whichever project it is bound to', async () => 
 
   for (const marker of ['PROJECT ALPHA RULES', 'PROJECT BETA RULES']) {
     const store = makeStore();
-    const r = new FlowRunner(store, testConfig());
+    const r = new StackRunner(store, testConfig());
     const ws = wsWithSkills({ 'house-style': marker });
     const runId = r.start(flow, { workspace: ws.root });
     assert.equal(await waitForStage(store, runId, ['done', 'failed']), 'done');
@@ -385,7 +385,7 @@ test('an aiStep contextSpec reads the file out of the bound project', async () =
   fs.mkdirSync(path.join(ws.root, 'src'), { recursive: true });
   fs.writeFileSync(path.join(ws.root, 'src', 'types.ts'), 'export interface AppConfig { PORT: number }', 'utf8');
 
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   let sawPrompt = null;
   setScript(({ prompt }) => { sawPrompt = prompt; return 'done'; });
   const flow = makeFlow(
@@ -409,7 +409,7 @@ test('a contextSpec path that escapes the project is not resolved', async () => 
   const secret = path.join(ws.root, '..', 'outside-secret.txt');
   fs.writeFileSync(secret, 'TOP SECRET', 'utf8');
   try {
-    const runner = new FlowRunner(store, testConfig());
+    const runner = new StackRunner(store, testConfig());
     let sawPrompt = null;
     setScript(({ prompt }) => { sawPrompt = prompt; return 'done'; });
     const flow = makeFlow(
@@ -431,7 +431,7 @@ test('an agentTask declared input reads the file out of the bound project', asyn
   const ws = new Workspace(tmpDir()).ensure();
   fs.writeFileSync(path.join(ws.root, 'STYLE.md'), 'House rule: tabs, never spaces.', 'utf8');
 
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   let sawPrompt = null;
   setScript(({ prompt }) => { sawPrompt = prompt; return 'Task complete.'; });
   const flow = makeFlow(
@@ -457,7 +457,7 @@ test('an agentTask declared input reads the file out of the bound project', asyn
 test('a run started with skills attaches them to every node that can hold one', async () => {
   const store = makeStore();
   const ws = wsWithSkills({ 'house-rules': 'House rule: tabs, never spaces.' });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   let sawSystem = null;
   setScript(({ system }) => { sawSystem = system; return 'done'; });
 
@@ -482,7 +482,7 @@ test('run-level skills are a union with the node\'s own, never a replacement', a
     'house-rules': 'House rule: tabs, never spaces.',
     'from-template': 'Template rule: cite the file you read.'
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   let sawSystem = null;
   setScript(({ system }) => { sawSystem = system; return 'done'; });
 

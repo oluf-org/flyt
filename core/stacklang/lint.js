@@ -6,8 +6,8 @@
 //
 // Findings: { rule, severity: 'error'|'warning', nodeId?, edge?, message }.
 // ok === true means "no errors" (warnings allowed). Surfaces: the CLI
-// (core/flowlang/cli.js), on-save validation in the app, and the pre-run
-// gate in core/flowRunner.js (RUNTIME_RULES subset).
+// (core/stacklang/cli.js), on-save validation in the app, and the pre-run
+// gate in core/stackRunner.js (RUNTIME_RULES subset).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -633,7 +633,7 @@ function result(findings) {
   };
 }
 
-// The pre-run gate (core/flowRunner.js): only rules whose violation would
+// The pre-run gate (core/stackRunner.js): only rules whose violation would
 // corrupt or wedge a run. Shape rules (no-input/no-output/unreachable/dead-end)
 // stay author-time concerns — the runner has always tolerated partial flows.
 // grant-exceeds-ceiling and child-exceeds-parent are here because the runtime

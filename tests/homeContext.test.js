@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FlowRunner, contextIsStale, readContextStamp, orientSummary, ORIENT_SUMMARY_WORDS } from '../core/flowRunner.js';
+import { StackRunner, contextIsStale, readContextStamp, orientSummary, ORIENT_SUMMARY_WORDS } from '../core/stackRunner.js';
 import { homeSeed, projectGates, SEED_BUDGET } from '../core/homeSeed.js';
 import { parseOrientation, stripJsonBlock } from '../core/planEval.js';
 import { Workspace } from '../core/workspace.js';
@@ -219,7 +219,7 @@ test('a node pointed at a subject that reads the workspace instead is logged', a
     asked = true;
     return '```tool\n{"tool":"read_file","args":{"path":"src/ours.js"}}\n```';
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   // subjectRepo is what materializeInputs stamps when a repo input feeds a node.
   const runId = runner.start(orientFlow({ subjectRepo: 'their-repo' }), { userInput: 'brief', workspace: dir });
   await waitForStage(store, runId, ['done', 'failed']);
@@ -240,7 +240,7 @@ test('a node that reads the workspace by design is not reported for doing so', a
     asked = true;
     return '```tool\n{"tool":"read_file","args":{"path":"src/ours.js"}}\n```';
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(orientFlow({ subjectRepo: 'their-repo', subjectStrict: false }),
     { userInput: 'brief', workspace: dir });
   await waitForStage(store, runId, ['done', 'failed']);
@@ -260,7 +260,7 @@ test('every file result says which root it came from', async () => {
     asked = true;
     return '```tool\n{"tool":"read_file","args":{"path":"src/ours.js"}}\n```';
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(orientFlow(), { userInput: 'brief', workspace: dir });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -295,7 +295,7 @@ test('orient writes the context, the stance and a capped summary', async () => {
     if (roleOf(system) === 'orient') { seenPrompt = prompt; return STANCE(); }
     return 'ok';
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(flowWithOrient(), { userInput: 'learn from that repo', workspace: dir });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -349,7 +349,7 @@ test('an aiStep may narrow its tool rounds below the host-wide ceiling', async (
     if (calls === 2) return STANCE();
     return '```tool\n{"tool":"read_file","args":{"path":"README.md"}}\n```';
   });
-  const runner = new FlowRunner(store, testConfig({ maxToolIterations: 40 }));
+  const runner = new StackRunner(store, testConfig({ maxToolIterations: 40 }));
   const runId = runner.start(flowWithOrient({ maxToolIterations: 2 }), {
     userInput: 'learn from it', workspace: dir
   });
@@ -364,7 +364,7 @@ test('an unparseable stance degrades to "adjacent" rather than failing the run',
   const dir = tmpProject({ 'package.json': '{}' });
   const store = makeStore();
   setScript(({ system }) => roleOf(system) === 'orient' ? 'This project seems related, I think.' : 'ok');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(flowWithOrient(), { userInput: 'brief', workspace: dir });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -390,7 +390,7 @@ test('an empty workspace with no stated goal parks the run, once', async () => {
         questions: [{ id: 'what', text: 'What are you building here?', why: 'the workspace is empty' }] })
       : STANCE({ relation: 'empty', mission: 'find what is worth adopting for a task queue.' });
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(flowWithOrient(), { userInput: 'learn from it', workspace: dir });
 
   await waitFor(() => store.readMeta(runId).stage === 'awaiting_input', { label: 'the input gate' });
@@ -414,7 +414,7 @@ test('an unattended run never parks: the questions become recorded assumptions',
     calls += 1;
     return STANCE({ relation: 'empty', questions: [{ id: 'what', text: 'What are you building here?' }] });
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(flowWithOrient(), { userInput: 'brief', workspace: dir, approvalMode: 'always' });
   assert.equal(await waitForStage(store, runId, ['done', 'failed', 'awaiting_input']), 'done',
     store.readMeta(runId).error ?? '');
@@ -431,7 +431,7 @@ test('the context file is written to the project, stamped, and left alone when f
   const dir = tmpProject({ 'package.json': '{"name":"home"}' });
   const store = makeStore();
   setScript(({ system }) => roleOf(system) === 'orient' ? STANCE() : 'ok');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(flowWithOrient(), { userInput: 'brief', workspace: dir });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -461,7 +461,7 @@ test('a hand-edited context file is never overwritten — the divergence is repo
 
   const store = makeStore();
   setScript(({ system }) => roleOf(system) === 'orient' ? STANCE() : 'ok');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(flowWithOrient(), { userInput: 'brief', workspace: dir });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -477,7 +477,7 @@ test('an unattended run does not edit the project at all', async () => {
   const dir = tmpProject({ 'package.json': '{"name":"home"}' });
   const store = makeStore();
   setScript(({ system }) => roleOf(system) === 'orient' ? STANCE() : 'ok');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(flowWithOrient(), { userInput: 'brief', workspace: dir, approvalMode: 'always' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -521,7 +521,7 @@ test('the fan-out inherits the mission it was handed instead of inventing one', 
     [edge('in', 'orient'), edge('in', 'fan'),
      { id: 'e-orient-fan', source: 'orient', target: 'fan', sourceHandle: 'summary' },
      edge('fan', 'out')]);
-  const runner = new FlowRunner(store, testConfig({
+  const runner = new StackRunner(store, testConfig({
     activeModels: [{ id: 'm/one', enabled: true }, { id: 'm/two', enabled: true }],
     resolveModelSource: model => ({ provider: 'script', model, apiKey: null })
   }));
@@ -561,7 +561,7 @@ test('lanes pointed at a subject are told how to address it', async () => {
      }),
      node('out', 'output')],
     [edge('in', 'fan'), edge('fan', 'out')]);
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(flow, { userInput: 'brief' });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -626,7 +626,7 @@ test('an aiStep tool call is attributed to the node that made it', async () => {
     asked = true;
     return '```tool\n{"tool":"read_file","args":{"path":"src/ours.js"}}\n```';
   });
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(orientFlow(), { userInput: 'brief', workspace: dir });
   await waitForStage(store, runId, ['done', 'failed']);
   assert.equal(store.readMeta(runId).stage, 'done', store.readMeta(runId).error ?? '');
@@ -664,7 +664,7 @@ test('the readers inherit the subject even when the repo input fed a different n
      node('fan', 'fanout', { title: 'Read it', goal: 'Read it.', plan: 'auto', tools: ['read_file', 'search_references'], lanes: ['standard', 'wildcard'] }),
      node('out', 'output')],
     [edge('in', 'orient'), edge('orient', 'fan'), edge('fan', 'out')]);
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   runner.references = {
     catalog: () => [{ name: 'their-repo', cloned: true, about: '' }, { name: 'other-repo', cloned: true, about: '' }],
     search: (_pattern, opts) => { searched.push(opts.repo); return { results: [], truncated: false }; }
