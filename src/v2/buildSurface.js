@@ -21,7 +21,7 @@ export async function buildSurface(host = globalThis.window?.flyt ?? null) {
   if (typeof host?.v2Build !== 'function') return null;
   try {
     const surface = await host.v2Build();
-    if (!surface?.stack) return null;
+    if (!surface || typeof surface !== 'object') return null;
     let uiExtensions = Array.isArray(surface.uiExtensions) ? surface.uiExtensions : [];
     const live = { ...surface };
     Object.defineProperty(live, 'uiExtensions', { enumerable: true, get: () => uiExtensions });

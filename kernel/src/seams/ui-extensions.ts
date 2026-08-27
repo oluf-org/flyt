@@ -102,14 +102,26 @@ function assertData(value: unknown, at: string, seen = new Set<object>()): void 
   if (typeof value !== 'object') throw new Error(`${at} is not serializable data`);
   if (seen.has(value)) throw new Error(`${at} is cyclic`);
   seen.add(value);
-  if (Array.isArray(value)) value.forEach((item, i) => assertData(item, `${at}[${i}]`, seen));
-  else {
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (descriptor.get || descriptor.set) throw new Error(`${at}.${key} is an executable accessor`);
+  }
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) throw new Error(`${at} must be a plain data array`);
+    for (let i = 0; i < value.length; i += 1) {
+      const descriptor = descriptors[String(i)];
+      if (!descriptor) throw new Error(`${at} must not be a sparse array`);
+      assertData(descriptor.value, `${at}[${i}]`, seen);
+    }
+    const extras = Object.keys(descriptors).filter(key => key !== 'length' && !/^(0|[1-9]\d*)$/.test(key));
+    if (extras.length) throw new Error(`${at} carries unsupported array field "${extras[0]}"`);
+  } else {
     if (!record(value)) throw new Error(`${at} must be a plain data object`);
-    for (const [key, item] of Object.entries(value)) {
+    for (const [key, descriptor] of Object.entries(descriptors)) {
       if (/^(on[A-Z]|style|className|html|dangerouslySetInnerHTML|renderer|script)$/i.test(key)) {
         throw new Error(`${at}.${key} is renderer code, DOM access, or styling`);
       }
-      assertData(item, `${at}.${key}`, seen);
+      assertData(descriptor.value, `${at}.${key}`, seen);
     }
   }
   seen.delete(value);
@@ -173,6 +185,9 @@ export function assertUiContribution(value: unknown): asserts value is UiContrib
 
 /** Validate the wire shape before a host service reads any of it. */
 export function assertUiExtensionRpcRequest(value: unknown): asserts value is UiExtensionRpcRequest {
+  // Descriptor inspection in assertData happens before any property read, so
+  // a getter cannot execute merely because a plugin submitted it for refusal.
+  assertData(value, 'request');
   if (!record(value) || !record(value.params)) throw new Error('RPC request must be plain data');
   exact(value, ['method', 'params'], 'request');
   if (value.method === 'ui.contribute') {

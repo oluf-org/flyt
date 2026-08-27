@@ -12,10 +12,10 @@ export function createV2HostBridge(booted, { build = null } = {}) {
   return {
     build() {
       return {
-        // Phase 2 will replace this honest empty source with the active
-        // project's stack source. A shaped value lets Build distinguish "no
-        // stack yet" from "the host bridge is absent".
-        stack: { id: 'empty' },
+        // There is no production stack source until Phase 2. Null is the
+        // honest clean-slate state BlockEditor handles before geometry; never
+        // manufacture a partial root merely to make the host look connected.
+        stack: null,
         blocks: null,
         commands: null,
         library: {},

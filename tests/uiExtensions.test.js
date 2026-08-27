@@ -59,6 +59,8 @@ test('an installed plugin owns typed declarations and unload removes them', asyn
 test('unknown components and executable renderer payloads are refused before listing', async () => {
   const kernel = createKernel();
   const responses = [];
+  let accessorRuns = 0;
+  let requestAccessorRuns = 0;
   try {
     await kernel.ctx.plugin(flytUiExtensions);
     await kernel.ctx.plugin({
@@ -73,11 +75,30 @@ test('unknown components and executable renderer payloads are refused before lis
           { component: 'text', text: 'styled', style: { position: 'fixed' } },
           { component: 'text', text: 'renderer', renderer: '() => document.body' },
         ]) responses.push(contribute(ctx, { point: 'tool-view', id: 'bad.code', tool: 'search', view }));
+        const accessorView = {};
+        Object.defineProperty(accessorView, 'component', {
+          enumerable: true,
+          get() { accessorRuns += 1; return 'text'; },
+        });
+        responses.push(contribute(ctx, {
+          point: 'tool-view', id: 'bad.accessor', tool: 'search', view: accessorView,
+        }));
       },
     });
     assert.equal(responses.every(response => !response.ok), true);
     assert.match(responses[0].error.message, /unknown component/);
     assert.match(responses[1].error.message, /executable|renderer code|DOM access|styling/);
+    assert.match(responses.at(-1).error.message, /executable accessor/);
+    assert.equal(accessorRuns, 0, 'refusing an accessor must not execute it');
+    const accessorRequest = { method: 'ui.list' };
+    Object.defineProperty(accessorRequest, 'params', {
+      enumerable: true,
+      get() { requestAccessorRuns += 1; return {}; },
+    });
+    const requestRefusal = kernel.ctx.uiExtensions.invoke(accessorRequest);
+    assert.equal(requestRefusal.ok, false);
+    assert.match(requestRefusal.error.message, /executable accessor/);
+    assert.equal(requestAccessorRuns, 0, 'RPC envelope accessors are refused before any property read');
     assert.deepEqual(kernel.ctx.uiExtensions.invoke({ method: 'ui.list', params: {} }).result, [],
       'refused declarations never become renderer input');
   } finally { await kernel.dispose(); }
@@ -106,7 +127,20 @@ test('an external plugin crosses kernel host RPC and reaches Build and Trace Fly
   const runsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-ui-rpc-'));
   const booted = await bootKernel({ call: true, env: noEnv, profile: 'flyt-desktop', runsRoot });
   const detachReviewSurface = booted.pluginReviews.subscribe(() => {});
+  const emptyBridge = createV2HostBridge(booted);
+  const emptySurface = await buildSurface({ v2Build: () => emptyBridge.build() });
+  const stack = parseStack(`version: 2
+id: ui-proof
+name: UI proof
+blocks:
+  - id: work
+    use: example:work
+    title: Example work
+    config:
+      prompt: Ship it
+`).root;
   const productionBridge = createV2HostBridge(booted, { build: () => ({
+    stack: { id: 'ui-proof', root: stack },
     blocks: { resolve: use => use === 'example:work' ? { use } : undefined },
     library: {},
   }) });
@@ -129,19 +163,6 @@ test('an external plugin crosses kernel host RPC and reaches Build and Trace Fly
       }),
     });
 
-    const stack = parseStack(`version: 2
-id: ui-proof
-name: UI proof
-blocks:
-  - id: work
-    use: example:work
-    title: Example work
-    config:
-      prompt: Ship it
-`).root;
-    // The same bridge used by electron/main.js owns the stack source too; the
-    // test adds the Phase-2-shaped stack only after proving live UI refresh.
-    surface.stack.root = stack;
     assert.deepEqual(surface.uiExtensions.map(row => row.pluginId),
       ['example.ui.plugin', 'example.ui.plugin'], 'the renderer receives only host-pushed listed clones');
     assert.ok(uiRevisions >= 2, 'each accepted contribution refreshes an already-mounted surface');
@@ -151,6 +172,12 @@ blocks:
       vite.ssrLoadModule('/src/v2/Shell.jsx'),
       vite.ssrLoadModule('/src/v2/Trace.jsx'),
     ]);
+    const emptyHtml = renderToStaticMarkup(React.createElement(Shell, {
+      location: { dest: 'build', run: null }, build: emptySurface,
+    }));
+    assert.match(emptyHtml, /CLEAN SLATE/,
+      'the untouched production snapshot renders the explicit no-stack state before geometry');
+    assert.doesNotMatch(emptyHtml, /Plugin prompt/);
     const buildHtml = renderToStaticMarkup(React.createElement(Shell, {
       location: { dest: 'build', run: null }, build: surface,
     }));

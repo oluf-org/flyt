@@ -36,10 +36,6 @@ export class UiExtensionRegistry extends Service implements UiExtensionRpc {
   }
 
   invoke(request: UiExtensionRpcRequest): UiExtensionRpcResponse {
-    const method = (request as { method?: unknown })?.method;
-    if (method !== 'ui.contribute' && method !== 'ui.list') {
-      return { ok: false, error: { code: 'METHOD_NOT_FOUND', message: `Unknown UI RPC method "${String(method)}"` } };
-    }
     try {
       assertUiExtensionRpcRequest(request);
       if (request.method === 'ui.list') {
@@ -69,9 +65,13 @@ export class UiExtensionRegistry extends Service implements UiExtensionRpc {
       });
       return { ok: true, result: { accepted: true, pluginId } };
     } catch (error) {
+      const message = String((error as Error)?.message ?? error);
       return {
         ok: false,
-        error: { code: 'INVALID_UI_CONTRIBUTION', message: String((error as Error)?.message ?? error) },
+        error: {
+          code: message.startsWith('Unknown UI RPC method') ? 'METHOD_NOT_FOUND' : 'INVALID_UI_CONTRIBUTION',
+          message,
+        },
       };
     }
   }
