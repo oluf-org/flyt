@@ -369,11 +369,13 @@ test('capability cache has a fixed LRU capacity', async () => {
 });
 
 test('the default subscription probe is tiny, single-attempt, timed, and classifies safely', async () => {
-  let request = null;
+  let callArguments = null;
   const usable = await probeSubscriptionCapability({ provider: 'codex', model: 'gpt-5.6-sol' }, {
-    call: async value => { request = value; return { text: 'OK' }; }
+    call: async (...args) => { callArguments = args; return { text: 'OK' }; }
   });
   assert.equal(usable.status, 'usable');
+  assert.equal(callArguments.length, 1, 'callModel has one request-object argument, not a separate options argument');
+  const [request] = callArguments;
   assert.equal(request.prompt, 'Reply with OK.');
   assert.equal(request.maxTokens, 1);
   assert.deepEqual(request.retry, { attempts: 1 });
