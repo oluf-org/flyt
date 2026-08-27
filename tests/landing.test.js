@@ -756,7 +756,7 @@ test('a bulk added provider snapshot is manifested without hiding integration or
 });
 
 test('an oversized patch with no identifiable package snapshot fails closed', () => {
-  const evidence = packageReviewDiff('x'.repeat(120_001));
+  const evidence = packageReviewDiff('x'.repeat(160_001));
   assert.equal(evidence.complete, false);
   assert.match(evidence.text, /REVIEW EVIDENCE INCOMPLETE/);
   assert.match(evidence.text, /do not approve/i);
