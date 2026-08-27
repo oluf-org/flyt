@@ -51,6 +51,12 @@ export const REVIEW_SYSTEM = [
   'all integration, test, modified and deleted patches remain inline. This is deliberate',
   'structured evidence, not a truncated diff. Judge provenance and integration from the',
   'inline lockfile/metadata. If correctness truly depends on an omitted body, say which one.',
+  'For a roll-up task, LANDED DEPENDENCY EVIDENCE names work already present on the base',
+  'branch. That code is absent from the incremental diff because it was separately gated,',
+  'reviewed and canaried before this task became ready. Judge the base plus this delta; do',
+  'not demand that landed dependency work be reimplemented merely because it is not repeated',
+  'in the diff. Dependency status is not a waiver: reject a missing integration or a delta',
+  'that breaks the combined contract.',
   '',
   'Judge exactly these things:',
   '1. Does the change accomplish the task as stated?',
@@ -167,7 +173,10 @@ export function packageReviewDiff(diff = '') {
   return { text, summarized: true, complete: true, roots: roots.map(group => group.root) };
 }
 
-export function buildReviewPrompt({ task = {}, diff = '', gates = [], blastRadius = [], changedFiles = [], testDelta = null }) {
+export function buildReviewPrompt({
+  task = {}, diff = '', gates = [], blastRadius = [], changedFiles = [], testDelta = null,
+  dependencyEvidence = []
+}) {
   const evidence = packageReviewDiff(diff);
   const outside = blastRadius.length
     ? changedFiles.filter(f => !blastRadius.some(b => f === b || f.startsWith(b)))
@@ -175,6 +184,13 @@ export function buildReviewPrompt({ task = {}, diff = '', gates = [], blastRadiu
   return [
     `TASK: ${task.title ?? '(untitled)'}`,
     task.body ? `TASK DETAIL:\n${task.body}` : '',
+    dependencyEvidence.length ? [
+      'LANDED DEPENDENCY EVIDENCE (already in the reviewed base branch; each passed its own gates, review and canary):',
+      ...dependencyEvidence.map(dependency => [
+        `- ${dependency.id}: ${dependency.title ?? '(untitled)'} [${dependency.status ?? 'unknown'}]`,
+        dependency.body ? dependency.body.split('\n').map(line => `  ${line}`).join('\n') : '',
+      ].filter(Boolean).join('\n')),
+    ].join('\n') : '',
     blastRadius.length ? `DECLARED BLAST RADIUS:\n${blastRadius.map(b => `- ${b}`).join('\n')}` : '',
     // Named explicitly rather than left for the reviewer to notice: a file
     // outside the declared radius is usually benign and occasionally the whole
@@ -218,7 +234,7 @@ export function parseReview(text) {
  */
 export async function reviewDiff({
   worker, apiKey, task, diff, gates = [], blastRadius = [], changedFiles = [],
-  testDelta = null, retry, timeout, signal, onRetry = null
+  testDelta = null, dependencyEvidence = [], retry, timeout, signal, onRetry = null
 }) {
   if (!worker?.provider) {
     return {
@@ -241,7 +257,9 @@ export async function reviewDiff({
       // except inside the reviewer's own excuse.
       ...(apiKey ? { apiKey } : {}),
       system: REVIEW_SYSTEM,
-      prompt: buildReviewPrompt({ task, diff, gates, blastRadius, changedFiles, testDelta }),
+      prompt: buildReviewPrompt({
+        task, diff, gates, blastRadius, changedFiles, testDelta, dependencyEvidence
+      }),
       maxTokens: MAX_TOKENS, retry, timeout, signal, onRetry
     });
     const parsed = parseReview(res.text);

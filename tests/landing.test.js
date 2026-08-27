@@ -667,6 +667,27 @@ test('the reviewer is told the test delta, and told when it is unknown', () => {
   }
 });
 
+test('a roll-up review sees the landed contracts that are already in its base', () => {
+  const prompt = buildReviewPrompt({
+    task: {
+      title: 'Phase 4',
+      body: 'Bring the decomposed pieces together.',
+      dependsOn: ['t-trust', 't-skill'],
+    },
+    dependencyEvidence: [
+      { id: 't-trust', title: 'Classify plugin tools', status: 'landed', body: '## Done when\n\n- unknown effects resolve upward' },
+      { id: 't-skill', title: 'Bound skill requests', status: 'landed', body: '## Done when\n\n- unattended grants are refused' },
+    ],
+    diff: 'diff --git a/src/integration.js b/src/integration.js',
+  });
+  assert.match(prompt, /LANDED DEPENDENCY EVIDENCE/);
+  assert.match(prompt, /t-trust: Classify plugin tools \[landed\]/);
+  assert.match(prompt, /unknown effects resolve upward/);
+  assert.match(prompt, /t-skill: Bound skill requests \[landed\]/);
+  assert.match(prompt, /unattended grants are refused/);
+  assert.match(prompt, /DIFF:\ndiff --git a\/src\/integration\.js/);
+});
+
 test('a substantial cross-cutting diff reaches the reviewer whole', () => {
   const tail = 'THE-FINAL-TEST-AND-FILE';
   const diff = `${'x'.repeat(90_000)}${tail}`;
