@@ -233,10 +233,14 @@ test('declining keeps the plugin installed but its tools unclassified and unreac
   const ran = [];
   let shown;
   let shownPlugin;
+  let pluginCtx;
   try {
     await kernel.ctx.plugin(flytTools);
     await kernel.ctx.plugin(flytApprovals, { mode: 'always' });
-    await flytTools.installPlugin(kernel.ctx, contributedPlugin(ran), {
+    const plugin = contributedPlugin(ran);
+    const apply = plugin.apply;
+    plugin.apply = ctx => { pluginCtx = ctx; return apply(ctx); };
+    await flytTools.installPlugin(kernel.ctx, plugin, {
       attended: true,
       decide(pluginName, proposals) {
         shownPlugin = pluginName;
@@ -256,6 +260,12 @@ test('declining keeps the plugin installed but its tools unclassified and unreac
     assert.match(shown[0].permits, /eligible for a later, explicit ceiling grant/);
     assert.match(shown[0].doesNotPermit, /execution.*toolset.*ceiling/);
     assert.equal(kernel.ctx.tools.get('package_tool').classification, undefined);
+
+    const forged = { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' };
+    pluginCtx.tools.get('package_tool').classification = forged;
+    pluginCtx.tools.list().find(tool => tool.name === 'package_tool').classification = forged;
+    assert.equal(kernel.ctx.tools.get('package_tool').classification, undefined,
+      'get() and list() return detached views, so a declined plugin cannot classify itself later');
 
     const result = await kernel.ctx.tools.execute({
       runId: 'r', blockId: 'b', step: 1,

@@ -72,13 +72,26 @@ function reviewFor(fiber: Fiber): PendingReview | undefined {
   }
 }
 
-/** Freeze the data inference saw; a plugin must not rewrite the pending facts. */
-function snapshotDeclaration(tool: ToolDefinition): ToolDefinition {
+/** A detached public view; callers never receive the registry's own record. */
+function copyDefinition(tool: ToolDefinition): ToolDefinition {
   return {
     ...tool,
     parameters: JSON.parse(JSON.stringify(tool.parameters)) as JsonValue,
     classification: tool.classification ? { ...tool.classification } : undefined,
   };
+}
+
+/** Keep the registry-owned record immutable even inside this module. */
+function storedDefinition(tool: ToolDefinition): ToolDefinition {
+  const stored = copyDefinition(tool);
+  if (stored.parameters && typeof stored.parameters === 'object') Object.freeze(stored.parameters);
+  if (stored.classification) Object.freeze(stored.classification);
+  return Object.freeze(stored) as ToolDefinition;
+}
+
+/** Freeze the data inference saw; a plugin must not rewrite the pending facts. */
+function snapshotDeclaration(tool: ToolDefinition): ToolDefinition {
+  return copyDefinition(tool);
 }
 
 export interface PendingPluginReview {
@@ -245,7 +258,7 @@ function unclassify(tools: ToolsSeam, names: readonly string[]): void {
   const state = stateOf(tools as object);
   for (const toolName of names) {
     const tool = state.registered.get(toolName);
-    if (tool?.classification) state.registered.set(toolName, { ...tool, classification: undefined });
+    if (tool?.classification) state.registered.set(toolName, storedDefinition({ ...tool, classification: undefined }));
   }
 }
 
@@ -266,7 +279,7 @@ function applyClassifications(
     }
     const tool = state.registered.get(proposal.name);
     if (!tool) throw new Error(`No tool named "${proposal.name}" is registered`);
-    updates.push([proposal.name, {
+    updates.push([proposal.name, storedDefinition({
       ...tool,
       classification: {
         effect: decided.effect,
@@ -274,7 +287,7 @@ function applyClassifications(
         untrustedInput: Boolean(decided.untrustedInput),
         source: 'confirmed',
       },
-    }]);
+    })]);
   }
   for (const [name, tool] of updates) state.registered.set(name, tool);
 }
@@ -319,9 +332,9 @@ export class ToolRegistry extends Service implements ToolsSeam {
     // tool, but cannot contribute the human decision. Root/kernel registration
     // remains available for Flyt's own composed definitions.
     const quarantined = Boolean(review || (ctx.fiber.runtime && !belongsToTrustedPlugin(ctx.fiber)));
-    // Always detach quarantined registration from the plugin's object. A plugin
-    // otherwise could add `classification` later and mutate the registry.
-    const safeTool = quarantined ? { ...tool, classification: undefined } : tool;
+    // Always detach registration from the caller's object and freeze the
+    // registry-owned record. Quarantine additionally strips any claimed grant.
+    const safeTool = storedDefinition(quarantined ? { ...tool, classification: undefined } : tool);
     return ctx.effect(() => {
       registered.set(tool.name, safeTool);
       owners.set(tool.name, ownership);
@@ -340,12 +353,13 @@ export class ToolRegistry extends Service implements ToolsSeam {
 
   /** One tool by name, or undefined. */
   get(toolName: string): ToolDefinition | undefined {
-    return stateOf(this).registered.get(toolName);
+    const tool = stateOf(this).registered.get(toolName);
+    return tool ? copyDefinition(tool) : undefined;
   }
 
   /** Every registered tool, including unclassified ones. */
   list(): ToolDefinition[] {
-    return [...stateOf(this).registered.values()];
+    return [...stateOf(this).registered.values()].map(copyDefinition);
   }
 
   /**
