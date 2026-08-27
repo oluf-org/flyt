@@ -25,6 +25,9 @@ import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
 import { planDefaultRoute, TASK_KINDS } from './modelPriority.js';
 import { effortBudget, DEFAULT_EFFORT } from '../src/flowTypes.js';
 import { v2Flag } from './v2.js';
+import {
+  Workspace, configDirName, PROJECT_CONFIG_KEYS, unreadProjectConfigKeys, whereItIsReadFrom
+} from './workspace.js';
 
 // --- explainRun -----------------------------------------------------------
 
@@ -602,6 +605,29 @@ export async function doctor(engine, { probe = false, models = [], project = nul
           + `Probe it with: flyt probe --provider ${p.id}`
       });
     }
+  }
+
+  // A key written into .flyt/config.json that nothing reads.
+  //
+  // The file is created saying it is "safe to commit and hand-edit", and it
+  // owns two keys. A setting nobody reads is worse than one that does not
+  // exist, because the operator believes it is in force — watched exactly that
+  // with `loop.minLevel`, which was written, ignored, and never mentioned.
+  // `folder` is the bound project directory — the same field staleIndexLock
+  // above is handed.
+  if (project?.folder) {
+    try {
+      const cfg = new Workspace(project.folder).readConfig();
+      const unread = unreadProjectConfigKeys(cfg);
+      if (unread.length) {
+        findings.push({
+          level: 'warn',
+          message: `${configDirName(project.folder)}/config.json sets ${unread.length} key(s) nothing reads: `
+            + `${unread.join(', ')}. That file owns ${PROJECT_CONFIG_KEYS.join(' and ')} and nothing else — `
+            + `${unread.map(k => `"${k}" comes from ${whereItIsReadFrom(k)}`).join('; ')}.`
+        });
+      }
+    } catch { /* not a bound project, or an unreadable config: not a finding */ }
   }
 
   const references = (engine.references?.list?.() ?? []).map(r => ({

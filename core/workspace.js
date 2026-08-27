@@ -23,6 +23,50 @@ import { APP_NAME, CONFIG_DIR, LEGACY_CONFIG_DIR } from './brand.js';
 // a project's runs/ sits inside this directory too.
 
 // Read-only resolution: no side effects, safe on a folder that doesn't exist.
+/**
+ * The keys `.flyt/config.json` actually owns.
+ *
+ * It is created on first bind saying it is "safe to commit and hand-edit",
+ * which invited a reading it could not honour: the engine takes its base
+ * configuration from `config.json` at the REPOSITORY ROOT (core/engine.js), and
+ * only `readProjectGateConfig` in core/gates.js and the home seed read this
+ * one. So `loop.minLevel`, `loop.caps`, `workers.reviewer` and the rest were
+ * accepted in silence and did nothing. Watched it on 2026-08-26: `minLevel:
+ * high` written here, the loop started, and it picked a task at the medium band
+ * as though nothing had been set.
+ *
+ * That the list is short is deliberate rather than unfinished. A per-project
+ * file is part of a repository, and a repository is something you clone. If
+ * binding one could set `approvalMode`, name providers, or raise a spend cap,
+ * then cloning a repository would be enough to widen what this machine is
+ * allowed to do — and a convenience may narrow authority, never widen it. Gates
+ * are the exception that proves it: a project saying "run these commands before
+ * anything of mine lands" only ever adds a check.
+ */
+export const PROJECT_CONFIG_KEYS = ['gates', 'gateTimeoutMs'];
+
+/** Keys somebody wrote here that nothing will ever read. */
+export function unreadProjectConfigKeys(cfg = {}) {
+  const known = new Set([...PROJECT_CONFIG_KEYS, 'comment', 'version']);
+  return Object.keys(cfg ?? {}).filter(k => !known.has(k)).sort();
+}
+
+/** Where a key that does not belong here is actually read from. */
+export function whereItIsReadFrom(key) {
+  const homes = {
+    loop: 'the app\'s own config.json at the repository root, or the flags on flyt loop start',
+    workers: 'Settings, or --model / --reviewer on flyt loop start',
+    approvalMode: 'Settings, or --approval on flyt run',
+    providers: 'Settings — a repository may not name providers or hold keys',
+    providerPriority: 'Settings',
+    models: 'Settings, or --models on flyt loop start',
+    modelFacts: 'Settings, refreshed from the provider',
+    references: 'the reference library (flyt ref)',
+    python: 'Settings'
+  };
+  return homes[key] ?? 'Settings, or the flags on the command that starts the run';
+}
+
 export function configDirName(root) {
   try {
     if (fs.existsSync(path.join(root, CONFIG_DIR))) return CONFIG_DIR;
@@ -76,7 +120,13 @@ export class Workspace {
     if (!fs.existsSync(this.configPath)) {
       writeJson(this.configPath, {
         comment: `Per-project ${APP_NAME} configuration (version-controllable). `
-          + 'Created on first bind; safe to commit and hand-edit.',
+          + 'Created on first bind; safe to commit and hand-edit. '
+          + `This file owns exactly these keys: ${PROJECT_CONFIG_KEYS.join(', ')}. `
+          + 'Anything else here is IGNORED — provider routing, approval mode, the '
+          + 'effort bands and the spend caps are read from the application, not from '
+          + 'the repository, so that binding a project can never widen what it is '
+          + 'allowed to do. Set those in Settings, or on the command that starts the '
+          + 'run. Run flyt doctor to see any key here that nothing reads.',
         version: 1
       });
     }
