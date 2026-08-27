@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer as createViteServer } from 'vite';
 import { createKernel, flytUiExtensions, parseStack } from '#kernel';
 import { bootKernel } from '../core/v2.js';
+import { createV2HostBridge } from '../core/v2Host.js';
 import { buildSurface } from '../src/v2/buildSurface.js';
 
 const noEnv = {};
@@ -105,8 +106,19 @@ test('an external plugin crosses kernel host RPC and reaches Build and Trace Fly
   const runsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-ui-rpc-'));
   const booted = await bootKernel({ call: true, env: noEnv, profile: 'flyt-desktop', runsRoot });
   const detachReviewSurface = booted.pluginReviews.subscribe(() => {});
+  const productionBridge = createV2HostBridge(booted, { build: () => ({
+    blocks: { resolve: use => use === 'example:work' ? { use } : undefined },
+    library: {},
+  }) });
+  const surface = await buildSurface({
+    v2Build: () => productionBridge.build(),
+    onV2UiExtensionsChange: listener => productionBridge.subscribe(listener),
+  });
+  let uiRevisions = 0;
+  const detachUiSurface = surface.subscribeUiExtensions(() => { uiRevisions += 1; });
   let vite;
   try {
+    assert.deepEqual(surface.uiExtensions, [], 'the production bridge starts from the host registry');
     await booted.install([{ id: 'example-ui', name: 'example-ui-package' }], {
       import: async () => ({
         name: 'example.ui.plugin', inject: ['uiExtensions'],
@@ -127,16 +139,12 @@ blocks:
     config:
       prompt: Ship it
 `).root;
-    const surface = await buildSurface({
-      v2Build: async () => ({
-        stack: { id: 'ui-proof', root: stack },
-        blocks: { resolve: use => use === 'example:work' ? { use } : undefined },
-        library: {},
-        uiExtensions: booted.uiExtensions.list(),
-      }),
-    });
+    // The same bridge used by electron/main.js owns the stack source too; the
+    // test adds the Phase-2-shaped stack only after proving live UI refresh.
+    surface.stack.root = stack;
     assert.deepEqual(surface.uiExtensions.map(row => row.pluginId),
-      ['example.ui.plugin', 'example.ui.plugin'], 'the renderer receives only host-listed clones');
+      ['example.ui.plugin', 'example.ui.plugin'], 'the renderer receives only host-pushed listed clones');
+    assert.ok(uiRevisions >= 2, 'each accepted contribution refreshes an already-mounted surface');
 
     vite = await createViteServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'silent' });
     const [{ default: Shell }, { ToolCall }] = await Promise.all([
@@ -160,8 +168,21 @@ blocks:
     assert.doesNotMatch(toolHtml, /plugin-react-component|dangerouslySetInnerHTML/);
   } finally {
     await vite?.close();
+    detachUiSurface();
     detachReviewSurface();
     await booted?.dispose();
     fs.rmSync(runsRoot, { recursive: true, force: true });
   }
+});
+
+test('Electron exposes the production bridge as read-only build data and a push subscription', () => {
+  const main = fs.readFileSync(new URL('../electron/main.js', import.meta.url), 'utf8');
+  const preload = fs.readFileSync(new URL('../electron/preload.cjs', import.meta.url), 'utf8');
+  assert.match(main, /createV2HostBridge\(booted\)/);
+  assert.match(main, /ipcMain\.handle\('v2:build'/);
+  assert.match(main, /webContents\.send\('v2:ui-extensions-change', rows\)/);
+  assert.match(preload, /v2Build: \(\) => ipcRenderer\.invoke\('v2:build'\)/);
+  assert.match(preload, /onV2UiExtensionsChange:/);
+  assert.doesNotMatch(preload, /ui\.contribute|uiExtensions\.invoke/,
+    'the renderer bridge must not expose the contribution RPC');
 });

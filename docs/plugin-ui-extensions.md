@@ -2,6 +2,12 @@
 
 Plugins extend Flyt's UI by sending typed data to the host's `UiExtensionRpc`. The host validates and stores that data before the renderer can receive it. Flyt then renders the declaration with its own React components and styles.
 
+In the desktop app, the booted kernel stays in Electron's main process. The
+preload exposes only a `v2Build()` snapshot and a UI-extension change event;
+accepted registrations are re-listed and pushed as cloned data when plugins
+load or unload. The generic RPC invocation capability never enters the
+renderer.
+
 The first rendered points are:
 
 - **block configuration** — a bounded object schema becomes Flyt labels, inputs, checkboxes, and selects;
