@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createKernel, flytTools } from '#kernel';
 import { buildSurface } from '../src/v2/buildSurface.js';
 import {
-  declinePluginDecisions, initialPluginDecisions, tightenPluginDecision,
+  declinePluginDecisions, initialPluginDecisions, pluginInferenceEvidence, tightenPluginDecision,
 } from '../src/v2/pluginTrustReview.js';
 
 const proposal = {
@@ -26,6 +26,24 @@ test('the review editor can only tighten the inference', () => {
 
 test('decline is explicit and leaves every proposed tool undecided', () => {
   assert.deepEqual(declinePluginDecisions([proposal]), { publish_release: null });
+});
+
+test('the review surface includes every tool input used by inference', () => {
+  const evidence = pluginInferenceEvidence({
+    requested: ['tools', 'fs'],
+    inferredFrom: {
+      seams: ['tools', 'fs'],
+      tool: {
+        name: 'write_note', description: 'Writes a note.',
+        parameters: { type: 'object', required: ['text'] },
+        classification: { effect: 'write', destructive: true, untrustedInput: false, source: 'declared' },
+      },
+    },
+  });
+  assert.equal(evidence.requested, 'tools, fs');
+  assert.equal(evidence.seams, 'tools, fs');
+  assert.match(evidence.schema, /"required": \[/);
+  assert.equal(evidence.claim, 'write + destructive');
 });
 
 test('a real kernel install appears in Build and awaits exactly one decision', async () => {

@@ -22,7 +22,10 @@ export interface ToolClassificationProposal extends ToolClassification {
   /** The capabilities the plugin requested while being installed. */
   requested: readonly string[];
   /** The evidence from which the inference was made. */
-  inferredFrom: { seams: readonly string[]; tool: { name: string; description: string } };
+  inferredFrom: {
+    seams: readonly string[];
+    tool: Pick<ToolDefinition, 'name' | 'description' | 'parameters' | 'classification'>;
+  };
   /** What accepting this classification changes. */
   permits: string;
   /** What accepting it still does not permit. */
@@ -43,12 +46,39 @@ export interface AttendedPluginReview {
 
 interface PendingReview {
   /** Original declarations, retained as inference evidence while reach is stripped. */
-  declarations: Map<string, ToolDefinition>;
+  declarations: Map<string, RegistrationEvidence>;
+}
+
+interface RegistrationEvidence {
+  tool: ToolDefinition;
+  requested: string[];
+  seams: SeamName[];
 }
 
 // Keyed by the contributing fiber, not by a global "installing" boolean: two
 // contexts may mount concurrently and a tool must inherit only its own review.
 const reviewedFibers = new WeakMap<Fiber, PendingReview>();
+
+/** Find the quarantine inherited from any ancestor in this plugin tree. */
+function reviewFor(fiber: Fiber): PendingReview | undefined {
+  let current = fiber;
+  while (true) {
+    const review = reviewedFibers.get(current);
+    if (review) return review;
+    const parent = current.parent?.fiber;
+    if (!parent || parent === current) return undefined;
+    current = parent;
+  }
+}
+
+/** Freeze the data inference saw; a plugin must not rewrite the pending facts. */
+function snapshotDeclaration(tool: ToolDefinition): ToolDefinition {
+  return {
+    ...tool,
+    parameters: JSON.parse(JSON.stringify(tool.parameters)) as JsonValue,
+    classification: tool.classification ? { ...tool.classification } : undefined,
+  };
+}
 
 export interface PendingPluginReview {
   pluginName: string;
@@ -130,11 +160,17 @@ export async function installPlugin(
   const requested = pluginInjections(plugin.inject);
   const seams = requested.filter((name): name is SeamName =>
     (SEAM_NAMES as readonly string[]).includes(name));
-  const installed = tools.list().filter(tool => !before.has(tool.name));
+  const installed = [...pending.declarations.keys()]
+    .filter(name => !before.has(name))
+    .map(name => tools.get(name))
+    .filter((tool): tool is ToolDefinition => Boolean(tool));
   // A plugin cannot smuggle in a grant by supplying a pre-confirmed claim.
   unclassify(tools, installed.map(tool => tool.name));
   if (installed.length) ctx.emit('tools/change');
-  const proposals = installed.map(tool => proposalFor(pending.declarations.get(tool.name) ?? tool, requested, seams));
+  const proposals = installed.map(tool => {
+    const evidence = pending.declarations.get(tool.name);
+    return proposalFor(evidence?.tool ?? tool, evidence?.requested ?? requested, evidence?.seams ?? seams);
+  });
   if (!proposals.length) return fiber;
   const decisions = await review.decide(plugin.name ?? 'plugin', proposals);
 
@@ -161,7 +197,15 @@ function proposalFor(tool: ToolDefinition, requested: readonly string[], seams: 
   return Object.assign(inferred, {
     name: tool.name,
     requested: [...requested],
-    inferredFrom: { seams: [...seams], tool: { name: tool.name, description: tool.description } },
+    inferredFrom: {
+      seams: [...seams],
+      tool: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        classification: tool.classification ? { ...tool.classification } : undefined,
+      },
+    },
     permits: `makes this ${describe(inferred)} tool eligible for a later, explicit ceiling grant`,
     doesNotPermit: 'execution, membership in a toolset, or addition to any ceiling',
   });
@@ -253,9 +297,17 @@ export class ToolRegistry extends Service implements ToolsSeam {
     if (registered.has(tool.name)) throw new Error(`A tool named "${tool.name}" is already registered`);
     const ctx = this.ctx;
     const ownership = Symbol(tool.name);
-    const review = reviewedFibers.get(ctx.fiber);
-    if (review) review.declarations.set(tool.name, tool);
-    const safeTool = review && tool.classification ? { ...tool, classification: undefined } : tool;
+    const review = reviewFor(ctx.fiber);
+    if (review) {
+      const requested = pluginInjections(ctx.fiber.inject);
+      const seams = requested.filter((name): name is SeamName =>
+        (SEAM_NAMES as readonly string[]).includes(name));
+      review.declarations.set(tool.name, { tool: snapshotDeclaration(tool), requested, seams });
+    }
+    // Always detach a quarantined registration from the plugin's object. A
+    // plugin otherwise could add `classification` to that object after this
+    // call and silently mutate the registry without any public mutator.
+    const safeTool = review ? { ...tool, classification: undefined } : tool;
     return ctx.effect(() => {
       registered.set(tool.name, safeTool);
       owners.set(tool.name, ownership);

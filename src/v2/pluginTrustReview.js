@@ -26,3 +26,17 @@ export function tightenPluginDecision(proposal, current, patch) {
 export function declinePluginDecisions(proposals = []) {
   return Object.fromEntries(proposals.map(p => [p.name, null]));
 }
+
+/** Every input the kernel used for inference, shaped for the review UI. */
+export function pluginInferenceEvidence(proposal) {
+  const tool = proposal?.inferredFrom?.tool ?? {};
+  return {
+    requested: proposal?.requested?.join(', ') || 'no injected capabilities',
+    seams: proposal?.inferredFrom?.seams?.join(', ') || 'no known seams',
+    schema: JSON.stringify(tool.parameters ?? {}, null, 2),
+    claim: tool.classification
+      ? [tool.classification.effect, tool.classification.destructive ? 'destructive' : null,
+        tool.classification.untrustedInput ? 'untrusted input' : null].filter(Boolean).join(' + ')
+      : 'no classification claimed',
+  };
+}

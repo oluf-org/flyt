@@ -3,7 +3,8 @@
 // the plugin supplies facts, and this component owns the controls and words.
 import React, { useMemo, useState } from 'react';
 import {
-  EFFECTS, declinePluginDecisions, initialPluginDecisions, tightenPluginDecision,
+  EFFECTS, declinePluginDecisions, initialPluginDecisions, pluginInferenceEvidence,
+  tightenPluginDecision,
 } from './pluginTrustReview.js';
 import './pluginTrustReview.css';
 
@@ -32,15 +33,20 @@ export default function PluginTrustReview({ pluginName = 'Plugin', proposals = [
         {proposals.map(proposal => {
           const decision = decisions[proposal.name];
           const floor = EFFECTS.indexOf(proposal.effect);
+          const evidence = pluginInferenceEvidence(proposal);
           return (
             <article className="plugin-trust-tool" key={proposal.name}>
               <h3 className="mono">{proposal.name}</h3>
               <p>{proposal.inferredFrom?.tool?.description || 'No description supplied.'}</p>
               <dl>
                 <dt>Plugin requested</dt>
-                <dd>{proposal.requested?.join(', ') || 'no injected capabilities'}</dd>
+                <dd>{evidence.requested}</dd>
                 <dt>Inference used</dt>
-                <dd>{proposal.inferredFrom?.seams?.join(', ') || 'tool name, description and schema only'}</dd>
+                <dd>{evidence.seams}, the tool name and description, its schema, and its claim</dd>
+                <dt>Tool schema</dt>
+                <dd><pre>{evidence.schema}</pre></dd>
+                <dt>Plugin claimed</dt>
+                <dd>{evidence.claim}</dd>
                 <dt>Accepting</dt>
                 <dd>{proposal.permits}</dd>
                 <dt>Still not permitted</dt>
