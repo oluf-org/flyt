@@ -1278,6 +1278,12 @@ export function createApi(engine) {
               `Choose a supported model in Settings, refresh subscription capabilities, or set an explicit manual model override.`,
               { status: 400, code: 'model_unsupported' });
           }
+          if (result.status === 'unknown') {
+            throw new ApiError(
+              `Could not confirm that the configured ${target.provider} model "${target.model}" is usable. ` +
+              `Refresh subscription capabilities and try again, or set an explicit manual model override.`,
+              { status: 503, code: 'model_capability_unknown' });
+          }
         }
       }
       const pinnedCapabilityProblem = loopWorkerProblem(pinned);
@@ -1615,6 +1621,14 @@ export function createApi(engine) {
       // work at some number I picked".
       return probeModel({ ...target, model },
         { ...(maxTokens ? { maxTokens } : {}), stream, timeout: engine.runtimeConfig.timeout });
+    },
+
+    'subscription:refresh': () => {
+      // Capability results are process-local and credential-free. Clearing them
+      // also resets the bounded probe window so an operator can retry after a
+      // sign-in, CLI update, or account/model change.
+      engine.capabilityCache?.clear();
+      return { refreshed: true };
     },
 
     'diag:doctor': ({ projectId, probe = false, models = [], flowId = null }) => {

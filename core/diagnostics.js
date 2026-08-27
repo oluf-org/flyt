@@ -597,8 +597,10 @@ export async function doctor(engine, { probe = false, models = [], project = nul
       const result = await engine.capabilityCache.check(
         `${item.provider}:${item.model}`,
         () => engine.capabilityProbe({ provider: item.provider, model: item.model }));
+      item.capability = result.status;
       item.usable = result.status === 'usable' ? true : result.status === 'unsupported' ? false : null;
-      if (result.status === 'unsupported') findings.push({ level: 'error', message: `"${item.model}" is connected through ${item.provider} but this account rejects it. Choose a supported model in Settings or set an explicit manual model override.` });
+      if (result.status === 'unsupported') findings.push({ level: 'error', message: `"${item.model}" is connected through ${item.provider} but this account rejects it. Choose a supported model in Settings, refresh subscription capabilities, or set an explicit manual model override.` });
+      if (result.status === 'unknown') findings.push({ level: 'warn', message: `"${item.model}" is connected through ${item.provider}, but its capability could not be confirmed. Refresh subscription capabilities before launching.` });
     }
   }
 

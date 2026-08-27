@@ -473,7 +473,14 @@ export function createCapabilityCache({ ttlMs = CAPABILITY_CACHE_TTL_MS, maxProb
       let value;
       try {
         const result = await probe();
-        value = { ok: Boolean(result?.ok), status: result?.ok ? 'usable' : 'unsupported' };
+        // Probes must distinguish a provider rejection from auth, runtime,
+        // network, and other inconclusive failures. Only an explicit capability
+        // result is safe to advertise as unsupported.
+        const status = result?.status === 'unsupported' ? 'unsupported'
+          : result?.status === 'unknown' || result?.status === 'error' ? 'unknown'
+            : result?.ok ? 'usable' : 'unsupported';
+        value = { ok: status === 'usable', status,
+          ...(result?.reason ? { reason: String(result.reason).slice(0, 160) } : {}) };
       } catch {
         value = { ok: false, status: 'unknown', reason: 'Capability check failed without exposing CLI details.' };
       }
@@ -481,7 +488,10 @@ export function createCapabilityCache({ ttlMs = CAPABILITY_CACHE_TTL_MS, maxProb
       entries.set(k, { value, expiresAt: stamp + ttlMs, refreshAt: stamp });
       return value;
     },
-    clear() { entries.clear(); }
+    // Refresh is an explicit operator action: discard results and restart the
+    // bounded probe window together. Otherwise a refresh after the limit was
+    // reached would remain permanently unknown until the TTL elapsed.
+    clear() { entries.clear(); probes = 0; refreshStarted = 0; }
   };
 }
 

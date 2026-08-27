@@ -32,6 +32,7 @@ import { configDirFor } from './workspace.js';
 import { setKnownTools } from '../src/flowTypes.js';
 import { diffSnapshot } from './snapshotDiff.js';
 import { canServe, callModel } from './adapters/index.js';
+import { classifyAdapterError } from './adapters/failures.js';
 import {
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
   migrateSettings, createResolver, createCapabilityCache
@@ -255,8 +256,16 @@ export function createEngine({
     try {
       await callModel({ provider, model, prompt: 'Reply with OK.', maxTokens: 1,
         stream: false, retry: { attempts: 1 }, timeout: { hardMs: 15000, idleMs: 15000 } });
-      return { ok: true };
-    } catch { return { ok: false }; }
+      return { ok: true, status: 'usable' };
+    } catch (error) {
+      // A failed probe is not automatically a rejected model: auth, network,
+      // quota, and CLI/runtime failures remain unknown. Use the shared stable
+      // classifier, but expose only a generic, credential-safe reason.
+      const failure = classifyAdapterError(error, { provider, model });
+      return failure.code === 'capability'
+        ? { ok: false, status: 'unsupported', reason: 'The provider rejected this model.' }
+        : { ok: false, status: 'unknown', reason: 'The capability check did not complete.' };
+    }
   });
   function resolveModelSource(modelId, pinned = null) {
     const entry = (settings.activeModels ?? []).find(m => m.id === modelId);

@@ -325,6 +325,21 @@ test('capability cache catches a stale Codex catalog model without credentials',
   assert.equal(calls, 1, 'the probe receives no credential and cache work is bounded');
 });
 
+test('capability cache preserves unknown probe failures and refresh resets its budget', async () => {
+  let calls = 0;
+  const cache = createCapabilityCache({ maxProbes: 1 });
+  assert.deepEqual(await cache.check('codex:gpt-5.2-codex', async () => {
+    calls += 1;
+    return { status: 'unknown', reason: 'authentication failed' };
+  }), { ok: false, status: 'unknown', reason: 'authentication failed' });
+  assert.deepEqual(await cache.check('codex:gpt-5.3-codex', async () => ({ ok: true })),
+    { ok: false, status: 'unknown', reason: 'Capability discovery limit reached; retry later.' });
+  cache.clear();
+  assert.deepEqual(await cache.check('codex:gpt-5.3-codex', async () => ({ ok: true })),
+    { ok: true, status: 'usable' });
+  assert.equal(calls, 1);
+});
+
 // --- resolveCallTarget ------------------------------------------------------
 
 test('resolveCallTarget: legacy workers read providerKeys; auto workers use the resolver', () => {
