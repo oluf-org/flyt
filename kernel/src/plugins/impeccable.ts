@@ -10,7 +10,9 @@ interface Config { cwd?: string; cli?: string }
 
 export function apply(ctx: Context, config: Config = {}): void {
   const cwd = path.resolve(config.cwd ?? process.cwd());
-  const cli = path.resolve(config.cli ?? path.join(cwd, 'node_modules/impeccable/cli/bin/cli.js'));
+  // The CLI travels with the provider payload. Do not silently substitute a
+  // separately trusted package: the skill and tool must be the same install.
+  const cli = path.resolve(config.cli ?? path.join(cwd, '.flyt/skills/impeccable/scripts/detect.mjs'));
   ctx.tools.register({
     name: 'impeccable_detect',
     description: 'Runs the third-party Impeccable detector CLI against UI files and returns its findings.',

@@ -4,6 +4,13 @@ import { createKernel, flytTools, flytApprovals, impeccablePlugin } from '#kerne
 
 const call = { runId: 'r', blockId: 'b', step: 1, call: { id: 'c', name: 'impeccable_detect', args: { paths: ['src/v2'] } }, ceiling: ['impeccable_detect'] };
 
+test('the detector plugin defaults to the CLI bundled in the provider payload', async () => {
+  const source = await import('node:fs/promises').then(fs => fs.readFile(
+    new URL('../kernel/src/plugins/impeccable.ts', import.meta.url), 'utf8'));
+  assert.match(source, /\.flyt\/skills\/impeccable\/scripts\/detect\.mjs/);
+  assert.doesNotMatch(source, /node_modules[\\/]impeccable/);
+});
+
 test('Impeccable uses external install, inference, human confirmation and the ordinary ceiling', async () => {
   const kernel = createKernel();
   let proposal;
