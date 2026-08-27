@@ -23,9 +23,11 @@ import { createHash } from 'node:crypto';
 // final files nor their tests. Keep one shared budget with landing and make it
 // large enough for a substantial task while retaining the fail-closed marker
 // for genuinely oversized changes.
-// Roughly 50k tokens: enough for a cross-cutting release cutover after safe
-// manifests, while leaving ample room for the task, gates, and reviewer reply.
-export const REVIEW_DIFF_BUDGET = 200_000;
+// Roughly 56k tokens: enough for a measured cross-cutting release cutover
+// after safe manifests, while leaving ample room for the task, gates, system
+// instructions, and reviewer reply. Incomplete evidence reports its exact size
+// and largest inline patches before this ceiling is changed again.
+export const REVIEW_DIFF_BUDGET = 225_000;
 // The verdict is short; arriving at it, over 60k of diff, is not. Sending the
 // answer size as the whole completion budget starves a reasoning model into
 // returning nothing (D40) — and this reviewer is the last thing between an
@@ -187,7 +189,13 @@ function snapshotRoots(sections) {
  * files are never summarised.
  */
 export function packageReviewDiff(diff = '', { renamePairs = [] } = {}) {
-  if (diff.length <= REVIEW_DIFF_BUDGET) return { text: diff, summarized: false, complete: true };
+  const baseStats = { rawChars: diff.length, budget: REVIEW_DIFF_BUDGET };
+  if (diff.length <= REVIEW_DIFF_BUDGET) {
+    return {
+      text: diff, summarized: false, complete: true,
+      stats: { ...baseStats, evidenceChars: diff.length, sections: diffSections(diff).length },
+    };
+  }
   const sections = diffSections(diff);
   const roots = snapshotRoots(sections);
   const deletionSections = sections.filter(section => section.deleted && !isTestEvidence(section.path));
@@ -199,6 +207,7 @@ export function packageReviewDiff(diff = '', { renamePairs = [] } = {}) {
         + 'or whole-file deletion could be identified. Request that the change be split; do not approve it.',
       summarized: false,
       complete: false,
+      stats: { ...baseStats, evidenceChars: null, sections: sections.length },
     };
   }
 
@@ -235,6 +244,19 @@ export function packageReviewDiff(diff = '', { renamePairs = [] } = {}) {
     'FULL PATCH FOR INTEGRATION, TESTS, MODIFICATIONS, NON-MANIFESTED DELETIONS, AND PACKAGE ENTRYPOINTS:',
     ...kept.map(section => section.text),
   ].filter(Boolean).join('\n\n');
+  const stats = {
+    ...baseStats,
+    evidenceChars: text.length,
+    sections: sections.length,
+    inlineSections: kept.length,
+    manifestedAdded: [...membership.keys()].length,
+    manifestedDeleted: deletionSections.length,
+    manifestedMechanical: mechanicalSections.length,
+    largestInline: [...kept]
+      .sort((a, b) => b.text.length - a.text.length)
+      .slice(0, 10)
+      .map(section => ({ path: section.path, chars: section.text.length })),
+  };
   if (text.length > REVIEW_DIFF_BUDGET) {
     return {
       text: `REVIEW EVIDENCE INCOMPLETE: even after manifesting eligible added payloads and whole-file deletions, `
@@ -242,12 +264,14 @@ export function packageReviewDiff(diff = '', { renamePairs = [] } = {}) {
         + 'Request that the change be split; do not approve it.',
       summarized: true,
       complete: false,
+      stats,
     };
   }
   return {
     text, summarized: true, complete: true,
     roots: roots.map(group => group.root),
     deleted: deletionSections.map(section => section.path),
+    stats,
   };
 }
 
@@ -320,6 +344,28 @@ export async function reviewDiff({
       reason: 'No reviewer model is configured, so nothing may land unattended.',
       changes: [], concerns: [], unavailable: true,
       unusable: { code: 'no-reviewer', remedy: 'Name a reviewer model. Nothing lands unattended without one.' }
+    };
+  }
+  const evidence = packageReviewDiff(diff, { renamePairs: declaredRenamePairs(task.body) });
+  if (!evidence.complete) {
+    const stats = evidence.stats ?? {};
+    const over = Number.isFinite(stats.evidenceChars)
+      ? Math.max(0, stats.evidenceChars - REVIEW_DIFF_BUDGET)
+      : null;
+    const largest = (stats.largestInline ?? []).slice(0, 5)
+      .map(row => `${row.path} (${row.chars} chars)`).join(', ');
+    return {
+      verdict: 'request-changes',
+      reason: Number.isFinite(stats.evidenceChars)
+        ? `Complete review evidence is ${stats.evidenceChars} characters, ${over} above the ${REVIEW_DIFF_BUDGET}-character budget.`
+        : `The ${stats.rawChars ?? diff.length}-character diff cannot be packaged into complete review evidence within the ${REVIEW_DIFF_BUDGET}-character budget.`,
+      changes: [
+        'Split the change or add a fail-closed manifest for a mechanically verifiable class; do not raise the budget without accounting for reviewer context.',
+        ...(largest ? [`Largest still-inline patches: ${largest}.`] : []),
+      ],
+      concerns: [],
+      evidenceIncomplete: true,
+      evidence: stats,
     };
   }
   try {
