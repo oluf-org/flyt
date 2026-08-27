@@ -63,6 +63,36 @@ test('a legacy flow opens read-only, then retires only after a validated first s
   assert.deepEqual(store.list(), [{ id: 'old-project', legacy: false }]);
 });
 
+test('a failed temporary-file validation leaves the legacy source authoritative', () => {
+  const dir = root();
+  const stacks = path.join(dir, 'stacks');
+  const flows = path.join(dir, 'flows');
+  fs.mkdirSync(flows);
+  const oldFile = path.join(flows, 'old-project.flow.yaml');
+  fs.writeFileSync(oldFile, legacy);
+  let parses = 0;
+  const store = new StackStore(stacks, {
+    ...migrationOptions,
+    parseStack(source, id) {
+      parses += 1;
+      if (parses === 2) throw new Error('simulated persisted-file validation failure');
+      return parseStack(source, id);
+    },
+  });
+  const canonical = `version: 2
+id: old-project
+name: Old project
+blocks:
+  - id: work
+    use: flyt-blocks-core:work
+`;
+
+  assert.throws(() => store.save('old-project', canonical), /simulated persisted-file validation failure/);
+  assert.ok(fs.existsSync(oldFile), 'validation failure preserves the only durable source');
+  assert.ok(!fs.existsSync(path.join(stacks, 'old-project.stack.yaml')));
+  assert.deepEqual(fs.readdirSync(stacks), [], 'the failed temporary file is cleaned up');
+});
+
 test('a canonical stack wins over a same-id legacy flow', () => {
   const dir = root();
   const stacks = path.join(dir, 'stacks');

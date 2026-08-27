@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 // templates and settings are global (T2) and stay unscoped.
 const api = {
   v2Build: () => ipcRenderer.invoke('v2:build'),
+  v2OpenStack: (id, caller = 'human') => ipcRenderer.invoke('v2:open-stack', id, caller),
   v2InvokeCommand: (name, args, caller = 'human') =>
     ipcRenderer.invoke('v2:command', name, args, caller),
   onV2Command: (cb) => {

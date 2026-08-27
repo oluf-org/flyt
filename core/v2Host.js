@@ -74,13 +74,17 @@ export async function createV2BuildController(booted, {
   let active = activeId ? stacks.load(activeId) : null;
   const listeners = new Set();
 
-  const detachCommands = active ? kernel.registerStackCommands(booted.ctx, {
-    get: () => active.root,
-    set: root => {
-      active = { ...active, root };
-      stacks.saveStack(active);
+  const detachCommands = kernel.registerStackCommands(booted.ctx, {
+    get: () => {
+      if (!active?.root) throw new Error('Select a stack before editing');
+      return active.root;
     },
-  }) : () => {};
+    set: root => {
+      const next = { ...active, root };
+      stacks.saveStack(next);
+      active = next;
+    },
+  });
   const detachEvents = booted.ctx.on('commands/invoke', record => {
     // Include the accepted tree in the push. IPC snapshots are clones, so the
     // renderer cannot observe the host's new root merely by re-rendering an
@@ -113,6 +117,17 @@ export async function createV2BuildController(booted, {
     },
     invoke(name, args, caller = 'human') {
       return booted.ctx.commands.invoke(name, args, caller);
+    },
+    open(id, caller = 'human') {
+      const next = stacks.load(id);
+      activeId = id;
+      active = next;
+      const record = {
+        name: 'stack:open', args: { id }, caller,
+        result: { stackId: id }, stack: active,
+      };
+      for (const listener of listeners) listener(record);
+      return this.snapshot();
     },
     subscribe(listener) {
       listeners.add(listener);

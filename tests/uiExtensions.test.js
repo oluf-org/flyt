@@ -234,8 +234,10 @@ test('Electron exposes the production bridge as read-only build data and a push 
   assert.match(main, /createV2HostBridge\(booted, \{ build:/);
   assert.match(main, /createV2BuildController\(booted, \{ stackRoot \}\)/);
   assert.match(main, /ipcMain\.handle\('v2:build'/);
+  assert.match(main, /ipcMain\.handle\('v2:open-stack'/);
   assert.match(main, /webContents\.send\('v2:ui-extensions-change', rows\)/);
   assert.match(preload, /v2Build: \(\) => ipcRenderer\.invoke\('v2:build'\)/);
+  assert.match(preload, /v2OpenStack: \(id, caller = 'human'\) => ipcRenderer\.invoke\('v2:open-stack'/);
   assert.match(preload, /onV2UiExtensionsChange:/);
   assert.doesNotMatch(preload, /ui\.contribute|uiExtensions\.invoke/,
     'the renderer bridge must not expose the contribution RPC');

@@ -208,9 +208,30 @@ export class StackStore {
     if (parsed.id !== id) throw new Error(`Stack id "${parsed.id}" does not match file id "${id}"`);
     const target = this.stackPath(id);
     const legacy = path.join(this.legacyRoot, `${id}${LEGACY_FLOW_EXTENSION}`);
-    if (fs.existsSync(legacy)) this.#assertMigratedBlocksResolve(parsed, id);
-    fs.writeFileSync(target, source.endsWith('\n') ? source : `${source}\n`, 'utf8');
-    if (fs.existsSync(legacy)) fs.rmSync(legacy);
+    const hasLegacy = fs.existsSync(legacy);
+    const firstMigrationWrite = hasLegacy && !fs.existsSync(target);
+    const normalized = source.endsWith('\n') ? source : `${source}\n`;
+    if (hasLegacy) this.#assertMigratedBlocksResolve(parsed, id);
+    if (firstMigrationWrite) {
+      // The legacy file remains the source of truth until a complete canonical
+      // file has been written, read back, and accepted by the parser. The temp
+      // file lives beside its destination so the final rename is atomic.
+      const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+      try {
+        fs.writeFileSync(temporary, normalized, { encoding: 'utf8', flag: 'wx' });
+        const persisted = this.parseStack(fs.readFileSync(temporary, 'utf8'), id);
+        if (persisted.id !== id) {
+          throw new Error(`Stack id "${persisted.id}" does not match file id "${id}"`);
+        }
+        this.#assertMigratedBlocksResolve(persisted, id);
+        fs.renameSync(temporary, target);
+      } finally {
+        fs.rmSync(temporary, { force: true });
+      }
+    } else {
+      fs.writeFileSync(target, normalized, 'utf8');
+    }
+    if (hasLegacy) fs.rmSync(legacy);
     return target;
   }
   saveStack(stack) {

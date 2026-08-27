@@ -40,7 +40,14 @@ export async function buildSurface(host = globalThis.window?.flyt ?? null) {
     } : surface.commands;
     const library = { ...(surface.library ?? {}) };
     if (Array.isArray(library.blocks)) library.blocks = blocks;
-    const live = { ...surface, blocks, commands, library };
+    const onAct = typeof host.v2OpenStack === 'function' ? async entry => {
+      if (entry?.kind !== 'stack' || entry?.action !== 'open') return null;
+      const next = await host.v2OpenStack(entry.id, 'human');
+      if (next?.stack?.root) stack = next.stack;
+      if (Array.isArray(next?.library?.stacks)) library.stacks = next.library.stacks;
+      return next;
+    } : surface.onAct;
+    const live = { ...surface, blocks, commands, library, onAct };
     Object.defineProperty(live, 'stack', { enumerable: true, get: () => stack });
     Object.defineProperty(live, 'uiExtensions', { enumerable: true, get: () => uiExtensions });
     if (typeof host.onV2UiExtensionsChange === 'function') {

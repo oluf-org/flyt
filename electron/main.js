@@ -256,6 +256,11 @@ const bindIpc = (name, toArgs = () => ({})) =>
 // D61: this is the production host-to-renderer bridge. Only the host's cloned
 // list crosses IPC; the generic plugin RPC and Cordis context stay main-side.
 ipcMain.handle('v2:build', async () => (await v2Host())?.bridge.build() ?? null);
+ipcMain.handle('v2:open-stack', async (_event, id, caller = 'human') => {
+  await v2Host();
+  if (!v2BuildController) throw new Error('The Build stack surface is not available');
+  return v2BuildController.open(String(id ?? ''), caller === 'agent' ? 'agent' : 'human');
+});
 ipcMain.handle('v2:command', async (_event, name, args, caller = 'human') => {
   await v2Host();
   if (!v2BuildController) throw new Error('The Build command surface is not available');
