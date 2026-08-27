@@ -51,7 +51,7 @@
 **Status:** 2026-07-13 — Initial version produced as part of flowchart refinement.  
 **Purpose:** Define the nodes that AI (and humans) can reliably pick from, categorize work into, or instantiate when authoring custom flows. This is the authoritative reference for "how the flowchart part of the application should work" for sophisticated planning + execution + reflection workflows.
 
-> **Read this together with** `GOALS.md` (principles) and the source (`src/flowTypes.js`, `core/flowRunner.js`).
+> **Read this together with** `GOALS.md` (principles) and the source (`src/flowTypes.js`, `core/stackRunner.js`).
 
 ---
 
@@ -59,8 +59,8 @@
 
 The **flowchart** system consists of:
 
-- The visual editor (`src/FlowCanvas.jsx` + `FlowEditor`, `src/App.jsx`) for authoring static DAG definitions stored as the Flow DSL `flows/<id>.flow.yaml` (+ a `flows/<id>.layout.json` position sidecar; spec: `FLOW_LANG.md`). Legacy `flows/<id>.json` still loads and migrates on save.
-- The execution engine (`core/flowRunner.js`) that performs a topological walk, with special phases for `agentTask` nodes (which feed the existing powerful executor + tools).
+- The visual editor (`src/FlowCanvas.jsx` + `FlowEditor`, `src/App.jsx`) for authoring static DAG definitions stored as the Flow DSL `flows/<id>.flow.yaml` (+ a `flows/<id>.layout.json` position sidecar; spec: `STACK_LANG.md`). Legacy `flows/<id>.json` still loads and migrates on save.
+- The execution engine (`core/stackRunner.js`) that performs a topological walk, with special phases for `agentTask` nodes (which feed the existing powerful executor + tools).
 - All coordination through plain files under `runs/<runId>/` (the single source of truth).
 
 ### Core Philosophy (unchanged)
@@ -440,7 +440,7 @@ result.
 referenced flow is resolved and its nodes are spliced into the run graph as
 children of the call site, ids namespaced `<callId>__<innerId>`. There is one
 run folder, one snapshot and one canvas; gates, resume, the scheduler and the
-run canvas all see an ordinary graph. A nested FlowRunner would fragment run
+run canvas all see an ordinary graph. A nested StackRunner would fragment run
 state across run folders and break the live canvas — the transparency window
 the whole product rests on (D1, D4).
 
@@ -862,7 +862,7 @@ reported; omitting the block or `"fixTasks": []` means nothing to fix.
 
 ### followup-triage → turn classification (DECISIONS.md D21)
 
-Not a node role: a direct call `FlowRunner.followUp()` makes when the user
+Not a node role: a direct call `StackRunner.followUp()` makes when the user
 replies to a finished run. One ```json block:
 
 ```json
@@ -980,8 +980,8 @@ All the above node kinds support `data.requiresApproval`. Evaluation nodes that 
 - `nodes/*.json` — shipped template records
 - `src/flowTypes.js` — template resolution and renderer metadata
 - `core/planEval.js` — structured contract parsers
-- `core/flowRunner.js` — execution and materialization
-- `FLOW_LANG.md` — structural node syntax and lint rules
+- `core/stackRunner.js` — execution and materialization
+- `STACK_LANG.md` — structural node syntax and lint rules
 
 Treat the files above as the implementation when this prose and code differ. Update this contract in the same change that alters a role, port, or structured output.
 

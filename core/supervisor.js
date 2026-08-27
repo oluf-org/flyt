@@ -1909,7 +1909,7 @@ export class Supervisor {
 // nothing to nudge" and moves down a rung.
 //
 // `active` is the status the runner actually writes for a node it is executing
-// (`FlowRunner.setNodeStatus(runId, node.id, 'active')`); nothing anywhere
+// (`StackRunner.setNodeStatus(runId, node.id, 'active')`); nothing anywhere
 // writes 'running'. Looking for the wrong word meant this ALWAYS returned null,
 // so the two cheapest rungs of the interruption ladder — nudge and restart —
 // could never fire on any run, and every stall went straight to the bottom.

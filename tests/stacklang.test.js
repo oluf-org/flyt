@@ -824,10 +824,7 @@ test('every container kind the parser has is documented, and no others', () => {
     'a row for every kind, and a row for nothing else');
 });
 
-test('the v1 DSL is still pointed at, and not renamed', () => {
-  const doc = fs.readFileSync(new URL('../STACK_LANG.md', import.meta.url), 'utf8');
-  assert.match(doc, /FLOW_LANG\.md/, 'v1 keeps v1 names until the cutover');
-});
+
 
 test('a stack file saved with a byte-order mark parses', () => {
   // Windows editors add one by default and it is invisible everywhere a person

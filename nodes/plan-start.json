@@ -6,10 +6,15 @@
   "icon": "▶",
   "baseType": "aiStep",
   "role": "plan-start",
+  "effort": "high",
+  "evalType": "step",
   "worker": null,
   "instructions": "",
   "tools": null,
+  "toolCeiling": null,
   "skills": [],
+  "skillToolGrants": [],
   "requiresApproval": false,
-  "approveToolCalls": false
+  "approveToolCalls": false,
+  "outputs": null
 }

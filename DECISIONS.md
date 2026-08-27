@@ -35,7 +35,7 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D24 | Keep the flow DSL and core protocol infrastructure dependency-light and inspectable; the hand-written strict YAML subset is intentional. | Current; scoped by D53 to the DSL parser and core command surface |
 | D27 | Runtime configuration is a per-node override map. Precedence is run input, mode/call-site override, node override, then template. Comparisons read immutable run snapshots. | Current |
 | D28 | Packaged assets are read-only seeds; all mutable stores resolve through writable data roots. | Current |
-| D29 | Flyt is the brand and `flow` remains the domain noun. `.flow.yaml`, `FlowRunner`, `flowlang`, and flow-named contracts are not unfinished rename work. | Superseded by D52; holds for v1 code until the Phase 5 cutover |
+| D29 | Flyt is the brand and `flow` remains the domain noun. `.flow.yaml`, `StackRunner`, `stacklang`, and flow-named contracts are not unfinished rename work. | Superseded by D52; holds for v1 code until the Phase 5 cutover |
 | D36 | Typed inputs, fan-out, sub-flows, backlog-plan, and Loop nodes are one composition system. Sub-flows splice into one run graph; the Loop node hands work to the existing supervisor. | Current; implemented |
 | D37 | Adaptive fan-out may select only from fixed lane presets, degrades to the authored roster, and keeps lane outputs isolated until aggregation. | Current |
 | D38 | Repository-learning flows orient to both the home workspace and the subject repository before planning; subject scope and attribution must be explicit. | Current |

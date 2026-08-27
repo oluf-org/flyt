@@ -72,7 +72,7 @@
       "model": "claude-sonnet-5"
     }
   },
-  "categoryWorkersComment": "Optional per-category model routing: a node declaring a category resolves here before falling back to workers.executor (FLOW_NODES.md). EMPTY on purpose. This map is read from this file only and is NOT overridable from Settings, so whatever it names is pinned: it shipped mapping every category to 'mock', which silently forced each categorised work node onto the mock provider no matter what key the user saved — a real run just produced '(mock output)'. Empty means categories follow the executor worker, so one Settings change points the whole app at a real model. See categoryWorkersExample to pin one deliberately.",
+  "categoryWorkersComment": "Optional per-category model routing: a node declaring a category resolves here before falling back to workers.executor (BLOCKS.md). EMPTY on purpose. This map is read from this file only and is NOT overridable from Settings, so whatever it names is pinned: it shipped mapping every category to 'mock', which silently forced each categorised work node onto the mock provider no matter what key the user saved — a real run just produced '(mock output)'. Empty means categories follow the executor worker, so one Settings change points the whole app at a real model. See categoryWorkersExample to pin one deliberately.",
   "categoryWorkers": {},
   "categoryWorkersExample": {
     "documentation": {

@@ -6,9 +6,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { FlowStore } from '../core/flowstore.js';
-import { FlowRunner, resolveWorker, topoSort } from '../core/flowRunner.js';
+import { StackRunner, resolveWorker, topoSort } from '../core/stackRunner.js';
 import { NodeStore } from '../core/nodestore.js';
-import { lintFlow } from '../core/flowlang/lint.js';
+import { lintFlow } from '../core/stacklang/lint.js';
 import {
   SEED_NODE_TEMPLATES, resolveInstance, ensureStructuralNodes, migrateLegacyTemplates,
   FEEDBACK_HANDLE
@@ -143,7 +143,7 @@ test('topoSort ignores feedback edges', () => {
 
 test('a feedback-edge retry verdict re-runs the judged node with guidance, then passes', async () => {
   const store = makeStore();
-  const runner = new FlowRunner(store, testConfig(), () => {});
+  const runner = new StackRunner(store, testConfig(), () => {});
   const attempts = { work: 0, review: 0 };
   setScript(({ system, prompt }) => {
     if (/FEEDBACK LINK/.test(system)) {
@@ -174,7 +174,7 @@ test('a feedback-edge retry verdict re-runs the judged node with guidance, then 
 
 test('the orchestrator planning prompt carries the min/max node budget', async () => {
   const store = makeStore();
-  const runner = new FlowRunner(store, testConfig(), () => {});
+  const runner = new StackRunner(store, testConfig(), () => {});
   let orchSystem = '';
   setScript(({ system }) => {
     if (roleOf(system) === 'orchestrate') {

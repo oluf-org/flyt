@@ -1,8 +1,8 @@
 // Node Library + template-instance model (GOALS.md refocus):
-//   - NodeStore seeds itself from the FLOW_NODES.md catalog and round-trips CRUD
+//   - NodeStore seeds itself from the BLOCKS.md catalog and round-trips CRUD
 //   - resolveFlow merges template defaults with per-workflow overrides
 //   - FlowStore ships the classic pipeline as the editable "Default pipeline"
-//   - FlowRunner: unified run entry (user input -> User Input node), library
+//   - StackRunner: unified run entry (user input -> User Input node), library
 //     resolution, per-template instructions, and the post-planning gate
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { NodeStore } from '../core/nodestore.js';
 import { FlowStore, DEFAULT_PIPELINE_ID } from '../core/flowstore.js';
-import { FlowRunner, topoSort } from '../core/flowRunner.js';
+import { StackRunner, topoSort } from '../core/stackRunner.js';
 import { SEED_NODE_TEMPLATES, resolveFlow, resolveInstance, namedFlow, UNTITLED_FLOW } from '../src/flowTypes.js';
 import { makeStore, setScript, roleOf, testConfig, waitForStage } from './helpers.js';
 
@@ -21,7 +21,7 @@ const makeFlowStore = () => new FlowStore(tmpDir('llm-flow-flows-'));
 
 // --- NodeStore ---
 
-test('NodeStore seeds the FLOW_NODES.md catalog into an empty directory', () => {
+test('NodeStore seeds the BLOCKS.md catalog into an empty directory', () => {
   const ns = makeNodeStore();
   const ids = ns.listFull().map(t => t.id).sort();
   assert.deepEqual(ids, SEED_NODE_TEMPLATES.map(t => t.id).sort());
@@ -108,14 +108,14 @@ test('ensureDefaultPipeline ships an editable User Input → plan → gated rout
   assert.equal(fsStore.load(DEFAULT_PIPELINE_ID).nodes.find(n => n.id === 'route').overrides.title, 'Renamed');
 });
 
-// --- FlowRunner + Node Library: the unified run entry, end to end ---
+// --- StackRunner + Node Library: the unified run entry, end to end ---
 
 test('default pipeline parity: user input, post-planning gate, retrospectives, historyDigest', async () => {
   const store = makeStore();
   const ns = makeNodeStore();
   const flows = makeFlowStore();
   flows.ensureDefaultPipeline();
-  const runner = new FlowRunner(store, testConfig(), () => {}, ns);
+  const runner = new StackRunner(store, testConfig(), () => {}, ns);
 
   const seenPrompts = {};
   setScript(({ system, prompt }) => {
@@ -164,7 +164,7 @@ test('template + override instructions reach the model prompt; agentTask templat
   const store = makeStore();
   const ns = makeNodeStore();
   ns.save({ ...ns.load('work'), instructions: 'TPL-GUIDANCE' });
-  const runner = new FlowRunner(store, testConfig(), () => {}, ns);
+  const runner = new StackRunner(store, testConfig(), () => {}, ns);
 
   const prompts = [];
   setScript(({ prompt }) => { prompts.push(prompt); return 'ok'; });

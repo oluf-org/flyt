@@ -4,13 +4,13 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createEngine } from '../core/engine.js';
 import { createApi } from '../core/api.js';
-import { APPROVAL_MODES } from '../core/flowRunner.js';
+import { APPROVAL_MODES } from '../core/stackRunner.js';
 import { SAFETY_MODEL_CANDIDATES } from '../core/safetyCheck.js';
 import { DEFAULT_PROJECT_ID } from '../core/projects.js';
-import { lintText } from '../core/flowlang/lint.js';
+import { lintText } from '../core/stacklang/lint.js';
 import { resolveFlow, exposedFields, diffOverrides } from '../src/flowTypes.js';
-import { parseFlow } from '../core/flowlang/parse.js';
-import { serializeFlow } from '../core/flowlang/serialize.js';
+import { parseFlow } from '../core/stacklang/parse.js';
+import { serializeFlow } from '../core/stacklang/serialize.js';
 import { callModel } from '../core/adapters/index.js';
 import {
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
@@ -56,7 +56,7 @@ const dataRoot = app.isPackaged ? app.getPath('userData') : projectRoot;
 
 // One instance per runs/ directory, claimed before anything reads or writes it.
 // runs/ is a shared mutable store and liveness is tracked in process memory
-// (FlowRunner.live), so a second instance cannot tell a run this process is
+// (StackRunner.live), so a second instance cannot tell a run this process is
 // actively executing from one left behind by a crash: its startup
 // reconcileInterrupted would rewind the first instance's in-flight tasks to
 // 'pending' underneath it, and offer the user a Resume that re-runs real

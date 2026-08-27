@@ -12,7 +12,9 @@
   "worker": null,
   "instructions": "",
   "tools": null,
+  "toolCeiling": null,
   "skills": [],
+  "skillToolGrants": [],
   "requiresApproval": false,
   "approveToolCalls": false,
   "outputs": null

@@ -9,7 +9,7 @@
 //
 // The fix: detection beside the empty-stream guard in core/adapters/http.js,
 // surfaced as `unparsedToolCall` (the dialect name) on the adapter result, and
-// recorded as a problem in the node's retrospective by core/flowRunner.js —
+// recorded as a problem in the node's retrospective by core/stackRunner.js —
 // the same path `interrogation emitted no parseable status JSON` already takes.
 //
 // The separator in the DSML dialect below is U+FF5C FULLWIDTH VERTICAL LINE,
@@ -190,7 +190,7 @@ test('non-streamed turn: healthy content -> no unparsedToolCall key at all', asy
 
 // --- end to end through the runner: the problem reaches the retrospective ---
 
-import { FlowRunner } from '../core/flowRunner.js';
+import { StackRunner } from '../core/stackRunner.js';
 import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
 // A fake provider that returns the exact DeepSeek markup as CONTENT — no
@@ -208,7 +208,7 @@ const probeFlow = () => makeFlow(
 
 test('a turn whose markup was not parsed is recorded as a problem in the node retrospective', async () => {
   const store = makeStore();
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(probeFlow(), { userInput: 'a thing' });
   await waitForStage(store, runId, ['done', 'failed']);
 
@@ -241,7 +241,7 @@ test('prose quoting the markup inside a code fence does NOT report a problem', a
     ].join('\n'),
     usage: null
   }));
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(probeFlow(), { userInput: 'a thing' });
   await waitForStage(store, runId, ['done', 'failed']);
 

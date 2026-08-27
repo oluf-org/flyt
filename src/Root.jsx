@@ -11,7 +11,6 @@
 // flag, and "behind a flag" would mean "rendered conditionally" rather than
 // "not loaded". A test asserts there is no static one.
 import React, { Suspense, lazy, useEffect, useState } from 'react';
-import App from './App.jsx';
 
 const V2Shell = lazy(() => import('./v2/Shell.jsx'));
 
@@ -31,13 +30,12 @@ export default function Root({ flag = null }) {
     let live = true;
     window.flyt?.getSettings?.()
       .then(s => { if (live) setV2(Boolean(s?.v2)); })
-      // A settings read that fails is not permission to turn a rebuild on.
-      .catch(() => { if (live) setV2(false); });
+      // The cutover default is Work/Build even when settings cannot be read.
+      .catch(() => { if (live) setV2(true); });
     return () => { live = false; };
   }, [flag]);
 
   if (v2 === null) return null;
-  if (!v2) return <App />;
   return (
     <Suspense fallback={null}>
       <V2Root />

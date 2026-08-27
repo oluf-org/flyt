@@ -4,10 +4,10 @@
 // bundles of exactly that map, carried in the flow file.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FlowRunner } from '../core/flowRunner.js';
-import { parseFlow } from '../core/flowlang/parse.js';
-import { serializeFlow } from '../core/flowlang/serialize.js';
-import { lintText, lintFlow } from '../core/flowlang/lint.js';
+import { StackRunner } from '../core/stackRunner.js';
+import { parseFlow } from '../core/stacklang/parse.js';
+import { serializeFlow } from '../core/stacklang/serialize.js';
+import { lintText, lintFlow } from '../core/stacklang/lint.js';
 import {
   resolveFlow, overridableFields, validateOverrideMap, mergeOverrideMaps,
   exposedFields, SEED_NODE_TEMPLATES
@@ -116,7 +116,7 @@ function modeFlow() {
 test('start() applies a picked mode and records provenance in meta', async () => {
   const store = makeStore();
   setScript(() => 'ok');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(modeFlow(), { userInput: 'brief', modeId: 'fast' });
   await waitForStage(store, runId, ['done', 'failed']);
 
@@ -135,7 +135,7 @@ test('start() applies a picked mode and records provenance in meta', async () =>
 test('start() layers run inputs over the mode (run input > mode)', async () => {
   const store = makeStore();
   setScript(() => 'ok');
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   const runId = runner.start(modeFlow(), {
     userInput: 'brief', modeId: 'fast',
     overrides: { step: { effort: 'low' } } // run input overrides the mode's 'high'
@@ -148,13 +148,13 @@ test('start() layers run inputs over the mode (run input > mode)', async () => {
 
 test('start() rejects an unknown mode', () => {
   const store = makeStore();
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   assert.throws(() => runner.start(modeFlow(), { modeId: 'nope' }), /no mode "nope"/);
 });
 
 test('start() rejects launch overrides that reference an unknown node', () => {
   const store = makeStore();
-  const runner = new FlowRunner(store, testConfig());
+  const runner = new StackRunner(store, testConfig());
   assert.throws(
     () => runner.start(modeFlow(), { overrides: { ghost: { effort: 'high' } } }),
     /launch overrides are invalid[\s\S]*unknown node "ghost"/);

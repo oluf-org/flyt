@@ -39,7 +39,7 @@ export function v2Flag({ call = null, settings = null, env = process.env } = {})
   }
 
   if (typeof settings?.v2 === 'boolean') return { enabled: settings.v2, source: 'settings' };
-  return { enabled: false, source: 'default' };
+  return { enabled: true, source: 'default' };
 }
 
 /** Convenience: just the answer. */

@@ -88,8 +88,8 @@ npm run flow -- lint <file>
 - [`GOALS.md`](./GOALS.md) — product intent, principles, and boundaries
 - [`DESIGN-SPEC.md`](./DESIGN-SPEC.md) — current architecture and safety contracts
 - [`DECISIONS.md`](./DECISIONS.md) — concise durable decisions and unresolved choices
-- [`FLOW_LANG.md`](./FLOW_LANG.md) — flow DSL grammar and lint rules
-- [`FLOW_NODES.md`](./FLOW_NODES.md) — node roles, ports, and structured output contracts
+- [`STACK_LANG.md`](./STACK_LANG.md) — flow DSL grammar and lint rules
+- [`BLOCKS.md`](./BLOCKS.md) — node roles, ports, and structured output contracts
 - [`TOOLS.md`](./TOOLS.md) — the tool contract: effects, trust, grants, and the Python sidecar
 
 Implementation plans are intentionally not kept as living documentation after they land. Git history preserves them; current work belongs in `.flyt/backlog/`.

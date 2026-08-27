@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { FlowStore, SEED_PIPELINE_IDS } from '../core/flowstore.js';
 import { NodeStore } from '../core/nodestore.js';
-import { lintFlow } from '../core/flowlang/lint.js';
+import { lintFlow } from '../core/stacklang/lint.js';
 import { resolveFlow, validateOverrideMap } from '../src/flowTypes.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'llm-flow-seed-'));

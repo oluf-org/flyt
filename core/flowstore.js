@@ -1,5 +1,5 @@
 // Flow definitions: user-editable workflow graphs in flows/, with the Flow
-// DSL (*.flow.yaml, see FLOW_LANG.md) as the source of truth for STRUCTURE
+// DSL (*.flow.yaml, see STACK_LANG.md) as the source of truth for STRUCTURE
 // (nodes, template refs, overrides, relations, ports, gates) and a sidecar
 // <id>.layout.json for PRESENTATION (canvas positions), written only here.
 //
@@ -19,9 +19,9 @@
 // (and re-seeded if deleted; it is the app's built-in starting point).
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseFlow } from './flowlang/parse.js';
-import { serializeFlow } from './flowlang/serialize.js';
-import { layoutPositions } from '../src/flowLayout.js';
+import { parseFlow } from './stacklang/parse.js';
+import { serializeFlow } from './stacklang/serialize.js';
+import { layoutPositions } from '../src/stackLayout.js';
 import { UNTITLED_FLOW, ensureStructuralNodes, migrateLegacyTemplates } from '../src/flowTypes.js';
 
 export const DEFAULT_PIPELINE_ID = 'default-pipeline';

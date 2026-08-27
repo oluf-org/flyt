@@ -40,7 +40,7 @@ The main surfaces are the lander/composer, flow canvas, run feed/canvas, Nodes l
 
 ## 3. Flows and execution
 
-`core/flowRunner.js` is the execution engine. At run start it resolves templates, modes, run overrides, typed inputs, model sources, tool grants, and sub-flow references into `flow.json`. Editing a library item later cannot change what an existing run records.
+`core/stackRunner.js` is the execution engine. At run start it resolves templates, modes, run overrides, typed inputs, model sources, tool grants, and sub-flow references into `flow.json`. Editing a library item later cannot change what an existing run records.
 
 The scheduler recomputes readiness after each wave and runs independent `aiStep` and `agentTask` nodes up to `maxParallel`. Nodes with approval interactions are serialized where simultaneous gates would be ambiguous. Task claims are persisted before execution so two drains cannot take the same task.
 
@@ -57,7 +57,7 @@ Supported composition includes:
 - sub-flows spliced into the resolved run graph with namespaced ids; and
 - backlog-plan and Loop nodes that enqueue project tasks and wait on file-backed status.
 
-Sub-flows are static composition. The DSL deliberately has no expression language or arbitrary conditional branching. See [`FLOW_LANG.md`](./FLOW_LANG.md) for grammar and lint rules and [`FLOW_NODES.md`](./FLOW_NODES.md) for roles, ports, and structured outputs.
+Sub-flows are static composition. The DSL deliberately has no expression language or arbitrary conditional branching. See [`STACK_LANG.md`](./STACK_LANG.md) for grammar and lint rules and [`BLOCKS.md`](./BLOCKS.md) for roles, ports, and structured outputs.
 
 ## 4. Context and artifacts
 

@@ -2,7 +2,7 @@
 //
 // Round-trip stable by construction: fixed top-level key order, fixed node
 // field order, one flow line per edge in stored order, deterministic scalar
-// quoting (core/flowlang/yaml.js). parseFlow(serializeFlow(x)) reproduces x
+// quoting (core/stacklang/yaml.js). parseFlow(serializeFlow(x)) reproduces x
 // (minus positions, which belong to <id>.layout.json), and
 // serializeFlow(parseFlow(y)) is byte-identical for serializer-produced y —
 // so canvas edits and AI edits generate minimal diffs.

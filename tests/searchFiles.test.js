@@ -98,9 +98,9 @@ test('a bad regular expression is the model\'s to fix, not a crash', async () =>
 });
 
 test('case sensitivity is opt-in, because "Runner" and "runner" are the same question', async () => {
-  const { ctx } = project({ 'a.js': 'class FlowRunner {}\n' });
-  assert.equal((await run(ctx, { pattern: 'flowrunner' })).result.hits, 1);
-  assert.equal((await run(ctx, { pattern: 'flowrunner', caseSensitive: true })).result.hits, 0);
+  const { ctx } = project({ 'a.js': 'class StackRunner {}\n' });
+  assert.equal((await run(ctx, { pattern: 'stackrunner' })).result.hits, 1);
+  assert.equal((await run(ctx, { pattern: 'stackrunner', caseSensitive: true })).result.hits, 0);
 });
 
 test('it is read-effect, workspace-scoped, and reaches every work node', async () => {

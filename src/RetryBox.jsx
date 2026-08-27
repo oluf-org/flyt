@@ -11,7 +11,7 @@ import { ModelPicker } from './ModelPicker.jsx';
 // what to do differently.
 //
 // The model change is scoped to the run: restartNode writes the pin into the
-// run's flow.json, never the authored workflow (see FlowRunner.restartNode).
+// run's flow.json, never the authored workflow (see StackRunner.restartNode).
 export default function RetryBox({
   worker, activeModels, onRetry, busy = false, disabled = false, disabledReason = null,
   label = 'Retry this step'

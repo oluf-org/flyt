@@ -10,9 +10,9 @@ import { v2Flag, isV2Enabled, bootKernel } from '../core/v2.js';
 
 const noEnv = {};
 
-test('off unless somebody said otherwise', () => {
-  assert.deepEqual(v2Flag({ env: noEnv }), { enabled: false, source: 'default' });
-  assert.equal(isV2Enabled({ env: noEnv }), false);
+test('on by default after cutover', () => {
+  assert.deepEqual(v2Flag({ env: noEnv }), { enabled: true, source: 'default' });
+  assert.equal(isV2Enabled({ env: noEnv }), true);
 });
 
 test('the call wins, then the environment, then the settings', () => {
@@ -39,10 +39,10 @@ test('FLYT_V2=0 turns it off, rather than on for being present', () => {
   assert.equal(v2Flag({ env: { FLYT_V2: '' }, settings: { v2: true } }).source, 'settings');
 });
 
-test('with the flag off, the v2 tree is never loaded', async () => {
+test('an explicit off flag keeps the v2 tree unloaded', async () => {
   let opened = 0;
   const booted = await bootKernel({
-    env: noEnv,
+    call: false, env: noEnv,
     load: () => { opened += 1; return import('#kernel'); },
   });
   assert.equal(booted, null);

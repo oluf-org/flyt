@@ -5,7 +5,7 @@
 1. `GOALS.md` for intent and boundaries.
 2. `DESIGN-SPEC.md` for current architecture and safety contracts.
 3. `DECISIONS.md` for durable choices and unresolved decisions.
-4. `FLOW_LANG.md` and `FLOW_NODES.md` when changing flow syntax, linting, node roles, ports, or structured outputs.
+4. `STACK_LANG.md` and `BLOCKS.md` when changing flow syntax, linting, node roles, ports, or structured outputs.
 5. `TOOLS.md` when adding or changing a tool, a toolset, or a Python sidecar.
 6. `.flyt/backlog/v2-plugin-stack-plan.md` before any work on the plugin kernel, the block editor, the session log, or the Work/Build/Trace surfaces.
 
@@ -15,7 +15,7 @@ Current work is tracked in `.flyt/backlog/`. Completed implementation plans are 
 
 A rebuild onto a Cordis plugin kernel is approved and under way (D52-D63, plan in `.flyt/backlog/v2-plugin-stack-plan.md`, phases `t-0035`-`t-0040`). It ships behind a flag; the v1 surfaces keep doing real work until the Phase 5 cutover. Two rules govern the overlap:
 
-- **v1 code keeps v1 names.** The rename map (flow to stack, node to block, `FlowRunner` to `StackRunner`, `flowlang` to `stacklang`) is executed once, in `t-0040`, in a single commit. Do not rename opportunistically while working on something else.
+- **v1 code keeps v1 names.** The rename map (flow to stack, node to block, `StackRunner` to `StackRunner`, `stacklang` to `stacklang`) is executed once, in `t-0040`, in a single commit. Do not rename opportunistically while working on something else.
 - **v2 code uses the v2 vocabulary from the start.** A new plugin, block, stack or seam is named for what it is, not for what it replaces.
 
 Phase 0 landed on 2026-08-21 (`t-0035`, built as `t-0041`-`t-0048`). What exists is described in `DESIGN-SPEC.md` §10; the short version for anyone touching it:
@@ -36,7 +36,7 @@ Phase 0 landed on 2026-08-21 (`t-0035`, built as `t-0041`-`t-0048`). What exists
 
 ## Standing rules
 
-- Flyt is the product. `flow` is the v1 domain object and `stack` is its v2 successor (D52). Within v1 code, do not rename `.flow.yaml`, `flowlang`, `FlowRunner`, `flow.nodes`, `FLOW_LANG.md`, or `FLOW_NODES.md` — those renames belong to the cutover task. `core/brand.js` owns brand literals and legacy migration names.
+- Flyt is the product. `flow` is the v1 domain object and `stack` is its v2 successor (D52). Within v1 code, do not rename `.flow.yaml`, `stacklang`, `StackRunner`, `flow.nodes`, `STACK_LANG.md`, or `BLOCKS.md` — those renames belong to the cutover task. `core/brand.js` owns brand literals and legacy migration names.
 - Durable coordination is file-backed. Preserve the storage-root split and project scoping described in `DESIGN-SPEC.md`. In v2 the canonical record is the append-only session event log and the run folder is a projection written beside it (D55); either way, correctness may not depend on memory surviving.
 - Projects use `.flyt/`; `.llmflow/` exists only as a migration input.
 - Preserve approval, confinement, tool-ceiling, worktree, gate, review, and spend boundaries. A convenience feature may narrow authority but must not silently widen it. This applies unchanged to tools contributed by third-party plugins: they arrive unclassified and ungranted, inference may only err toward restriction, and classification is not a grant (D57).

@@ -4,7 +4,7 @@
 // rename covered brand surfaces only — app name, appId, window titles, the IPC
 // bridge, storage keys, log prefixes, the .flyt/ config directory, the mark. It
 // deliberately did NOT touch the vocabulary of the thing you build: a *flow* is
-// still a flow, so `.flow.yaml`, `flowlang`, `FlowRunner` and `flow.nodes` keep
+// still a flow, so `.flow.yaml`, `stacklang`, `StackRunner` and `flow.nodes` keep
 // their names and `grep -i flow` keeps returning thousands of hits forever.
 //
 // So the test asserts BOTH halves. Forbidding the brand strings alone would be
@@ -80,7 +80,7 @@ test('brand: the scan actually covers the files it claims to', () => {
   // A walk that silently returns nothing would make the test above vacuous.
   assert.ok(files.length > 40, `expected a real file list, got ${files.length}`);
   for (const expected of ['index.html', 'package.json', 'electron-builder.yml',
-                          'electron/preload.cjs', 'electron/main.js', 'src/App.jsx',
+                          'electron/preload.cjs', 'electron/main.js', 'src/Root.jsx',
                           'core/projects.js', 'core/workspace.js']) {
     assert.ok(files.includes(expected), `${expected} is not being scanned`);
   }
@@ -121,8 +121,8 @@ test('brand: the new name is actually wired up, not just the old one removed', (
 
 test('brand: "flow" is still the domain noun and was NOT renamed', () => {
   // The DSL, its parser, and the runner keep their names on purpose.
-  for (const p of ['core/flowlang/parse.js', 'core/flowlang/serialize.js',
-                   'core/flowRunner.js', 'core/flowstore.js', 'FLOW_LANG.md', 'FLOW_NODES.md']) {
+  for (const p of ['core/stacklang/parse.js', 'core/stacklang/serialize.js',
+                   'core/stackRunner.js', 'core/flowstore.js', 'STACK_LANG.md', 'BLOCKS.md']) {
     assert.ok(fs.existsSync(path.join(REPO, p)), `${p} must keep its name (D29)`);
   }
   // Flows on disk are still *.flow.yaml — renaming the extension would have
