@@ -10,8 +10,10 @@
  */
 import { Service, type Context } from '@deepseek-ai/cordis';
 import type { JsonValue, ToolResult } from '../types.js';
-import type { ToolDefinition, ToolsSeam } from '../seams/tools.js';
+import type { ToolClassification, ToolDefinition, ToolsSeam } from '../seams/tools.js';
 import type { PostToolDecision, PreToolDecision, ToolExecution } from '../events.js';
+import type { SeamName } from '../seams/index.js';
+import { classifyContributedTool, atLeastAsStrict, describe } from './classify.js';
 
 /** Cordis plugin name. */
 export const name = 'flyt-tools';
@@ -66,6 +68,49 @@ export class ToolRegistry extends Service implements ToolsSeam {
   /** Every registered tool, including unclassified ones. */
   list(): ToolDefinition[] {
     return [...this.registered.values()];
+  }
+
+  /**
+   * What a registered tool WOULD be classified as, if a human agreed.
+   *
+   * A proposal, and deliberately not an application. The tool stays
+   * unclassified and therefore unreachable — that is not an oversight to be
+   * tidied away, it is the mechanism: absence of a classification is what the
+   * permission bridge refuses on, and a tool that arrives classified has
+   * skipped the only step that was ever going to involve a person.
+   *
+   * So this answers "what am I being asked to agree to", and nothing else.
+   * Applying it is {@link ToolsSeam.classify}, which only a confirmed decision
+   * reaches.
+   *
+   * Returns null for a tool that is already classified: there is nothing to
+   * propose about a decision somebody has taken.
+   */
+  propose(toolName: string, seams: readonly SeamName[] = []): ToolClassification | null {
+    const tool = this.registered.get(toolName);
+    if (!tool || tool.classification) return null;
+    return classifyContributedTool(tool, seams);
+  }
+
+  /**
+   * Apply a classification a human confirmed.
+   *
+   * Refuses anything looser than the proposal for the same seams: the pass is
+   * confirm-or-EDIT, and an edit may make a classification stricter and never
+   * weaker. Without that, "edit" is a way to grant by hand what the inference
+   * declined to grant, which is the whole thing D57 is guarding.
+   */
+  classify(toolName: string, decided: ToolClassification, seams: readonly SeamName[] = []): void {
+    const tool = this.registered.get(toolName);
+    if (!tool) throw new Error(`No tool named "${toolName}" is registered`);
+    const floor = classifyContributedTool(tool, seams);
+    if (!atLeastAsStrict(decided, floor)) {
+      throw new Error(
+        `"${toolName}" cannot be classified more loosely than it was inferred: `
+        + `inferred ${describe(floor)}, asked for ${describe(decided)}`);
+    }
+    this.registered.set(toolName, { ...tool, classification: { ...decided, source: 'confirmed' } });
+    this.ctx.emit('tools/change');
   }
 
   /**
