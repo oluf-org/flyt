@@ -70,6 +70,119 @@ test('a sandboxed delegated agent is refused as a Loop worker before it can clai
     'the helper describes worker capability; reviewers do not call it');
 });
 
+test('Loop preflights a subscription reviewer before claiming and accepts a supported override', async () => {
+  const probes = [];
+  const { api, engine, dataRoot } = makeApi({
+    capabilityProbe: async ({ provider, model }) => {
+      probes.push([provider, model]);
+      return model === 'gpt-5.2-codex'
+        ? { status: 'unsupported' }
+        : { status: 'usable', ok: true };
+    }
+  });
+  engine.hasKey = id => id === 'codex' || id === 'mock';
+  const workspace = path.join(dataRoot, 'work');
+  fs.mkdirSync(workspace, { recursive: true });
+  const { id: projectId } = await api.invoke('project:open', { folder: workspace });
+  const task = await api.invoke('task:add', { projectId, title: 'must stay queued', goal: 'g' });
+
+  await assert.rejects(api.invoke('loop:start', {
+    projectId,
+    worker: { provider: 'mock', model: 'mock-large' },
+    reviewer: { provider: 'codex', model: 'gpt-5.2-codex' },
+    only: [task.id]
+  }), error => error.code === 'model_unsupported' && /reviewer.*gpt-5\.2-codex/.test(error.message));
+  assert.equal((await api.invoke('task:get', { projectId, id: task.id })).status, 'queued',
+    'capability refusal happens before Supervisor can claim work');
+
+  const started = await api.invoke('loop:start', {
+    projectId,
+    worker: { provider: 'mock', model: 'mock-large' },
+    reviewer: { provider: 'codex', model: 'gpt-5.6-sol' },
+    only: ['t-not-present']
+  });
+  assert.equal(started.started, true);
+  assert.equal(started.reviewer, 'gpt-5.6-sol');
+  assert.deepEqual(probes, [
+    ['codex', 'gpt-5.2-codex'], ['codex', 'gpt-5.6-sol']
+  ]);
+});
+
+test('Loop preflights the effective default worker and a manual override bypasses it', async () => {
+  const probes = [];
+  const { api, engine, dataRoot } = makeApi({
+    capabilityProbe: async ({ model }) => {
+      probes.push(model);
+      return model === 'gpt-5.2-codex'
+        ? { status: 'unsupported' }
+        : { status: 'usable', ok: true };
+    }
+  });
+  engine.hasKey = id => id === 'codex' || id === 'mock';
+  engine.runtimeConfig.loop.levels = false;
+  engine.runtimeConfig.workers.loop = { provider: null, model: null };
+  engine.runtimeConfig.workers.executor = { provider: 'codex', model: 'gpt-5.2-codex' };
+  const workspace = path.join(dataRoot, 'work');
+  fs.mkdirSync(workspace, { recursive: true });
+  const { id: projectId } = await api.invoke('project:open', { folder: workspace });
+  const task = await api.invoke('task:add', { projectId, title: 'default must be checked', goal: 'g' });
+
+  await assert.rejects(api.invoke('loop:start', {
+    projectId, dryRun: true, only: [task.id]
+  }), error => error.code === 'model_unsupported' && /default worker.*gpt-5\.2-codex/.test(error.message));
+  assert.equal((await api.invoke('task:get', { projectId, id: task.id })).status, 'queued');
+
+  const started = await api.invoke('loop:start', {
+    projectId,
+    worker: { provider: 'mock', model: 'mock-large' },
+    dryRun: true,
+    only: ['t-not-present']
+  });
+  assert.equal(started.started, true);
+  assert.equal(started.model, 'mock-large');
+  assert.deepEqual(probes, ['gpt-5.2-codex'], 'the explicit worker replaces, rather than supplements, the stale default');
+});
+
+test('doctor returns connected and usable states through the capability probe', async () => {
+  const { api, engine } = makeApi({
+    capabilityProbe: async ({ model }) => model === 'gpt-5.2-codex'
+      ? { status: 'unsupported' }
+      : { status: 'usable', ok: true }
+  });
+  engine.hasKey = id => id === 'codex' || id === 'mock';
+  engine.resolveModelSource = model => ({ provider: 'codex', model });
+  engine.settings.activeModels = [];
+
+  const report = await api.invoke('diag:doctor', {
+    models: ['gpt-5.2-codex', 'gpt-5.6-sol']
+  });
+  assert.deepEqual(report.selected.map(item => [item.model, item.connected, item.usable, item.capability]), [
+    ['gpt-5.2-codex', true, false, 'unsupported'],
+    ['gpt-5.6-sol', true, true, 'usable']
+  ]);
+  assert.ok(report.findings.some(item => /gpt-5\.2-codex.*account rejects/.test(item.message)));
+});
+
+test('doctor bounds subscription capability calls and marks the remainder unknown', async () => {
+  const probes = [];
+  const { api, engine } = makeApi({
+    capabilityProbe: async ({ model }) => {
+      probes.push(model);
+      return { status: 'usable', ok: true };
+    }
+  });
+  engine.hasKey = id => id === 'codex';
+  engine.resolveModelSource = model => ({ provider: 'codex', model });
+  engine.settings.activeModels = [];
+  const models = Array.from({ length: 12 }, (_, index) => `gpt-selected-${index}`);
+
+  const report = await api.invoke('diag:doctor', { models });
+  assert.equal(probes.length, 8, 'one doctor operation cannot make an arbitrary number of real calls');
+  assert.deepEqual(report.selected.slice(8).map(item => [item.capability, item.usable]),
+    Array.from({ length: 4 }, () => ['unknown', null]));
+  assert.ok(report.findings.some(item => /at most 8 subscription models/.test(item.message)));
+});
+
 test('a loop running in another process is visible here — and a dead one is not believed', async () => {
   // The status file outlives the process that wrote it. A reader that trusts it
   // blindly reports work in flight that stopped hours ago, which is worse than

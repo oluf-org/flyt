@@ -64,8 +64,28 @@ export function composeCodexPrompt(system, prompt) {
 //   turn.completed — usage { input_tokens, cached_input_tokens, output_tokens }
 //   turn.failed / error — failure text
 //   { msg: { type: 'agent_message', message } } — legacy envelope
+function codexErrorDetail(value) {
+  const raw = String(value ?? 'error');
+  try {
+    const payload = JSON.parse(raw);
+    return {
+      message: String(payload?.error?.message ?? payload?.message ?? raw),
+      status: Number(payload?.status) || null
+    };
+  } catch {
+    return { message: raw, status: null };
+  }
+}
+
+export function codexFailureError(state, stderr = '', code = null) {
+  const detail = (state?.errorText || stderr || `exit code ${code}`).trim().slice(0, 500);
+  const error = new Error(`Codex CLI failed: ${detail}`);
+  if (state?.errorStatus) error.status = state.errorStatus;
+  return error;
+}
+
 export function codexStreamReducer() {
-  const state = { text: '', usage: null, errorText: '' };
+  const state = { text: '', usage: null, errorText: '', errorStatus: null };
   return {
     state,
     push(line) {
@@ -86,11 +106,15 @@ export function codexStreamReducer() {
         return false;
       }
       if (evt.type === 'turn.failed') {
-        state.errorText = String(evt.error?.message ?? 'turn failed');
+        const detail = codexErrorDetail(evt.error?.message ?? 'turn failed');
+        state.errorText = detail.message;
+        state.errorStatus = detail.status;
         return false;
       }
       if (evt.type === 'error') {
-        state.errorText = String(evt.message ?? 'error');
+        const detail = codexErrorDetail(evt.message ?? 'error');
+        state.errorText = detail.message;
+        state.errorStatus = detail.status;
         return false;
       }
       if (evt.msg?.type === 'agent_message' && evt.msg.message) {
@@ -153,8 +177,7 @@ export async function codexAdapter({ model, system, prompt, onText, signal, cliH
     } catch { /* no file — fall back to the streamed text */ }
 
     if (code !== 0 || st.errorText) {
-      const detail = (st.errorText || stderr || `exit code ${code}`).trim().slice(0, 500);
-      throw new Error(`Codex CLI failed: ${detail}`);
+      throw codexFailureError(st, stderr, code);
     }
     if (!text) throw new Error(`Codex CLI produced no output${stderr ? `: ${stderr.trim().slice(0, 300)}` : ''}`);
     onText?.(text, { final: true });

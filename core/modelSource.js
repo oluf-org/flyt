@@ -444,6 +444,77 @@ export function createResolver({ hasKey, canServe, priority }) {
 // on purpose (WR-05): unattended fallback that walks the whole priority list is
 // a way to spend a budget on a misconfiguration, and each attempt is a real
 // call on a real bill.
+// Capability discovery is deliberately small and provider-neutral. Subscription
+// CLIs do not expose a stable model-list API, so callers may supply a bounded
+// probe function (normally one tiny CLI call per selected model). The cache is
+// process-local: credentials and probe responses never become settings or logs.
+export const CAPABILITY_CACHE_TTL_MS = 15 * 60 * 1000;
+export const CAPABILITY_CACHE_MAX_ENTRIES = 64;
+export const CAPABILITY_MAX_MODELS_PER_OPERATION = 8;
+
+export function createCapabilityCache({
+  ttlMs = CAPABILITY_CACHE_TTL_MS,
+  maxEntries = CAPABILITY_CACHE_MAX_ENTRIES,
+  now = () => Date.now()
+} = {}) {
+  const entries = new Map();
+  const pending = new Map();
+  const capacity = Math.max(1, Math.min(
+    CAPABILITY_CACHE_MAX_ENTRIES,
+    Math.floor(Number(maxEntries) || CAPABILITY_CACHE_MAX_ENTRIES)
+  ));
+  let generation = 0;
+  return {
+    async check(key, probe) {
+      const k = String(key);
+      const current = now();
+      const cached = entries.get(k);
+      if (cached && cached.expiresAt > current) {
+        // Map insertion order is our small LRU. Touch a hit so rarely used
+        // model ids, not the active set, are evicted first.
+        entries.delete(k);
+        entries.set(k, cached);
+        return { ...cached.value, cached: true };
+      }
+      if (cached) entries.delete(k);
+      if (typeof probe !== 'function') return { ok: false, status: 'unknown', reason: 'No capability probe is configured.' };
+      // Bound per selected model, not per process: one short probe per key per
+      // TTL, with concurrent readers sharing the same promise. A global count
+      // made the fourth configured Loop model impossible to validate forever.
+      if (pending.has(k)) return pending.get(k);
+      const startedIn = generation;
+      const work = (async () => {
+        let value;
+        try {
+          const result = await probe();
+          // Only an explicit provider model rejection is unsupported. A bare
+          // false, auth error, timeout or runtime failure remains unknown.
+          const status = result?.status === 'unsupported' ? 'unsupported'
+            : result?.status === 'usable' || result?.ok === true ? 'usable'
+              : 'unknown';
+          value = { ok: status === 'usable', status,
+            ...(result?.reason ? { reason: String(result.reason).slice(0, 160) } : {}) };
+        } catch {
+          value = { ok: false, status: 'unknown', reason: 'Capability check failed without exposing CLI details.' };
+        }
+        const stamp = now();
+        if (generation === startedIn) {
+          entries.delete(k);
+          while (entries.size >= capacity) entries.delete(entries.keys().next().value);
+          entries.set(k, { value, expiresAt: stamp + ttlMs, refreshAt: stamp });
+        }
+        return value;
+      })();
+      pending.set(k, work);
+      try { return await work; }
+      finally { if (pending.get(k) === work) pending.delete(k); }
+    },
+    // In-flight probes may finish, but a refresh generation prevents their old
+    // answers from repopulating the new cache.
+    clear() { generation += 1; entries.clear(); pending.clear(); }
+  };
+}
+
 export const MAX_AUTO_FALLBACKS = 2;
 
 /**

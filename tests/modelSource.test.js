@@ -9,9 +9,11 @@ import {
   usdPerMillion, catalogFromOpenRouter, factsFromCatalog, normalizeModelFacts,
   popularityFromOpenRouter, normalizeModelPopularity,
   normalizeModelSets, modelSetId, resolveModelSet, MODEL_SET_MAX,
-  proposeStarterSet, STARTER_ROLES
+  proposeStarterSet, STARTER_ROLES, createCapabilityCache,
+  CAPABILITY_CACHE_MAX_ENTRIES
 } from '../core/modelSource.js';
 import { canServe, callModel } from '../core/adapters/index.js';
+import { probeSubscriptionCapability } from '../core/engine.js';
 
 // --- migration (legacy settings.json) --------------------------------------
 
@@ -308,6 +310,85 @@ test('no match fails with a settings-pointing error', () => {
 test('mock serves its own ids without a key', () => {
   const resolve = resolverWith([], DEFAULT_PRIORITY);
   assert.deepEqual(resolve('mock-large'), { provider: 'mock', model: 'mock-large' });
+});
+
+// --- bounded subscription capability checks --------------------------------
+
+test('capability cache catches a stale Codex catalog model without credentials', async () => {
+  let now = 1000;
+  let calls = 0;
+  const cache = createCapabilityCache({ ttlMs: 100, now: () => now });
+  const probe = async () => { calls += 1; return { status: 'unsupported' }; };
+  assert.deepEqual(await cache.check('codex:gpt-5.2-codex', probe), { ok: false, status: 'unsupported' });
+  assert.deepEqual(await cache.check('codex:gpt-5.2-codex', probe), { ok: false, status: 'unsupported', cached: true });
+  assert.equal(calls, 1);
+  now = 1101;
+  assert.deepEqual(await cache.check('codex:gpt-5.3-codex', async () => ({ ok: true })), { ok: true, status: 'usable' });
+  assert.equal(calls, 1, 'the probe receives no credential and cache work is bounded');
+});
+
+test('capability cache validates every selected model, deduplicates, and refreshes', async () => {
+  let calls = 0;
+  const cache = createCapabilityCache();
+  const probe = async () => { calls += 1; return { ok: true, status: 'usable' }; };
+  for (let i = 0; i < 5; i += 1) {
+    assert.equal((await cache.check(`codex:model-${i}`, probe)).status, 'usable');
+  }
+  assert.equal(calls, 5, 'all five Loop bands can be conclusively validated');
+  assert.equal((await cache.check('codex:model-0', probe)).cached, true);
+  assert.equal(calls, 5, 'a repeated selected model costs no second probe');
+  cache.clear();
+  assert.equal((await cache.check('codex:model-0', probe)).status, 'usable');
+  assert.equal(calls, 6, 'explicit refresh performs one new bounded probe');
+});
+
+test('capability refresh cannot be overwritten by an older in-flight probe', async () => {
+  const cache = createCapabilityCache();
+  let finishOld;
+  const old = cache.check('codex:selected', () => new Promise(resolve => { finishOld = resolve; }));
+  await Promise.resolve();
+  cache.clear();
+  assert.equal((await cache.check('codex:selected', async () => ({ status: 'usable', ok: true }))).status, 'usable');
+  finishOld({ status: 'unsupported' });
+  assert.equal((await old).status, 'unsupported');
+  assert.deepEqual(await cache.check('codex:selected', async () => ({ status: 'unknown' })),
+    { ok: true, status: 'usable', cached: true }, 'the refreshed generation remains authoritative');
+});
+
+test('capability cache has a fixed LRU capacity', async () => {
+  let calls = 0;
+  const cache = createCapabilityCache({ maxEntries: 2 });
+  const probe = async () => { calls += 1; return { status: 'usable', ok: true }; };
+  await cache.check('codex:a', probe);
+  await cache.check('codex:b', probe);
+  assert.equal((await cache.check('codex:a', probe)).cached, true, 'a hit makes a the most-recent entry');
+  await cache.check('codex:c', probe);
+  assert.equal((await cache.check('codex:b', probe)).cached, undefined, 'the least-recent entry was evicted');
+  assert.equal(calls, 4);
+  assert.ok(CAPABILITY_CACHE_MAX_ENTRIES >= 8, 'the shipped cache holds at least one complete Loop preflight');
+});
+
+test('the default subscription probe is tiny, single-attempt, timed, and classifies safely', async () => {
+  let callArguments = null;
+  const usable = await probeSubscriptionCapability({ provider: 'codex', model: 'gpt-5.6-sol' }, {
+    call: async (...args) => { callArguments = args; return { text: 'OK' }; }
+  });
+  assert.equal(usable.status, 'usable');
+  assert.equal(callArguments.length, 1, 'callModel has one request-object argument, not a separate options argument');
+  const [request] = callArguments;
+  assert.equal(request.prompt, 'Reply with OK.');
+  assert.equal(request.maxTokens, 1);
+  assert.deepEqual(request.retry, { attempts: 1 });
+  assert.deepEqual(request.timeout, { hardMs: 15_000, idleMs: 15_000 });
+
+  const rejected = Object.assign(new Error('unknown model'), { status: 404 });
+  assert.equal((await probeSubscriptionCapability({ provider: 'codex', model: 'old' }, {
+    call: async () => { throw rejected; }
+  })).status, 'unsupported');
+  const auth = Object.assign(new Error('not signed in'), { status: 401 });
+  assert.equal((await probeSubscriptionCapability({ provider: 'codex', model: 'new' }, {
+    call: async () => { throw auth; }
+  })).status, 'unknown');
 });
 
 // --- resolveCallTarget ------------------------------------------------------

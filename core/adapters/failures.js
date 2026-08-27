@@ -168,7 +168,7 @@ export function classifyAdapterError(err, { provider = 'the provider', model = n
     code = 'credit';
   } else if (status === 429 || /\b(rate limit|too many requests|quota)\b/i.test(message)) {
     code = 'quota';
-  } else if (status === 404 || /\b(unknown model|model not found|does not support|unsupported)\b/i.test(message)) {
+  } else if (status === 404 || /\b(unknown model|model not found|does not support|not supported|unsupported)\b/i.test(message)) {
     code = 'capability';
   } else if (status >= 500 || /\b(socket hang up|network|fetch failed)\b/i.test(message)) {
     code = 'network';

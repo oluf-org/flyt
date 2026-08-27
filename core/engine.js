@@ -31,10 +31,11 @@ import { ReferenceLibrary, DEFAULT_REFERENCES } from './references.js';
 import { configDirFor } from './workspace.js';
 import { setKnownTools } from '../src/flowTypes.js';
 import { diffSnapshot } from './snapshotDiff.js';
-import { canServe } from './adapters/index.js';
+import { canServe, callModel } from './adapters/index.js';
+import { classifyAdapterError } from './adapters/failures.js';
 import {
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
-  migrateSettings, createResolver
+  migrateSettings, createResolver, createCapabilityCache
 } from './modelSource.js';
 import { claudeCredentialStatus, resolveClaudeCli } from './adapters/claudeCode.js';
 import { codexCredentialStatus, resolveCodexCli } from './adapters/codexCli.js';
@@ -43,6 +44,26 @@ import { v2Flag } from './v2.js';
 import { LoopLog } from './loopLog.js';
 
 const PUSH_COALESCE_MS = 80;
+
+export async function probeSubscriptionCapability({ provider, model }, { call = callModel } = {}) {
+  try {
+    // callModel's public contract is one request object. Pin that shape here so
+    // the tiny prompt, single attempt and hard deadline cannot be dropped by a
+    // future refactor of this preflight.
+    await call({
+      provider, model, prompt: 'Reply with OK.', maxTokens: 1, stream: false,
+      retry: { attempts: 1 }, timeout: { hardMs: 15_000, idleMs: 15_000 }
+    });
+    return { ok: true, status: 'usable' };
+  } catch (error) {
+    // Only the shared classifier's actual model-rejection category is
+    // unsupported. Auth, quota, network and runtime failures are inconclusive.
+    const failure = classifyAdapterError(error, { provider, model });
+    return failure.code === 'capability'
+      ? { ok: false, status: 'unsupported', reason: 'The provider rejected this model.' }
+      : { ok: false, status: 'unknown', reason: 'The capability check did not complete.' };
+  }
+}
 
 /**
  * @param {object} opts
@@ -66,7 +87,10 @@ export function createEngine({
   canEmit = () => true,
   shouldPush = () => true,
   log = () => {},
-  warn = () => {}
+  warn = () => {},
+  // Optional host-supplied, credential-safe capability probe. It receives only
+  // provider/model and must return { ok }; the engine caches the result.
+  capabilityProbe = null
 } = {}) {
   const dataDir = name => {
     const dir = path.join(dataRoot, name);
@@ -240,6 +264,15 @@ export function createEngine({
   // key; 'auto' walks providerPriority, skipping disconnected providers and
   // providers that can't serve the id. Returns the fully-stamped call target.
   const resolveSource = createResolver({ hasKey, canServe, priority: () => settings.providerPriority });
+  // Short-lived, in-memory capability results. A probe implementation can be
+  // supplied by the host; keeping this cache out of settings prevents secrets
+  // and vendor CLI output from being persisted.
+  const capabilityCache = createCapabilityCache();
+  // One minimal authenticated call is the only reliable capability signal for
+  // subscription CLIs. It is intentionally not automatic during ordinary model
+  // resolution; Loop/doctor invoke it only for selected models and the cache
+  // bounds repeats.
+  const effectiveCapabilityProbe = capabilityProbe ?? probeSubscriptionCapability;
   function resolveModelSource(modelId, pinned = null) {
     const entry = (settings.activeModels ?? []).find(m => m.id === modelId);
     const source = pinned ?? entry?.source ?? 'auto';
@@ -708,7 +741,8 @@ export function createEngine({
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,
     setLoopDriver,
     // Providers
-    hasKey, subscriptionStatus, resolveModelSource, effectiveSafetyModel,
+    hasKey, subscriptionStatus, resolveModelSource, capabilityCache,
+    capabilityProbe: effectiveCapabilityProbe, effectiveSafetyModel,
     // Push
     pushStateFor, broadcastActivity, pushUpdateFor, emitLoop, loopLog, loopLogFor, emitChat,
     // A project id that is gone for good (an appdata project adopted into a

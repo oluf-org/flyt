@@ -23,6 +23,7 @@ import { ChatStore, runChatTurn, CHAT_TOOLS } from './chat.js';
 import { breakdown, costOf, liveEntries, totalsWithLive } from './ledger.js';
 import { executeTool, getTools, registerDefinition } from './tools/index.js';
 import { canUseFlytTools } from './adapters/index.js';
+import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
 import { isDestructive } from '../src/toolTypes.js';
 import { pythonStatus, setupPython } from './python.js';
 import { loadToolSuite, runToolSuite, SUITE_DIR } from './toolbench.js';
@@ -1244,6 +1245,13 @@ export function createApi(engine) {
       // at its first node with a provider error and the whole backlog would
       // end the night parked for a reason that has nothing to do with the work.
       const useLevels = runtimeConfig.loop?.levels !== false && !pinned && !Object.keys(byLevel).length;
+      // With levels disabled and no Loop-specific pin, Supervisor passes no
+      // worker override to the flow. The authored work node then takes the
+      // configured executor default. It is just as real a launch choice as an
+      // explicit --model and must be preflighted before the queue is touched.
+      const defaultWorker = !useLevels && !pinned && !Object.keys(byLevel).length
+        ? resolveWorkerArg(runtimeConfig.workers?.executor)
+        : null;
       if (useLevels && !engine.hasKey('openrouter')) {
         throw new ApiError(
           'Effort levels route through OpenRouter, and no OpenRouter key is set. Add one in Settings, pick a model for the loop, or set loop.levels to false to run on the configured workers instead.',
@@ -1257,9 +1265,61 @@ export function createApi(engine) {
           `The loop is set to run on "${pinned.model}", but its provider (${pinned.provider}) is not connected. Add a key in Settings, or choose another model.`,
           { status: 400, code: 'no_provider_key' });
       }
+      if (defaultWorker && defaultWorker.provider !== 'mock' && !engine.hasKey(defaultWorker.provider)) {
+        throw new ApiError(
+          `The loop's default worker is "${defaultWorker.model}", but its provider (${defaultWorker.provider}) is not connected. Add a key in Settings, or choose another model.`,
+          { status: 400, code: 'no_provider_key' });
+      }
+      // A connected subscription account can still reject a catalog id. When
+      // the host supplies a bounded preflight, validate every explicit choice
+      // before Supervisor is created (and therefore before any task is taken).
+      if (engine.capabilityProbe) {
+        const checks = [];
+        if (pinned) checks.push({ provider: pinned.provider, model: pinned.model });
+        if (defaultWorker) checks.push({
+          provider: defaultWorker.provider, model: defaultWorker.model, defaultWorker: true
+        });
+        for (const [band, id] of Object.entries(byLevel)) {
+          const w = resolveWorkerArg({ provider: 'auto', model: id });
+          if (w) checks.push({ provider: w.provider, model: id, band });
+        }
+        // The reviewer is the most common subscription CLI in a Loop session.
+        // Validate it now too; finding out after a worker has changed the repo
+        // is precisely the late failure this preflight exists to prevent.
+        const selectedReviewer = sessionReviewer ?? reviewWorker(runtimeConfig);
+        if (selectedReviewer) checks.push({
+          provider: selectedReviewer.provider, model: selectedReviewer.model, reviewer: true
+        });
+        const uniqueChecks = [...new Map(checks.map(target => [
+          `${target.provider}:${target.model}`, target
+        ])).values()];
+        for (const target of uniqueChecks) {
+          if (!SUBSCRIPTION_PROVIDERS.includes(target.provider)) continue;
+          const result = await engine.capabilityCache.check(
+            `${target.provider}:${target.model}`,
+            () => engine.capabilityProbe({ provider: target.provider, model: target.model }));
+          if (result.status === 'unsupported') {
+            const role = target.reviewer ? 'reviewer ' : target.defaultWorker ? 'default worker ' : '';
+            throw new ApiError(
+              `The configured ${target.provider} ${role}model "${target.model}" is not usable by this signed-in account. ` +
+              `Choose a supported model in Settings, run "flyt call subscription:refresh", or set an explicit manual model override.`,
+              { status: 400, code: 'model_unsupported' });
+          }
+          if (result.status === 'unknown') {
+            throw new ApiError(
+              `Could not confirm that the configured ${target.provider} model "${target.model}" is usable. ` +
+              `Run "flyt call subscription:refresh" and try again, or set an explicit manual model override.`,
+              { status: 503, code: 'model_capability_unknown' });
+          }
+        }
+      }
       const pinnedCapabilityProblem = loopWorkerProblem(pinned);
       if (pinnedCapabilityProblem) {
         throw new ApiError(pinnedCapabilityProblem, { status: 400, code: 'worker_cannot_use_tools' });
+      }
+      const defaultCapabilityProblem = loopWorkerProblem(defaultWorker);
+      if (defaultCapabilityProblem) {
+        throw new ApiError(defaultCapabilityProblem, { status: 400, code: 'worker_cannot_use_tools' });
       }
       // Nothing lands unattended without a reviewer (§7.2) — also worth saying
       // before a night of work rather than after it. Asked of the same function
@@ -1592,6 +1652,14 @@ export function createApi(engine) {
       // work at some number I picked".
       return probeModel({ ...target, model },
         { ...(maxTokens ? { maxTokens } : {}), stream, timeout: engine.runtimeConfig.timeout });
+    },
+
+    'subscription:refresh': () => {
+      // Capability results are process-local and credential-free. Clearing them
+      // also resets the bounded probe window so an operator can retry after a
+      // sign-in, CLI update, or account/model change.
+      engine.capabilityCache?.clear();
+      return { refreshed: true };
     },
 
     'diag:doctor': ({ projectId, probe = false, models = [], flowId = null }) => {

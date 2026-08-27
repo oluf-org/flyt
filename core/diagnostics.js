@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { callModel } from './adapters/index.js';
 import { incidentHeadline } from './incidents.js';
-import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
+import { CAPABILITY_MAX_MODELS_PER_OPERATION, SUBSCRIPTION_PROVIDERS } from './modelSource.js';
 import { planDefaultRoute, TASK_KINDS } from './modelPriority.js';
 import { effortBudget, DEFAULT_EFFORT } from '../src/flowTypes.js';
 import { v2Flag } from './v2.js';
@@ -573,12 +573,46 @@ export async function doctor(engine, { probe = false, models = [], project = nul
     return {
       id,
       connected,
+      // A signed-in CLI is only a runtime connection; its model catalog may be
+      // stale. Keep those facts separate so doctor never advertises a model as
+      // usable merely because auth.json exists.
       kind: SUBSCRIPTION_PROVIDERS.includes(id) ? 'subscription' : (id === 'mock' ? 'built-in' : 'api-key'),
       ...(sub ? { subscription: sub } : {})
     };
   });
 
   const findings = [];
+  const selected = [...new Set([...(models ?? []), ...(settings.activeModels ?? []).filter(m => m?.enabled !== false).map(m => m.id)])]
+    .filter(Boolean).map(model => {
+      try {
+        const target = engine.resolveModelSource(model);
+        return { model, provider: target.provider, connected: true, usable: !SUBSCRIPTION_PROVIDERS.includes(target.provider) ? true : null };
+      } catch (error) {
+        return { model, provider: null, connected: false, usable: false, error: String(error?.message ?? error).slice(0, 240) };
+      }
+    });
+  if (engine.capabilityProbe) {
+    let capabilityChecks = 0;
+    for (const item of selected) {
+      if (!item.connected || !SUBSCRIPTION_PROVIDERS.includes(item.provider)) continue;
+      if (capabilityChecks >= CAPABILITY_MAX_MODELS_PER_OPERATION) {
+        item.capability = 'unknown';
+        item.usable = null;
+        item.reason = 'Capability check skipped because this operation reached its probe limit.';
+        findings.push({ level: 'warn', message: `"${item.model}" was not probed because doctor checks at most ${CAPABILITY_MAX_MODELS_PER_OPERATION} subscription models per operation. Run doctor again with a smaller explicit model set.` });
+        continue;
+      }
+      capabilityChecks += 1;
+      const result = await engine.capabilityCache.check(
+        `${item.provider}:${item.model}`,
+        () => engine.capabilityProbe({ provider: item.provider, model: item.model }));
+      item.capability = result.status;
+      item.usable = result.status === 'usable' ? true : result.status === 'unsupported' ? false : null;
+      if (result.status === 'unsupported') findings.push({ level: 'error', message: `"${item.model}" is connected through ${item.provider} but this account rejects it. Choose a supported model in Settings, run "flyt call subscription:refresh", or set an explicit manual model override.` });
+      if (result.status === 'unknown') findings.push({ level: 'warn', message: `"${item.model}" is connected through ${item.provider}, but its capability could not be confirmed. Run "flyt call subscription:refresh" before launching.` });
+    }
+  }
+
   // An open incident goes FIRST, above everything, because it is the reason
   // nothing else is working and every other finding below it is downstream of
   // that. Somebody running `doctor` after a loop stopped is asking exactly this
@@ -743,6 +777,10 @@ export async function doctor(engine, { probe = false, models = [], project = nul
     ...(project ? { project } : {}),
     providers,
     priority,
+    // Provider connectivity and selected-model usability are different facts.
+    // Return the structured states so every UI/CLI consumer can say which one
+    // is unsupported or unknown without parsing findings prose.
+    selected,
     // The effective default route per task kind, so `flyt doctor`, the node
     // start log and the adapter call all quote the same answer.
     routes,

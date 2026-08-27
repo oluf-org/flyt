@@ -14,8 +14,11 @@ import {
   claudeCredentialStatus, codexCredentialStatus, cliEnv
 } from '../core/adapters/cliDelegate.js';
 import { buildClaudeArgs, claudeStreamReducer } from '../core/adapters/claudeCode.js';
-import { buildCodexArgs, composeCodexPrompt, codexStreamReducer } from '../core/adapters/codexCli.js';
+import {
+  buildCodexArgs, composeCodexPrompt, codexFailureError, codexStreamReducer
+} from '../core/adapters/codexCli.js';
 import { canServe } from '../core/adapters/index.js';
+import { probeSubscriptionCapability } from '../core/engine.js';
 import {
   migrateSettings, createResolver,
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY, CURATED_MODELS
@@ -182,6 +185,32 @@ test('codexStreamReducer: agent messages stream, turn usage folds cached input, 
   const failed = codexStreamReducer();
   failed.push(JSON.stringify({ type: 'turn.failed', error: { message: 'usage limit' } }));
   assert.equal(failed.state.errorText, 'usage limit');
+});
+
+test('the observed Codex account rejection is decoded and classified as an unsupported model', async () => {
+  // Captured from `codex exec --json -m gpt-5.2-codex`: the CLI wraps the
+  // provider error as JSON text inside both error and turn.failed events.
+  const message = JSON.stringify({
+    type: 'error', status: 400,
+    error: {
+      type: 'invalid_request_error',
+      message: "The 'gpt-5.2-codex' model is not supported when using Codex with a ChatGPT account."
+    }
+  });
+  const reducer = codexStreamReducer();
+  reducer.push(JSON.stringify({ type: 'error', message }));
+  reducer.push(JSON.stringify({ type: 'turn.failed', error: { message } }));
+  assert.equal(reducer.state.errorStatus, 400);
+  assert.match(reducer.state.errorText, /gpt-5\.2-codex.*not supported/);
+
+  const oldModel = await probeSubscriptionCapability({ provider: 'codex', model: 'gpt-5.2-codex' }, {
+    call: async () => { throw codexFailureError(reducer.state, '', 1); }
+  });
+  const newModel = await probeSubscriptionCapability({ provider: 'codex', model: 'gpt-5.6-sol' }, {
+    call: async () => ({ text: 'OK' })
+  });
+  assert.equal(oldModel.status, 'unsupported');
+  assert.equal(newModel.status, 'usable');
 });
 
 // --- credential detection ----------------------------------------------------
