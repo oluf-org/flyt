@@ -23,7 +23,9 @@ import { createHash } from 'node:crypto';
 // final files nor their tests. Keep one shared budget with landing and make it
 // large enough for a substantial task while retaining the fail-closed marker
 // for genuinely oversized changes.
-export const REVIEW_DIFF_BUDGET = 120_000;
+// Roughly 40k tokens: enough for a cross-cutting release cutover after safe
+// manifests, while leaving ample room for the task, gates, and reviewer reply.
+export const REVIEW_DIFF_BUDGET = 160_000;
 // The verdict is short; arriving at it, over 60k of diff, is not. Sending the
 // answer size as the whole completion budget starves a reasoning model into
 // returning nothing (D40) — and this reviewer is the last thing between an
@@ -114,6 +116,47 @@ function isTestEvidence(path) {
   return /(^|\/)(tests?|specs?)(\/|$)|\.(?:test|spec)\.[^/]+$/i.test(path);
 }
 
+function declaredRenamePairs(body = '') {
+  const pairs = [];
+  const seen = new Set();
+  const add = (from, to) => {
+    if (!from || from === to || seen.has(`${from}\0${to}`)) return;
+    seen.add(`${from}\0${to}`);
+    pairs.push([from, to]);
+  };
+  for (const match of String(body).matchAll(/`([^`]+)`\s+to\s+`([^`]+)`/g)) {
+    add(match[1], match[2]);
+    if (/^[A-Z]/.test(match[1]) && /^[A-Z]/.test(match[2])) {
+      add(match[1][0].toLowerCase() + match[1].slice(1), match[2][0].toLowerCase() + match[2].slice(1));
+    }
+  }
+  return pairs.sort((a, b) => b[0].length - a[0].length);
+}
+
+function mechanicalRenameOnly(section, pairs) {
+  if (!pairs.length || section.added || section.deleted) return false;
+  const removed = [];
+  const added = [];
+  for (const line of section.text.split('\n')) {
+    if (line.startsWith('-') && !line.startsWith('---')) removed.push(line.slice(1));
+    if (line.startsWith('+') && !line.startsWith('+++')) added.push(line.slice(1));
+  }
+  if (!removed.length || removed.length !== added.length) return false;
+  let replacements = 0;
+  const transformed = removed.map(line => {
+    let next = line;
+    for (const [from, to] of pairs) {
+      const count = next.split(from).length - 1;
+      if (count) {
+        replacements += count;
+        next = next.split(from).join(to);
+      }
+    }
+    return next;
+  });
+  return replacements > 0 && transformed.every((line, i) => line === added[i]);
+}
+
 function snapshotRoots(sections) {
   const added = sections.filter(section => section.added);
   const roots = [];
@@ -143,12 +186,13 @@ function snapshotRoots(sections) {
  * reviewer can still detect coverage being weakened. Modified and renamed
  * files are never summarised.
  */
-export function packageReviewDiff(diff = '') {
+export function packageReviewDiff(diff = '', { renamePairs = [] } = {}) {
   if (diff.length <= REVIEW_DIFF_BUDGET) return { text: diff, summarized: false, complete: true };
   const sections = diffSections(diff);
   const roots = snapshotRoots(sections);
   const deletionSections = sections.filter(section => section.deleted && !isTestEvidence(section.path));
-  if (!sections.length || (!roots.length && !deletionSections.length)) {
+  const mechanicalSections = sections.filter(section => mechanicalRenameOnly(section, renamePairs));
+  if (!sections.length || (!roots.length && !deletionSections.length && !mechanicalSections.length)) {
     return {
       text: `REVIEW EVIDENCE INCOMPLETE: the ${diff.length}-character diff exceeds the `
         + `${REVIEW_DIFF_BUDGET}-character review budget and no safely manifestable added package `
@@ -162,7 +206,8 @@ export function packageReviewDiff(diff = '') {
   for (const group of roots) for (const section of group.members) membership.set(section, group);
   const kept = sections.filter(section => !membership.has(section)
     || roots.some(group => group.marker === section))
-    .filter(section => !deletionSections.includes(section));
+    .filter(section => !deletionSections.includes(section))
+    .filter(section => !mechanicalSections.includes(section));
   const manifests = roots.map(group => [
     `BULK ADDED SNAPSHOT: ${group.root}/`,
     `${group.members.length} added files; contents represented by a complete SHA-256 patch manifest.`,
@@ -175,10 +220,18 @@ export function packageReviewDiff(diff = '') {
     'Deleted tests/specs are excluded from this manifest and remain inline.',
     ...deletionSections.map(section => `- ${section.path} | ${section.lines} patch lines | sha256:${section.hash}`),
   ].join('\n') : '';
+  const mechanicalManifest = mechanicalSections.length ? [
+    'DECLARED MECHANICAL RENAME MANIFEST',
+    `${mechanicalSections.length} modified or renamed files contain only the task-declared substitutions below.`,
+    `Rules: ${renamePairs.map(([from, to]) => `${JSON.stringify(from)} -> ${JSON.stringify(to)}`).join('; ')}`,
+    'Each patch was verified line-for-line after applying those substitutions; tests with any other edit remain inline.',
+    ...mechanicalSections.map(section => `- ${section.path} | ${section.lines} patch lines | sha256:${section.hash}`),
+  ].join('\n') : '';
   const text = [
     'REVIEW EVIDENCE: structured complete change set (eligible whole-file payloads are manifested, not truncated).',
     ...manifests,
     deletionManifest,
+    mechanicalManifest,
     'FULL PATCH FOR INTEGRATION, TESTS, MODIFICATIONS, NON-MANIFESTED DELETIONS, AND PACKAGE ENTRYPOINTS:',
     ...kept.map(section => section.text),
   ].filter(Boolean).join('\n\n');
@@ -202,7 +255,7 @@ export function buildReviewPrompt({
   task = {}, diff = '', gates = [], blastRadius = [], changedFiles = [], testDelta = null,
   dependencyEvidence = []
 }) {
-  const evidence = packageReviewDiff(diff);
+  const evidence = packageReviewDiff(diff, { renamePairs: declaredRenamePairs(task.body) });
   const outside = blastRadius.length
     ? changedFiles.filter(f => !blastRadius.some(b => f === b || f.startsWith(b)))
     : [];
