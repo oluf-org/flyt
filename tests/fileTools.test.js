@@ -66,6 +66,46 @@ test('completed audit logging does not depend on live activity metadata', async 
   assert.deepEqual(events.map(e => e.event), ['tool_call']);
 });
 
+test('a configured store without an audit writer fails loudly', async () => {
+  const ctx = boundCtx();
+  await assert.rejects(
+    executeTool('read_file', { path: 'existing.txt' }, { ...ctx, store: {} }),
+    /appendLog/
+  );
+});
+
+test('activity metadata failures cannot change tool outcomes', async () => {
+  const startFailure = boundCtx();
+  startFailure.store.writeToolActivity = () => { throw new Error('meta unavailable'); };
+  const completed = await executeTool('read_file', { path: 'existing.txt' }, startFailure);
+  assert.equal(completed.ok, true);
+
+  const finishFailure = boundCtx();
+  const original = finishFailure.store.writeToolActivity.bind(finishFailure.store);
+  finishFailure.store.writeToolActivity = (runId, node, state) => {
+    if (!state.active) throw new Error('meta became unavailable');
+    return original(runId, node, state);
+  };
+  const alsoCompleted = await executeTool('read_file', { path: 'existing.txt' }, finishFailure);
+  assert.equal(alsoCompleted.ok, true);
+});
+
+test('a failed start or completion audit still finalizes the live activity edge', async () => {
+  for (const failedEvent of ['tool_start', 'tool_call']) {
+    const ctx = boundCtx();
+    const states = [];
+    ctx.store.writeToolActivity = (_runId, _node, state) => {
+      states.push(state.active);
+      return state;
+    };
+    ctx.store.appendLog = (_runId, event) => {
+      if (event.event === failedEvent) throw new Error(`${failedEvent} audit unavailable`);
+    };
+    await assert.rejects(executeTool('read_file', { path: 'existing.txt' }, ctx), /audit unavailable/);
+    assert.deepEqual(states, [true, false], `${failedEvent} failure settles the edge`);
+  }
+});
+
 test('create_file: creates a new file, refuses to clobber an existing one', async () => {
   const ctx = boundCtx();
   const ok = await executeTool('create_file', { path: 'src/new.js', content: 'export const x = 1;\n' }, ctx);
