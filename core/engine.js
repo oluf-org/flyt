@@ -45,6 +45,29 @@ import { LoopLog } from './loopLog.js';
 
 const PUSH_COALESCE_MS = 80;
 
+// Search providers are not model providers: keeping their secrets in a
+// separate settings bucket prevents them from entering model resolution while
+// still giving tools the existing runtimeConfig.providerKeys lookup.
+export const SEARCH_PROVIDER_IDS = Object.freeze(['brave', 'tavily']);
+
+/** Apply one-way secret updates. Missing, empty, and unknown fields preserve what is stored. */
+export function applySearchProviderKeys(settings, patch) {
+  if (!patch || typeof patch !== 'object') return false;
+  let changed = false;
+  for (const provider of SEARCH_PROVIDER_IDS) {
+    const raw = patch[provider];
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const key = raw.trim();
+    if (settings.searchProviders?.[provider]?.apiKey === key) continue;
+    settings.searchProviders = { ...(settings.searchProviders ?? {}) };
+    settings.searchProviders[provider] = {
+      ...(settings.searchProviders[provider] ?? {}), apiKey: key,
+    };
+    changed = true;
+  }
+  return changed;
+}
+
 export async function probeSubscriptionCapability({ provider, model }, { call = callModel } = {}) {
   try {
     // callModel's public contract is one request object. Pin that shape here so
@@ -352,6 +375,10 @@ export function createEngine({
     runtimeConfig.providerKeys = Object.fromEntries(
       KEYED_PROVIDERS.filter(p => settings.providers?.[p]?.apiKey).map(p => [p, settings.providers[p].apiKey])
     );
+    for (const provider of SEARCH_PROVIDER_IDS) {
+      const key = settings.searchProviders?.[provider]?.apiKey;
+      if (key) runtimeConfig.providerKeys[provider] = key;
+    }
     // Connected subscription providers join the map with a sentinel — the
     // default-worker picker treats presence as "connected", and the adapters
     // ignore apiKey by design (the CLI owns auth).
@@ -435,6 +462,9 @@ export function createEngine({
     const connectable = [...KEYED_PROVIDERS, ...SUBSCRIPTION_PROVIDERS];
     return {
       providers,
+      searchProviders: Object.fromEntries(SEARCH_PROVIDER_IDS.map(provider => [provider, {
+        hasKey: Boolean(settings.searchProviders?.[provider]?.apiKey),
+      }])),
       hasKey: connectable.some(hasKey),
       claudeSubscriptionActive: hasKey('claude-code'),
       providerPriority: settings.providerPriority ?? [...DEFAULT_PRIORITY],

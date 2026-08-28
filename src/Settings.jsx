@@ -54,6 +54,16 @@ const PROVIDER_META = {
 // model pickers need the same answers, and two copies of a rule that must
 // agree is one too many.
 const CATALOG_PROVIDERS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi']; // curated lists; openrouter fetches live
+const SEARCH_PROVIDER_META = {
+  brave: {
+    name: 'Brave Search', placeholder: 'BSA…',
+    blurb: 'Preferred for web_search when configured. Create a key in the Brave Search API dashboard.',
+  },
+  tavily: {
+    name: 'Tavily', placeholder: 'tvly-…',
+    blurb: 'Used when Brave is not configured. Create a key in the Tavily dashboard.',
+  },
+};
 
 export default function Settings({ onClose, onOpenProject = null, onOpenModels = null }) {
   const [tab, setTab] = useState('providers');
@@ -262,6 +272,8 @@ function ProvidersTab({ s, save, onKeySaved }) {
         </div>
       </section>
 
+      <SearchProvidersSection searchProviders={s.searchProviders} save={save} />
+
       <section>
         <div className="settings-section-head">
           <span className="section-label">Project storage</span>
@@ -284,6 +296,69 @@ function ProvidersTab({ s, save, onKeySaved }) {
 
       <FlowFilesSection />
     </>
+  );
+}
+
+export function searchProviderKeyPatch(provider, raw) {
+  const key = String(raw ?? '').trim();
+  return SEARCH_PROVIDER_META[provider] && key ? { providerKeys: { [provider]: key } } : null;
+}
+
+export function SearchProvidersSection({ searchProviders = {}, save }) {
+  const [inputs, setInputs] = useState({});
+  const [saved, setSaved] = useState(null);
+
+  const saveKey = async provider => {
+    const patch = searchProviderKeyPatch(provider, inputs[provider]);
+    if (!patch) return;
+    await save(patch);
+    setInputs(current => ({ ...current, [provider]: '' }));
+    setSaved(provider);
+    setTimeout(() => setSaved(current => (current === provider ? null : current)), 2000);
+  };
+
+  return (
+    <section data-search-providers>
+      <div className="settings-section-head">
+        <span className="section-label">Web search</span>
+      </div>
+      <p className="settings-hint">
+        Optional provider keys make <code className="mono">web_search</code> use a JSON search API.
+        Without one, Flyt keeps using its keyless DuckDuckGo fallback. Keys stay local and are never shown again.
+      </p>
+      <div className="provider-cards">
+        {Object.entries(SEARCH_PROVIDER_META).map(([provider, meta]) => {
+          const connected = Boolean(searchProviders?.[provider]?.hasKey);
+          const value = inputs[provider] ?? '';
+          return (
+            <div className="provider-card open" key={provider}>
+              <div className="provider-card-head">
+                <span className="provider-name">{meta.name}</span>
+                <span className={'status-pill' + (connected ? '' : ' pill-neutral')}>
+                  {connected ? 'configured' : 'optional'}
+                </span>
+              </div>
+              <div className="provider-card-body">
+                <p className="settings-hint">{meta.blurb}</p>
+                <div className="settings-row">
+                  <input
+                    type="password"
+                    placeholder={connected ? 'Enter a new key to replace the saved one' : meta.placeholder}
+                    value={value}
+                    onChange={event => setInputs(current => ({ ...current, [provider]: event.target.value }))}
+                    onKeyDown={event => { if (event.key === 'Enter') saveKey(provider); }}
+                    aria-label={`${meta.name} API key`}
+                  />
+                  <button className="primary" onClick={() => saveKey(provider)} disabled={!value.trim()}>
+                    {saved === provider ? 'Saved ✓' : 'Save key'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
