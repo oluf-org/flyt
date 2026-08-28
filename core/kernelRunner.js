@@ -150,6 +150,7 @@ export async function bootLoopKernel({
   worker = null, level = null, loopTaskId = null, skills = null,
   backlog = null, pool = null, references = null, settings = {},
   load = null, call = callModel,
+  onSessionEvent = null,
 } = {}) {
   let kernelModule = null;
   const importer = async () => {
@@ -201,6 +202,9 @@ export async function bootLoopKernel({
   await booted.ctx.plugin(kernel.flytBlocksInquiry);
   await booted.ctx.plugin(kernel.flytBlocksLoop);
   await booted.ctx.plugin(kernel.flytAdapters, { callModel: callThrough, resolve });
+  if (typeof onSessionEvent === 'function') {
+    booted.ctx.on('session/append', (runId, event) => onSessionEvent(runId, event));
+  }
 
   // Built-ins are application code, registered on the root context. They are
   // trusted definitions, but still require the block ceiling and approvals.
@@ -218,7 +222,9 @@ export async function bootLoopKernel({
           defaultWorker: worker, projectConfig: workspace.readConfig(), settings,
           gateTimeoutMs: runtimeConfig.gateTimeoutMs,
           config: runtimeConfig, signal: execution.signal,
-          notify: () => {},
+          // Long tools use this between their durable call/result boundaries.
+          // It deliberately reuses the host's coalesced session observer.
+          notify: () => onSessionEvent?.(execution.runId, { type: 'tool.progress', data: null }),
         });
         const baseline = baselines.get(execution.runId);
         if (baseline) {
