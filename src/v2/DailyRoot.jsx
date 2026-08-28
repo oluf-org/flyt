@@ -6,7 +6,10 @@ import TabDeck from '../TabDeck.jsx';
 import TabStrip, { NewTabPage } from '../TabStrip.jsx';
 import Shell from './Shell.jsx';
 import { INITIAL, MODELS, WORK } from './shellRouting.js';
-import { initialFlowId, watchingFromRun } from './dailyWorkModel.js';
+import { initialFlowId } from './dailyWorkModel.js';
+import {
+  dailyProjectBridge, launchDailyPrompt, readDailyRun, subscribeDailyRun,
+} from './dailyWorkBridge.js';
 
 const cleanIpcError = error => String(error?.message ?? error)
   .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, '');
@@ -51,6 +54,7 @@ export default function DailyRoot() {
   const tabsRef = useRef([]);
   const flowsRef = useRef([]);
   const deckRef = useRef(null);
+  const projectApi = useMemo(() => dailyProjectBridge(window.flyt), []);
 
   const acceptProjects = useCallback(payload => {
     if (!payload) return;
@@ -114,21 +118,22 @@ export default function DailyRoot() {
 
   const watchRun = useCallback(async (projectId, runId) => {
     if (!projectId || !runId) return;
-    const [snapshot, log] = await Promise.all([
-      window.flyt.getSnapshot(projectId, runId),
-      window.flyt.readRunLog(projectId, runId).catch(() => []),
-    ]);
+    const next = await readDailyRun(window.flyt, projectId, runId);
     if (projectId !== activeRef.current) return;
-    const next = watchingFromRun(runId, snapshot, log);
     watchingRef.current = next;
     setWatching(next);
     setLocation(current => ({ dest: WORK, run: runId ?? current.run }));
   }, []);
 
-  useEffect(() => window.flyt.onRunUpdate?.(payload => {
-    if (!payload?.runId || payload.runId !== watchingRef.current?.runId) return;
-    watchRun(activeRef.current, payload.runId).catch(() => {});
-  }), [watchRun]);
+  useEffect(() => subscribeDailyRun(window.flyt, {
+    getProjectId: () => activeRef.current,
+    getRunId: () => watchingRef.current?.runId,
+    onWatching: next => {
+      if (!next) return;
+      watchingRef.current = next;
+      setWatching(next);
+    },
+  }), []);
 
   useEffect(() => window.flyt.onProjectActivity?.(({ projectId, live = [] }) => {
     setTabLive(current => ({ ...current, [projectId]: live.length }));
@@ -178,7 +183,7 @@ export default function DailyRoot() {
   async function switchProject(id) {
     if (!id || id === activeRef.current) return;
     try {
-      const payload = await window.flyt.activateProject(id);
+      const payload = await projectApi.activateProject(id);
       acceptProjects(payload);
       const tab = payload.tabs?.find(item => item.id === payload.active);
       setFlowId(initialFlowId(flowsRef.current, tab?.state?.runFlowId));
@@ -192,7 +197,7 @@ export default function DailyRoot() {
   async function openProject(folder) {
     if (!folder) return;
     try {
-      const payload = await window.flyt.openProject(folder);
+      const payload = await projectApi.openProject(folder);
       acceptProjects(payload);
       setNewTabOpen(false);
       const tab = payload.tabs?.find(item => item.id === payload.active);
@@ -209,7 +214,7 @@ export default function DailyRoot() {
 
   async function closeProject(id) {
     try {
-      const payload = await window.flyt.closeProject(id);
+      const payload = await projectApi.closeProject(id);
       acceptProjects(payload);
       const tab = payload.tabs?.find(item => item.id === payload.active);
       setFlowId(initialFlowId(flowsRef.current, tab?.state?.runFlowId));
@@ -225,7 +230,7 @@ export default function DailyRoot() {
   async function adoptProject(id) {
     const folder = await window.flyt.pickProjectFolder();
     if (!folder) return;
-    try { acceptProjects(await window.flyt.adoptProject(id, folder)); }
+    try { acceptProjects(await projectApi.adoptProject(id, folder)); }
     catch (err) { setError(cleanIpcError(err)); }
   }
 
@@ -234,24 +239,24 @@ export default function DailyRoot() {
     setBusy(true);
     setError('');
     try {
-      let projectId = activeRef.current;
-      if (!projectId) {
-        const payload = await window.flyt.createProject(text);
-        acceptProjects(payload);
-        projectId = payload.opened;
-      }
       const overrides = launchValues[flowId] ?? {};
       const inputs = declaredValues[flowId] ?? {};
-      const launch = {
-        ...(modeId ? { modeId } : {}),
-        ...(Object.keys(overrides).length ? { overrides } : {}),
-        ...(launchSpec.declared?.length ? { inputs } : {}),
-      };
-      const runId = await window.flyt.runFlow(
-        projectId, flowId, text, null, settings?.approvalMode ?? null,
-        Object.keys(launch).length ? launch : null,
-      );
-      await Promise.all([watchRun(projectId, runId), refreshRuns(projectId)]);
+      const result = await launchDailyPrompt({
+        flyt: window.flyt,
+        projectId: activeRef.current,
+        flowId,
+        text,
+        approvalMode: settings?.approvalMode ?? null,
+        modeId,
+        overrides,
+        inputs,
+        hasDeclaredInputs: Boolean(launchSpec.declared?.length),
+      });
+      if (result.projectPayload) acceptProjects(result.projectPayload);
+      setRuns(result.runs);
+      watchingRef.current = result.watching;
+      setWatching(result.watching);
+      setLocation(current => ({ dest: WORK, run: result.runId ?? current.run }));
     } catch (err) { setError(cleanIpcError(err)); }
     finally { setBusy(false); }
   }
@@ -310,11 +315,11 @@ export default function DailyRoot() {
       saveState="saved"
       onSelect={switchProject}
       onClose={closeProject}
-      onReorder={async ids => acceptProjects(await window.flyt.reorderProjects(ids))}
+      onReorder={async ids => acceptProjects(await projectApi.reorderProjects(ids))}
       onNewTab={async () => { setRecents(await window.flyt.projectRecents()); setNewTabOpen(true); }}
-      onRename={async (id, name) => acceptProjects(await window.flyt.renameProject(id, name))}
+      onRename={async (id, name) => acceptProjects(await projectApi.renameProject(id, name))}
       onAdopt={adoptProject}
-      onReveal={id => window.flyt.revealProject(id)}
+      onReveal={id => projectApi.revealProject(id)}
     />
   );
   const buildView = build ? {

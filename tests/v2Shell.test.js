@@ -143,8 +143,8 @@ test('the daily host wires the surviving entry controls into the v2 shell', () =
   assert.match(host, /<TabStrip/);
   assert.match(host, /<Lander/);
   assert.match(host, /<ModelsPage/);
-  assert.match(host, /window\.flyt\.runFlow/);
-  assert.match(host, /window\.flyt\.onRunUpdate/);
+  assert.match(host, /launchDailyPrompt/);
+  assert.match(host, /subscribeDailyRun/);
   assert.match(shell, /composer=\{composer\}/);
   assert.match(shell, /loc\.dest === MODELS/);
   assert.doesNotMatch(host, /FlowCanvas|NodesPage|settings\.v2/);
