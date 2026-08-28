@@ -170,7 +170,9 @@ Current architectural gaps worth preserving as explicit choices:
 
 ## 10. Plugin kernel, stacks, and shipping surfaces
 
-Phase 5 completed the cutover described by D52-D63. The Electron host explicitly boots the kernel and `Root.jsx` always mounts Work/Build; stale pre-cutover settings cannot select a renderer that has been deleted. `core/v2.js` keeps an optional boot switch for tests and non-desktop callers, with v2 as its default.
+Phase 5 completed the cutover described by D52-D63. The Electron host explicitly boots the kernel and `Root.jsx` always mounts the daily shell around Work/Build/Models; stale pre-cutover settings cannot select a renderer that has been deleted. `core/v2.js` keeps an optional boot switch for tests and non-desktop callers, with v2 as its default.
+
+**Daily entry point.** Work is the default, familiar front door: the persistent project tab strip, projectless first-prompt creation, recent runs, workflow/config choice, typed launch inputs, and the Enter-to-run composer. Build remains the only stack/block authoring surface. Models is a permanent peer that exposes catalog identity, routing availability, pin state, pricing, context, tool support, creator popularity, and provider counts. The old all-purpose renderer and its canvas/routes stay retired; a small host composes the surviving controls around v2 instead.
 
 **Kernel and seams.** `kernel/` is TypeScript compiled to `kernel/dist` and imported as `#kernel`. Third-party capability boundaries are typed services: sessions, tools, models, filesystem, shell, agents, commands, and sandbox. `ctx.skills` and `ctx.blocks` are registries rather than capability seams. Cordis profile composition narrows surfaces; a Loop worker may never gain a row the desktop profile lacks.
 
@@ -180,7 +182,7 @@ Phase 5 completed the cutover described by D52-D63. The Electron host explicitly
 
 **Blocks and plugins.** `ctx.blocks` is the only resolution of a stack's `use`. Bundled core, judgement, inquiry, and Loop plugins register the canonical block set. The same definition supplies execution, Library metadata, configuration schema, outputs, and ceiling. External UI contributions cross a typed RPC registry and are rendered by Flyt components; executable values and unknown component kinds are refused before the renderer.
 
-**Runs and Trace.** `runs/<id>/session.jsonl` is the canonical record. `deriveMessages()` reconstructs what the model saw, including a synthetic result for a tool call that never returned. The run folder is a projection that can be rebuilt from the log. Work and Trace fold the same event stream, so live state and forensic detail cannot disagree.
+**Runs and Trace.** `runs/<id>/session.jsonl` is the canonical record. `deriveMessages()` reconstructs what the model saw, including a synthetic result for a tool call that never returned. The run folder is a projection that can be rebuilt from the log. Work and Trace fold the same event stream, so live state and forensic detail cannot disagree. During the compatibility interval, an older flow-run snapshot is projected into a read-only sequence and folded trace for these two surfaces; that projection never becomes a stack authoring source.
 
 **Safety.** Every tool reaches `tools/pre-execute`. Conservative effect inference may only make a plugin tool more restricted; classification is not a grant; a skill request is not a grant; and no grant may exceed the block's static ceiling. Attended `ask` can reach a person, while an unattended context with nobody to ask denies rather than guessing.
 
