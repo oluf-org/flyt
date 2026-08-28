@@ -161,3 +161,64 @@ test('shouldPush gates the expensive half without silencing activity', async () 
   assert.ok(!events.some(e => e.type === 'run:update'), 'no snapshot/diff work was done for nobody');
   assert.ok(events.some(e => e.type === 'project:activity'), 'but the live indicator still got the truth');
 });
+
+test('async snapshot pushes serialize a dirty trailing read and keep revisions ordered', async () => {
+  const events = [];
+  const { engine, dataRoot } = makeEngine({ emit: (type, payload) => events.push({ type, payload }) });
+  const workspace = path.join(dataRoot, 'work');
+  fs.mkdirSync(workspace, { recursive: true });
+  const { project } = engine.registry.open(workspace);
+
+  let version = 1;
+  let calls = 0;
+  let active = 0;
+  let maxActive = 0;
+  let releaseFirst;
+  const firstHeld = new Promise(resolve => { releaseFirst = resolve; });
+  const snapshot = value => ({ meta: { stage: value }, nodeOutputs: {}, taskOutputs: {}, retrospectives: {} });
+  const push = engine.pushSnapshotFor(project.id, async () => {
+    calls += 1;
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    const captured = version;
+    if (calls === 1) await firstHeld;
+    active -= 1;
+    return snapshot(captured);
+  });
+
+  push('ordered-run');
+  await waitFor(() => calls === 1, { label: 'first snapshot read to start' });
+  version = 2;
+  push('ordered-run');
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(calls, 1, 'a notification during an async read cannot start a competing read');
+  releaseFirst();
+
+  await waitFor(() => events.filter(e => e.type === 'run:update').length === 2,
+    { label: 'serialized full and patch updates' });
+  const updates = events.filter(e => e.type === 'run:update');
+  assert.equal(maxActive, 1);
+  assert.equal(updates[0].payload.full.meta.stage, 1);
+  assert.equal(updates[1].payload.patch.meta.stage, 2);
+  assert.deepEqual(updates.map(e => [e.payload.base, e.payload.rev]), [[null, 1], [1, 2]]);
+});
+
+test('a transient async snapshot failure retries without another notification', async () => {
+  const events = [];
+  const { engine, dataRoot } = makeEngine({ emit: (type, payload) => events.push({ type, payload }) });
+  const workspace = path.join(dataRoot, 'work');
+  fs.mkdirSync(workspace, { recursive: true });
+  const { project } = engine.registry.open(workspace);
+  let calls = 0;
+  const push = engine.pushSnapshotFor(project.id, async () => {
+    calls += 1;
+    if (calls === 1) throw new Error('transient read failure');
+    return { meta: { stage: 'done' }, nodeOutputs: {}, taskOutputs: {}, retrospectives: {} };
+  });
+
+  push('retry-run');
+  const update = await waitFor(() => events.find(e => e.type === 'run:update'),
+    { label: 'snapshot retry update' });
+  assert.equal(calls, 2);
+  assert.equal(update.payload.full.meta.stage, 'done');
+});
