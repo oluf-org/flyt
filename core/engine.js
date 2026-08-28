@@ -44,6 +44,7 @@ import { v2Flag } from './v2.js';
 import { LoopLog } from './loopLog.js';
 
 const PUSH_COALESCE_MS = 80;
+const PUSH_SNAPSHOT_RETRIES = 1;
 
 // Search providers are not model providers: keeping their secrets in a
 // separate settings bucket prevents them from entering model resolution while
@@ -583,7 +584,7 @@ export function createEngine({
   const pushStateFor = projectId => {
     let s = pushState.get(projectId);
     if (!s) pushState.set(projectId, s = {
-      pending: new Map(),   // runId -> timer
+      pending: new Map(),   // runId -> serialized snapshot job
       channels: new Map(),  // runId -> { snapshot, rev }
       lastActivity: null,
       activityTimer: null
@@ -617,18 +618,55 @@ export function createEngine({
 
   const pushSnapshotFor = (projectId, snapshotFor) => runId => {
     const s = pushStateFor(projectId);
-    if (s.pending.has(runId)) return;
-    s.pending.set(runId, setTimeout(async () => {
-      s.pending.delete(runId);
-      if (!canEmit()) return;
+    const existing = s.pending.get(runId);
+    if (existing) {
+      // A scheduled read already sees all state written before it starts. A
+      // notification DURING a read needs exactly one trailing read; retaining
+      // the job in `pending` is also what prevents two async snapshots from
+      // racing and publishing revisions backwards.
+      if (existing.running) existing.dirty = true;
+      return;
+    }
+
+    const job = { timer: null, running: false, dirty: false, failures: 0, snapshotFor };
+    const finish = () => {
+      job.running = false;
+      if (job.dirty) {
+        job.dirty = false;
+        job.timer = setTimeout(flush, PUSH_COALESCE_MS);
+      } else if (s.pending.get(runId) === job) {
+        s.pending.delete(runId);
+      }
+    };
+    const flush = async () => {
+      job.timer = null;
+      job.running = true;
+      job.dirty = false;
+      if (pushState.get(projectId) !== s || !canEmit()) { finish(); return; }
       broadcastActivity(projectId);
       // Consumer says this project isn't worth diffing for right now (a
       // background tab): skip the snapshot/diff work entirely. Its channel
       // baseline goes stale, but a resync via run:snapshot re-baselines it.
-      if (!shouldPush(projectId)) return;
+      if (!shouldPush(projectId)) { finish(); return; }
       let next;
-      try { next = await snapshotFor(runId); }
-      catch { return; } // The durable source remains available for a later resync.
+      try {
+        next = await job.snapshotFor(runId);
+        job.failures = 0;
+      } catch {
+        // A session append can briefly race filesystem visibility. Retry once
+        // without requiring another event, but stay bounded if the source is
+        // genuinely unreadable. A real notification received during the failed
+        // read also keeps `dirty` true and therefore earns a trailing attempt.
+        if (job.failures < PUSH_SNAPSHOT_RETRIES) {
+          job.failures += 1;
+          job.dirty = true;
+        }
+        finish();
+        return;
+      }
+      // Closing a project replaces its push state. An in-flight read from the
+      // old state must not wake the renderer afterward.
+      if (pushState.get(projectId) !== s || !canEmit()) { finish(); return; }
       const chan = s.channels.get(runId);
       // No baseline yet: send the full snapshot so the consumer has something
       // to patch against.
@@ -636,18 +674,30 @@ export function createEngine({
         const rev = 1;
         s.channels.set(runId, { snapshot: next, rev });
         emit('run:update', { projectId, runId, rev, base: null, full: next });
+        finish();
         return;
       }
       const patch = diffSnapshot(chan.snapshot, next);
-      if (!patch) return; // nothing actually changed — skip the wake-up
-      const rev = chan.rev + 1;
-      s.channels.set(runId, { snapshot: next, rev });
-      emit('run:update', { projectId, runId, rev, base: chan.rev, patch });
-    }, PUSH_COALESCE_MS));
+      if (patch) {
+        const rev = chan.rev + 1;
+        s.channels.set(runId, { snapshot: next, rev });
+        emit('run:update', { projectId, runId, rev, base: chan.rev, patch });
+      }
+      finish(); // no patch still completes or schedules the dirty trailing read
+    };
+    s.pending.set(runId, job);
+    job.timer = setTimeout(flush, PUSH_COALESCE_MS);
   };
   const pushUpdateFor = projectId => pushSnapshotFor(
     projectId, runId => registry.get(projectId).store.snapshot(runId)
   );
+  const dropPushState = projectId => {
+    const s = pushState.get(projectId);
+    if (!s) return;
+    for (const job of s.pending.values()) if (job.timer) clearTimeout(job.timer);
+    if (s.activityTimer) clearTimeout(s.activityTimer);
+    pushState.delete(projectId);
+  };
 
   // --- The backlog, one per project (DESIGN-SPEC.md §8) ---
   //
@@ -794,7 +844,7 @@ export function createEngine({
     pushStateFor, broadcastActivity, pushUpdateFor, pushSnapshotFor, emitLoop, loopLog, loopLogFor, emitChat,
     // A project id that is gone for good (an appdata project adopted into a
     // real folder) takes its push channels with it.
-    dropPushState: projectId => pushState.delete(projectId),
+    dropPushState,
     // Convenience for consumers that hold a project id
     project: id => registry.get(id)
   };
