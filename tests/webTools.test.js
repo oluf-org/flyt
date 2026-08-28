@@ -238,6 +238,7 @@ test('web_search: a configured key is found, and a subscription sentinel is not 
   assert.equal(providerFor({ config: { providerKeys: {} } }), null);
   assert.equal(providerFor({ config: { providerKeys: { brave: 'subscription' } } }), null);
   assert.deepEqual(providerFor({ config: { providerKeys: { brave: 'abc' } } }), { name: 'brave', key: 'abc' });
+  assert.deepEqual(providerFor({ config: { providerKeys: { tavily: 'xyz' } } }), { name: 'tavily', key: 'xyz' });
 });
 
 test('web_search: with a key it calls the provider and shapes the results', async () => {
@@ -252,6 +253,26 @@ test('web_search: with a key it calls the provider and shapes the results', asyn
     assert.deepEqual(rec.result.results, [{ title: 'A', url: 'https://a.example', snippet: 'snip' }]);
     assert.equal(rec.result.trust, 'untrusted');
   });
+});
+
+test('web_search: a Tavily key selects Tavily and sends its authenticated JSON request', async () => {
+  const ctx = ctxWith({ config: { providerKeys: { tavily: 'tvly-test' } } });
+  let request = null;
+  await withFetch(async (url, options) => {
+    request = { url, options };
+    return {
+      ok: true, status: 200, statusText: 'OK',
+      json: async () => ({ results: [{ title: 'T', url: 'https://t.example', content: 'answer' }] }),
+    };
+  }, async () => {
+    const rec = await executeTool('web_search', { query: 'flyt', limit: 3 }, ctx);
+    assert.equal(rec.ok, true);
+    assert.equal(rec.result.provider, 'Tavily');
+    assert.deepEqual(rec.result.results, [{ title: 'T', url: 'https://t.example', snippet: 'answer' }]);
+  });
+  assert.equal(request.url, 'https://api.tavily.com/search');
+  assert.equal(request.options.headers.authorization, 'Bearer tvly-test');
+  assert.deepEqual(JSON.parse(request.options.body), { query: 'flyt', max_results: 3 });
 });
 
 // --- the web toolset -------------------------------------------------------

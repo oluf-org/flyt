@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification } from '
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createEngine } from '../core/engine.js';
+import { applySearchProviderKeys, createEngine } from '../core/engine.js';
 import { createApi } from '../core/api.js';
 import { APPROVAL_MODES } from '../core/stackRunner.js';
 import { SAFETY_MODEL_CANDIDATES } from '../core/safetyCheck.js';
@@ -725,6 +725,10 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
         settings.providers[p] = { ...(settings.providers[p] ?? {}), apiKey: key.trim() };
       }
     }
+    // Brave and Tavily are tool providers, not model routes. The shared input
+    // shape keeps every API key one-way while the engine stores them outside
+    // settings.providers and only exposes hasKey flags back to the renderer.
+    applySearchProviderKeys(settings, patch.providerKeys);
   }
   // Subscription opt-ins (DESIGN-SPEC.md §6): per provider —
   // { enabled?, home?, cliPath? }. enabled is the explicit consent gate;

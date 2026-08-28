@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createEngine } from '../core/engine.js';
+import { applySearchProviderKeys, createEngine } from '../core/engine.js';
 import { waitFor } from './helpers.js';
 
 const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -75,6 +75,35 @@ test('publicSettings never leaks a key', () => {
   const pub = engine.publicSettings();
   assert.equal(pub.providers.openrouter.hasKey, true);
   assert.ok(!JSON.stringify(pub).includes('sk-secret-value'), 'the key itself stays inside');
+});
+
+test('search-provider keys are one-way, secret, durable, and available to web tools', () => {
+  const { engine, dataRoot } = makeEngine();
+  assert.equal(applySearchProviderKeys(engine.settings, {
+    brave: '  brave-secret  ', tavily: 'tavily-secret',
+  }), true);
+  engine.rebuildRuntimeConfig();
+
+  assert.equal(engine.runtimeConfig.providerKeys.brave, 'brave-secret');
+  assert.equal(engine.runtimeConfig.providerKeys.tavily, 'tavily-secret');
+  assert.deepEqual(engine.publicSettings().searchProviders, {
+    brave: { hasKey: true }, tavily: { hasKey: true },
+  });
+  assert.ok(!JSON.stringify(engine.publicSettings()).includes('brave-secret'));
+  assert.ok(!JSON.stringify(engine.publicSettings()).includes('tavily-secret'));
+
+  assert.equal(applySearchProviderKeys(engine.settings, { brave: '', openrouter: 'not-search' }), false,
+    'empty and unrelated settings patches cannot clear or replace a search key');
+  engine.settings.approvalMode = 'always';
+  engine.rebuildRuntimeConfig();
+  assert.equal(engine.runtimeConfig.providerKeys.brave, 'brave-secret');
+  assert.equal(engine.persistSettings(), true);
+
+  const reopened = createEngine({ projectRoot, dataRoot, userDataDir: dataRoot });
+  assert.equal(reopened.runtimeConfig.providerKeys.brave, 'brave-secret');
+  assert.equal(reopened.runtimeConfig.providerKeys.tavily, 'tavily-secret');
+  assert.equal(reopened.publicSettings().searchProviders.brave.hasKey, true);
+  assert.ok(!JSON.stringify(reopened.publicSettings()).includes('brave-secret'));
 });
 
 test('fresh engine startup seeds a familiar daily prompt, not a Loop projection', () => {

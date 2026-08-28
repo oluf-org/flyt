@@ -240,6 +240,10 @@ const mockSettings = {
     openrouter: { hasKey: false },
     mock: { hasKey: true }
   },
+  searchProviders: {
+    brave: { hasKey: false },
+    tavily: { hasKey: false },
+  },
   claudeSubscriptionActive: false,
   providerPriority: ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'],
   // Enough of a registry that every picker in the app previews with something
@@ -835,6 +839,9 @@ blocks:
       if (patch.providerKeys) {
         for (const p of Object.keys(patch.providerKeys)) {
           if (mockSettings.providers[p]) mockSettings.providers[p].hasKey = true;
+          if (mockSettings.searchProviders[p] && String(patch.providerKeys[p] ?? '').trim()) {
+            mockSettings.searchProviders[p].hasKey = true;
+          }
         }
       }
       if (patch.kimiKeyKind) mockSettings.providers.kimi.keyKind = patch.kimiKeyKind;
