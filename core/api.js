@@ -1056,7 +1056,13 @@ export function createApi(engine) {
       // A cleanup that touched nothing because somebody else owns the path must
       // not drop that owner's lease along with it.
       if (result.outcome !== 'owner-mismatch' && result.outcome !== 'live-owner') {
-        backlogFor(projectId).release(taskId, { status });
+        const backlog = backlogFor(projectId);
+        const task = backlog.get(taskId);
+        // Cleanup is about scratch state, never about undoing a merge. A
+        // landed task can still have a tree when Windows holds a handle open;
+        // retrying that exact cleanup later used to put the already-merged
+        // task back in the queue and advertise it as fresh work.
+        backlog.release(taskId, { status: task?.status === 'landed' ? null : status });
       }
       return { removed: result.outcome === 'removed', ...result };
     },
@@ -1208,9 +1214,43 @@ export function createApi(engine) {
       }
       // Landed: this attempt's tree is finished with. Scoped to the attempt
       // that produced the merge, so a slow landing cannot clean up after a
-      // restart that has already begun.
-      if (result.landed) await pool.remove(taskId, { deleteBranch: false, attemptId: attemptId ?? pool.owner(taskId)?.attemptId ?? null });
-      return result;
+      // restart that has already begun. Cleanup is deliberately a SECOND
+      // outcome: the review, merge and green canary are durable facts by this
+      // point, and Windows holding an editor/terminal handle open must not turn
+      // them into a rejected command whose caller retries the merge.
+      let cleanup = null;
+      if (result.landed) {
+        const cleanupAttemptId = attemptId ?? pool.owner(taskId)?.attemptId ?? null;
+        try {
+          const removed = await pool.remove(taskId, {
+            deleteBranch: false, attemptId: cleanupAttemptId,
+          });
+          const ok = removed.outcome === 'removed' || removed.outcome === 'already-removed';
+          cleanup = { ok, attemptId: cleanupAttemptId, ...removed };
+          if (!ok) {
+            cleanup.remedy = `Run flyt work discard ${taskId}`
+              + `${cleanupAttemptId ? ` --attempt ${cleanupAttemptId}` : ''}.`;
+          }
+        } catch (err) {
+          cleanup = {
+            ok: false,
+            outcome: 'failed',
+            taskId,
+            attemptId: cleanupAttemptId,
+            dir: pool.dirFor(taskId),
+            error: String(err?.message ?? err),
+            remedy: `Close processes using the worktree, then run flyt work discard ${taskId}`
+              + `${cleanupAttemptId ? ` --attempt ${cleanupAttemptId}` : ''}.`,
+          };
+        }
+        if (!cleanup.ok) {
+          engine.emitLoop?.(projectId,
+            `⚠ ${taskId} landed as ${result.mergeSha?.slice(0, 8) ?? 'unknown'}, but worktree cleanup ${cleanup.outcome}: `
+            + `${cleanup.error ?? `owner ${cleanup.owner ?? 'unknown'}`}. ${cleanup.remedy}`,
+          { taskId });
+        }
+      }
+      return cleanup ? { ...result, cleanup } : result;
     },
 
     // --- The loop (DESIGN-SPEC.md §8) ---------------------------------

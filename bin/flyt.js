@@ -1112,6 +1112,10 @@ async function main() {
           if (asJson) return out(r);
           for (const step of r.steps) say(`  ${step.step}: ${step.ok ?? step.verdict ?? step.landed ?? ''}`);
           say(r.landed ? `landed as ${r.mergeSha?.slice(0, 8)}` : `did not land (${r.stage})`);
+          if (r.landed && r.cleanup?.ok === false) {
+            say(`  cleanup: ${r.cleanup.outcome} — ${r.cleanup.error ?? r.cleanup.remedy}`);
+            say(`  remedy: ${r.cleanup.remedy}`);
+          }
           process.exitCode = r.landed ? 0 : 1;
           return out(r.landed ? `landed ${r.mergeSha}` : `${r.stage}: ${r.guidance ?? ''}`);
         }
