@@ -292,6 +292,58 @@ test('WR-07/5: verified work lands through gates, review, merge and canary', asy
   assert.equal((await api.invoke('task:get', { projectId, id: task.id })).status, 'landed');
 });
 
+test('WR-07/5b: cleanup failure cannot erase a successful landing or requeue it later', async () => {
+  const { api, engine, dataRoot } = harness();
+  const repo = await scenarioRepo(dataRoot, 'landing-cleanup-subject');
+  const { id: projectId } = await api.invoke('project:open', { folder: repo });
+  await api.invoke('task:add', { projectId, title: 'Land despite a held handle', body: 'Change app.js.' });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+  const wt = await api.invoke('work:start', { projectId, taskId: task.id });
+  fs.writeFileSync(path.join(wt.dir, 'app.js'), 'export const banner = "cleanup-safe";\n');
+  setScript(() => JSON.stringify({ verdict: 'approve', reason: 'The change is focused and tested.' }));
+
+  // Deterministic version of Windows retaining an editor/terminal handle: the
+  // merge and canary finish, but the first attempt to remove this exact tree
+  // fails. The second call is the operator retry after closing that handle.
+  const pool = engine.poolFor(projectId);
+  const remove = pool.remove.bind(pool);
+  let failOnce = true;
+  pool.remove = async (...args) => {
+    if (failOnce) {
+      failOnce = false;
+      throw new Error('simulated open handle kept the worktree busy');
+    }
+    return remove(...args);
+  };
+
+  const landed = await api.invoke('work:land', {
+    projectId, taskId: task.id, attemptId: wt.attemptId,
+    reviewer: { provider: 'script', model: 'reviewer' },
+  });
+  assert.equal(landed.landed, true);
+  assert.ok(landed.mergeSha);
+  assert.match(landed.canaryOutput, /# tests 2/);
+  assert.equal(landed.cleanup.ok, false);
+  assert.equal(landed.cleanup.outcome, 'failed');
+  assert.match(landed.cleanup.remedy, new RegExp(`work discard ${task.id}.*${wt.attemptId}`));
+  assert.ok(fs.existsSync(wt.dir), 'the failed cleanup is retained for a retry');
+  assert.equal((await api.invoke('task:get', { projectId, id: task.id })).status, 'landed');
+  assert.ok((await api.invoke('loop:log', { projectId, taskId: task.id }))
+    .some(entry => /landed as .*cleanup failed.*work discard/.test(entry.line)),
+  'the separate cleanup failure survives in the durable Loop log');
+
+  const discarded = await api.invoke('work:discard', {
+    projectId, taskId: task.id, attemptId: wt.attemptId,
+  });
+  assert.equal(discarded.outcome, 'removed');
+  assert.equal((await api.invoke('task:get', { projectId, id: task.id })).status, 'landed',
+    'cleanup cannot turn a merged task back into work');
+  const ready = await api.invoke('task:ready', { projectId });
+  assert.equal(ready.ready.some(candidate => candidate.id === task.id), false);
+  assert.doesNotMatch(await api.invoke('loop:report', { projectId }),
+    new RegExp(`${task.id}.*queued`, 'i'));
+});
+
 // --- INVARIANT: an empty diff is refused even if everything upstream passed --
 
 test('WR-07/6: landing independently refuses an empty diff', async () => {

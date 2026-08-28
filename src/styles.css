@@ -5144,7 +5144,8 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 .loop-chat-compose textarea:focus-visible { outline: none; border-color: var(--accent); }
 
 /* --- the v2 shell (t-0073) ------------------------------------------------
-   Two permanent destinations and one transient record, behind the flag. Only
+   Three permanent destinations and one transient record. Work keeps the
+   familiar project/prompt/model entry path; Build remains canonical authoring.
    the frame is here: the editor, the library and the running stack each arrive
    with their own task, and a shell that pre-styles surfaces that do not exist
    is a shell nobody can tell is finished. Tokens only — the derived palette in
@@ -5178,6 +5179,17 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 }
 .v2-shell-nav > * { -webkit-app-region: no-drag; }
 
+.v2-project-tabs {
+  flex: 1 1 560px;
+  min-width: 120px;
+  max-width: min(62vw, 860px);
+  align-self: stretch;
+  display: flex;
+  -webkit-app-region: drag;
+}
+.v2-project-tabs > .tab-strip { width: 100%; }
+.v2-destinations { flex: none; display: flex; align-items: center; gap: 4px; }
+
 .v2-nav {
   appearance: none;
   border: 0;
@@ -5196,7 +5208,7 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 .v2-nav.active { background: rgba(255, 255, 255, .12); color: var(--app-tx); }
 
 .v2-trace-chip {
-  margin-left: auto;
+  margin-left: 4px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -5211,6 +5223,20 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 .v2-panel { padding: 28px 32px; overflow: auto; flex: 1; }
 .v2-panel h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
 .v2-panel .muted { color: var(--dim); margin: 0; }
+.v2-panel[data-surface="work"], .v2-panel[data-surface="models"] { padding: 0; display: flex; }
+.v2-panel[data-surface="models"] { overflow: hidden; display: flex; }
+.daily-error {
+  position: sticky; top: 8px; z-index: 4; margin: 8px auto -46px;
+  width: min(680px, calc(100% - 32px)); padding: 9px 12px;
+  border: 1px solid var(--err); border-radius: 8px;
+  color: var(--err); background: var(--err-soft); font-size: 12px;
+}
+
+@media (max-width: 820px) {
+  .v2-shell-nav { padding-right: 136px; gap: 2px; }
+  .v2-project-tabs { max-width: none; }
+  .v2-nav { padding-inline: 8px; font-size: 11px; }
+}
 
 /* The trace chip is a control, not a label (t-0071): it opens Trace over the
    surface you are on. Same shape as the nav buttons it sits beside. */

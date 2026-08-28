@@ -7,11 +7,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  WORK, BUILD, DESTINATIONS, INITIAL, navigate, heading, traceOf, state, adjacent,
+  WORK, BUILD, MODELS, DESTINATIONS, INITIAL, navigate, heading, traceOf, state, adjacent,
 } from '../src/v2/shellRouting.js';
 
-test('Work and Build are the only permanent destinations', () => {
-  assert.deepEqual(DESTINATIONS, [WORK, BUILD]);
+test('Work, Build and the model catalog are permanent destinations', () => {
+  assert.deepEqual(DESTINATIONS, [WORK, BUILD, MODELS]);
   // Trace is not a peer: it is reached by a run address, never by picking it.
   assert.ok(!DESTINATIONS.includes('trace'));
 });
@@ -22,16 +22,17 @@ test('the shell starts on Work, no run addressed', () => {
   assert.equal(traceOf(INITIAL), null);
 });
 
-test('headings are the two permanent surfaces', () => {
+test('headings name the three permanent surfaces', () => {
   assert.equal(heading(WORK), 'Work');
   assert.equal(heading(BUILD), 'Build');
+  assert.equal(heading(MODELS), 'Models');
   assert.equal(heading('nonexistent'), null);
   assert.equal(heading('trace'), null);
 });
 
-test('Work and Build are reachable from each other in one hop', () => {
-  assert.deepEqual(adjacent({ dest: WORK, run: null }), [BUILD]);
-  assert.deepEqual(adjacent({ dest: BUILD, run: null }), [WORK]);
+test('Work, Build and Models are reachable from each other in one hop', () => {
+  assert.deepEqual(adjacent({ dest: WORK, run: null }), [BUILD, MODELS]);
+  assert.deepEqual(adjacent({ dest: BUILD, run: null }), [WORK, MODELS]);
   // A run address is carried across either hop — that is the whole point of
   // it being a property of the location rather than of a destination.
   const watched = { dest: WORK, run: 'run-42' };
@@ -56,6 +57,8 @@ test('state is a judgement-proof view of the location', () => {
   assert.deepEqual(state(INITIAL), { dest: WORK, run: null, trace: null, surface: 'work' });
   assert.deepEqual(state({ dest: BUILD, run: 'r' }),
     { dest: BUILD, run: 'r', trace: { run: 'r' }, surface: 'build' });
+  assert.deepEqual(state({ dest: MODELS, run: null }),
+    { dest: MODELS, run: null, trace: null, surface: 'models' });
 });
 // --- the flag, which is the half a reviewer rejected the first attempt for ---
 //
@@ -76,6 +79,7 @@ test('the window mounts the cutover Root and no renderer reads the retired flag'
     .filter(f => f !== 'Root.jsx' && /getSettings\(\)[\s\S]{0,400}\.v2\b/.test(src(f)));
   assert.deepEqual(roots, [], 'a second reader of the flag is a second answer to it');
   assert.doesNotMatch(src('Root.jsx'), /getSettings|settings\.v2|<App/);
+  assert.match(src('Root.jsx'), /lazy\(\(\) => import\('\.\/v2\/DailyRoot\.jsx'\)\)/);
 });
 
 
@@ -100,7 +104,7 @@ test('the shipping shell keeps a lazy startup boundary', () => {
   walk(dir);
   assert.deepEqual(offenders, [],
     'behind a flag has to mean not loaded, not rendered conditionally');
-  assert.match(src('Root.jsx'), /lazy\(\(\) => import\('\.\/v2\/Shell\.jsx'\)\)/);
+  assert.match(src('Root.jsx'), /lazy\(\(\) => import\('\.\/v2\/DailyRoot\.jsx'\)\)/);
 });
 
 
@@ -126,9 +130,22 @@ test('the host re-reads the stack when a command settles, so an edit redraws', (
   // nothing had told anybody to take again. The host owns "the stack changed" —
   // an editor re-reading a mutable surface behind React's back would be a
   // second source of truth for the tree.
-  const root = src('Root.jsx');
-  assert.match(root, /commands\.subscribe\(\(\) => setEdits/,
+  const root = src('v2/DailyRoot.jsx');
+  assert.match(root, /setEdits\(n => n \+ 1\)/,
     'something has to count the edits, or nothing re-renders');
   assert.match(root, /stack: build\.stack/,
     'and the stack is taken again on each of them, not held from the first render');
+});
+
+test('the daily host wires the surviving entry controls into the v2 shell', () => {
+  const host = src('v2/DailyRoot.jsx');
+  const shell = src('v2/Shell.jsx');
+  assert.match(host, /<TabStrip/);
+  assert.match(host, /<Lander/);
+  assert.match(host, /<ModelsPage/);
+  assert.match(host, /launchDailyPrompt/);
+  assert.match(host, /subscribeDailyRun/);
+  assert.match(shell, /composer=\{composer\}/);
+  assert.match(shell, /loc\.dest === MODELS/);
+  assert.doesNotMatch(host, /FlowCanvas|NodesPage|settings\.v2/);
 });
