@@ -292,16 +292,18 @@ export default function Lander({
 
             {/* Compare toggle (T11): splits the chip into A/B slots and fires two
                 runs from one prompt. Off by default — the common path is one run. */}
-            <button
-              type="button"
-              className={'lander-compare-toggle' + (compareOn ? ' active' : '')}
-              onClick={onToggleCompare}
-              disabled={!flows.length}
-              aria-pressed={compareOn}
-              title="Compare two workflows or modes side by side on one prompt"
-            >
-              <span aria-hidden>⚖</span> Compare
-            </button>
+            {onToggleCompare && (
+              <button
+                type="button"
+                className={'lander-compare-toggle' + (compareOn ? ' active' : '')}
+                onClick={onToggleCompare}
+                disabled={!flows.length}
+                aria-pressed={compareOn}
+                title="Compare two workflows or modes side by side on one prompt"
+              >
+                <span aria-hidden>⚖</span> Compare
+              </button>
+            )}
 
             <button
               type="button"

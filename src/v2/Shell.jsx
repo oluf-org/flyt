@@ -2,15 +2,15 @@
 // contract lives there so tests hold the renderer to it without importing
 // React.
 //
-// Work is the running stack (t-0077). Build's body is the block editor,
+// Work is the familiar prompt-first home plus the running stack (t-0077).
+// Build's body is the block editor,
 // read-only until it is handed a command surface (t-0074, t-0075); the library
-// is t-0076. Trace is neither: it opens OVER whichever surface you are on when
-// a run is addressed, and closing it puts you back. A third tab would have been
-// easier and would have made it a peer of the other two, which is the one thing
-// D60 says it is not.
+// is t-0076. Models is the model catalog. Trace is none of those: it opens OVER
+// whichever surface you are on when a run is addressed, and closing it puts
+// you back. Making Trace a peer is the one thing D60 says it is not.
 import React, { useState } from 'react';
 import {
-  DESTINATIONS, INITIAL, BUILD, navigate, heading, traceOf, state, resolveLocation,
+  DESTINATIONS, INITIAL, BUILD, MODELS, navigate, heading, traceOf, state, resolveLocation,
 } from './shellRouting.js';
 import BlockEditor from './BlockEditor.jsx';
 import Trace from './Trace.jsx';
@@ -39,7 +39,10 @@ import { PluginContributionSection } from './PluginContributionView.jsx';
  *   because there is exactly one place the command surface may come from and it
  *   is not a renderer component.
  */
-export default function Shell({ location = null, onNavigate, build = null, watching = null }) {
+export default function Shell({
+  location = null, onNavigate, build = null, watching = null,
+  composer = null, projectTabs = null, models = null,
+}) {
   const [focus, setFocus] = useState(location ?? INITIAL);
   const loc = resolveLocation(location, focus);
   // Trace appears when anything RUNS (D60), not when somebody navigates to it.
@@ -65,16 +68,19 @@ export default function Shell({ location = null, onNavigate, build = null, watch
   return (
     <div className="v2-shell" data-v2>
       <nav className="v2-shell-nav" aria-label="v2 shell">
-        {DESTINATIONS.map(dest => (
-          <button
-            key={dest}
-            type="button"
-            className={'v2-nav' + (loc.dest === dest && !showTrace ? ' active' : '')}
-            onClick={() => go(dest)}
-          >
-            {heading(dest)}
-          </button>
-        ))}
+        {projectTabs && <div className="v2-project-tabs">{projectTabs}</div>}
+        <div className="v2-destinations">
+          {DESTINATIONS.map(dest => (
+            <button
+              key={dest}
+              type="button"
+              className={'v2-nav' + (loc.dest === dest && !showTrace ? ' active' : '')}
+              onClick={() => go(dest)}
+            >
+              {heading(dest)}
+            </button>
+          ))}
+        </div>
         {trace && (
           <button
             type="button"
@@ -87,10 +93,12 @@ export default function Shell({ location = null, onNavigate, build = null, watch
         )}
       </nav>
       <section className="v2-panel" data-surface={showTrace ? 'trace' : here.surface}>
-        <h1>{showTrace ? 'Trace' : heading(loc.dest)}</h1>
+        {(showTrace || loc.dest === BUILD) && <h1>{showTrace ? 'Trace' : heading(loc.dest)}</h1>}
         {showTrace
           ? <Trace trace={watching?.trace ?? null} runId={trace.run} uiExtensions={build?.uiExtensions ?? []} />
-          : loc.dest === BUILD
+          : loc.dest === MODELS
+            ? models
+            : loc.dest === BUILD
             ? (
               <>
                 {/* Everything authored, in one place: the library above what
@@ -122,6 +130,7 @@ export default function Shell({ location = null, onNavigate, build = null, watch
                 blocks={build?.blocks ?? null}
                 trace={watching?.trace ?? null}
                 runId={watching?.runId ?? null}
+                composer={composer}
               />}
       </section>
     </div>

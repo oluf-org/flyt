@@ -78,6 +78,7 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D70 | A red gate is triaged before a rung is spent: work that is salvageable is corrected in place, at the same band, with the failing tests handed back by name as feedback. The judgement is mechanical — the gate's output names the failures, and whether they sit in the diff is a set intersection — so it costs no call and no model is asked to adjudicate what the output already settles. Escalating is what happens when a bound says the work is past correcting, not what happens by default. | Current; extends D51 |
 | D71 | Every correction has to make progress or run out. The bounds are the same failures returning after a correction aimed at them, an exhausted budget (two, raised to four only while the failure count strictly falls), breakage wider than the diff, and a second hang. A correction counts as an attempt but not as a rung: the money is real and the ladder is not what was missing. | Current; bounds D70 |
 | D72 | What a failure tells a person and what it tells the next attempt are the same text, so it is written for a person: the failures by name, place and assertion, never a raw gate transcript. `blockedReason` is frontmatter that the board renders, `task:list` re-reads every three seconds, and the archive quotes — a field that holds twenty thousand characters of passing tests is not a reason, it is a payload. | Current |
+| D73 | The v2 cutover keeps the familiar daily entry point. Work owns project tabs and the prompt composer, Models remains a first-class catalog/metrics destination, and Build alone authors canonical stacks. Compatibility run snapshots may be projected read-only into Work/Trace; they may not revive the retired canvas, router, or a second authoring source. | Current; extends D60-D63 |
 
 Decision numbers D30–D34 were never promoted from retired plan drafts and are intentionally unused.
 
@@ -118,6 +119,5 @@ These are questions, not commitments:
 12. Session persistence default: JSONL, which stays openable in a text editor, or SQLite, which is faster for long sessions?
 13. Do Flyt profiles become a user-facing concept, or stay internal composition?
 14. Does the Loop board stay a distinct section inside Work, or dissolve into the run list?
-15. Should old runs be converted into session logs so they gain a trace, or read through a compatibility reader only?
 
 Feature-sized work belongs in `.flyt/backlog/`. When one of these questions is resolved, update the relevant row and architecture contract instead of creating a new plan document.

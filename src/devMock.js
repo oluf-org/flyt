@@ -633,6 +633,9 @@ export function installDevMock() {
       if (mockProjects.active === pid) mockProjects.active = folder;
       return { ...structuredClone(mockProjects), oldId: pid, opened: folder };
     },
+    // Browser preview has no OS shell, but must expose the same project
+    // bridge shape as preload so the daily shell never depends on its host.
+    revealProject: async () => null,
     closeProject: async pid => {
       const idx = mockProjects.tabs.findIndex(t => t.id === pid);
       if (idx !== -1) {
@@ -912,6 +915,7 @@ blocks:
       ...(f.modes && Object.keys(f.modes).length
         ? { modes: Object.entries(f.modes).map(([id, m]) => ({ id, name: m?.name || id })) } : {})
     })),
+    listConfigs: async () => ({}),
     loadFlow: async id => structuredClone(mockFlows[id]),
     saveFlow: async flow => { mockFlows[flow.id] = structuredClone(flow); return flow; },
     newFlow: async () => {
