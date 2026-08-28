@@ -597,7 +597,7 @@ ipcMain.handle('flow:new', () =>
 ipcMain.handle('flow:delete', (_e, id) => flows.remove(id));
 // Where the .flow.yaml files actually live, and a way to open that folder.
 // In a packaged build this is userData/flows (D28), which is otherwise hard to
-// find — and it's the folder `npm run flow -- adopt` reads from when promoting
+// find — and it's the folder `npm run workflow -- adopt` reads from when promoting
 // a flow designed in the installed app into a shipped default.
 ipcMain.handle('flow:folder', () => ({ dir: flows.rootDir, packaged: app.isPackaged }));
 ipcMain.handle('flow:openFolder', () => shell.openPath(flows.rootDir));

@@ -27,7 +27,10 @@ import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
 import { isDestructive } from '../src/toolTypes.js';
 import { pythonStatus, setupPython } from './python.js';
 import { loadToolSuite, runToolSuite, SUITE_DIR } from './toolbench.js';
-import { bootLoopKernel, startStackRun, stopStackRun } from './kernelRunner.js';
+import {
+  bootLoopKernel, startStackRun, stopStackRun, resumeStackRun,
+  restartStackBlock, snapshotStackRun, snapshotStoredStackRun, storedStackRunMetadata, isKernelRun,
+} from './kernelRunner.js';
 
 // Why a one-shot call to this tool needs the caller to say so. Reads off the
 // record rather than a name list, for the same reason isDestructive() does.
@@ -136,7 +139,7 @@ export class ApiError extends Error {
  * @param {ReturnType<import('./engine.js').createEngine>} engine
  */
 export function createApi(engine) {
-  const { registry, flows, nodeLibrary, toolLibrary, runtimeConfig, publicSettings } = engine;
+  const { registry, flows, stackRoot, nodeLibrary, toolLibrary, runtimeConfig, publicSettings } = engine;
 
   // A project id that isn't open is a caller error, not a crash. The CLI hands
   // these straight to the user, so the message names the id it was given.
@@ -152,6 +155,86 @@ export function createApi(engine) {
     throw new ApiError(`No open project "${projectId}".`, { status: 404, code: 'no_project' });
   };
   const runnerFor = projectId => proj(projectId).runner;
+
+  /** Compose (or reuse) the worktree-scoped production Loop host. */
+  const loopKernelHost = async (entry, {
+    workspace, approvalMode = 'always', worker = null, level = null,
+    loopTaskId = null, skills = null,
+  }) => {
+    entry.kernelHosts ??= new Map();
+    entry.kernelRuns ??= new Map();
+    const route = `${worker?.provider ?? 'auto'}/${worker?.model ?? 'auto'}`;
+    const key = `${workspace}\n${route}\n${level ?? ''}\n${loopTaskId ?? ''}`;
+    let host = entry.kernelHosts.get(key);
+    if (!host) {
+      host = await bootLoopKernel({
+        runsRoot: entry.store.rootDir,
+        workspaceDir: workspace,
+        stackRoot,
+        store: entry.store,
+        approvalMode,
+        runtimeConfig,
+        resolveModelSource: engine.resolveModelSource,
+        worker,
+        level,
+        loopTaskId,
+        skills,
+        backlog: engine.backlogFor(entry.id),
+        pool: engine.poolFor(entry.id),
+        references: engine.references,
+        settings: publicSettings(),
+        ...(engine.kernelCallModel ? { call: engine.kernelCallModel } : {}),
+      });
+      Object.defineProperty(host, 'cacheKey', { value: key, configurable: true });
+      entry.kernelHosts.set(key, host);
+    }
+    return host;
+  };
+
+  // A kernel host is scoped to one worktree/route. Once its last live run has
+  // settled, the session on disk is the source of truth and keeping the whole
+  // plugin graph resident only leaks one host per unattended attempt.
+  const watchKernelRun = (entry, host, run) => {
+    entry.kernelWatches ??= new Set();
+    if (entry.kernelWatches.has(run.runId)) return;
+    entry.kernelWatches.add(run.runId);
+    void run.settled().then(async () => {
+      await snapshotStackRun(host.ctx, run.runId, host.kernelModule);
+    }).catch(() => {
+      // The canonical session is still readable even if compatibility
+      // materialisation failed. The next snapshot call rebuilds it from JSONL.
+    }).finally(async () => {
+      entry.kernelRuns?.delete(run.runId);
+      entry.kernelWatches?.delete(run.runId);
+      const stillUsed = [...(entry.kernelRuns?.values() ?? [])].some(candidate => candidate === host);
+      if (stillUsed) return;
+      if (entry.kernelHosts?.get(host.cacheKey) === host) entry.kernelHosts.delete(host.cacheKey);
+      try { await host.dispose(); } catch { /* settled run remains durable */ }
+    });
+  };
+
+  /** Recreate the exact host a durable run says it used. */
+  const resumeKernelHost = async (entry, runId) => {
+    const live = entry.kernelRuns?.get(runId);
+    if (live) return live;
+    const meta = storedStackRunMetadata(entry.store.rootDir, runId);
+    if (!meta?.workspace) throw new ApiError(`Kernel run "${runId}" does not record a workspace, so it cannot be resumed safely.`, {
+      status: 409, code: 'kernel_resume_metadata_missing'
+    });
+    const host = await loopKernelHost(entry, {
+      workspace: meta.workspace,
+      approvalMode: meta.approvalMode ?? 'always',
+      worker: meta.model ? {
+        provider: meta.provider ?? 'auto', model: meta.model,
+        ...(meta.routing && typeof meta.routing === 'object' ? { routing: meta.routing } : {}),
+      } : null,
+      level: meta.level ?? null,
+      loopTaskId: meta.loopTaskId ?? null,
+      skills: Array.isArray(meta.skills) ? meta.skills : null,
+    });
+    entry.kernelRuns.set(runId, host);
+    return host;
+  };
   const feedbackFor = projectId => {
     proj(projectId);
     const feedback = engine.feedbackFor(projectId);
@@ -671,46 +754,36 @@ export function createApi(engine) {
       });
     },
 
-    // The kernel path (t-0117). Same shape as flow:run, but the run is walked
-    // by the production StackRunner over a v2 stack, with the session log and
-    // the fs/tools/llm/approvals seams doing what the compat runner faked.
-    // The supervisor tries this first and falls back to flow:run only when
-    // the kernel cannot boot (unknown_command / kernel_unavailable), so a
-    // project without a compiled kernel still runs the loop.
-    'stack:run': async ({ projectId, stackId, input = '', workspaceDir = null, approvalMode = 'always', runId = null }) => {
+    // The Loop execution path. It is deliberately separate from flow:run:
+    // daily prompting can keep the familiar workflow UX while unattended
+    // supervision has one production-kernel record and no fallback semantics.
+    'stack:run': async ({
+      projectId, stackId, input = '', workspaceDir = null,
+      approvalMode = 'always', runId = null, worker = null, level = null,
+      loopTaskId = null, skills = null,
+    }) => {
       const entry = proj(projectId);
       const workspace = workspaceDir
-        ? new Workspace(workspaceDir).ensure().root
+        ? new Workspace(workspaceDir).root
         : entry.folder
           ? new Workspace(entry.folder).ensure().root
           : new Workspace(entry.workspaceRoot).ensure().root;
-      // One kernel per project+worktree, memoized on the registry entry: the
-      // session store and run projection inside it must not be doubled.
-      const key = `loopKernel:${workspace}`;
-      entry.kernelByWorktree ??= new Map();
-      if (!entry.kernelByWorktree.has(key)) {
-        const booted = await bootLoopKernel({
-          runsRoot: entry.store.root,
-          workspaceDir: workspace,
-          approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : 'always',
-        });
-        entry.kernelByWorktree.set(key, booted);
-      }
-      const { ctx } = entry.kernelByWorktree.get(key);
-      const { runId: startedId } = await startStackRun({ ctx, stackId, input, runId });
+      const host = await loopKernelHost(entry, {
+        workspace,
+        approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : 'always',
+        worker, level, loopTaskId, skills,
+      });
+      const { runId: startedId, run } = await startStackRun({ host, stackId, input, id: runId });
+      entry.kernelRuns.set(startedId, host);
+      watchKernelRun(entry, host, run);
       return startedId;
     },
 
-    'stack:stop': async ({ projectId, runId, workspaceDir = null }) => {
+    'stack:stop': async ({ projectId, runId, reason = 'stopped by request' }) => {
       const entry = proj(projectId);
-      const workspace = workspaceDir
-        ? new Workspace(workspaceDir).ensure().root
-        : entry.folder
-          ? new Workspace(entry.folder).ensure().root
-          : new Workspace(entry.workspaceRoot).ensure().root;
-      const booted = entry.kernelByWorktree?.get(`loopKernel:${workspace}`);
-      if (!booted) return { ok: false, error: 'not-live', message: `No kernel run ${runId} in this process.` };
-      return stopStackRun(booted.ctx, runId);
+      const host = entry.kernelRuns?.get(runId);
+      if (!host) return { ok: false, error: 'not-live', message: `No kernel run ${runId} in this process.` };
+      return stopStackRun(host.ctx, runId, reason);
     },
 
     'run:list': ({ projectId }) => proj(projectId).store.runSummaries(),
@@ -723,12 +796,17 @@ export function createApi(engine) {
 
     // Fetching a snapshot re-baselines the caller's diff channel at the same
     // instant, so the rev it gets back is the one subsequent patches build on.
-    'run:snapshot': ({ projectId, runId }) => {
+    'run:snapshot': async ({ projectId, runId }) => {
       const entry = proj(projectId);
       const retired = entry.store.runRetirement(runId);
       if (retired) return { retired: true, runId, ...retired };
       const chans = engine.pushStateFor(entry.id).channels;
-      const snapshot = entry.store.snapshot(runId);
+      const host = entry.kernelRuns?.get(runId);
+      const snapshot = isKernelRun(entry.store, runId)
+        ? host
+          ? await snapshotStackRun(host.ctx, runId, host.kernelModule)
+          : await snapshotStoredStackRun(entry.store.rootDir, runId)
+        : entry.store.snapshot(runId);
       const rev = (chans.get(runId)?.rev ?? 0) + 1;
       chans.set(runId, { snapshot, rev });
       return { ...snapshot, rev };
@@ -739,13 +817,34 @@ export function createApi(engine) {
     // lets the supervisor park a task instead of blocking on one (§10).
     'run:approve': ({ projectId, runId }) => runnerFor(projectId).approvePlan(runId),
     'run:reject': ({ projectId, runId, reason = '' }) => runnerFor(projectId).rejectPlan(runId, reason),
-    'run:resume': ({ projectId, runId }) => runnerFor(projectId).resume(runId),
-    'run:stop': ({ projectId, runId }) => runnerFor(projectId).stop(runId),
+    'run:resume': async ({ projectId, runId }) => {
+      const entry = proj(projectId);
+      if (!isKernelRun(entry.store, runId)) return runnerFor(projectId).resume(runId);
+      const host = await resumeKernelHost(entry, runId);
+      const { run } = await resumeStackRun(host, runId);
+      watchKernelRun(entry, host, run);
+      return { ok: true, runId };
+    },
+    'run:stop': async ({ projectId, runId, reason = 'stopped by request' }) => {
+      const entry = proj(projectId);
+      if (!isKernelRun(entry.store, runId)) return runnerFor(projectId).stop(runId);
+      const host = entry.kernelRuns?.get(runId);
+      if (!host) return { ok: false, error: 'not-live', message: `Kernel run ${runId} is not live in this process.` };
+      return stopStackRun(host.ctx, runId, reason);
+    },
     'run:pause': ({ projectId, runId }) => runnerFor(projectId).pause(runId),
     // `worker` re-pins the node's model for this attempt only (D39) — the way
     // back from "the step failed because of the model it was pointed at".
-    'run:restartNode': ({ projectId, runId, nodeId, guidance = '', worker = null }) =>
-      runnerFor(projectId).restartNode(runId, nodeId, String(guidance ?? ''), worker ?? null),
+    'run:restartNode': async ({ projectId, runId, nodeId, guidance = '', worker = null }) => {
+      const entry = proj(projectId);
+      if (!isKernelRun(entry.store, runId)) {
+        return runnerFor(projectId).restartNode(runId, nodeId, String(guidance ?? ''), worker ?? null);
+      }
+      const host = await resumeKernelHost(entry, runId);
+      const { run } = await restartStackBlock(host, runId, nodeId, String(guidance ?? ''));
+      watchKernelRun(entry, host, run);
+      return { ok: true, runId, blockId: nodeId };
+    },
     'run:followUp': ({ projectId, runId, text }) => runnerFor(projectId).followUp(runId, String(text ?? '')),
     'run:answerInput': ({ projectId, runId, text }) => runnerFor(projectId).answerInput(runId, String(text ?? '')),
 

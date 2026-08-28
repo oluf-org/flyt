@@ -54,15 +54,15 @@ export function pricesFromCatalog(modelFacts = {}, overrides = {}) {
  */
 export function costOf({ usage = null, provider = null, model = null, prices = {} } = {}) {
   // OpenRouter returns the real charge on the usage object.
-  const reported = usage?.cost ?? usage?.total_cost ?? null;
+  const reported = usage?.costUsd ?? usage?.cost ?? usage?.total_cost ?? null;
   if (typeof reported === 'number' && Number.isFinite(reported)) {
     return { usd: reported, estimated: false };
   }
   const key = `${provider}/${model}`;
   const price = prices[key] ?? prices[model] ?? null;
   if (price) {
-    const inTok = usage?.prompt_tokens ?? usage?.input_tokens ?? 0;
-    const outTok = usage?.completion_tokens ?? usage?.output_tokens ?? 0;
+    const inTok = usage?.promptTokens ?? usage?.prompt_tokens ?? usage?.input_tokens ?? 0;
+    const outTok = usage?.completionTokens ?? usage?.completion_tokens ?? usage?.output_tokens ?? 0;
     const usd = (inTok / 1e6) * (price.in ?? 0) + (outTok / 1e6) * (price.out ?? 0);
     return { usd, estimated: true };
   }

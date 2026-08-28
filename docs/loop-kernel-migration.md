@@ -1,87 +1,68 @@
-# Loop Supervision onto Kernel Runner — Migration
+# Loop supervision on the kernel runner
 
-## Goal
-Replace `core/stackRunner.js` compatibility runner with `kernel/src/plugins/stack-runner.ts` `StackRunner` (Cordis `ctx.agents`) for `stacks/loop-task.stack.yaml` without losing Loop capability, safety, recovery, or observability.
+## Current architecture
 
-## Architecture delta
-- **Before:** `Supervisor` → `api.invoke('flow:run', { flowId: LOOP_TASK_ID })` → `ProjectRegistry.createRunner` → `core/stackRunner.StackRunner` → `RunStore` (log.jsonl/files) + `FlowStore` + `NodeStore`.
-- **After:** `Supervisor` → `api.invoke('stack:run', { stackId: 'loop-task' })` fallback `flow:run` → `kernel StackRunner` via `ctx.agents.start({ id, runId }, input)` → `JsonlSessionStore` (`runs/<id>/session.jsonl` canonical, projection rebuildable) + `StackStore` + `ctx.blocks` registry + `ctx.fs` (worktree), `ctx.tools`, `ctx.llm`, `ctx.approvals`.
+Unattended Loop work has one execution route:
 
-Compatibility runner retained until parity passes (this document + parity tests are the gate). Deletion of `core/stackRunner.js`, `core/stacklang` graph parser, generated `compatibility/flows` + `compatibility/nodes` stores, and `bin/flyt.js` `flow` alias deferred to next task after `npm test` + manual `stack:run` smoke passes on real model.
+`Supervisor` → `stack:run` → `stacks/loop-task.stack.yaml` → kernel `StackRunner` → canonical `session.jsonl`
 
-## Seams mapped
-| Loop need | Kernel seam | Notes |
-|-----------|-------------|-------|
-| workspace isolation | `ctx.fs` (`flyt-fs-worktree` provider) | Supervisor's `work:start` worktree dir becomes FsSeam root. No `workspaceDir` bypass. |
-| model | `ctx.llm` (`flyt-llm-adapters`) | `level`/`worker` from `Supervisor.#workerFor` passed as `run.config.model`; `routeOf` handles OpenRouter Auto Router bands. |
-| tools | `ctx.tools` (`flyt-tools`) + `tools/pre-execute` gate | `LOOP_CEILING` (`flyt-blocks-core:work` ceiling) intersect run ceiling; classification not a grant; approval mode `always` via `flyt-loop-worker` profile. |
-| backlog | `ctx.commands` (`flyt-api`) `task:*` commands | Work block already has `create_task`, `enqueue_task`, `list_tasks`, `read_task`, `why_blocked`, `update_task`. |
-| gates | `run_gate` tool + host `gates` | Supervisor runs same gate commands post-run for verification; no second semantics. |
-| review/landing | `landTask`/`verifyTask` via `api` `work:*` | Unchanged; landing still reads `session.jsonl` via `explainRun`/`doctor`. |
-| canary/spend | `Ledger` totals + `totalsWithLive` inclusive of `session.jsonl` `llm.response` usage | `JsonlSessionStore` logs `usage`/`route` on every `llm.response`; `deriveMessages` reconstructs cost even if run interrupted. |
-| diagnostics | `session/append` → Trace/Work `deriveMessages` | Dotted vocabulary (`run.created`, `block.status`, `tool.result` etc.) — slash names are Cordis dispatch, not durable log. |
-| skill | `ctx.skills` registry | Supervisor's `missingSkills` check stays — worktree missing `.flyt/skills/<name>.md` warned, not parked. |
+There is no `flow:run` fallback. A kernel composition or start failure is a harness failure, and the Supervisor parks the task with that evidence instead of creating a run with different control and recovery semantics.
 
-## Supervisor change (this patch)
-`core/supervisor.js` `#runTask` now tries `stack:run` first:
+The familiar Work entry remains intentionally separate. It still uses editable daily workflows, workspace tabs, the prompt composer, recent runs, and the Models library. A fresh install seeds an `Assistant` workflow for that entry. Those stores are a user-facing workflow product, not a Loop compatibility layer.
 
-```js
-let runId;
-try {
-  runId = await this.invoke('stack:run', {
-    projectId, stackId: 'loop-task',
-    input: this.#briefFor(task),
-    workspaceDir: wt.dir,
-    approvalMode: 'always',
-    level, worker, loopTaskId: task.id,
-    skills: task.skills ?? null
-  });
-} catch (e) {
-  if (e?.code !== 'unknown_command') throw e;
-  runId = await this.invoke('flow:run', { projectId, flowId: LOOP_TASK_ID, userInput: ..., workspaceDir: wt.dir, ... });
-}
-```
+## Host composition
 
-Keeps all existing `flow:run` mocks green (fallback), new path exercised by parity test via mocked kernel `stack:run`.
+`core/kernelRunner.js` builds one worktree-scoped kernel host and installs:
 
-`core/api.js` adds `stack:run` command:
-- Resolves `StackStore` from `engine.stackRoot` (seeded `stacks/` bundle) with `kernel.parseStack` and `ctx.blocks.resolve` guard.
-- Boots kernel `flyt-loop-worker` profile lazily on first `stack:run` (sessions root = project's `runs/` dir, approvals `always`, tools/skills/commands/ui-extensions providers).
-- Provides `ctx.fs` confined to `workspaceDir` (worktree) per invocation via scoped child context.
-- Starts stack `{ id: stackId, runId }` with `input`, returns `runId`; heartbeat and `pool` ownership unchanged.
+- the canonical JSONL session store and run projection;
+- the filesystem seam rooted at the exact task worktree;
+- the canonical stack parser and stack store;
+- all built-in block plugins and the kernel stack runner;
+- the real model adapter bridge, including provider and CLI routing metadata;
+- the application tool library behind kernel classification, ceiling, and approval gates; and
+- the existing backlog, worktree pool, references, skills, and settings as tool context.
 
-## Durable session & resumability
-- `kernel/src/session/jsonl.ts` `JsonlSession` is the truth; `runs/<runId>/session.jsonl` appended before `llm.request`. Torn tail repaired on next `#sync`; `deriveMessages` injects `NEVER_RETURNED` synthetic `tool.result` for unreturned calls so interrupted runs resume from `agents.resume(runId)` without ghost tool shape change.
-- Heartbeat still reads work signature + spend via `spendFromRun` (now `session` fold, not `retrospectives`). Stall detectors `detectStall`/`nextIntervention` ladder (nudge→restart→escalate→park) reads `block.status=active` same as compat `nodeStatus=active`; `currentNodeOf` mapping preserved.
-- Ledger `totalsWithLive` includes live runs' `session.jsonl` `usage` so `loop:report` inclusive of in-flight spend.
+Booting a host is read-only with respect to the worktree. In particular, it does not create `.flyt/config.json`; host setup must never manufacture a protected-path diff before the worker acts.
 
-## Safety parity
-- `flyt-loop-worker` profile asserts `assertNarrower(desktop, loopWorker)` — worker never gains row desktop lacks.
-- `block.ceiling` intersect `run.ceiling`; `inferTool` err toward restriction; plugin tool `unclassified` not grantable.
-- Skill request never grants unattended; human `ask_human` vetoed by `approvals` seam when nobody present (denied, not guessed).
+Each run records workspace, approval mode, task, provider/model, Auto Router band constraints, effort level, skills, stack resolution, block state, tool calls/results, model usage, and stage transitions in `runs/<runId>/session.jsonl`. The host also forwards the configured retry and timeout policy to every adapter call. Compatibility snapshots used by the Supervisor and existing UI are projections rebuilt from that log, not a second source of truth.
 
-## Parity tests (new `tests/loopKernelParity.test.js`)
-Covers the "remains resumable and explainable" clause:
-- status: claimed→running→parked/done updates durable backlog file.
-- retry: `flow:run` fallback via `unknown_command`; `stack:run` success records `runIds` and is stoppable via `agents.stop`.
-- approval: gate veto -> `Parked for approval - gate: ...`.
-- spend: `llm.response` `usage.cost` reaches `Ledger` even when run interrupted.
-- worktree ownership: `attempt_live` deferred not parked; second attempt with stale lease reclaimed; cleanup respects `owner-mismatch`/`live-owner`.
+## Control and recovery
 
-## Commands
-- `flyt stack -- lint` canonical linter (was `flow -- lint` alias). Alias kept one release, warned.
-- `flyt run loop-task --input "…"` now prefers `stack:run` (kernel) via api; `flyt flow run` alias still hits compat path.
+- `run:snapshot` detects a kernel session and projects its status, current block, outputs, tool evidence, and usage.
+- `run:stop` calls the live kernel agent registry and reports `not-live` honestly when another process owns the run or it has already settled.
+- `run:resume` reconstructs the host from `run.created` metadata. Completed blocks are replayed; active blocks run again.
+- An interrupted tool call is represented by a synthetic `NEVER_RETURNED` tool result when messages are derived, so the resumed model sees the break instead of a silently altered conversation.
+- `run:restartNode` writes a durable pending transition plus the Supervisor's guidance, then resumes the same session.
+- A settled run is materialised once more, removed from the live host maps, and its plugin graph is disposed. Later inspection reads the durable session, preventing one resident kernel per unattended attempt.
 
-## Verification done this patch
-- `npm run build:kernel && npm test` — existing suites pass (supervisor fallback preserves mocks).
-- Manual smoke (mock provider, no creds):
-  `node bin/flyt.js task add "probe-kernel-loop" --goal "write docs/probe.md with hello" --blast docs/probe.md --gates "npm test" && node bin/flyt.js loop start --maxTasks 1` → worktree created, `runs/<id>/session.jsonl` has `run.created`→`block.status:work:active`→`block.output`→`block.status:done`, `docs/probe.md` in worktree, landing canaried, ledger entry present, `flyt doctor` clean.
+## Safety and observability
 
-## Next steps (separate task after parity green)
-- Delete `core/stackRunner.js`, `core/stacklang/{parse,serialize,lint}`, `core/flowstore.js` compat projection, `core/nodestore.js` generated nodes store, `compatibility/` seeding, `flow` CLI alias in `bin/flyt.js` + `package.json`, and `tests/loopCompatibility.test.js` seeding test.
-- Remove `electron/main.js` `flow:run` IPC binding once renderer Work/Build uses `stack:run`.
+The Loop worker profile remains narrower than the desktop profile. Tool classification is not a grant: the block ceiling, runtime ceiling, and approvals seam all have to allow a call. Built-in tools execute with the task's existing worktree/backlog/pool/reference context and cannot escape the filesystem root supplied to the kernel.
 
-## References
-- `kernel/src/plugins/stack-runner.ts` `StackRunner.start` returns durable immediately, `settled()` awaited by heartbeat polling.
-- `DESIGN-SPEC.md` §3 (kernel walks parsed containment), §5 (pre-execute gate), §8 (supervisor file-backed).
-- `DECISIONS.md` D45/D57/D55/D62.
+The `workspace-change` effect is enforced inside the kernel block before it can report success. The host records a workspace signature observation after tool activity, and the effect block fails closed when no durable change is observed. Landing still independently checks blast radius, declared gates, diff review, merge, and post-merge canary.
+
+Model usage in kernel `llm.response` events is understood by the existing ledger, including camelCase token and cost fields. The Supervisor therefore applies the same live burn, task, session, and rolling caps as before, while the run remains independently auditable from its session.
+
+## Compatibility removed
+
+The following Loop-only scaffolding is gone:
+
+- the generated `loop-task.flow.yaml` seed and `LOOP_TASK_ID` coupling;
+- the Supervisor's `flow:run` fallback;
+- the temporary `npm run flow -- lint` alias; and
+- the compatibility projection test.
+
+`core/stackRunner.js`, `FlowStore`, `NodeStore`, and the workflow DSL remain because the product still exposes the familiar daily Work and workflow-library experience. They no longer participate in Loop supervision. Removing them would remove current user-facing behavior and is a separate migration, not Loop cleanup.
+
+## Verification contract
+
+`tests/loopKernelParity.test.js` exercises the production host rather than source-only mocks:
+
+- work is confined to the worktree and the durable snapshot contains launch metadata;
+- spend is recovered from canonical model events;
+- missing workspace effect fails inside the kernel before landing;
+- an interrupted session resumes in a newly composed host with missing-call evidence;
+- stopping an unknown/non-live run fails explicitly; and
+- a fresh Supervisor claims a real temporary-repository task, runs the kernel worker, passes project/default gates and independent review, merges, runs the canary, updates status, and records spend.
+
+Run `npm test`, `npm run build`, and `npm run stack -- lint` before landing changes to this boundary.

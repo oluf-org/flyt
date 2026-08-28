@@ -126,11 +126,13 @@ export function createEngine({
 
   const baseConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'config.json'), 'utf8'));
 
-  // The legacy flow store and generated node library remain only for the
-  // compatibility runner that currently drives Loop and opens old runs.
-  // Canonical authored definitions live in stacks/ and plugins.
-  const compatibilityRoot = path.join(userDataDir, 'compatibility');
-  const flows = new FlowStore(path.join(compatibilityRoot, 'flows'));
+  // The familiar Work entry and its editable workflow/model library still use
+  // these stores. They are a day-to-day product surface, not a Loop fallback;
+  // unattended Loop execution is canonical stacks + kernel only.
+  // Keep the on-disk directory name stable so an upgrade does not orphan a
+  // person's saved workflows; only the old architectural role is retired.
+  const workflowRoot = path.join(userDataDir, 'compatibility');
+  const flows = new FlowStore(path.join(workflowRoot, 'flows'));
   // Canonical v2 stacks live beside the legacy flow directory. StackStore can
   // read an existing flows/*.flow.yaml without mutation and retires that file
   // only when the stack is first written.
@@ -138,8 +140,8 @@ export function createEngine({
   // constructs StackStore after bootKernel's dynamic import supplies the one
   // canonical parser; the CLI can still manage Loop without kernel/dist.
   const stackRoot = seedFromBundle('stacks');
-  const nodeLibrary = new NodeStore(path.join(compatibilityRoot, 'nodes'));
-  flows.ensureLoopTask();        // compatibility projection until Loop uses the kernel runner
+  const nodeLibrary = new NodeStore(path.join(workflowRoot, 'nodes'));
+  flows.ensureDefaultPrompt();
 
   // The tool library is files too (DESIGN-SPEC.md §5): tools/<id>.json seeds from
   // the built-in modules, and the runtime registry is loaded FROM the files — so

@@ -36,7 +36,6 @@ import { classifyAdapterError, needsHuman } from './adapters/failures.js';
 import { whyNothingReady } from './blockers.js';
 import { CONFIG_DIR } from './brand.js';
 import { skillPath } from './skills.js';
-import { LOOP_TASK_ID } from './flowstore.js';
 
 // Which of a task's declared skills a checkout does not actually contain.
 // Deliberately a plain existence check against the worktree rather than a
@@ -911,23 +910,14 @@ export class Supervisor {
           + ' — untracked, ignored, or misspelled. The worker runs without it.',
           { taskId: task.id });
       }
-      // The kernel StackRunner is the runner now (t-0117); flow:run is the
-      // fallback for a host whose kernel cannot boot, and nothing else.
-      let runId;
-      try {
-        runId = await this.invoke('stack:run', {
-          projectId: this.projectId,
-          stackId: this.config.loop?.stackId ?? 'loop-task',
-          input: this.#briefFor(task),
-          workspaceDir: wt.dir,
-          approvalMode: 'always',
-        });
-      } catch (e) {
-        if (e?.code !== 'unknown_command' && e?.code !== 'kernel_unavailable') throw e;
-        runId = await this.invoke('flow:run', {
+      // One execution engine for unattended work. Falling back here would
+      // create a run whose id belongs to one store while every later control
+      // command talks to another; a kernel boot failure is a harness failure
+      // and is parked honestly before any ambiguous work is done.
+      const runId = await this.invoke('stack:run', {
         projectId: this.projectId,
-        flowId: this.config.loop?.flowId ?? LOOP_TASK_ID,
-        userInput: this.#briefFor(task),
+        stackId: this.config.loop?.stackId ?? 'loop-task',
+        input: this.#briefFor(task),
         // THE WORKTREE, not the main checkout. Without this the isolation is
         // built and then bypassed: every task would edit the repo the loop is
         // merging into, and two parallel tasks would edit each other's work.
@@ -948,8 +938,7 @@ export class Supervisor {
         // convention by trial and error is most expensive: nobody is watching
         // to say "we do it this way here", so the task has to.
         skills: task.skills ?? null
-        });
-      }
+      });
       const hb = new Heartbeat({ taskId: task.id, runId, level, now: this.now(), model: worker?.model ?? null });
       // Where the work is supposed to appear. The heartbeat reads it to tell
       // accomplishment from talking (workSignature).
@@ -1582,7 +1571,8 @@ export class Supervisor {
     try {
       for (const e of spendFromRun(this.store, hb.runId, { prices: this.ledger.prices ?? {} })) {
         usd += e.usd ?? 0;
-        tokens += Number(e.usage?.prompt_tokens ?? 0) + Number(e.usage?.completion_tokens ?? 0);
+        tokens += Number(e.usage?.promptTokens ?? e.usage?.prompt_tokens ?? e.usage?.input_tokens ?? 0)
+          + Number(e.usage?.completionTokens ?? e.usage?.completion_tokens ?? e.usage?.output_tokens ?? 0);
       }
     } catch { /* a run with nothing readable yet has cost nothing yet */ }
     return { usd, tokens };

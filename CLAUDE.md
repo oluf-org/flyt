@@ -35,4 +35,4 @@ Current work belongs in `.flyt/backlog/`. Completed plans belong in git history;
 
 ## Verification
 
-Run the smallest relevant tests while iterating, then `npm test` for cross-cutting changes. Run `npm run stack -- lint` after changing shipped stacks, the grammar, block output contracts, or containment bounds. `npm run flow -- lint` is a temporary compatibility alias for the Phase 5 landing contract and executes the same canonical linter.
+Run the smallest relevant tests while iterating, then `npm test` for cross-cutting changes. Run `npm run stack -- lint` after changing shipped stacks, the grammar, block output contracts, or containment bounds.

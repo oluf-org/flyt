@@ -40,6 +40,9 @@ export interface CallModel {
     maxTokens?: number;
     temperature?: number;
     apiKey?: string;
+    keyKind?: string;
+    cliHome?: string;
+    cliPath?: string;
     signal?: AbortSignal;
     onText?: (text: string, options?: { final?: boolean }) => void;
   }): Promise<{
@@ -56,7 +59,10 @@ export interface CallModel {
 
 /** How a model id becomes a provider and a key. `core/modelSource.js` already knows. */
 export interface ResolveSource {
-  (model: string): { provider: string; model: string; apiKey?: string; reason?: string } | null;
+  (model: string): {
+    provider: string; model: string; apiKey?: string; reason?: string;
+    keyKind?: string; cliHome?: string; cliPath?: string;
+  } | null;
 }
 
 /** What this plugin is given. Both come from the JS core; neither is imported. */
@@ -151,6 +157,9 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
       model: source.model,
       messages: request.messages,
       ...(source.apiKey ? { apiKey: source.apiKey } : {}),
+      ...(source.keyKind ? { keyKind: source.keyKind } : {}),
+      ...(source.cliHome ? { cliHome: source.cliHome } : {}),
+      ...(source.cliPath ? { cliPath: source.cliPath } : {}),
       ...(toolsFor(request) ? { tools: toolsFor(request) } : {}),
       ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),

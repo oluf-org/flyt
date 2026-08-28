@@ -278,9 +278,9 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
     if (name === 'work:start') return {
       dir: '/tmp/wt', branch: 'b', attemptId: `${args.taskId}-fake-attempt`
     };
-    if (name === 'flow:run') {
+    if (name === 'stack:run') {
       const runId = `run-${++runSeq}`;
-      runs.set(runId, { polls: 0, taskId: args.userInput, prompt: String(args.userInput ?? '') });
+      runs.set(runId, { polls: 0, taskId: args.input, prompt: String(args.input ?? '') });
       return runId;
     }
     if (name === 'run:snapshot') {
@@ -410,7 +410,7 @@ test('a model the loop was pinned to is what every task runs on, and the ladder 
   });
 
   await sup.run({ maxTasks: 1 });
-  const run = engine.calls.find(c => c.name === 'flow:run');
+  const run = engine.calls.find(c => c.name === 'stack:run');
   assert.deepEqual(run.args.worker, worker, 'the run is told which model to use');
   // The band still travels with the attempt, so escalation still counts.
   assert.equal(run.args.level, 'low');
@@ -609,7 +609,7 @@ test('the brief says how the work will be judged, because the task file cannot k
   const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
 
   await sup.run({ maxTasks: 1 });
-  const brief = engine.calls.find(c => c.name === 'flow:run').args.userInput;
+  const brief = engine.calls.find(c => c.name === 'stack:run').args.input;
   assert.match(brief, /Write a report/, 'the task itself still leads');
   assert.match(brief, /CHANGE IN THE FILES/);
   assert.match(brief, /create_file or write_file/);
@@ -635,7 +635,7 @@ test('the brief names the files the task said it would change', async () => {
   const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
 
   await sup.run({ maxTasks: 1 });
-  const brief = engine.calls.find(c => c.name === 'flow:run').args.userInput;
+  const brief = engine.calls.find(c => c.name === 'stack:run').args.input;
   assert.match(brief, /WHERE THIS WORK GOES/);
   assert.match(brief, /src\/traceModel\.js/);
   assert.match(brief, /tests\/traceModel\.test\.js/);
@@ -663,7 +663,7 @@ test('the brief says whether each named file exists, because those are different
   const sup = new Supervisor({ ...engine, projectId: root, backlog, pollMs: 1 });
 
   await sup.run({ maxTasks: 1 });
-  const brief = engine.calls.find(c => c.name === 'flow:run').args.userInput;
+  const brief = engine.calls.find(c => c.name === 'stack:run').args.input;
   assert.match(brief, /`src\/v2\/Library\.jsx` \(new\)/);
   assert.match(brief, /`tests\/library\.test\.js` \(exists, 4 lines/);
 });
@@ -675,7 +675,7 @@ test('a task that named no files says nothing about where the work goes', async 
   const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
 
   await sup.run({ maxTasks: 1 });
-  const brief = engine.calls.find(c => c.name === 'flow:run').args.userInput;
+  const brief = engine.calls.find(c => c.name === 'stack:run').args.input;
   assert.doesNotMatch(brief, /WHERE THIS WORK GOES/,
     'an empty section is a paragraph of instructions about nothing');
 });
@@ -719,7 +719,7 @@ test('a provider refusing everyone stops the loop instead of grinding the backlo
   // ...and the second task was never started, because it would have failed the
   // same way.
   assert.equal(backlog.get('t-0002').attempts, 0);
-  assert.equal(engine.calls.filter(c => c.name === 'flow:run').length, 1);
+  assert.equal(engine.calls.filter(c => c.name === 'stack:run').length, 1);
 });
 
 test('a model that never answered costs a rung of the ladder, so it does not', async () => {
@@ -1064,7 +1064,7 @@ test('a task learned from another repository is told where to look', async () =>
   const engine = fakeEngine({ backlog });
   await new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 }).run({ maxTasks: 1 });
 
-  const brief = engine.calls.find(c => c.name === 'flow:run').args.userInput;
+  const brief = engine.calls.find(c => c.name === 'stack:run').args.input;
   assert.match(brief, /reference:self_improving_coding_agent/);
   assert.match(brief, /search_references/);
   // The half that prevents the opposite mistake: read there, write here.
@@ -1076,7 +1076,7 @@ test('a task learned from another repository is told where to look', async () =>
   b2.add({ title: 'Ordinary work', goal: 'g' });
   const e2 = fakeEngine({ backlog: b2 });
   await new Supervisor({ ...e2, projectId: 'p', backlog: b2, pollMs: 1 }).run({ maxTasks: 1 });
-  assert.ok(!e2.calls.find(c => c.name === 'flow:run').args.userInput.includes('WHERE THIS TASK CAME FROM'));
+  assert.ok(!e2.calls.find(c => c.name === 'stack:run').args.input.includes('WHERE THIS TASK CAME FROM'));
 });
 
 test('the loop publishes its status where another process can read it', async () => {
@@ -1262,7 +1262,7 @@ test('a session cap this loop DID reach still stops it', async () => {
   // Money spent BY this loop, as its first task runs.
   const engine = fakeEngine({ backlog });
   const invoke = async (name, args) => {
-    if (name === 'flow:run') ledger.record({ taskId: 'in-this-session', usd: 1.5, estimated: false });
+    if (name === 'stack:run') ledger.record({ taskId: 'in-this-session', usd: 1.5, estimated: false });
     return engine.invoke(name, args);
   };
 

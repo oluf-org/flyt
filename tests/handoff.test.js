@@ -96,8 +96,13 @@ async function bootHandoff(root, workspace) {
       ctx.tools.register({
         name: 'write_file', description: 'Write a file.', parameters: { type: 'object' },
         classification: classified('write'),
-        async execute(args) {
+        async execute(args, execution) {
           fs.writeFileSync(path.join(workspace, args.path), args.content, 'utf8');
+          const session = await kernel.ctx.sessions.open(execution.runId);
+          await session.append({
+            type: 'workspace.observed',
+            data: { changed: true, kind: 'test-workspace', tool: 'write_file' },
+          });
           return { content: `wrote ${args.path}` };
         },
       });
@@ -131,7 +136,7 @@ test('the loop-task stack file parses, and names a block a plugin contributes', 
   assert.equal(workBlock.use, block.use);
 });
 
-test('its ceiling is the one the v1 flow declared — asserted, not assumed', () => {
+test('its ceiling is explicit on the canonical Loop stack — asserted, not assumed', () => {
   // D45. The repository, the shell, the queue, the failed run, and a way to ask
   // a human. Not the web: a task that needs it asks for it.
   assert.ok(LOOP_CEILING.includes('bash'), 'a task judged by `npm test` must be able to run it');

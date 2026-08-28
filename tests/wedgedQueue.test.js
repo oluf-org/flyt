@@ -209,7 +209,7 @@ test('a per-task session cap does not count money this session never spent', asy
   const started = [];
   const invoke = async (name, args) => {
     if (name === 'work:start') { started.push(args.taskId); return { dir: '/tmp/wt', branch: 'b', attemptId: 'a1' }; }
-    if (name === 'flow:run') return 'run-1';
+    if (name === 'stack:run') return 'run-1';
     if (name === 'work:touch') return { touched: true };
     if (name === 'run:snapshot') {
       return { meta: { stage: 'done', nodeStatus: { 'work-1': 'done' } },
@@ -263,17 +263,4 @@ test('a STANDING per-task cap still counts the rolling window', async () => {
   assert.match(park, /in the last/, 'and says which span it counted');
   assert.equal(backlog.get(task.id).status, 'parked');
 });
-
-// --- a documented command that does not run ---------------------------------
-
-// `npm run flow -- lint` is what CLAUDE.md tells contributors to run after
-// changing shipped flows, the DSL, template resolution, or tool-grant linting.
-// It printed a usage line and exited 2.
-//
-// Everybody who followed the instruction got an error, and t-0037 — which put
-// the documented command in its `gates` — was unlandable by construction: no
-// diff could ever make it pass, and the failure said nothing about any flow.
-// `gateProblem` checks that a gate's INTERPRETER exists, which `npm` does;
-// nothing checks that the command is well-formed, and nothing can in general.
-// So the command is what had to change.
 

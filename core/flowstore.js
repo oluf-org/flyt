@@ -6,7 +6,7 @@
 // Format-aware: reads both legacy <id>.json (whole flow incl. positions) and
 // <id>.flow.yaml (+ layout sidecar); prefers the DSL when both exist. Writes
 // only the DSL + sidecar — saving a legacy flow migrates it and removes the
-// old .json (npm run flow -- migrate does the same in bulk).
+// old .json (`npm run workflow -- migrate` does the same in bulk).
 //
 // Two node shapes may appear in a flow (see src/flowTypes.js):
 //   template instance: { id, templateId, position, overrides:{...} }
@@ -21,7 +21,7 @@ import { serializeFlow } from './stacklang/serialize.js';
 import { layoutPositions } from '../src/stackLayout.js';
 import { UNTITLED_FLOW, ensureStructuralNodes, migrateLegacyTemplates } from '../src/flowTypes.js';
 
-export const LOOP_TASK_ID = 'loop-task';
+export const DEFAULT_PROMPT_ID = 'assistant';
 
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
@@ -262,32 +262,30 @@ export class FlowStore {
     return !fs.existsSync(this.flowPath(id)) && !fs.existsSync(this.legacyPath(id));
   }
 
-  // Compatibility execution for the current Loop supervisor. The shipping
-  // file is now stacks/loop-task.stack.yaml; until the supervisor itself is
-  // moved onto the kernel runner, a fresh install still needs one authored
-  // tool-holding node rather than a plan that can finish without doing work.
-  ensureLoopTask() {
-    if (!this.#seedMissing(LOOP_TASK_ID)) return false;
+  // The familiar Work entry needs one safe selection on a fresh install. This
+  // is a user-facing prompt workflow, not the Loop execution projection: Loop
+  // runs only stacks/loop-task.stack.yaml through the kernel host.
+  ensureDefaultPrompt() {
+    if (!this.#seedMissing(DEFAULT_PROMPT_ID)) return false;
     const pos = i => ({ x: 0, y: i * 130 });
     this.save({
-      id: LOOP_TASK_ID,
-      name: 'Work one backlog task',
-      description: 'Compatibility projection of the canonical loop-task stack for the supervisor.',
+      id: DEFAULT_PROMPT_ID,
+      name: 'Assistant',
+      description: 'A direct, familiar prompt for everyday questions and analysis.',
       nodes: [
         { id: 'input', type: 'input', kind: 'user', position: pos(0), data: {} },
         {
-          id: 'work', templateId: 'work', position: pos(1),
+          id: 'answer', templateId: 'general-analysis', position: pos(1),
           overrides: {
-            title: 'Do the task', category: 'Code general', effect: 'workspace-change',
-            toolCeiling: 'loop', tools: ['loop'],
-            instructions: 'Work the backlog task exactly as written. Read before writing, stay inside the blast radius, run the declared gates, inspect git status, and never report success over a red gate.',
+            title: 'Answer',
+            instructions: 'Answer the request directly. Be clear about assumptions and uncertainty.',
           },
         },
         { id: 'output', type: 'output', kind: 'user', position: pos(2), data: {} },
       ],
       edges: [
-        { id: 'e-input-work', source: 'input', target: 'work' },
-        { id: 'e-work-output', source: 'work', target: 'output' },
+        { id: 'e-input-answer', source: 'input', target: 'answer' },
+        { id: 'e-answer-output', source: 'answer', target: 'output' },
       ],
     });
     return true;

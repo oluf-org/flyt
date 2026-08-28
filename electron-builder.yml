@@ -20,7 +20,7 @@ files:
   # inside app.asar and is read-only; main.js copies it into userData (D28).
   # Scratch flows (flow:new mints ids like flow-mrkhw5q9-eaxv) never ship, so
   # promoting a flow to a default means giving it a stable slug id — that is
-  # exactly what `npm run flow -- adopt` does.
+  # exactly what `npm run workflow -- adopt` does.
   - flows/**
   - "!flows/flow-*"
   # nodes/ is deliberately NOT packaged: NodeStore seeds itself from
