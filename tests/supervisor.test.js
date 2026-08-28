@@ -152,6 +152,39 @@ test('reading is not progress', () => {
   assert.equal(detectStall(hb, { thresholds: { silentMs: 60_000, spinMs: 60_000, spinRepeats: 2 } })?.detector, 'spin');
 });
 
+test('repeated context is bounded even when no dollar cap was configured', () => {
+  const hb = new Heartbeat({ taskId: 't-1', runId: 'r1', now: 0 });
+  const reading = tool => ({
+    ...snap({ work: 'active' }),
+    retrospectives: { work: { toolCalls: [{ tool, ok: true, at: '2026-08-28T05:00:00Z' }] } },
+  });
+  hb.observe(reading('search_files'), { now: 0, tokens: 0, workspace: { status: {} } });
+  hb.observe(reading('read_file'), { now: 1_000, tokens: 60_000, workspace: { status: {} } });
+  hb.observe(reading('read_file'), { now: 2_000, tokens: 60_000, workspace: { status: {} } });
+  const stall = detectStall(hb);
+  assert.equal(stall.detector, 'burn');
+  assert.match(stall.detail, /120000 tokens/);
+  assert.deepEqual(hb.lastToolActivity, {
+    nodeId: 'work', tool: 'read_file', state: 'done', at: '2026-08-28T05:00:00Z',
+  });
+  assert.deepEqual(stall.threshold, { kind: 'tokens', limit: DEFAULT_THRESHOLDS.burnTokens });
+
+  hb.observe({
+    ...snap({ work: 'active' }),
+    retrospectives: { work: { toolCalls: [
+      { tool: 'search_files', ok: true }, { tool: 'read_file', ok: true },
+    ] } },
+  }, { now: 2_500, workspace: { status: {} } });
+  assert.equal(hb.lastToolActivity.tool, 'read_file',
+    'ordered traces without timestamps still report the most recent tool');
+
+  hb.observe(reading('write_file'), {
+    now: 3_000, tokens: 80_000, workspace: { status: { 'core/supervisor.js': ' M' } },
+  });
+  assert.equal(hb.tokensSinceProgress, 0, 'a durable file change earns a fresh context budget');
+  assert.equal(detectStall(hb), null, 'productive long work is not killed');
+});
+
 test('a different error is progress; the same error three times is a groundhog', () => {
   const hb = new Heartbeat({ taskId: 't-1', runId: 'r1', now: 0 });
   const fail = out => ({ command: 'npm test', status: 'fail', code: 1, output: out });
@@ -242,7 +275,9 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
   const runs = new Map(); // runId -> { polls, taskId }
   const invoke = async (name, args) => {
     calls.push({ name, args });
-    if (name === 'work:start') return { dir: '/tmp/wt', branch: 'b' };
+    if (name === 'work:start') return {
+      dir: '/tmp/wt', branch: 'b', attemptId: `${args.taskId}-fake-attempt`
+    };
     if (name === 'flow:run') {
       const runId = `run-${++runSeq}`;
       runs.set(runId, { polls: 0, taskId: args.userInput, prompt: String(args.userInput ?? '') });
@@ -311,6 +346,7 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
       return true;
     }
     if (name === 'run:approve') return true;
+    if (name === 'work:release') return { released: true };
     if (name === 'work:discard') {
       // Modelled, not stubbed. A no-op here hid a real bug for a week: the
       // command releases the lease, and passing a status into it overwrote the
@@ -786,13 +822,14 @@ test('a bounded run that did no work says so, instead of exiting as though it ha
   assert.equal(task.attempts, 0);
 });
 
-test('a requested stop stays visibly running until in-flight work has wound down', async () => {
+test('a requested stop immediately cancels and releases an in-flight task', async () => {
   const backlog = makeBacklog();
-  backlog.add({ title: 'finish cleanly', goal: 'g' });
-  const engine = fakeEngine({ backlog, stages: { default: [...Array(20).fill('execution'), 'done'] } });
+  backlog.add({ title: 'cancel cleanly', goal: 'g' });
+  const engine = fakeEngine({ backlog, stages: { default: ['execution', 'execution', 'interrupted'] } });
   const published = [];
   const sup = new Supervisor({
     ...engine, projectId: 'p', backlog, pollMs: 2,
+    config: { loop: { stopGraceMs: 100 } },
     writeStatus: status => published.push(status),
   });
 
@@ -807,9 +844,68 @@ test('a requested stop stays visibly running until in-flight work has wound down
   const settled = await run;
   assert.equal(settled.running, false);
   assert.equal(settled.inFlight.length, 0);
-  assert.equal(backlog.get('t-0001').status, 'landed', 'the in-flight task was allowed to settle');
+  assert.equal(backlog.get('t-0001').status, 'queued', 'the cancelled task is immediately recoverable');
+  assert.equal(settled.cancellations[0].timedOut, false);
+  assert.equal(settled.cancellations[0].recovery, 'released to queue; worktree kept');
+  assert.ok(engine.calls.some(call => call.name === 'run:stop'), 'the adapter is signalled at stop time');
+  assert.ok(engine.calls.some(call => call.name === 'work:release'), 'the retained worktree lease is released');
+  assert.equal(engine.calls.some(call => call.name === 'work:discard'), false, 'recoverable work is not deleted');
   assert.ok(published.some(status => status.running && status.stopping && status.inFlight.length),
     'an external watcher can see the winding-down state');
+});
+
+test('a worker that ignores stop cannot hold Loop past the grace period', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'ignores abort', goal: 'g' });
+  const engine = fakeEngine({ backlog, stages: { default: ['execution'] } });
+  const said = [];
+  const sup = new Supervisor({
+    ...engine, projectId: 'p', backlog, pollMs: 2,
+    config: { loop: { stopGraceMs: 12 } },
+    log: line => said.push(String(line)),
+  });
+
+  const started = Date.now();
+  const run = sup.run({ maxTasks: 1 });
+  while (!sup.status().inFlight.length) await new Promise(resolve => setTimeout(resolve, 1));
+  sup.stop('operator stop');
+  const settled = await run;
+
+  assert.ok(Date.now() - started < 250, 'the ignored abort is bounded in wall time');
+  assert.equal(settled.cancellations[0].timedOut, true);
+  assert.ok(settled.cancellations[0].elapsedMs >= 12);
+  assert.equal(backlog.get('t-0001').status, 'queued');
+  assert.ok(said.some(line => /grace expired.*released to queue; worktree kept/.test(line)), said.join(' | '));
+  assert.ok(engine.calls.some(call => call.name === 'work:release'));
+  assert.equal(engine.calls.some(call => call.name === 'work:discard'), false);
+});
+
+test('repeated stop requests cannot extend the original grace deadline', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'keeps ignoring abort', goal: 'g' });
+  const engine = fakeEngine({ backlog, stages: { default: ['execution'] } });
+  let clock = 0;
+  let asked = null;
+  const sup = new Supervisor({
+    ...engine, projectId: 'p', backlog, pollMs: 1,
+    config: { loop: { stopGraceMs: 12 } },
+    stopRequested: () => {
+      clock += 10;
+      return asked;
+    },
+  });
+  sup.now = () => clock;
+
+  const run = sup.run({ maxTasks: 1 });
+  while (!sup.status().inFlight.length) await new Promise(resolve => setTimeout(resolve, 1));
+  asked = 'remote stop';
+  const settled = await run;
+
+  assert.equal(settled.cancellations[0].timedOut, true);
+  assert.equal(settled.cancellations[0].requestedAt, new Date(10).toISOString(),
+    'later observations preserve the first request time');
+  assert.equal(settled.cancellations[0].elapsedMs, 20,
+    'the repeated request did not renew its grace period');
 });
 
 test('a lease left by a stopped loop is waited out, not spun on', async () => {
@@ -1297,6 +1393,49 @@ test('the burn detector is handed real numbers', async () => {
   // How it ENDS is the cap's business or the ladder's, depending on which
   // reaches it first, and both are correct outcomes for a run that is busy,
   // expensive and producing the same thing every time.
+});
+
+test('a no-cap worker repeating read passes is intervened on before context runs away', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'reads forever', goal: 'g', level: 'low' });
+  const ledger = new Ledger(path.join(tmp(), 'ledger'));
+  let polls = 0;
+  const engine = fakeEngine({ backlog, stages: { default: ['execution'] } });
+  const invoke = async (name, args) => {
+    const result = await engine.invoke(name, args);
+    if (name !== 'run:snapshot') return result;
+    polls += 1;
+    return {
+      ...result,
+      retrospectives: { work: { toolCalls: [{ tool: 'read_file', ok: true, at: `poll-${polls}` }] } },
+    };
+  };
+  const store = {
+    snapshot: () => ({ retrospectives: {} }),
+    callTraceNodes: () => ['work'],
+    readCallTrace: () => [{
+      usage: { prompt_tokens: 45_000 * polls, completion_tokens: 0 },
+      provider: 'openrouter', model: 'm', ok: true,
+    }],
+  };
+  const published = [];
+  const said = [];
+  const sup = new Supervisor({
+    ...engine, invoke, projectId: 'p', backlog, ledger, store, pollMs: 1,
+    log: line => said.push(String(line)), writeStatus: status => published.push(status),
+    config: { loop: { thresholds: { silentMs: 1e9, spinMs: 1e9 } } },
+  });
+
+  await sup.run({ maxTasks: 1 });
+  assert.ok(polls < 30, `the context guard allowed ${polls} identical read passes`);
+  assert.ok(said.some(line => /burn: 1[2-9]\d{4,} tokens.*→ nudge/.test(line)), said.join(' | '));
+  assert.ok(published.some(status => status.inFlight.some(hb =>
+    hb.lastStall?.detector === 'burn'
+      && hb.lastStall?.lastToolActivity?.tool === 'read_file'
+      && hb.lastStall?.threshold?.limit === DEFAULT_THRESHOLDS.burnTokens
+      && hb.lastStall?.tokensSinceProgress >= DEFAULT_THRESHOLDS.burnTokens)),
+  'status preserves the threshold, token count, action and last tool');
+  assert.equal(backlog.get('t-0001').level, 'medium', 'bounded interventions eventually escalate');
 });
 
 test('a park about the wallet keeps what was wrong with the work', async () => {
