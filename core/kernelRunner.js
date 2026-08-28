@@ -127,13 +127,15 @@ export async function snapshotStoredStackRun(runsRoot, id, kernelModule = null) 
 export function storedStackRunMetadata(runsRoot, id) {
   const file = path.join(runsRoot, id, 'session.jsonl');
   if (!fs.existsSync(file)) return null;
+  let metadata = null;
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     if (!line.trim()) continue;
     let event;
     try { event = JSON.parse(line); } catch { continue; }
-    if (event.type === 'run.created') return event.data ?? null;
+    if (event.type === 'run.created') metadata = { ...(event.data ?? {}) };
+    if (event.type === 'run.reconfigured' && metadata) metadata = { ...metadata, ...(event.data ?? {}) };
   }
-  return null;
+  return metadata;
 }
 
 /** Does this run folder contain the kernel's canonical record? */
@@ -305,10 +307,13 @@ export async function resumeStackRun(host, id) {
   return { runId: run.runId, run };
 }
 
-export async function restartStackBlock(host, id, blockId, guidance = '') {
+export async function restartStackBlock(host, id, blockId, guidance = '', reconfigured = null) {
   if (!host?.ctx?.agents) throw Object.assign(new Error('The kernel host is unavailable.'), { code: 'kernel_unavailable' });
   if (host.ctx.agents.get(id)) throw new Error(`Kernel run "${id}" is still live; stop it before restarting a block.`);
   const session = await host.ctx.sessions.open(id);
+  if (reconfigured) {
+    await session.append({ type: 'run.reconfigured', data: reconfigured });
+  }
   await session.append({
     type: 'block.status',
     data: { blockId, status: 'pending', reason: 'restarted by supervisor' },

@@ -32,7 +32,8 @@ Each run records workspace, approval mode, task, provider/model, Auto Router ban
 - `run:stop` calls the live kernel agent registry and reports `not-live` honestly when another process owns the run or it has already settled.
 - `run:resume` reconstructs the host from `run.created` metadata. Completed blocks are replayed; active blocks run again.
 - An interrupted tool call is represented by a synthetic `NEVER_RETURNED` tool result when messages are derived, so the resumed model sees the break instead of a silently altered conversation.
-- `run:restartNode` writes a durable pending transition plus the Supervisor's guidance, then resumes the same session.
+- `run:restartNode` can re-pin the worker. It writes durable `run.reconfigured`, pending, and guidance events, reconstructs a host with the replacement provider/model/routing, and starts the failed block again in the same session. A later resume uses the replacement route rather than stale `run.created` values.
+- Daily-workflow-only controls (`run:approve`, `run:reject`, `run:pause`, `run:followUp`, and `run:answerInput`) reject kernel run IDs explicitly. Kernel approvals happen synchronously at the tool seam; silently addressing the legacy runner would report control over a run it does not own.
 - A settled run is materialised once more, removed from the live host maps, and its plugin graph is disposed. Later inspection reads the durable session, preventing one resident kernel per unattended attempt.
 
 ## Safety and observability
@@ -62,7 +63,8 @@ The following Loop-only scaffolding is gone:
 - spend is recovered from canonical model events;
 - missing workspace effect fails inside the kernel before landing;
 - an interrupted session resumes in a newly composed host with missing-call evidence;
-- stopping an unknown/non-live run fails explicitly; and
+- live stop settles at a safe boundary, while a second or unknown stop fails explicitly;
+- a failed block is restarted through the public API with durable guidance and a replacement provider/model/routing band; and
 - a fresh Supervisor claims a real temporary-repository task, runs the kernel worker, passes project/default gates and independent review, merges, runs the canary, updates status, and records spend.
 
 Run `npm test`, `npm run build`, and `npm run stack -- lint` before landing changes to this boundary.

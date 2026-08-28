@@ -235,10 +235,122 @@ test('an interrupted session resumes from its log and explains the missing tool 
   await second.dispose();
 });
 
-test('stop uses the live kernel registry and an unknown run fails honestly', async () => {
+test('stop reaches a live kernel run, settles cooperatively, and then fails honestly', async () => {
+  const runsRoot = tmp('flyt-kernel-stop-runs-');
+  const workspace = tmp('flyt-kernel-stop-work-');
+  const store = new RunStore(runsRoot);
+  let enter;
+  let release;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const seen = [];
+  const script = {
+    seen,
+    call: async request => {
+      seen.push(request);
+      enter();
+      await held;
+      return { text: 'Stopped at the next safe boundary.', finishReason: 'stop' };
+    },
+  };
+  const host = await hostFor({ workspace, runsRoot, store, script });
+  const started = await startStackRun({ host, stackId: 'loop-task', input: 'Wait for a stop.' });
+  await entered;
+
+  assert.deepEqual(await stopStackRun(host.ctx, started.runId, 'parity stop'), { ok: true });
+  release();
+  assert.deepEqual(await started.run.settled(), { status: 'stopped', reason: 'parity stop' });
+  await waitFor(() => !host.ctx.agents.get(started.runId), { label: 'stopped run to leave live registry' });
+  assert.deepEqual(await stopStackRun(host.ctx, started.runId), {
+    ok: false, error: 'not-live', message: `Kernel run ${started.runId} is not live in this process.`,
+  });
   assert.deepEqual(await stopStackRun({}, 'missing'), {
     ok: false, error: 'kernel-unavailable', message: 'No agents seam.',
   });
+  await host.dispose();
+});
+
+test('run:restartNode durably re-pins a failed kernel block and starts it on the new route', async () => {
+  const repo = tmp('flyt-kernel-repin-work-');
+  const dataRoot = tmp('flyt-kernel-repin-data-');
+  await git(['init', '-b', 'main'], { cwd: repo });
+  await git(['config', 'user.email', 'kernel-test@example.test'], { cwd: repo });
+  await git(['config', 'user.name', 'Kernel Test'], { cwd: repo });
+  fs.writeFileSync(path.join(repo, 'target.txt'), 'before\n');
+  await git(['add', '.'], { cwd: repo });
+  await git(['commit', '-m', 'base'], { cwd: repo });
+
+  const seen = [];
+  const adapter = async request => {
+    seen.push(request);
+    if (request.model === 'mock-old') {
+      return { text: 'I did not make the required edit.', finishReason: 'stop' };
+    }
+    const wrote = (request.messages ?? []).some(message => (
+      message.role === 'tool' && /target\.txt/.test(String(message.content ?? ''))
+    ));
+    if (!wrote) {
+      return {
+        text: 'Applying the corrected attempt.', finishReason: 'tool_calls',
+        message: { tool_calls: [{
+          id: 'repin-write',
+          function: { name: 'write_file', arguments: JSON.stringify({ path: 'target.txt', content: 'after\n' }) },
+        }] },
+      };
+    }
+    return { text: 'Corrected.', finishReason: 'stop' };
+  };
+  adapter.canServe = model => String(model).startsWith('mock-');
+  registerProvider('mock', adapter);
+
+  const engine = createEngine({ projectRoot, dataRoot, userDataDir: dataRoot });
+  const api = createApi(engine);
+  const { id: projectId } = await api.invoke('project:open', { folder: repo });
+  const runId = await api.invoke('stack:run', {
+    projectId, stackId: 'loop-task', input: 'Change target.txt.', workspaceDir: repo,
+    loopTaskId: 't-repin', worker: {
+      provider: 'mock', model: 'mock-old', routing: { costTier: 'high' },
+    },
+  });
+  const entry = engine.registry.get(projectId);
+  await waitFor(() => {
+    try { return entry.store.readMeta(runId).stage === 'failed'; } catch { return false; }
+  }, { label: 'first kernel attempt to fail' });
+
+  const guidance = 'Use the file tool and make the requested edit.';
+  await api.invoke('run:restartNode', {
+    projectId, runId, nodeId: 'work', guidance,
+    worker: { provider: 'mock', model: 'mock-new', routing: { costTier: 'low' } },
+  });
+  await waitFor(() => {
+    try { return entry.store.readMeta(runId).stage === 'done'; } catch { return false; }
+  }, { label: 're-pinned kernel attempt to finish' });
+
+  assert.equal(fs.readFileSync(path.join(repo, 'target.txt'), 'utf8'), 'after\n');
+  const newCalls = seen.filter(request => request.model === 'mock-new');
+  assert.ok(newCalls.length >= 2, 'the restarted block actually executed with the new adapter route');
+  assert.deepEqual(newCalls[0].routing, { costTier: 'low' });
+  assert.equal(seen.filter(request => request.model === 'mock-old').length, 1);
+
+  const events = fs.readFileSync(path.join(entry.store.runDir(runId), 'session.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map(line => JSON.parse(line));
+  assert.ok(events.some(event => event.type === 'run.reconfigured'
+    && event.data?.model === 'mock-new' && event.data?.provider === 'mock'));
+  assert.ok(events.some(event => event.type === 'block.status'
+    && event.data?.blockId === 'work' && event.data?.status === 'pending'));
+  assert.ok(events.some(event => event.type === 'message.user' && event.data?.content === guidance));
+  const metadata = storedStackRunMetadata(entry.store.rootDir, runId);
+  assert.equal(metadata.model, 'mock-new');
+  assert.equal(metadata.provider, 'mock');
+  assert.deepEqual(metadata.routing, { costTier: 'low' });
+  assert.equal((await api.invoke('run:snapshot', { projectId, runId })).meta.stage, 'done');
+
+  await assert.rejects(
+    () => api.invoke('run:pause', { projectId, runId }),
+    error => error?.status === 409 && error?.code === 'kernel_control_unsupported',
+  );
+  await waitFor(() => entry.kernelRuns?.size === 0 && entry.kernelHosts?.size === 0,
+    { label: 'restarted kernel host disposal' });
 });
 
 test('Supervisor has no compatibility fallback for unattended execution', async () => {

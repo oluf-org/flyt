@@ -156,6 +156,20 @@ export function createApi(engine) {
   };
   const runnerFor = projectId => proj(projectId).runner;
 
+  // Daily workflows and Loop stacks deliberately have different control
+  // protocols. Never let a kernel run fall through to the daily runner: that
+  // can acknowledge a control against a different in-memory registry while
+  // the requested run carries on unchanged.
+  const dailyRunControl = (projectId, runId, action, invoke) => {
+    const entry = proj(projectId);
+    if (isKernelRun(entry.store, runId)) {
+      throw new ApiError(`Kernel run "${runId}" does not support ${action} through the daily workflow control API.`, {
+        status: 409, code: 'kernel_control_unsupported'
+      });
+    }
+    return invoke(entry.runner);
+  };
+
   /** Compose (or reuse) the worktree-scoped production Loop host. */
   const loopKernelHost = async (entry, {
     workspace, approvalMode = 'always', worker = null, level = null,
@@ -164,7 +178,9 @@ export function createApi(engine) {
     entry.kernelHosts ??= new Map();
     entry.kernelRuns ??= new Map();
     const route = `${worker?.provider ?? 'auto'}/${worker?.model ?? 'auto'}`;
-    const key = `${workspace}\n${route}\n${level ?? ''}\n${loopTaskId ?? ''}`;
+    const routing = worker?.routing && typeof worker.routing === 'object'
+      ? JSON.stringify(worker.routing) : '';
+    const key = `${workspace}\n${route}\n${routing}\n${approvalMode}\n${level ?? ''}\n${loopTaskId ?? ''}`;
     let host = entry.kernelHosts.get(key);
     if (!host) {
       host = await bootLoopKernel({
@@ -195,17 +211,21 @@ export function createApi(engine) {
   // settled, the session on disk is the source of truth and keeping the whole
   // plugin graph resident only leaks one host per unattended attempt.
   const watchKernelRun = (entry, host, run) => {
-    entry.kernelWatches ??= new Set();
-    if (entry.kernelWatches.has(run.runId)) return;
-    entry.kernelWatches.add(run.runId);
+    entry.kernelWatches ??= new Map();
+    if (entry.kernelWatches.get(run.runId) === run) return;
+    entry.kernelWatches.set(run.runId, run);
     void run.settled().then(async () => {
       await snapshotStackRun(host.ctx, run.runId, host.kernelModule);
     }).catch(() => {
       // The canonical session is still readable even if compatibility
       // materialisation failed. The next snapshot call rebuilds it from JSONL.
     }).finally(async () => {
-      entry.kernelRuns?.delete(run.runId);
-      entry.kernelWatches?.delete(run.runId);
+      // A restart can replace this watcher before the old promise reaches its
+      // finally. Ownership is the AgentRun identity, not merely the host: a
+      // same-route restart deliberately reuses its host.
+      const ownsWatch = entry.kernelWatches?.get(run.runId) === run;
+      if (ownsWatch && entry.kernelRuns?.get(run.runId) === host) entry.kernelRuns.delete(run.runId);
+      if (ownsWatch) entry.kernelWatches.delete(run.runId);
       const stillUsed = [...(entry.kernelRuns?.values() ?? [])].some(candidate => candidate === host);
       if (stillUsed) return;
       if (entry.kernelHosts?.get(host.cacheKey) === host) entry.kernelHosts.delete(host.cacheKey);
@@ -214,9 +234,14 @@ export function createApi(engine) {
   };
 
   /** Recreate the exact host a durable run says it used. */
-  const resumeKernelHost = async (entry, runId) => {
+  const resumeKernelHost = async (entry, runId, workerOverride = null) => {
     const live = entry.kernelRuns?.get(runId);
-    if (live) return live;
+    if (!workerOverride && live) return live;
+    if (workerOverride && live?.ctx.agents.get(runId)) {
+      throw new ApiError(`Kernel run "${runId}" is still live; stop it before changing its worker.`, {
+        status: 409, code: 'kernel_run_live'
+      });
+    }
     const meta = storedStackRunMetadata(entry.store.rootDir, runId);
     if (!meta?.workspace) throw new ApiError(`Kernel run "${runId}" does not record a workspace, so it cannot be resumed safely.`, {
       status: 409, code: 'kernel_resume_metadata_missing'
@@ -224,10 +249,16 @@ export function createApi(engine) {
     const host = await loopKernelHost(entry, {
       workspace: meta.workspace,
       approvalMode: meta.approvalMode ?? 'always',
-      worker: meta.model ? {
-        provider: meta.provider ?? 'auto', model: meta.model,
-        ...(meta.routing && typeof meta.routing === 'object' ? { routing: meta.routing } : {}),
-      } : null,
+      worker: workerOverride?.model
+        ? {
+          provider: workerOverride.provider ?? 'auto', model: workerOverride.model,
+          ...(workerOverride.routing && typeof workerOverride.routing === 'object'
+            ? { routing: workerOverride.routing } : {}),
+        }
+        : meta.model ? {
+          provider: meta.provider ?? 'auto', model: meta.model,
+          ...(meta.routing && typeof meta.routing === 'object' ? { routing: meta.routing } : {}),
+        } : null,
       level: meta.level ?? null,
       loopTaskId: meta.loopTaskId ?? null,
       skills: Array.isArray(meta.skills) ? meta.skills : null,
@@ -815,8 +846,12 @@ export function createApi(engine) {
     // --- Run control -------------------------------------------------------
     // A gate can be answered with no renderer in the process, which is what
     // lets the supervisor park a task instead of blocking on one (§10).
-    'run:approve': ({ projectId, runId }) => runnerFor(projectId).approvePlan(runId),
-    'run:reject': ({ projectId, runId, reason = '' }) => runnerFor(projectId).rejectPlan(runId, reason),
+    'run:approve': ({ projectId, runId }) => dailyRunControl(
+      projectId, runId, 'plan approval', runner => runner.approvePlan(runId)
+    ),
+    'run:reject': ({ projectId, runId, reason = '' }) => dailyRunControl(
+      projectId, runId, 'plan rejection', runner => runner.rejectPlan(runId, reason)
+    ),
     'run:resume': async ({ projectId, runId }) => {
       const entry = proj(projectId);
       if (!isKernelRun(entry.store, runId)) return runnerFor(projectId).resume(runId);
@@ -832,7 +867,9 @@ export function createApi(engine) {
       if (!host) return { ok: false, error: 'not-live', message: `Kernel run ${runId} is not live in this process.` };
       return stopStackRun(host.ctx, runId, reason);
     },
-    'run:pause': ({ projectId, runId }) => runnerFor(projectId).pause(runId),
+    'run:pause': ({ projectId, runId }) => dailyRunControl(
+      projectId, runId, 'pause', runner => runner.pause(runId)
+    ),
     // `worker` re-pins the node's model for this attempt only (D39) — the way
     // back from "the step failed because of the model it was pointed at".
     'run:restartNode': async ({ projectId, runId, nodeId, guidance = '', worker = null }) => {
@@ -840,13 +877,25 @@ export function createApi(engine) {
       if (!isKernelRun(entry.store, runId)) {
         return runnerFor(projectId).restartNode(runId, nodeId, String(guidance ?? ''), worker ?? null);
       }
-      const host = await resumeKernelHost(entry, runId);
-      const { run } = await restartStackBlock(host, runId, nodeId, String(guidance ?? ''));
+      const override = worker?.model ? worker : null;
+      const host = await resumeKernelHost(entry, runId, override);
+      const { run } = await restartStackBlock(
+        host, runId, nodeId, String(guidance ?? ''),
+        override ? {
+          model: override.model, provider: override.provider ?? 'auto',
+          // Explicit null clears an old Auto Router band on future resumes.
+          routing: override.routing ?? null,
+        } : null,
+      );
       watchKernelRun(entry, host, run);
       return { ok: true, runId, blockId: nodeId };
     },
-    'run:followUp': ({ projectId, runId, text }) => runnerFor(projectId).followUp(runId, String(text ?? '')),
-    'run:answerInput': ({ projectId, runId, text }) => runnerFor(projectId).answerInput(runId, String(text ?? '')),
+    'run:followUp': ({ projectId, runId, text }) => dailyRunControl(
+      projectId, runId, 'follow-up', runner => runner.followUp(runId, String(text ?? ''))
+    ),
+    'run:answerInput': ({ projectId, runId, text }) => dailyRunControl(
+      projectId, runId, 'input answers', runner => runner.answerInput(runId, String(text ?? ''))
+    ),
 
     // --- Backlog (DESIGN-SPEC.md §8) --------------------------------------------
     //

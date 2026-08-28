@@ -217,10 +217,15 @@ export class StackRunner extends Service implements AgentsSeam {
     // you resume — that is what stopping is for. Treating it as terminal made
     // `resume` hand back the stop it was asked to undo, which reads as success
     // and is the exact opposite of the feature.
-    const stages = events.filter(e => e.type === 'run.stage')
-      .map(e => String((e.data as { stage?: unknown })?.stage ?? ''));
-    const last = stages.at(-1);
-    if (last === 'done' || last === 'failed') {
+    const stageEvents = events.filter(e => e.type === 'run.stage');
+    const lastStage = stageEvents.at(-1);
+    const last = String((lastStage?.data as { stage?: unknown })?.stage ?? '');
+    const restartedAfterTerminal = (last === 'done' || last === 'failed') && events.some(event => (
+      event.type === 'block.status'
+      && (event.data as { status?: unknown })?.status === 'pending'
+      && event.seq > (lastStage?.seq ?? 0)
+    ));
+    if ((last === 'done' || last === 'failed') && !restartedAfterTerminal) {
       const settled: RunOutcome = last === 'done'
         ? { status: 'done', messages: await past.deriveMessages() as Message[] }
         : {
