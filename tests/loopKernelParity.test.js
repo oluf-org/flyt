@@ -270,6 +270,72 @@ test('stop reaches a live kernel run, settles cooperatively, and then fails hone
   await host.dispose();
 });
 
+test('kernel session activity uses the existing live and incremental run channels', async () => {
+  const repo = tmp('flyt-kernel-push-work-');
+  const dataRoot = tmp('flyt-kernel-push-data-');
+  await git(['init', '-b', 'main'], { cwd: repo });
+  await git(['config', 'user.email', 'kernel-test@example.test'], { cwd: repo });
+  await git(['config', 'user.name', 'Kernel Test'], { cwd: repo });
+  fs.writeFileSync(path.join(repo, 'target.txt'), 'before\n');
+  await git(['add', '.'], { cwd: repo });
+  await git(['commit', '-m', 'base'], { cwd: repo });
+
+  let release;
+  let secondCall;
+  const held = new Promise(resolve => { release = resolve; });
+  const enteredSecond = new Promise(resolve => { secondCall = resolve; });
+  let calls = 0;
+  const adapter = async () => {
+    calls++;
+    if (calls === 1) {
+      return {
+        text: 'Writing.', finishReason: 'tool_calls',
+        message: { tool_calls: [{
+          id: 'push-write',
+          function: { name: 'write_file', arguments: JSON.stringify({ path: 'target.txt', content: 'after\n' }) },
+        }] },
+      };
+    }
+    secondCall();
+    await held;
+    return { text: 'Done.', finishReason: 'stop' };
+  };
+  adapter.canServe = model => model === 'mock-push';
+  registerProvider('mock', adapter);
+
+  const events = [];
+  const engine = createEngine({
+    projectRoot, dataRoot, userDataDir: dataRoot,
+    emit: (type, payload) => events.push({ type, payload }),
+  });
+  const api = createApi(engine);
+  const { id: projectId } = await api.invoke('project:open', { folder: repo });
+  const runId = await api.invoke('stack:run', {
+    projectId, stackId: 'loop-task', input: 'Change target.txt.', workspaceDir: repo,
+    loopTaskId: 't-push', worker: { provider: 'mock', model: 'mock-push' },
+  });
+  await enteredSecond;
+
+  const liveUpdate = await waitFor(() => events.find(event => (
+    event.type === 'run:update' && event.payload.runId === runId
+    && event.payload.full?.retrospectives?.work?.toolCalls?.length === 1
+  )), { label: 'live canonical kernel update' });
+  assert.equal(liveUpdate.payload.full.meta.stage, 'execution');
+  assert.equal(liveUpdate.payload.full.meta.nodeStatus.work, 'active');
+  assert.deepEqual(await api.invoke('run:live', { projectId }), { [projectId]: [runId] });
+  assert.ok(events.some(event => event.type === 'project:activity'
+    && event.payload.projectId === projectId && event.payload.live.includes(runId)));
+
+  release();
+  await waitFor(() => events.some(event => (
+    event.type === 'run:update' && event.payload.runId === runId && event.payload.patch?.meta?.stage === 'done'
+  )), { label: 'terminal kernel patch' });
+  await waitFor(() => events.some(event => event.type === 'project:activity'
+    && event.payload.projectId === projectId && event.payload.live.length === 0),
+  { label: 'kernel activity to clear' });
+  assert.deepEqual(await api.invoke('run:live', { projectId }), { [projectId]: [] });
+});
+
 test('run:restartNode durably re-pins a failed kernel block and starts it on the new route', async () => {
   const repo = tmp('flyt-kernel-repin-work-');
   const dataRoot = tmp('flyt-kernel-repin-data-');

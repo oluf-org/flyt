@@ -183,6 +183,14 @@ export function createApi(engine) {
     const key = `${workspace}\n${route}\n${routing}\n${approvalMode}\n${level ?? ''}\n${loopTaskId ?? ''}`;
     let host = entry.kernelHosts.get(key);
     if (!host) {
+      let composed = null;
+      // Session append notifications are coalesced, so their snapshot may run
+      // after the live host has been disposed. Read the canonical JSONL rather
+      // than coupling delivery to host lifetime; this also preserves the final
+      // done/failed transition during teardown.
+      const pushKernelUpdate = engine.pushSnapshotFor(entry.id, runId => (
+        snapshotStoredStackRun(entry.store.rootDir, runId, composed?.kernelModule)
+      ));
       host = await bootLoopKernel({
         runsRoot: entry.store.rootDir,
         workspaceDir: workspace,
@@ -199,8 +207,10 @@ export function createApi(engine) {
         pool: engine.poolFor(entry.id),
         references: engine.references,
         settings: publicSettings(),
+        onSessionEvent: runId => pushKernelUpdate(runId),
         ...(engine.kernelCallModel ? { call: engine.kernelCallModel } : {}),
       });
+      composed = host;
       Object.defineProperty(host, 'cacheKey', { value: key, configurable: true });
       entry.kernelHosts.set(key, host);
     }
@@ -1986,7 +1996,10 @@ export function createApi(engine) {
     // the thing a crash destroys and a file cannot tell you.
     'run:live': ({ projectId = null } = {}) => {
       const ids = projectId ? [projectId] : registry.listOpen().map(p => p.id);
-      return Object.fromEntries(ids.map(id => [id, [...(registry.get(id)?.runner?.live ?? [])]]));
+      return Object.fromEntries(ids.map(id => {
+        const entry = registry.get(id);
+        return [id, [...new Set([...(entry?.runner?.live ?? []), ...(entry?.kernelRuns?.keys() ?? [])])]];
+      }));
     }
   };
 

@@ -597,7 +597,11 @@ export function createEngine({
   function broadcastActivity(projectId, { recheck = true } = {}) {
     if (!canEmit()) return;
     const s = pushStateFor(projectId);
-    const live = [...(registry.get(projectId).runner?.live ?? [])];
+    const entry = registry.get(projectId);
+    const live = [...new Set([
+      ...(entry.runner?.live ?? []),
+      ...(entry.kernelRuns?.keys() ?? []),
+    ])];
     const sig = live.join('\n');
     if (sig !== s.lastActivity) {
       s.lastActivity = sig;
@@ -611,10 +615,10 @@ export function createEngine({
     }
   }
 
-  const pushUpdateFor = projectId => runId => {
+  const pushSnapshotFor = (projectId, snapshotFor) => runId => {
     const s = pushStateFor(projectId);
     if (s.pending.has(runId)) return;
-    s.pending.set(runId, setTimeout(() => {
+    s.pending.set(runId, setTimeout(async () => {
       s.pending.delete(runId);
       if (!canEmit()) return;
       broadcastActivity(projectId);
@@ -622,8 +626,9 @@ export function createEngine({
       // background tab): skip the snapshot/diff work entirely. Its channel
       // baseline goes stale, but a resync via run:snapshot re-baselines it.
       if (!shouldPush(projectId)) return;
-      const entry = registry.get(projectId);
-      const next = entry.store.snapshot(runId);
+      let next;
+      try { next = await snapshotFor(runId); }
+      catch { return; } // The durable source remains available for a later resync.
       const chan = s.channels.get(runId);
       // No baseline yet: send the full snapshot so the consumer has something
       // to patch against.
@@ -640,6 +645,9 @@ export function createEngine({
       emit('run:update', { projectId, runId, rev, base: chan.rev, patch });
     }, PUSH_COALESCE_MS));
   };
+  const pushUpdateFor = projectId => pushSnapshotFor(
+    projectId, runId => registry.get(projectId).store.snapshot(runId)
+  );
 
   // --- The backlog, one per project (DESIGN-SPEC.md §8) ---
   //
@@ -783,7 +791,7 @@ export function createEngine({
     hasKey, subscriptionStatus, resolveModelSource, capabilityCache,
     capabilityProbe: effectiveCapabilityProbe, effectiveSafetyModel,
     // Push
-    pushStateFor, broadcastActivity, pushUpdateFor, emitLoop, loopLog, loopLogFor, emitChat,
+    pushStateFor, broadcastActivity, pushUpdateFor, pushSnapshotFor, emitLoop, loopLog, loopLogFor, emitChat,
     // A project id that is gone for good (an appdata project adopted into a
     // real folder) takes its push channels with it.
     dropPushState: projectId => pushState.delete(projectId),

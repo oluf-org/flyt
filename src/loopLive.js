@@ -1,12 +1,10 @@
 // What one loop worker is doing right now, as a pure projection
 // (DECISIONS.md D45).
 //
-// The whole point of this file is that NOTHING new had to be built on the
-// backend. A loop worker's run is an ordinary run: `core/engine.js` already
-// emits `run:update` with snapshot patches for every run in the project, and
-// `src/runStreams.js` already turns a snapshot into live token streams. The
-// Loop page simply was not listening. So this module is a rearrangement of data
-// that has been on the wire the whole time, into the four things a person
+// A Loop worker's kernel session is bridged into the same `run:update` channel
+// as a daily workflow by core/api.js and core/engine.js. `src/runStreams.js`
+// turns either snapshot into live token streams, so this module remains a
+// rearrangement of one protocol rather than a second Loop-only activity feed:
 // actually wants when they look at a working card:
 //
 //   is it thinking or is it working  → currentNode + the last tool call
