@@ -535,6 +535,23 @@ test('work:start refuses to start over a live attempt and says who holds it', as
   assert.ok(fs.existsSync(a.dir));
 });
 
+test('work:release keeps forensic files but makes a cancelled attempt reclaimable', async () => {
+  const { api, dataRoot } = wtApi();
+  const { projectId } = await gitProject(api, dataRoot, 'repo-wt-release');
+  await api.invoke('task:add', { projectId, title: 'Cancelled safely', body: 'Because.' });
+  const { tasks: [task] } = await api.invoke('task:list', { projectId });
+  const a = await api.invoke('work:start', { projectId, taskId: task.id });
+  fs.writeFileSync(path.join(a.dir, 'kept.txt'), 'forensics');
+
+  assert.deepEqual(await api.invoke('work:release', {
+    projectId, taskId: task.id, attemptId: a.attemptId,
+  }), { released: true });
+  assert.ok(fs.existsSync(path.join(a.dir, 'kept.txt')), 'release is not deletion');
+
+  const b = await api.invoke('work:start', { projectId, taskId: task.id });
+  assert.notEqual(b.attemptId, a.attemptId, 'the next attempt can reclaim immediately');
+});
+
 // --- a dead owner is not a missing one (t-0101) ------------------------------
 //
 // The loop process running t-0095 and t-0096 died mid-flight. The status reader

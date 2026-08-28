@@ -62,6 +62,11 @@ const POLL_MS = 5000;
 // still has to reach a decision.
 const RESTART_UNWIND_POLLS = 12;
 
+// An explicit stop is cancellation, not an instruction to wait forever. The
+// runner normally aborts its adapter immediately; this is the outer bound for
+// a provider/tool that ignores that signal before the task lease is released.
+export const DEFAULT_STOP_GRACE_MS = 15_000;
+
 /**
  * The one thing a task file cannot tell the agent: how this will be judged.
  *
@@ -428,6 +433,7 @@ export class Supervisor {
     this.history = [];         // finished attempts, for the report
     this.durations = [];       // how long each finished attempt took, for the outlier detector
     this.parked = [];          // things waiting on a person
+    this.cancellations = [];   // bounded stop outcomes after they leave inFlight
     this.unavailable = new Map(); // taskId → times its model did not answer at all
     this.deferred = new Map();    // taskId → the earliest moment it is worth trying again
     this.noEscalate = false;   // set when the soft cap trips
@@ -461,6 +467,7 @@ export class Supervisor {
       models: this.config.loop?.models ?? {},
       inFlight: [...this.inFlight.values()].map(h => h.toJSON()),
       parked: this.parked.slice(-20),
+      cancellations: this.cancellations.slice(-20),
       completed: this.history.length,
       landed: this.history.filter(h => h.landed).length,
       // Starts that did no work. A bounded session that reports 0 completed
@@ -624,8 +631,9 @@ export class Supervisor {
         await this.#begin(task);
       }
 
-      // Wind down: let what is in flight finish rather than abandoning it
-      // half-landed.
+      // Wind down. A cap or exhausted picker lets landing work finish; an
+      // explicit stop marks each heartbeat for bounded cancellation in
+      // stop(), so this same loop observes the abort or expires its grace.
       while (this.inFlight.size) await this.#tick();
 
       // A set-aside is decided while the attempt winds DOWN, so the refund
@@ -680,6 +688,13 @@ export class Supervisor {
     for (const taskId of [...this.inFlight.keys()]) {
       try {
         this.inFlight.delete(taskId);
+        const attemptId = this.attempts.get(taskId) ?? null;
+        if (attemptId) {
+          await this.invoke('work:release', {
+            projectId: this.projectId, taskId, attemptId,
+          }).catch(() => {});
+          this.attempts.delete(taskId);
+        }
         const task = this.backlog.get(taskId);
         // Landed or failed while the loop was winding down: it is finished, and
         // releasing it would put a done task back in the queue.
@@ -694,11 +709,89 @@ export class Supervisor {
   stop(reason = 'stopped by request') {
     this.stopping = reason;
     // `running` describes whether this process still owns live Loop work, not
-    // whether it will claim another task. Keep it true while in-flight work
-    // winds down so status readers and the CLI do not announce "stopped" and
-    // detach from a worker that is still changing a worktree. The intake loop
-    // also checks `stopping`; run() clears `running` in its finally block after
-    // every held task has settled or been released.
+    // whether it will claim another task. Keep it true until every cancellation
+    // either settles or reaches the bounded grace period below.
+    // Preserve the first deadline. A second click, or a stop-request file that
+    // could not be consumed, must not buy an uncooperative adapter a fresh
+    // grace period on every poll and thereby turn a bounded stop back into an
+    // infinite one.
+    const requestedAt = this.stopRequestedAt ?? this.now();
+    const graceMs = Math.max(1, Number(this.config.loop?.stopGraceMs ?? DEFAULT_STOP_GRACE_MS));
+    this.stopRequestedAt = requestedAt;
+    this.stopDeadlineAt ??= requestedAt + graceMs;
+    for (const [taskId, hb] of this.inFlight) {
+      if (hb.cancellation) continue;
+      hb.cancellation = {
+        reason,
+        requestedAt: new Date(requestedAt).toISOString(),
+        graceMs,
+        deadlineAt: new Date(requestedAt + graceMs).toISOString(),
+        stopSentAt: new Date(requestedAt).toISOString(),
+      };
+      if (!hb.interventions.includes('cancel')) hb.interventions.push('cancel');
+      const tool = hb.lastToolActivity?.tool ? `; last tool ${hb.lastToolActivity.tool}` : '';
+      this.log(`■ ${taskId} cancellation requested; ${graceMs}ms grace; `
+        + `${hb.tokensSinceProgress} token(s) and ${hb.repeats} repeat(s) since progress${tool}.`, { taskId });
+      // Dispatch immediately. Waiting for the next poll is what made "stop"
+      // only a status flag while a model continued spending in the background.
+      Promise.resolve(this.invoke('run:stop', {
+        projectId: this.projectId, runId: hb.runId,
+      })).catch(err => this.log(`  ${taskId} stop signal failed: ${err.message}`, { taskId }));
+    }
+    this.#publish();
+    return this.status();
+  }
+
+  #stopExpired() {
+    return this.stopDeadlineAt != null && this.now() >= this.stopDeadlineAt;
+  }
+
+  async #settleCancellation(taskId, hb, { timedOut = false, stage = null } = {}) {
+    if (!this.inFlight.has(taskId)) return;
+    this.inFlight.delete(taskId);
+    this.#recordSpend(taskId, hb, timedOut ? 'cancelled after grace period' : 'cancelled by request');
+    const settledAt = this.now();
+    const record = {
+      taskId,
+      runId: hb.runId,
+      reason: hb.cancellation?.reason ?? this.stopping ?? 'stopped by request',
+      requestedAt: hb.cancellation?.requestedAt ?? new Date(settledAt).toISOString(),
+      settledAt: new Date(settledAt).toISOString(),
+      elapsedMs: Math.max(0, settledAt - (this.stopRequestedAt ?? settledAt)),
+      graceMs: hb.cancellation?.graceMs ?? null,
+      timedOut,
+      stage,
+      tokensSinceProgress: hb.tokensSinceProgress,
+      repeats: hb.repeats,
+      lastToolActivity: hb.lastToolActivity,
+      recovery: 'released to queue; worktree kept',
+    };
+    hb.cancellation = { ...hb.cancellation, ...record };
+    this.cancellations.push(record);
+    const attemptId = this.attempts.get(taskId) ?? null;
+    if (attemptId) {
+      try {
+        const released = await this.invoke('work:release', {
+          projectId: this.projectId, taskId, attemptId,
+        });
+        if (released?.released !== true) {
+          throw new Error(`attempt ${attemptId} was not the current owner`);
+        }
+      } catch (err) {
+        record.recovery = 'queued; worktree lease release failed';
+        this.log(`  ${taskId} could not release attempt ${attemptId}: ${err.message}`, { taskId });
+      }
+    }
+    this.attempts.delete(taskId);
+    const task = this.backlog.get(taskId);
+    if (task && !['landed', 'failed', 'parked'].includes(task.status)) {
+      this.backlog.release(taskId, { status: 'queued' });
+    }
+    this.history.push({ taskId, landed: false, stage: 'cancelled', timedOut });
+    this.log(`↩ ${taskId} ${timedOut ? 'did not settle before the stop grace expired' : 'cancelled'} `
+      + `after ${record.elapsedMs}ms — ${record.recovery}; ${record.tokensSinceProgress} token(s), `
+      + `${record.repeats} repeat(s) since progress${record.lastToolActivity?.tool
+        ? `; last tool ${record.lastToolActivity.tool} (${record.lastToolActivity.state})` : ''}.`, { taskId });
   }
 
   /** Caps named on THIS start call, as opposed to the project's standing ones. */
@@ -922,12 +1015,18 @@ export class Supervisor {
     await new Promise(r => setTimeout(r, this.pollMs));
     // A stop asked for from somewhere else — the app's button, a second
     // terminal. It reaches the same `stop()` a local caller uses, so it winds
-    // down the same way: what is in flight finishes, nothing is abandoned
-    // half-landed.
+    // down through the same bounded cancellation path as a local Stop.
     const asked = this.stopRequested();
     if (asked && this.running) {
       this.log(`stop requested: ${asked}`);
       this.stop(asked);
+    }
+    if (this.#stopExpired()) {
+      for (const [taskId, hb] of [...this.inFlight]) {
+        await this.#settleCancellation(taskId, hb, { timedOut: true, stage: hb.stage });
+      }
+      this.#publish();
+      return;
     }
     this.#publish();
     for (const [taskId, hb] of [...this.inFlight]) {
@@ -961,6 +1060,18 @@ export class Supervisor {
   async #pollTask(taskId, hb) {
     const snapshot = await this.invoke('run:snapshot', { projectId: this.projectId, runId: hb.runId });
     const stage = snapshot.meta?.stage;
+
+    // A requested stop owns the outcome. A provider commonly reports the
+    // aborted call as `failed`; feeding that into ordinary completion would
+    // spend a rung and blame the work for an operator cancellation.
+    if (hb.cancellation) {
+      hb.observe(snapshot, { now: this.now(), workspace: this.#workspaceOf(hb) });
+      hb.currentNode = currentNodeOf(snapshot);
+      if (stage === 'done' || stage === 'failed' || stage === 'stopped' || stage === 'interrupted') {
+        await this.#settleCancellation(taskId, hb, { timedOut: false, stage });
+      }
+      return;
+    }
 
     // A restart the ladder asked for and could not take yet (see #intervene).
     // First, because the run is stopped: its bytes are frozen, so observing it
@@ -1100,6 +1211,16 @@ export class Supervisor {
   async #intervene(taskId, hb, stall) {
     let rung = nextIntervention(hb);
     hb.interventions.push(rung);
+    hb.lastStall = {
+      detector: stall.detector,
+      detail: stall.detail,
+      threshold: stall.threshold ?? null,
+      rung,
+      at: new Date(this.now()).toISOString(),
+      tokensSinceProgress: hb.tokensSinceProgress,
+      repeats: hb.repeats,
+      lastToolActivity: hb.lastToolActivity,
+    };
     this.log(`… ${taskId} ${stall.detector}: ${stall.detail} → ${rung}`, { taskId });
 
     const guidance = `SUPERVISOR: ${stall.detail} Change your approach rather than repeating it.`;

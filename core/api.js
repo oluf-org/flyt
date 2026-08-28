@@ -1027,6 +1027,11 @@ export function createApi(engine) {
     // says "still mine" on every tick.
     'work:touch': ({ projectId, taskId, attemptId }) =>
       ({ touched: poolFor(projectId).touchAttempt(taskId, attemptId) }),
+    // End ownership without deleting the forensic worktree. An explicit Loop
+    // stop uses this after aborting the run so the task is immediately
+    // recoverable rather than appearing live until the heartbeat expires.
+    'work:release': ({ projectId, taskId, attemptId }) =>
+      ({ released: poolFor(projectId).releaseAttempt(taskId, attemptId) }),
     // Owner records and worktrees that no longer belong together. Reported,
     // never auto-deleted: "remove this directory" is precisely the decision
     // that must not be guessed at.
@@ -1441,7 +1446,15 @@ export function createApi(engine) {
     },
     'loop:stop': ({ projectId, reason = 'stopped by request' }) => {
       const sup = supervisors.get(projectId);
-      if (sup) { sup.stop(reason); return { stopped: true, reason }; }
+      if (sup) {
+        const status = sup.stop(reason);
+        return {
+          stopped: !status.running,
+          requested: true,
+          cancelling: status.inFlight.length,
+          reason,
+        };
+      }
       // Not ours. If one is running elsewhere, ask it — the loop reads the
       // request once a tick and winds down the way a local stop does. Killing
       // the process instead would leave a worktree, a claimed task and a

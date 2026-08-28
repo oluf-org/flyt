@@ -57,10 +57,41 @@ export const DEFAULT_THRESHOLDS = {
   // No default: the honest threshold is a fraction of what THIS task was
   // allowed to spend, which the supervisor knows and this module does not.
   burnUsd: null,
-  burnTokens: null
+  // A task with no dollar cap still needs a no-progress ceiling. Prompt tokens
+  // grow on repeated read/think passes, so this bounds the exact failure where
+  // a worker keeps rebuilding the same context without changing the worktree.
+  // Productive work resets the counter; 120k is therefore a budget between
+  // durable changes, not a lifetime cap on a substantial task.
+  burnTokens: 120_000
 };
 
 const hash = value => crypto.createHash('sha1').update(String(value ?? '')).digest('hex').slice(0, 16);
+
+function latestToolActivity(snapshot = {}) {
+  const pending = snapshot.meta?.pendingToolCall;
+  if (pending?.tool || pending?.name) {
+    return { tool: pending.tool ?? pending.name, state: 'pending', at: pending.at ?? null };
+  }
+  let latest = null;
+  for (const [nodeId, retro] of Object.entries(snapshot.retrospectives ?? {})) {
+    for (const call of retro?.toolCalls ?? []) {
+      const candidate = {
+        nodeId,
+        tool: call.tool ?? call.name ?? 'unknown',
+        state: call.ok === false ? 'failed' : call.ok === true ? 'done' : 'unknown',
+        at: call.endedAt ?? call.at ?? call.ts ?? null,
+      };
+      // Agent retrospectives preserve call order but older records often have
+      // no timestamp. In that case the later array entry is still the latest
+      // evidence; retaining the first call would make a stopped write look as
+      // though it were still on the discovery read that preceded it.
+      if (!latest
+        || (candidate.at && (!latest.at || candidate.at >= latest.at))
+        || (!candidate.at && !latest.at)) latest = candidate;
+    }
+  }
+  return latest;
+}
 
 /**
  * A fingerprint of what has been ACCOMPLISHED, not of what is being said.
@@ -162,6 +193,9 @@ export class Heartbeat {
     this.phase = 'running';
     this.stage = null;
     this.interventions = [];     // what the supervisor has already tried (§11.4)
+    this.lastToolActivity = null;
+    this.lastStall = null;
+    this.cancellation = null;
   }
 
   /**
@@ -176,6 +210,7 @@ export class Heartbeat {
   observe(snapshot, { now = Date.now(), tokens = 0, usd = 0, workspace = null } = {}) {
     this.lastPollAt = now;
     this.stage = snapshot?.meta?.stage ?? this.stage;
+    this.lastToolActivity = latestToolActivity(snapshot) ?? this.lastToolActivity;
     const signature = workSignature(snapshot, { workspace });
     const moved = this.signature !== null && signature !== this.signature;
     const first = this.signature === null;
@@ -256,6 +291,9 @@ export class Heartbeat {
       tokensSinceProgress: this.tokensSinceProgress,
       quietMs: this.quietMs,
       usdSinceProgress: Number(this.usdSinceProgress.toFixed(6)),
+      lastToolActivity: this.lastToolActivity,
+      lastStall: this.lastStall,
+      cancellation: this.cancellation,
       interventions: this.interventions
     };
   }
@@ -274,6 +312,7 @@ export function detectStall(heartbeat, { thresholds = DEFAULT_THRESHOLDS, median
   if (heartbeat.gateFailures.length >= t.groundhogRepeats) {
     return {
       detector: 'groundhog',
+      threshold: { kind: 'repeats', limit: t.groundhogRepeats },
       detail: `The same gate failure ${heartbeat.gateFailures.length} times running. The last ${heartbeat.gateFailures.length} attempts changed nothing the gate can see.`
     };
   }
@@ -300,6 +339,7 @@ export function detectStall(heartbeat, { thresholds = DEFAULT_THRESHOLDS, median
     && quietMs >= (t.spinMs ?? 0)) {
     return {
       detector: 'spin',
+      threshold: { kind: 'spin', repeats: t.spinRepeats, ms: t.spinMs },
       detail: `${heartbeat.repeats} consecutive polls over ${Math.round(heartbeat.idleMs / 60000)} minutes with byte-identical work. Whatever it is doing, it is producing the same thing each time.`
     };
   }
@@ -312,19 +352,22 @@ export function detectStall(heartbeat, { thresholds = DEFAULT_THRESHOLDS, median
   if (heartbeat.idleMs >= t.silentMs && quietMs >= t.silentMs) {
     return {
       detector: 'silent',
+      threshold: { kind: 'quiet_ms', limit: t.silentMs },
       detail: `No file, tool or node event for ${Math.round(heartbeat.idleMs / 1000)}s.`
     };
   }
   if (t.burnUsd && heartbeat.usdSinceProgress >= t.burnUsd) {
     return {
       detector: 'burn',
+      threshold: { kind: 'usd', limit: t.burnUsd },
       detail: `$${heartbeat.usdSinceProgress.toFixed(2)} spent since anything last changed.`
     };
   }
   if (t.burnTokens && heartbeat.tokensSinceProgress >= t.burnTokens) {
     return {
       detector: 'burn',
-      detail: `${heartbeat.tokensSinceProgress} tokens since anything last changed.`
+      threshold: { kind: 'tokens', limit: t.burnTokens },
+      detail: `${heartbeat.tokensSinceProgress} tokens since anything last changed (limit ${t.burnTokens}).`
     };
   }
   // Both, and the floor is not negotiable by the median: a task is an outlier
@@ -333,6 +376,7 @@ export function detectStall(heartbeat, { thresholds = DEFAULT_THRESHOLDS, median
   if (medianMs && heartbeat.ageMs >= outlierAt) {
     return {
       detector: 'outlier',
+      threshold: { kind: 'age_ms', limit: outlierAt, medianMs, factor: t.outlierFactor },
       detail: `Running ${Math.round(heartbeat.ageMs / 60000)} minutes; ${t.outlierFactor}× the usual`
         + ` for this kind of task (${Math.round(medianMs / 60000)} min).`
     };
