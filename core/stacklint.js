@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-// Canonical stack linter. `npm run stack -- lint` is the public spelling;
-// `npm run flow -- lint` remains a compatibility alias because the Phase 5
-// landing contract itself uses that command. Both execute this file.
+// Canonical stack linter. `npm run stack -- lint` is the public spelling.
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';

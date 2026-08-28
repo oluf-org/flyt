@@ -261,7 +261,7 @@ test('a run can be started and gated entirely through the map', async () => {
   const { id: projectId } = await api.invoke('project:open', { folder: workspace });
 
   const runId = await api.invoke('flow:run', {
-    projectId, flowId: 'loop-task', userInput: 'via the map', approvalMode: 'always'
+    projectId, flowId: 'assistant', userInput: 'via the map', approvalMode: 'always'
   });
   assert.ok(runId);
 
@@ -366,7 +366,7 @@ test('the event stream carries engine events to an attached client', async () =>
     const workspace = path.join(dataRoot, 'work');
     fs.mkdirSync(workspace, { recursive: true });
     const { id: projectId } = await api.invoke('project:open', { folder: workspace });
-    await call('flow:run', { projectId, flowId: 'loop-task', userInput: 'stream me', approvalMode: 'always' });
+    await call('flow:run', { projectId, flowId: 'assistant', userInput: 'stream me', approvalMode: 'always' });
 
     await waitFor(() => (seen.includes('event: run:update') ? true : null),
       { label: 'a run:update frame', timeoutMs: 30000 });

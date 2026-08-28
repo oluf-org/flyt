@@ -117,7 +117,7 @@ A task declares what it may touch (`blastRadius`), how it is judged (`gates`), w
 For each claimable task the supervisor:
 
 1. claims the task and creates a git worktree outside the repository, minting an `attemptId` that owns it;
-2. starts the Loop compatibility projection of canonical `stacks/loop-task.stack.yaml` — one authored work block holding the Loop ceiling. The projection is seeded by code rather than shipped as a v1 asset, so a fresh cutover install can still work its backlog while the supervisor migrates to the kernel runner;
+2. starts canonical `stacks/loop-task.stack.yaml` through the kernel runner — one authored work block holding the Loop ceiling, with no graph-runner fallback;
 3. records heartbeats, model calls, tool feedback, and spend;
 4. runs the task's declared gates itself;
 5. requests an independent diff review;
@@ -162,7 +162,7 @@ Current architectural gaps worth preserving as explicit choices:
 - context can still balloon when no `contextSpec` is supplied;
 - synchronous filesystem access assumes modest run and graph sizes;
 - shell execution is controlled but not securely sandboxed;
-- pending tool calls in runs written by the compatibility runner cannot be reconstructed; canonical stack runs reconstruct an unreturned tool result from the session log;
+- pending tool calls in older daily workflow runs cannot be reconstructed; canonical stack runs reconstruct an unreturned tool result from the session log;
 - MCP/HTTP-imported tools, a full Tools management page, and code mode are not implemented; the tool library is reachable from the CLI (`flyt tools`) but has no desktop surface;
 - a killed call's spend is estimated from what it streamed, so it is bounded
   evidence rather than a measurement;

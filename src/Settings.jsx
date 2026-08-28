@@ -129,7 +129,7 @@ function FlowFilesSection() {
         Every flow is a plain <code className="mono">&lt;id&gt;.flow.yaml</code> plus a{' '}
         <code className="mono">.layout.json</code> sidecar in this folder — editable, copyable,
         diffable. To turn a flow you designed here into one the app ships with, run{' '}
-        <code className="mono">npm run flow -- adopt</code> in the repo checkout.
+        <code className="mono">npm run workflow -- adopt</code> in the repo checkout.
       </p>
       <div className="settings-row">
         <code className="mono settings-path">{info.dir}</code>

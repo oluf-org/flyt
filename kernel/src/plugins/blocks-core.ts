@@ -138,6 +138,20 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
   if (result.stopped !== 'answered') {
     return { status: 'failed', output: result.content, error: result.reason ?? result.stopped };
   }
+  if (run.config.effect === 'workspace-change') {
+    let changed = false;
+    for await (const event of session.read()) {
+      if (event.type === 'workspace.observed') {
+        changed = Boolean((event.data as { changed?: unknown })?.changed);
+      }
+    }
+    if (!changed) {
+      return {
+        status: 'failed', output: result.content,
+        error: 'required workspace change was not produced',
+      };
+    }
+  }
   return { status: 'done', output: result.content };
 }
 

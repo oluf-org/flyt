@@ -426,7 +426,7 @@ test('the loop re-picks a corrected task at the same band, with the failures in 
   let runSeq = 0;
   const invoke = async (name, args) => {
     if (name === 'work:start') return { dir: '/tmp/wt', branch: 'b', attemptId: 'a1' };
-    if (name === 'flow:run') { briefs.push(String(args.userInput ?? '')); return `run-${++runSeq}`; }
+    if (name === 'stack:run') { briefs.push(String(args.input ?? '')); return `run-${++runSeq}`; }
     if (name === 'work:touch') return { touched: true };
     if (name === 'run:snapshot') {
       return { meta: { stage: 'done', nodeStatus: { 'work-1': 'done' } },
@@ -537,7 +537,7 @@ test('an empty run is corrected at the same band, and runs out', async () => {
   let runs = 0;
   const invoke = async (name, args) => {
     if (name === 'work:start') return { dir: '/tmp/wt', branch: 'b', attemptId: 'a1' };
-    if (name === 'flow:run') { runs += 1; return `run-${runs}`; }
+    if (name === 'stack:run') { runs += 1; return `run-${runs}`; }
     if (name === 'work:touch') return { touched: true };
     if (name === 'run:snapshot') {
       return {

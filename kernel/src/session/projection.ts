@@ -136,6 +136,7 @@ export function projectRun(events: readonly SessionEvent[], runId: string): RunP
         meta.approvalMode = data.approvalMode ? String(data.approvalMode) : meta.approvalMode;
         meta.loopTaskId = data.loopTaskId ? String(data.loopTaskId) : meta.loopTaskId;
         if (typeof data.prompt === 'string') projection.prompt = data.prompt;
+        else if (typeof data.input === 'string') projection.prompt = data.input;
         break;
 
       case 'stack.resolved':
@@ -288,7 +289,11 @@ export function spendFromLog(events: readonly SessionEvent[]): SpendEntry[] {
     const callId = String(data.callId ?? '');
     const request = requests.get(callId);
     const usage = asRecord(data.usage);
-    const reported = typeof usage.cost === 'number' ? usage.cost : null;
+    const reported = typeof usage.costUsd === 'number'
+      ? usage.costUsd
+      : typeof usage.cost === 'number'
+        ? usage.cost
+        : null;
     out.push({
       callId: callId || null,
       taskId: (data.taskId ? String(data.taskId) : null) ?? request?.taskId ?? null,

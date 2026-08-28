@@ -14,6 +14,17 @@ export interface StackRef {
   id: string;
   /** The run this execution belongs to. */
   runId: string;
+  /** Durable host facts needed to explain and reconstruct an unattended run. */
+  metadata?: {
+    workspace?: string;
+    approvalMode?: string;
+    loopTaskId?: string;
+    model?: string;
+    provider?: string;
+    level?: string;
+    skills?: string[];
+    routing?: { costTier?: string; allowedModels?: string[] };
+  };
 }
 
 /** How a run ended, in the only three ways that matter to a caller. */
@@ -44,6 +55,8 @@ export interface AgentsSeam {
   resume(runId: string): Promise<AgentRun>;
   /** A run that is still in flight in this process, if any. */
   get(runId: string): AgentRun | undefined;
+  /** Ask a live run to stop at its next durable boundary. False when it is not live here. */
+  stop(runId: string, reason: string): Promise<boolean>;
 }
 
 declare module '@deepseek-ai/cordis' {

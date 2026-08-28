@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Flow DSL command line — the AI/CI surface of the DSL (STACK_LANG.md):
 //
-//   npm run flow -- lint [<file>] [--json]   validate a *.flow.yaml — or, with no
+//   npm run workflow -- lint [<file>] [--json] validate a *.flow.yaml — or, with no
 //                                            file, every flow this repo ships (exit 1 on errors)
-//   npm run flow -- templates [--json]       Node Library templates + ports + allowed overrides
-//   npm run flow -- migrate [--json]         convert legacy flows/*.json → .flow.yaml + .layout.json
-//   npm run flow -- adopt [--json]           list flows in the INSTALLED app
-//   npm run flow -- adopt <id> [--as <new-id>] [--from <dir>] [--force]
+//   npm run workflow -- templates [--json]     Node Library templates + ports + allowed overrides
+//   npm run workflow -- migrate [--json]       convert legacy flows/*.json → .flow.yaml + .layout.json
+//   npm run workflow -- adopt [--json]         list flows in the INSTALLED app
+//   npm run workflow -- adopt <id> [--as <new-id>] [--from <dir>] [--force]
 //                                            copy one into flows/ as a shipped default
 //
 // --json output is machine-readable so an AI can act on it programmatically.
@@ -107,7 +107,7 @@ function shippedFlows() {
  * Lint one flow, or — with no argument — every flow this repository ships.
  *
  * The bare form exists because it is the form the contributor guide documents:
- * "Run `npm run flow -- lint` after changing shipped flows, the DSL, template
+ * "Run `npm run workflow -- lint` after changing daily workflows, the DSL, template
  * resolution, or tool-grant linting." It did not run. It printed a usage line
  * and exited 2, so everybody who followed the instruction got an error, and a
  * task that put the documented command in its `gates` was unlandable by
@@ -220,7 +220,7 @@ function cmdAdopt() {
     for (const f of list) {
       console.log(`  ${f.id.padEnd(24)} ${f.name}${f.ships ? '  [already a shipping id]' : ''}`);
     }
-    console.log('\nadopt one with:  npm run flow -- adopt <id> [--as <new-id>]');
+    console.log('\nadopt one with:  npm run workflow -- adopt <id> [--as <new-id>]');
     return;
   }
 
@@ -266,7 +266,7 @@ switch (cmd) {
   case 'adopt': cmdAdopt(); break;
   default:
     fail([
-      'usage: npm run flow -- <command> [--json]',
+      'usage: npm run workflow -- <command> [--json]',
       '  lint <file>                                 validate a *.flow.yaml',
       '  templates                                   list Node Library templates',
       '  migrate [dir] [--rm]                        legacy *.json → *.flow.yaml',

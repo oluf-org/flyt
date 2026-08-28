@@ -151,12 +151,22 @@ export class StackRunner extends Service implements AgentsSeam {
     }
 
     const session = await this.ctx.sessions.open(stack.runId);
-    await session.append({ type: 'run.created', data: { runId: stack.runId, stackId: stack.id, input } });
+    await session.append({
+      type: 'run.created',
+      data: {
+        runId: stack.runId, stackId: stack.id, input, prompt: input,
+        ...(stack.metadata ?? {}),
+      },
+    });
 
     // The bounds that decide whether this tree may run at all are known now,
     // before any block executes. They go in the log so a run that went wrong
     // can still say what it was allowed to become (D55).
     const bounds = boundStack(root);
+    await session.append({
+      type: 'stack.resolved',
+      data: { stackId: stack.id, stack: root as unknown as JsonValue },
+    });
     await session.append({
       type: 'run.stage',
       data: { stage: 'execution', blockCount: bounds.blocks, worstCaseExpansion: bounds.expansion },
@@ -164,6 +174,9 @@ export class StackRunner extends Service implements AgentsSeam {
 
     const run = new Run(stack.runId, r => this.walkRun(r, root, input, session));
     this.runs.set(stack.runId, run);
+    void run.settled().finally(() => {
+      if (this.runs.get(stack.runId) === run) this.runs.delete(stack.runId);
+    });
     return run;
   }
 
@@ -204,10 +217,15 @@ export class StackRunner extends Service implements AgentsSeam {
     // you resume — that is what stopping is for. Treating it as terminal made
     // `resume` hand back the stop it was asked to undo, which reads as success
     // and is the exact opposite of the feature.
-    const stages = events.filter(e => e.type === 'run.stage')
-      .map(e => String((e.data as { stage?: unknown })?.stage ?? ''));
-    const last = stages.at(-1);
-    if (last === 'done' || last === 'failed') {
+    const stageEvents = events.filter(e => e.type === 'run.stage');
+    const lastStage = stageEvents.at(-1);
+    const last = String((lastStage?.data as { stage?: unknown })?.stage ?? '');
+    const restartedAfterTerminal = (last === 'done' || last === 'failed') && events.some(event => (
+      event.type === 'block.status'
+      && (event.data as { status?: unknown })?.status === 'pending'
+      && event.seq > (lastStage?.seq ?? 0)
+    ));
+    if ((last === 'done' || last === 'failed') && !restartedAfterTerminal) {
       const settled: RunOutcome = last === 'done'
         ? { status: 'done', messages: await past.deriveMessages() as Message[] }
         : {
@@ -230,6 +248,11 @@ export class StackRunner extends Service implements AgentsSeam {
         outputs.set(data.blockId, String(data.content ?? ''));
       }
       if (event.type !== 'block.status' || typeof data.blockId !== 'string') continue;
+      if (data.status === 'pending') {
+        done.delete(data.blockId);
+        outputs.delete(data.blockId);
+        continue;
+      }
       if (data.status === 'done' || data.status === 'failed') {
         done.set(data.blockId, {
           status: data.status,
@@ -251,12 +274,22 @@ export class StackRunner extends Service implements AgentsSeam {
 
     const run = new Run(runId, r => this.walkRun(r, root, input, session, done));
     this.runs.set(runId, run);
+    void run.settled().finally(() => {
+      if (this.runs.get(runId) === run) this.runs.delete(runId);
+    });
     return run;
   }
 
   /** A run still in flight in this process, if any. */
   get(runId: string): AgentRun | undefined {
     return this.runs.get(runId);
+  }
+
+  async stop(runId: string, reason: string): Promise<boolean> {
+    const run = this.runs.get(runId);
+    if (!run) return false;
+    await run.stop(reason);
+    return true;
   }
 
   // Ordinary private methods below, never `#private` ones. Cordis derives a

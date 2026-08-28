@@ -31,6 +31,7 @@ export * as flytStackCommands from './plugins/stack-commands.js';
 export * as flytBlocks from './plugins/blocks.js';
 export * as flytStackRunner from './plugins/stack-runner.js';
 export * as flytRunProjection from './plugins/run-projection.js';
+export * as flytFs from './plugins/fs.js';
 export * as flytAdapters from './plugins/llm-adapters.js';
 export * as flytBlocksCore from './plugins/blocks-core.js';
 export * as flytBlocksJudgement from './plugins/blocks-judgement.js';

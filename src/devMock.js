@@ -11,18 +11,18 @@ const snapshots = {
   'run-20260716-142200': {
     meta: {
       runId: 'run-20260716-142200', stage: 'done', error: null, turn: 1,
-      flowId: 'loop-task', flowName: 'Work one backlog task',
+      flowId: 'assistant', flowName: 'Assistant',
       nodeStatus: {
-        in: 'done', work: 'done', out: 'done',
+        in: 'done', answer: 'done', out: 'done',
         'fu1-input': 'done', 'fu1-patch': 'done', 'fu1-review': 'done'
       }
     },
     prompt: 'Write a landing page hero section for the habit tracker.',
     flow: {
-      id: 'loop-task', name: 'Work one backlog task',
+      id: 'assistant', name: 'Assistant',
       nodes: [
         { id: 'in', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
-        { id: 'work', type: 'aiStep', kind: 'ai', position: { x: 0, y: 120 }, data: { title: 'Write hero', role: 'execute' } },
+        { id: 'answer', type: 'aiStep', kind: 'ai', position: { x: 0, y: 120 }, data: { title: 'Write hero', role: 'execute' } },
         { id: 'out', type: 'output', kind: 'user', position: { x: 0, y: 240 }, data: {} },
         { id: 'fu1-input', type: 'input', kind: 'user', position: { x: 220, y: 120 },
           data: { title: 'Follow-up 1', text: 'Make the headline punchier.', origin: 'followup', turn: 1 } },
@@ -32,9 +32,9 @@ const snapshots = {
           data: { title: 'Feedback review 1', role: 'feedback-review', origin: 'followup', turn: 1 } }
       ],
       edges: [
-        { id: 'e-in-work', source: 'in', target: 'work' },
-        { id: 'e-work-out', source: 'work', target: 'out' },
-        { id: 'fu1-e-work-patch', source: 'work', target: 'fu1-patch' },
+        { id: 'e-in-answer', source: 'in', target: 'answer' },
+        { id: 'e-answer-out', source: 'answer', target: 'out' },
+        { id: 'fu1-e-answer-patch', source: 'answer', target: 'fu1-patch' },
         { id: 'fu1-e-input-patch', source: 'fu1-input', target: 'fu1-patch' },
         { id: 'fu1-e-patch-review', source: 'fu1-patch', target: 'fu1-review' },
         { id: 'fu1-e-input-review', source: 'fu1-input', target: 'fu1-review' }
@@ -42,7 +42,7 @@ const snapshots = {
     },
     retrospectives: {},
     nodeOutputs: {
-      out: '# Result — Work one backlog task\n\nBuild habits that stick.\nTrack today, see your streaks grow all week.',
+      out: '# Result — Assistant\n\nBuild habits that stick.\nTrack today, see your streaks grow all week.',
       'fu1-patch': 'New headline: "Small habits. Big streaks."',
       'fu1-review': 'The revised headline is shorter and punchier, as requested.\n\n```json\n{ "verdict": "solved", "reason": "Headline tightened per feedback." }\n```'
     },
@@ -50,7 +50,7 @@ const snapshots = {
       {
         turn: 1,
         prompt: 'Make the headline punchier.',
-        triage: { class: 'fix', reason: 'Small copy tweak to the produced hero.', contextNodes: ['work'] },
+        triage: { class: 'fix', reason: 'Small copy tweak to the produced hero.', contextNodes: ['answer'] },
         answer: null
       }
     ]
@@ -447,22 +447,21 @@ const mockRefs = [
 // In-memory Node Library mirroring core/nodestore.js (seed catalog).
 const mockTemplates = new Map(SEED_NODE_TEMPLATES.map(t => [t.id, structuredClone(t)]));
 
-// The browser preview retains only the internal projection Loop still uses.
+// The browser preview starts at the same familiar daily prompt as a fresh app.
 const mockFlows = {
-  'loop-task': {
-    id: 'loop-task',
-    name: 'Work one backlog task',
+  assistant: {
+    id: 'assistant',
+    name: 'Assistant',
     nodes: [
       { id: 'input', type: 'input', kind: 'user', position: { x: 0, y: 0 }, data: {} },
-      { id: 'work', templateId: 'work', position: { x: 0, y: 130 }, overrides: {
-        title: 'Do the task', category: 'Code general', effect: 'workspace-change',
-        toolCeiling: 'loop', tools: ['loop'],
+      { id: 'answer', templateId: 'general-analysis', position: { x: 0, y: 130 }, overrides: {
+        title: 'Answer', instructions: 'Answer the request directly.',
       } },
       { id: 'output', type: 'output', kind: 'user', position: { x: 0, y: 260 }, data: {} }
     ],
     edges: [
-      { id: 'e-input-work', source: 'input', target: 'work' },
-      { id: 'e-work-output', source: 'work', target: 'output' }
+      { id: 'e-input-answer', source: 'input', target: 'answer' },
+      { id: 'e-answer-output', source: 'answer', target: 'output' }
     ]
   }
 };
