@@ -1,6 +1,6 @@
 # Flyt
 
-Flyt is a desktop app for composing and running inspectable AI work. The shipping interface has two permanent surfaces: **Work** for running and watching, and **Build** for editing stacks and browsing contributions. **Trace** opens over either surface for the durable run record.
+Flyt is a desktop app for composing and running inspectable AI work. The shipping interface calls a reusable launchable stack a **Workflow** and has two permanent surfaces: **Work** for running and watching, and **Build** for visual/YAML editing and browsing contributions. **Trace** opens over either surface for the durable run record.
 
 ## What ships
 
@@ -36,6 +36,8 @@ runs/<runId>/                  rebuildable projections and artifacts
 ```
 
 An older project containing a linear `flows/*.flow.yaml` is readable through the migration path. Edge order becomes sequence order, supported structural Loop handoffs map to the registered block, and every generated `use` must resolve through the installed plugin registry before the flow can open or save. Opening does not mutate the source; the first stack write creates and validates `stacks/<id>.stack.yaml`, then retires the legacy file. A branched, disconnected, unknown, or unsupported structural graph is refused with its source intact instead of being flattened into different behavior. Layout sidecars are not carried forward because stack layout is derived.
+
+Chat lists only stacks marked `launchable: true`. Pipeline's Low, Medium, and High choices are presets on one canonical Workflow. A run replaces the composer with the same deterministic block program used by Build, streams state and output in place, recovers pending approval/question prompts after a renderer reconnect, and ends with an optional no-tool supervisor summary below the stack. Follow-ups create linked immutable runs rather than mutating completed work.
 
 ## Headless and Loop use
 

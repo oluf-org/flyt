@@ -1,103 +1,88 @@
-/* --- the library (t-0076) ---------------------------------------------------
-   One search over six kinds, replacing four lists. The row is the unit: what
-   it is, what it is called, what it does, and the verb for using it. Nothing
-   moves — a list that animates while you type is a list you cannot read while
-   you type. Tokens only. */
-
+/* Workflow Library: search first, narrow second, then scan by kind. */
 .library {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  overflow: auto;
+  gap: 10px;
+  overflow: hidden;
+  padding: 16px 18px 20px;
+  color: var(--tx);
 }
 
 .lib-search {
+  flex: none;
   width: 100%;
-  padding: 9px 12px;
+  box-sizing: border-box;
+  padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--card);
   color: var(--tx);
   font: inherit;
 }
 .lib-search:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 
-.lib-facets { display: flex; flex-wrap: wrap; gap: 6px; }
-
+.lib-facets { flex: none; display: flex; flex-wrap: wrap; gap: 5px; padding-bottom: 9px; border-bottom: 1px solid var(--border); }
 .lib-facet {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--card);
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
   color: var(--dim);
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
 }
-.lib-facet:hover { color: var(--tx); }
-.lib-facet.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-/* Shown, not hidden. "There are no plugins matching this" is an answer. */
+.lib-facet:hover { background: var(--side); color: var(--tx); }
+.lib-facet.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); color: var(--accent); }
 .lib-facet.none { color: var(--faint); }
-.lib-count { color: var(--faint); font-variant-numeric: tabular-nums; }
-.lib-facet.on .lib-count { color: var(--accent); }
+.lib-count { display: grid; min-width: 17px; height: 17px; place-items: center; padding: 0 3px; border-radius: 999px; background: var(--side); color: var(--faint); font-size: 9px; font-variant-numeric: tabular-nums; }
+.lib-facet.on .lib-count { background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--accent); }
 
-.lib-results { list-style: none; margin: 0; padding: 0; }
+.lib-status-line { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 18px; }
+.lib-summary { display: flex; align-items: baseline; gap: 5px; color: var(--faint); font-size: 10px; }
+.lib-summary strong { color: var(--dim); font-size: 12px; }
+.lib-groups { min-height: 0; overflow: auto; padding-right: 4px; scrollbar-gutter: stable; }
+.lib-group + .lib-group { margin-top: 18px; }
+.lib-group > header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; padding: 4px 2px 7px; background: var(--canvas); }
+.lib-group > header h2 { margin: 0; color: var(--dim); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.lib-group > header span { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
 
+.lib-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 7px; list-style: none; margin: 0; padding: 0; }
 .lib-row {
+  min-width: 0;
   display: grid;
-  grid-template-columns: 72px minmax(160px, 1fr) 2fr auto auto;
-  align-items: baseline;
-  gap: 12px;
-  padding: 8px 4px;
-  border-top: 1px solid var(--border);
-  font-size: 13px;
-}
-.lib-row:first-child { border-top: 0; }
-.lib-row:hover { background: var(--chip); }
-
-.lib-kind {
-  color: var(--faint);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: .05em;
-}
-
-.lib-title { display: flex; flex-direction: column; gap: 1px; }
-.lib-id { color: var(--faint); font-size: 11px; }
-.lib-desc { color: var(--dim); }
-
-.lib-warn {
-  color: var(--warn);
-  background: var(--warn-soft);
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.lib-act {
-  padding: 4px 12px;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  grid-template-areas: "kind title action" "kind description action" "kind meta action";
+  align-items: center;
+  column-gap: 9px;
+  row-gap: 2px;
+  padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 9px;
   background: var(--card);
-  color: var(--tx);
-  font: inherit;
+  box-shadow: var(--shadow-rest);
   font-size: 12px;
-  cursor: pointer;
 }
+.lib-row:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); background: color-mix(in srgb, var(--card) 92%, var(--accent-soft)); }
+.lib-kind { grid-area: kind; align-self: start; display: grid; width: 28px; height: 28px; place-items: center; border-radius: 7px; background: var(--accent-soft); color: var(--accent); font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.lib-title { grid-area: title; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.lib-title strong { overflow: hidden; color: var(--tx); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.lib-id { overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.lib-desc { grid-area: description; overflow: hidden; color: var(--dim); font-size: 10px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.lib-meta { grid-area: meta; min-width: 0; }
+.lib-warn { display: inline-flex; max-width: 100%; overflow: hidden; padding: 2px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.lib-act { grid-area: action; align-self: center; padding: 5px 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--tx); font: inherit; font-size: 10px; cursor: pointer; }
 .lib-act:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .lib-act:disabled { color: var(--faint); cursor: default; }
-
-.lib-empty { font-size: 12px; }
+.lib-empty { margin: 0; font-size: 10px; }
 
 @media (max-width: 720px) {
-  /* The description is the first thing to go: the kind, the name and the verb
-     are what the row is for. */
-  .lib-row { grid-template-columns: 64px 1fr auto; }
-  .lib-desc { display: none; }
+  .library { padding-inline: 12px; }
+  .lib-results { grid-template-columns: 1fr; }
+  .lib-facet { padding-inline: 7px; }
 }

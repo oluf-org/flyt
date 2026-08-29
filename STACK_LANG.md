@@ -22,6 +22,14 @@ id: review
 name: Review a change
 description: |
   Optional prose.
+launchable: true
+presets:
+  low:
+    name: Low
+    description: Fast execution.
+    overrides:
+      write:
+        effort: low
 blocks:
   - id: read
     use: flyt-blocks-core:general-analysis
@@ -40,6 +48,14 @@ all point at something, so a duplicate is refused rather than resolved.
 
 The YAML is a hand-written strict subset (D24): **block style only**. Flow style
 — `{ source: a.b, operator: is }` — is refused. Write the mapping out.
+
+`launchable: true` makes the stack a user-facing **Workflow** and includes it
+in the chat picker. The default is false, so internal stacks cannot become a
+chat option by accident. `presets` is an optional mapping of launch choices.
+Each preset has a display `name`, optional `description`, and `overrides`
+mapping block ids to partial block config. An override must name an existing
+leaf block; it cannot change containment, tools, or outputs. The resolved tree,
+preset id, and resulting config are recorded with the immutable run.
 
 ## Blocks
 

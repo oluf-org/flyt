@@ -498,7 +498,7 @@ export class StackRunner extends Service implements AgentsSeam {
       data: { blockId: node.id, status: 'failed', kind: 'until', passes: node.max, error },
     });
     steps.push({
-      node: { kind: 'block', id: node.id, use: 'until', title: null, config: {}, position: node.position },
+      node: { kind: 'block', id: node.id, use: 'until', title: null, config: {}, outputs: [], position: node.position },
       outcome: { status: 'failed', output: carried, error },
     });
     return steps;

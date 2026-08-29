@@ -144,7 +144,21 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       model, messages, signal,
       ...(schemas.length ? { tools: schemas } : {}),
     });
-    for await (const chunk of stream) ctx.emit('llm/stream', ref, chunk as LlmChunk);
+    for await (const chunk of stream) {
+      ctx.emit('llm/stream', ref, chunk as LlmChunk);
+      // Streaming must cross the same durable boundary as every other run
+      // fact. The host coalesces renderer notifications, so preserving each
+      // provider chunk here does not make the UI repaint per token, and a
+      // reconnect can fold the live text already received.
+      await session.append({
+        type: 'llm.stream',
+        data: {
+          callId, blockId, step,
+          ...(chunk.text ? { text: chunk.text } : {}),
+          ...(chunk.reasoning ? { reasoning: chunk.reasoning } : {}),
+        },
+      });
+    }
     const answer = await stream.settled();
 
     content = answer.content ?? '';

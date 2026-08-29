@@ -48,6 +48,17 @@ test('an active block shows what it is saying; a finished one shows what it prod
   assert.equal(done.running, false);
 });
 
+test('durable stream chunks survive a renderer reconnect before the response settles', () => {
+  const partial = [
+    ...RUN.slice(0, 6),
+    { seq: 7, at: 't2', type: 'llm.stream', data: { callId: 'q1', text: 'Half a ' } },
+    { seq: 8, at: 't2', type: 'llm.stream', data: { callId: 'q1', text: 'thought' } },
+  ];
+  const reopened = runView(foldTrace(partial));
+  assert.equal(reopened.blocks.plan.showing, 'Half a thought');
+  assert.equal(reopened.running, true);
+});
+
 test('parallel lanes are active together, and Work says so in the plural', () => {
   const fan = [
     ...RUN.slice(0, 2),

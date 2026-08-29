@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createKernel, flytTools, flytApprovals } from '#kernel';
 import { verifyPayload } from '../plugins/impeccable-flyt-plugin/verify-provenance.mjs';
 
-const call = { runId: 'r', blockId: 'b', step: 1, call: { id: 'c', name: 'impeccable_detect', args: { paths: ['src/v2'] } }, ceiling: ['impeccable_detect'] };
+const call = { runId: 'r', blockId: 'b', step: 1, call: { id: 'c', name: 'impeccable_detect', args: { paths: ['tests/fixtures/impeccable-bounce.css'] } }, ceiling: ['impeccable_detect'] };
 
 test('the bundled provider payload has reproducible upstream provenance', async () => {
   const verified = await verifyPayload();
@@ -48,6 +48,11 @@ test('Impeccable uses external install, inference, human confirmation and the or
     assert.equal(detected.error, undefined);
     assert.match(detected.content, /bounce-easing/,
       'the installed external artifact executes the detector bundled in the provider payload');
+    const product = await kernel.ctx.tools.execute({
+      ...call,
+      call: { ...call.call, id: 'c-clean', args: { paths: ['src/v2'] } },
+    });
+    assert.deepEqual(JSON.parse(product.content), [], 'the shipping v2 surfaces contain no detected UI antipatterns');
   } finally { await kernel.dispose(); }
 });
 

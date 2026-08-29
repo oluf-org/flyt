@@ -18,6 +18,8 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D10 | Streaming is required so a real-model run never looks idle while producing output. | Current |
 | D25 | Every project tab opens on Work; Build is one hop away and Trace opens over either when a run is addressed. | Current; supersedes lander wording |
 | D26 | Avoid large backdrop blur, animated mesh gradients, 3D tilt, and fake skeleton shimmer. Modern Chromium CSS is welcome when it improves clarity. | Current |
+| D76 | Workflow is the user-facing name for a reusable canonical stack. Build renders its containment as a deterministic snapping block program; Work renders the same program read-only while it runs. Chat lists only workflows explicitly marked launchable. | Current; extends D4-D6 and D59 |
+| D77 | The chat request is a system-owned virtual Input block. It is visible in Build and Work but is not stored as an executable YAML block. Sending replaces the composer with the run surface; the conversation and final status summary continue below the stack. | Current |
 
 ## Execution, composition, and data
 
@@ -81,6 +83,8 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D73 | The v2 cutover keeps the familiar daily entry point. Work owns project tabs and the prompt composer, Models remains a first-class catalog/metrics destination, and Build alone authors canonical stacks. Compatibility run snapshots may be projected read-only into Work/Trace; they may not revive the retired canvas, router, or a second authoring source. | Current; extends D60-D63 |
 | D74 | Loop supervision fails closed in both directions. Busy-but-unchanging work gets a default context ceiling between durable changes even without a dollar cap, with the trigger and last tool published. An explicit Stop sends cancellation immediately and has one non-renewable grace deadline; settlement releases the attempt and queue claim while retaining the worktree and durable evidence. | Current; extends D35, D40, D64-D66 |
 | D75 | Landing truth and scratch cleanup are separate outcomes. Once review, merge and canary succeed, cleanup may report an actionable failure but may not make the command look unlanded, requeue the task, or erase the merge SHA and canary evidence. Retrying an exact discard preserves `landed`. | Current; extends D35, D39 and attempt-scoped ownership |
+| D78 | Follow-up chat is a chain of linked immutable workflow runs. A system-owned Conversation Supervisor has no tools or write authority; at a general follow-up, an explicit status request, and optionally at run completion it records a bounded status/context capsule for the next run. Direct approval and block-question answers bypass it. | Current; extends D21, D40 and D55 |
+| D79 | Supervisor routing is a global model role with ordered fallback. Its context bounds preserve semantic units and fall back to a deterministic capsule when no model is available; a failed summary may warn but may not make the chat unusable. | Current |
 
 Decision numbers D30–D34 were never promoted from retired plan drafts and are intentionally unused.
 

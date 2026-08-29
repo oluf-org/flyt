@@ -133,7 +133,7 @@ function nodes(lines, children, indent, key) {
       lines.push(`${pad}  use: ${node.use}`);
       if (node.title) lines.push(`${pad}  title: ${quote(node.title)}`);
       if (node.config && Object.keys(node.config).length) mapping(lines, indent + 4, 'config', node.config);
-      if (node.outputs && Object.keys(node.outputs).length) mapping(lines, indent + 4, 'outputs', node.outputs);
+      if (node.outputs?.length) mapping(lines, indent + 4, 'outputs', node.outputs);
       continue;
     }
     lines.push(`${pad}  kind: ${node.kind}`);
@@ -161,6 +161,8 @@ export function serializeStack(stack) {
     `name: ${quote(stack.name || stack.id)}`,
   ];
   if (stack.description) lines.push(`description: ${quote(stack.description)}`);
+  if (stack.launchable) lines.push('launchable: true');
+  if (stack.presets && Object.keys(stack.presets).length) mapping(lines, 0, 'presets', stack.presets);
   nodes(lines, stack.root?.children ?? [], 0, 'blocks');
   return `${lines.join('\n')}\n`;
 }

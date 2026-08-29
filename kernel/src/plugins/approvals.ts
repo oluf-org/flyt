@@ -40,6 +40,8 @@ export interface ApprovalsConfig {
   ask?: AskHuman;
   /** The screen `smart` consults. Absent means the built-in one below. */
   screen?: (exec: ToolExecution, classification: Classification) => Verdict | Promise<Verdict>;
+  /** Interaction-only tools (for example an attended ask-human turn) that do not need a second approval before they can ask. */
+  bypass?: string[];
 }
 
 interface Classification {
@@ -98,6 +100,8 @@ export function apply(ctx: Context, config: ApprovalsConfig = {}): () => void {
         reason: `"${tool.name}" is not in this block's ceiling`,
       };
     }
+
+    if (config.bypass?.includes(tool.name)) return next();
 
     if (mode === 'always') return next();
 

@@ -27,6 +27,15 @@ const VERB = {
   pin: 'Pin',
 };
 
+const KIND_LABEL = {
+  stack: 'Workflows',
+  block: 'Blocks',
+  plugin: 'Plugins',
+  tool: 'Tools',
+  skill: 'Skills',
+  model: 'Models',
+};
+
 /**
  * @param sources — `{ stacks, blocks, plugins, tools, skills, models, modelFacts }`.
  *   Whatever the host has; an absent kind contributes nothing and is named as
@@ -44,6 +53,9 @@ export default function Library({ sources = {}, onAct = null, uiExtensions = [] 
     () => librarySearch(entries, query, { kinds }),
     [entries, query, kinds],
   );
+  const groups = useMemo(() => KINDS.map(kind => ({
+    kind, rows: matches.filter(entry => entry.kind === kind),
+  })).filter(group => group.rows.length), [matches]);
 
   const toggle = kind => setKinds(k => (k.includes(kind) ? k.filter(x => x !== kind) : [...k, kind]));
 
@@ -53,7 +65,7 @@ export default function Library({ sources = {}, onAct = null, uiExtensions = [] 
         className="lib-search"
         type="search"
         value={query}
-        placeholder="Search stacks, blocks, plugins, tools, skills and models"
+        placeholder="Search the workflow library"
         onChange={e => setQuery(e.target.value)}
         aria-label="Search the library"
       />
@@ -67,7 +79,7 @@ export default function Library({ sources = {}, onAct = null, uiExtensions = [] 
             onClick={() => toggle(kind)}
             aria-pressed={kinds.includes(kind)}
           >
-            {kind}
+            {KIND_LABEL[kind]}
             <span className="lib-count">{facets[kind]}</span>
           </button>
         ))}
@@ -81,44 +93,38 @@ export default function Library({ sources = {}, onAct = null, uiExtensions = [] 
         </p>
       )}
 
-      <ul className="lib-results">
-        {matches.map(m => (
+      <div className="lib-status-line">
+        {matches.length > 0 && <div className="lib-summary"><strong>{matches.length}</strong><span>{matches.length === 1 ? 'item' : 'items'} shown</span></div>}
+        {empty.length > 0 && <p className="lib-empty muted">Not installed: {empty.map(kind => KIND_LABEL[kind]).join(', ')}.</p>}
+      </div>
+
+      <div className="lib-groups">{groups.map(group => <section className="lib-group" key={group.kind} data-kind={group.kind}>
+        <header><h2>{KIND_LABEL[group.kind]}</h2><span>{group.rows.length}</span></header>
+        <ul className="lib-results">{group.rows.map(m => (
           <li key={`${m.kind}:${m.id}`} className="lib-row" data-kind={m.kind}>
-            <span className="lib-kind">{m.kind}</span>
+            <span className="lib-kind" aria-hidden="true">{m.kind.slice(0, 2)}</span>
             <span className="lib-title">
-              {m.title}
+              <strong>{m.title}</strong>
               <span className="mono lib-id">{m.id}</span>
             </span>
             <span className="lib-desc">{m.description}</span>
-            {m.detail?.unclassified && (
-              // A tool in no toolset cannot be reached by any ceiling (D57).
-              // Showing it as ordinary invites somebody to plan around it.
-              <span className="lib-warn" title="In no toolset, so no ceiling can reach it">unclassified</span>
-            )}
-            {m.detail?.requiresTools?.length > 0 && (
-              // A skill REQUESTS tools (D58); a human grants them. The grant
-              // moment should be loud, and this is where loud starts.
-              <span className="lib-warn" title="This skill asks for tools a human must grant">
-                asks for {m.detail.requiresTools.join(', ')}
-              </span>
-            )}
-            <button
-              type="button"
-              className="lib-act"
-              disabled={!onAct}
-              onClick={() => onAct?.(m)}
-            >
+            <span className="lib-meta">
+              {m.detail?.unclassified && (
+                <span className="lib-warn" title="In no toolset, so no ceiling can reach it">unclassified</span>
+              )}
+              {m.detail?.requiresTools?.length > 0 && (
+                <span className="lib-warn" title="This skill asks for tools a human must grant">
+                  asks for {m.detail.requiresTools.join(', ')}
+                </span>
+              )}
+            </span>
+            <button type="button" className="lib-act" disabled={!onAct} onClick={() => onAct?.(m)}>
               {VERB[m.action] ?? m.action}
             </button>
           </li>
-        ))}
-      </ul>
+        ))}</ul>
+      </section>)}</div>
 
-      {empty.length > 0 && (
-        <p className="lib-empty muted">
-          Nothing installed of: {empty.join(', ')}.
-        </p>
-      )}
       {total > matches.length && <p className="muted">{total} in total.</p>}
       {uiExtensions.filter(row => row?.contribution?.point === 'library-entry').map(row =>
         <PluginContributionSection key={`${row.pluginId}:${row.contribution.id}`}

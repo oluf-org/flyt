@@ -60,6 +60,7 @@ export const SESSION_EVENTS = [
   'message.system',
   'message.user',
   'llm.request',
+  'llm.stream',
   'llm.response',
   // What it did
   'tool.call',
@@ -68,6 +69,9 @@ export const SESSION_EVENTS = [
   // What the block produced
   'block.status',
   'block.output',
+  // System-owned conversation projection. It is deliberately not an
+  // `llm.response`: the no-tool supervisor is outside the authored workflow.
+  'supervisor.summary',
 ] as const;
 
 /** One of the session log's event types. */

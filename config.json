@@ -13,7 +13,15 @@
     "reviewer": {
       "provider": null,
       "model": null
+    },
+    "supervisor": {
+      "provider": null,
+      "model": null
     }
+  },
+  "supervisorComment": "System-owned conversation summaries. workers.supervisor should point at a cheap connected model; if it is unset or fails, Flyt emits a deterministic summary and the chat remains usable. Context is bounded internally by whole semantic units, never by slicing output text. terminalSummary controls whether the summary is added beneath each completed workflow.",
+  "supervisor": {
+    "terminalSummary": true
   },
   "retryComment": "Transient-error retry for every model call (429 / 408 / 5xx / network). A provider's own Retry-After wins when it asks for longer than the backoff; maxMs bounds any single wait so a bad hint cannot park a run.",
   "retry": {

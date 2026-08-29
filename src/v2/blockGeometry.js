@@ -9,7 +9,12 @@
 // draws those boxes absolute — moving anything means moving it in the tree,
 // which is t-0075 and does not exist yet, so this phase is read-only.
 
-import { layout, walk, missingBlocks } from '#kernel';
+// Import the browser-safe pure modules directly. The #kernel barrel also
+// exports main-process loaders and session stores; importing it here made Vite
+// crawl node:fs/node:path modules even though this renderer only needs math.
+import { layout } from '#kernel/stack/layout.js';
+import { walk } from '#kernel/stack/types.js';
+import { missingBlocks } from '#kernel/plugins/blocks.js';
 
 /** Stack units to CSS px. The kernel's metrics are ratios, not pixels. */
 export const LAYOUT_SCALE = 1;

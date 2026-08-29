@@ -16,9 +16,9 @@ export function FlytUiNode({ node }) {
 }
 
 /** Flyt form controls generated from the contributed configuration schema. */
-export function BlockConfigurationView({ contribution, value = {}, onChange = null }) {
+export function BlockConfigurationView({ contribution, pluginId = null, value = {}, onChange = null }) {
   const set = (name, next) => onChange({ ...value, [name]: next });
-  return <fieldset className="plugin-block-configuration">
+  return <fieldset className="plugin-block-configuration" data-plugin={pluginId ?? undefined}>
     {Object.entries(contribution.schema.properties).map(([name, field]) => <label key={name}>
       <span>{field.title}</span>
       {field.description && <small>{field.description}</small>}

@@ -9,7 +9,7 @@
 // a second read of the log would be a second answer.
 
 /** A block's state, as the log tells it. */
-export const BLOCK_STATES = ['pending', 'active', 'done', 'failed'];
+export const BLOCK_STATES = ['pending', 'active', 'done', 'failed', 'waiting', 'approval', 'input', 'skipped'];
 
 /**
  * Which blocks a run has touched, and how they ended.

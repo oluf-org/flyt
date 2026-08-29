@@ -143,9 +143,24 @@ test('the daily host wires the surviving entry controls into the v2 shell', () =
   assert.match(host, /<TabStrip/);
   assert.match(host, /<Lander/);
   assert.match(host, /<ModelsPage/);
-  assert.match(host, /launchDailyPrompt/);
+  assert.match(host, /runWorkflow/);
+  assert.doesNotMatch(host, /launchDailyPrompt/);
   assert.match(host, /subscribeDailyRun/);
   assert.match(shell, /composer=\{composer\}/);
   assert.match(shell, /loc\.dest === MODELS/);
   assert.doesNotMatch(host, /FlowCanvas|NodesPage|settings\.v2/);
+});
+
+test('Build exposes organized library groups, resize separators, and explicit drop slots', () => {
+  const editor = src('v2/BlockEditor.jsx');
+  const editorCss = src('v2/blockEditorStyles.css');
+  const library = src('v2/Library.jsx');
+  assert.match(editor, /role="separator"/);
+  assert.match(editor, /aria-valuenow=\{value\}/);
+  assert.match(editor, /className=\{`be-drop-zone/);
+  assert.match(editorCss, /\.be-stack\.is-dragging \.be-drop-zone/);
+  assert.match(editorCss, /\.be-container\.kind-parallel > header strong \{ color: var\(--accent\); \}/);
+  assert.doesNotMatch(editorCss, /#8b5cf6/, 'the Builder does not introduce a separate purple control color');
+  assert.match(library, /className="lib-group"/);
+  assert.match(library, /KIND_LABEL/);
 });

@@ -692,7 +692,7 @@ export function installDevMock() {
     v2Watching: async () => {
       const { foldTrace } = await import('./traceModel.js');
       const at = n => new Date(Date.UTC(2026, 7, 22, 10, 0, n)).toISOString();
-      const { parseStack } = await import('#kernel');
+      const { parseStack } = await import('#kernel/stack/parse.js');
       const stack = parseStack([
         'version: 2', 'id: preview-run', 'blocks:',
         '  - id: plan', '    use: flyt:work', '    title: Plan the change',
@@ -728,85 +728,90 @@ export function installDevMock() {
     },
 
     v2Build: async () => {
-      const [{ parseStack, createKernel, flytApi, flytBlocks, flytUiExtensions, registerStackCommands }] =
-        await Promise.all([import('#kernel')]);
-      const kernel = createKernel();
-      await kernel.ctx.plugin(flytApi);
-      await kernel.ctx.plugin(flytBlocks);
-      await kernel.ctx.plugin(flytUiExtensions);
-      await kernel.ctx.plugin({
-        name: 'preview-blocks',
-        inject: ['blocks'],
-        apply(ctx) {
-          for (const use of ['flyt:work', 'flyt:evaluate']) {
-            ctx.blocks.register({
-              use, title: use.split(':')[1], description: '', category: 'work',
-              settings: { type: 'object' }, ceiling: null,
-              async execute() { return { status: 'done', output: '' }; },
-            });
-          }
-        },
-      });
-      await kernel.ctx.plugin({
-        name: 'preview-ui', inject: ['uiExtensions'],
-        apply(ctx) {
-          const declarations = [
-            {
-              point: 'block-configuration', id: 'preview.work.config', block: 'flyt:work',
-              schema: { type: 'object', properties: {
-                prompt: { type: 'string', title: 'Prompt', description: 'What should this block do?' },
-                careful: { type: 'boolean', title: 'Careful', default: true },
-              }, required: ['prompt'] },
-            },
-            {
-              point: 'tool-view', id: 'preview.bash.view', tool: 'bash',
-              view: { component: 'notice', tone: 'info', text: 'Shell result supplied by Flyt.' },
-            },
-          ];
-          for (const contribution of declarations) {
-            const accepted = ctx.uiExtensions.invoke({ method: 'ui.contribute', params: { contribution } });
-            if (!accepted.ok) throw new Error(accepted.error.message);
-          }
-        },
-      });
+      // The browser preview deliberately imports only the pure tree editor.
+      // Importing the kernel entry point also pulls the main-process file store
+      // into Vite, which makes the otherwise useful Build fixture disappear.
+      const {
+        configureBlock, configureContainer, insertNode, moveNode,
+        removeNode, unwrapContainer, wrapNode,
+      } = await import('#kernel/stack/edit.js');
+      let root = {
+        id: 'preview', kind: 'sequence', children: [
+          {
+            id: 'plan', kind: 'block', use: 'flyt:work', title: 'Plan the change',
+            config: { prompt: 'Turn the request into a concise implementation plan.', careful: true },
+            outputs: [{ name: 'tasks', type: 'list' }],
+          },
+          {
+            id: 'fan', kind: 'parallel', maxParallel: 2, children: [
+              { id: 'left', kind: 'sequence', children: [
+                { id: 'write', kind: 'block', use: 'flyt:work', title: 'Write it', config: {}, outputs: [] },
+              ] },
+              { id: 'right', kind: 'sequence', children: [
+                { id: 'check', kind: 'block', use: 'flyt:evaluate', title: 'Check it', config: {}, outputs: [] },
+              ] },
+            ],
+          },
+          { id: 'gone', kind: 'block', use: 'flyt:not-installed', title: 'A block nobody installed', config: {}, outputs: [] },
+        ],
+      };
 
-      let root = parseStack(`version: 2
-id: preview
-name: A stack to look at
-blocks:
-  - id: plan
-    use: flyt:work
-    title: Plan the change
-  - id: fan
-    kind: parallel
-    maxParallel: 2
-    lanes:
-      - id: left
-        kind: sequence
-        blocks:
-          - id: write
-            use: flyt:work
-            title: Write it
-      - id: right
-        kind: sequence
-        blocks:
-          - id: check
-            use: flyt:evaluate
-            title: Check it
-  - id: gone
-    use: flyt:not-installed
-    title: A block nobody installed
-`).root;
-
+      const blockRows = [
+        {
+          use: 'flyt:work', title: 'Work', description: 'Give a model one focused task.', category: 'work',
+          settings: { type: 'object', properties: {
+            prompt: { type: 'string', title: 'Prompt', description: 'What should this block do?' },
+            careful: { type: 'boolean', title: 'Careful', default: true },
+          } },
+        },
+        {
+          use: 'flyt:evaluate', title: 'Evaluate', description: 'Check the result against explicit criteria.', category: 'quality',
+          settings: { type: 'object', properties: {} },
+        },
+      ];
+      const blocks = {
+        list: () => blockRows,
+        resolve: use => blockRows.find(block => block.use === use),
+      };
       const listeners = new Set();
-      kernel.ctx.on('commands/invoke', record => { for (const fn of listeners) fn(record); });
-      registerStackCommands(kernel.ctx, { get: () => root, set: next => { root = next; } });
+      const notify = (command, args, caller, result = null, error = null) => {
+        const record = { command, args, caller, at: new Date().toISOString(), result: result?.change ?? result, error };
+        for (const fn of listeners) fn(record);
+        return record;
+      };
+      const commands = {
+        async invoke(command, args = {}, caller = 'human') {
+          try {
+            let result;
+            if (command === 'stack:insert-block') result = insertNode(root, { kind: 'block', config: {}, outputs: [], ...args.block }, args.at);
+            else if (command === 'stack:move-block') result = moveNode(root, args.nodeId, args.to);
+            else if (command === 'stack:remove-block') result = removeNode(root, args.nodeId);
+            else if (command === 'stack:unwrap-container') result = unwrapContainer(root, args.nodeId);
+            else if (command === 'stack:wrap-block') {
+              const config = args.container?.config ?? {};
+              result = wrapNode(root, args.nodeId, {
+                id: args.container.id, kind: args.container.kind, children: [],
+                ...(args.container.kind === 'if' ? { else: null } : {}), ...config,
+              });
+            } else if (command === 'stack:configure-block') result = configureBlock(root, args.nodeId, args.config);
+            else if (command === 'stack:configure-container') result = configureContainer(root, args.nodeId, args.config);
+            else throw new Error(`Unknown preview command: ${command}`);
+            root = result.root;
+            notify(command, args, caller, result);
+            return result.change;
+          } catch (error) {
+            notify(command, args, caller, null, String(error?.message ?? error));
+            throw error;
+          }
+        },
+        subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+      };
 
       // What the library shows in the preview: the real block registry, plus
       // the tools and models this mock already carries. Six kinds, so the
       // facets and the empty-kind line can both be looked at.
       const library = {
-        blocks: kernel.ctx.blocks,
+        blocks,
         stacks: [{ id: 'loop-task', name: 'Work one backlog task', description: 'One work block.', blockCount: 1 }],
         tools: [
           { id: 'read_file', title: 'Read a file', description: 'Read a text file from the workspace.', effects: ['read'], risk: 'safe', scope: 'workspace' },
@@ -819,15 +824,14 @@ blocks:
       };
 
       const surface = {
-        get stack() { return { id: 'preview', root }; },
-        blocks: kernel.ctx.blocks,
+        get stack() { return { id: 'preview', name: 'A stack to look at', description: '', launchable: true, presets: {}, root }; },
+        source: 'version: 2\nid: preview\nname: A stack to look at\nlaunchable: true\nblocks:\n  - id: plan\n    use: flyt:work\n',
+        validation: { ok: true, errors: [], warnings: [], stats: { blocks: 4, depth: 3, worstCaseExpansion: 4 } },
+        history: [],
+        blocks,
         library,
-        pluginReviews: kernel.pluginReviews,
-        uiExtensions: kernel.ctx.uiExtensions.invoke({ method: 'ui.list', params: {} }).result,
-        commands: {
-          invoke: (name, args, caller) => kernel.ctx.commands.invoke(name, args, caller),
-          subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); },
-        },
+        uiExtensions: [],
+        commands,
       };
       // So a person can watch an agent edit: from the console,
       // `flytPreviewAgentEdit()` moves a block the way a model would.
@@ -921,6 +925,16 @@ blocks:
       ...(f.modes && Object.keys(f.modes).length
         ? { modes: Object.entries(f.modes).map(([id, m]) => ({ id, name: m?.name || id })) } : {})
     })),
+    listWorkflows: async () => [
+      { id: 'pipeline', name: 'Pipeline', description: 'Refine, plan, and do the work.', presets: [
+        { id: 'low', name: 'Low', description: 'Fast and focused.' },
+        { id: 'medium', name: 'Medium', description: 'Balanced.' },
+        { id: 'high', name: 'High', description: 'Deep and thorough.' },
+      ] },
+      { id: 'research', name: 'Research a question', description: 'Ground an answer in opened sources.', presets: [] },
+      { id: 'spec-an-idea', name: 'Spec an idea', description: 'Interrogate an idea and turn it into a specification.', presets: [] },
+      { id: 'learn-from-repo', name: 'Learn from a repo', description: 'Read a repository in parallel and synthesize it.', presets: [] },
+    ],
     listConfigs: async () => ({}),
     loadFlow: async id => structuredClone(mockFlows[id]),
     saveFlow: async flow => { mockFlows[flow.id] = structuredClone(flow); return flow; },
@@ -964,6 +978,18 @@ blocks:
       if (!ids.length) return null;
       return ids[mockRunCursor++ % ids.length];
     },
+    runWorkflow: async (_pid) => {
+      const ids = Object.keys(snapshots).sort().reverse();
+      return { runId: ids[mockRunCursor++ % ids.length], conversationId: 'mock-conversation' };
+    },
+    getPendingWorkflowInteractions: async () => [],
+    replyWorkflow: async (_pid, _runId) => {
+      const ids = Object.keys(snapshots).sort().reverse();
+      return { runId: ids[mockRunCursor++ % ids.length], conversationId: 'mock-conversation' };
+    },
+    decideWorkflowCall: async () => ({ ok: true }),
+    answerWorkflowQuestion: async () => ({ ok: true }),
+    onWorkflowEvent: () => () => {},
     // Comparison records (DECISIONS.md D27): kept in memory so the launch,
     // rematch and select-compare paths all run in the browser preview.
     beginCompare: async (_pid) => ({ id: 'cmp-mock-' + Date.now().toString(36) }),

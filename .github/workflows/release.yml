@@ -6,41 +6,86 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
-        node: [22]
+        include:
+          - os: windows-latest
+            build_args: --win --x64
+          - os: macos-latest
+            # macos-latest is ARM today; build Intel explicitly as well so the
+            # release does not silently drop existing Intel installations.
+            build_args: --mac --x64 --arm64
+          - os: ubuntu-latest
+            build_args: --linux --x64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 22
           cache: npm
       - run: npm ci
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "$expected" || {
+            echo "Tag $GITHUB_REF_NAME does not match package version $expected" >&2
+            exit 1
+          }
       - run: npm test
       - run: npm run build
+      - run: npm run lint
       # Unsigned builds only: never pick up a codesigning identity on macOS.
-      - name: Build and publish installers
-        run: npx electron-builder --publish always
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: Build installers (no publish)
-        run: npx electron-builder --publish never
-        if: github.event_name == 'workflow_dispatch'
+      - name: Build installers
+        run: npx electron-builder ${{ matrix.build_args }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Upload artifacts
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: flyt-${{ matrix.os }}
-          path: release/
+          path: |
+            release/*
+            !release/*-unpacked/**
+            !release/*.tmp/**
+            !release/mac*/**
+            !release/builder-debug.yml
+            !release/builder-effective-config.yaml
           retention-days: 14
+
+  # Publish only after every OS has built successfully. This avoids exposing a
+  # half-populated release when one matrix leg fails after another has uploaded.
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: flyt-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Publish GitHub release atomically
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --generate-notes --title "$GITHUB_REF_NAME"
+          fi
+          gh release upload "$GITHUB_REF_NAME" release-artifacts/* --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false

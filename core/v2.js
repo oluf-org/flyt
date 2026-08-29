@@ -63,6 +63,7 @@ export const isV2Enabled = options => v2Flag(options).enabled;
 export async function bootKernel({
   call = null, settings = null, env = process.env,
   profile = 'flyt-cli', runsRoot = null, approvalMode = 'ask',
+  approvalConfig = null,
   onReviewReady = null,
   load = () => import('#kernel')
 } = {}) {
@@ -77,7 +78,10 @@ export async function bootKernel({
     if (entry.id === 'sessions' && runsRoot) return { ...entry, config: { root: runsRoot } };
     // The surface's approval mode is a property of WHO is watching, and the
     // caller knows that; the profile only says what the default is.
-    if (entry.id === 'approvals') return { ...entry, config: { ...(entry.config ?? {}), mode: approvalMode } };
+    if (entry.id === 'approvals') return {
+      ...entry,
+      config: { ...(entry.config ?? {}), ...(approvalConfig ?? {}), mode: approvalMode },
+    };
     return entry;
   });
 

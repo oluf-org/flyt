@@ -34,11 +34,13 @@ A project tab identifies one workspace. The renderer is a single React tree; swi
 
 Stacks, plugins, tool definitions, model settings, and reference repositories are global reusable libraries. Runs, backlog tasks, context, skills, chats, spend, and Loop status are project-scoped.
 
-The shipping renderer has Work and Build as permanent surfaces. Trace opens over either when a run is addressed. Build contains the unified contribution library and containment editor. There is no route to the retired canvas, node picker, or Nodes page. Electron IPC, the CLI, and the loopback HTTP server bind host command surfaces rather than implementing separate behavior.
+The shipping renderer has Work and Build as permanent surfaces. Trace opens over either when a run is addressed. A reusable, launchable stack is called a **Workflow** in the UI; `.stack.yaml` remains the canonical internal format. Build contains the unified contribution library, deterministic containment editor, and a real YAML editor with parser/schema diagnostics and static block/depth/worst-case statistics. There is no route to the retired canvas, node picker, or Nodes page. Electron IPC, the CLI, and the loopback HTTP server bind host command surfaces rather than implementing separate behavior.
 
 ## 3. Stacks and execution
 
 The kernel stack runner walks the parsed containment tree and records the resolved stack before executing a block. It resolves every `use` through `ctx.blocks` before spending, then applies run and block ceilings through the tool seam. Editing a stack later cannot change the stack already recorded by a run.
+
+Only stacks carrying `launchable: true` appear in chat. Their optional presets are named partial block-config overrides; the Low, Medium, and High Pipeline choices are presets of one Workflow, not separate graphs. The chat message is rendered as an immutable virtual Input block but is not authored into YAML. Build and Run render the same containment recursively, including isolated Parallel lanes and both If branches, without storing coordinates.
 
 `core/stackRunner.js` remains the compatibility engine used by the current Loop supervisor and old run readers. Its old nouns are migration inputs owned by `core/brand.js`; it is not a desktop surface or the canonical stack grammar.
 
@@ -92,7 +94,11 @@ The Models page ranks a separate “Popular on OpenRouter” creator section fro
 
 ## 7. Run lifecycle and presentation
 
-Model output streams into the session log and reaches the renderer as folded trace updates. Build edits the source stack through commands; Work renders the resolved stack read-only while it runs. Both use the same derived containment geometry.
+Model output streams into the session log and reaches the renderer as folded trace updates. Sending chat replaces the composer with block-run mode. Build edits the source stack through commands; Work renders the resolved stack read-only while it runs. Both use the same derived containment geometry and the statuses pending, running, waiting, approval, input, done, failed, and skipped.
+
+Every non-empty container deletion asks whether to delete the subtree, unwrap its children, or cancel. Keyboard moves and drag/drop invoke the same registered stack commands as agent edits. Each accepted or refused authoring command is appended outside the canonical stack to authoring provenance with before/after source hashes; prior immutable run history remains session-owned.
+
+Attended tool approvals and a block's direct `ask_human` question are process-owned pending interactions. A renderer reconnect queries them again and sends the decision or answer directly back to the waiting call. These interactions never pay for a Conversation Supervisor turn.
 
 Completed nodes survive a crash. On startup, interrupted work is reconciled to a non-running state and the user chooses Resume. Completed nodes are reconstructed from persisted status and are not re-executed. A tool approval whose call stack died is failed honestly rather than pretending the pending call still exists.
 
@@ -104,7 +110,7 @@ question you cannot answer from where you are standing is a run that reads as
 stuck. Unattended, the questions are recorded as explicit assumptions instead
 of parking forever.
 
-Follow-up turns append a visible continuation to the run graph. Existing completed work remains immutable; new question, fix, or feature paths use prior artifacts through explicit edges.
+One chat chain is a linked sequence of immutable Workflow runs. A general follow-up starts a new run with `conversationId` and `parentRunId`, using a bounded status capsule from the prior run; it never reopens or mutates completed blocks. The system-owned Conversation Supervisor has no tools and no write authority. A globally configured cheap model may produce the capsule and optional terminal summary, but an unavailable or failed model falls back deterministically and emits a warning without breaking chat. Context bounds keep whole semantic outputs or omit their body; they never slice a model output mid-unit. When terminal summaries are globally enabled, `supervisor.summary` is appended to canonical `session.jsonl` and shown as the final assistant message below the stack, with the reply composer beneath it.
 
 ## 8. Autonomous Loop
 

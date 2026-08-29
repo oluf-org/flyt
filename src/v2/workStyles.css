@@ -1,97 +1,39 @@
-/* --- Work (t-0077) ----------------------------------------------------------
-   Everything happening, and it stays calm. The stack renders through the block
-   editor — the same drawing, because a second one would drift — and the only
-   thing this file adds is which block is live and what it is saying.
-
-   One animation, doing one job: a block that is working looks like it is
-   working. Tokens only. */
-
-.v2-work {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  overflow: auto;
-}
-
-.work-run {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.work-run-head {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-}
-.work-run-id { color: var(--faint); font-size: 12px; }
-.work-lanes { color: var(--accent); font-size: 12px; }
-
-.work-error {
-  margin: 0;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: var(--err-soft);
-  color: var(--err);
-  font-size: 13px;
-}
-
-.work-outputs {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.work-block {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--card);
-  padding: 10px 12px;
-}
-
-.work-block h3 {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 0 6px;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.work-state { color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-.state-done .work-state { color: var(--ok); }
-.state-failed .work-state { color: var(--err); }
-.state-active .work-state { color: var(--accent); }
-
-/* The live block. A steady pulse on the border rather than anything moving:
-   the eye should find it without being pulled away from the text that is
-   arriving inside it. */
-.work-block[data-active] {
-  border-color: var(--accent);
-  animation: work-alive 2.2s ease-in-out infinite;
-}
-
-@keyframes work-alive {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 24%, transparent); }
-  50%      { box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 10%, transparent); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  /* Still says which block is live, without moving. */
-  .work-block[data-active] { animation: none; box-shadow: 0 0 0 2px var(--accent-soft); }
-}
-
-.work-output {
-  margin: 0;
-  max-height: 260px;
-  overflow: auto;
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--tx);
-}
+.v2-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--canvas); color: var(--tx); overflow: auto; }
+.work-empty { padding: 0 24px 24px; text-align: center; }
+.work-run-mode { overflow: hidden; }
+.work-run-head { height: 62px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--card); }
+.work-run-head > div { min-width: 0; }.work-run-head h1 { margin: 2px 0 0; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.work-run-head > code { margin-left: auto; color: var(--faint); font-size: 10px; }
+.work-stage { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; padding: 4px 8px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); }
+.stage-done { color: var(--ok); background: color-mix(in srgb, var(--ok) 11%, transparent); }.stage-failed { color: var(--err); background: var(--err-soft); }
+.work-error { margin: 0; padding: 8px 14px; background: var(--err-soft); color: var(--err); border-bottom: 1px solid var(--border); font-size: 12px; }
+.work-warning { margin: 0; padding: 8px 14px; color: #a45b04; background: color-mix(in srgb, #d97706 11%, var(--card)); border-bottom: 1px solid var(--border); font-size: 12px; }
+.work-run-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 190px minmax(420px, 1fr) 310px; }
+.work-run-rail { min-height: 0; overflow: auto; padding: 16px 12px; border-right: 1px solid var(--border); background: var(--side); }
+.work-run-rail > .section-label { display: block; margin: 0 5px 12px; }
+.work-rail-step { position: relative; display: flex; align-items: center; gap: 8px; min-height: 38px; color: var(--dim); }
+.work-rail-step:not(:last-child)::after { content: ''; position: absolute; left: 12px; top: 31px; bottom: -7px; border-left: 1px solid var(--divider); }
+.work-rail-index { position: relative; z-index: 1; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 50%; background: var(--card); color: var(--faint); font-size: 10px; }
+.work-rail-step > span:last-child { min-width: 0; display: flex; flex-direction: column; }.work-rail-step strong { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }.work-rail-step small { font-size: 9px; color: var(--faint); text-transform: uppercase; }
+.work-rail-step.state-active .work-rail-index { color: white; background: var(--accent); border-color: var(--accent); }.work-rail-step.state-done .work-rail-index { color: white; background: var(--ok); border-color: var(--ok); }.work-rail-step.state-failed .work-rail-index { color: white; background: var(--err); border-color: var(--err); }
+.work-run-main { min-width: 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.work-run-main > .block-editor { flex: none; min-height: min-content; }
+.work-details { min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--side); border-left: 1px solid var(--border); }
+.work-details-tabs { display: grid; grid-template-columns: repeat(3, 1fr); padding: 8px; border-bottom: 1px solid var(--border); }
+.work-details-tabs button { border: 0; padding: 6px; background: transparent; color: var(--faint); text-transform: capitalize; font-size: 11px; cursor: pointer; border-radius: 6px; }.work-details-tabs button.active { color: var(--tx); background: var(--card); }
+.work-log, .work-results, .work-runs { min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+.work-log article, .work-results article { padding: 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--card); }
+.work-log article header { display: flex; justify-content: space-between; gap: 8px; color: var(--faint); font-size: 9px; }.work-log article p { margin: 7px 0 0; color: var(--dim); font-size: 11px; line-height: 1.45; white-space: pre-wrap; }
+.work-tool { display: flex; justify-content: space-between; margin-top: 6px; padding: 5px 7px; border-radius: 5px; background: var(--side); font-size: 10px; }
+.work-results article code { color: var(--faint); font-size: 9px; }.work-results pre { margin: 7px 0 0; white-space: pre-wrap; font: 10px/1.5 var(--mono, ui-monospace, monospace); }
+.work-runs button { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--tx); text-align: left; padding: 8px; cursor: pointer; }.work-runs small { color: var(--faint); }
+.work-interaction { margin: 0 auto 16px; width: min(720px, calc(100% - 36px)); box-sizing: border-box; padding: 14px; border: 1px solid; border-radius: 10px; background: var(--card); }
+.work-interaction.approval { border-color: #d97706; }.work-interaction.question { border-color: var(--accent); }
+.work-interaction h3 { margin: 5px 0; font-size: 14px; }.work-interaction p { color: var(--dim); font-size: 11px; }.work-interaction pre { max-height: 160px; overflow: auto; padding: 8px; background: var(--side); border-radius: 6px; font-size: 10px; white-space: pre-wrap; }
+.work-interaction > div { display: flex; flex-wrap: wrap; gap: 7px; }.work-interaction button { border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--tx); padding: 6px 10px; cursor: pointer; }.work-interaction .work-allow { background: var(--accent); color: white; border-color: var(--accent); }
+.work-interaction textarea, .work-reply textarea { width: 100%; box-sizing: border-box; resize: vertical; border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--tx); padding: 8px; }
+.work-options { margin-bottom: 9px; }.work-options button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.work-reply { position: sticky; bottom: 0; margin-top: auto; display: flex; align-items: flex-end; gap: 8px; padding: 12px 18px; background: color-mix(in srgb, var(--canvas) 92%, transparent); border-top: 1px solid var(--border); backdrop-filter: blur(8px); }
+.work-reply button { border: 0; border-radius: 7px; padding: 8px 13px; background: var(--accent); color: white; cursor: pointer; }.work-reply button:disabled { opacity: .5; }
+@media (max-width: 1050px) { .work-run-grid { grid-template-columns: 150px minmax(380px, 1fr); }.work-details { display: none; } }
+@media (max-width: 760px) { .work-run-grid { grid-template-columns: 1fr; }.work-run-rail { display: none; }.work-run-head > code { display: none; } }

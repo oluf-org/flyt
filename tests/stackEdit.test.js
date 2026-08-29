@@ -39,6 +39,7 @@ const FAN = () => stack(`blocks:
 
 const block = id => ({ kind: 'block', id, use: 'work', title: null, config: {}, position: { line: 0, path: '' } });
 const idsIn = (root, container) => [...walk(root)].find(n => n.id === container).children.map(c => c.id);
+const elseIdsIn = (root, container) => ([...walk(root)].find(n => n.id === container).else ?? []).map(c => c.id);
 
 function refusal(fn) {
   try { fn(); } catch (err) { return err; }
@@ -111,6 +112,42 @@ test('a move across containers takes the node with it', () => {
     from: { container: 'left', index: 0 },
     to: { container: 'right', index: 1 },
   });
+});
+
+test('If alternate branches are first-class edit slots', () => {
+  const root = stack(`blocks:
+  - id: gate
+    use: work
+    outputs:
+      - name: decision
+        type: boolean
+  - id: choose
+    kind: if
+    predicate:
+      source: gate.decision
+      operator: is
+      literal: true
+    body:
+      - id: yes
+        use: work
+    else:
+      - id: no-a
+        use: work
+      - id: no-b
+        use: work
+`).root;
+
+  const inserted = insertNode(root, block('no-middle'), { container: 'choose', branch: 'else', index: 1 }).root;
+  assert.deepEqual(elseIdsIn(inserted, 'choose'), ['no-a', 'no-middle', 'no-b']);
+  const reordered = moveNode(inserted, 'no-b', { container: 'choose', branch: 'else', index: 0 }).root;
+  assert.deepEqual(elseIdsIn(reordered, 'choose'), ['no-b', 'no-a', 'no-middle']);
+  const configured = configureBlock(reordered, 'no-a', { effort: 'low' }).root;
+  assert.deepEqual([...walk(configured)].find(node => node.id === 'no-a').config, { effort: 'low' });
+
+  const withoutElse = removeNode(removeNode(reordered, 'no-a').root, 'no-middle').root;
+  assert.deepEqual(elseIdsIn(removeNode(withoutElse, 'no-b').root, 'choose'), []);
+  assert.match(refusal(() => moveNode(root, 'yes', { container: 'choose', branch: 'else', index: 0 })).message,
+    /moving it out would leave a container that cannot run/);
 });
 
 test('a drop where it already was is not an error and not a change', () => {

@@ -32,6 +32,8 @@ export interface BlockNode {
   title: string | null;
   /** Whatever the block's own settings schema accepts. The parser does not interpret it. */
   config: Record<string, JsonValue>;
+  /** Structured fields this instance promises for predicates and for-each rosters. */
+  outputs: Array<{ name: string; type: 'string' | 'number' | 'boolean' | 'list' }>;
   position: Position;
 }
 
@@ -204,8 +206,19 @@ export interface Stack {
   id: string;
   name: string;
   description: string;
+  /** Only launchable workflows appear in the ordinary chat picker. */
+  launchable: boolean;
+  /** Named behavioural variants. Model/provider pinning is deliberately not a preset concern. */
+  presets: Record<string, WorkflowPreset>;
   /** The implicit root sequence. A stack is a sequence, whatever else it holds. */
   root: SequenceNode;
+}
+
+export interface WorkflowPreset {
+  name: string;
+  description: string;
+  /** Block id -> partial config merged over the authored block config for this run. */
+  overrides: Record<string, Record<string, JsonValue>>;
 }
 
 /**

@@ -8,6 +8,7 @@ description: |
   specification into claimable backlog tasks, and the handoff queues them.
   Ported as-is from the v1 flow; the interrogation keeps its multi-round
   contract (D46).
+launchable: true
 
 blocks:
   - id: interrogate

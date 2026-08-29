@@ -31,6 +31,8 @@ import {
   bootLoopKernel, startStackRun, stopStackRun, resumeStackRun,
   restartStackBlock, snapshotStackRun, snapshotStoredStackRun, storedStackRunMetadata, isKernelRun,
 } from './kernelRunner.js';
+import { StackStore } from './stackstore.js';
+import { summarizeWorkflowRun } from './conversationSupervisor.js';
 
 // Why a one-shot call to this tool needs the caller to say so. Reads off the
 // record rather than a name list, for the same reason isDestructive() does.
@@ -140,6 +142,8 @@ export class ApiError extends Error {
  */
 export function createApi(engine) {
   const { registry, flows, stackRoot, nodeLibrary, toolLibrary, runtimeConfig, publicSettings } = engine;
+  const workflowApprovals = new Map();
+  const workflowQuestions = new Map();
 
   // A project id that isn't open is a caller error, not a crash. The CLI hands
   // these straight to the user, so the message names the id it was given.
@@ -174,13 +178,15 @@ export function createApi(engine) {
   const loopKernelHost = async (entry, {
     workspace, approvalMode = 'always', worker = null, level = null,
     loopTaskId = null, skills = null,
+    profile = 'flyt-loop-worker', presetId = null, askHuman = null, askBlock = null,
+    requireLaunchable = false,
   }) => {
     entry.kernelHosts ??= new Map();
     entry.kernelRuns ??= new Map();
     const route = `${worker?.provider ?? 'auto'}/${worker?.model ?? 'auto'}`;
     const routing = worker?.routing && typeof worker.routing === 'object'
       ? JSON.stringify(worker.routing) : '';
-    const key = `${workspace}\n${route}\n${routing}\n${approvalMode}\n${level ?? ''}\n${loopTaskId ?? ''}`;
+    const key = `${workspace}\n${route}\n${routing}\n${approvalMode}\n${level ?? ''}\n${loopTaskId ?? ''}\n${profile}\n${presetId ?? ''}`;
     let host = entry.kernelHosts.get(key);
     if (!host) {
       let composed = null;
@@ -207,6 +213,11 @@ export function createApi(engine) {
         pool: engine.poolFor(entry.id),
         references: engine.references,
         settings: publicSettings(),
+        profile,
+        presetId,
+        askHuman,
+        askBlock,
+        requireLaunchable,
         onSessionEvent: runId => pushKernelUpdate(runId),
         ...(engine.kernelCallModel ? { call: engine.kernelCallModel } : {}),
       });
@@ -220,11 +231,12 @@ export function createApi(engine) {
   // A kernel host is scoped to one worktree/route. Once its last live run has
   // settled, the session on disk is the source of truth and keeping the whole
   // plugin graph resident only leaks one host per unattended attempt.
-  const watchKernelRun = (entry, host, run) => {
+  const watchKernelRun = (entry, host, run, { onSettled = null } = {}) => {
     entry.kernelWatches ??= new Map();
     if (entry.kernelWatches.get(run.runId) === run) return;
     entry.kernelWatches.set(run.runId, run);
-    void run.settled().then(async () => {
+    void run.settled().then(async outcome => {
+      await onSettled?.(outcome);
       await snapshotStackRun(host.ctx, run.runId, host.kernelModule);
     }).catch(() => {
       // The canonical session is still readable even if compatibility
@@ -241,6 +253,103 @@ export function createApi(engine) {
       if (entry.kernelHosts?.get(host.cacheKey) === host) entry.kernelHosts.delete(host.cacheKey);
       try { await host.dispose(); } catch { /* settled run remains durable */ }
     });
+  };
+
+  const workflowAskHuman = entry => async (exec, reason) => {
+    const callId = String(exec?.call?.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+    const key = `${entry.id}\n${exec.runId}\n${callId}`;
+    const interaction = {
+      kind: 'approval', projectId: entry.id, runId: exec.runId, blockId: exec.blockId,
+      callId, tool: exec.call?.name ?? 'tool', args: exec.call?.args ?? null, reason,
+    };
+    return new Promise(resolve => {
+      workflowApprovals.set(key, { resolve, interaction });
+      engine.emitWorkflow?.(entry.id, interaction);
+    });
+  };
+
+  const workflowAskBlock = entry => async question => {
+    const questionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const key = `${entry.id}\n${question.runId}\n${questionId}`;
+    const interaction = {
+      kind: 'question', projectId: entry.id, questionId, ...question,
+    };
+    return new Promise(resolve => {
+      workflowQuestions.set(key, { resolve, interaction });
+      engine.emitWorkflow?.(entry.id, interaction);
+    });
+  };
+
+  const supervisorWorker = () => {
+    const configured = runtimeConfig.workers?.supervisor;
+    if (configured?.provider && configured?.model) return configured;
+    const active = (runtimeConfig.activeModels ?? []).filter(model => model?.id && model.enabled !== false)
+      .map(model => {
+        const facts = runtimeConfig.modelFacts?.[model.id] ?? {};
+        const price = Number(facts.inUsdPerM ?? Infinity) + Number(facts.outUsdPerM ?? Infinity);
+        return { provider: model.source ?? 'auto', model: model.id, price };
+      }).sort((a, b) => a.price - b.price);
+    return active[0] ?? null;
+  };
+
+  const appendWorkflowSummary = async (entry, host, runId) => {
+    if (runtimeConfig.supervisor?.terminalSummary === false) return null;
+    const before = await snapshotStackRun(host.ctx, runId, host.kernelModule);
+    const summary = await summarizeWorkflowRun({
+      snapshot: before,
+      workflowName: before.meta?.stackId ?? null,
+      worker: supervisorWorker(),
+      resolveModelSource: engine.resolveModelSource,
+      retry: runtimeConfig.retry,
+      timeout: runtimeConfig.timeout,
+    });
+    const session = await host.ctx.sessions.open(runId);
+    await session.append({
+      type: 'supervisor.summary',
+      data: {
+        content: summary.text, capsule: summary.capsule, model: summary.model,
+        degraded: summary.degraded, reason: summary.reason,
+      },
+    });
+    if (summary.degraded) {
+      engine.emitWorkflow?.(entry.id, {
+        kind: 'warning', runId,
+        message: `The conversation supervisor used its deterministic fallback${summary.reason ? `: ${summary.reason}` : '.'}`,
+      });
+    }
+    return summary;
+  };
+
+  const startWorkflow = async ({
+    projectId, workflowId, input = '', approvalMode = null, presetId = null,
+    conversationId = null, parentRunId = null, userMessage = null,
+  }) => {
+    const entry = proj(projectId);
+    const workspace = entry.folder
+      ? new Workspace(entry.folder).ensure().root
+      : new Workspace(entry.workspaceRoot).ensure().root;
+    const host = await loopKernelHost(entry, {
+      workspace,
+      approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : runtimeConfig.approvalMode,
+      worker: runtimeConfig.workers?.executor ?? null,
+      profile: 'flyt-desktop', presetId,
+      askHuman: workflowAskHuman(entry), askBlock: workflowAskBlock(entry), requireLaunchable: true,
+    });
+    const conversation = conversationId || `conversation-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const { runId, run } = await startStackRun({
+      host, stackId: workflowId, input,
+      metadata: {
+        conversationId: conversation, parentRunId, presetId,
+        supervisorSummary: runtimeConfig.supervisor?.terminalSummary !== false,
+        userMessage: String(userMessage ?? input),
+      },
+    });
+    entry.kernelRuns.set(runId, host);
+    watchKernelRun(entry, host, run, {
+      onSettled: () => appendWorkflowSummary(entry, host, runId),
+    });
+    engine.broadcastActivity(entry.id);
+    return { runId, conversationId: conversation };
   };
 
   /** Recreate the exact host a durable run says it used. */
@@ -795,6 +904,94 @@ export function createApi(engine) {
       });
     },
 
+    'workflow:list': async () => {
+      const kernel = await import('#kernel');
+      const store = new StackStore(stackRoot, { parseStack: kernel.parseStack });
+      return store.list().flatMap(row => {
+        try {
+          const stack = store.load(row.id);
+          if (!stack.launchable) return [];
+          return [{
+            id: stack.id, name: stack.name, description: stack.description,
+            presets: Object.entries(stack.presets ?? {}).map(([id, preset]) => ({
+              id, name: preset.name, description: preset.description,
+            })),
+          }];
+        } catch { return []; }
+      });
+    },
+
+    'workflow:run': startWorkflow,
+
+    // The event channel is intentionally transient, but the pending promise is
+    // process-owned state. A renderer reload can therefore recover the exact
+    // approval/question instead of leaving a visibly waiting block with no
+    // way to answer it.
+    'workflow:pending': ({ projectId, runId }) => {
+      proj(projectId);
+      const matches = [];
+      for (const pending of workflowApprovals.values()) {
+        if (pending.interaction.projectId === projectId && pending.interaction.runId === runId) {
+          matches.push(pending.interaction);
+        }
+      }
+      for (const pending of workflowQuestions.values()) {
+        if (pending.interaction.projectId === projectId && pending.interaction.runId === runId) {
+          matches.push(pending.interaction);
+        }
+      }
+      return matches;
+    },
+
+    'workflow:decide': ({ projectId, runId, callId, approved }) => {
+      const key = `${projectId}\n${runId}\n${callId}`;
+      const pending = workflowApprovals.get(key);
+      if (!pending) return { ok: false, error: 'not-pending' };
+      workflowApprovals.delete(key);
+      pending.resolve(Boolean(approved));
+      return { ok: true };
+    },
+
+    'workflow:answer': ({ projectId, runId, questionId, answer }) => {
+      const key = `${projectId}\n${runId}\n${questionId}`;
+      const pending = workflowQuestions.get(key);
+      if (!pending) return { ok: false, error: 'not-pending' };
+      workflowQuestions.delete(key);
+      pending.resolve(String(answer ?? ''));
+      return { ok: true };
+    },
+
+    'workflow:reply': async ({ projectId, runId, text, approvalMode = null }) => {
+      const entry = proj(projectId);
+      const metadata = storedStackRunMetadata(entry.store.rootDir, runId);
+      if (!metadata?.stackId) throw new ApiError(`Run "${runId}" does not identify its workflow.`, {
+        status: 409, code: 'workflow_metadata_missing',
+      });
+      const snapshot = await snapshotStoredStackRun(entry.store.rootDir, runId);
+      let context = snapshot.conversation?.filter(turn => turn.role === 'assistant').at(-1)?.text ?? '';
+      if (!context) {
+        const summary = await summarizeWorkflowRun({
+          snapshot, workflowName: metadata.stackId,
+          worker: supervisorWorker(), resolveModelSource: engine.resolveModelSource,
+          retry: runtimeConfig.retry, timeout: runtimeConfig.timeout,
+        });
+        context = summary.text;
+      }
+      return startWorkflow({
+        projectId,
+        workflowId: metadata.stackId,
+        presetId: metadata.presetId ?? null,
+        conversationId: metadata.conversationId ?? null,
+        parentRunId: runId,
+        userMessage: String(text ?? ''),
+        approvalMode,
+        input: [
+          'CONVERSATION CONTEXT FROM THE PREVIOUS IMMUTABLE RUN:', context,
+          'USER FOLLOW-UP:', String(text ?? ''),
+        ].join('\n\n'),
+      });
+    },
+
     // The Loop execution path. It is deliberately separate from flow:run:
     // daily prompting can keep the familiar workflow UX while unattended
     // supervision has one production-kernel record and no fallback semantics.
@@ -832,6 +1029,10 @@ export function createApi(engine) {
       const store = proj(projectId).store;
       const retired = store.runRetirement(runId);
       if (retired) return { retired: true, runId, ...retired };
+      if (isKernelRun(store, runId)) {
+        return fs.readFileSync(path.join(store.runDir(runId), 'session.jsonl'), 'utf8')
+          .split(/\r?\n/).filter(Boolean).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+      }
       return store.readLog(runId);
     },
 

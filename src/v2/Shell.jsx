@@ -8,7 +8,7 @@
 // is t-0076. Models is the model catalog. Trace is none of those: it opens OVER
 // whichever surface you are on when a run is addressed, and closing it puts
 // you back. Making Trace a peer is the one thing D60 says it is not.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   DESTINATIONS, INITIAL, BUILD, MODELS, navigate, heading, traceOf, state, resolveLocation,
 } from './shellRouting.js';
@@ -41,7 +41,9 @@ import { PluginContributionSection } from './PluginContributionView.jsx';
  */
 export default function Shell({
   location = null, onNavigate, build = null, watching = null,
-  composer = null, projectTabs = null, models = null,
+  composer = null, projectTabs = null, models = null, onRunBuild = null,
+  workflowInteraction = null, onWorkflowDecide = null, onWorkflowAnswer = null,
+  onWorkflowReply = null, workflowReplyBusy = false, runs = [], onOpenRun = null,
 }) {
   const [focus, setFocus] = useState(location ?? INITIAL);
   const loc = resolveLocation(location, focus);
@@ -56,7 +58,14 @@ export default function Shell({
   // Making it a third tab would have been easier and would have made it a peer
   // of Work and Build, which is the one thing D60 says it is not.
   const [tracing, setTracing] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const showTrace = tracing && Boolean(trace);
+  useEffect(() => {
+    if (!libraryOpen) return undefined;
+    const closeOnEscape = event => { if (event.key === 'Escape') setLibraryOpen(false); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [libraryOpen]);
 
   const go = dest => {
     const next = navigate(loc, dest);
@@ -93,19 +102,14 @@ export default function Shell({
         )}
       </nav>
       <section className="v2-panel" data-surface={showTrace ? 'trace' : here.surface}>
-        {(showTrace || loc.dest === BUILD) && <h1>{showTrace ? 'Trace' : heading(loc.dest)}</h1>}
+        {showTrace && <h1>Trace</h1>}
         {showTrace
           ? <Trace trace={watching?.trace ?? null} runId={trace.run} uiExtensions={build?.uiExtensions ?? []} />
           : loc.dest === MODELS
             ? models
             : loc.dest === BUILD
             ? (
-              <>
-                {/* Everything authored, in one place: the library above what
-                    you are editing, because finding a block and putting it in
-                    a stack is one motion and used to be two screens. */}
-                <Library sources={build?.library ?? {}} onAct={build?.onAct ?? null}
-                  uiExtensions={build?.uiExtensions ?? []} />
+              <div className="v2-build-surface">
                 {build?.uiExtensions?.filter(row => row?.contribution?.point === 'settings-section').map(row =>
                   <PluginContributionSection key={`${row.pluginId}:${row.contribution.id}`}
                     contribution={row.contribution} pluginId={row.pluginId} />)}
@@ -114,7 +118,24 @@ export default function Shell({
                   blocks={build?.blocks ?? null}
                   commands={build?.commands ?? null}
                   uiExtensions={build?.uiExtensions ?? []}
+                  source={build?.source ?? ''}
+                  validation={build?.validation ?? null}
+                  history={build?.history ?? []}
+                  validateSource={build?.validateSource ?? null}
+                  saveSource={build?.saveSource ?? null}
+                  onRun={onRunBuild ? () => onRunBuild(build?.stack) : null}
+                  onOpenLibrary={() => setLibraryOpen(true)}
                 />
+                {libraryOpen && <div className="v2-library-overlay" role="presentation" onMouseDown={() => setLibraryOpen(false)}>
+                  <aside className="v2-library-drawer" role="dialog" aria-modal="true" aria-labelledby="workflow-library-title"
+                    onMouseDown={event => event.stopPropagation()}>
+                    <div className="v2-library-drawer-head"><div><span className="section-label">BUILD</span><h2 id="workflow-library-title">Workflow Library</h2>
+                      <p>Browse reusable building blocks and project resources.</p></div>
+                      <button type="button" onClick={() => setLibraryOpen(false)} aria-label="Close library">×</button></div>
+                    <Library sources={build?.library ?? {}} onAct={entry => { build?.onAct?.(entry); if (entry?.action === 'open') setLibraryOpen(false); }}
+                      uiExtensions={build?.uiExtensions ?? []} />
+                  </aside>
+                </div>}
                 {build?.pluginReview?.proposals?.length > 0 && (
                   <PluginTrustReview
                     key={`${build.pluginReview.pluginName}:${build.pluginReview.proposals.map(p => p.name).join(',')}`}
@@ -123,14 +144,22 @@ export default function Shell({
                     onDecide={build.pluginReview.decide}
                   />
                 )}
-              </>
+              </div>
             )
             : <Work
                 stack={watching?.stack ?? null}
                 blocks={build?.blocks ?? null}
                 trace={watching?.trace ?? null}
                 runId={watching?.runId ?? null}
+                snapshot={watching?.snapshot ?? null}
                 composer={composer}
+                interaction={workflowInteraction}
+                onDecide={onWorkflowDecide}
+                onAnswer={onWorkflowAnswer}
+                onReply={onWorkflowReply}
+                replyBusy={workflowReplyBusy}
+                runs={runs}
+                onOpenRun={onOpenRun}
               />}
       </section>
     </div>

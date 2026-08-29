@@ -5225,6 +5225,20 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
 .v2-panel .muted { color: var(--dim); margin: 0; }
 .v2-panel[data-surface="work"], .v2-panel[data-surface="models"] { padding: 0; display: flex; }
 .v2-panel[data-surface="models"] { overflow: hidden; display: flex; }
+.v2-panel[data-surface="build"] { padding: 0; overflow: hidden; display: flex; }
+.v2-build-surface { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
+.v2-library-overlay { position: absolute; inset: 0; z-index: 20; display: flex; background: rgba(7, 12, 9, .34); backdrop-filter: blur(1px); }
+.v2-library-drawer {
+  width: min(760px, calc(100% - 44px)); min-width: 0;
+  display: flex; flex-direction: column; overflow: hidden; background: var(--canvas);
+  border-right: 1px solid var(--border); box-shadow: 20px 0 55px rgba(0,0,0,.24);
+}
+.v2-library-drawer-head { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
+  padding: 16px 18px 13px; background: var(--card); border-bottom: 1px solid var(--border); }
+.v2-library-drawer-head h2 { margin: 2px 0 0; font-size: 17px; }
+.v2-library-drawer-head p { margin: 4px 0 0; color: var(--dim); font-size: 11px; }
+.v2-library-drawer-head button { width: 30px; height: 30px; border: 0; border-radius: 7px; background: transparent; color: var(--dim); font-size: 22px; cursor: pointer; }
+.v2-library-drawer-head button:hover { background: var(--side); color: var(--tx); }
 .daily-error {
   position: sticky; top: 8px; z-index: 4; margin: 8px auto -46px;
   width: min(680px, calc(100% - 32px)); padding: 9px 12px;

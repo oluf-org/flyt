@@ -8,7 +8,7 @@ import Shell from './Shell.jsx';
 import { INITIAL, MODELS, WORK } from './shellRouting.js';
 import { initialFlowId } from './dailyWorkModel.js';
 import {
-  dailyProjectBridge, launchDailyPrompt, readDailyRun, subscribeDailyRun,
+  dailyProjectBridge, readDailyRun, subscribeDailyRun,
 } from './dailyWorkBridge.js';
 
 const cleanIpcError = error => String(error?.message ?? error)
@@ -37,9 +37,6 @@ export default function DailyRoot() {
   const [flowId, setFlowId] = useState(null);
   const [modeId, setModeId] = useState(null);
   const [configs, setConfigs] = useState({});
-  const [launchSpec, setLaunchSpec] = useState({ fields: [], declared: [] });
-  const [launchValues, setLaunchValues] = useState({});
-  const [declaredValues, setDeclaredValues] = useState({});
   const [settings, setSettings] = useState(null);
   const [runs, setRuns] = useState([]);
   const [watching, setWatching] = useState(null);
@@ -49,6 +46,9 @@ export default function DailyRoot() {
   const [error, setError] = useState('');
   const [tabLive, setTabLive] = useState({});
   const [deck, setDeck] = useState(null);
+  const [workflowInteraction, setWorkflowInteraction] = useState(null);
+  const [blockRunHistory, setBlockRunHistory] = useState([]);
+  const [replyBusy, setReplyBusy] = useState(false);
   const activeRef = useRef(null);
   const watchingRef = useRef(null);
   const tabsRef = useRef([]);
@@ -68,18 +68,20 @@ export default function DailyRoot() {
     Promise.all([
       window.flyt.listProjects(),
       window.flyt.projectRecents(),
-      window.flyt.listFlows(),
-      (window.flyt.listConfigs?.() ?? Promise.resolve({})).catch(() => ({})),
+      window.flyt.listWorkflows(),
       window.flyt.getSettings(),
-    ]).then(([projectPayload, recentProjects, availableFlows, availableConfigs, publicSettings]) => {
+    ]).then(([projectPayload, recentProjects, availableWorkflows, publicSettings]) => {
       if (!live) return;
+      const availableFlows = (availableWorkflows ?? []).map(workflow => ({ ...workflow, modes: workflow.presets ?? [] }));
       acceptProjects(projectPayload);
       setRecents(recentProjects ?? []);
-      setFlows(availableFlows ?? []);
+      setFlows(availableFlows);
       const active = (projectPayload.tabs ?? []).find(tab => tab.id === projectPayload.active);
-      setFlowId(initialFlowId(availableFlows ?? [], active?.state?.runFlowId));
-      setModeId(active?.state?.runModeId ?? null);
-      setConfigs(availableConfigs ?? {});
+      setFlowId(initialFlowId(availableFlows, active?.state?.runWorkflowId ?? active?.state?.runFlowId));
+      setModeId(active?.state?.runPresetId ?? null);
+      setConfigs(Object.fromEntries(availableFlows.map(workflow => [workflow.id, (workflow.presets ?? []).map(preset => ({
+        ...preset, badges: [],
+      }))])));
       setSettings(publicSettings);
     }).catch(err => { if (live) setError(cleanIpcError(err)); });
     return () => { live = false; };
@@ -109,19 +111,51 @@ export default function DailyRoot() {
 
   useEffect(() => {
     let live = true;
-    if (!flowId) { setLaunchSpec({ fields: [], declared: [] }); return undefined; }
-    window.flyt.flowLaunchInputs?.(flowId)
-      .then(spec => { if (live) setLaunchSpec(spec ?? { fields: [], declared: [] }); })
-      .catch(() => { if (live) setLaunchSpec({ fields: [], declared: [] }); });
+    const projectId = projects.active;
+    const workflowId = build?.stack?.id;
+    if (!projectId || !workflowId) { setBlockRunHistory([]); return () => { live = false; }; }
+    Promise.all((runs ?? []).slice(0, 30).map(async run => {
+      try {
+        const snapshot = await window.flyt.getSnapshot(projectId, run.id);
+        if (snapshot?.meta?.stackId !== workflowId) return [];
+        return Object.entries(snapshot.meta?.nodeStatus ?? {}).map(([nodeId, status]) => {
+          const evidence = snapshot.retrospectives?.[nodeId] ?? {};
+          const output = snapshot.nodeOutputs?.[nodeId];
+          return {
+            kind: 'run', nodeId, runId: run.id,
+            command: `Run · ${status}`,
+            caller: run.name ?? run.id,
+            at: run.updatedAt ?? run.createdAt,
+            error: evidence.error ?? (status === 'failed' ? snapshot.meta?.error : null),
+            details: [
+              evidence.toolCalls?.length ? `${evidence.toolCalls.length} tool call${evidence.toolCalls.length === 1 ? '' : 's'}` : '',
+              Object.keys(evidence.usage ?? {}).length ? `usage ${JSON.stringify(evidence.usage)}` : '',
+              output != null ? `output ${String(output).slice(0, 240)}` : '',
+            ].filter(Boolean).join(' · '),
+          };
+        });
+      } catch { return []; }
+    })).then(groups => { if (live) setBlockRunHistory(groups.flat()); });
     return () => { live = false; };
-  }, [flowId]);
+  }, [projects.active, runs, build?.stack?.id]);
+
+  useEffect(() => window.flyt.onWorkflowEvent?.(entry => {
+    if (entry?.projectId !== activeRef.current) return;
+    if (entry.kind === 'warning') { setError(entry.message ?? 'The workflow supervisor degraded.'); return; }
+    if (entry.runId && watchingRef.current?.runId && entry.runId !== watchingRef.current.runId) return;
+    if (entry.kind === 'approval' || entry.kind === 'question') setWorkflowInteraction(entry);
+  }), []);
 
   const watchRun = useCallback(async (projectId, runId) => {
     if (!projectId || !runId) return;
-    const next = await readDailyRun(window.flyt, projectId, runId);
+    const [next, pending] = await Promise.all([
+      readDailyRun(window.flyt, projectId, runId),
+      window.flyt.getPendingWorkflowInteractions?.(projectId, runId) ?? Promise.resolve([]),
+    ]);
     if (projectId !== activeRef.current) return;
     watchingRef.current = next;
     setWatching(next);
+    setWorkflowInteraction((pending ?? [])[0] ?? null);
     setLocation(current => ({ dest: WORK, run: runId ?? current.run }));
   }, []);
 
@@ -173,7 +207,7 @@ export default function DailyRoot() {
     const projectId = activeRef.current;
     if (!projectId) return;
     const tab = tabsRef.current.find(item => item.id === projectId);
-    const state = { ...(tab?.state ?? {}), runFlowId: nextFlowId, runModeId: modeId };
+    const state = { ...(tab?.state ?? {}), runWorkflowId: nextFlowId, runPresetId: modeId };
     setProjects(current => ({ ...current, tabs: current.tabs.map(item => (
       item.id === projectId ? { ...item, state } : item
     )) }));
@@ -186,8 +220,8 @@ export default function DailyRoot() {
       const payload = await projectApi.activateProject(id);
       acceptProjects(payload);
       const tab = payload.tabs?.find(item => item.id === payload.active);
-      setFlowId(initialFlowId(flowsRef.current, tab?.state?.runFlowId));
-      setModeId(tab?.state?.runModeId ?? null);
+      setFlowId(initialFlowId(flowsRef.current, tab?.state?.runWorkflowId ?? tab?.state?.runFlowId));
+      setModeId(tab?.state?.runPresetId ?? null);
       setWatching(null);
       watchingRef.current = null;
       setLocation(current => ({ ...current, run: null }));
@@ -201,8 +235,8 @@ export default function DailyRoot() {
       acceptProjects(payload);
       setNewTabOpen(false);
       const tab = payload.tabs?.find(item => item.id === payload.active);
-      setFlowId(initialFlowId(flowsRef.current, tab?.state?.runFlowId));
-      setModeId(tab?.state?.runModeId ?? null);
+      setFlowId(initialFlowId(flowsRef.current, tab?.state?.runWorkflowId ?? tab?.state?.runFlowId));
+      setModeId(tab?.state?.runPresetId ?? null);
       setRecents(await window.flyt.projectRecents());
     } catch (err) { setError(cleanIpcError(err)); }
   }
@@ -217,8 +251,8 @@ export default function DailyRoot() {
       const payload = await projectApi.closeProject(id);
       acceptProjects(payload);
       const tab = payload.tabs?.find(item => item.id === payload.active);
-      setFlowId(initialFlowId(flowsRef.current, tab?.state?.runFlowId));
-      setModeId(tab?.state?.runModeId ?? null);
+      setFlowId(initialFlowId(flowsRef.current, tab?.state?.runWorkflowId ?? tab?.state?.runFlowId));
+      setModeId(tab?.state?.runPresetId ?? null);
       if (watchingRef.current && id === projects.active) {
         watchingRef.current = null;
         setWatching(null);
@@ -239,24 +273,21 @@ export default function DailyRoot() {
     setBusy(true);
     setError('');
     try {
-      const overrides = launchValues[flowId] ?? {};
-      const inputs = declaredValues[flowId] ?? {};
-      const result = await launchDailyPrompt({
-        flyt: window.flyt,
-        projectId: activeRef.current,
-        flowId,
-        text,
-        approvalMode: settings?.approvalMode ?? null,
-        modeId,
-        overrides,
-        inputs,
-        hasDeclaredInputs: Boolean(launchSpec.declared?.length),
-      });
-      if (result.projectPayload) acceptProjects(result.projectPayload);
-      setRuns(result.runs);
-      watchingRef.current = result.watching;
-      setWatching(result.watching);
-      setLocation(current => ({ dest: WORK, run: result.runId ?? current.run }));
+      let projectId = activeRef.current;
+      if (!projectId) {
+        const projectPayload = await window.flyt.createProject(text);
+        acceptProjects(projectPayload);
+        projectId = projectPayload.opened;
+        await window.flyt.saveProjectState?.(projectId, { runWorkflowId: flowId, runPresetId: modeId });
+      }
+      const started = await window.flyt.runWorkflow(projectId, flowId, text, settings?.approvalMode ?? null, modeId);
+      const [nextWatching, nextRuns, pending] = await Promise.all([
+        readDailyRun(window.flyt, projectId, started.runId), window.flyt.listRuns(projectId),
+        window.flyt.getPendingWorkflowInteractions?.(projectId, started.runId) ?? Promise.resolve([]),
+      ]);
+      setRuns(nextRuns ?? []); watchingRef.current = nextWatching; setWatching(nextWatching);
+      setWorkflowInteraction((pending ?? [])[0] ?? null);
+      setLocation({ dest: WORK, run: started.runId });
     } catch (err) { setError(cleanIpcError(err)); }
     finally { setBusy(false); }
   }
@@ -280,21 +311,7 @@ export default function DailyRoot() {
         modeId={modeId}
         onSelect={updateFlow}
         configs={configs}
-        launchInputs={launchSpec.fields ?? []}
-        launchValues={launchValues[flowId] ?? {}}
-        onLaunchInput={(nodeId, field, value) => setLaunchValues(current => {
-          const flow = { ...(current[flowId] ?? {}) };
-          const node = { ...(flow[nodeId] ?? {}) };
-          if (value == null || value === '') delete node[field]; else node[field] = value;
-          if (Object.keys(node).length) flow[nodeId] = node; else delete flow[nodeId];
-          return { ...current, [flowId]: flow };
-        })}
-        declaredInputs={launchSpec.declared ?? []}
-        declaredValues={declaredValues[flowId] ?? {}}
-        onDeclaredInput={(name, value) => setDeclaredValues(current => ({
-          ...current,
-          [flowId]: { ...(current[flowId] ?? {}), [name]: value },
-        }))}
+        canonicalWorkflows
         models={models}
         activeModels={settings?.activeModels ?? []}
         hasKey={settings?.hasKey ?? true}
@@ -325,6 +342,7 @@ export default function DailyRoot() {
   const buildView = build ? {
     ...build,
     stack: build.stack,
+    history: [...(build.history ?? []), ...blockRunHistory],
     edits,
     reviewRevision,
     uiExtensionRevision,
@@ -339,6 +357,39 @@ export default function DailyRoot() {
         build={buildView}
         watching={watching}
         composer={composer}
+        runs={runs}
+        onOpenRun={runId => watchRun(activeRef.current, runId).catch(err => setError(cleanIpcError(err)))}
+        workflowInteraction={workflowInteraction}
+        onWorkflowDecide={async approved => {
+          const at = workflowInteraction; if (!at) return;
+          await window.flyt.decideWorkflowCall(activeRef.current, at.runId, at.callId, approved);
+          setWorkflowInteraction(null);
+        }}
+        onWorkflowAnswer={async answer => {
+          const at = workflowInteraction; if (!at) return;
+          await window.flyt.answerWorkflowQuestion(activeRef.current, at.runId, at.questionId, answer);
+          setWorkflowInteraction(null);
+        }}
+        onWorkflowReply={async text => {
+          if (!watchingRef.current?.runId || replyBusy) return;
+          setReplyBusy(true); setError('');
+          try {
+            const started = await window.flyt.replyWorkflow(activeRef.current, watchingRef.current.runId, text, settings?.approvalMode ?? null);
+            const [next, pending] = await Promise.all([
+              readDailyRun(window.flyt, activeRef.current, started.runId),
+              window.flyt.getPendingWorkflowInteractions?.(activeRef.current, started.runId) ?? Promise.resolve([]),
+            ]);
+            watchingRef.current = next; setWatching(next); setLocation({ dest: WORK, run: started.runId });
+            setWorkflowInteraction((pending ?? [])[0] ?? null);
+            setRuns(await window.flyt.listRuns(activeRef.current));
+          } catch (err) { setError(cleanIpcError(err)); } finally { setReplyBusy(false); }
+        }}
+        workflowReplyBusy={replyBusy}
+        onRunBuild={stack => {
+          if (!stack?.id) return;
+          updateFlow(stack.id, stack.presets?.[modeId] ? modeId : Object.keys(stack.presets ?? {})[0] ?? null);
+          watchingRef.current = null; setWatching(null); setLocation({ dest: WORK, run: null });
+        }}
         projectTabs={projectTabs}
         models={<ModelsPage
           onChanged={() => window.flyt.getSettings().then(setSettings)}

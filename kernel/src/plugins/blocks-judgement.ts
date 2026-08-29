@@ -22,10 +22,11 @@ export const inject = ['blocks', 'sessions'];
 const judge = (
   use: string, title: string, description: string, brief: string,
   output: { name: string; type?: 'string' | 'list' },
+  ceiling: readonly string[] = [],
 ): BlockDefinition => ({
   use, title, description, category: 'judgement',
   settings: AI_STEP_SETTINGS as unknown as JsonValue,
-  ceiling: [],
+  ceiling,
   outputs: [{ name: output.name, type: output.type ?? 'string' }],
   execute: (run: BlockRun) => executeAiStep(run, brief, output),
 });
@@ -48,6 +49,7 @@ export const promptRefinerBlock = judge(
   'Rewrite the request into a precise, self-contained brief (goal, constraints, deliverable, acceptance).',
   'Rewrite the request into a precise, self-contained brief: goal, constraints, deliverable, acceptance. Ask a clarifying question only when an ambiguity would materially change the work; otherwise take the reading a competent person would and mark it.',
   { name: 'brief' },
+  ['ask_human'],
 );
 
 /** Contribute the judgement blocks. */

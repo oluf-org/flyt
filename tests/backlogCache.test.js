@@ -47,12 +47,14 @@ test('a task rewritten within the same second as its previous write is still re-
   const task = backlog.add({ title: 'keep me', goal: 'g' });
   const file = path.join(backlog.rootDir, `${task.id}.task.md`);
 
-  // Pin the file to a whole-millisecond mtime BEFORE the first list, so the
-  // cache key and the file's stat agree exactly. Otherwise sub-millisecond
-  // stat precision would make "same mtime" unattainable in the test.
-  const mtime = Math.trunc(fs.statSync(file).mtimeMs);
-  fs.utimesSync(file, new Date(mtime), new Date(mtime));
-  const size = fs.statSync(file).size;
+  // Preserve the filesystem's own representation of this timestamp. APFS can
+  // report the Date we set a fraction of a millisecond lower, so comparing it
+  // with our requested integer made the fixture itself platform-sensitive.
+  const pinned = fs.statSync(file);
+  fs.utimesSync(file, pinned.atime, pinned.mtime);
+  const baseline = fs.statSync(file);
+  const mtime = baseline.mtimeMs;
+  const size = baseline.size;
 
   backlog.list(); // populate the cache with the original parse, keyed on mtime/size
 
@@ -61,7 +63,7 @@ test('a task rewritten within the same second as its previous write is still re-
   // filesystem presents to a reader. The cache must not trust it.
   const rewritten = fs.readFileSync(file, 'utf8').replace('keep me', 'KEEP ME');
   fs.writeFileSync(file, rewritten);
-  fs.utimesSync(file, new Date(mtime), new Date(mtime));
+  fs.utimesSync(file, pinned.atime, pinned.mtime);
 
   assert.equal(fs.statSync(file).mtimeMs, mtime, 'test setup: same mtime');
   assert.equal(fs.statSync(file).size, size, 'test setup: same size');

@@ -1,14 +1,21 @@
 import { foldTrace } from '../traceModel.js';
 
-const DONE = new Set(['done', 'complete', 'completed', 'skipped']);
+const DONE = new Set(['done', 'complete', 'completed']);
 const ACTIVE = new Set(['active', 'running', 'execution', 'thinking', 'streaming', 'tool']);
 const FAILED = new Set(['failed', 'error', 'interrupted', 'rejected']);
+const WAITING = new Set(['waiting', 'awaiting_input']);
+const APPROVAL = new Set(['approval', 'awaiting_approval']);
+const INPUT = new Set(['input']);
 
 export function normalizeBlockStatus(value) {
   const status = String(value ?? 'pending').toLowerCase();
   if (DONE.has(status)) return 'done';
   if (ACTIVE.has(status)) return 'active';
   if (FAILED.has(status)) return 'failed';
+  if (WAITING.has(status)) return 'waiting';
+  if (APPROVAL.has(status)) return 'approval';
+  if (INPUT.has(status)) return 'input';
+  if (status === 'skipped') return 'skipped';
   return 'pending';
 }
 
@@ -95,6 +102,9 @@ function modelEvents(log, runId, startSeq) {
 /** One renderer-safe source for both Work and Trace from a persisted run. */
 export function watchingFromRun(runId, snapshot, log = []) {
   if (!runId || !snapshot || snapshot.retired) return null;
+  if (Array.isArray(log) && log.some(event => event?.type === 'run.created')) {
+    return { runId, stack: stackFromSnapshot(snapshot), trace: foldTrace(log), snapshot };
+  }
   const events = [];
   let seq = 1;
   const at = snapshot.meta?.updatedAt ?? snapshot.meta?.createdAt ?? null;

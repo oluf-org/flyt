@@ -24,6 +24,9 @@ export async function buildSurface(host = globalThis.window?.flyt ?? null) {
     if (!surface || typeof surface !== 'object') return null;
     let uiExtensions = Array.isArray(surface.uiExtensions) ? surface.uiExtensions : [];
     let stack = surface.stack ?? null;
+    let source = surface.source ?? '';
+    let validation = surface.validation ?? null;
+    let history = Array.isArray(surface.history) ? surface.history : [];
     const blockRows = Array.isArray(surface.blocks) ? surface.blocks : null;
     const blocks = blockRows ? {
       list: () => blockRows,
@@ -34,6 +37,9 @@ export async function buildSurface(host = globalThis.window?.flyt ?? null) {
       subscribe: listener => typeof host.onV2Command === 'function'
         ? host.onV2Command(record => {
           if (record?.stack?.root) stack = record.stack;
+          if (typeof record?.source === 'string') source = record.source;
+          if (record?.validation) validation = record.validation;
+          if (Array.isArray(record?.history)) history = record.history;
           listener(record);
         })
         : () => {},
@@ -44,11 +50,35 @@ export async function buildSurface(host = globalThis.window?.flyt ?? null) {
       if (entry?.kind !== 'stack' || entry?.action !== 'open') return null;
       const next = await host.v2OpenStack(entry.id, 'human');
       if (next?.stack?.root) stack = next.stack;
+      if (typeof next?.source === 'string') source = next.source;
+      if (next?.validation) validation = next.validation;
+      if (Array.isArray(next?.history)) history = next.history;
       if (Array.isArray(next?.library?.stacks)) library.stacks = next.library.stacks;
       return next;
     } : surface.onAct;
     const live = { ...surface, blocks, commands, library, onAct };
+    if (typeof host.v2ValidateStackSource === 'function') {
+      live.validateSource = source => host.v2ValidateStackSource(source);
+    }
+    if (typeof host.v2SaveStackSource === 'function') {
+      live.saveSource = async (nextSource, caller = 'human') => {
+        const next = await host.v2SaveStackSource(nextSource, caller);
+        if (next?.ok) {
+          source = next.source ?? nextSource;
+          validation = next;
+          if (Array.isArray(next.history)) history = next.history;
+          if (next.stack?.root) stack = next.stack;
+        }
+        return next;
+      };
+    }
+    if (typeof host.v2StackHistory === 'function') {
+      live.loadHistory = (nodeId = null, limit = 200) => host.v2StackHistory(nodeId, limit);
+    }
     Object.defineProperty(live, 'stack', { enumerable: true, get: () => stack });
+    Object.defineProperty(live, 'source', { enumerable: true, get: () => source });
+    Object.defineProperty(live, 'validation', { enumerable: true, get: () => validation });
+    Object.defineProperty(live, 'history', { enumerable: true, get: () => history });
     Object.defineProperty(live, 'uiExtensions', { enumerable: true, get: () => uiExtensions });
     if (typeof host.onV2UiExtensionsChange === 'function') {
       live.subscribeUiExtensions = listener => host.onV2UiExtensionsChange(rows => {

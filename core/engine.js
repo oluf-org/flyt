@@ -571,6 +571,13 @@ export function createEngine({
     if (canEmit()) emit('chat:event', { projectId, at: new Date().toISOString(), ...event });
   }
 
+  // Attended workflow interaction: approvals, direct block questions, and a
+  // degraded-supervisor warning. Durable run facts stay in session.jsonl;
+  // this channel only carries the prompt that needs a person right now.
+  function emitWorkflow(projectId, event) {
+    if (canEmit()) emit('workflow:event', { projectId, at: new Date().toISOString(), ...event });
+  }
+
   // --- Push plumbing (per project) ---
   // Bursts of state changes (parallel waves, streaming chunks) coalesce into at
   // most one push per (project, run) per tick window: the snapshot is built from
@@ -841,7 +848,7 @@ export function createEngine({
     hasKey, subscriptionStatus, resolveModelSource, capabilityCache,
     capabilityProbe: effectiveCapabilityProbe, effectiveSafetyModel,
     // Push
-    pushStateFor, broadcastActivity, pushUpdateFor, pushSnapshotFor, emitLoop, loopLog, loopLogFor, emitChat,
+    pushStateFor, broadcastActivity, pushUpdateFor, pushSnapshotFor, emitLoop, loopLog, loopLogFor, emitChat, emitWorkflow,
     // A project id that is gone for good (an appdata project adopted into a
     // real folder) takes its push channels with it.
     dropPushState,

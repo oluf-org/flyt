@@ -1,76 +1,46 @@
 version: 2
 id: learn-from-repo
-name: Learn from a repo
-description: |
-  Point it at a repository and a question. Orient says where this project
-  stands in relation to it; the readings fan out in parallel; a synthesis
-  merges them; the plan proposes claimable backlog work; the handoff queues it.
-  Ported as-is from the v1 flow, with the fanout collapsed into parallel
-  lanes over the same general-analysis block.
-
+name: "Learn from a repo"
+description: "Point it at a repository and a question. Orient says where this project\nstands in relation to it; the readings fan out in parallel; a synthesis\nmerges them; the plan proposes claimable backlog work; the handoff queues it.\nPorted as-is from the v1 flow, with the fanout collapsed into parallel\nlanes over the same general-analysis block."
+launchable: true
 blocks:
   - id: orient
     use: flyt-blocks-inquiry:orient
-    title: Where are we standing?
+    title: "Where are we standing?"
     config:
-      effort: high
-      instructions: |
-        Say what THIS project is and what relationship it has to the repository:
-        empty, the same kind of thing, overlapping problems, or no real overlap.
-        A bounded survey — manifests and guidance plus at most two load-bearing
-        files from each side. Everything after you is aimed by your answer.
-
+      effort: "high"
+      instructions: "Say what THIS project is and what relationship it has to the repository:\nempty, the same kind of thing, overlapping problems, or no real overlap.\nA bounded survey — manifests and guidance plus at most two load-bearing\nfiles from each side. Everything after you is aimed by your answer.\n"
   - id: read
     kind: parallel
     lanes:
       - id: read-architecture
         use: flyt-blocks-core:general-analysis
-        title: Architecture
+        title: "Architecture"
         config:
-          instructions: |
-            Read the repository and answer the question in the brief, on the
-            architecture lane: how the thing is put together, and why. Ground
-            every claim in a file and a line you actually opened.
+          instructions: "Read the repository and answer the question in the brief, on the\narchitecture lane: how the thing is put together, and why. Ground\nevery claim in a file and a line you actually opened.\n"
       - id: read-practices
         use: flyt-blocks-core:general-analysis
-        title: Practices
+        title: "Practices"
         config:
-          instructions: |
-            Read the repository and answer the question in the brief, on the
-            practices lane: the conventions, tests and tooling it runs on.
-            Ground every claim in a file and a line you actually opened.
+          instructions: "Read the repository and answer the question in the brief, on the\npractices lane: the conventions, tests and tooling it runs on.\nGround every claim in a file and a line you actually opened.\n"
       - id: read-adversarial
         use: flyt-blocks-core:general-analysis
-        title: Adversarial
+        title: "Adversarial"
         config:
-          instructions: |
-            Read the repository and answer the question in the brief, on the
-            adversarial lane: where it would fail, and what it quietly assumes.
-            Ground every claim in a file and a line you actually opened.
-
+          instructions: "Read the repository and answer the question in the brief, on the\nadversarial lane: where it would fail, and what it quietly assumes.\nGround every claim in a file and a line you actually opened.\n"
+  - id: combine
+    use: flyt-blocks-core:combine
+    title: "Combine"
   - id: synthesise
     use: flyt-blocks-core:general-analysis
-    title: Merge the reads
+    title: "Merge the reads"
     config:
-      instructions: |
-        Several independent readings of one repository follow, each with a
-        different slant. Merge them into one account: what is agreed, what only
-        one lane saw, and what they contradict. Where two lanes disagree, say so
-        rather than picking a winner silently. Use the orientation to separate
-        what is relevant here from what is not, and drop what does not apply.
-
+      instructions: "Several independent readings of one repository follow, each with a\ndifferent slant. Merge them into one account: what is agreed, what only\none lane saw, and what they contradict. Where two lanes disagree, say so\nrather than picking a winner silently. Use the orientation to separate\nwhat is relevant here from what is not, and drop what does not apply.\n"
   - id: plan
     use: flyt-blocks-loop:backlog-plan
-    title: What we should do
+    title: "What we should do"
     config:
-      instructions: |
-        Propose only work this project should genuinely do as a result of what
-        was read. Confirm every path in blastRadius. Where a task points at the
-        repository that was read, name the path as reference:<name>/<path> and
-        say it lives there. If the orientation says the relation is unrelated, a
-        short backlog or an honest "nothing here transfers" is the correct
-        answer.
-
+      instructions: "Propose only work this project should genuinely do as a result of what\nwas read. Confirm every path in blastRadius. Where a task points at the\nrepository that was read, name the path as reference:<name>/<path> and\nsay it lives there. If the orientation says the relation is unrelated, a\nshort backlog or an honest \"nothing here transfers\" is the correct\nanswer.\n"
   - id: handoff
     use: flyt-blocks-loop:loop-handoff
-    title: Queue it
+    title: "Queue it"

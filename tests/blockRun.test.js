@@ -120,7 +120,7 @@ test('a block with no tool calls runs, and its events fire in the documented ord
 
   assert.deepEqual(await typesIn(boot.session), [
     'turn.start', 'message.system', 'message.user',
-    'step.start', 'llm.request', 'llm.response', 'step.end',
+    'step.start', 'llm.request', 'llm.stream', 'llm.response', 'step.end',
     'turn.end',
   ]);
   await boot.kernel.dispose();

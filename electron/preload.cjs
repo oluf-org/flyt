@@ -5,6 +5,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 const api = {
   v2Build: () => ipcRenderer.invoke('v2:build'),
   v2OpenStack: (id, caller = 'human') => ipcRenderer.invoke('v2:open-stack', id, caller),
+  v2ValidateStackSource: (source) => ipcRenderer.invoke('v2:validate-source', source),
+  v2SaveStackSource: (source, caller = 'human') => ipcRenderer.invoke('v2:save-source', source, caller),
+  v2StackHistory: (nodeId = null, limit = 200) => ipcRenderer.invoke('v2:history', nodeId, limit),
   v2InvokeCommand: (name, args, caller = 'human') =>
     ipcRenderer.invoke('v2:command', name, args, caller),
   onV2Command: (cb) => {
@@ -63,6 +66,21 @@ const api = {
   openWorkspace: (pid, runId) => ipcRenderer.invoke('workspace:open', pid, runId),
   runFlow: (pid, id, userInput, workspaceDir, approvalMode, launch = null) =>
     ipcRenderer.invoke('flow:run', pid, id, userInput, workspaceDir, approvalMode, launch),
+  listWorkflows: () => ipcRenderer.invoke('workflow:list'),
+  runWorkflow: (pid, workflowId, input, approvalMode = null, presetId = null) =>
+    ipcRenderer.invoke('workflow:run', pid, workflowId, input, approvalMode, presetId),
+  getPendingWorkflowInteractions: (pid, runId) => ipcRenderer.invoke('workflow:pending', pid, runId),
+  replyWorkflow: (pid, runId, text, approvalMode = null) =>
+    ipcRenderer.invoke('workflow:reply', pid, runId, text, approvalMode),
+  decideWorkflowCall: (pid, runId, callId, approved) =>
+    ipcRenderer.invoke('workflow:decide', pid, runId, callId, approved),
+  answerWorkflowQuestion: (pid, runId, questionId, answer) =>
+    ipcRenderer.invoke('workflow:answer', pid, runId, questionId, answer),
+  onWorkflowEvent: (cb) => {
+    const handler = (_e, entry) => cb(entry);
+    ipcRenderer.on('workflow:event', handler);
+    return () => ipcRenderer.removeListener('workflow:event', handler);
+  },
   getConfig: () => ipcRenderer.invoke('config:get'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),

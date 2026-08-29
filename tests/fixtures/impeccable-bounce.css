@@ -1,0 +1,2 @@
+/* Detector fixture: deliberately overshoots so the external package has a stable positive case. */
+.detector-fixture { transition: transform 120ms cubic-bezier(.2, 1.2, .4, 1); }

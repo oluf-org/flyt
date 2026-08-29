@@ -57,7 +57,10 @@ async function inTempRepo(fn) {
 test('a failure buried in the middle of a huge suite survives the cut', async () => {
   await inTempRepo(async dir => {
     const script = path.join(dir, 'suite.js');
-    fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(tapRun())});\nprocess.exit(1);\n`);
+    // Let Node drain the pipe before it exits. process.exit() can discard a
+    // large buffered stdout write on Unix, which made this test validate a
+    // randomly truncated fixture instead of the gate clipper.
+    fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(tapRun())});\nprocess.exitCode = 1;\n`);
 
     const run = await runGates([`node ${JSON.stringify(script)}`], { cwd: dir });
     const output = run.failure.output;
@@ -83,7 +86,7 @@ test('several failures are all kept, and the ones that did not fit are counted',
     }
     lines.push('# fail 400');
     const script = path.join(dir, 'suite.js');
-    fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(lines.join('\n'))});\nprocess.exit(1);\n`);
+    fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(lines.join('\n'))});\nprocess.exitCode = 1;\n`);
 
     const run = await runGates([`node ${JSON.stringify(script)}`], { cwd: dir });
     const output = run.failure.output;
@@ -97,7 +100,7 @@ test('several failures are all kept, and the ones that did not fit are counted',
 test('output that fits is passed through untouched', async () => {
   await inTempRepo(async dir => {
     const script = path.join(dir, 'suite.js');
-    fs.writeFileSync(script, 'process.stdout.write("not ok 1 - small\\n# fail 1\\n");process.exit(1);');
+    fs.writeFileSync(script, 'process.stdout.write("not ok 1 - small\\n# fail 1\\n");process.exitCode=1;');
     const run = await runGates([`node ${JSON.stringify(script)}`], { cwd: dir });
     assert.equal(run.failure.output, 'not ok 1 - small\n# fail 1\n');
   });
@@ -108,7 +111,7 @@ test('a runner that is not TAP still gets its error lines kept', async () => {
     const noise = Array.from({ length: 4000 }, (_, i) => `  compiled module ${i} with nothing to say`);
     noise.splice(2000, 0, "src/thing.ts(41,7): error TS2322: Type 'string' is not assignable to type 'number'.");
     const script = path.join(dir, 'suite.js');
-    fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(noise.join('\n'))});\nprocess.exit(2);\n`);
+    fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(noise.join('\n'))});\nprocess.exitCode = 2;\n`);
 
     const run = await runGates([`node ${JSON.stringify(script)}`], { cwd: dir });
     assert.match(run.failure.output, /error TS2322/,

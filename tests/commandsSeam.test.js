@@ -178,7 +178,8 @@ test('every stack command describes its arguments, so a model can call it', asyn
   const { ctx, kernel } = await withStack();
   const commands = ctx.commands.list();
   assert.deepEqual(commands.map(c => c.name).sort(), [
-    'stack:configure-block', 'stack:insert-block', 'stack:move-block', 'stack:remove-block',
+    'stack:configure-block', 'stack:configure-container', 'stack:insert-block',
+    'stack:move-block', 'stack:remove-block', 'stack:unwrap-container', 'stack:wrap-block',
   ]);
   for (const command of commands) {
     assert.ok(command.description, `${command.name} has no description`);

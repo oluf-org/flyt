@@ -34,15 +34,21 @@ const classificationOf = tool => {
   };
 };
 
-function configuredTree(root, { model = null, level = null, skillText = '' } = {}) {
+function configuredTree(root, { model = null, level = null, skillText = '', overrides = {} } = {}) {
   const visit = node => {
     if (node.kind === 'block') {
-      if (node.use !== 'flyt-blocks-core:work') return { ...node, config: { ...node.config } };
-      const instructions = [node.config?.instructions, skillText].filter(Boolean).join('\n\n');
+      const base = { ...node.config, ...(overrides[node.id] ?? {}) };
+      // Every shipped leaf is model-backed. Pinning only `work` left plan,
+      // judgement, and inquiry blocks on their schema default
+      // (`openrouter/auto`), so a workflow could silently use a different
+      // provider from the executor selected for the run.
+      const instructions = node.use === 'flyt-blocks-core:work'
+        ? [base.instructions, skillText].filter(Boolean).join('\n\n')
+        : base.instructions;
       return {
         ...node,
         config: {
-          ...node.config,
+          ...base,
           ...(model ? { model } : {}),
           ...(['low', 'medium', 'high'].includes(level) ? { effort: level } : {}),
           ...(instructions ? { instructions } : {}),
@@ -67,6 +73,7 @@ async function eventsFor(ctx, id) {
 
 function compatibilitySnapshot(kernel, events, id, runsRoot) {
   const projected = kernel.projectRun(events, id);
+  const created = events.find(event => event.type === 'run.created')?.data ?? {};
   kernel.materialise(path.join(runsRoot, id), projected);
 
   const toolCalls = events.filter(event => event.type === 'tool.result').map(event => ({
@@ -88,15 +95,33 @@ function compatibilitySnapshot(kernel, events, id, runsRoot) {
     toolCalls,
     usage,
   }]));
+  const conversation = events.flatMap(event => {
+    if (event.type === 'message.user') return [{ role: 'user', text: String(event.data?.content ?? ''), at: event.at }];
+    if (event.type === 'supervisor.summary') return [{
+      role: 'assistant', text: String(event.data?.content ?? ''), at: event.at,
+      supervisor: true, degraded: Boolean(event.data?.degraded), reason: event.data?.reason ?? null,
+    }];
+    return [];
+  });
 
   return {
     meta: {
       ...projected.meta,
+      conversationId: created.conversationId ?? null,
+      parentRunId: created.parentRunId ?? null,
+      presetId: created.presetId ?? null,
+      supervisorSummary: created.supervisorSummary !== false,
+      userMessage: created.userMessage ?? created.input ?? null,
       nodeStatus: { ...projected.meta.blockStatus },
       currentNodeId: projected.meta.currentBlockId,
     },
     prompt: projected.prompt,
-    stack: projected.stack,
+    stack: projected.stack ? {
+      version: 2,
+      id: projected.meta.stackId ?? 'workflow-run',
+      name: projected.meta.stackName ?? projected.meta.stackId ?? 'Workflow run',
+      description: '', launchable: true, presets: {}, root: projected.stack,
+    } : null,
     flow: null,
     tasks: null,
     retrospectives,
@@ -104,6 +129,7 @@ function compatibilitySnapshot(kernel, events, id, runsRoot) {
     taskOutputs: {},
     followups: [],
     summaries: [],
+    conversation,
     session: { head: events.at(-1)?.seq ?? 0, canonical: true },
   };
 }
@@ -149,6 +175,8 @@ export async function bootLoopKernel({
   approvalMode = 'always', runtimeConfig = {}, resolveModelSource = null,
   worker = null, level = null, loopTaskId = null, skills = null,
   backlog = null, pool = null, references = null, settings = {},
+  profile = 'flyt-loop-worker', ceiling = null, presetId = null, askHuman = null,
+  requireLaunchable = false, askBlock = null,
   load = null, call = callModel,
   onSessionEvent = null,
 } = {}) {
@@ -159,9 +187,13 @@ export async function bootLoopKernel({
   };
   const booted = await bootKernel({
     call: true,
-    profile: 'flyt-loop-worker',
+    profile,
     runsRoot,
     approvalMode,
+    approvalConfig: (typeof askHuman === 'function' || typeof askBlock === 'function') ? {
+      ...(typeof askHuman === 'function' ? { ask: askHuman } : {}),
+      ...(typeof askBlock === 'function' ? { bypass: ['ask_human'] } : {}),
+    } : null,
     load: importer,
   });
   if (!booted) throw Object.assign(new Error('The kernel is off, so Loop cannot start a task.'), { code: 'kernel_unavailable' });
@@ -216,6 +248,15 @@ export async function bootLoopKernel({
       classification: classificationOf(tool),
       async execute(args, execution) {
         if (booted.ctx.fs.root !== workspace.root) throw new Error('Kernel filesystem binding does not match the task worktree.');
+        if (tool.name === 'ask_human' && typeof askBlock === 'function') {
+          const answer = await askBlock({
+            runId: execution.runId, blockId: execution.blockId,
+            question: String(args?.question ?? ''),
+            options: Array.isArray(args?.options) ? args.options.map(String) : [],
+            context: String(args?.context ?? ''),
+          });
+          return { content: safeJson({ answered: true, answer: String(answer ?? '') }) };
+        }
         const record = await executeTool(tool.name, args, {
           store, runId: execution.runId, nodeId: execution.blockId,
           taskId: loopTaskId, workspace, backlog, pool, references,
@@ -256,10 +297,18 @@ export async function bootLoopKernel({
         // collapse a malformed stack, a missing block plugin, and a missing
         // file into the same "There is no stack" message precisely where the
         // unattended harness most needs a repairable cause.
-        return configuredTree(stacks.load(id).root, { model, level, skillText });
+        const stack = stacks.load(id);
+        if (requireLaunchable && !stack.launchable) {
+          throw new Error(`Workflow "${id}" is internal and cannot be launched from chat.`);
+        }
+        const preset = presetId ? stack.presets?.[presetId] : null;
+        if (presetId && !preset) throw new Error(`Workflow "${id}" has no preset "${presetId}".`);
+        return configuredTree(stack.root, { model, level, skillText, overrides: preset?.overrides ?? {} });
       },
     },
-    ceiling: kernel.LOOP_CEILING,
+    ceiling: ceiling ?? (profile === 'flyt-loop-worker'
+      ? kernel.LOOP_CEILING
+      : [...new Set(booted.ctx.blocks.list().flatMap(block => block.ceiling ?? []))]),
   });
 
   // Host-only facts used by snapshotStackRun; never exposed to a renderer.
@@ -272,7 +321,8 @@ export async function bootLoopKernel({
       workspace: workspace.root, approvalMode, loopTaskId, model,
       ...(worker?.provider ? { provider: worker.provider } : {}),
       ...(worker?.routing ? { routing: worker.routing } : {}),
-      level, skills: skills ?? [],
+      level, skills: skills ?? [], presetId,
+      profile, requireLaunchable,
     },
     skillLoad,
     beginRun(id) { baselines.set(id, captureWorkspaceSignature(workspace.root)); },

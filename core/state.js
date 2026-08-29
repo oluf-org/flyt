@@ -15,7 +15,13 @@ export class RunStore {
     // One clock read for both: the id IS the creation instant (timeFromRunId
     // recovers it for runs whose meta predates createdAt), so a second read
     // would have them disagree by a millisecond for no reason.
-    const now = new Date();
+    // Two starts can share one millisecond on fast machines. Keep creation
+    // order in the file-backed id by advancing one millisecond past the newest
+    // run already on disk; otherwise equal createdAt values leave the UI order
+    // to a random suffix and make "newest first" nondeterministic.
+    const latest = this.listRuns().at(-1);
+    const latestMs = latest ? Date.parse(timeFromRunId(latest) ?? '') : NaN;
+    const now = new Date(Math.max(Date.now(), Number.isNaN(latestMs) ? 0 : latestMs + 1));
     const runId = now.toISOString().replace(/[:.]/g, '-') + '-' +
       Math.random().toString(36).slice(2, 6);
     const dir = this.runDir(runId);

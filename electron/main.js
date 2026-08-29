@@ -266,6 +266,21 @@ ipcMain.handle('v2:command', async (_event, name, args, caller = 'human') => {
   if (!v2BuildController) throw new Error('The Build command surface is not available');
   return v2BuildController.invoke(String(name ?? ''), args ?? null, caller === 'agent' ? 'agent' : 'human');
 });
+ipcMain.handle('v2:validate-source', async (_event, source) => {
+  await v2Host();
+  if (!v2BuildController) throw new Error('The Build validation surface is not available');
+  return v2BuildController.validate(String(source ?? ''));
+});
+ipcMain.handle('v2:save-source', async (_event, source, caller = 'human') => {
+  await v2Host();
+  if (!v2BuildController) throw new Error('The Build source surface is not available');
+  return v2BuildController.saveSource(String(source ?? ''), caller === 'agent' ? 'agent' : 'human');
+});
+ipcMain.handle('v2:history', async (_event, nodeId = null, limit = 200) => {
+  await v2Host();
+  if (!v2BuildController) throw new Error('The Build history surface is not available');
+  return v2BuildController.history(nodeId, limit);
+});
 
 bindIpc('flow:list');
 bindIpc('flow:load', id => ({ id }));
@@ -274,6 +289,16 @@ bindIpc('tool:list');
 bindIpc('config:get');
 bindIpc('flow:run', (projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) =>
   ({ projectId, flowId, userInput, workspaceDir, approvalMode, launch }));
+bindIpc('workflow:list');
+bindIpc('workflow:run', (projectId, workflowId, input = '', approvalMode = null, presetId = null) =>
+  ({ projectId, workflowId, input, approvalMode, presetId }));
+bindIpc('workflow:pending', (projectId, runId) => ({ projectId, runId }));
+bindIpc('workflow:reply', (projectId, runId, text = '', approvalMode = null) =>
+  ({ projectId, runId, text, approvalMode }));
+bindIpc('workflow:decide', (projectId, runId, callId, approved) =>
+  ({ projectId, runId, callId, approved }));
+bindIpc('workflow:answer', (projectId, runId, questionId, answer = '') =>
+  ({ projectId, runId, questionId, answer }));
 bindIpc('run:list', projectId => ({ projectId }));
 bindIpc('run:log', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:snapshot', (projectId, runId) => ({ projectId, runId }));

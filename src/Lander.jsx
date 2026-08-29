@@ -169,6 +169,7 @@ export default function Lander({
   projectName, projectless, recents = [], seed,
   runs = [], onOpenRun,
   flows = [], flowId, modeId = null, onSelect, configs = {},
+  canonicalWorkflows = false,
   compareOn = false, onToggleCompare, slotB = null, onSelectB,
   launchInputs = [], launchValues, onLaunchInput,
   declaredInputs = [], declaredValues, onDeclaredInput,
@@ -208,7 +209,7 @@ export default function Lander({
       {/* The config modal (the cog's "later stage"): pick a config of the chosen
           workflow and tune its per-node settings. Rendered at the lander root so
           its backdrop covers the whole home area. */}
-      {!compareOn && configOpen && selectedFlow && (
+      {!canonicalWorkflows && !compareOn && configOpen && selectedFlow && (
         <ConfigModal
           flow={selectedFlow}
           configs={configs[flowId] ?? []}
@@ -271,11 +272,11 @@ export default function Lander({
               </div>
             ) : (
               <div className="lander-workflow-group">
-                <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow" composerRef={taRef} configs={configs} flowsOnly />
+                <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow" composerRef={taRef} configs={configs} flowsOnly={!canonicalWorkflows} />
                 {/* The cog is the "later stage" of choosing: which config of the
                     picked workflow to run, and its per-node settings. Disabled
                     until a workflow is chosen — there's nothing to configure. */}
-                <button
+                {!canonicalWorkflows && <button
                   type="button"
                   className={'lander-config-cog' + (configOpen ? ' open' : '')}
                   onClick={() => setConfigOpen(true)}
@@ -286,7 +287,7 @@ export default function Lander({
                   aria-label="Configure workflow"
                 >
                   <span aria-hidden>⚙</span>
-                </button>
+                </button>}
               </div>
             )}
 

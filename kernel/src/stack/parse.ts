@@ -76,6 +76,8 @@ const isMapping = (v: YamlValue): v is Record<string, YamlValue> =>
  * be told from a sentence.
  */
 const OUTPUT_TYPES = ['string', 'number', 'boolean', 'list'];
+const STACK_KEYS = new Set(['version', 'id', 'name', 'description', 'launchable', 'presets', 'blocks']);
+const PRESET_KEYS = new Set(['name', 'description', 'overrides']);
 
 const BLOCK_KEYS = new Set(['id', 'use', 'title', 'config', 'outputs']);
 const SEQUENCE_KEYS = new Set(['id', 'kind', 'blocks']);
@@ -348,13 +350,14 @@ function readIfBranch(
   return value.map((child, i) => readNode(ctx, child, `${path}.${key}[${i}]`, depth + 1));
 }
 
-function readOutputs(ctx: Ctx, raw: Record<string, YamlValue>, id: string, path: string, line: number): void {
+function readOutputs(ctx: Ctx, raw: Record<string, YamlValue>, id: string, path: string, line: number): BlockNode['outputs'] {
   const value = raw['outputs'];
-  if (value === undefined || value === null) return;
+  if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) {
     throw new StackError('a block "outputs" is a list, each entry a mapping with a "name"', path, line);
   }
   const fields = new Map<string, string>();
+  const outputs: BlockNode['outputs'] = [];
   value.forEach((entry, i) => {
     const entryPath = `${path}.outputs[${i}]`;
     if (!isMapping(entry)) {
@@ -371,8 +374,10 @@ function readOutputs(ctx: Ctx, raw: Record<string, YamlValue>, id: string, path:
         entryPath, line);
     }
     fields.set(name, type);
+    outputs.push({ name, type: type as BlockNode['outputs'][number]['type'] });
   });
   ctx.outputs.set(id, { line, fields });
+  return outputs;
 }
 
 function checkPredicate(ctx: Ctx, predicate: IfPredicate, path: string, line: number): void {
@@ -428,11 +433,12 @@ function readNode(ctx: Ctx, raw: YamlValue, path: string, depth: number): StackN
     if (title !== undefined && title !== null && typeof title !== 'string') {
       throw new StackError('"title" must be text', path, line);
     }
-    readOutputs(ctx, raw, id, path, line);
+    const outputs = readOutputs(ctx, raw, id, path, line);
     return {
       kind: 'block', id, use,
       title: typeof title === 'string' ? title : null,
       config: (config ?? {}) as Record<string, JsonValue>,
+      outputs,
       position,
     } satisfies BlockNode;
   }
@@ -539,7 +545,6 @@ export function parseStack(source: string, fallbackId = ''): Stack {
   if (!isMapping(doc)) {
     throw new StackError('a stack file is a mapping with a "blocks" list in it', 'stack', 0);
   }
-
   const version = doc['version'];
   if (version !== 2) {
     throw new StackError(
@@ -548,6 +553,7 @@ export function parseStack(source: string, fallbackId = ''): Stack {
         : `a stack is "version: 2", and this says ${JSON.stringify(version ?? null)}`,
       'stack.version', 0);
   }
+  rejectUnknownKeys(doc, STACK_KEYS, 'stack', 'stack', 0);
 
   const ctx: Ctx = { lines: idLines(source), seen: new Map(), outputs: new Map() };
   const id = typeof doc['id'] === 'string' && doc['id'] ? doc['id'] : fallbackId;
@@ -591,6 +597,48 @@ export function parseStack(source: string, fallbackId = ''): Stack {
     }
   }
 
+  const launchable = doc['launchable'];
+  if (launchable !== undefined && typeof launchable !== 'boolean') {
+    throw new StackError('"launchable" must be true or false', 'stack.launchable', 0);
+  }
+  const presets: Stack['presets'] = {};
+  const rawPresets = doc['presets'];
+  if (rawPresets !== undefined && rawPresets !== null) {
+    if (!isMapping(rawPresets)) throw new StackError('"presets" must be a mapping', 'stack.presets', 0);
+    for (const [presetId, value] of Object.entries(rawPresets)) {
+      const presetPath = `stack.presets.${presetId}`;
+      if (!ID_PATTERN.test(presetId)) throw new StackError(`"${presetId}" is not a usable preset id`, presetPath, 0);
+      if (!isMapping(value)) throw new StackError('a preset must be a mapping', presetPath, 0);
+      rejectUnknownKeys(value, PRESET_KEYS, 'preset', presetPath, 0);
+      const presetName = value['name'];
+      const presetDescription = value['description'];
+      const rawOverrides = value['overrides'] ?? {};
+      if (presetName !== undefined && typeof presetName !== 'string') {
+        throw new StackError('a preset "name" must be text', `${presetPath}.name`, 0);
+      }
+      if (presetDescription !== undefined && typeof presetDescription !== 'string') {
+        throw new StackError('a preset "description" must be text', `${presetPath}.description`, 0);
+      }
+      if (!isMapping(rawOverrides)) {
+        throw new StackError('preset "overrides" must map block ids to configuration mappings', `${presetPath}.overrides`, 0);
+      }
+      const overrides: Record<string, Record<string, JsonValue>> = {};
+      for (const [blockId, config] of Object.entries(rawOverrides)) {
+        const target = [...walk(root)].find(node => node.id === blockId);
+        const overridePath = `${presetPath}.overrides.${blockId}`;
+        if (!target) throw new StackError(`preset names block "${blockId}", which is not in this workflow`, overridePath, 0);
+        if (target.kind !== 'block') throw new StackError(`preset target "${blockId}" is a ${target.kind}, not a configurable block`, overridePath, 0);
+        if (!isMapping(config)) throw new StackError('a preset block override must be a configuration mapping', overridePath, 0);
+        overrides[blockId] = config as Record<string, JsonValue>;
+      }
+      presets[presetId] = {
+        name: typeof presetName === 'string' && presetName ? presetName : presetId,
+        description: typeof presetDescription === 'string' ? presetDescription.trim() : '',
+        overrides,
+      };
+    }
+  }
+
   const name = doc['name'];
   const description = doc['description'];
   return {
@@ -598,6 +646,8 @@ export function parseStack(source: string, fallbackId = ''): Stack {
     id,
     name: typeof name === 'string' && name ? name : id,
     description: typeof description === 'string' ? description.trim() : '',
+    launchable: launchable === true,
+    presets,
     root,
   };
 }

@@ -23,6 +23,11 @@ export interface StackRef {
     provider?: string;
     level?: string;
     skills?: string[];
+    presetId?: string | null;
+    conversationId?: string;
+    parentRunId?: string | null;
+    supervisorSummary?: boolean;
+    userMessage?: string;
     routing?: { costTier?: string; allowedModels?: string[] };
   };
 }

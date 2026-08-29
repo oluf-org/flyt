@@ -29,6 +29,7 @@ const STEP_START = 'step.start';
 const STEP_END = 'step.end';
 const STEP_PROMPT = 'step.prompt';
 const LLM_REQUEST = 'llm.request';
+const LLM_STREAM = 'llm.stream';
 const LLM_RESPONSE = 'llm.response';
 const TOOL_CALL = 'tool.call';
 const TOOL_RESULT = 'tool.result';
@@ -45,7 +46,7 @@ const PERMISSION_DECISION = 'permission.decision';
  */
 export const FOLDED_EVENTS = [
   TURN_START, TURN_END, STEP_START, STEP_END, STEP_PROMPT,
-  LLM_REQUEST, LLM_RESPONSE, TOOL_CALL, TOOL_RESULT, PERMISSION_DECISION
+  LLM_REQUEST, LLM_STREAM, LLM_RESPONSE, TOOL_CALL, TOOL_RESULT, PERMISSION_DECISION
 ];
 
 function asRecord(value) {
@@ -238,6 +239,14 @@ export function feed(trace, events) {
             });
           }
         }
+        break;
+      }
+
+      case LLM_STREAM: {
+        const request = openStep(trace)?.request ?? null;
+        if (!request) break;
+        if (data.text != null) request.content = `${request.content ?? ''}${String(data.text)}`;
+        if (data.reasoning != null) request.reasoning = `${request.reasoning ?? ''}${String(data.reasoning)}`;
         break;
       }
 

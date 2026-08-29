@@ -5,6 +5,7 @@ appId: com.olaaxe.flyt
 productName: Flyt
 directories:
   output: release
+afterPack: scripts/verify-packaged-app.mjs
 files:
   - dist/**
   - electron/**
@@ -16,13 +17,15 @@ files:
   - src/**/*.js
   - config.json
   - package.json
-  # flows/ ships as FIRST-RUN SEEDS, not as a store — the packaged copy lives
-  # inside app.asar and is read-only; main.js copies it into userData (D28).
-  # Scratch flows (flow:new mints ids like flow-mrkhw5q9-eaxv) never ship, so
-  # promoting a flow to a default means giving it a stable slug id — that is
-  # exactly what `npm run workflow -- adopt` does.
-  - flows/**
-  - "!flows/flow-*"
+  # Canonical stacks ship as first-run seeds. The package-integrity hook above
+  # verifies these and the declarative plugin/tool catalogs in the completed
+  # app.asar so a green installer cannot silently contain an empty Library.
+  - stacks/**
+  - plugins/**
+  - tools/**
+  # main.js uses this path for the live BrowserWindow icon on Windows/Linux;
+  # the target-specific icons below only brand the installer/executable.
+  - build/icon.png
   # nodes/ is deliberately NOT packaged: NodeStore seeds itself from
   # SEED_NODE_TEMPLATES in code, so a bundled copy would only be a second,
   # silently-diverging source of truth for the same templates.

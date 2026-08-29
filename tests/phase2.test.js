@@ -82,11 +82,11 @@ test('research reaches every web reader and no write, shell, destructive, or que
   await k.dispose();
 });
 
-test('learn-from-repo keeps its canonical orientation, parallel reading, synthesis, planning, and handoff', () => {
+test('learn-from-repo keeps its canonical orientation, parallel reading, combination, synthesis, planning, and handoff', () => {
   const stack = parseStack(read('stacks/learn-from-repo.stack.yaml'), 'learn-from-repo');
-  const [orient, readers, synthesise, plan, handoff] = stack.root.children;
+  const [orient, readers, combine, synthesise, plan, handoff] = stack.root.children;
   assert.deepEqual(stack.root.children.map(node => node.id), [
-    'orient', 'read', 'synthesise', 'plan', 'handoff',
+    'orient', 'read', 'combine', 'synthesise', 'plan', 'handoff',
   ]);
   assert.equal(orient.use, 'flyt-blocks-inquiry:orient');
   assert.equal(orient.config.effort, 'high');
@@ -99,6 +99,7 @@ test('learn-from-repo keeps its canonical orientation, parallel reading, synthes
     assert.equal(reader.use, 'flyt-blocks-core:general-analysis');
     assert.match(reader.config.instructions, /file and a line you actually opened/);
   }
+  assert.equal(combine.use, 'flyt-blocks-core:combine');
   assert.equal(synthesise.use, 'flyt-blocks-core:general-analysis');
   assert.match(synthesise.config.instructions, /Where two lanes disagree/);
   assert.match(synthesise.config.instructions, /what is relevant here/);

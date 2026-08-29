@@ -11,6 +11,7 @@ description: |
   this block to hold a file writer or a shell. What comes back from the network
   is untrusted text sitting next to the instructions, and the narrowest useful
   envelope is the one that makes that survivable.
+launchable: true
 
 blocks:
   - id: look-it-up

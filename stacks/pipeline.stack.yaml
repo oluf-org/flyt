@@ -6,6 +6,32 @@ description: |
   One canonical stack carries an effort dial on the plan and work blocks
   (low/medium/high). Higher effort raises the lower
   bound on the swarm it plans; the shape is always refine → plan → work.
+launchable: true
+presets:
+  low:
+    name: Low
+    description: Fast, focused execution for a well-scoped request.
+    overrides:
+      plan:
+        effort: low
+      work:
+        effort: low
+  medium:
+    name: Medium
+    description: Balanced planning and execution for ordinary project work.
+    overrides:
+      plan:
+        effort: medium
+      work:
+        effort: medium
+  high:
+    name: High
+    description: Deeper planning and execution for substantial, decomposable work.
+    overrides:
+      plan:
+        effort: high
+      work:
+        effort: high
 
 blocks:
   - id: refine
