@@ -101,6 +101,27 @@ test('a block already running is allowed to finish, and its result is in the log
   await boot.kernel.dispose();
 });
 
+test('stop aborts the signal held by an in-flight block', async () => {
+  let entered;
+  const inside = new Promise(resolve => { entered = resolve; });
+  let aborted = false;
+  const boot = await bootStop(async ({ signal, blockId }) => {
+    if (blockId !== 'one') return { status: 'done', output: 'unexpected' };
+    entered();
+    await new Promise(resolve => {
+      if (signal.aborted) { aborted = true; resolve(); return; }
+      signal.addEventListener('abort', () => { aborted = true; resolve(); }, { once: true });
+    });
+    return { status: 'done', output: 'unwound after abort' };
+  });
+  const run = await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-1' }, 'in');
+  await inside;
+  await run.stop('close promptly');
+  assert.equal((await run.settled()).status, 'stopped');
+  assert.equal(aborted, true);
+  await boot.kernel.dispose();
+});
+
 test('the log names where it stopped', async () => {
   let run;
   const boot = await bootStop(async ({ blockId }) => {

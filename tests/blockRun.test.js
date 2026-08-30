@@ -35,7 +35,7 @@ function scriptedLlm(script) {
           temperature: request.temperature ?? null,
         });
         const answer = answerFor();
-        const chunks = [
+        const chunks = answer.chunks ?? [
           ...(answer.reasoning ? [{ reasoning: answer.reasoning }] : []),
           ...(answer.content ? [{ text: answer.content }] : []),
           ...(answer.toolCalls ?? []).map(toolCall => ({ toolCall })),
@@ -238,6 +238,20 @@ test('the loop is bounded, and hitting the bound says so rather than looking fin
   assert.equal(types.filter(t => t === 'step.start').length, 3);
   assert.equal(types.at(-1), 'turn.end', 'and the turn is closed, so the log is not left open');
   await boot.kernel.dispose();
+});
+
+test('a burst of provider chunks is persisted as one durable stream batch', async () => {
+  const content = Array.from({ length: 200 }, (_, index) => `${index},`).join('');
+  const boot = await bootFor([{ content, chunks: Array.from(content, text => ({ text })) }]);
+  try {
+    await runAgentLoop({
+      ctx: boot.kernel.ctx, session: boot.session, runId: 'run-1', blockId: 'work',
+      turn: 1, model: 'fake', system: 'system', input: 'go',
+    });
+    const stream = boot.session.readSync().filter(event => event.type === 'llm.stream');
+    assert.equal(stream.length, 1, 'synchronous token bursts do not become hundreds of fs appends');
+    assert.equal(stream.map(event => event.data.text ?? '').join(''), content);
+  } finally { await boot.kernel.dispose(); fs.rmSync(boot.root, { recursive: true, force: true }); }
 });
 
 test('a query records its exact assembled request and carries structural call controls', async () => {

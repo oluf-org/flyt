@@ -33,6 +33,14 @@ import type { ToolDefinition } from '../seams/tools.js';
  */
 export const MAX_STEPS = 120;
 
+/**
+ * Durable stream cadence. Provider chunks can arrive once per token, and a
+ * twelve-agent task graph otherwise turns each one into a synchronous append,
+ * a projection notification and an IPC update. Batching deltas for a fraction
+ * of a frame keeps reconnect recovery while bounding disk and renderer work.
+ */
+export const SESSION_STREAM_FLUSH_MS = 120;
+
 /** Why the loop stopped, in the four ways that are not "the model finished". */
 export type StopReason = 'answered' | 'bound' | 'cancelled' | 'vetoed';
 
@@ -214,21 +222,35 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
         });
       },
     });
-    for await (const chunk of stream) {
-      ctx.emit('llm/stream', ref, chunk as LlmChunk);
-      // Streaming must cross the same durable boundary as every other run
-      // fact. The host coalesces renderer notifications, so preserving each
-      // provider chunk here does not make the UI repaint per token, and a
-      // reconnect can fold the live text already received.
+    let streamText = '';
+    let streamReasoning = '';
+    let lastStreamFlush = Date.now();
+    const flushStream = async (): Promise<void> => {
+      if (!streamText && !streamReasoning) return;
+      const text = streamText;
+      const thought = streamReasoning;
+      streamText = '';
+      streamReasoning = '';
+      lastStreamFlush = Date.now();
       await session.append({
         type: 'llm.stream',
         data: {
           callId, blockId, step,
-          ...(chunk.text ? { text: chunk.text } : {}),
-          ...(chunk.reasoning ? { reasoning: chunk.reasoning } : {}),
+          ...(text ? { text } : {}),
+          ...(thought ? { reasoning: thought } : {}),
         },
       });
+    };
+    for await (const chunk of stream) {
+      ctx.emit('llm/stream', ref, chunk as LlmChunk);
+      if (chunk.text) streamText += chunk.text;
+      if (chunk.reasoning) streamReasoning += chunk.reasoning;
+      if (Date.now() - lastStreamFlush >= SESSION_STREAM_FLUSH_MS) await flushStream();
     }
+    // The final partial batch is durable before the authoritative response.
+    // A crash between these two writes therefore still leaves the latest text
+    // a renderer can reconnect to.
+    await flushStream();
     const answer = await stream.settled();
     stepsRun = step;
 

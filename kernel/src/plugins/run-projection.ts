@@ -16,19 +16,17 @@
  *   swappable for a SQLite provider, and a `dirFor(runId)` on it would make
  *   that swap a lie.
  *
- * The projection is recomputed from the whole log each time rather than
- * updated incrementally. That is O(n) per boundary on a file that is small, and
- * it buys the property the task actually asks for: the folder is a pure
- * function of the log, so deleting it and rebuilding cannot produce anything
- * different. An incremental writer would be a second implementation of
- * `projectRun`, and the two would drift.
+ * The projection remains a pure fold through `projectRun`, so deleting the
+ * folder and rebuilding cannot produce anything different. The live path
+ * retains only the relevant parsed events and writes only changed files; the
+ * repair path can still fold the whole canonical log from scratch.
  *
  * @module #kernel/plugins/run-projection
  */
 import path from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
 import type { SessionEvent } from '../seams/sessions.js';
-import { materialise, projectRun } from '../session/projection.js';
+import { materialiseChanged, projectRun, type RunProjection } from '../session/projection.js';
 
 /** Where the run folders live — the same root the session store uses. */
 export interface RunProjectionConfig {
@@ -61,6 +59,13 @@ export const PROJECT_AFTER = new Set([
   'turn.end',
 ]);
 
+/** Events that can change the human-readable run folder. Stream and step
+ * detail stay in session.jsonl and never need to be folded for this view. */
+export const PROJECT_EVENTS = new Set([
+  'run.created', 'stack.resolved', 'run.stage', 'run.error',
+  'block.status', 'block.output', 'llm.request', 'llm.response', 'tool.result',
+]);
+
 /**
  * Materialise the run folder beside the log, at durable boundaries.
  *
@@ -75,10 +80,18 @@ export function apply(ctx: Context, config: RunProjectionConfig): () => void {
   // arrives while a write is in flight must not be lost, and it must not queue
   // a third: what matters is that the folder ends up reflecting the log, not
   // that every intermediate state was written.
-  const busy = new Map<string, { running: boolean; again: boolean }>();
+  const busy = new Map<string, {
+    running: boolean;
+    again: boolean;
+    cursor: number;
+    events: SessionEvent[];
+    projection: RunProjection | null;
+  }>();
 
   const write = async (runId: string): Promise<void> => {
-    const state = busy.get(runId) ?? { running: false, again: false };
+    const state = busy.get(runId) ?? {
+      running: false, again: false, cursor: 0, events: [], projection: null,
+    };
     busy.set(runId, state);
     if (state.running) { state.again = true; return; }
     state.running = true;
@@ -86,9 +99,13 @@ export function apply(ctx: Context, config: RunProjectionConfig): () => void {
       do {
         state.again = false;
         const session = await ctx.sessions.read(runId);
-        const events: SessionEvent[] = [];
-        for await (const event of session.read()) events.push(event);
-        materialise(path.join(config.root, runId), projectRun(events, runId));
+        for await (const event of session.read(state.cursor)) {
+          state.cursor = Math.max(state.cursor, event.seq);
+          if (PROJECT_EVENTS.has(event.type)) state.events.push(event);
+        }
+        const next = projectRun(state.events, runId);
+        materialiseChanged(path.join(config.root, runId), next, state.projection);
+        state.projection = next;
       } while (state.again);
     } catch {
       // A projection that cannot be written is not a run that failed. The log
@@ -97,6 +114,9 @@ export function apply(ctx: Context, config: RunProjectionConfig): () => void {
       // the dog.
     } finally {
       state.running = false;
+      if (!state.again && ['done', 'failed', 'stopped'].includes(state.projection?.meta.stage ?? '')) {
+        busy.delete(runId);
+      }
     }
   };
 

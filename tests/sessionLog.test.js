@@ -139,10 +139,27 @@ test('a new writer recovers the sequence after a crash', async () => {
     await first.append({ type: 'message.user', data: { content: 'one' } });
     await first.append({ type: 'message.user', data: { content: 'two' } });
 
-    const second = await store.open('run-1'); // a fresh process, same file
+    const second = await new JsonlSessionStore(dir).open('run-1'); // a fresh process, same file
     assert.equal(await second.head(), 2);
     const third = await second.append({ type: 'message.user', data: { content: 'three' } });
     assert.equal(third.seq, 3, 'the next seq continues, it does not restart');
+  } finally { cleanup(); }
+});
+
+test('parallel blocks share one writer and one parsed event cache per run', async () => {
+  const { dir, cleanup } = tempRuns();
+  try {
+    const store = new JsonlSessionStore(dir);
+    const [one, two, three] = await Promise.all([
+      store.open('run-1'), store.open('run-1'), store.open('run-1'),
+    ]);
+    assert.equal(one, two);
+    assert.equal(two, three);
+    const written = await Promise.all(Array.from({ length: 40 }, (_, index) => (
+      (index % 2 ? one : two).append({ type: 'message.user', data: { content: String(index) } })
+    )));
+    assert.deepEqual(written.map(event => event.seq), Array.from({ length: 40 }, (_, index) => index + 1));
+    assert.equal(one.readSync().length, 40);
   } finally { cleanup(); }
 });
 

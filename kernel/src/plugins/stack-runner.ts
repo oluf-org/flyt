@@ -77,15 +77,16 @@ function parallelCarry(node: ParallelNode, steps: readonly BlockStep[]): string 
 /**
  * One run in flight.
  *
- * `stop()` sets a flag the walk reads at its boundaries; it never cancels
- * anything mid-write. An in-flight block is allowed to finish — a call
- * abandoned mid-flight is a provider billing for work no record survives,
- * which the aborted-spend work already found from the other direction.
+ * `stop()` sets the boundary flag and aborts the current model/tool call. The
+ * block still reaches the same durable unwind path, which records the stopped
+ * stage before the scheduler settles; it just does not wait minutes for a
+ * provider or child process after the person asked it to stop.
  */
 class Run implements AgentRun {
   readonly runId: string;
   private settledPromise: Promise<RunOutcome>;
   private stopRequest: string | null = null;
+  private abortController = new AbortController();
 
   constructor(runId: string, walk: (run: Run) => Promise<RunOutcome>) {
     this.runId = runId;
@@ -103,6 +104,7 @@ class Run implements AgentRun {
 
   /** Has somebody asked this run to stop, and why? */
   get stopReason(): string | null { return this.stopRequest; }
+  get signal(): AbortSignal { return this.abortController.signal; }
 
   settled(): Promise<RunOutcome> { return this.settledPromise; }
 
@@ -111,6 +113,7 @@ class Run implements AgentRun {
     // through a shutdown has to be able to finish it, and a run that already
     // settled has nothing to stop.
     this.stopRequest ??= reason || 'stopped';
+    this.abortController.abort(this.stopRequest);
   }
 }
 
@@ -604,6 +607,7 @@ export class StackRunner extends Service implements AgentsSeam {
         config: node.config,
         input,
         ceiling,
+        signal: run.signal,
       });
     } catch (err) {
       // A throwing block is a failed block, not a crashed run: the walk still

@@ -52,7 +52,17 @@ test('summaries name every run and come back newest first', () => {
   assert.deepEqual(list.map(r => r.name), ['Second request', 'First request']);
   assert.equal(list[0].stage, 'done');
   assert.equal(list[0].flowName, 'Pipeline');
+  assert.equal(list[0].flowId, null);
   assert.equal(list[0].named, false); // derived, not user-set
+});
+
+test('summaries carry workflow identity so the UI can filter before opening snapshots', () => {
+  const store = makeStore();
+  const id = store.createRun('Indexed run');
+  store.setStage(id, 'execution', { flowId: 'daily', stackId: 'canonical' });
+  const [summary] = store.runSummaries();
+  assert.equal(summary.flowId, 'daily');
+  assert.equal(summary.stackId, 'canonical');
 });
 
 test('renaming overrides the derived name; blanking it restores the derived one', () => {

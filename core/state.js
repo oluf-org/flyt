@@ -8,6 +8,10 @@ import path from 'node:path';
 export class RunStore {
   constructor(rootDir) {
     this.rootDir = rootDir; // e.g. <project>/runs
+    // The directory remains authoritative; this is only the next known free
+    // number in this process so a many-tool run does not rescan every prior
+    // result for every new result (quadratic metadata I/O).
+    this.toolSequences = new Map();
     fs.mkdirSync(rootDir, { recursive: true });
   }
 
@@ -93,6 +97,8 @@ export class RunStore {
           createdAt,
           updatedAt: meta.updatedAt ?? createdAt,
           stage: meta.stage ?? 'unknown',
+          stackId: meta.stackId ?? null,
+          flowId: meta.flowId ?? null,
           flowName: meta.flowName ?? null,
           turns: Number(meta.turn ?? 0),
           interrupted: Boolean(meta.interrupted),
@@ -124,6 +130,7 @@ export class RunStore {
       throw new Error(`Not a run in this store: "${runId}"`);
     }
     fs.rmSync(dir, { recursive: true, force: true });
+    this.toolSequences.delete(runId);
   }
 
   #tryPrompt(runId) {
@@ -232,19 +239,27 @@ export class RunStore {
     const dir = this.toolResultsDir(runId);
     fs.mkdirSync(dir, { recursive: true });
     const name = String(record?.tool ?? 'tool').replace(/[^a-zA-Z0-9_-]/g, '_');
-    let seq = 1;
-    for (const f of fs.readdirSync(dir)) {
-      const n = Number((f.match(/^(\d+)-/) ?? [])[1]);
-      if (Number.isInteger(n) && n >= seq) seq = n + 1;
-    }
+    const nextOnDisk = () => {
+      let next = 1;
+      for (const f of fs.readdirSync(dir)) {
+        const n = Number((f.match(/^(\d+)-/) ?? [])[1]);
+        if (Number.isInteger(n) && n >= next) next = n + 1;
+      }
+      return next;
+    };
+    let seq = this.toolSequences.get(runId) ?? nextOnDisk();
     for (;;) {
       const file = `${seq}-${name}.json`;
       try {
         fs.writeFileSync(path.join(dir, file), JSON.stringify({ seq, ...record }, null, 2), { encoding: 'utf8', flag: 'wx' });
+        this.toolSequences.set(runId, seq + 1);
         return { seq, file, path: `tools/${file}`, handle: `@tool:${seq}` };
       } catch (err) {
         if (err.code !== 'EEXIST') throw err;
-        seq += 1;
+        // Another process may have advanced beyond the cached value. One
+        // collision earns one authoritative rescan; the exclusive create is
+        // still the final arbiter if two writers race again.
+        seq = Math.max(seq + 1, nextOnDisk());
       }
     }
   }

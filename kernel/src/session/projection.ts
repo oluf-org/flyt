@@ -354,6 +354,90 @@ export function materialise(dir: string, projection: RunProjection): void {
 }
 
 /**
+ * Materialise only projection files whose value changed since the preceding
+ * fold. The full {@link materialise} function remains the repair/rebuild path;
+ * this is the live path used while an append-only log is growing.
+ */
+export function materialiseChanged(
+  dir: string,
+  projection: RunProjection,
+  previous: RunProjection | null = null,
+): void {
+  if (!previous) { materialise(dir, projection); return; }
+  fs.mkdirSync(dir, { recursive: true });
+  const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+  if (!same(previous.meta, projection.meta)) writeJson(path.join(dir, 'meta.json'), projection.meta);
+
+  const stackFile = path.join(dir, 'stack.json');
+  if (!same(previous.stack, projection.stack)) {
+    if (projection.stack === null) fs.rmSync(stackFile, { force: true });
+    else writeJson(stackFile, projection.stack);
+  }
+  const promptFile = path.join(dir, 'prompt.md');
+  if (previous.prompt !== projection.prompt) {
+    if (projection.prompt) fs.writeFileSync(promptFile, projection.prompt, 'utf8');
+    else fs.rmSync(promptFile, { force: true });
+  }
+
+  const blockDir = path.join(dir, 'blocks');
+  for (const [blockId, content] of Object.entries(projection.blocks)) {
+    if (previous.blocks[blockId] === content) continue;
+    const file = path.join(blockDir, `${safe(blockId)}.md`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content, 'utf8');
+  }
+  for (const blockId of Object.keys(previous.blocks)) {
+    if (!(blockId in projection.blocks)) fs.rmSync(path.join(blockDir, `${safe(blockId)}.md`), { force: true });
+  }
+
+  const toolFile = (record: ToolRecord): string => `${record.seq}-${safe(record.tool)}.json`;
+  const oldTools = new Map(previous.tools.map(record => [toolFile(record), record]));
+  const nextTools = new Set<string>();
+  for (const record of projection.tools) {
+    const name = toolFile(record);
+    nextTools.add(name);
+    if (!same(oldTools.get(name), record)) writeJson(path.join(dir, 'tools', name), record);
+  }
+  for (const name of oldTools.keys()) {
+    if (!nextTools.has(name)) fs.rmSync(path.join(dir, 'tools', name), { force: true });
+  }
+
+  const groupedCalls = (calls: readonly CallRecord[]): Map<string, CallRecord[]> => {
+    const grouped = new Map<string, CallRecord[]>();
+    for (const call of calls) {
+      const name = `${safe(call.blockId ?? 'run')}${call.taskId ? `_${safe(call.taskId)}` : ''}.jsonl`;
+      const list = grouped.get(name) ?? [];
+      list.push(call);
+      grouped.set(name, list);
+    }
+    return grouped;
+  };
+  const oldCalls = groupedCalls(previous.calls);
+  const nextCalls = groupedCalls(projection.calls);
+  for (const [name, calls] of nextCalls) {
+    const before = oldCalls.get(name) ?? [];
+    const file = path.join(dir, 'calls', name);
+    // Calls in one block are append-only except for its newest request, which
+    // may gain a response after an overlapping parallel projection. When the
+    // prior tail is unchanged, append only the new JSONL records instead of
+    // rewriting the block's complete call history on every turn.
+    const priorTailUnchanged = before.length === 0
+      || (before.length <= calls.length && same(before.at(-1), calls[before.length - 1]));
+    if (priorTailUnchanged && (before.length === 0 || fs.existsSync(file))) {
+      if (calls.length === before.length) continue;
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.appendFileSync(file, calls.slice(before.length).map(call => JSON.stringify(call)).join('\n') + '\n', 'utf8');
+      continue;
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, calls.map(call => JSON.stringify(call)).join('\n') + '\n', 'utf8');
+  }
+  for (const name of oldCalls.keys()) {
+    if (!nextCalls.has(name)) fs.rmSync(path.join(dir, 'calls', name), { force: true });
+  }
+}
+
+/**
  * Read a legacy run folder — one written before the log existed.
  *
  * Read-only and lossy on purpose (D55): an old run does not gain a trace it

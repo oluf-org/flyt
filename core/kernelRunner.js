@@ -137,13 +137,14 @@ export function stackWithGeneratedTasks(stack, events) {
   return visit(stack);
 }
 
-function compatibilitySnapshot(kernel, events, id, runsRoot) {
-  const projected = kernel.projectRun(events, id);
-  projected.stack = stackWithGeneratedTasks(projected.stack, events);
-  const created = events.find(event => event.type === 'run.created')?.data ?? {};
-  kernel.materialise(path.join(runsRoot, id), projected);
+function compatibilitySnapshot(kernel, events, id, runsRoot, { materialise = true } = {}) {
+  const relevant = events.filter(event => COMPATIBILITY_EVENTS.has(event?.type));
+  const projected = kernel.projectRun(relevant, id);
+  projected.stack = stackWithGeneratedTasks(projected.stack, relevant);
+  const created = relevant.find(event => event.type === 'run.created')?.data ?? {};
+  if (materialise) kernel.materialise(path.join(runsRoot, id), projected);
 
-  const toolCalls = events.filter(event => event.type === 'tool.result').map(event => ({
+  const toolCalls = relevant.filter(event => event.type === 'tool.result').map(event => ({
     tool: event.data?.name ?? 'tool',
     ok: !event.data?.error,
     error: event.data?.error ?? null,
@@ -162,7 +163,7 @@ function compatibilitySnapshot(kernel, events, id, runsRoot) {
     toolCalls,
     usage,
   }]));
-  const conversation = events.flatMap(event => {
+  const conversation = relevant.flatMap(event => {
     if (event.type === 'message.user') return [{ role: 'user', text: String(event.data?.content ?? ''), at: event.at }];
     if (event.type === 'supervisor.summary') return [{
       role: 'assistant', text: String(event.data?.content ?? ''), at: event.at,
@@ -206,19 +207,73 @@ function compatibilitySnapshot(kernel, events, id, runsRoot) {
   };
 }
 
+/** Events that change the compatibility snapshot rather than Trace alone. */
+export const SNAPSHOT_UPDATE_EVENTS = new Set([
+  'run.created', 'run.reconfigured', 'stack.resolved', 'run.stage', 'run.error',
+  'block.status', 'block.output',
+  'llm.response', 'tool.result', 'message.user', 'supervisor.summary',
+]);
+
+// Requests are required to fold the later response into a call record, but do
+// not themselves change the Work snapshot enough to justify rebuilding it.
+const COMPATIBILITY_EVENTS = new Set([...SNAPSHOT_UPDATE_EVENTS, 'llm.request']);
+
 /** A Supervisor-shaped snapshot derived only from the canonical session. */
-export async function snapshotStackRun(ctx, id, kernelModule = null) {
+export async function snapshotStackRun(ctx, id, kernelModule = null, options = {}) {
   const kernel = kernelModule ?? await import('#kernel');
-  return compatibilitySnapshot(kernel, await eventsFor(ctx, id), id, ctx.__flytRunsRoot);
+  return compatibilitySnapshot(kernel, await eventsFor(ctx, id), id, ctx.__flytRunsRoot, options);
 }
 
+/**
+ * Incremental reader for stored sessions. A live snapshot used to read and
+ * parse the complete growing JSONL on every coalesced token update. Keeping a
+ * byte cursor makes the total file I/O linear in the run size.
+ */
+export class StoredStackSnapshotReader {
+  #files = new Map();
+  #maxFiles;
+
+  constructor({ maxFiles = 64 } = {}) { this.#maxFiles = Math.max(1, Number(maxFiles) || 64); }
+
+  events(runsRoot, id) {
+    const file = path.join(runsRoot, id, 'session.jsonl');
+    if (!fs.existsSync(file)) throw new Error(`Run "${id}" has no kernel session log.`);
+    const size = fs.statSync(file).size;
+    let state = this.#files.get(file);
+    if (!state || size < state.offset) state = { offset: 0, tail: '', events: [] };
+    if (size > state.offset) {
+      const length = size - state.offset;
+      const buffer = Buffer.allocUnsafe(length);
+      const fd = fs.openSync(file, 'r');
+      try { fs.readSync(fd, buffer, 0, length, state.offset); } finally { fs.closeSync(fd); }
+      const text = state.tail + buffer.toString('utf8');
+      const lines = text.split(/\r?\n/);
+      state.tail = text.endsWith('\n') ? '' : (lines.pop() ?? '');
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try { state.events.push(JSON.parse(line)); } catch { /* a malformed line remains evidence on disk */ }
+      }
+      state.offset = size;
+    }
+    this.#files.delete(file);
+    this.#files.set(file, state);
+    while (this.#files.size > this.#maxFiles) this.#files.delete(this.#files.keys().next().value);
+    return state.events;
+  }
+
+  drop(runsRoot, id) { this.#files.delete(path.join(runsRoot, id, 'session.jsonl')); }
+
+  async snapshot(runsRoot, id, kernelModule = null, options = {}) {
+    const kernel = kernelModule ?? await import('#kernel');
+    return compatibilitySnapshot(kernel, this.events(runsRoot, id), id, runsRoot, options);
+  }
+}
+
+const storedSnapshots = new StoredStackSnapshotReader();
+
 /** Read a kernel run after its process is gone; no live host is required. */
-export async function snapshotStoredStackRun(runsRoot, id, kernelModule = null) {
-  const file = path.join(runsRoot, id, 'session.jsonl');
-  if (!fs.existsSync(file)) throw new Error(`Run "${id}" has no kernel session log.`);
-  const events = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
-  const kernel = kernelModule ?? await import('#kernel');
-  return compatibilitySnapshot(kernel, events, id, runsRoot);
+export async function snapshotStoredStackRun(runsRoot, id, kernelModule = null, options = {}) {
+  return storedSnapshots.snapshot(runsRoot, id, kernelModule, options);
 }
 
 /** Durable launch metadata, used to reconstruct a host for resume. */

@@ -32,10 +32,13 @@ export const name = 'flyt-session-jsonl';
 export function apply(ctx: Context, config: SessionJsonlConfig): () => void {
   if (!config?.root) throw new Error('flyt-session-jsonl needs a root');
   const store = new JsonlSessionStore(config.root);
+  const announced = new WeakSet<object>();
 
   const announcing: typeof store = Object.create(store);
   announcing.open = async (runId: string) => {
     const session = await store.open(runId);
+    if (announced.has(session)) return session;
+    announced.add(session);
     const append = session.append.bind(session);
     session.append = async event => {
       const written = await append(event);
