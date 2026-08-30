@@ -27,6 +27,7 @@ blocks:
     use: flyt-blocks-core:work
     title: Do the task
     config:
+      modelTier: standard
       effect: workspace-change
       instructions: |
         The brief above is the task file exactly as it was written, plus how it

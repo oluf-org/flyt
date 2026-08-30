@@ -13,6 +13,9 @@ import type { LlmChunk, RouteRecord } from '../events.js';
 export interface LlmRequest {
   /** The model id as the caller asked for it, before routing. */
   model: string;
+  /** Ordered, same-budget alternatives. The seam tries these only if the
+   * primary fails before producing any streamed text. */
+  fallbackModels?: readonly string[];
   messages: readonly Message[];
   /** Tool schemas offered for this request — the ceiling, already applied. */
   tools?: readonly { name: string; description: string; parameters: unknown }[];

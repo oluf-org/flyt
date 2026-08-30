@@ -30,13 +30,53 @@ export const BUILTIN = {
   skills: 'flyt:skills',
   commands: 'flyt:api',
   uiExtensions: 'flyt:ui-extensions',
+  blocks: 'flyt:blocks',
+  blocksCore: 'flyt:blocks-core',
+  blocksTaskGraph: 'flyt:blocks-task-graph',
+  blocksJudgement: 'flyt:blocks-judgement',
+  blocksInquiry: 'flyt:blocks-inquiry',
+  blocksLoop: 'flyt:blocks-loop',
+  runProjection: 'flyt:run-projection',
+  fs: 'flyt:fs',
+  adapters: 'flyt:llm-adapters',
+  stackRunner: 'flyt:stack-runner',
 } as const;
+
+export interface BuiltinMetadata {
+  name: string;
+  description: string;
+  contributes: string[];
+}
+
+const BUILTIN_METADATA: Record<string, BuiltinMetadata> = {
+  [BUILTIN.sessionJsonl]: { name: 'Session log', description: 'Append-only JSONL run sessions.', contributes: ['sessions'] },
+  [BUILTIN.tools]: { name: 'Tool registry', description: 'Tool registration, classification, and execution policy boundary.', contributes: ['tools'] },
+  [BUILTIN.approvals]: { name: 'Approval policy', description: 'Applies the active approval mode to tool execution.', contributes: ['policy'] },
+  [BUILTIN.skills]: { name: 'Skill registry', description: 'Lifecycle-owned skill contributions.', contributes: ['skills'] },
+  [BUILTIN.commands]: { name: 'Command registry', description: 'Typed commands shared by human and agent callers.', contributes: ['commands'] },
+  [BUILTIN.uiExtensions]: { name: 'UI extensions', description: 'Validated, data-only UI extension declarations.', contributes: ['ui'] },
+  [BUILTIN.blocks]: { name: 'Block registry', description: 'Canonical resolution for every stack block use.', contributes: ['blocks'] },
+  [BUILTIN.blocksCore]: { name: 'Core blocks', description: 'Core work and transformation blocks.', contributes: ['blocks'] },
+  [BUILTIN.blocksTaskGraph]: { name: 'Plan & dispatch', description: 'Agent-planned task graphs with bounded dependency scheduling.', contributes: ['blocks'] },
+  [BUILTIN.blocksJudgement]: { name: 'Judgement blocks', description: 'Evaluation, comparison, refinement, and checkpoint blocks.', contributes: ['blocks'] },
+  [BUILTIN.blocksInquiry]: { name: 'Inquiry blocks', description: 'Question and inquiry blocks.', contributes: ['blocks'] },
+  [BUILTIN.blocksLoop]: { name: 'Loop blocks', description: 'Loop handoff blocks.', contributes: ['blocks'] },
+  [BUILTIN.runProjection]: { name: 'Run projection', description: 'Materialises durable session events into run artifacts.', contributes: ['runs'] },
+  [BUILTIN.fs]: { name: 'Filesystem seam', description: 'Binds plugin file access to one workspace root.', contributes: ['filesystem'] },
+  [BUILTIN.adapters]: { name: 'LLM adapters', description: 'Routes kernel model requests to configured providers.', contributes: ['models'] },
+  [BUILTIN.stackRunner]: { name: 'Stack runner', description: 'Executes registered blocks from canonical stacks.', contributes: ['runner'] },
+};
 
 const BUILTIN_NAMES = new Set<string>(Object.values(BUILTIN));
 
 /** Trust is an exact shipped identity, never a forgeable package-name prefix. */
 export function isBuiltin(name: string): boolean {
   return BUILTIN_NAMES.has(name);
+}
+
+export function builtinMetadata(name: string): BuiltinMetadata | null {
+  const found = BUILTIN_METADATA[name];
+  return found ? { ...found, contributes: [...found.contributes] } : null;
 }
 
 /** Resolve `flyt:*` specifiers to the bundled plugin modules. */
@@ -48,9 +88,28 @@ export async function builtinImporter(name: string): Promise<unknown> {
     case BUILTIN.skills: return import('./plugins/skills.js');
     case BUILTIN.commands: return import('./plugins/commands.js');
     case BUILTIN.uiExtensions: return import('./plugins/ui-extensions.js');
+    case BUILTIN.blocks: return import('./plugins/blocks.js');
+    case BUILTIN.blocksCore: return import('./plugins/blocks-core.js');
+    case BUILTIN.blocksTaskGraph: return import('./plugins/blocks-task-graph.js');
+    case BUILTIN.blocksJudgement: return import('./plugins/blocks-judgement.js');
+    case BUILTIN.blocksInquiry: return import('./plugins/blocks-inquiry.js');
+    case BUILTIN.blocksLoop: return import('./plugins/blocks-loop.js');
+    case BUILTIN.runProjection: return import('./plugins/run-projection.js');
+    case BUILTIN.fs: return import('./plugins/fs.js');
+    case BUILTIN.adapters: return import('./plugins/llm-adapters.js');
+    case BUILTIN.stackRunner: return import('./plugins/stack-runner.js');
     default: return import(name);
   }
 }
+
+const BLOCKS: Entry[] = [
+  { id: 'blocks', name: BUILTIN.blocks },
+  { id: 'blocks-core', name: BUILTIN.blocksCore },
+  { id: 'blocks-task-graph', name: BUILTIN.blocksTaskGraph },
+  { id: 'blocks-judgement', name: BUILTIN.blocksJudgement },
+  { id: 'blocks-inquiry', name: BUILTIN.blocksInquiry },
+  { id: 'blocks-loop', name: BUILTIN.blocksLoop },
+];
 
 /**
  * The desktop: a person is present, so `ask` can reach one.
@@ -61,6 +120,7 @@ const DESKTOP: Entry[] = [
   { id: 'skills', name: BUILTIN.skills },
   { id: 'commands', name: BUILTIN.commands },
   { id: 'ui-extensions', name: BUILTIN.uiExtensions },
+  ...BLOCKS,
   { id: 'approvals', name: BUILTIN.approvals, config: { mode: 'ask' } },
 ];
 
@@ -73,6 +133,7 @@ const CLI: Entry[] = [
   { id: 'tools', name: BUILTIN.tools },
   { id: 'skills', name: BUILTIN.skills },
   { id: 'commands', name: BUILTIN.commands },
+  ...BLOCKS,
   { id: 'approvals', name: BUILTIN.approvals, config: { mode: 'ask' } },
 ];
 
@@ -88,6 +149,7 @@ const LOOP_WORKER: Entry[] = [
   { id: 'tools', name: BUILTIN.tools },
   { id: 'skills', name: BUILTIN.skills },
   { id: 'commands', name: BUILTIN.commands },
+  ...BLOCKS,
   { id: 'approvals', name: BUILTIN.approvals, config: { mode: 'always' } },
 ];
 

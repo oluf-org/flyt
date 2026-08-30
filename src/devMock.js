@@ -272,6 +272,12 @@ const mockSettings = {
     fetchedAt: '2026-08-18T08:00:00Z'
   },
   modelSets: {},
+  workflowModelTiers: {
+    free: [{ provider: 'mock', model: 'mock-small' }],
+    economy: { provider: 'mock', model: 'mock-small' },
+    standard: { provider: 'mock', model: 'mock-large' },
+    frontier: { provider: 'mock', model: 'mock-large' },
+  },
   // The loop's band→model map (DESIGN-SPEC.md §8), empty by default: the shipped
   // state is "ask for an effort band", and naming models is the deliberate act.
   loopModels: {},
@@ -510,8 +516,115 @@ const mockComparisons = []; // in-memory comparison records (P2 preview)
 const mockAppdataSlugs = () => new Set(
   mockProjects.tabs.filter(t => t.kind === 'appdata').map(t => t.id.replace(/^appdata:/, '')));
 
+// --- The plugin catalog, for previewing the manager outside Electron ---
+// One row per state the manager has to have an answer for: a built-in that may
+// only be inspected, an external plugin that can be configured and removed, a
+// group, one still waiting on an injected service, and one whose last
+// lifecycle call failed. A manager previewed against only healthy rows is a
+// manager whose interesting states nobody ever looks at.
+const mockPlugins = [
+  {
+    id: 'tools', name: 'Tool registry', specifier: 'flyt:tools',
+    description: 'Tool registration, classification, and execution policy boundary.',
+    source: 'profile:flyt-desktop', contributes: ['tools'], inject: [],
+    builtin: true, group: false, parentId: null, installed: true, state: 'active',
+  },
+  {
+    id: 'blocks-core', name: 'Core blocks', specifier: 'flyt:blocks-core',
+    description: 'Core work and transformation blocks.',
+    source: 'profile:flyt-desktop', contributes: ['blocks'], inject: ['blocks'],
+    builtin: true, group: false, parentId: null, installed: true, state: 'active',
+  },
+  {
+    id: 'llm-adapters', name: 'LLM adapters', specifier: 'flyt:llm-adapters',
+    description: 'Routes kernel model requests to configured providers.',
+    source: 'profile:flyt-desktop', contributes: ['models'], inject: [],
+    builtin: true, group: false, parentId: null, installed: true, state: 'active',
+  },
+  {
+    id: 'impeccable', name: 'Impeccable', specifier: 'impeccable-flyt-plugin',
+    description: 'A reviewer that reads the diff and refuses work it cannot defend.',
+    source: 'bundle:impeccable-flyt-plugin', contributes: ['tools', 'skills', 'ui'],
+    inject: ['tools', 'skills'], builtin: false, group: false, parentId: null,
+    installed: true, state: 'active',
+    config: { strictness: 'high', maxFindings: 12, skipPaths: ['dist', 'node_modules'] },
+  },
+  {
+    id: 'research', name: 'Research group', specifier: 'cordis:group',
+    description: 'A scoped group of plugins.', source: 'home',
+    contributes: [], inject: [], builtin: true, group: true, parentId: null,
+    installed: true, state: 'active',
+  },
+  {
+    id: 'web-search', name: 'Web search', specifier: '@acme/flyt-web-search',
+    description: 'Search and fetch pages, scoped to the research group.',
+    source: 'home', contributes: ['tools'], inject: ['tools', 'http'],
+    builtin: false, group: false, parentId: 'research', installed: true, state: 'pending',
+    config: { provider: 'brave', maxResults: 8 },
+  },
+  {
+    id: 'notes-sync', name: 'Notes sync', specifier: '@acme/flyt-notes',
+    description: 'Mirrors run artifacts into an external notebook.',
+    source: 'home', contributes: ['tools'], inject: ['filesystem'],
+    builtin: false, group: false, parentId: null, installed: true, state: 'failed',
+    error: 'ENOTFOUND api.notes.example - the notebook host did not resolve.',
+    config: { endpoint: 'https://api.notes.example/v1', notebook: 'flyt-runs' },
+  },
+];
+const mockPluginListeners = new Set();
+const notifyMockPlugins = () => {
+  for (const fn of mockPluginListeners) fn(mockPlugins.map(row => ({ ...row })));
+};
+const mockPlugin = id => {
+  const row = mockPlugins.find(entry => entry.id === id);
+  if (!row) throw new Error(`There is no installed plugin named "${id}"`);
+  return row;
+};
+// Long enough to see a button say what it is doing, short enough not to be a
+// wait. The manager's busy states are real states, not decoration.
+const mockLatency = () => new Promise(resolve => setTimeout(resolve, 420));
+
 export function installDevMock() {
   window.flyt = {
+    // --- The plugin manager, previewed ---
+    v2Plugins: async () => mockPlugins.map(row => ({ ...row })),
+    v2ConfigurePlugin: async (id, config) => {
+      const row = mockPlugin(id);
+      await mockLatency();
+      if (row.builtin) throw new Error(`"${row.name}" is part of Flyt itself and is not configurable here`);
+      row.config = config;
+      row.state = 'active';
+      delete row.error;
+      notifyMockPlugins();
+      return { ...row };
+    },
+    v2RestartPlugin: async id => {
+      const row = mockPlugin(id);
+      await mockLatency();
+      // Restarting does not conjure a missing service. A row that was waiting
+      // on one is still waiting after it remounts, and a preview that pretended
+      // otherwise would be previewing a state the kernel cannot produce.
+      row.state = row.state === 'pending' ? 'pending' : 'active';
+      if (row.state !== 'pending') delete row.error;
+      notifyMockPlugins();
+      return { ...row };
+    },
+    v2UninstallPlugin: async id => {
+      const row = mockPlugin(id);
+      await mockLatency();
+      if (row.builtin) throw new Error(`"${row.name}" is part of Flyt itself and cannot be removed`);
+      const gone = new Set([row.id]);
+      for (const entry of mockPlugins) if (entry.parentId && gone.has(entry.parentId)) gone.add(entry.id);
+      for (let index = mockPlugins.length - 1; index >= 0; index -= 1) {
+        if (gone.has(mockPlugins[index].id)) mockPlugins.splice(index, 1);
+      }
+      notifyMockPlugins();
+      return mockPlugins.map(entry => ({ ...entry }));
+    },
+    onV2PluginsChange: cb => {
+      mockPluginListeners.add(cb);
+      return () => mockPluginListeners.delete(cb);
+    },
     listRuns: async (_pid) => Object.keys(snapshots)
       .map(id => ({
         id,
@@ -739,8 +852,12 @@ export function installDevMock() {
         id: 'preview', kind: 'sequence', children: [
           {
             id: 'plan', kind: 'block', use: 'flyt:work', title: 'Plan the change',
-            config: { prompt: 'Turn the request into a concise implementation plan.', careful: true },
+            config: { modelTier: 'frontier', prompt: 'Turn the request into a concise implementation plan.', careful: true },
             outputs: [{ name: 'tasks', type: 'list' }],
+          },
+          {
+            id: 'approve-refinement', kind: 'block', use: 'flyt-blocks-judgement:human-checkpoint', title: 'Approve refined request',
+            config: { enabled: true }, outputs: [{ name: 'approved', type: 'boolean' }],
           },
           {
             id: 'fan', kind: 'parallel', maxParallel: 2, children: [
@@ -760,13 +877,23 @@ export function installDevMock() {
         {
           use: 'flyt:work', title: 'Work', description: 'Give a model one focused task.', category: 'work',
           settings: { type: 'object', properties: {
+            model: { type: 'string' },
+            modelTier: { enum: ['free', 'economy', 'standard', 'frontier'] },
             prompt: { type: 'string', title: 'Prompt', description: 'What should this block do?' },
             careful: { type: 'boolean', title: 'Careful', default: true },
           } },
         },
         {
           use: 'flyt:evaluate', title: 'Evaluate', description: 'Check the result against explicit criteria.', category: 'quality',
-          settings: { type: 'object', properties: {} },
+          settings: { type: 'object', properties: {
+            model: { type: 'string' }, modelTier: { enum: ['free', 'economy', 'standard', 'frontier'] },
+          } },
+        },
+        {
+          use: 'flyt-blocks-judgement:human-checkpoint', title: 'Human checkpoint', description: 'Pause until a person approves the refined request.', category: 'utility',
+          settings: { type: 'object', properties: {
+            enabled: { type: 'boolean', title: 'Require approval', default: true },
+          } },
         },
       ];
       const blocks = {
@@ -810,28 +937,83 @@ export function installDevMock() {
       // What the library shows in the preview: the real block registry, plus
       // the tools and models this mock already carries. Six kinds, so the
       // facets and the empty-kind line can both be looked at.
+      const ago = days => new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      const mockStacks = [
+        {
+          id: 'pipeline', name: 'Pipeline', launchable: true, blockCount: 4, updatedAt: ago(0.02),
+          description: 'Refine the request, approve the brief, plan it, and do the work.',
+          presets: [
+            { id: 'low', name: 'Low', description: 'Fast, focused execution.', default: false, targets: ['plan', 'work'], overrides: { plan: { effort: 'low' }, work: { effort: 'low' } } },
+            { id: 'medium', name: 'Medium', description: 'Balanced for ordinary work.', default: true, targets: ['plan', 'work'], overrides: { plan: { effort: 'medium' }, work: { effort: 'medium' } } },
+            { id: 'high', name: 'High', description: 'Deeper planning for substantial work.', default: false, targets: ['plan', 'work'], overrides: { plan: { effort: 'high' }, work: { effort: 'high' } } },
+          ],
+        },
+        {
+          id: 'research', name: 'Research a question', launchable: true, blockCount: 2, updatedAt: ago(3),
+          description: 'Ground an answer in opened sources.', presets: [],
+        },
+        {
+          id: 'loop-task', name: 'Work one backlog task', launchable: false, blockCount: 1, updatedAt: ago(11),
+          description: 'One work block, used by the Loop supervisor.', presets: [],
+        },
+      ];
       const library = {
         blocks,
-        stacks: [{ id: 'loop-task', name: 'Work one backlog task', description: 'One work block.', blockCount: 1 }],
+        // Enough rows for Build's gallery to be worth looking at: a workflow
+        // with modes, one without, and an internal stack that chat never
+        // offers.
+        stacks: mockStacks,
         tools: [
           { id: 'read_file', title: 'Read a file', description: 'Read a text file from the workspace.', effects: ['read'], risk: 'safe', scope: 'workspace' },
           { id: 'bash', title: 'Run a command', description: 'A shell in the workspace.', effects: ['shell'], risk: 'danger', scope: 'workspace' },
           { id: 'from_a_plugin', description: 'Contributed, and not yet classified.' },
         ],
         skills: [{ name: 'impeccable', description: 'Critique the work.', requiresTools: ['bash'] }],
+        plugins: mockPlugins.map(row => ({ ...row })),
         models: Object.keys(mockSettings.modelFacts ?? {}).slice(0, 12).map(id => ({ id, source: 'openrouter' })),
         modelFacts: mockSettings.modelFacts ?? {},
       };
 
+      // Which stack the mock Build has open. The preview tree is the same one
+      // whichever is chosen — this exists so the gallery's open / new /
+      // duplicate path can be walked in a browser without an Electron host.
+      let openStack = mockStacks[0];
+      const presetsOf = row => Object.fromEntries((row.presets ?? []).map(preset => [preset.id, {
+        name: preset.name, description: preset.description ?? '',
+        default: preset.default === true, overrides: preset.overrides ?? {},
+      }]));
       const surface = {
-        get stack() { return { id: 'preview', name: 'A stack to look at', description: '', launchable: true, presets: {}, root }; },
+        get stack() {
+          return {
+            id: openStack.id, name: openStack.name, description: openStack.description ?? '',
+            launchable: openStack.launchable !== false, presets: presetsOf(openStack), root,
+          };
+        },
         source: 'version: 2\nid: preview\nname: A stack to look at\nlaunchable: true\nblocks:\n  - id: plan\n    use: flyt:work\n',
-        validation: { ok: true, errors: [], warnings: [], stats: { blocks: 4, depth: 3, worstCaseExpansion: 4 } },
+        validation: { ok: true, errors: [], warnings: [], stats: { blocks: 5, depth: 3, worstCaseExpansion: 5 } },
         history: [],
         blocks,
         library,
         uiExtensions: [],
         commands,
+        onAct: async entry => {
+          if (entry?.kind !== 'stack' || entry?.action !== 'open') return null;
+          openStack = mockStacks.find(row => row.id === entry.id) ?? openStack;
+          return { stack: surface.stack, library };
+        },
+        createStack: async ({ name, description = '', from = null }) => {
+          const source = from ? mockStacks.find(row => row.id === from) : null;
+          const slug = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'workflow';
+          const row = {
+            ...(source ?? { launchable: true, blockCount: 1, presets: [] }),
+            id: mockStacks.some(item => item.id === slug) ? `${slug}-2` : slug,
+            name, description: description || source?.description || 'A new workflow.',
+            updatedAt: new Date().toISOString(),
+          };
+          mockStacks.unshift(row);
+          openStack = row;
+          return { stackId: row.id, stack: surface.stack, library };
+        },
       };
       // So a person can watch an agent edit: from the console,
       // `flytPreviewAgentEdit()` moves a block the way a model would.
@@ -862,6 +1044,9 @@ export function installDevMock() {
       if (Array.isArray(patch.providerPriority)) mockSettings.providerPriority = [...patch.providerPriority];
       if (Array.isArray(patch.activeModels)) mockSettings.activeModels = structuredClone(patch.activeModels);
       if (patch.modelSets && typeof patch.modelSets === 'object') mockSettings.modelSets = structuredClone(patch.modelSets);
+      if (patch.workflowModelTiers && typeof patch.workflowModelTiers === 'object') {
+        mockSettings.workflowModelTiers = structuredClone(patch.workflowModelTiers);
+      }
       // Sent whole, like activeModels: clearing a band is its absence.
       if (patch.loopModels && typeof patch.loopModels === 'object') mockSettings.loopModels = structuredClone(patch.loopModels);
       if (patch.workers) Object.assign(mockSettings.workers, structuredClone(patch.workers));
@@ -926,12 +1111,19 @@ export function installDevMock() {
         ? { modes: Object.entries(f.modes).map(([id, m]) => ({ id, name: m?.name || id })) } : {})
     })),
     listWorkflows: async () => [
-      { id: 'pipeline', name: 'Pipeline', description: 'Refine, plan, and do the work.', presets: [
-        { id: 'low', name: 'Low', description: 'Fast and focused.' },
-        { id: 'medium', name: 'Medium', description: 'Balanced.' },
-        { id: 'high', name: 'High', description: 'Deep and thorough.' },
+      { id: 'pipeline', name: 'Pipeline', description: 'Refine the request, approve the brief, plan it, and do the work in this project.', presets: [
+        { id: 'low', name: 'Low', description: 'Fast, focused execution for a well-scoped request.', overrides: { plan: { effort: 'low' }, work: { effort: 'low' } } },
+        { id: 'medium', name: 'Medium', description: 'Balanced planning and execution for ordinary project work.', default: true, overrides: { plan: { effort: 'medium' }, work: { effort: 'medium' } } },
+        { id: 'high', name: 'High', description: 'Deeper planning and execution for substantial work.', overrides: { plan: { effort: 'high' }, work: { effort: 'high' } } },
+      ], steps: [
+        { id: 'refine', title: 'Refine the request', use: 'flyt-blocks-judgement:prompt-refiner', effort: null, modelTier: 'free', modelBacked: true },
+        { id: 'approve-refinement', title: 'Approve the refined request', use: 'flyt-blocks-judgement:human-checkpoint', effort: null, modelTier: null, modelBacked: false, checkpoint: true },
+        { id: 'plan', title: 'Plan', use: 'flyt-blocks-loop:backlog-plan', effort: 'high', modelTier: 'frontier', modelBacked: true },
+        { id: 'work', title: 'Do the work', use: 'flyt-blocks-core:work', effort: 'medium', modelTier: 'standard', modelBacked: true },
       ] },
-      { id: 'research', name: 'Research a question', description: 'Ground an answer in opened sources.', presets: [] },
+      { id: 'research', name: 'Research a question', description: 'Ground an answer in opened sources.', presets: [], steps: [
+        { id: 'look-it-up', title: 'Look it up', use: 'flyt-blocks-core:research', effort: null, modelTier: 'standard', modelBacked: true },
+      ] },
       { id: 'spec-an-idea', name: 'Spec an idea', description: 'Interrogate an idea and turn it into a specification.', presets: [] },
       { id: 'learn-from-repo', name: 'Learn from a repo', description: 'Read a repository in parallel and synthesize it.', presets: [] },
     ],
@@ -1119,7 +1311,7 @@ export function installDevMock() {
         subjects: [], remedy: { action: 'set-reviewer', label: 'Set a reviewer', args: {} }
       }]
     }),
-    addTask: async (_pid, task) => task,
+    addTask: async (_pid, task) => ({ id: `t-mock-${Date.now().toString(36)}`, ...task }),
     getTask: async (_pid, id) => structuredClone(mockTasks.find(t => t.id === id) ?? null),
     // Inline editing on the board writes through this. The allowlist is the
     // backlog's business; the mock only has to move the fields.

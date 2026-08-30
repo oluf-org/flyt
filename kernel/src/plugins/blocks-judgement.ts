@@ -52,9 +52,65 @@ export const promptRefinerBlock = judge(
   ['ask_human'],
 );
 
+/**
+ * A deterministic, optional human boundary. It spends no model call: the
+ * upstream artifact is shown to the person and passed through unchanged only
+ * after they approve it. This is particularly useful after a Free refiner,
+ * where one cheap misunderstanding should not aim an expensive plan.
+ */
+export const humanCheckpointBlock: BlockDefinition = {
+  use: 'flyt-blocks-judgement:human-checkpoint',
+  title: 'Human checkpoint',
+  description: 'Optionally pause after an upstream artifact and require a person to approve it before continuing.',
+  category: 'utility',
+  settings: {
+    type: 'object', additionalProperties: false,
+    properties: {
+      enabled: {
+        type: 'boolean', title: 'Require approval',
+        description: 'When off, the artifact passes through without pausing.',
+      },
+    },
+  } as unknown as JsonValue,
+  ceiling: ['ask_human'],
+  outputs: [{ name: 'approved', type: 'boolean' }],
+  async execute(run: BlockRun) {
+    if (run.config.enabled === false) {
+      return { status: 'done', output: run.input, structured: { approved: true } };
+    }
+    const callId = `${run.blockId}-checkpoint`;
+    const args = {
+      question: 'Approve the refined request before the workflow spends more on planning?',
+      options: ['Approve and continue', 'Stop this workflow'],
+      context: run.input,
+    };
+    const session = await run.ctx.sessions.open(run.runId);
+    await session.append({ type: 'tool.call', data: { callId, name: 'ask_human', args } });
+    const result = await run.ctx.tools.execute({
+      runId: run.runId, blockId: run.blockId, step: 1,
+      call: { id: callId, name: 'ask_human', args },
+      ceiling: run.ceiling,
+      ...(run.signal ? { signal: run.signal } : {}),
+    });
+    await session.append({
+      type: 'tool.result',
+      data: { callId, name: 'ask_human', content: result.content ?? '', ...(result.error ? { error: result.error } : {}) },
+    });
+    if (result.error) return { status: 'failed', output: run.input, error: result.error };
+    let answer = '';
+    try { answer = String((JSON.parse(result.content ?? '{}') as { answer?: unknown }).answer ?? ''); }
+    catch { answer = String(result.content ?? ''); }
+    const approved = /^approve\b/i.test(answer.trim());
+    return approved
+      ? { status: 'done', output: run.input, structured: { approved: true } }
+      : { status: 'failed', output: run.input, structured: { approved: false }, error: 'The refined request was not approved.' };
+  },
+};
+
 /** Contribute the judgement blocks. */
 export function apply(ctx: Context): void {
   ctx.blocks.register(evaluationBlock);
   ctx.blocks.register(compareBlock);
   ctx.blocks.register(promptRefinerBlock);
+  ctx.blocks.register(humanCheckpointBlock);
 }

@@ -7,7 +7,7 @@
  * @module #kernel
  */
 import { Context } from '@deepseek-ai/cordis';
-import { mount, type Importer } from './loader/index.js';
+import { PluginHost, type Importer, type InstalledPlugin } from './loader/index.js';
 import type { Entry } from './loader/compose.js';
 import { PluginReviewCoordinator } from './plugins/tools.js';
 
@@ -37,6 +37,7 @@ export * as flytBlocksCore from './plugins/blocks-core.js';
 export * as flytBlocksJudgement from './plugins/blocks-judgement.js';
 export * as flytBlocksInquiry from './plugins/blocks-inquiry.js';
 export * as flytBlocksLoop from './plugins/blocks-loop.js';
+export { taskGraphBlock, executeTaskGraph, parseTaskGraphPlan, PARALLELISM_LEVELS } from './plugins/blocks-task-graph.js';
 export {
   workBlock, researchBlock,
   LOOP_CEILING, RESEARCH_CEILING, WORK_SYSTEM,
@@ -74,6 +75,15 @@ export interface Kernel {
   readonly profile: ProfileName;
   /** The one pending attended plugin review, observable by the host UI. */
   readonly pluginReviews: PluginReviewCoordinator;
+  /** Addressable catalog and lifecycle operations for mounted Cordis fibers. */
+  readonly plugins: {
+    list(): InstalledPlugin[];
+    get(id: string): InstalledPlugin | undefined;
+    configure(id: string, config: unknown): Promise<void>;
+    restart(id: string): Promise<void>;
+    uninstall(id: string): Promise<void>;
+    subscribe(listener: () => void): () => void;
+  };
   /** Install package rows through this surface's attended/unattended policy. */
   install(entries: readonly Entry[], options?: { import?: Importer }): Promise<string[]>;
   /**
@@ -99,6 +109,7 @@ export function createKernel(options: KernelOptions = {}): Kernel {
   const ctx = new Context();
   const profile = options.profile ?? 'flyt-cli';
   const pluginReviews = new PluginReviewCoordinator();
+  const plugins = new PluginHost(ctx);
   if (options.baseUrl) ctx.baseUrl = options.baseUrl;
 
   let disposed: Promise<void> | null = null;
@@ -106,8 +117,9 @@ export function createKernel(options: KernelOptions = {}): Kernel {
     ctx,
     profile,
     pluginReviews,
+    plugins,
     install(entries, installOptions = {}) {
-      return mount(ctx, entries, {
+      return plugins.install(entries, {
         ...installOptions,
         // A Loop worker cannot manufacture a human callback. The shared mount
         // path therefore refuses every external package before it executes.
@@ -115,7 +127,7 @@ export function createKernel(options: KernelOptions = {}): Kernel {
       });
     },
     dispose() {
-      disposed ??= ctx.fiber.dispose();
+      disposed ??= ctx.fiber.dispose().finally(() => plugins.clear());
       return disposed;
     },
   };

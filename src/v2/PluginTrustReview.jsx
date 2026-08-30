@@ -12,11 +12,41 @@ export default function PluginTrustReview({ pluginName = 'Plugin', proposals = [
   const initial = useMemo(() => initialPluginDecisions(proposals), [proposals]);
   const [decisions, setDecisions] = useState(initial);
   const [settled, setSettled] = useState(false);
+  // Deciding crosses IPC, so it takes time and can fail. Treating the returned
+  // promise as an answer settled the dialog the instant it was pressed and
+  // dismissed the only surface that could report the refusal — the review was
+  // then parked with nothing on screen waiting on it.
+  const [submitting, setSubmitting] = useState(null);
+  const [failure, setFailure] = useState(null);
 
   const edit = (proposal, patch) => setDecisions(all => ({
     ...all,
     [proposal.name]: tightenPluginDecision(proposal, all[proposal.name], patch),
   }));
+
+  const decide = async (kind, chosen) => {
+    setSubmitting(kind);
+    setFailure(null);
+    try {
+      const answer = await onDecide?.(chosen);
+      // `false` is the coordinator saying it had nothing to settle — a review
+      // that was withdrawn or already answered. That is not an error and it is
+      // not an acceptance, so it says so and leaves the dialog usable.
+      if (answer === false) {
+        setFailure({ kind, message: 'This review is no longer pending — nothing was recorded.' });
+        return;
+      }
+      setSettled(true);
+    } catch (error) {
+      setFailure({
+        kind,
+        message: String(error?.message ?? error)
+          .replace(/^Error invoking remote method '[^']*':\s*(Error:\s*)?/, ''),
+      });
+    } finally {
+      setSubmitting(null);
+    }
+  };
 
   return (
     <div className="plugin-trust-backdrop">
@@ -80,17 +110,24 @@ export default function PluginTrustReview({ pluginName = 'Plugin', proposals = [
         })}
 
         <footer>
-          <button type="button" className="reject" disabled={settled}
-            onClick={() => {
-              if (onDecide?.(declinePluginDecisions(proposals)) !== false) setSettled(true);
-            }}>
-            Keep installed; leave tools unreachable
-          </button>
-          <button type="button" className="primary" disabled={settled} onClick={() => {
-            if (onDecide?.(decisions) !== false) setSettled(true);
-          }}>
-            Confirm classifications
-          </button>
+          {failure && <p className="plugin-trust-failure" role="alert">
+            {failure.message}
+            {' '}<button type="button" className="plugin-trust-retry" disabled={Boolean(submitting)}
+              onClick={() => decide(failure.kind, failure.kind === 'decline' ? declinePluginDecisions(proposals) : decisions)}>
+              Try again
+            </button>
+          </p>}
+          {settled && <p className="plugin-trust-settled" role="status">Recorded. You can close this once installation finishes.</p>}
+          <div className="plugin-trust-buttons">
+            <button type="button" className="reject" disabled={settled || Boolean(submitting)}
+              onClick={() => decide('decline', declinePluginDecisions(proposals))}>
+              {submitting === 'decline' ? 'Recording…' : 'Keep installed; leave tools unreachable'}
+            </button>
+            <button type="button" className="primary" disabled={settled || Boolean(submitting)}
+              onClick={() => decide('confirm', decisions)}>
+              {submitting === 'confirm' ? 'Recording…' : 'Confirm classifications'}
+            </button>
+          </div>
         </footer>
       </section>
     </div>

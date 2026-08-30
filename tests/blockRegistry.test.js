@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createKernel, flytBlocks, missingBlocks, parseStack } from '#kernel';
 import { apply as coreBlocks } from '../kernel/dist/plugins/blocks-core.js';
-import { apply as judgementBlocks } from '../kernel/dist/plugins/blocks-judgement.js';
+import { apply as judgementBlocks, humanCheckpointBlock } from '../kernel/dist/plugins/blocks-judgement.js';
 import { apply as inquiryBlocks } from '../kernel/dist/plugins/blocks-inquiry.js';
 import { apply as loopBlocks } from '../kernel/dist/plugins/blocks-loop.js';
 
@@ -118,6 +118,13 @@ test('a block that declares no outputs stays legal and offers no field to name',
     assert.equal(found.outputs, undefined);
   }));
 
+test('the human checkpoint can be disabled without asking a question or changing the artifact', async () => {
+  const outcome = await humanCheckpointBlock.execute({ config: { enabled: false }, input: 'refined brief' });
+  assert.deepEqual(outcome, {
+    status: 'done', output: 'refined brief', structured: { approved: true },
+  });
+});
+
 test('a declared output agrees with what execute returns in `structured`', () =>
   withBlocks(async kernel => {
     kernel.ctx.blocks.register(block({
@@ -158,6 +165,7 @@ test('every shipped block declares exactly the structured fields its role produc
       'flyt-blocks-judgement:evaluation': { verdict: 'string' },
       'flyt-blocks-judgement:compare': { comparison: 'string' },
       'flyt-blocks-judgement:prompt-refiner': { brief: 'string' },
+      'flyt-blocks-judgement:human-checkpoint': { approved: 'boolean' },
       'flyt-blocks-inquiry:interrogate': { spec: 'string' },
       'flyt-blocks-inquiry:orient': { orientation: 'string' },
       'flyt-blocks-loop:backlog-plan': { tasks: 'list' },

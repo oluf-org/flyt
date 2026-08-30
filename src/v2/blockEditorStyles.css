@@ -69,6 +69,16 @@
 .be-children { display: flex; flex-direction: column; gap: 9px; }
 .be-children.parallel { flex-direction: row; align-items: stretch; gap: 8px; }
 .be-children.parallel > .be-block, .be-children.parallel > .be-container { min-width: 190px; flex: 1 1 0; align-self: flex-start; }
+
+/* A task graph is authored as one block and expands only in Run. The dashed
+   well makes that boundary explicit: these children are durable run facts,
+   never edits waiting to be saved back into the workflow. */
+.be-generated-group { display: grid; gap: 8px; }
+.be-generated-group > header { display: flex; align-items: baseline; justify-content: space-between; padding: 3px 10px 0 42px; color: var(--muted); }
+.be-generated-group > header span { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.be-generated-group > header small { font-size: 11px; }
+.be-generated-children { display: grid; gap: 7px; margin-left: 28px; padding: 10px; border: 1px dashed color-mix(in srgb, var(--accent) 34%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.be-block.generated { background: color-mix(in srgb, var(--accent-soft) 42%, var(--card)); }
 .be-else { margin-top: 11px; padding-top: 10px; border-top: 1px dashed var(--divider); display: flex; flex-direction: column; gap: 9px; }
 .be-else > span { color: var(--accent); font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .be-drop-zone { position: relative; flex: none; height: 0; margin: -4px 8px; border-radius: 7px; opacity: 0; pointer-events: none; transition: opacity 120ms ease, background 120ms ease; }
@@ -94,6 +104,39 @@
 .status-done { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .status-failed { color: var(--err); background: var(--err-soft); }
 .status-waiting, .status-approval, .status-input { color: #d97706; background: color-mix(in srgb, #d97706 12%, transparent); }
+.be-tier-badge, .be-checkpoint-badge {
+  flex: none; padding: 3px 7px; border-radius: 999px; font-size: 9px; font-weight: 700;
+  letter-spacing: .035em; text-transform: uppercase; background: var(--chip); color: var(--dim);
+}
+.be-tier-badge.tier-free { color: #16835d; background: color-mix(in srgb, #16835d 12%, transparent); }
+.be-tier-badge.tier-economy { color: #4f78a8; background: color-mix(in srgb, #4f78a8 12%, transparent); }
+.be-tier-badge.tier-standard { color: var(--accent); background: var(--accent-soft); }
+.be-tier-badge.tier-frontier { color: #8b5fb0; background: color-mix(in srgb, #8b5fb0 13%, transparent); }
+.be-checkpoint-badge { color: #b56f08; background: color-mix(in srgb, #d97706 13%, transparent); }
+.be-checkpoint-badge.off { color: var(--faint); background: var(--chip); }
+
+.be-model-tier {
+  display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; padding: 11px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--side);
+}
+.be-model-tier-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.be-model-tier-head > div { display: flex; flex-direction: column; gap: 2px; }
+.be-model-tier-head strong { font-size: 13px; text-transform: capitalize; }
+.be-model-tier-head > small { max-width: 150px; color: var(--faint); font-size: 9px; line-height: 1.35; text-align: right; }
+.be-tier-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.be-tier-options > button {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 7px 8px; text-align: left;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--tx); cursor: pointer;
+}
+.be-tier-options > button:hover { border-color: var(--divider); }
+.be-tier-options > button.active { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; }
+.be-tier-options strong { font-size: 10.5px; }
+.be-tier-options small { color: var(--faint); font-size: 8.5px; line-height: 1.25; }
+.be-tier-options .tier-free.active { color: #16835d; }
+.be-tier-options .tier-economy.active { color: #4f78a8; }
+.be-tier-options .tier-standard.active { color: var(--accent); }
+.be-tier-options .tier-frontier.active { color: #8b5fb0; }
+.be-tier-inherit { align-self: flex-start; font-size: 9.5px; }
 .be-inline-output { grid-column: 3 / -1; width: 100%; border-top: 1px solid var(--border); padding-top: 7px; }
 .be-inline-output summary { cursor: pointer; color: var(--dim); font-size: 11px; }
 .be-inline-output pre { margin: 8px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap; font: 11px/1.5 var(--mono, ui-monospace, monospace); }
@@ -138,3 +181,30 @@
 .be-modal h2 { margin: 0 0 7px; font-size: 17px; }.be-modal p { color: var(--dim); font-size: 12px; }.be-modal > div { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
 @media (max-width: 1050px) { .be-builder-grid { grid-template-columns: minmax(184px, var(--be-palette-width, 200px)) 5px minmax(360px,1fr); }.be-resizer.side-inspector { display: none; }.be-inspector { position: fixed; right: 0; top: 106px; bottom: 0; z-index: 8; width: var(--be-inspector-width, 310px); border-left: 1px solid var(--border); box-shadow: -12px 0 30px rgba(0,0,0,.15); }.be-yaml { grid-template-columns: 1fr; }.be-verification { max-height: 260px; border-left: 0; border-top: 1px solid var(--border); } }
 @media (prefers-reduced-motion: reduce) { .touched { animation: none; outline: 2px solid var(--be-touch); } }
+
+/* --- Back to the gallery, and the modes bar ---------------------------------
+   Build is a destination with two views: every workflow, and one of them. The
+   back control is part of the toolbar rather than a breadcrumb over it, because
+   a second row of chrome for one word is a second row of chrome. */
+.be-back { display: inline-flex; align-items: center; gap: 4px; margin-right: 2px; padding: 6px 9px 6px 6px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--dim); font-size: 12px; font-weight: 600; cursor: pointer; }
+.be-back:hover { border-color: var(--border); background: var(--side); color: var(--tx); }
+.be-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.be-modes { flex: none; display: flex; align-items: center; gap: 12px; padding: 7px 18px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--side) 62%, var(--card)); }
+.be-modes-label { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+.be-mode-chips { display: flex; gap: 4px; }
+.be-mode-chips button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--card); color: var(--dim); font-size: 11.5px; font-weight: 500; cursor: pointer; transition: color .14s ease, border-color .14s ease, background-color .14s ease; }
+.be-mode-chips button:hover { color: var(--tx); }
+.be-mode-chips button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.be-mode-chips button em { font-style: normal; font-size: 8.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+.be-mode-chips button.active em { color: inherit; opacity: .75; }
+.be-modes-copy { flex: 1; min-width: 0; margin: 0; color: var(--faint); font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.be-modes-edit { flex: none; border: 0; background: transparent; color: var(--accent); font-size: 11px; font-weight: 600; cursor: pointer; }
+.be-modes-edit:hover { text-decoration: underline; }
+
+/* A block a previewed mode changes says so on the block, not only in a panel:
+   the question "what does High actually do" is asked while looking at steps. */
+.be-block.overridden { border-color: color-mix(in srgb, var(--accent) 48%, var(--border)); }
+.be-mode-override { align-self: flex-start; max-width: 100%; margin-top: 2px; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.be-mode-note { margin: 0 0 10px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 8px; background: var(--accent-soft); color: var(--tx); font-size: 11.5px; line-height: 1.5; }
+.be-mode-note strong { color: var(--accent); }

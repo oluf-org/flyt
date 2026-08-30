@@ -1,12 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Lander from '../Lander.jsx';
+import { ModelMetaProvider } from '../ModelPicker.jsx';
 import ModelsPage from '../ModelsPage.jsx';
 import Settings from '../Settings.jsx';
 import TabDeck from '../TabDeck.jsx';
 import TabStrip, { NewTabPage } from '../TabStrip.jsx';
 import Shell from './Shell.jsx';
-import { INITIAL, MODELS, WORK } from './shellRouting.js';
-import { initialFlowId } from './dailyWorkModel.js';
+import { BUILD, INITIAL, MODELS, WORK } from './shellRouting.js';
+import { initialFlowId, initialModeId } from './dailyWorkModel.js';
+import { defaultModeId, queueTaskFromPrompt } from './workflowUx.js';
+import {
+  DEFAULT_WORKFLOW_MODEL_TIER, workflowModelSelection,
+} from '../modelTiers.js';
 import {
   dailyProjectBridge, readDailyRun, subscribeDailyRun,
 } from './dailyWorkBridge.js';
@@ -29,6 +34,10 @@ export default function DailyRoot() {
   const [build, setBuild] = useState(null);
   const [edits, setEdits] = useState(0);
   const [reviewRevision, setReviewRevision] = useState(0);
+  // The plugin catalog changes without any edit or review: a package finishes
+  // installing, a fiber fails, the manager removes a row. Counting those is how
+  // the Library redraws for a change nothing in this host initiated.
+  const [pluginRevision, setPluginRevision] = useState(0);
   const [uiExtensionRevision, setUiExtensionRevision] = useState(0);
   const [location, setLocation] = useState(INITIAL);
   const [projects, setProjects] = useState({ tabs: [], active: null });
@@ -49,12 +58,38 @@ export default function DailyRoot() {
   const [workflowInteraction, setWorkflowInteraction] = useState(null);
   const [blockRunHistory, setBlockRunHistory] = useState([]);
   const [replyBusy, setReplyBusy] = useState(false);
+  const [submitKind, setSubmitKind] = useState('run');
+  const [queueLevel, setQueueLevel] = useState('low');
+  const [queueReceipt, setQueueReceipt] = useState(null);
+  const [workflowModels, setWorkflowModels] = useState({});
+  const workflowModelsRef = useRef({});
   const activeRef = useRef(null);
   const watchingRef = useRef(null);
   const tabsRef = useRef([]);
   const flowsRef = useRef([]);
   const deckRef = useRef(null);
   const projectApi = useMemo(() => dailyProjectBridge(window.flyt), []);
+
+  const loadWorkflowModels = useCallback(tab => {
+    const next = tab?.state?.workflowModelChoices ?? {};
+    workflowModelsRef.current = next;
+    setWorkflowModels(next);
+  }, []);
+
+  const commitWorkflowModels = useCallback(update => {
+    const next = typeof update === 'function' ? update(workflowModelsRef.current) : update;
+    workflowModelsRef.current = next;
+    setWorkflowModels(next);
+    const projectId = activeRef.current;
+    if (!projectId) return;
+    const tab = tabsRef.current.find(item => item.id === projectId);
+    const state = { ...(tab?.state ?? {}), workflowModelChoices: next };
+    tabsRef.current = tabsRef.current.map(item => item.id === projectId ? { ...item, state } : item);
+    setProjects(current => ({ ...current, tabs: current.tabs.map(item => (
+      item.id === projectId ? { ...item, state } : item
+    )) }));
+    window.flyt.saveProjectState?.(projectId, state);
+  }, []);
 
   const acceptProjects = useCallback(payload => {
     if (!payload) return;
@@ -77,15 +112,17 @@ export default function DailyRoot() {
       setRecents(recentProjects ?? []);
       setFlows(availableFlows);
       const active = (projectPayload.tabs ?? []).find(tab => tab.id === projectPayload.active);
-      setFlowId(initialFlowId(availableFlows, active?.state?.runWorkflowId ?? active?.state?.runFlowId));
-      setModeId(active?.state?.runPresetId ?? null);
+      loadWorkflowModels(active);
+      const openingFlowId = initialFlowId(availableFlows, active?.state?.runWorkflowId ?? active?.state?.runFlowId);
+      setFlowId(openingFlowId);
+      setModeId(initialModeId(availableFlows, openingFlowId, active?.state?.runPresetId ?? null));
       setConfigs(Object.fromEntries(availableFlows.map(workflow => [workflow.id, (workflow.presets ?? []).map(preset => ({
         ...preset, badges: [],
       }))])));
       setSettings(publicSettings);
     }).catch(err => { if (live) setError(cleanIpcError(err)); });
     return () => { live = false; };
-  }, [acceptProjects]);
+  }, [acceptProjects, loadWorkflowModels]);
 
   useEffect(() => {
     let live = true;
@@ -98,6 +135,7 @@ export default function DailyRoot() {
 
   useEffect(() => build?.commands?.subscribe?.(() => setEdits(n => n + 1)), [build]);
   useEffect(() => build?.subscribePluginReview?.(() => setReviewRevision(n => n + 1)), [build]);
+  useEffect(() => build?.subscribePlugins?.(() => setPluginRevision(n => n + 1)), [build]);
   useEffect(() => build?.subscribeUiExtensions?.(() => setUiExtensionRevision(n => n + 1)), [build]);
 
   const refreshRuns = useCallback(async (projectId = activeRef.current) => {
@@ -156,7 +194,7 @@ export default function DailyRoot() {
     watchingRef.current = next;
     setWatching(next);
     setWorkflowInteraction((pending ?? [])[0] ?? null);
-    setLocation(current => ({ dest: WORK, run: runId ?? current.run }));
+    setLocation(current => ({ ...current, dest: WORK, run: runId ?? current.run }));
   }, []);
 
   useEffect(() => subscribeDailyRun(window.flyt, {
@@ -208,6 +246,7 @@ export default function DailyRoot() {
     if (!projectId) return;
     const tab = tabsRef.current.find(item => item.id === projectId);
     const state = { ...(tab?.state ?? {}), runWorkflowId: nextFlowId, runPresetId: modeId };
+    tabsRef.current = tabsRef.current.map(item => item.id === projectId ? { ...item, state } : item);
     setProjects(current => ({ ...current, tabs: current.tabs.map(item => (
       item.id === projectId ? { ...item, state } : item
     )) }));
@@ -220,8 +259,10 @@ export default function DailyRoot() {
       const payload = await projectApi.activateProject(id);
       acceptProjects(payload);
       const tab = payload.tabs?.find(item => item.id === payload.active);
-      setFlowId(initialFlowId(flowsRef.current, tab?.state?.runWorkflowId ?? tab?.state?.runFlowId));
-      setModeId(tab?.state?.runPresetId ?? null);
+      loadWorkflowModels(tab);
+      const nextFlowId = initialFlowId(flowsRef.current, tab?.state?.runWorkflowId ?? tab?.state?.runFlowId);
+      setFlowId(nextFlowId);
+      setModeId(initialModeId(flowsRef.current, nextFlowId, tab?.state?.runPresetId ?? null));
       setWatching(null);
       watchingRef.current = null;
       setLocation(current => ({ ...current, run: null }));
@@ -235,8 +276,10 @@ export default function DailyRoot() {
       acceptProjects(payload);
       setNewTabOpen(false);
       const tab = payload.tabs?.find(item => item.id === payload.active);
-      setFlowId(initialFlowId(flowsRef.current, tab?.state?.runWorkflowId ?? tab?.state?.runFlowId));
-      setModeId(tab?.state?.runPresetId ?? null);
+      loadWorkflowModels(tab);
+      const nextFlowId = initialFlowId(flowsRef.current, tab?.state?.runWorkflowId ?? tab?.state?.runFlowId);
+      setFlowId(nextFlowId);
+      setModeId(initialModeId(flowsRef.current, nextFlowId, tab?.state?.runPresetId ?? null));
       setRecents(await window.flyt.projectRecents());
     } catch (err) { setError(cleanIpcError(err)); }
   }
@@ -251,8 +294,10 @@ export default function DailyRoot() {
       const payload = await projectApi.closeProject(id);
       acceptProjects(payload);
       const tab = payload.tabs?.find(item => item.id === payload.active);
-      setFlowId(initialFlowId(flowsRef.current, tab?.state?.runWorkflowId ?? tab?.state?.runFlowId));
-      setModeId(tab?.state?.runPresetId ?? null);
+      loadWorkflowModels(tab);
+      const nextFlowId = initialFlowId(flowsRef.current, tab?.state?.runWorkflowId ?? tab?.state?.runFlowId);
+      setFlowId(nextFlowId);
+      setModeId(initialModeId(flowsRef.current, nextFlowId, tab?.state?.runPresetId ?? null));
       if (watchingRef.current && id === projects.active) {
         watchingRef.current = null;
         setWatching(null);
@@ -272,30 +317,111 @@ export default function DailyRoot() {
     if (!flowId || busy) return;
     setBusy(true);
     setError('');
+    setQueueReceipt(null);
     try {
       let projectId = activeRef.current;
       if (!projectId) {
         const projectPayload = await window.flyt.createProject(text);
         acceptProjects(projectPayload);
         projectId = projectPayload.opened;
-        await window.flyt.saveProjectState?.(projectId, { runWorkflowId: flowId, runPresetId: modeId });
+        await window.flyt.saveProjectState?.(projectId, {
+          runWorkflowId: flowId, runPresetId: modeId, workflowModelChoices: workflowModelsRef.current,
+        });
       }
-      const started = await window.flyt.runWorkflow(projectId, flowId, text, settings?.approvalMode ?? null, modeId);
+      const selectedModels = workflowModels[flowId] ?? {};
+      const authoredBlockTiers = Object.fromEntries((flows.find(flow => flow.id === flowId)?.steps ?? [])
+        .filter(step => step.modelBacked !== false && step.modelTier)
+        .map(step => [step.id, step.modelTier]));
+      const routedModels = workflowModelSelection({
+        tiers: settings?.workflowModelTiers ?? {},
+        defaultTier: selectedModels.defaultTier ?? DEFAULT_WORKFLOW_MODEL_TIER,
+        blockTiers: selectedModels.blockTiers ?? {},
+        defaultBlockTiers: authoredBlockTiers,
+        customBlocks: selectedModels.customBlocks ?? {},
+        fallback: settings?.workers?.executor ?? null,
+      });
+      const started = await window.flyt.runWorkflow(
+        projectId, flowId, text, settings?.approvalMode ?? null, modeId,
+        routedModels,
+      );
       const [nextWatching, nextRuns, pending] = await Promise.all([
         readDailyRun(window.flyt, projectId, started.runId), window.flyt.listRuns(projectId),
         window.flyt.getPendingWorkflowInteractions?.(projectId, started.runId) ?? Promise.resolve([]),
       ]);
       setRuns(nextRuns ?? []); watchingRef.current = nextWatching; setWatching(nextWatching);
       setWorkflowInteraction((pending ?? [])[0] ?? null);
-      setLocation({ dest: WORK, run: started.runId });
+      setLocation(current => ({ ...current, dest: WORK, run: started.runId }));
     } catch (err) { setError(cleanIpcError(err)); }
     finally { setBusy(false); }
   }
+
+  async function enqueue(text) {
+    if (busy) return;
+    setBusy(true); setError(''); setQueueReceipt(null);
+    try {
+      let projectId = activeRef.current;
+      if (!projectId) {
+        const projectPayload = await window.flyt.createProject(text);
+        acceptProjects(projectPayload);
+        projectId = projectPayload.opened;
+      }
+      const task = await window.flyt.addTask(projectId, queueTaskFromPrompt(text, queueLevel));
+      setQueueReceipt({ id: task.id, title: task.title });
+    } catch (err) { setError(cleanIpcError(err)); }
+    finally { setBusy(false); }
+  }
+
+  const newChat = useCallback(() => {
+    setLocation(current => ({ ...current, dest: WORK, run: null }));
+  }, []);
+
+  const returnToRun = useCallback(() => {
+    const runId = watchingRef.current?.runId;
+    if (runId) setLocation(current => ({ ...current, dest: WORK, run: runId }));
+  }, []);
 
   const activeProject = projects.tabs.find(tab => tab.id === projects.active) ?? null;
   const models = useMemo(() => (settings?.activeModels ?? []).map(model => ({
     ...settings?.modelFacts?.[model.id], ...model,
   })), [settings]);
+  const selectedModels = workflowModels[flowId] ?? {};
+  const defaultTier = selectedModels.defaultTier ?? DEFAULT_WORKFLOW_MODEL_TIER;
+  const blockTiers = selectedModels.blockTiers ?? {};
+  const modelOverrides = selectedModels.customBlocks ?? {};
+  const authoredBlockTiers = Object.fromEntries((flows.find(flow => flow.id === flowId)?.steps ?? [])
+    .filter(step => step.modelBacked !== false && step.modelTier)
+    .map(step => [step.id, step.modelTier]));
+  const setDefaultTier = tier => commitWorkflowModels(current => ({
+    ...current,
+    [flowId]: { ...(current[flowId] ?? {}), defaultTier: tier },
+  }));
+  const setStepWorker = (blockId, worker) => commitWorkflowModels(current => ({
+    ...current,
+    [flowId]: {
+      ...(current[flowId] ?? {}),
+      blockTiers: Object.fromEntries(Object.entries(current[flowId]?.blockTiers ?? {})
+        .filter(([id]) => id !== blockId)),
+      customBlocks: { ...(current[flowId]?.customBlocks ?? {}), [blockId]: worker },
+    },
+  }));
+  const setStepTier = (blockId, tier = null) => commitWorkflowModels(current => {
+    const nextTiers = { ...(current[flowId]?.blockTiers ?? {}) };
+    const customBlocks = { ...(current[flowId]?.customBlocks ?? {}) };
+    delete customBlocks[blockId];
+    if (tier) nextTiers[blockId] = tier; else delete nextTiers[blockId];
+    return { ...current, [flowId]: { ...(current[flowId] ?? {}), blockTiers: nextTiers, customBlocks } };
+  });
+  const saveModelTier = async (tier, worker, slot = 0) => {
+    const next = { ...(settings?.workflowModelTiers ?? {}) };
+    if (tier === 'free') {
+      const current = Array.isArray(next.free) ? [...next.free] : (next.free?.model ? [next.free] : []);
+      if (worker?.model) current[slot] = worker; else current.splice(slot, 1);
+      if (current.length) next.free = current; else delete next.free;
+    } else if (worker?.model) next[tier] = worker;
+    else delete next[tier];
+    try { setSettings(await window.flyt.setSettings({ workflowModelTiers: next })); }
+    catch (err) { setError(cleanIpcError(err)); }
+  };
   const composer = (
     <>
       {error && <p className="daily-error" role="alert">{error}</p>}
@@ -318,7 +444,28 @@ export default function DailyRoot() {
         claudeSubActive={settings?.claudeSubscriptionActive ?? false}
         onOpenSettings={() => setSettingsOpen(true)}
         busy={busy}
-        onSubmit={launch}
+        onSubmit={submitKind === 'loop' ? enqueue : launch}
+        submitKind={submitKind}
+        onSubmitKind={setSubmitKind}
+        queueLevel={queueLevel}
+        onQueueLevel={setQueueLevel}
+        fallbackWorker={settings?.workers?.executor ?? null}
+        modelTiers={settings?.workflowModelTiers ?? {}}
+        defaultTier={defaultTier}
+        blockTiers={blockTiers}
+        authoredBlockTiers={authoredBlockTiers}
+        modelOverrides={modelOverrides}
+        onDefaultTier={setDefaultTier}
+        onStepTier={setStepTier}
+        onModelTier={saveModelTier}
+        onStepWorker={setStepWorker}
+        onResetStepWorker={blockId => setStepTier(blockId, null)}
+        queueReceipt={queueReceipt}
+        returnRun={watching && !location.run ? {
+          name: watching.stack?.name ?? watching.snapshot?.meta?.stackId ?? 'Workflow run',
+          stage: watching.snapshot?.meta?.stage ?? watching.trace?.stage ?? 'run',
+        } : null}
+        onReturnRun={returnToRun}
         onOpenProject={openProject}
         onOpenFolder={pickAndOpenProject}
       />
@@ -343,14 +490,22 @@ export default function DailyRoot() {
     ...build,
     stack: build.stack,
     history: [...(build.history ?? []), ...blockRunHistory],
+    library: build.library,
     edits,
     reviewRevision,
+    pluginRevision,
     uiExtensionRevision,
     pluginReview: build.pluginReview ?? null,
+    // The manager's own answer, for the case where nothing pushed: a lifecycle
+    // call that changed a row this window is looking at settles before the
+    // change event lands, and re-reading is cheaper than guessing.
+    refreshPlugins: build.plugins?.list
+      ? async () => { await build.plugins.list(); setPluginRevision(n => n + 1); }
+      : null,
   } : null;
 
   return (
-    <>
+    <ModelMetaProvider value={{ ...(settings ?? {}), catalog: models }}>
       <Shell
         location={location}
         onNavigate={setLocation}
@@ -359,6 +514,18 @@ export default function DailyRoot() {
         composer={composer}
         runs={runs}
         onOpenRun={runId => watchRun(activeRef.current, runId).catch(err => setError(cleanIpcError(err)))}
+        onNewChat={newChat}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenFlow={async () => {
+          const stackId = watchingRef.current?.stack?.id;
+          try {
+            if (stackId && build?.stack?.id !== stackId) {
+              await build?.onAct?.({ kind: 'stack', action: 'open', id: stackId });
+              setEdits(n => n + 1);
+            }
+            setLocation(current => ({ ...current, dest: BUILD, run: current.run, workflow: stackId ?? build?.stack?.id ?? null }));
+          } catch (err) { setError(cleanIpcError(err)); }
+        }}
         workflowInteraction={workflowInteraction}
         onWorkflowDecide={async approved => {
           const at = workflowInteraction; if (!at) return;
@@ -379,7 +546,7 @@ export default function DailyRoot() {
               readDailyRun(window.flyt, activeRef.current, started.runId),
               window.flyt.getPendingWorkflowInteractions?.(activeRef.current, started.runId) ?? Promise.resolve([]),
             ]);
-            watchingRef.current = next; setWatching(next); setLocation({ dest: WORK, run: started.runId });
+            watchingRef.current = next; setWatching(next); setLocation(current => ({ ...current, dest: WORK, run: started.runId }));
             setWorkflowInteraction((pending ?? [])[0] ?? null);
             setRuns(await window.flyt.listRuns(activeRef.current));
           } catch (err) { setError(cleanIpcError(err)); } finally { setReplyBusy(false); }
@@ -387,8 +554,8 @@ export default function DailyRoot() {
         workflowReplyBusy={replyBusy}
         onRunBuild={stack => {
           if (!stack?.id) return;
-          updateFlow(stack.id, stack.presets?.[modeId] ? modeId : Object.keys(stack.presets ?? {})[0] ?? null);
-          watchingRef.current = null; setWatching(null); setLocation({ dest: WORK, run: null });
+          updateFlow(stack.id, stack.presets?.[modeId] ? modeId : defaultModeId(stack));
+          watchingRef.current = null; setWatching(null); setLocation(current => ({ ...current, dest: WORK, run: null }));
         }}
         projectTabs={projectTabs}
         models={<ModelsPage
@@ -421,6 +588,6 @@ export default function DailyRoot() {
         onClose={() => setSettingsOpen(false)}
         onOpenModels={() => { setSettingsOpen(false); setLocation(current => ({ ...current, dest: MODELS })); }}
       />}
-    </>
+    </ModelMetaProvider>
   );
 }

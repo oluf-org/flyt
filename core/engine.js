@@ -403,6 +403,9 @@ export function createEngine({
     // P2.4), and drops members that are no longer active rather than minting a
     // lane that cannot run — so the runner needs both lists.
     runtimeConfig.modelSets = settings.modelSets ?? {};
+    // Workflow definitions name stable Free/Economy/Standard/Frontier tiers;
+    // the installation decides which current models those names mean.
+    runtimeConfig.workflowModelTiers = settings.workflowModelTiers ?? {};
     runtimeConfig.activeModels = settings.activeModels ?? [];
     runtimeConfig.categoryWorkers = baseConfig.categoryWorkers ?? {};
     // A model per effort band for the loop (DESIGN-SPEC.md §8). Settings win over
@@ -476,6 +479,7 @@ export function createEngine({
       modelFacts: settings.modelFacts ?? {},
       modelPopularity: settings.modelPopularity ?? null,
       modelSets: settings.modelSets ?? {},
+      workflowModelTiers: settings.workflowModelTiers ?? {},
       // What the Loop view's per-band pickers show. Model ids, never keys.
       loopModels: settings.loopModels ?? {},
       // The backlog chat's model, when this person has chosen one (D45).

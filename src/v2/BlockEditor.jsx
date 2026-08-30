@@ -2,6 +2,8 @@
 // follows the YAML tree and stores no coordinates or layout sidecar.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BlockConfigurationView } from './PluginContributionView.jsx';
+import { WORKFLOW_MODEL_TIERS } from '../modelTiers.js';
+import { defaultModeId, workflowModes } from './workflowUx.js';
 import './blockEditorStyles.css';
 
 const TOUCH_MS = 600;
@@ -10,6 +12,8 @@ const CONTROL_KINDS = ['sequence', 'parallel', 'repeat', 'foreach', 'until', 'if
 function Icon({ name, size = 16 }) {
   const paths = {
     search: <><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></>,
+    back: <path d="m14 6-6 6 6 6"/>,
+    modes: <><circle cx="7" cy="8" r="2.4"/><circle cx="17" cy="16" r="2.4"/><path d="M11 8h8M5 16h8"/></>,
     grip: <><path d="M8 7h.01M8 12h.01M8 17h.01M16 7h.01M16 12h.01M16 17h.01"/></>,
     chevron: <path d="m9 6 6 6-6 6"/>,
     trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/></>,
@@ -30,7 +34,9 @@ const statusOf = (run, id) => run?.blocks?.[id]?.status ?? 'pending';
 
 function walkNode(node, out = []) {
   out.push(node);
-  if (node?.kind !== 'block') {
+  if (node?.kind === 'block') {
+    for (const child of node.generated ?? []) walkNode(child, out);
+  } else {
     for (const child of node.children ?? []) walkNode(child, out);
     if (node.kind === 'if') for (const child of node.else ?? []) walkNode(child, out);
   }
@@ -123,7 +129,7 @@ function GenericConfigForm({ node, definition, commands, onError }) {
   };
   return <div className="be-config-form">
     {node.kind === 'block' && !Object.keys(props).length && <p className="be-empty-copy">This block has no settings.</p>}
-    {Object.entries(props).map(([name, field]) => <label key={name}>
+    {Object.entries(props).filter(([name]) => !['model', 'modelTier', 'modelFallbacks'].includes(name)).map(([name, field]) => <label key={name}>
       <span>{field.title ?? name}</span>{field.description && <small>{field.description}</small>}
       {field.enum ? <select value={draft[name] ?? ''} onChange={event => update(name, field, event.target.value)}>
         <option value="">Default</option>{field.enum.map(option => <option key={option} value={option}>{option}</option>)}</select>
@@ -137,7 +143,35 @@ function GenericConfigForm({ node, definition, commands, onError }) {
   </div>;
 }
 
-function Inspector({ root, selected, blocks, commands, history, uiExtensions, onError }) {
+function ModelTierControl({ node, definition, commands, onError }) {
+  const properties = definition?.settings?.properties ?? {};
+  if (!properties.model && !node.config?.modelTier) return null;
+  const selected = node.config?.modelTier ?? '';
+  const choose = async tier => {
+    const config = { ...(node.config ?? {}) };
+    if (tier) config.modelTier = tier; else delete config.modelTier;
+    // A tier is the route. Remove stale generated pins if this workflow was
+    // copied from a resolved run before being edited.
+    delete config.model;
+    delete config.modelFallbacks;
+    try { await commands?.invoke?.('stack:configure-block', { nodeId: node.id, config }, 'human'); }
+    catch (error) { onError(String(error?.message ?? error)); }
+  };
+  return <section className="be-model-tier" aria-label="Model tier">
+    <div className="be-model-tier-head"><div><span className="section-label">Model tier</span><strong>{selected ? WORKFLOW_MODEL_TIERS.find(tier => tier.id === selected)?.name : 'Workflow default'}</strong></div>
+      <small>Choose by job; change the actual model globally later.</small></div>
+    <div className="be-tier-options" role="group" aria-label={`${node.id} model tier`}>
+      {WORKFLOW_MODEL_TIERS.map(tier => <button type="button" key={tier.id}
+        className={`tier-${tier.id}${selected === tier.id ? ' active' : ''}`}
+        aria-pressed={selected === tier.id} onClick={() => choose(tier.id)}>
+        <strong>{tier.name}</strong><small>{tier.hint}</small>
+      </button>)}
+    </div>
+    <button type="button" className="link be-tier-inherit" disabled={!selected} onClick={() => choose(null)}>Use workflow default</button>
+  </section>;
+}
+
+function Inspector({ root, selected, blocks, commands, history, uiExtensions, preview = null, onError }) {
   const [tab, setTab] = useState('config');
   const node = selected ? nodeById(root, selected) : null;
   const context = node ? contextFor(root, node.id) : { upstream: [], downstream: [] };
@@ -150,7 +184,13 @@ function Inspector({ root, selected, blocks, commands, history, uiExtensions, on
       aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div>
     {!node ? <p className="be-empty-copy">Select a block or control to inspect it.</p> : <>
       <header className="be-inspector-head"><span className="section-label">{node.kind}</span><h2>{titleOf(node, blocks)}</h2><code>{node.id}</code></header>
-      {tab === 'config' && <><GenericConfigForm node={node} definition={definition} commands={commands} onError={onError} />
+      {tab === 'config' && <>
+        {preview?.overrides?.[node.id] && <p className="be-mode-note">
+          <strong>{preview.name}</strong> runs this block with {overrideLine(preview.overrides[node.id])}.
+          The fields below are the authored settings every mode starts from; edit modes in YAML.
+        </p>}
+        <ModelTierControl node={node} definition={definition} commands={commands} onError={onError} />
+        <GenericConfigForm node={node} definition={definition} commands={commands} onError={onError} />
         {contributions.map(row => <BlockConfigurationView key={`${row.pluginId}:${row.contribution.id}`} contribution={row.contribution} pluginId={row.pluginId}
           value={node.config ?? {}} onChange={config => commands?.invoke?.('stack:configure-block', { nodeId: node.id, config }, 'human')?.catch?.(error => onError(String(error)))} />)}</>}
       {tab === 'context' && <div className="be-context"><h3>Receives context from</h3>{context.upstream.length
@@ -223,6 +263,50 @@ function Palette({ blocks, root, selected, commands, onError, setDragging }) {
   </aside>;
 }
 
+/** `effort low · model x` — a mode's change to one block, in one line. */
+const overrideLine = config => Object.entries(config ?? {})
+  .map(([key, value]) => `${key} ${typeof value === 'string' ? value : JSON.stringify(value)}`).join(' · ');
+
+/**
+ * Modes, stated where they are edited.
+ *
+ * The rule this bar exists to make visible: a workflow is ONE graph, and its
+ * modes are named settings over that graph. Low, Medium and High are not three
+ * Pipelines — they are three ways to run the one below, and a mode may only
+ * change the settings of blocks that already exist. Anything that needs a
+ * different shape is a different workflow, which is what Duplicate is for.
+ *
+ * Selecting a mode PREVIEWS it: the canvas keeps showing the authored settings,
+ * because those are what an edit here writes, and marks the blocks the mode
+ * changes with what it changes them to.
+ */
+function ModesBar({ modes, previewing, onPreview, onOpenYaml, defaultId }) {
+  const active = modes.find(mode => mode.id === previewing) ?? null;
+  const changes = Object.entries(active?.overrides ?? {});
+  return <div className="be-modes" aria-label="Modes">
+    <span className="be-modes-label"><Icon name="modes" size={14} />Modes</span>
+    <div className="be-mode-chips" role="group" aria-label="Preview a mode">
+      <button type="button" className={previewing ? '' : 'active'} aria-pressed={!previewing}
+        title="The settings every mode starts from — and the ones an edit here writes"
+        onClick={() => onPreview(null)}>As authored</button>
+      {modes.map(mode => <button type="button" key={mode.id}
+        className={previewing === mode.id ? 'active' : ''} aria-pressed={previewing === mode.id}
+        title={[mode.description, mode.id === defaultId ? 'Runs when chat picks no mode.' : ''].filter(Boolean).join(' ')}
+        onClick={() => onPreview(mode.id)}>
+        {mode.name}{mode.id === defaultId && <em>default</em>}
+      </button>)}
+    </div>
+    <p className="be-modes-copy">
+      {active
+        ? changes.length
+          ? changes.map(([blockId, config]) => `${blockId}: ${overrideLine(config)}`).join('  ·  ')
+          : `${active.name} changes nothing — it runs exactly as authored.`
+        : 'One graph, named settings over it. A mode may change block settings, never the steps.'}
+    </p>
+    {onOpenYaml && <button type="button" className="be-modes-edit" onClick={onOpenYaml}>Edit modes in YAML</button>}
+  </div>;
+}
+
 const slotKey = at => `${at.container}:${at.branch ?? 'body'}:${at.index}`;
 
 function DropZone({ at, axis = 'y', root, blocks, commands, dragging, setDragging, dropTarget, setDropTarget, onError }) {
@@ -249,7 +333,7 @@ function DropZone({ at, axis = 'y', root, blocks, commands, dragging, setDraggin
 }
 
 function ChildrenList({ parent, branch = null, root, blocks, commands, selected, setSelected, touched, dragging, setDragging,
-  dropTarget, setDropTarget, run, onDelete, onError }) {
+  dropTarget, setDropTarget, run, preview = null, onDelete, onError }) {
   const children = branch === 'else' ? parent.else ?? [] : parent.children ?? [];
   const axis = parent.kind === 'parallel' && branch !== 'else' ? 'x' : 'y';
   return <div className={`be-children${axis === 'x' ? ' parallel' : ''}`}>
@@ -258,7 +342,7 @@ function ChildrenList({ parent, branch = null, root, blocks, commands, selected,
         commands={commands} dragging={dragging} setDragging={setDragging} dropTarget={dropTarget} setDropTarget={setDropTarget} onError={onError} />}
       <NodeView node={child} root={root} blocks={blocks} commands={commands} selected={selected} setSelected={setSelected}
         touched={touched} dragging={dragging} setDragging={setDragging} dropTarget={dropTarget} setDropTarget={setDropTarget}
-        run={run} onDelete={onDelete} onError={onError} />
+        run={run} preview={preview} onDelete={onDelete} onError={onError} />
     </React.Fragment>)}
     {commands && <DropZone at={{ container: parent.id, index: children.length, ...(branch ? { branch } : {}) }} axis={axis} root={root}
       blocks={blocks} commands={commands} dragging={dragging} setDragging={setDragging} dropTarget={dropTarget}
@@ -266,10 +350,12 @@ function ChildrenList({ parent, branch = null, root, blocks, commands, selected,
   </div>;
 }
 
-function NodeView({ node, root, blocks, commands, selected, setSelected, touched, dragging, setDragging, dropTarget, setDropTarget, run, onDelete, onError }) {
+function NodeView({ node, root, blocks, commands, selected, setSelected, touched, dragging, setDragging, dropTarget, setDropTarget, run, preview = null, onDelete, onError }) {
   const editable = Boolean(commands?.invoke);
   const status = statusOf(run, node.id);
   const missing = node.kind === 'block' && !definitionOf(node, blocks);
+  const definition = definitionOf(node, blocks);
+  const modelBacked = Boolean(definition?.settings?.properties?.model || node.config?.modelTier);
   const output = run?.blocks?.[node.id]?.showing ?? '';
   const slot = parentSlot(root, node.id);
   const move = async delta => {
@@ -290,13 +376,27 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
     draggable: editable, onDragStart: event => { event.stopPropagation(); event.dataTransfer.effectAllowed = 'move'; setDragging(node.id); event.dataTransfer.setData('text/flyt-node', node.id); },
     onDragEnd: () => { setDragging(null); setDropTarget(null); },
   };
-  if (node.kind === 'block') return <article {...common} className={`be-block${selected === node.id ? ' selected' : ''}${missing ? ' missing' : ''}${touched?.nodeId === node.id ? ` touched by-${touched.caller}` : ''}${dragging === node.id ? ' dragging' : ''}`}>
+  const override = preview?.overrides?.[node.id] ?? null;
+  if (node.kind === 'block') {
+    const card = <article {...common} className={`be-block${selected === node.id ? ' selected' : ''}${missing ? ' missing' : ''}${touched?.nodeId === node.id ? ` touched by-${touched.caller}` : ''}${dragging === node.id ? ' dragging' : ''}${override ? ' overridden' : ''}${node.generated === true ? ' generated' : ''}`}>
     <span className="be-grip"><Icon name="grip"/></span><span className="be-block-glyph"><Icon name="blocks"/></span>
-    <span className="be-block-copy"><strong>{titleOf(node, blocks)}</strong><small>{missing ? `Missing · ${node.use}` : node.use}</small></span>
+    <span className="be-block-copy"><strong>{titleOf(node, blocks)}</strong><small>{missing ? `Missing · ${node.use}` : node.use}</small>
+      {override && <span className="be-mode-override" title={`${preview.name} runs this block with ${overrideLine(override)}`}>
+        {preview.name} · {overrideLine(override)}</span>}</span>
+    {modelBacked && <span className={`be-tier-badge tier-${node.config?.modelTier ?? 'default'}`}>{node.config?.modelTier ?? 'default'}</span>}
+    {node.use === 'flyt-blocks-judgement:human-checkpoint' && <span className={`be-checkpoint-badge${node.config?.enabled === false ? ' off' : ''}`}>
+      {node.config?.enabled === false ? 'checkpoint off' : 'human approval'}
+    </span>}
     {run && <span className={`be-status status-${status}`}>{status === 'active' ? 'running' : status}</span>}
     {editable && <button type="button" className="be-delete" aria-label={`Delete ${titleOf(node, blocks)}`} onClick={event => { event.stopPropagation(); onDelete(node); }}><Icon name="trash"/></button>}
     {output && <details className="be-inline-output" open={status === 'active'}><summary>Output</summary><pre>{output}</pre></details>}
-  </article>;
+    </article>;
+    if (!(node.generated ?? []).length) return card;
+    return <section className="be-generated-group" data-parent-id={node.id}>{card}<header><span>Generated tasks</span><small>{node.generated.length} blocks · created for this run</small></header>
+      <div className="be-generated-children">{node.generated.map(child => <NodeView key={child.id} node={child} root={root} blocks={blocks}
+        commands={null} selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
+        dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} preview={preview} onDelete={onDelete} onError={onError} />)}</div></section>;
+  }
 
   return <section {...common} className={`be-container kind-${node.kind}${selected === node.id ? ' selected' : ''}${touched?.nodeId === node.id ? ` touched by-${touched.caller}` : ''}`}>
     <header><span className="be-grip"><Icon name="grip"/></span><strong>{controlLabel(node)}</strong><code>{node.id}</code>
@@ -304,10 +404,10 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
         onClick={event => { event.stopPropagation(); onDelete(node); }} aria-label={`Delete ${node.id}`}><Icon name="trash"/></button>}</header>
     <div className="be-container-well"><ChildrenList parent={node} root={root} blocks={blocks} commands={commands}
       selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
-      dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} onDelete={onDelete} onError={onError} />
+      dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} preview={preview} onDelete={onDelete} onError={onError} />
       {node.kind === 'if' && <div className="be-else"><span>Else</span><ChildrenList parent={node} branch="else" root={root} blocks={blocks}
         commands={commands} selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
-        dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} onDelete={onDelete} onError={onError} /></div>}</div>
+        dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} preview={preview} onDelete={onDelete} onError={onError} /></div>}</div>
   </section>;
 }
 
@@ -371,6 +471,7 @@ function YamlEditor({ source, validation, validateSource, saveSource }) {
 export default function BlockEditor({
   stack, blocks = null, commands = null, uiExtensions = [], source = '', validation = null, history = [],
   validateSource = null, saveSource = null, mode = 'build', run = null, onRun = null, onOpenLibrary = null,
+  onBack = null,
 }) {
   const [selected, setSelected] = useState(() => stack?.root?.children?.[0]?.id ?? null);
   const [touched, setTouched] = useState(null);
@@ -381,6 +482,9 @@ export default function BlockEditor({
   const [inspectorWidth, setInspectorWidth] = useState(SIDEBAR_LIMITS.inspector.initial);
   const [view, setView] = useState('blocks');
   const [deleting, setDeleting] = useState(null);
+  // Which mode the canvas is being read AS. Null is the authored settings,
+  // which is what an edit writes; a mode id overlays what that mode changes.
+  const [previewing, setPreviewing] = useState(null);
   useEffect(() => commands?.subscribe?.(record => {
     if (record?.error) { setRefusal(record.error); return; }
     const nodeId = record?.result?.nodeId ?? null;
@@ -403,13 +507,21 @@ export default function BlockEditor({
   };
   if (!stack?.root) return <div className="block-editor-empty" role="status"><p className="section-label">CLEAN SLATE</p><p>No workflow yet — author canonical YAML and it will draw itself here.</p></div>;
   const editable = mode === 'build' && Boolean(commands?.invoke);
+  const modes = workflowModes(stack);
+  const modeDefault = defaultModeId(stack);
+  const previewedMode = modes.find(row => row.id === previewing) ?? null;
   return <div className={`block-editor mode-${mode}`} data-v2 data-editable={editable || undefined}>
-    {mode === 'build' && <header className="be-toolbar"><div><span className="section-label">Workflow</span><h1>{stack.name}</h1></div>
+    {mode === 'build' && <header className="be-toolbar">
+      {onBack && <button type="button" className="be-back" onClick={onBack} title="Back to every workflow in this project">
+        <Icon name="back"/><span>Workflows</span></button>}
+      <div><span className="section-label">Workflow</span><h1>{stack.name}</h1></div>
       <div className="be-view-switch"><button className={view === 'blocks' ? 'active' : ''} onClick={() => setView('blocks')}><Icon name="blocks"/>Build</button>
         <button className={view === 'yaml' ? 'active' : ''} onClick={() => setView('yaml')}><Icon name="code"/>YAML</button></div>
       <span className={`be-validity ${validation?.ok ? 'ok' : 'error'}`}>{validation?.ok ? `${validation.warnings?.length ?? 0} warnings` : `${validation?.errors?.length ?? 0} errors`}</span>
       {onOpenLibrary && <button type="button" className="be-secondary" onClick={onOpenLibrary}>Library</button>}
       {onRun && <button type="button" className="be-primary" disabled={!validation?.ok} onClick={onRun}><Icon name="play"/>Run</button>}</header>}
+    {mode === 'build' && view === 'blocks' && modes.length > 0 && <ModesBar modes={modes} previewing={previewing}
+      defaultId={modeDefault} onPreview={setPreviewing} onOpenYaml={() => setView('yaml')} />}
     {refusal && <p className="be-refusal" role="alert">{refusal}<button onClick={() => setRefusal(null)} aria-label="Dismiss">×</button></p>}
     {view === 'yaml' && mode === 'build' ? <YamlEditor source={source} validation={validation} validateSource={validateSource} saveSource={saveSource} />
       : <div className={`be-builder-grid${editable ? '' : ' no-palette'}`} style={{ '--be-palette-width': `${paletteWidth}px`, '--be-inspector-width': `${inspectorWidth}px` }}>
@@ -420,11 +532,11 @@ export default function BlockEditor({
           {mode === 'run' && run?.input && <p className="be-input-text">{run.input}</p>}</article>
         <ChildrenList parent={stack.root} root={stack.root} blocks={blocks} commands={editable ? commands : null}
           selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
-          dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} onDelete={remove} onError={setRefusal} />
+          dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} preview={previewedMode} onDelete={remove} onError={setRefusal} />
         {mode === 'run' && run?.summary && <article className="be-run-summary"><span className="section-label">Supervisor summary</span><p>{run.summary}</p></article>}
       </div></main>{mode === 'build' && <>{editable && <ResizeHandle side="inspector" value={inspectorWidth} onChange={setInspectorWidth} />}
         <Inspector root={stack.root} selected={selected} blocks={blocks} commands={commands} history={history}
-          uiExtensions={uiExtensions} onError={setRefusal} /></>}</div>}
+          uiExtensions={uiExtensions} preview={previewedMode} onError={setRefusal} /></>}</div>}
     {deleting && <div className="be-modal-backdrop" role="presentation"><section className="be-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
       <h2 id="delete-title">Remove {controlLabel(deleting)}?</h2><p>This control contains authored blocks. Choose what happens to them.</p><div>
         <button className="be-danger" onClick={() => settleDelete('subtree')}>Delete the whole subtree</button><button className="be-secondary" onClick={() => settleDelete('unwrap')}>Keep blocks, remove control</button><button onClick={() => settleDelete('cancel')}>Cancel</button></div>

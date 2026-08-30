@@ -27,6 +27,7 @@ presets:
   low:
     name: Low
     description: Fast execution.
+    default: true
     overrides:
       write:
         effort: low
@@ -51,11 +52,27 @@ The YAML is a hand-written strict subset (D24): **block style only**. Flow style
 
 `launchable: true` makes the stack a user-facing **Workflow** and includes it
 in the chat picker. The default is false, so internal stacks cannot become a
-chat option by accident. `presets` is an optional mapping of launch choices.
-Each preset has a display `name`, optional `description`, and `overrides`
-mapping block ids to partial block config. An override must name an existing
-leaf block; it cannot change containment, tools, or outputs. The resolved tree,
-preset id, and resulting config are recorded with the immutable run.
+chat option by accident. `presets` is an optional mapping of launch choices,
+called **modes** in the UI. Each preset has a display `name`, optional
+`description`, an optional `default`, and `overrides` mapping block ids to
+partial block config. An override must name an existing leaf block; it cannot
+change containment, tools, or outputs. The resolved tree, preset id, and
+resulting config are recorded with the immutable run.
+
+The standard modes follow, in three sentences:
+
+1. **One workflow is one graph.** Modes are named settings over that graph. A
+   different shape is a different workflow — duplicate it.
+2. **A workflow that declares modes always runs in one of them.** There is no
+   fourth, unnamed way to run a stack that has three named ones, so a launch
+   naming no mode is resolved to the default before the run is created, and
+   the run records the mode that was applied.
+3. **The default is the mode marked `default: true`, and failing that the
+   first one written.** At most one mode may claim it; two claims is a file
+   that does not say how it runs, and is refused where it is read.
+
+The authored block config is the base every mode starts from: a mode changes
+part of it for one run, and Build edits the base.
 
 ## Blocks
 

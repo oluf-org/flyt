@@ -1,0 +1,73 @@
+/* The Library destination. A page, not a drawer: it gets a real header, room to
+   read, and the same measured type scale as the models catalog it sits beside. */
+
+.library-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: clamp(20px, 3vw, 34px) clamp(20px, 4vw, 44px) clamp(20px, 3vw, 32px);
+  background:
+    radial-gradient(circle at 88% -6%, var(--accent-soft), transparent 26%),
+    var(--canvas);
+  color: var(--tx);
+}
+.library-page > * { width: min(1180px, 100%); margin-inline: auto; }
+
+.library-page-head { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; }
+.library-eyebrow { margin: 0; color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+.library-page-head h1 { margin: 6px 0 0; font-size: clamp(22px, 2.6vw, 30px); font-weight: 600; line-height: 1.1; letter-spacing: -.025em; }
+.library-lede { max-width: 62ch; margin: 8px 0 0; color: var(--dim); font-size: 13px; line-height: 1.6; }
+
+/* Two views of one question, so a segmented control rather than tabs: tabs
+   imply panels that belong to different things. */
+.library-views { flex: none; display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--side); }
+.library-view {
+  appearance: none; display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 14px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--dim);
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: background-color .16s var(--spring), color .16s var(--spring);
+}
+.library-view:hover { color: var(--tx); }
+.library-view.active { background: var(--card); color: var(--tx); box-shadow: var(--shadow-rest); }
+.library-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.library-view-count {
+  min-width: 18px; height: 17px; display: grid; place-items: center; padding: 0 5px;
+  border-radius: 999px; background: var(--chip); color: var(--chip-tx);
+  font-size: 9.5px; font-variant-numeric: tabular-nums;
+}
+.library-view-count.attention { background: var(--err-soft); color: var(--err); }
+
+.library-notice {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 9px 14px; border: 1px solid var(--warn); border-radius: 10px;
+  background: var(--warn-soft); color: var(--warn);
+  font: inherit; font-size: 12px; font-weight: 500; text-align: left; cursor: pointer;
+}
+.library-notice.bad { border-color: var(--err); background: var(--err-soft); color: var(--err); }
+.library-notice span { font-weight: 600; white-space: nowrap; }
+.library-notice:hover { filter: brightness(.98); }
+.library-notice:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+
+.library-page-body {
+  flex: 1; min-height: 0; display: flex;
+}
+
+/* The catalog inside the page is the same component the Build drawer uses; the
+   page gives it a card to sit in rather than a second set of rules. */
+.library-page-body > .library {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow-rest);
+}
+.library-page-body > .library .lib-group > header { background: var(--card); }
+
+@media (max-width: 860px) {
+  .library-page-head { flex-direction: column; align-items: flex-start; gap: 14px; }
+  .library-views { align-self: stretch; }
+  .library-view { flex: 1; justify-content: center; }
+}

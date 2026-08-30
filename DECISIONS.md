@@ -106,6 +106,9 @@ Adopted 2026-08-21 and cut over in Phase 5. The implementation plan is retired t
 | D61 | Plugin UI is limited to declared extension points rendered by Flyt over a typed RPC contract. No arbitrary renderer code. | Current |
 | D62 | The Work/Build cutover is complete. The Electron host always boots the kernel; old UI surfaces are retired; legacy flow files are migration inputs only. | Current |
 | D63 | Every Build operation is available to an agent through the command surface, and every agent operation renders in the editor. One code path, two callers. | Current |
+| D80 | A workflow is one graph and its modes are named settings over it. A mode may change only the config of existing blocks; a workflow with modes always runs in one of them, and the default is the mode marked `default: true` or the first written. | Current; refines D52 |
+| D81 | Build is a gallery of every workflow plus the editor for one of them, and which view shows is a property of the location. New and Duplicate are one host operation and both end with the new workflow open. | Current; extends D60 |
+| D82 | Plan & dispatch is one authored block that materializes a validated dependency DAG as run-only child blocks. Parallelism modes change planning bias and wave bounds, but required producer edges and declared same-file writes always serialize. Generated children are durable session facts and never silently rewrite the workflow. | Current; extends D7, D8 and D80 |
 
 ## Open decisions
 

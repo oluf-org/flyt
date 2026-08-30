@@ -16,6 +16,7 @@ test('the shipped linter parses every canonical stack', () => {
   const report = JSON.parse(result.stdout);
   assert.equal(report.ok, true);
   assert.deepEqual(report.files.map(file => file.file), [
+    'stacks/fable-at-home.stack.yaml',
     'stacks/learn-from-repo.stack.yaml',
     'stacks/loop-task.stack.yaml',
     'stacks/pipeline.stack.yaml',

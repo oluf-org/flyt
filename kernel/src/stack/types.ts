@@ -217,6 +217,15 @@ export interface Stack {
 export interface WorkflowPreset {
   name: string;
   description: string;
+  /**
+   * Whether this is the mode the workflow runs in when nobody picked one.
+   *
+   * A workflow that declares modes always runs in one of them: there is no
+   * fourth, unnamed way to run a stack that has three named ones. Exactly one
+   * mode may claim it in the file; when none does, the first one listed is it,
+   * which is what `defaultPresetId` answers.
+   */
+  default: boolean;
   /** Block id -> partial config merged over the authored block config for this run. */
   overrides: Record<string, Record<string, JsonValue>>;
 }

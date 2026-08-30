@@ -77,7 +77,7 @@ const isMapping = (v: YamlValue): v is Record<string, YamlValue> =>
  */
 const OUTPUT_TYPES = ['string', 'number', 'boolean', 'list'];
 const STACK_KEYS = new Set(['version', 'id', 'name', 'description', 'launchable', 'presets', 'blocks']);
-const PRESET_KEYS = new Set(['name', 'description', 'overrides']);
+const PRESET_KEYS = new Set(['name', 'description', 'default', 'overrides']);
 
 const BLOCK_KEYS = new Set(['id', 'use', 'title', 'config', 'outputs']);
 const SEQUENCE_KEYS = new Set(['id', 'kind', 'blocks']);
@@ -612,12 +612,16 @@ export function parseStack(source: string, fallbackId = ''): Stack {
       rejectUnknownKeys(value, PRESET_KEYS, 'preset', presetPath, 0);
       const presetName = value['name'];
       const presetDescription = value['description'];
+      const presetDefault = value['default'];
       const rawOverrides = value['overrides'] ?? {};
       if (presetName !== undefined && typeof presetName !== 'string') {
         throw new StackError('a preset "name" must be text', `${presetPath}.name`, 0);
       }
       if (presetDescription !== undefined && typeof presetDescription !== 'string') {
         throw new StackError('a preset "description" must be text', `${presetPath}.description`, 0);
+      }
+      if (presetDefault !== undefined && typeof presetDefault !== 'boolean') {
+        throw new StackError('a preset "default" must be true or false', `${presetPath}.default`, 0);
       }
       if (!isMapping(rawOverrides)) {
         throw new StackError('preset "overrides" must map block ids to configuration mappings', `${presetPath}.overrides`, 0);
@@ -634,8 +638,18 @@ export function parseStack(source: string, fallbackId = ''): Stack {
       presets[presetId] = {
         name: typeof presetName === 'string' && presetName ? presetName : presetId,
         description: typeof presetDescription === 'string' ? presetDescription.trim() : '',
+        default: presetDefault === true,
         overrides,
       };
+    }
+    // Two modes both claiming the default is a file that does not say how it
+    // runs. Refused here rather than resolved by declaration order, which
+    // would silently pick one and leave the other looking chosen.
+    const claimed = Object.entries(presets).filter(([, preset]) => preset.default);
+    if (claimed.length > 1) {
+      throw new StackError(
+        `modes ${claimed.map(([presetId]) => `"${presetId}"`).join(' and ')} both claim "default"; only one may`,
+        'stack.presets', 0);
     }
   }
 
@@ -650,4 +664,20 @@ export function parseStack(source: string, fallbackId = ''): Stack {
     presets,
     root,
   };
+}
+
+/**
+ * Which mode a workflow runs in when the caller named none.
+ *
+ * The rule is the whole standard in one function: a workflow that declares
+ * modes always runs in one of them. The mode marked `default: true` is it;
+ * with none marked, the first one written in the file is. A workflow with no
+ * modes answers null, and runs the configuration it was authored with.
+ *
+ * @param stack — a parsed stack, or anything carrying the same `presets` map.
+ */
+export function defaultPresetId(stack: Pick<Stack, 'presets'> | null | undefined): string | null {
+  const entries = Object.entries(stack?.presets ?? {});
+  if (!entries.length) return null;
+  return (entries.find(([, preset]) => preset?.default) ?? entries[0])[0];
 }

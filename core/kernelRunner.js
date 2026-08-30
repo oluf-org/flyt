@@ -19,6 +19,18 @@ const safeJson = value => {
   try { return JSON.stringify(value); } catch { return String(value ?? ''); }
 };
 
+// Starting a workflow from the attended chat is an immediate action. Queue
+// writes are a separate, explicit composer choice; keeping them out of the
+// desktop ceiling prevents a model from silently turning "run this now" into
+// "leave this for the Loop". Loop workers retain the full ceiling below.
+export const DESKTOP_QUEUE_WRITERS = new Set([
+  'create_task', 'enqueue_task', 'update_task', 'write_task_md',
+]);
+
+export const desktopWorkflowCeiling = blocks => [...new Set(
+  (blocks ?? []).flatMap(block => block.ceiling ?? [])
+)].filter(tool => !DESKTOP_QUEUE_WRITERS.has(tool));
+
 const newRunId = () => {
   const now = new Date().toISOString().replace(/[:.]/g, '-');
   return `${now}-${Math.random().toString(36).slice(2, 6)}`;
@@ -34,22 +46,39 @@ const classificationOf = tool => {
   };
 };
 
-function configuredTree(root, { model = null, level = null, skillText = '', overrides = {} } = {}) {
+function configuredTree(root, {
+  model = null, level = null, skillText = '', overrides = {}, blockWorkers = {},
+  defaultFallbacks = [], blockFallbacks = {}, tierWorkers = {}, useAuthoredTiers = false,
+} = {}) {
   const visit = node => {
     if (node.kind === 'block') {
       const base = { ...node.config, ...(overrides[node.id] ?? {}) };
-      // Every shipped leaf is model-backed. Pinning only `work` left plan,
-      // judgement, and inquiry blocks on their schema default
+      // Every shipped leaf except the explicit human checkpoint is model-backed.
+      // Pinning only `work` left plan, judgement, and inquiry blocks on their schema default
       // (`openrouter/auto`), so a workflow could silently use a different
       // provider from the executor selected for the run.
       const instructions = node.use === 'flyt-blocks-core:work'
         ? [base.instructions, skillText].filter(Boolean).join('\n\n')
         : base.instructions;
+      const tier = useAuthoredTiers && typeof base.modelTier === 'string' ? base.modelTier : null;
+      const modelBacked = node.use !== 'flyt-blocks-judgement:human-checkpoint';
+      const authored = tier
+        ? (Array.isArray(tierWorkers?.[tier]) ? tierWorkers[tier] : [tierWorkers?.[tier]]).filter(worker => worker?.model)
+        : [];
+      if (modelBacked && tier === 'free' && authored.length === 0) {
+        throw new Error(`Block "${node.title ?? node.id}" uses the Free tier, but no Free models are configured.`);
+      }
+      const selectedWorker = blockWorkers?.[node.id] ?? authored[0] ?? null;
+      const selectedModel = modelBacked ? (selectedWorker?.model ?? model) : null;
+      const selectedFallbacks = blockWorkers?.[node.id]
+        ? (blockFallbacks?.[node.id] ?? [])
+        : authored.length > 1 ? authored.slice(1) : defaultFallbacks;
       return {
         ...node,
         config: {
           ...base,
-          ...(model ? { model } : {}),
+          ...(selectedModel ? { model: selectedModel } : {}),
+          ...(modelBacked && selectedFallbacks.length ? { modelFallbacks: selectedFallbacks.map(worker => worker.model) } : {}),
           ...(['low', 'medium', 'high'].includes(level) ? { effort: level } : {}),
           ...(instructions ? { instructions } : {}),
         },
@@ -71,8 +100,46 @@ async function eventsFor(ctx, id) {
   return events;
 }
 
+/**
+ * Generated task-graph children are run-time facts, not authored YAML. Fold
+ * their first announcement into a display-only `generated` list on the parent
+ * block so Work can show the X blocks the agent created without pretending
+ * Build owns them or writing them back to the workflow file.
+ */
+export function stackWithGeneratedTasks(stack, events) {
+  if (!stack || typeof stack !== 'object') return stack;
+  const byParent = new Map();
+  for (const event of events ?? []) {
+    if (event?.type !== 'block.status') continue;
+    const data = event.data ?? {};
+    if (!data.parentId || !data.taskId || !data.blockId) continue;
+    const rows = byParent.get(String(data.parentId)) ?? new Map();
+    if (!rows.has(String(data.taskId))) rows.set(String(data.taskId), {
+      kind: 'block', id: String(data.blockId), use: String(data.use ?? 'flyt-blocks-core:work'),
+      title: String(data.title ?? data.taskId), config: {}, generated: true,
+      dependsOn: Array.isArray(data.dependsOn) ? data.dependsOn.map(String) : [],
+    });
+    byParent.set(String(data.parentId), rows);
+  }
+  if (!byParent.size) return stack;
+  const visit = node => {
+    if (!node || typeof node !== 'object') return node;
+    if (node.kind === 'block') {
+      const generated = byParent.get(String(node.id));
+      return generated ? { ...node, generated: [...generated.values()] } : { ...node };
+    }
+    return {
+      ...node,
+      children: (node.children ?? []).map(visit),
+      ...(node.else ? { else: node.else.map(visit) } : {}),
+    };
+  };
+  return visit(stack);
+}
+
 function compatibilitySnapshot(kernel, events, id, runsRoot) {
   const projected = kernel.projectRun(events, id);
+  projected.stack = stackWithGeneratedTasks(projected.stack, events);
   const created = events.find(event => event.type === 'run.created')?.data ?? {};
   kernel.materialise(path.join(runsRoot, id), projected);
 
@@ -110,6 +177,11 @@ function compatibilitySnapshot(kernel, events, id, runsRoot) {
       conversationId: created.conversationId ?? null,
       parentRunId: created.parentRunId ?? null,
       presetId: created.presetId ?? null,
+      model: created.model ?? null,
+      provider: created.provider ?? null,
+      blockWorkers: created.blockWorkers ?? {},
+      defaultFallbacks: created.defaultFallbacks ?? [],
+      blockFallbacks: created.blockFallbacks ?? {},
       supervisorSummary: created.supervisorSummary !== false,
       userMessage: created.userMessage ?? created.input ?? null,
       nodeStatus: { ...projected.meta.blockStatus },
@@ -173,7 +245,9 @@ export function isKernelRun(store, id) {
 export async function bootLoopKernel({
   runsRoot, workspaceDir, stackRoot = null, store = null,
   approvalMode = 'always', runtimeConfig = {}, resolveModelSource = null,
-  worker = null, level = null, loopTaskId = null, skills = null,
+  worker = null, blockWorkers = {}, defaultFallbacks = [], blockFallbacks = {},
+  tierWorkers = {},
+  level = null, loopTaskId = null, skills = null,
   backlog = null, pool = null, references = null, settings = {},
   profile = 'flyt-loop-worker', ceiling = null, presetId = null, askHuman = null,
   requireLaunchable = false, askBlock = null,
@@ -212,9 +286,23 @@ export async function bootLoopKernel({
   const skillText = skillsSection(skillLoad.found);
   const model = worker?.model ?? null;
   const pinnedProvider = worker?.provider && worker.provider !== 'auto' ? worker.provider : null;
+  const routedWorkers = [
+    worker,
+    ...Object.values(blockWorkers ?? {}),
+    ...(defaultFallbacks ?? []),
+    ...Object.values(blockFallbacks ?? {}).flat(),
+    ...Object.values(tierWorkers ?? {}).flatMap(candidate => Array.isArray(candidate) ? candidate : [candidate]),
+  ];
+  const workerByModel = new Map(routedWorkers
+    .filter(candidate => candidate?.model)
+    .map(candidate => [candidate.model, candidate]));
   const resolve = requested => {
     if (typeof resolveModelSource !== 'function') return null;
-    return resolveModelSource(requested, requested === model ? pinnedProvider : null);
+    const selected = workerByModel.get(requested);
+    const provider = selected?.provider && selected.provider !== 'auto'
+      ? selected.provider
+      : (requested === model ? pinnedProvider : null);
+    return resolveModelSource(requested, provider);
   };
   const callThrough = request => call({
     ...(runtimeConfig.retry ? { retry: runtimeConfig.retry } : {}),
@@ -223,17 +311,17 @@ export async function bootLoopKernel({
     // OpenRouter's Auto Router band is part of the worker selection, not the
     // model id. Dropping it makes low/high/max all send the same request while
     // the Supervisor and ledger claim they ran different rungs.
-    ...(worker?.routing && request.model === model ? { routing: worker.routing } : {}),
+    ...((workerByModel.get(request.model)?.routing
+      ?? (request.model === model ? worker?.routing : null)) ? {
+      routing: workerByModel.get(request.model)?.routing ?? worker.routing,
+    } : {}),
   });
 
-  await booted.ctx.plugin(kernel.flytRunProjection, { root: runsRoot });
-  await booted.ctx.plugin(kernel.flytFs, { root: workspace.root });
-  await booted.ctx.plugin(kernel.flytBlocks);
-  await booted.ctx.plugin(kernel.flytBlocksCore);
-  await booted.ctx.plugin(kernel.flytBlocksJudgement);
-  await booted.ctx.plugin(kernel.flytBlocksInquiry);
-  await booted.ctx.plugin(kernel.flytBlocksLoop);
-  await booted.ctx.plugin(kernel.flytAdapters, { callModel: callThrough, resolve });
+  await booted.install([
+    { id: 'run-projection', name: kernel.BUILTIN.runProjection, config: { root: runsRoot } },
+    { id: 'workspace-fs', name: kernel.BUILTIN.fs, config: { root: workspace.root } },
+    { id: 'llm-adapters', name: kernel.BUILTIN.adapters, config: { callModel: callThrough, resolve } },
+  ]);
   if (typeof onSessionEvent === 'function') {
     booted.ctx.on('session/append', (runId, event) => onSessionEvent(runId, event));
   }
@@ -290,7 +378,7 @@ export async function bootLoopKernel({
     parseStack: kernel.parseStack,
     resolveBlock: use => booted.ctx.blocks.resolve(use),
   });
-  await booted.ctx.plugin(kernel.flytStackRunner, {
+  await booted.install([{ id: 'stack-runner', name: kernel.BUILTIN.stackRunner, config: {
     stacks: {
       resolve(id) {
         // Preserve parser/resolution diagnostics. Returning null here would
@@ -303,13 +391,17 @@ export async function bootLoopKernel({
         }
         const preset = presetId ? stack.presets?.[presetId] : null;
         if (presetId && !preset) throw new Error(`Workflow "${id}" has no preset "${presetId}".`);
-        return configuredTree(stack.root, { model, level, skillText, overrides: preset?.overrides ?? {} });
+        return configuredTree(stack.root, {
+          model, level, skillText, blockWorkers, defaultFallbacks, blockFallbacks,
+          tierWorkers, useAuthoredTiers: profile === 'flyt-desktop',
+          overrides: preset?.overrides ?? {},
+        });
       },
     },
     ceiling: ceiling ?? (profile === 'flyt-loop-worker'
       ? kernel.LOOP_CEILING
-      : [...new Set(booted.ctx.blocks.list().flatMap(block => block.ceiling ?? []))]),
-  });
+      : desktopWorkflowCeiling(booted.ctx.blocks.list())),
+  } }]);
 
   // Host-only facts used by snapshotStackRun; never exposed to a renderer.
   booted.ctx.__flytRunsRoot = runsRoot;
@@ -321,6 +413,10 @@ export async function bootLoopKernel({
       workspace: workspace.root, approvalMode, loopTaskId, model,
       ...(worker?.provider ? { provider: worker.provider } : {}),
       ...(worker?.routing ? { routing: worker.routing } : {}),
+      blockWorkers,
+      defaultFallbacks,
+      blockFallbacks,
+      tierWorkers,
       level, skills: skills ?? [], presetId,
       profile, requireLaunchable,
     },

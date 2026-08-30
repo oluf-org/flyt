@@ -12,12 +12,11 @@ import path from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
 import { parseYaml, type YamlValue } from './yaml.js';
 import { compose, type Entry, type Layer, type ResolvedEntry } from './compose.js';
-import { installPlugin, type AttendedPluginReview } from '../plugins/tools.js';
-import { builtinImporter, isBuiltin } from '../profiles.js';
-import { installTrustedPlugin } from '../plugins/trusted-install.js';
+import { type AttendedPluginReview } from '../plugins/tools.js';
 
 export * from './compose.js';
 export * from './yaml.js';
+export * from './host.js';
 
 /** Read a composition file. `.yml`/`.yaml` and `.json` are both accepted. */
 export function readComposition(file: string, source = file): Layer {
@@ -149,8 +148,6 @@ export interface MountOptions {
   toolReview?: AttendedPluginReview;
 }
 
-const defaultImporter: Importer = name => import(name);
-
 /** The specifier a group row uses, matching dsh. */
 export const GROUP = 'cordis:group';
 
@@ -171,46 +168,6 @@ export async function mount(
   entries: readonly Entry[],
   options: MountOptions = {},
 ): Promise<string[]> {
-  const load = options.import ?? defaultImporter;
-  const mounted: string[] = [];
-
-  for (const entry of entries) {
-    if (entry.disabled) continue;
-
-    if (entry.group || entry.name === GROUP) {
-      let child = ctx.extend({});
-      for (const service of Object.keys(entry.isolate ?? {})) {
-        if (entry.isolate?.[service]) child = child.isolate(service);
-      }
-      mounted.push(entry.id);
-      mounted.push(...await mount(child, (entry.config as Entry[]) ?? [], options));
-      continue;
-    }
-
-    const bundled = isBuiltin(entry.name);
-    // Importing a package executes its top-level module body. An unattended
-    // refusal therefore belongs before import(), not merely before apply().
-    if (!bundled && (!options.toolReview?.attended || typeof options.toolReview.decide !== 'function')) {
-      throw new Error('Refused: installing a tool-capable plugin requires an attended human classification review');
-    }
-    // Exact built-in names are resolved by Flyt's own importer. A caller cannot
-    // attach a trusted name to an arbitrary module through the injectable one.
-    const module: any = await (bundled ? builtinImporter(entry.name) : load(entry.name));
-    const plugin = module?.default ?? module;
-    if (!plugin || (typeof plugin !== 'function' && typeof plugin.apply !== 'function')) {
-      throw new Error(`"${entry.name}" (entry "${entry.id}") is not a plugin`);
-    }
-    // `mount` is the package installation boundary. Flyt's own logical rows
-    // are composition. EVERY external package goes through review because a
-    // plugin that omitted or disguised `inject: ['tools']` must not earn a
-    // bypass. With no reviewer (the Loop profile), refusal precedes apply().
-    if (!bundled) {
-      await installPlugin(ctx, plugin, options.toolReview, entry.config);
-    } else {
-      await installTrustedPlugin(ctx, plugin, entry.config);
-    }
-    mounted.push(entry.id);
-  }
-
-  return mounted;
+  const { PluginHost } = await import('./host.js');
+  return new PluginHost(ctx).install(entries, options);
 }

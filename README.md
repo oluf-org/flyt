@@ -37,7 +37,7 @@ runs/<runId>/                  rebuildable projections and artifacts
 
 An older project containing a linear `flows/*.flow.yaml` is readable through the migration path. Edge order becomes sequence order, supported structural Loop handoffs map to the registered block, and every generated `use` must resolve through the installed plugin registry before the flow can open or save. Opening does not mutate the source; the first stack write creates and validates `stacks/<id>.stack.yaml`, then retires the legacy file. A branched, disconnected, unknown, or unsupported structural graph is refused with its source intact instead of being flattened into different behavior. Layout sidecars are not carried forward because stack layout is derived.
 
-Chat lists only stacks marked `launchable: true`. Pipeline's Low, Medium, and High choices are presets on one canonical Workflow. A run replaces the composer with the same deterministic block program used by Build, streams state and output in place, recovers pending approval/question prompts after a renderer reconnect, and ends with an optional no-tool supervisor summary below the stack. Follow-ups create linked immutable runs rather than mutating completed work.
+Chat lists only stacks marked `launchable: true`. Pipeline's Low, Medium, and High choices are **modes** of one canonical Workflow — the same graph with named settings over it, Medium by default — not three workflows. A mode may change the configuration of blocks that already exist and nothing else, so a launch that names no mode runs the default one, and a different shape means a new workflow. Build opens on a gallery of every workflow in the project, with New, Duplicate and Edit, and the editor for whichever one is opened. A run replaces the composer with the same deterministic block program used by Build, streams state and output in place, recovers pending approval/question prompts after a renderer reconnect, and ends with an optional no-tool supervisor summary below the stack. Follow-ups create linked immutable runs rather than mutating completed work.
 
 ## Headless and Loop use
 
@@ -56,3 +56,4 @@ The compatibility execution path used by the current Loop supervisor retains its
 - `tests/` — unit, integration, harness, and compatibility coverage
 
 Read [`GOALS.md`](./GOALS.md), [`DESIGN-SPEC.md`](./DESIGN-SPEC.md), and [`DECISIONS.md`](./DECISIONS.md) before changing architecture. Stack grammar is in [`STACK_LANG.md`](./STACK_LANG.md); block contracts are summarized in [`BLOCKS.md`](./BLOCKS.md); tools are covered by [`TOOLS.md`](./TOOLS.md).
+Plugin authoring, composition, and lifecycle are covered by [`docs/plugin-system.md`](./docs/plugin-system.md).

@@ -291,6 +291,68 @@ test('an attended package mount gets one review and preserves plugin config', as
   } finally { await kernel.dispose(); }
 });
 
+test('the kernel plugin host catalogs, reconfigures, restarts, and uninstalls Cordis fibers by entry id', async () => {
+  const kernel = createKernel();
+  const seen = [];
+  const detachReviewSurface = kernel.pluginReviews.subscribe(() => {});
+  const fixture = {
+    name: 'managed-fixture',
+    apply(_ctx, config) {
+      seen.push(['apply', config?.value ?? null]);
+      return () => seen.push(['dispose', config?.value ?? null]);
+    },
+  };
+  try {
+    await kernel.install([
+      { id: 'tools', name: 'flyt:tools' },
+      { id: 'fixture', name: 'fixture:managed', config: { value: 1 } },
+    ], { import: async () => fixture });
+
+    assert.deepEqual(kernel.plugins.list().map(row => row.id), ['tools', 'fixture']);
+    assert.deepEqual(kernel.plugins.get('fixture'), {
+      id: 'fixture', name: 'managed-fixture', specifier: 'fixture:managed',
+      description: '', source: 'runtime', contributes: [], inject: [],
+      builtin: false, group: false, parentId: null, installed: true,
+      state: 'active', config: { value: 1 },
+    });
+
+    await kernel.plugins.configure('fixture', { value: 2 });
+    await kernel.plugins.restart('fixture');
+    await kernel.plugins.uninstall('fixture');
+    assert.equal(kernel.plugins.get('fixture'), undefined);
+    assert.deepEqual(seen, [
+      ['apply', 1], ['dispose', 1], ['apply', 2],
+      ['dispose', 2], ['apply', 2], ['dispose', 2],
+    ]);
+  } finally {
+    detachReviewSurface();
+    await kernel.dispose();
+  }
+});
+
+test('a managed installation batch rolls back earlier fibers when a later row fails', async () => {
+  const kernel = createKernel();
+  const detachReviewSurface = kernel.pluginReviews.subscribe(() => {});
+  let disposed = 0;
+  try {
+    await kernel.install([{ id: 'tools', name: 'flyt:tools' }]);
+    await assert.rejects(() => kernel.install([
+      { id: 'first', name: 'fixture:first' },
+      { id: 'broken', name: 'fixture:broken' },
+    ], {
+      import: async name => name.endsWith('first')
+        ? { name: 'first', apply: () => () => { disposed += 1; } }
+        : { not: 'a plugin' },
+    }), /entry "broken".*not a plugin/);
+    assert.equal(disposed, 1);
+    assert.equal(kernel.plugins.get('first'), undefined);
+    assert.deepEqual(kernel.plugins.list().map(row => row.id), ['tools']);
+  } finally {
+    detachReviewSurface();
+    await kernel.dispose();
+  }
+});
+
 // --- profiles --------------------------------------------------------------
 
 test('the Loop worker never gains a row the desktop does not have', () => {

@@ -143,3 +143,18 @@ export function initialFlowId(flows, saved = null) {
   return flows[0]?.id ?? null;
 }
 
+/**
+ * Which mode the composer opens on.
+ *
+ * A saved choice wins, but only while the workflow still has that mode — a
+ * mode renamed in YAML must not leave the picker pointing at one the runner
+ * would refuse. Everything else resolves to the workflow's default, because a
+ * workflow with modes always runs in one of them.
+ */
+export function initialModeId(flows, flowId, saved = null) {
+  const flow = (flows ?? []).find(item => item.id === flowId) ?? null;
+  const modes = flow?.presets ?? flow?.modes ?? [];
+  if (!modes.length) return null;
+  if (saved && modes.some(mode => mode.id === saved)) return saved;
+  return (modes.find(mode => mode.default) ?? modes[0]).id;
+}

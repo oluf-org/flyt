@@ -3,16 +3,29 @@
 // React.
 //
 // Work is the familiar prompt-first home plus the running stack (t-0077).
-// Build's body is the block editor,
-// read-only until it is handed a command surface (t-0074, t-0075); the library
-// is t-0076. Models is the model catalog. Trace is none of those: it opens OVER
-// whichever surface you are on when a run is addressed, and closing it puts
-// you back. Making Trace a peer is the one thing D60 says it is not.
+// Build's body is the block editor. Library is everything installed, and the
+// plugin manager that installs it. Models is the model catalog. Trace is none
+// of those: it opens OVER whichever surface you are on when a run is addressed,
+// and closing it puts you back. Making Trace a peer is the one thing D60 says
+// it is not.
+//
+// The destinations live on a rail down the left rather than in the title bar.
+// The title bar is the project tabs' row, and four destinations plus a tab
+// strip plus the OS window controls runs out of width first.
+//
+// The plugin trust review is rendered at the SHELL ROOT, not inside Build.
+// Installation can publish a review while somebody is on Work or Models, and a
+// modal that only exists on one surface leaves that installation parked with
+// nothing on screen asking about it.
 import React, { useEffect, useState } from 'react';
 import {
-  DESTINATIONS, INITIAL, BUILD, MODELS, navigate, heading, traceOf, state, resolveLocation,
+  BUILD, INITIAL, LIBRARY, MODELS, builderView, closeWorkflow, heading, navigate, openWorkflow,
+  resolveLocation, state, traceOf,
 } from './shellRouting.js';
 import BlockEditor from './BlockEditor.jsx';
+import WorkflowGallery from './WorkflowGallery.jsx';
+import LibraryPage from './LibraryPage.jsx';
+import ShellRail from './ShellRail.jsx';
 import Trace from './Trace.jsx';
 import Work from './Work.jsx';
 import Library from './Library.jsx';
@@ -38,12 +51,15 @@ import { PluginContributionSection } from './PluginContributionView.jsx';
  *   should look like. The HOST supplies it; the shell does not go and find one,
  *   because there is exactly one place the command surface may come from and it
  *   is not a renderer component.
+ * @param onOpenSettings — the rail's foot. Absent, the rail has no utility slot
+ *   rather than a button that opens nothing.
  */
 export default function Shell({
   location = null, onNavigate, build = null, watching = null,
   composer = null, projectTabs = null, models = null, onRunBuild = null,
   workflowInteraction = null, onWorkflowDecide = null, onWorkflowAnswer = null,
   onWorkflowReply = null, workflowReplyBusy = false, runs = [], onOpenRun = null,
+  onNewChat = null, onOpenFlow = null, onOpenSettings = null,
 }) {
   const [focus, setFocus] = useState(location ?? INITIAL);
   const loc = resolveLocation(location, focus);
@@ -51,7 +67,8 @@ export default function Shell({
   // A host that is watching a run has addressed one, and a location that names
   // a run has too — the second is how you reopen a finished run's record, and
   // the first is how the live one shows up without being asked for.
-  const trace = traceOf(watching?.runId ? { ...loc, run: watching.runId } : loc);
+  const trace = traceOf(loc);
+  const addressedWatching = loc.run && watching?.runId === loc.run ? watching : null;
   const here = state(loc);
   // Trace is not a destination and does not replace one: it is opened OVER
   // whichever surface you are on, and closing it puts you back where you were.
@@ -67,101 +84,183 @@ export default function Shell({
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [libraryOpen]);
 
-  const go = dest => {
-    const next = navigate(loc, dest);
+  const [makingWorkflow, setMakingWorkflow] = useState(false);
+  const [workflowError, setWorkflowError] = useState('');
+
+  const move = next => {
     setTracing(false);
     setFocus(next);
     onNavigate?.(next);
+    return next;
   };
+  const go = dest => move(navigate(loc, dest));
+
+  // Opening a workflow is two things that must not come apart: the host loads
+  // the file, and the location says which one is being edited. Doing only the
+  // first is how Build used to land you in an editor whose heading disagreed
+  // with the list you pressed.
+  const openStack = async id => {
+    if (!id) return;
+    setWorkflowError('');
+    try {
+      if (build?.stack?.id !== id) await build?.onAct?.({ kind: 'stack', action: 'open', id });
+      move(openWorkflow(loc, id));
+    } catch (error) {
+      setWorkflowError(String(error?.message ?? error));
+    }
+  };
+
+  const createStack = async input => {
+    if (!build?.createStack) throw new Error('This host cannot create workflows');
+    setMakingWorkflow(true);
+    setWorkflowError('');
+    try {
+      const next = await build.createStack(input);
+      move(openWorkflow(loc, next?.stackId ?? next?.stack?.id ?? null));
+    } catch (error) {
+      setWorkflowError(String(error?.message ?? error));
+      throw error;
+    } finally {
+      setMakingWorkflow(false);
+    }
+  };
+
+  const plugins = build?.library?.plugins ?? [];
+  const brokenPlugins = plugins.filter(plugin => plugin.state === 'failed').length;
 
   return (
     <div className="v2-shell" data-v2>
-      <nav className="v2-shell-nav" aria-label="v2 shell">
+      <header className="v2-shell-nav" aria-label="Project">
         {projectTabs && <div className="v2-project-tabs">{projectTabs}</div>}
-        <div className="v2-destinations">
-          {DESTINATIONS.map(dest => (
+        <div className="v2-shell-nav-end">
+          {trace && (
             <button
-              key={dest}
               type="button"
-              className={'v2-nav' + (loc.dest === dest && !showTrace ? ' active' : '')}
-              onClick={() => go(dest)}
+              className={'v2-trace-chip' + (showTrace ? ' active' : '')}
+              onClick={() => setTracing(t => !t)}
+              aria-expanded={showTrace}
+              title="Open this run's record over whatever you are looking at"
             >
-              {heading(dest)}
+              Trace · <span className="mono">{trace.run}</span>
             </button>
-          ))}
+          )}
         </div>
-        {trace && (
-          <button
-            type="button"
-            className={'v2-trace-chip' + (showTrace ? ' active' : '')}
-            onClick={() => setTracing(t => !t)}
-            aria-expanded={showTrace}
-          >
-            Trace · <span className="mono">{trace.run}</span>
-          </button>
-        )}
-      </nav>
-      <section className="v2-panel" data-surface={showTrace ? 'trace' : here.surface}>
-        {showTrace && <h1>Trace</h1>}
-        {showTrace
-          ? <Trace trace={watching?.trace ?? null} runId={trace.run} uiExtensions={build?.uiExtensions ?? []} />
-          : loc.dest === MODELS
-            ? models
-            : loc.dest === BUILD
-            ? (
-              <div className="v2-build-surface">
-                {build?.uiExtensions?.filter(row => row?.contribution?.point === 'settings-section').map(row =>
-                  <PluginContributionSection key={`${row.pluginId}:${row.contribution.id}`}
-                    contribution={row.contribution} pluginId={row.pluginId} />)}
-                <BlockEditor
-                  stack={build?.stack ?? null}
-                  blocks={build?.blocks ?? null}
-                  commands={build?.commands ?? null}
+      </header>
+      <div className="v2-shell-body">
+        <ShellRail
+          active={showTrace ? null : loc.dest}
+          onGo={go}
+          onOpenSettings={onOpenSettings}
+          // A plugin that failed to start is the one thing the rail interrupts
+          // for: nothing else on screen will say so until somebody notices a
+          // block is missing.
+          badges={brokenPlugins ? { [LIBRARY]: { count: brokenPlugins, tone: 'err' } } : {}}
+        />
+        <section className="v2-panel" data-surface={showTrace ? 'trace' : here.surface}
+          aria-label={showTrace ? 'Trace' : heading(loc.dest) ?? undefined}>
+          {showTrace && <h1>Trace</h1>}
+          {showTrace
+            ? <Trace trace={watching?.trace ?? null} runId={trace.run} uiExtensions={build?.uiExtensions ?? []} />
+            : loc.dest === MODELS
+              ? models
+              : loc.dest === LIBRARY
+              ? (
+                <LibraryPage
+                  sources={build?.library ?? {}}
+                  plugins={plugins}
+                  pluginApi={build?.plugins ?? null}
                   uiExtensions={build?.uiExtensions ?? []}
-                  source={build?.source ?? ''}
-                  validation={build?.validation ?? null}
-                  history={build?.history ?? []}
-                  validateSource={build?.validateSource ?? null}
-                  saveSource={build?.saveSource ?? null}
-                  onRun={onRunBuild ? () => onRunBuild(build?.stack) : null}
-                  onOpenLibrary={() => setLibraryOpen(true)}
+                  onRefreshPlugins={build?.refreshPlugins ?? null}
+                  onAct={entry => {
+                    // Opening a workflow is a Build action wherever it was
+                    // pressed, so the library hands you over rather than
+                    // leaving you on a page whose selection just changed
+                    // something you cannot see.
+                    if (entry?.kind === 'stack' && entry?.action === 'open') { openStack(entry.id); return; }
+                    build?.onAct?.(entry);
+                  }}
                 />
-                {libraryOpen && <div className="v2-library-overlay" role="presentation" onMouseDown={() => setLibraryOpen(false)}>
-                  <aside className="v2-library-drawer" role="dialog" aria-modal="true" aria-labelledby="workflow-library-title"
-                    onMouseDown={event => event.stopPropagation()}>
-                    <div className="v2-library-drawer-head"><div><span className="section-label">BUILD</span><h2 id="workflow-library-title">Workflow Library</h2>
-                      <p>Browse reusable building blocks and project resources.</p></div>
-                      <button type="button" onClick={() => setLibraryOpen(false)} aria-label="Close library">×</button></div>
-                    <Library sources={build?.library ?? {}} onAct={entry => { build?.onAct?.(entry); if (entry?.action === 'open') setLibraryOpen(false); }}
-                      uiExtensions={build?.uiExtensions ?? []} />
-                  </aside>
-                </div>}
-                {build?.pluginReview?.proposals?.length > 0 && (
-                  <PluginTrustReview
-                    key={`${build.pluginReview.pluginName}:${build.pluginReview.proposals.map(p => p.name).join(',')}`}
-                    pluginName={build.pluginReview.pluginName}
-                    proposals={build.pluginReview.proposals}
-                    onDecide={build.pluginReview.decide}
+              )
+              : loc.dest === BUILD && builderView(loc) === 'gallery'
+              ? (
+                <WorkflowGallery
+                  stacks={build?.library?.stacks ?? []}
+                  activeId={build?.stack?.id ?? null}
+                  onOpen={openStack}
+                  onCreate={build?.createStack ? createStack : null}
+                  busy={makingWorkflow}
+                  error={workflowError}
+                />
+              )
+              : loc.dest === BUILD
+              ? (
+                <div className="v2-build-surface">
+                  {build?.uiExtensions?.filter(row => row?.contribution?.point === 'settings-section').map(row =>
+                    <PluginContributionSection key={`${row.pluginId}:${row.contribution.id}`}
+                      contribution={row.contribution} pluginId={row.pluginId} />)}
+                  <BlockEditor
+                    onBack={() => move(closeWorkflow(loc))}
+                    stack={build?.stack ?? null}
+                    blocks={build?.blocks ?? null}
+                    commands={build?.commands ?? null}
+                    uiExtensions={build?.uiExtensions ?? []}
+                    source={build?.source ?? ''}
+                    validation={build?.validation ?? null}
+                    history={build?.history ?? []}
+                    validateSource={build?.validateSource ?? null}
+                    saveSource={build?.saveSource ?? null}
+                    onRun={onRunBuild ? () => onRunBuild(build?.stack) : null}
+                    onOpenLibrary={() => setLibraryOpen(true)}
                   />
-                )}
-              </div>
-            )
-            : <Work
-                stack={watching?.stack ?? null}
-                blocks={build?.blocks ?? null}
-                trace={watching?.trace ?? null}
-                runId={watching?.runId ?? null}
-                snapshot={watching?.snapshot ?? null}
-                composer={composer}
-                interaction={workflowInteraction}
-                onDecide={onWorkflowDecide}
-                onAnswer={onWorkflowAnswer}
-                onReply={onWorkflowReply}
-                replyBusy={workflowReplyBusy}
-                runs={runs}
-                onOpenRun={onOpenRun}
-              />}
-      </section>
+                  {libraryOpen && <div className="v2-library-overlay" role="presentation" onMouseDown={() => setLibraryOpen(false)}>
+                    <aside className="v2-library-drawer" role="dialog" aria-modal="true" aria-labelledby="workflow-library-title"
+                      onMouseDown={event => event.stopPropagation()}>
+                      <div className="v2-library-drawer-head"><div><span className="section-label">BUILD</span><h2 id="workflow-library-title">Insert from the library</h2>
+                        <p>The same catalog as the Library page, here so a block can go straight into this stack.</p></div>
+                        <div className="v2-library-drawer-acts">
+                          <button type="button" className="v2-library-drawer-open"
+                            onClick={() => { setLibraryOpen(false); go(LIBRARY); }}>Open the Library</button>
+                          <button type="button" className="v2-library-drawer-close" onClick={() => setLibraryOpen(false)} aria-label="Close library">×</button>
+                        </div></div>
+                      <Library sources={build?.library ?? {}} onAct={entry => {
+                        if (entry?.kind === 'plugin') { setLibraryOpen(false); go(LIBRARY); return; }
+                        build?.onAct?.(entry);
+                        if (entry?.action === 'open') setLibraryOpen(false);
+                      }}
+                        uiExtensions={build?.uiExtensions ?? []} />
+                    </aside>
+                  </div>}
+                </div>
+              )
+              : <Work
+                  stack={addressedWatching?.stack ?? null}
+                  blocks={build?.blocks ?? null}
+                  trace={addressedWatching?.trace ?? null}
+                  runId={addressedWatching?.runId ?? null}
+                  snapshot={addressedWatching?.snapshot ?? null}
+                  composer={composer}
+                  interaction={workflowInteraction}
+                  onDecide={onWorkflowDecide}
+                  onAnswer={onWorkflowAnswer}
+                  onReply={onWorkflowReply}
+                  replyBusy={workflowReplyBusy}
+                  runs={runs}
+                  onOpenRun={onOpenRun}
+                  onNewChat={onNewChat}
+                  onOpenFlow={onOpenFlow}
+                />}
+        </section>
+      </div>
+      {/* At the root, and deliberately: a review published while somebody is on
+          Work is a review nobody would ever see if this lived under Build. */}
+      {build?.pluginReview?.proposals?.length > 0 && (
+        <PluginTrustReview
+          key={`${build.pluginReview.pluginName}:${build.pluginReview.proposals.map(p => p.name).join(',')}`}
+          pluginName={build.pluginReview.pluginName}
+          proposals={build.pluginReview.proposals}
+          onDecide={build.pluginReview.decide}
+        />
+      )}
     </div>
   );
 }

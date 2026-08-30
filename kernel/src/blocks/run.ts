@@ -61,6 +61,8 @@ export interface LoopOptions {
   turn: number;
   /** The model to ask for. Routing is the seam's business, not this loop's. */
   model: string;
+  /** Ordered alternatives within the same explicit profile (Free today). */
+  fallbackModels?: readonly string[];
   /** The system message. Appended to the log before anything is sent. */
   system: string;
   /** What entered the block. Appended as the user message. */
@@ -70,6 +72,8 @@ export interface LoopOptions {
   /** The ceiling itself, carried onto each execution so the gate can read it. */
   ceiling?: readonly string[];
   maxSteps?: number;
+  /** Read only this block's tagged conversation from the canonical run log. */
+  isolated?: boolean;
   signal?: AbortSignal;
 }
 
@@ -86,8 +90,8 @@ function schemasFor(tools: readonly ToolDefinition[]): { name: string; descripti
  */
 export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   const {
-    ctx, session, runId, blockId, turn, model, system, input,
-    tools = [], ceiling = [], maxSteps = MAX_STEPS, signal,
+    ctx, session, runId, blockId, turn, model, fallbackModels = [], system, input,
+    tools = [], ceiling = [], maxSteps = MAX_STEPS, isolated = false, signal,
   } = options;
 
   await session.append({ type: 'turn.start', data: { runId, turn, blockId } });
@@ -97,8 +101,8 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   // them. That ordering is the whole of D55: a crash between the append and the
   // call leaves a log that over-reports what the model saw, which is safe; the
   // other order leaves one that under-reports it, which is not.
-  await session.append({ type: 'message.system', data: { content: system } });
-  await session.append({ type: 'message.user', data: { content: input } });
+  await session.append({ type: 'message.system', data: { blockId, content: system } });
+  await session.append({ type: 'message.user', data: { blockId, content: input } });
 
   const schemas = schemasFor(tools);
   let content = '';
@@ -133,7 +137,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     // "model-visible means logged" a property of the code rather than a rule
     // somebody has to keep: a message that is not in the log is not in the
     // request, because the request is the log.
-    const messages = await session.deriveMessages();
+    const messages = await session.deriveMessages(undefined, isolated ? blockId : undefined);
     const callId = `${blockId}-${step}`;
     await session.append({
       type: 'llm.request',
@@ -142,6 +146,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
 
     const stream = ctx.llm.stream({
       model, messages, signal,
+      ...(fallbackModels.length ? { fallbackModels } : {}),
       ...(schemas.length ? { tools: schemas } : {}),
     });
     for await (const chunk of stream) {
@@ -170,7 +175,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     await session.append({
       type: 'llm.response',
       data: {
-        callId,
+        callId, blockId,
         content,
         ...(answer.reasoning ? { reasoning: answer.reasoning } : {}),
         ...(calls.length ? { toolCalls: calls as unknown as JsonValue } : {}),
@@ -195,7 +200,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     }
 
     for (const call of calls) {
-      await session.append({ type: 'tool.call', data: { callId: call.id, name: call.name, args: call.args } });
+      await session.append({ type: 'tool.call', data: { callId: call.id, blockId, name: call.name, args: call.args } });
       // The ONE path. `ctx.tools.execute` dispatches `tool/call`, then the
       // `tools/pre-execute` gate, then the body, then `tools/post-execute` —
       // so a refusal comes back as a result the model can read rather than as
@@ -204,7 +209,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       await session.append({
         type: 'tool.result',
         data: {
-          callId: call.id, name: call.name,
+          callId: call.id, blockId, name: call.name,
           content: result.content ?? '',
           ...(result.error ? { error: result.error } : {}),
         },
@@ -215,7 +220,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     ctx.emit('step/end', ref, settled);
   }
 
-  const messages = await session.deriveMessages();
+  const messages = await session.deriveMessages(undefined, isolated ? blockId : undefined);
   await session.append({
     type: 'turn.end',
     data: { runId, turn, blockId, stopped, ...(reason ? { reason } : {}) },

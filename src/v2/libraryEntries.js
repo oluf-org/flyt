@@ -91,9 +91,22 @@ export function fromPlugins(plugins = []) {
     id: p.id ?? p.name,
     title: p.name ?? p.id,
     description: p.description,
-    tags: [p.source, ...(p.contributes ?? [])].filter(Boolean),
-    action: p.installed === false ? 'install' : 'configure',
-    detail: { contributes: p.contributes ?? [], installed: p.installed !== false },
+    // The specifier is searchable because it is what a person has in hand when
+    // they are looking for a package they installed rather than a plugin they
+    // named. The state is a tag for the same reason: "failed" is a thing to
+    // search for on the morning something stopped working.
+    tags: [p.source, p.specifier, p.state, ...(p.contributes ?? [])].filter(Boolean),
+    // One verb for every installed plugin, and it opens the manager. The verb a
+    // row can offer depends on state the row does not carry — built-in, group,
+    // failed — so a catalog that guessed would be a catalog whose buttons are
+    // refused on press.
+    action: p.installed === false ? 'install' : 'manage',
+    detail: {
+      contributes: p.contributes ?? [],
+      installed: p.installed !== false,
+      state: p.state ?? 'active',
+      builtin: Boolean(p.builtin),
+    },
   }));
 }
 

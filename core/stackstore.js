@@ -162,7 +162,18 @@ export function serializeStack(stack) {
   ];
   if (stack.description) lines.push(`description: ${quote(stack.description)}`);
   if (stack.launchable) lines.push('launchable: true');
-  if (stack.presets && Object.keys(stack.presets).length) mapping(lines, 0, 'presets', stack.presets);
+  if (stack.presets && Object.keys(stack.presets).length) {
+    // `default` is written only where it is claimed. A parsed preset always
+    // carries the boolean, and round-tripping `default: false` onto every mode
+    // would turn "the first one listed" into three lines of noise saying the
+    // same nothing.
+    mapping(lines, 0, 'presets', Object.fromEntries(Object.entries(stack.presets).map(([id, preset]) => [id, {
+      name: preset.name ?? id,
+      ...(preset.description ? { description: preset.description } : {}),
+      ...(preset.default ? { default: true } : {}),
+      overrides: preset.overrides ?? {},
+    }])));
+  }
   nodes(lines, stack.root?.children ?? [], 0, 'blocks');
   return `${lines.join('\n')}\n`;
 }
@@ -194,6 +205,31 @@ export class StackStore {
       if (!seen.has(id)) current.push({ id, legacy: true });
     }
     return current;
+  }
+  /** Whether a stack file — canonical or still-legacy — already answers to this id. */
+  exists(id) {
+    if (!SAFE_ID.test(id)) return false;
+    return fs.existsSync(this.stackPath(id))
+      || fs.existsSync(path.join(this.legacyRoot, `${id}${LEGACY_FLOW_EXTENSION}`));
+  }
+  /**
+   * Write a stack that does not exist yet.
+   *
+   * Separate from `save` because the two answer different questions. `save`
+   * overwrites the file it is given and is how an edit lands; this refuses to,
+   * so New and Duplicate cannot quietly write over the workflow somebody has
+   * open in another window.
+   */
+  create(id, source) {
+    if (this.exists(id)) throw new Error(`A workflow named "${id}" already exists`);
+    const parsed = this.parseStack(String(source ?? ''), id);
+    if (parsed.id !== id) throw new Error(`Stack id "${parsed.id}" does not match file id "${id}"`);
+    const target = this.stackPath(id);
+    const normalized = source.endsWith('\n') ? source : `${source}\n`;
+    // Exclusive create: two windows pressing New at the same instant is a
+    // race the filesystem settles, not one this decides by reading first.
+    fs.writeFileSync(target, normalized, { encoding: 'utf8', flag: 'wx' });
+    return target;
   }
   loadSource(id) {
     const current = this.stackPath(id);

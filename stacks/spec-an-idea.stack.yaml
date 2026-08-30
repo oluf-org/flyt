@@ -15,6 +15,7 @@ blocks:
     use: flyt-blocks-inquiry:interrogate
     title: What are we actually building?
     config:
+      modelTier: standard
       instructions: |
         Ask a few bounded rounds — goal, non-goals, constraints, acceptance —
         then write the specification the answers settle. Mark every assumption
@@ -24,6 +25,7 @@ blocks:
     use: flyt-blocks-loop:backlog-plan
     title: What this becomes
     config:
+      modelTier: frontier
       instructions: |
         The specification was settled WITH the person who asked for it — its
         Goal, Non-goals, Constraints and Acceptance are decisions, not guesses,
@@ -35,3 +37,5 @@ blocks:
   - id: handoff
     use: flyt-blocks-loop:loop-handoff
     title: Queue it
+    config:
+      modelTier: economy

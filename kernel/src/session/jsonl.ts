@@ -233,8 +233,8 @@ export class JsonlSession implements SessionHandle {
     return out;
   }
 
-  async deriveMessages(upTo?: number): Promise<Message[]> {
-    return deriveMessages(this.readSync(), upTo);
+  async deriveMessages(upTo?: number, blockId?: string): Promise<Message[]> {
+    return deriveMessages(this.readSync(), upTo, blockId);
   }
 }
 
@@ -251,7 +251,7 @@ export class JsonlSession implements SessionHandle {
  * @param upTo — fold only events up to this seq, for replay to a point.
  * @returns the messages a model would see next.
  */
-export function deriveMessages(events: readonly SessionEvent[], upTo?: number): Message[] {
+export function deriveMessages(events: readonly SessionEvent[], upTo?: number, blockId?: string): Message[] {
   const messages: Message[] = [];
   /** callId -> index of the assistant message that requested it. */
   const requested = new Map<string, { name: string; answered: boolean }>();
@@ -259,6 +259,7 @@ export function deriveMessages(events: readonly SessionEvent[], upTo?: number): 
   for (const event of events) {
     if (upTo !== undefined && event.seq > upTo) break;
     const data = asRecord(event.data);
+    if (blockId !== undefined && data.blockId !== blockId) continue;
 
     switch (event.type) {
       case 'message.system':

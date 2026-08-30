@@ -7,13 +7,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  WORK, BUILD, MODELS, DESTINATIONS, INITIAL, navigate, heading, traceOf, state, adjacent,
+  WORK, BUILD, LIBRARY, MODELS, DESTINATIONS, INITIAL, navigate, heading, hint, traceOf, state,
+  adjacent,
 } from '../src/v2/shellRouting.js';
 
-test('Work, Build and the model catalog are permanent destinations', () => {
-  assert.deepEqual(DESTINATIONS, [WORK, BUILD, MODELS]);
+test('Work, Build, the Library and the model catalog are permanent destinations', () => {
+  assert.deepEqual(DESTINATIONS, [WORK, BUILD, LIBRARY, MODELS]);
   // Trace is not a peer: it is reached by a run address, never by picking it.
   assert.ok(!DESTINATIONS.includes('trace'));
+  // The order is the rail's order, and the rail's sliding pill is positioned
+  // from the index — so reordering this list moves the highlight off the
+  // button it is meant to be under.
+  assert.equal(DESTINATIONS.indexOf(LIBRARY), 2);
 });
 
 test('the shell starts on Work, no run addressed', () => {
@@ -22,21 +27,27 @@ test('the shell starts on Work, no run addressed', () => {
   assert.equal(traceOf(INITIAL), null);
 });
 
-test('headings name the three permanent surfaces', () => {
+test('headings name every permanent surface, and only those', () => {
   assert.equal(heading(WORK), 'Work');
   assert.equal(heading(BUILD), 'Build');
+  assert.equal(heading(LIBRARY), 'Library');
   assert.equal(heading(MODELS), 'Models');
   assert.equal(heading('nonexistent'), null);
   assert.equal(heading('trace'), null);
+  // The rail is four icons and four one-word labels; the hint is the only
+  // place a destination gets to say what it is FOR.
+  for (const dest of DESTINATIONS) assert.match(hint(dest), /^\w+ —/);
+  assert.equal(hint('trace'), null);
 });
 
-test('Work, Build and Models are reachable from each other in one hop', () => {
-  assert.deepEqual(adjacent({ dest: WORK, run: null }), [BUILD, MODELS]);
-  assert.deepEqual(adjacent({ dest: BUILD, run: null }), [WORK, MODELS]);
+test('every destination is reachable from every other in one hop', () => {
+  assert.deepEqual(adjacent({ dest: WORK, run: null }), [BUILD, LIBRARY, MODELS]);
+  assert.deepEqual(adjacent({ dest: BUILD, run: null }), [WORK, LIBRARY, MODELS]);
+  assert.deepEqual(adjacent({ dest: LIBRARY, run: null }), [WORK, BUILD, MODELS]);
   // A run address is carried across either hop — that is the whole point of
   // it being a property of the location rather than of a destination.
   const watched = { dest: WORK, run: 'run-42' };
-  assert.deepEqual(navigate(watched, BUILD), { dest: BUILD, run: 'run-42' });
+  assert.deepEqual(navigate(watched, BUILD), { dest: BUILD, run: 'run-42', workflow: null });
   assert.equal(traceOf(navigate(watched, BUILD)).run, 'run-42');
 });
 
@@ -54,11 +65,21 @@ test('a run addressed once stays addressed across navigation', () => {
 });
 
 test('state is a judgement-proof view of the location', () => {
-  assert.deepEqual(state(INITIAL), { dest: WORK, run: null, trace: null, surface: 'work' });
+  assert.deepEqual(state(INITIAL),
+    { dest: WORK, run: null, workflow: null, trace: null, surface: 'work', builder: 'gallery' });
   assert.deepEqual(state({ dest: BUILD, run: 'r' }),
-    { dest: BUILD, run: 'r', trace: { run: 'r' }, surface: 'build' });
+    { dest: BUILD, run: 'r', workflow: null, trace: { run: 'r' }, surface: 'build', builder: 'gallery' });
+  assert.deepEqual(state({ dest: LIBRARY, run: null }),
+    { dest: LIBRARY, run: null, workflow: null, trace: null, surface: 'library', builder: 'gallery' });
   assert.deepEqual(state({ dest: MODELS, run: null }),
-    { dest: MODELS, run: null, trace: null, surface: 'models' });
+    { dest: MODELS, run: null, workflow: null, trace: null, surface: 'models', builder: 'gallery' });
+  // Build with a workflow addressed is the editor for it; with none, the
+  // gallery. One question, one answer, so the rail and the back button cannot
+  // disagree about which view Build is showing.
+  assert.equal(state({ dest: BUILD, workflow: 'pipeline' }).builder, 'editor');
+  // A destination nothing knows falls back to Work rather than styling the
+  // panel for a surface that has no stylesheet.
+  assert.equal(state({ dest: 'nonexistent' }).surface, 'work');
 });
 // --- the flag, which is the half a reviewer rejected the first attempt for ---
 //
@@ -144,6 +165,10 @@ test('the daily host wires the surviving entry controls into the v2 shell', () =
   assert.match(host, /<Lander/);
   assert.match(host, /<ModelsPage/);
   assert.match(host, /runWorkflow/);
+  assert.match(host, /ModelMetaProvider/);
+  assert.match(host, /modelOverrides/);
+  assert.match(host, /workflowModelSelection/);
+  assert.match(host, /workflowModelTiers/);
   assert.doesNotMatch(host, /launchDailyPrompt/);
   assert.match(host, /subscribeDailyRun/);
   assert.match(shell, /composer=\{composer\}/);

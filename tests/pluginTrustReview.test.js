@@ -91,3 +91,41 @@ test('a real kernel install appears in Build and awaits exactly one decision', a
     unsubscribe();
   } finally { await kernel.dispose(); }
 });
+
+test('the desktop-shaped bridge carries review data and a separate decision call across IPC', async () => {
+  let reviewListener = null;
+  let pluginListener = null;
+  let decided = null;
+  const host = {
+    v2Build: async () => ({ stack: { id: 's' }, library: { plugins: [] }, pluginReview: null }),
+    v2PluginReview: async () => null,
+    v2DecidePluginReview: async decisions => { decided = decisions; return true; },
+    onV2PluginReviewChange(listener) { reviewListener = listener; return () => { reviewListener = null; }; },
+    onV2PluginsChange(listener) { pluginListener = listener; return () => { pluginListener = null; }; },
+  };
+  const surface = await buildSurface(host);
+  let revisions = 0;
+  const detach = surface.subscribePluginReview(() => { revisions += 1; });
+
+  reviewListener({ pluginName: 'desktop-package', proposals: [proposal] });
+  assert.equal(surface.pluginReview.pluginName, 'desktop-package');
+  await surface.pluginReview.decide({ publish_release: proposal });
+  assert.deepEqual(decided, { publish_release: proposal });
+  assert.ok(revisions >= 1);
+  detach();
+
+  // The catalog is its own subscription, not a side effect of the review one.
+  // It used to ride along on `subscribePluginReview`, which meant a manager
+  // open on the Library page only heard about installs while a review happened
+  // to be wired — and the library object was MUTATED in place, so React never
+  // redrew for it either.
+  let catalogChanges = 0;
+  const detachPlugins = surface.subscribePlugins(() => { catalogChanges += 1; });
+  const before = surface.library;
+  pluginListener([{ id: 'desktop-package', name: 'Desktop package', installed: true }]);
+  assert.equal(surface.library.plugins[0].id, 'desktop-package');
+  assert.equal(catalogChanges, 1);
+  assert.notEqual(surface.library, before,
+    'a catalog edited through the same object is a catalog the renderer cannot see change');
+  detachPlugins();
+});

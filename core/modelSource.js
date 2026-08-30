@@ -143,6 +143,7 @@ export function migrateSettings(raw) {
   s.modelFacts = normalizeModelFacts(s.modelFacts);
   s.modelPopularity = normalizeModelPopularity(s.modelPopularity);
   s.modelSets = normalizeModelSets(s.modelSets);
+  s.workflowModelTiers = normalizeWorkflowModelTiers(s.workflowModelTiers);
   // The loop's band→model map (DESIGN-SPEC.md §8). Normalized here so a hand-edited
   // settings.json cannot put a non-string, an empty id, or a band that is not a
   // band into the one structure the supervisor reads per attempt.
@@ -151,6 +152,28 @@ export function migrateSettings(raw) {
 }
 
 export const LOOP_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+export const WORKFLOW_MODEL_TIER_IDS = ['free', 'economy', 'standard', 'frontier'];
+
+export function normalizeWorkflowModelTiers(raw) {
+  const out = {};
+  for (const tier of WORKFLOW_MODEL_TIER_IDS) {
+    const candidates = (Array.isArray(raw?.[tier]) ? raw[tier] : [raw?.[tier]])
+      .filter(worker => worker?.model && typeof worker.model === 'string' && worker.model.trim())
+      .map(worker => ({
+        provider: typeof worker.provider === 'string' && worker.provider.trim() ? worker.provider.trim() : 'auto',
+        model: worker.model.trim(),
+      }));
+    if (!candidates.length) continue;
+    // Free is the only profile with automatic fallback. Keep it ordered and
+    // bounded; paid profiles remain one deliberate model choice.
+    out[tier] = tier === 'free'
+      ? candidates.filter((worker, index, all) => all.findIndex(other => (
+        other.provider === worker.provider && other.model === worker.model
+      )) === index).slice(0, 4)
+      : candidates[0];
+  }
+  return out;
+}
 
 export function normalizeLoopModels(raw) {
   const out = {};

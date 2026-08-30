@@ -98,7 +98,15 @@ test('the rendered shell keeps the composer and tabs on Work and opens Models in
     const work = renderToStaticMarkup(React.createElement(Shell, { ...props, location: INITIAL }));
     assert.match(work, /data-daily-composer="true"/);
     assert.match(work, /data-project-tabs="true"/);
-    assert.match(work, />Models<\/button>/);
+    // Every destination is one press away from every other, from the rail —
+    // which is why the rail is rendered on Work rather than only where it is
+    // pointing.
+    for (const label of ['Work', 'Build', 'Library', 'Models']) {
+      assert.match(work, new RegExp(`class="activity-label">${label}</span>`),
+        `${label} has to be reachable without going anywhere first`);
+    }
+    assert.match(work, /class="activity-btn active"[^>]*aria-current="page"[^>]*Work/,
+      'the rail says where you are, not only where you can go');
     assert.doesNotMatch(work, /data-model-catalog="true"/);
 
     const models = renderToStaticMarkup(React.createElement(Shell, {
@@ -106,6 +114,15 @@ test('the rendered shell keeps the composer and tabs on Work and opens Models in
     }));
     assert.match(models, /data-model-catalog="true"/);
     assert.doesNotMatch(models, /data-daily-composer="true"/);
+
+    // The Library is a destination of its own now, not a drawer inside Build.
+    const library = renderToStaticMarkup(React.createElement(Shell, {
+      ...props, location: { dest: 'library', run: null },
+      build: { library: { plugins: [{ id: 'p', name: 'A plugin', specifier: 'x', builtin: false, state: 'active' }] } },
+    }));
+    assert.match(library, /Everything this project can use/);
+    assert.match(library, /data-surface="library"/);
+    assert.doesNotMatch(library, /data-daily-composer="true"/);
   } finally {
     await vite.close();
   }

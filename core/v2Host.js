@@ -44,6 +44,103 @@ const publicBlock = block => ({
   outputs: block.outputs ?? null,
 });
 
+const validationErrorKey = error => `${error?.code ?? ''}\n${error?.message ?? ''}`;
+
+/**
+ * Errors an edit introduced, excluding problems already present in the source.
+ *
+ * Build must be able to repair a stack whose plugin disappeared or whose
+ * schema moved forward. Refusing every command until unrelated old errors are
+ * gone turns Remove — often the repair itself — into a dead end.
+ */
+export function introducedWorkflowErrors(before, after) {
+  const remaining = new Map();
+  for (const error of before?.errors ?? []) {
+    const key = validationErrorKey(error);
+    remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  }
+  return (after?.errors ?? []).filter(error => {
+    const key = validationErrorKey(error);
+    const count = remaining.get(key) ?? 0;
+    if (!count) return true;
+    if (count === 1) remaining.delete(key);
+    else remaining.set(key, count - 1);
+    return false;
+  });
+}
+
+/**
+ * A file id for a workflow somebody named in a dialog.
+ *
+ * The id is what the file is called and what a run record names, so it is
+ * derived once, here, and never asked for in the UI: a New dialog with a
+ * "slug" field is a dialog that makes the person do the computer's filing.
+ *
+ * @param name — what they typed.
+ * @param taken — ids already in the store.
+ */
+export function workflowIdFrom(name, taken = []) {
+  const base = String(name ?? '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'workflow';
+  const used = new Set(taken);
+  if (!used.has(base)) return base;
+  let index = 2;
+  while (used.has(`${base}-${index}`)) index += 1;
+  return `${base}-${index}`;
+}
+
+/**
+ * The same YAML, under a new id and name.
+ *
+ * A duplicate is edited by the person who made it, so it is a TEXT rewrite of
+ * the two lines that identify the file rather than a parse-and-reserialize:
+ * round-tripping through the tree is lossless about structure and lossless
+ * about nothing else — block comments, `|` prose and the author's spacing all
+ * come back as one quoted line.
+ */
+export function rewriteStackIdentity(source, { id, name }) {
+  const lines = String(source ?? '').split(/\r?\n/);
+  const eol = /\r\n/.test(String(source ?? '')) ? '\r\n' : '\n';
+  let sawId = false;
+  let sawName = false;
+  const next = lines.map(line => {
+    if (!sawId && /^id:\s/.test(line)) { sawId = true; return `id: ${id}`; }
+    if (!sawName && /^name:\s/.test(line)) { sawName = true; return `name: ${JSON.stringify(name)}`; }
+    return line;
+  });
+  if (!sawId) next.unshift(`id: ${id}`);
+  if (!sawName) next.splice(next.findIndex(line => line.startsWith('id: ')) + 1, 0, `name: ${JSON.stringify(name)}`);
+  return next.join(eol);
+}
+
+/**
+ * The workflow a New button makes: one block, launchable, and nothing else.
+ *
+ * A starter with a plan/work pair pre-wired would be a second Pipeline that
+ * nobody chose. One step is the smallest thing that runs, and the palette is
+ * right there.
+ *
+ * @param blocks — `ctx.blocks`, so the starter block is one this profile
+ *   actually has rather than a name that parses and cannot resolve.
+ */
+export function starterWorkflowSource({ id, name, description = '', blocks = null }) {
+  const preferred = blocks?.resolve?.('flyt-blocks-core:work') ?? null;
+  const use = preferred?.use ?? blocks?.list?.()?.[0]?.use ?? null;
+  if (!use) throw new Error('This profile contributes no blocks, so a new workflow would have nothing to run');
+  const lines = [
+    'version: 2',
+    `id: ${id}`,
+    `name: ${JSON.stringify(name)}`,
+    ...(description ? [`description: ${JSON.stringify(description)}`] : []),
+    'launchable: true',
+    'blocks:',
+    '  - id: step-1',
+    `    use: ${use}`,
+    `    title: ${JSON.stringify(preferred?.title ?? 'First step')}`,
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
 /**
  * Bind the production kernel to the file-backed stack Build edits.
  *
@@ -69,16 +166,30 @@ export async function createV2BuildController(booted, {
     throw new Error('A Build controller needs a file-backed stack store');
   }
 
-  await booted.ctx.plugin(kernel.flytBlocks);
-  await booted.ctx.plugin(kernel.flytBlocksCore);
-  await booted.ctx.plugin(kernel.flytBlocksJudgement);
-  await booted.ctx.plugin(kernel.flytBlocksInquiry);
-  await booted.ctx.plugin(kernel.flytBlocksLoop);
+  if (!booted.ctx.blocks) {
+    throw new Error('The selected plugin profile does not provide the block registry');
+  }
 
   const rows = stacks.list();
   let activeId = rows.some(row => row.id === preferredId) ? preferredId : rows[0]?.id ?? null;
-  let active = activeId ? stacks.load(activeId) : null;
-  let lastSource = active ? stacks.loadSource(activeId) : '';
+  // A canonical stack that will not parse must not take Build down with it:
+  // Build opens on the gallery, which lists that file WITH its reason and is
+  // the one surface from which somebody could go and repair it.
+  //
+  // A LEGACY file is the other case and still refuses loudly. Opening one is a
+  // migration, and a migration that cannot resolve its blocks must not proceed
+  // quietly beside a surface that looks fine.
+  const openingLegacy = rows.find(row => row.id === activeId)?.legacy === true;
+  let active = null;
+  let lastSource = '';
+  try {
+    active = activeId ? stacks.load(activeId) : null;
+    lastSource = active ? stacks.loadSource(activeId) : '';
+  } catch (error) {
+    if (openingLegacy) throw error;
+    active = null;
+    lastSource = '';
+  }
   const listeners = new Set();
 
   const historyPath = id => historyRoot ? path.join(historyRoot, `${id}.jsonl`) : null;
@@ -126,8 +237,10 @@ export async function createV2BuildController(booted, {
     },
     set: root => {
       const next = { ...active, root };
+      const before = validationOf();
       const verification = validationOf(serializeStack(next));
-      if (!verification.ok) throw new Error(verification.errors.map(error => error.message).join('\n'));
+      const introduced = introducedWorkflowErrors(before, verification);
+      if (introduced.length) throw new Error(introduced.map(error => error.message).join('\n'));
       stacks.saveStack(next);
       active = next;
     },
@@ -147,19 +260,41 @@ export async function createV2BuildController(booted, {
   });
 
   const blockRows = () => booted.ctx.blocks.list().map(publicBlock);
+  const changedAt = id => {
+    try { return fs.statSync(stacks.stackPath(id)).mtime.toISOString(); } catch { return null; }
+  };
   const stackRows = () => stacks.list().map(row => {
     try {
       const stack = stacks.load(row.id);
+      // Which mode runs when nobody picked one is the kernel's answer, not a
+      // guess made again here: a gallery that marked a different mode default
+      // from the one the runner applies would be a lie with a checkmark on it.
+      const fallbackPreset = kernel.defaultPresetId(stack);
       return {
         id: stack.id, name: stack.name, description: stack.description,
         launchable: stack.launchable,
         presets: Object.entries(stack.presets ?? {}).map(([id, preset]) => ({
           id, name: preset.name, description: preset.description,
+          default: id === fallbackPreset,
+          // The block ids a mode changes, so the gallery and the editor can say
+          // what a mode DOES without reopening the file to find out.
+          targets: Object.keys(preset.overrides ?? {}),
+          overrides: preset.overrides ?? {},
         })),
         blockCount: [...kernel.walk(stack.root)].filter(node => node.kind === 'block').length,
+        updatedAt: changedAt(row.id),
+        legacy: row.legacy === true,
+        error: null,
       };
-    } catch {
-      return { id: row.id, name: row.id, description: '', launchable: false, presets: [], blockCount: null };
+    } catch (error) {
+      // A stack whose plugin is missing still belongs in the list. Hiding it
+      // makes the file look deleted; naming the reason is what lets somebody
+      // open it and repair it.
+      return {
+        id: row.id, name: row.id, description: '', launchable: false, presets: [],
+        blockCount: null, updatedAt: changedAt(row.id), legacy: row.legacy === true,
+        error: String(error?.message ?? error),
+      };
     }
   });
 
@@ -173,7 +308,7 @@ export async function createV2BuildController(booted, {
         validation: validationOf(source),
         history: readHistory(null, 100),
         blocks,
-        library: { blocks, stacks: stackRows() },
+        library: { blocks, stacks: stackRows(), plugins: booted.plugins?.list?.() ?? [] },
       };
     },
     invoke(name, args, caller = 'human') {
@@ -190,6 +325,46 @@ export async function createV2BuildController(booted, {
       };
       for (const listener of listeners) listener(record);
       return this.snapshot();
+    },
+    /**
+     * Make a workflow, and open it.
+     *
+     * New and Duplicate are one operation with one difference — where the YAML
+     * comes from — so they are one method. Both end with the new file open in
+     * Build, because a New button that leaves you looking at the old workflow
+     * has not finished the thing it started.
+     *
+     * @param from — an existing stack id to copy, or null for the starter.
+     */
+    create({ name, description = '', from = null } = {}, caller = 'human') {
+      const label = String(name ?? '').trim();
+      if (!label) throw new Error('A workflow needs a name');
+      const id = workflowIdFrom(label, stacks.list().map(row => row.id));
+      const source = from
+        ? rewriteStackIdentity(stacks.loadSource(String(from)), { id, name: label })
+        : starterWorkflowSource({ id, name: label, description, blocks: booted.ctx.blocks });
+      const verification = validateWorkflowSource(source, {
+        id, parseStack: kernel.parseStack, blocks: booted.ctx.blocks,
+      });
+      // A copy of a workflow whose plugin is missing is still a legal copy: it
+      // is refused only for what the copying introduced, the same line
+      // `set` holds an edit to.
+      const before = from
+        ? validateWorkflowSource(stacks.loadSource(String(from)), {
+          id: String(from), parseStack: kernel.parseStack, blocks: booted.ctx.blocks,
+        })
+        : { errors: [] };
+      const introduced = introducedWorkflowErrors(before, verification);
+      if (introduced.length) throw new Error(introduced.map(error => error.message).join('\n'));
+      stacks.create(id, source);
+      const record = {
+        at: new Date().toISOString(),
+        name: from ? 'stack:duplicate' : 'stack:create',
+        args: { id, from: from ?? null, name: label }, caller, result: { stackId: id },
+      };
+      const opened = this.open(id, caller);
+      for (const listener of listeners) listener({ ...record, stack: active, source, validation: verification });
+      return { ...opened, stackId: id };
     },
     validate(source) {
       return validationOf(String(source ?? ''));

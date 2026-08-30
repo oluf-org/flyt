@@ -57,6 +57,11 @@ export const isV2Enabled = options => v2Flag(options).enabled;
  * @param {string} [options.runsRoot] — where session logs live.
  * @param {'ask'|'smart'|'always'} [options.approvalMode] — how this surface approves.
  * @param {Function} [options.onReviewReady] — synchronously attach the host review surface before startup plugins install.
+ * @param {Array} [options.contributions] — discovered dsh package contributions.
+ * @param {string|null} [options.nodeModules] — optional package directory to discover.
+ * @param {string|null} [options.homeConfig] — optional machine composition patch.
+ * @param {Array} [options.overlay] — highest-precedence runtime composition rows.
+ * @param {boolean} [options.deferExternal] — return after trusted bootstrap and let the host start package installation.
  * @param {Function} [options.load] — the importer, injectable so a test can watch the door.
  * @returns {Promise<null|{ kernel: object, ctx: object, dispose: Function }>} null when the flag is off.
  */
@@ -65,13 +70,17 @@ export async function bootKernel({
   profile = 'flyt-cli', runsRoot = null, approvalMode = 'ask',
   approvalConfig = null,
   onReviewReady = null,
+  contributions = [], nodeModules = null, homeConfig = null, overlay = [], deferExternal = false,
   load = () => import('#kernel')
 } = {}) {
   const flag = v2Flag({ call, settings, env });
   if (!flag.enabled) return null;
 
   const kernelModule = await load();
-  const { createKernel, loadComposition, PROFILES, builtinImporter } = kernelModule;
+  const {
+    createKernel, loadComposition, discoverContributions,
+    PROFILES, isBuiltin, builtinImporter,
+  } = kernelModule;
 
   const kernel = createKernel({ profile });
   const profileEntries = (PROFILES[profile] ?? PROFILES['flyt-cli']).map(entry => {
@@ -85,10 +94,32 @@ export async function bootKernel({
     return entry;
   });
 
-  const { entries } = loadComposition({ profile, profileEntries });
+  const discovered = nodeModules ? discoverContributions(nodeModules) : [];
+  const { entries } = loadComposition({
+    profile, profileEntries,
+    contributions: [...discovered, ...contributions], home: homeConfig, overlay,
+  });
+  const bootstrap = entries.filter(entry => isBuiltin(entry.name));
+  const external = entries.filter(entry => !isBuiltin(entry.name));
+  let externalStarted = null;
   const prepared = {
     kernel, ctx: kernel.ctx, pluginReviews: kernel.pluginReviews,
     install: (pluginEntries, installOptions) => kernel.install(pluginEntries, installOptions),
+    plugins: {
+      list: () => kernel.plugins.list(),
+      get: id => kernel.plugins.get(id),
+      configure: (id, config) => kernel.plugins.configure(id, config),
+      restart: id => kernel.plugins.restart(id),
+      uninstall: id => kernel.plugins.uninstall(id),
+      subscribe: listener => kernel.plugins.subscribe(listener),
+    },
+    /** Begin deferred package installation exactly once. */
+    startExternal() {
+      externalStarted ??= external.length
+        ? kernel.install(external, { import: builtinImporter })
+        : Promise.resolve([]);
+      return externalStarted;
+    },
     // Host-only projection of the RPC service. Renderers receive the cloned
     // rows this returns, never the Cordis context or an invoke capability.
     uiExtensions: {
@@ -110,7 +141,13 @@ export async function bootKernel({
     // and returns, then startup installation may publish a pending review. It
     // gives UI code the coordinator before boot's promise can be parked on it.
     if (typeof onReviewReady === 'function') onReviewReady(prepared);
-    await kernel.install(entries, { import: builtinImporter });
+    // Flyt's trusted service providers are the bootstrap stratum. Package
+    // bundles are still composed before profile patches, but mounting them
+    // before the tool registry would make review impossible. Cordis handles
+    // dependency order after this boundary; trust review needs the registry
+    // itself to exist first.
+    await kernel.install(bootstrap, { import: builtinImporter });
+    if (!deferExternal) await prepared.startExternal();
   } catch (error) {
     await kernel.dispose();
     throw error;

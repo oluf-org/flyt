@@ -22,6 +22,7 @@ const VERB = {
   insert: 'Insert',
   install: 'Install',
   configure: 'Configure',
+  manage: 'Manage',
   inspect: 'Inspect',
   attach: 'Attach',
   pin: 'Pin',
@@ -116,6 +117,12 @@ export default function Library({ sources = {}, onAct = null, uiExtensions = [] 
                 <span className="lib-warn" title="This skill asks for tools a human must grant">
                   asks for {m.detail.requiresTools.join(', ')}
                 </span>
+              )}
+              {m.kind === 'plugin' && m.detail?.state === 'failed' && (
+                <span className="lib-bad" title="This plugin's last lifecycle call failed">failed</span>
+              )}
+              {m.kind === 'plugin' && m.detail?.state === 'pending' && (
+                <span className="lib-warn" title="Mounted, but waiting for a service it needs">waiting</span>
               )}
             </span>
             <button type="button" className="lib-act" disabled={!onAct} onClick={() => onAct?.(m)}>

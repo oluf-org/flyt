@@ -187,28 +187,35 @@ export async function installPlugin(
   const pending: PendingReview = { declarations: new Map() };
   reviewedFibers.set(owner, pending);
   const fiber = await loading;
-  const requested = pluginInjections(plugin.inject);
-  const seams = requested.filter((name): name is SeamName =>
-    (SEAM_NAMES as readonly string[]).includes(name));
-  const installed = [...pending.declarations.keys()]
-    .filter(name => !before.has(name))
-    .map(name => tools.get(name))
-    .filter((tool): tool is ToolDefinition => Boolean(tool));
-  // A plugin cannot smuggle in a grant by supplying a pre-confirmed claim.
-  unclassify(tools, installed.map(tool => tool.name));
-  if (installed.length) ctx.emit('tools/change');
-  const proposals = installed.map(tool => {
-    const evidence = pending.declarations.get(tool.name);
-    return proposalFor(evidence?.tool ?? tool, evidence?.requested ?? requested, evidence?.seams ?? seams);
-  });
-  if (!proposals.length) return fiber;
-  const decisions = await review.decide(plugin.name ?? 'plugin', proposals);
+  try {
+    const requested = pluginInjections(plugin.inject);
+    const seams = requested.filter((name): name is SeamName =>
+      (SEAM_NAMES as readonly string[]).includes(name));
+    const installed = [...pending.declarations.keys()]
+      .filter(name => !before.has(name))
+      .map(name => tools.get(name))
+      .filter((tool): tool is ToolDefinition => Boolean(tool));
+    // A plugin cannot smuggle in a grant by supplying a pre-confirmed claim.
+    unclassify(tools, installed.map(tool => tool.name));
+    if (installed.length) ctx.emit('tools/change');
+    const proposals = installed.map(tool => {
+      const evidence = pending.declarations.get(tool.name);
+      return proposalFor(evidence?.tool ?? tool, evidence?.requested ?? requested, evidence?.seams ?? seams);
+    });
+    if (!proposals.length) return fiber;
+    const decisions = await review.decide(plugin.name ?? 'plugin', proposals);
 
-  // One batch validates against the exact per-tool proposals the human saw,
-  // and verifies every registry target before mutating any of them.
-  applyClassifications(tools, proposals, decisions);
-  if (proposals.some(proposal => Boolean(decisions?.[proposal.name]))) ctx.emit('tools/change');
-  return fiber;
+    // One batch validates against the exact per-tool proposals the human saw,
+    // and verifies every registry target before mutating any of them.
+    applyClassifications(tools, proposals, decisions);
+    if (proposals.some(proposal => Boolean(decisions?.[proposal.name]))) ctx.emit('tools/change');
+    return fiber;
+  } catch (error) {
+    // A thrown/invalid review is an installation failure, not an explicit
+    // decline. Do not leave a half-installed fiber outside the host's catalog.
+    await fiber.dispose();
+    throw error;
+  }
 }
 
 function proposalFor(tool: ToolDefinition, requested: readonly string[], seams: readonly SeamName[]): ToolClassificationProposal {

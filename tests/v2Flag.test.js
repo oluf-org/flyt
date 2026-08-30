@@ -169,6 +169,52 @@ test('an attended host can review a startup plugin before boot settles', async (
   }
 });
 
+test('desktop boot can expose its trusted surface before deferred package review', async () => {
+  const actual = await import('#kernel');
+  let applied = 0;
+  let detach;
+  const external = {
+    name: 'deferred-tool', inject: ['tools'],
+    apply(ctx) {
+      applied += 1;
+      ctx.tools.register({
+        name: 'deferred_read', description: 'Read after desktop startup.', parameters: {},
+        async execute() { return { content: 'ready' }; },
+      });
+    },
+  };
+  const load = async () => ({
+    ...actual,
+    PROFILES: {
+      ...actual.PROFILES,
+      'deferred-boot': [
+        { id: 'tools', name: 'flyt:tools' },
+        { id: 'external', name: 'deferred-package' },
+      ],
+    },
+    builtinImporter: name => name === 'deferred-package'
+      ? Promise.resolve(external)
+      : actual.builtinImporter(name),
+  });
+  const booted = await bootKernel({
+    call: true, env: noEnv, profile: 'deferred-boot', load, deferExternal: true,
+    onReviewReady(prepared) { detach = prepared.pluginReviews.subscribe(() => {}); },
+  });
+  try {
+    assert.equal(applied, 0, 'trusted profile boot returns before package code executes');
+    const installing = booted.startExternal();
+    for (let i = 0; i < 20 && !booted.pluginReviews.snapshot(); i++) await Promise.resolve();
+    const pending = booted.pluginReviews.snapshot();
+    assert.equal(pending.pluginName, 'deferred-tool');
+    pending.decide({ deferred_read: pending.proposals[0] });
+    await installing;
+    assert.equal(booted.plugins.get('external').name, 'deferred-tool');
+  } finally {
+    detach?.();
+    await booted.dispose();
+  }
+});
+
 test('the surface decides who it can ask, not the profile', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-v2-'));
   const booted = await bootKernel({ call: true, env: noEnv, profile: 'flyt-desktop', runsRoot: dir, approvalMode: 'ask' });

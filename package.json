@@ -14,8 +14,9 @@
   },
   "scripts": {
     "build:kernel": "tsc -p kernel",
+    "predev": "npm run build:kernel",
     "pretest": "npm run build:kernel",
-    "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER=http://localhost:5173 electron .\"",
+    "dev": "concurrently -k \"tsc -p kernel --watch --preserveWatchOutput\" \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER=http://localhost:5173 node scripts/watch-electron.mjs\"",
     "build": "npm run build:kernel && vite build",
     "start": "npm run build && electron .",
     "test": "node --test \"tests/**/*.test.js\"",
@@ -27,11 +28,11 @@
     "flyt": "node bin/flyt.js",
     "serve": "node bin/flyt.js serve",
     "icons": "node scripts/make-icons.mjs",
-    "dist": "electron-builder",
-    "dist:win": "electron-builder --win",
-    "dist:mac": "electron-builder --mac",
-    "dist:linux": "electron-builder --linux",
-    "release": "electron-builder --publish always"
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "release": "npm run build && electron-builder --publish always"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-skill": "0.0.1-rc.1",

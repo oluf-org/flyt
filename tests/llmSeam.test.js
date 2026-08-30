@@ -56,6 +56,45 @@ test('a model nothing can serve is refused, naming it', async () => {
   await boot.kernel.dispose();
 });
 
+test('a configured fallback resolves and runs only after an earlier model fails before output', async () => {
+  const kernel = createKernel();
+  const seen = [];
+  await kernel.ctx.plugin(flytAdapters, {
+    resolve: model => ({ provider: model === 'free-a' ? 'first' : 'second', model }),
+    async callModel(req) {
+      seen.push(`${req.provider}/${req.model}`);
+      if (req.model === 'free-a') throw new Error('free-a is at capacity');
+      return { text: 'backup answered', finishReason: 'stop', provider: req.provider, model: req.model };
+    },
+  });
+  const answer = await kernel.ctx.llm.complete(request({
+    model: 'free-a', fallbackModels: ['free-b'],
+  }));
+  assert.deepEqual(seen, ['first/free-a', 'second/free-b']);
+  assert.equal(answer.content, 'backup answered');
+  assert.equal(answer.route.requested, 'free-a');
+  assert.equal(answer.route.effective, 'second/free-b');
+  assert.match(answer.route.reason, /configured Free fallback free-b/);
+  await kernel.dispose();
+});
+
+test('a fallback is not started after the first model streamed visible text', async () => {
+  const kernel = createKernel();
+  const seen = [];
+  await kernel.ctx.plugin(flytAdapters, {
+    resolve: model => ({ provider: 'free', model }),
+    async callModel(req) {
+      seen.push(req.model);
+      req.onText?.('partial');
+      throw new Error('failed after output');
+    },
+  });
+  const stream = kernel.ctx.llm.stream(request({ model: 'free-a', fallbackModels: ['free-b'] }));
+  await assert.rejects(async () => { for await (const _ of stream) { /* drain */ } }, /failed after output/);
+  assert.deepEqual(seen, ['free-a']);
+  await kernel.dispose();
+});
+
 test('tool calls arrive parsed, and one that will not parse is still a call', async () => {
   const boot = await bootLlm({
     answer: {

@@ -109,17 +109,38 @@ test('learn-from-repo keeps its canonical orientation, parallel reading, combina
   assert.equal(handoff.use, 'flyt-blocks-loop:loop-handoff');
 });
 
-test('the pipeline stack is one stack with an effort dial', () => {
+test('the pipeline stack has explicit tier choices and an optional human boundary', () => {
   const stack = parseStack(read('stacks/pipeline.stack.yaml'), 'pipeline');
   const uses = stack.root.children.map(c => c.use);
   assert.deepEqual(uses, [
     'flyt-blocks-judgement:prompt-refiner',
+    'flyt-blocks-judgement:human-checkpoint',
     'flyt-blocks-loop:backlog-plan',
     'flyt-blocks-core:work',
   ]);
+  assert.deepEqual(stack.root.children.map(c => c.config?.modelTier ?? null), [
+    'free', null, 'frontier', 'standard',
+  ]);
+  assert.equal(stack.root.children[1].config.enabled, true);
   const efforts = stack.root.children.map(c => c.config?.effort).filter(Boolean);
   assert.ok(efforts.length >= 1, 'an effort dial is present');
   for (const e of efforts) assert.match(e, /^(low|medium|high)$/);
+});
+
+test('every shipped model-backed block has an authored model tier', async () => {
+  const k = await registryWithAll();
+  for (const id of FIVE) {
+    const stack = parseStack(read(`stacks/${id}.stack.yaml`), id);
+    const walk = node => [node, ...(node.children ?? []).flatMap(walk), ...(node.else ?? []).flatMap(walk)];
+    for (const node of walk(stack.root)) {
+      if (node.kind !== 'block') continue;
+      const definition = k.ctx.blocks.require(node.use);
+      const modelBacked = Boolean(definition.settings?.properties?.model);
+      if (modelBacked) assert.match(node.config.modelTier, /^(free|economy|standard|frontier)$/,
+        `${id}:${node.id} has an explicit stable tier`);
+    }
+  }
+  await k.dispose();
 });
 
 test('tool plugins are deliveries and the sets are ceilings, not conflated', () => {

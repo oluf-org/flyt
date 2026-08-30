@@ -6,7 +6,7 @@ A block is one executable step contributed by a plugin. A stack references it wi
 
 | Plugin | Blocks | Purpose |
 |---|---|---|
-| `flyt-blocks-core` | `work`, `research`, `general-analysis`, `combine`, `split`, `plan-start` | Bounded repository work, untrusted web reading, and general transformations |
+| `flyt-blocks-core` | `work`, `research`, `general-analysis`, `combine`, `split`, `plan-start`, `task-graph` | Bounded repository work, untrusted web reading, transformations, and agent-planned task dispatch |
 | `flyt-blocks-judgement` | `evaluation`, `compare`, `prompt-refiner` | Review, comparison, and brief refinement |
 | `flyt-blocks-inquiry` | `interrogate`, `orient` | Bounded questioning and grounded project orientation |
 | `flyt-blocks-loop` | `backlog-plan`, `loop-handoff` | Produce claimable tasks and hand them to Loop |
@@ -29,6 +29,8 @@ Classification is not a grant. A plugin tool arrives unclassified and unreachabl
 ## Composition
 
 Blocks live inside `sequence`, `parallel`, `repeat`, `foreach`, `until`, and `if` containers. Containment is the graph. A sequence passes its result forward; parallel lanes receive the same input and remain isolated until the container aggregates them. Repetition and predicates are statically bounded before execution. See [`STACK_LANG.md`](./STACK_LANG.md) for the exact grammar.
+
+`flyt-blocks-core:task-graph` is a leaf in the authored language and a run-time container in Work. Its planner produces a bounded DAG; validation rejects unknown dependencies, duplicate outputs, missing required producers, and cycles before child work is announced. Data producers and same-file writers receive deterministic edges, then ready tasks run in bounded waves. The generated child blocks are durable run events nested under the authored block, never edits silently written back to the workflow.
 
 ## Execution and evidence
 

@@ -89,6 +89,14 @@ export const WORK_SETTINGS = {
   additionalProperties: false,
   properties: {
     model: { type: 'string', description: 'The model to ask for. Routing is the seam’s business.' },
+    modelTier: {
+      title: 'Model tier', enum: ['free', 'economy', 'standard', 'frontier'],
+      description: 'Stable cost/quality profile. The model behind it is chosen globally.',
+    },
+    modelFallbacks: {
+      type: 'array', items: { type: 'string' }, maxItems: 3,
+      description: 'Ordered alternatives in the same explicit cost profile.',
+    },
     instructions: { type: 'string', description: 'Appended to the standing instructions above.' },
     maxSteps: { type: 'integer', minimum: 1, description: 'Tool rounds before it must answer.' },
     effort: {
@@ -125,11 +133,15 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
     // and containers are Phase 3.
     turn: 1,
     model: str(run.config.model, 'openrouter/auto'),
+    fallbackModels: Array.isArray(run.config.modelFallbacks)
+      ? run.config.modelFallbacks.filter((model): model is string => typeof model === 'string' && Boolean(model))
+      : [],
     system: instructions ? `${standingSystem}\n\n${instructions}` : standingSystem,
     input: run.input,
     tools,
     ceiling: run.ceiling,
     maxSteps: typeof run.config.maxSteps === 'number' ? run.config.maxSteps : MAX_STEPS,
+    isolated: run.config.isolated === true,
     ...(run.signal ? { signal: run.signal } : {}),
   });
 

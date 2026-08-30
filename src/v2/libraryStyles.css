@@ -76,6 +76,7 @@
 .lib-desc { grid-area: description; overflow: hidden; color: var(--dim); font-size: 10px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .lib-meta { grid-area: meta; min-width: 0; }
 .lib-warn { display: inline-flex; max-width: 100%; overflow: hidden; padding: 2px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.lib-bad { display: inline-flex; max-width: 100%; overflow: hidden; padding: 2px 6px; border-radius: 999px; background: var(--err-soft); color: var(--err); font-size: 9px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .lib-act { grid-area: action; align-self: center; padding: 5px 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--tx); font: inherit; font-size: 10px; cursor: pointer; }
 .lib-act:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .lib-act:disabled { color: var(--faint); cursor: default; }

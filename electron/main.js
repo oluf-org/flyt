@@ -16,7 +16,7 @@ import {
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
   CURATED_MODELS, TEST_MODELS,
   catalogFromOpenRouter, factsFromCatalog, normalizeModelSets,
-  popularityFromOpenRouter, normalizeModelPopularity
+  popularityFromOpenRouter, normalizeModelPopularity, normalizeWorkflowModelTiers
 } from '../core/modelSource.js';
 // Subscription (CLI-delegation) plumbing: sign-in detection + binary
 // resolution. Presence checks only — no token is ever read (DESIGN-SPEC.md §6).
@@ -25,6 +25,7 @@ import { APP_NAME, LOG_TAG, LEGACY_APP_DIRS } from '../core/brand.js';
 import { migrateUserDataDir } from '../core/migrate.js';
 import { bootKernel } from '../core/v2.js';
 import { createV2BuildController, createV2HostBridge } from '../core/v2Host.js';
+import { persistPluginConfig, persistPluginRemoval } from '../core/pluginPatch.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Where the app's own code and bundled assets live. When packaged this is
@@ -111,7 +112,20 @@ const CHROME = {
 let win = null;
 let v2HostPromise = null;
 let detachV2UiExtensions = null;
+let detachV2PluginReviews = null;
+let detachV2Plugins = null;
 let v2BuildController = null;
+let v2Prepared = null;
+
+// The `home` layer of the plugin composition. bootKernel READS it; the plugin
+// manager WRITES it, and both have to name the same file or a configuration
+// that was saved would compose from somewhere the next boot never looks.
+const pluginPatchFile = () => path.join(app.getPath('home'), '.flyt', 'cordis.patch.yml');
+
+const publicPluginReview = () => {
+  const pending = v2Prepared?.pluginReviews?.snapshot?.();
+  return pending ? { pluginName: pending.pluginName, proposals: pending.proposals } : null;
+};
 
 async function v2Host() {
   if (!v2HostPromise) {
@@ -122,6 +136,15 @@ async function v2Host() {
       profile: 'flyt-desktop',
       runsRoot: registry.defaultRunsDir,
       approvalMode: settings.approvalMode ?? 'ask',
+      nodeModules: path.join(projectRoot, 'node_modules'),
+      homeConfig: pluginPatchFile(),
+      deferExternal: true,
+      onReviewReady(prepared) {
+        v2Prepared = prepared;
+        detachV2PluginReviews = prepared.pluginReviews.subscribe(() => {
+          if (win && !win.isDestroyed()) win.webContents.send('v2:plugin-review-change', publicPluginReview());
+        });
+      },
     }).then(async booted => {
       if (!booted) return null;
       v2BuildController = await createV2BuildController(booted, { stackRoot });
@@ -131,6 +154,14 @@ async function v2Host() {
       });
       detachV2UiExtensions = bridge.subscribe(rows => {
         if (win && !win.isDestroyed()) win.webContents.send('v2:ui-extensions-change', rows);
+      });
+      detachV2Plugins = booted.plugins.subscribe(() => {
+        if (win && !win.isDestroyed()) win.webContents.send('v2:plugins-change', booted.plugins.list());
+      });
+      // Let the pending v2:build request return the review-capable surface
+      // before package installation can publish a modal request.
+      setImmediate(() => {
+        booted.startExternal().catch(error => console.error(`${LOG_TAG} plugin startup:`, error));
       });
       return { booted, bridge };
     });
@@ -255,11 +286,83 @@ const bindIpc = (name, toArgs = () => ({})) =>
 
 // D61: this is the production host-to-renderer bridge. Only the host's cloned
 // list crosses IPC; the generic plugin RPC and Cordis context stay main-side.
-ipcMain.handle('v2:build', async () => (await v2Host())?.bridge.build() ?? null);
+ipcMain.handle('v2:build', async () => {
+  const host = await v2Host();
+  return host ? { ...host.bridge.build(), pluginReview: publicPluginReview() } : null;
+});
+ipcMain.handle('v2:plugin-review', async () => { await v2Host(); return publicPluginReview(); });
+ipcMain.handle('v2:plugin-review-decide', async (_event, decisions = {}) => {
+  await v2Host();
+  const pending = v2Prepared?.pluginReviews?.snapshot?.();
+  return pending ? pending.decide(decisions) : false;
+});
+// --- The plugin manager (Library -> Plugins) ---
+// Every one of these does BOTH halves of the change: the Cordis fiber, so the
+// running app reflects it now, and `~/.flyt/cordis.patch.yml`, so the next boot
+// composes the same tree. A runtime-only uninstall is undone by a restart, and
+// a button whose effect expires is worse than no button.
+const v2Plugins = async () => {
+  const host = await v2Host();
+  if (!host?.booted?.plugins) throw new Error('The plugin host is not available');
+  return host.booted.plugins;
+};
+
+// A row the manager is about to change, refused by name rather than by a
+// thrown TypeError three frames further in.
+//
+// `mutable` is the same line the manager's buttons draw, drawn again here.
+// Flyt's own services are the block registry, the tool gate and the approval
+// policy; restarting one disposes the gate every running block is checked
+// against, and a group has no fiber of its own. The UI not offering the verb is
+// a convenience — this is the boundary.
+const pluginRow = async (id, { mutable = false } = {}) => {
+  const plugins = await v2Plugins();
+  const row = plugins.get(String(id ?? ''));
+  if (!row) throw new Error(`There is no installed plugin named "${id}"`);
+  if (mutable && row.group) {
+    throw new Error(`"${row.name}" is a group; change the rows composed inside it instead`);
+  }
+  if (mutable && row.builtin) {
+    throw new Error(`"${row.name}" is part of Flyt itself and can only be inspected`);
+  }
+  return { plugins, row };
+};
+
+ipcMain.handle('v2:plugins', async () => (await v2Plugins()).list());
+
+ipcMain.handle('v2:plugin-configure', async (_event, id, config = null) => {
+  const { plugins, row } = await pluginRow(id, { mutable: true });
+  await plugins.configure(row.id, config);
+  persistPluginConfig(pluginPatchFile(), row, config);
+  return plugins.get(row.id) ?? null;
+});
+
+ipcMain.handle('v2:plugin-restart', async (_event, id) => {
+  const { plugins, row } = await pluginRow(id, { mutable: true });
+  await plugins.restart(row.id);
+  return plugins.get(row.id) ?? null;
+});
+
+ipcMain.handle('v2:plugin-uninstall', async (_event, id) => {
+  const { plugins, row } = await pluginRow(id, { mutable: true });
+  await plugins.uninstall(row.id);
+  persistPluginRemoval(pluginPatchFile(), row);
+  return plugins.list();
+});
+
 ipcMain.handle('v2:open-stack', async (_event, id, caller = 'human') => {
   await v2Host();
   if (!v2BuildController) throw new Error('The Build stack surface is not available');
   return v2BuildController.open(String(id ?? ''), caller === 'agent' ? 'agent' : 'human');
+});
+ipcMain.handle('v2:create-stack', async (_event, input = {}, caller = 'human') => {
+  await v2Host();
+  if (!v2BuildController) throw new Error('The Build stack surface is not available');
+  return v2BuildController.create({
+    name: String(input?.name ?? ''),
+    description: String(input?.description ?? ''),
+    from: input?.from ? String(input.from) : null,
+  }, caller === 'agent' ? 'agent' : 'human');
 });
 ipcMain.handle('v2:command', async (_event, name, args, caller = 'human') => {
   await v2Host();
@@ -290,8 +393,8 @@ bindIpc('config:get');
 bindIpc('flow:run', (projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) =>
   ({ projectId, flowId, userInput, workspaceDir, approvalMode, launch }));
 bindIpc('workflow:list');
-bindIpc('workflow:run', (projectId, workflowId, input = '', approvalMode = null, presetId = null) =>
-  ({ projectId, workflowId, input, approvalMode, presetId }));
+bindIpc('workflow:run', (projectId, workflowId, input = '', approvalMode = null, presetId = null, modelSelection = null) =>
+  ({ projectId, workflowId, input, approvalMode, presetId, modelSelection }));
 bindIpc('workflow:pending', (projectId, runId) => ({ projectId, runId }));
 bindIpc('workflow:reply', (projectId, runId, text = '', approvalMode = null) =>
   ({ projectId, runId, text, approvalMode }));
@@ -796,6 +899,12 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
   if (patch.modelSets && typeof patch.modelSets === 'object') {
     settings.modelSets = normalizeModelSets(patch.modelSets);
   }
+  // Workflow blocks point at stable cost/quality profiles. The mappings are
+  // sent whole so replacing a new breakout model is one edit, and several
+  // profiles may intentionally name the same model.
+  if (patch.workflowModelTiers && typeof patch.workflowModelTiers === 'object') {
+    settings.workflowModelTiers = normalizeWorkflowModelTiers(patch.workflowModelTiers);
+  }
   if (patch.workers && typeof patch.workers === 'object') {
     settings.workers = { ...settings.workers };
     for (const [name, w] of Object.entries(patch.workers)) {
@@ -978,6 +1087,10 @@ app.whenReady().then(() => { createWindow(); setupAutoUpdate(); });
 app.on('before-quit', () => {
   detachV2UiExtensions?.();
   detachV2UiExtensions = null;
+  detachV2PluginReviews?.();
+  detachV2PluginReviews = null;
+  detachV2Plugins?.();
+  detachV2Plugins = null;
   v2BuildController?.dispose?.();
   v2BuildController = null;
   void v2HostPromise?.then(host => host?.booted.dispose());

@@ -177,6 +177,7 @@ export function createApi(engine) {
   /** Compose (or reuse) the worktree-scoped production Loop host. */
   const loopKernelHost = async (entry, {
     workspace, approvalMode = 'always', worker = null, level = null,
+    blockWorkers = {}, defaultFallbacks = [], blockFallbacks = {}, tierWorkers = {},
     loopTaskId = null, skills = null,
     profile = 'flyt-loop-worker', presetId = null, askHuman = null, askBlock = null,
     requireLaunchable = false,
@@ -186,7 +187,9 @@ export function createApi(engine) {
     const route = `${worker?.provider ?? 'auto'}/${worker?.model ?? 'auto'}`;
     const routing = worker?.routing && typeof worker.routing === 'object'
       ? JSON.stringify(worker.routing) : '';
-    const key = `${workspace}\n${route}\n${routing}\n${approvalMode}\n${level ?? ''}\n${loopTaskId ?? ''}\n${profile}\n${presetId ?? ''}`;
+    const blockRoutes = JSON.stringify(blockWorkers ?? {});
+    const fallbackRoutes = JSON.stringify({ defaultFallbacks, blockFallbacks, tierWorkers });
+    const key = `${workspace}\n${route}\n${routing}\n${blockRoutes}\n${fallbackRoutes}\n${approvalMode}\n${level ?? ''}\n${loopTaskId ?? ''}\n${profile}\n${presetId ?? ''}`;
     let host = entry.kernelHosts.get(key);
     if (!host) {
       let composed = null;
@@ -206,6 +209,10 @@ export function createApi(engine) {
         runtimeConfig,
         resolveModelSource: engine.resolveModelSource,
         worker,
+        blockWorkers,
+        defaultFallbacks,
+        blockFallbacks,
+        tierWorkers,
         level,
         loopTaskId,
         skills,
@@ -320,18 +327,61 @@ export function createApi(engine) {
     return summary;
   };
 
+  /**
+   * Which mode a workflow will actually run in.
+   *
+   * A workflow that declares modes always runs in one of them: an absent
+   * choice means the default, never "no mode". Resolved HERE, before the run
+   * is created, so the immutable record names the mode that was applied rather
+   * than the null the caller happened to send.
+   */
+  const resolvePresetId = async (workflowId, presetId) => {
+    if (presetId) return presetId;
+    try {
+      const kernel = await import('#kernel');
+      const store = new StackStore(stackRoot, { parseStack: kernel.parseStack });
+      return kernel.defaultPresetId(store.load(workflowId));
+    } catch {
+      // An unreadable stack is the runner's refusal to report, with the file
+      // and the reason. Guessing a mode here would only change which message
+      // it fails with.
+      return null;
+    }
+  };
+
   const startWorkflow = async ({
     projectId, workflowId, input = '', approvalMode = null, presetId = null,
     conversationId = null, parentRunId = null, userMessage = null,
+    modelSelection = null,
   }) => {
     const entry = proj(projectId);
+    presetId = await resolvePresetId(workflowId, presetId);
     const workspace = entry.folder
       ? new Workspace(entry.folder).ensure().root
       : new Workspace(entry.workspaceRoot).ensure().root;
+    const normalizeWorker = candidate => candidate?.model ? {
+      provider: candidate.provider ?? 'auto', model: String(candidate.model),
+      ...(candidate.routing && typeof candidate.routing === 'object' ? { routing: candidate.routing } : {}),
+    } : null;
+    const defaultWorker = normalizeWorker(modelSelection?.defaultWorker)
+      ?? normalizeWorker(runtimeConfig.workers?.executor);
+    const blockWorkers = Object.fromEntries(Object.entries(modelSelection?.blocks ?? {})
+      .map(([blockId, candidate]) => [blockId, normalizeWorker(candidate)])
+      .filter(([, candidate]) => candidate));
+    const normalizeFallbacks = candidates => (Array.isArray(candidates) ? candidates : [])
+      .map(normalizeWorker).filter(Boolean).slice(0, 3);
+    const defaultFallbacks = normalizeFallbacks(modelSelection?.defaultFallbacks);
+    const blockFallbacks = Object.fromEntries(Object.entries(modelSelection?.blockFallbacks ?? {})
+      .map(([blockId, candidates]) => [blockId, normalizeFallbacks(candidates)])
+      .filter(([, candidates]) => candidates.length));
     const host = await loopKernelHost(entry, {
       workspace,
       approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : runtimeConfig.approvalMode,
-      worker: runtimeConfig.workers?.executor ?? null,
+      worker: defaultWorker,
+      blockWorkers,
+      defaultFallbacks,
+      blockFallbacks,
+      tierWorkers: runtimeConfig.workflowModelTiers ?? {},
       profile: 'flyt-desktop', presetId,
       askHuman: workflowAskHuman(entry), askBlock: workflowAskBlock(entry), requireLaunchable: true,
     });
@@ -353,7 +403,7 @@ export function createApi(engine) {
   };
 
   /** Recreate the exact host a durable run says it used. */
-  const resumeKernelHost = async (entry, runId, workerOverride = null) => {
+  const resumeKernelHost = async (entry, runId, workerOverride = null, blockId = null) => {
     const live = entry.kernelRuns?.get(runId);
     if (!workerOverride && live) return live;
     if (workerOverride && live?.ctx.agents.get(runId)) {
@@ -365,10 +415,17 @@ export function createApi(engine) {
     if (!meta?.workspace) throw new ApiError(`Kernel run "${runId}" does not record a workspace, so it cannot be resumed safely.`, {
       status: 409, code: 'kernel_resume_metadata_missing'
     });
+    const desktopBlockOverride = Boolean(workerOverride?.model && blockId && meta.profile === 'flyt-desktop');
+    const blockWorkers = desktopBlockOverride
+      ? { ...(meta.blockWorkers ?? {}), [blockId]: workerOverride }
+      : (meta.blockWorkers ?? {});
+    const blockFallbacks = desktopBlockOverride
+      ? { ...(meta.blockFallbacks ?? {}), [blockId]: [] }
+      : (meta.blockFallbacks ?? {});
     const host = await loopKernelHost(entry, {
       workspace: meta.workspace,
       approvalMode: meta.approvalMode ?? 'always',
-      worker: workerOverride?.model
+      worker: workerOverride?.model && !desktopBlockOverride
         ? {
           provider: workerOverride.provider ?? 'auto', model: workerOverride.model,
           ...(workerOverride.routing && typeof workerOverride.routing === 'object'
@@ -378,9 +435,16 @@ export function createApi(engine) {
           provider: meta.provider ?? 'auto', model: meta.model,
           ...(meta.routing && typeof meta.routing === 'object' ? { routing: meta.routing } : {}),
         } : null,
+      blockWorkers,
+      defaultFallbacks: meta.defaultFallbacks ?? [],
+      blockFallbacks,
+      tierWorkers: meta.tierWorkers ?? {},
       level: meta.level ?? null,
       loopTaskId: meta.loopTaskId ?? null,
       skills: Array.isArray(meta.skills) ? meta.skills : null,
+      profile: meta.profile ?? 'flyt-loop-worker',
+      presetId: meta.presetId ?? null,
+      requireLaunchable: Boolean(meta.requireLaunchable),
     });
     entry.kernelRuns.set(runId, host);
     return host;
@@ -911,11 +975,41 @@ export function createApi(engine) {
         try {
           const stack = store.load(row.id);
           if (!stack.launchable) return [];
+          const steps = [...kernel.walk(stack.root)]
+            .filter(node => node.kind === 'block')
+            .map(node => {
+              const modelBacked = node.use !== 'flyt-blocks-judgement:human-checkpoint';
+              return {
+                id: node.id,
+                title: node.title ?? node.id,
+                use: node.use,
+                effort: node.config?.effort ?? null,
+                effect: node.config?.effect ?? null,
+                modelTier: node.config?.modelTier ?? null,
+                modelBacked,
+                checkpoint: node.use === 'flyt-blocks-judgement:human-checkpoint'
+                  ? node.config?.enabled !== false : false,
+              };
+            });
+          const fallbackPreset = kernel.defaultPresetId(stack);
           return [{
             id: stack.id, name: stack.name, description: stack.description,
             presets: Object.entries(stack.presets ?? {}).map(([id, preset]) => ({
               id, name: preset.name, description: preset.description,
+              // The chat picker preselects this one, and the runner applies it
+              // when nobody chose. Same answer, computed once.
+              default: id === fallbackPreset,
+              overrides: Object.fromEntries(Object.entries(preset.overrides ?? {}).map(([blockId, config]) => [
+                blockId,
+                {
+                  ...(config?.effort ? { effort: config.effort } : {}),
+                  ...(config?.model ? { model: config.model } : {}),
+                  ...(config?.parallelism ? { parallelism: config.parallelism } : {}),
+                  ...(Number.isInteger(config?.maxParallel) ? { maxParallel: config.maxParallel } : {}),
+                },
+              ])),
             })),
+            steps,
           }];
         } catch { return []; }
       });
@@ -985,6 +1079,15 @@ export function createApi(engine) {
         parentRunId: runId,
         userMessage: String(text ?? ''),
         approvalMode,
+        modelSelection: {
+          defaultWorker: metadata.model ? {
+            provider: metadata.provider ?? 'auto', model: metadata.model,
+            ...(metadata.routing && typeof metadata.routing === 'object' ? { routing: metadata.routing } : {}),
+          } : null,
+          defaultFallbacks: metadata.defaultFallbacks ?? [],
+          blocks: metadata.blockWorkers ?? {},
+          blockFallbacks: metadata.blockFallbacks ?? {},
+        },
         input: [
           'CONVERSATION CONTEXT FROM THE PREVIOUS IMMUTABLE RUN:', context,
           'USER FOLLOW-UP:', String(text ?? ''),
@@ -1089,10 +1192,14 @@ export function createApi(engine) {
         return runnerFor(projectId).restartNode(runId, nodeId, String(guidance ?? ''), worker ?? null);
       }
       const override = worker?.model ? worker : null;
-      const host = await resumeKernelHost(entry, runId, override);
+      const host = await resumeKernelHost(entry, runId, override, nodeId);
+      const desktopBlockOverride = Boolean(override && host.metadata.profile === 'flyt-desktop');
       const { run } = await restartStackBlock(
         host, runId, nodeId, String(guidance ?? ''),
-        override ? {
+        desktopBlockOverride ? {
+          blockWorkers: host.metadata.blockWorkers,
+          blockFallbacks: host.metadata.blockFallbacks,
+        } : override ? {
           model: override.model, provider: override.provider ?? 'auto',
           // Explicit null clears an old Auto Router band on future resumes.
           routing: override.routing ?? null,

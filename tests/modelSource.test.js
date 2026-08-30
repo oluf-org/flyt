@@ -9,6 +9,7 @@ import {
   usdPerMillion, catalogFromOpenRouter, factsFromCatalog, normalizeModelFacts,
   popularityFromOpenRouter, normalizeModelPopularity,
   normalizeModelSets, modelSetId, resolveModelSet, MODEL_SET_MAX,
+  normalizeWorkflowModelTiers,
   proposeStarterSet, STARTER_ROLES, createCapabilityCache,
   CAPABILITY_CACHE_MAX_ENTRIES
 } from '../core/modelSource.js';
@@ -185,6 +186,26 @@ test('resolving a set drops members that are no longer active models', () => {
 test('migration keeps model sets and defaults them to empty', () => {
   assert.deepEqual(migrateSettings({}).modelSets, {});
   assert.deepEqual(migrateSettings({ modelSets: { A: ['x/y'] } }).modelSets, { a: { name: 'a', models: ['x/y'] } });
+});
+
+test('workflow model profiles are normalized independently and may share one breakout model', () => {
+  const shared = { provider: 'openrouter', model: 'vendor/flash' };
+  assert.deepEqual(normalizeWorkflowModelTiers({
+    free: [
+      { provider: 'openrouter', model: ' vendor/free ' },
+      { provider: 'auto', model: 'other/free' },
+      { provider: 'openrouter', model: 'vendor/free' },
+    ],
+    economy: shared, standard: shared, frontier: shared,
+    invented: { provider: 'auto', model: 'ignored' },
+  }), {
+    free: [
+      { provider: 'openrouter', model: 'vendor/free' },
+      { provider: 'auto', model: 'other/free' },
+    ],
+    economy: shared, standard: shared, frontier: shared,
+  });
+  assert.deepEqual(migrateSettings({}).workflowModelTiers, {});
 });
 
 // --- the starter set (DECISIONS.md D36) -----------------------------------------

@@ -4,7 +4,18 @@ const { contextBridge, ipcRenderer } = require('electron');
 // templates and settings are global (T2) and stay unscoped.
 const api = {
   v2Build: () => ipcRenderer.invoke('v2:build'),
+  v2PluginReview: () => ipcRenderer.invoke('v2:plugin-review'),
+  v2DecidePluginReview: decisions => ipcRenderer.invoke('v2:plugin-review-decide', decisions),
+  // --- The plugin manager (Library -> Plugins) ---
+  // Data and lifecycle only. The Cordis context, the plugin objects and the
+  // generic RPC stay main-side; what crosses is the cloned catalog and four
+  // verbs the host already owns.
+  v2Plugins: () => ipcRenderer.invoke('v2:plugins'),
+  v2ConfigurePlugin: (id, config) => ipcRenderer.invoke('v2:plugin-configure', id, config),
+  v2RestartPlugin: id => ipcRenderer.invoke('v2:plugin-restart', id),
+  v2UninstallPlugin: id => ipcRenderer.invoke('v2:plugin-uninstall', id),
   v2OpenStack: (id, caller = 'human') => ipcRenderer.invoke('v2:open-stack', id, caller),
+  v2CreateStack: (input = {}, caller = 'human') => ipcRenderer.invoke('v2:create-stack', input, caller),
   v2ValidateStackSource: (source) => ipcRenderer.invoke('v2:validate-source', source),
   v2SaveStackSource: (source, caller = 'human') => ipcRenderer.invoke('v2:save-source', source, caller),
   v2StackHistory: (nodeId = null, limit = 200) => ipcRenderer.invoke('v2:history', nodeId, limit),
@@ -19,6 +30,16 @@ const api = {
     const handler = (_e, rows) => cb(rows);
     ipcRenderer.on('v2:ui-extensions-change', handler);
     return () => ipcRenderer.removeListener('v2:ui-extensions-change', handler);
+  },
+  onV2PluginReviewChange: (cb) => {
+    const handler = (_e, review) => cb(review);
+    ipcRenderer.on('v2:plugin-review-change', handler);
+    return () => ipcRenderer.removeListener('v2:plugin-review-change', handler);
+  },
+  onV2PluginsChange: (cb) => {
+    const handler = (_e, plugins) => cb(plugins);
+    ipcRenderer.on('v2:plugins-change', handler);
+    return () => ipcRenderer.removeListener('v2:plugins-change', handler);
   },
   approvePlan: (pid, runId) => ipcRenderer.invoke('run:approve', pid, runId),
   rejectPlan: (pid, runId, reason) => ipcRenderer.invoke('run:reject', pid, runId, reason),
@@ -67,8 +88,8 @@ const api = {
   runFlow: (pid, id, userInput, workspaceDir, approvalMode, launch = null) =>
     ipcRenderer.invoke('flow:run', pid, id, userInput, workspaceDir, approvalMode, launch),
   listWorkflows: () => ipcRenderer.invoke('workflow:list'),
-  runWorkflow: (pid, workflowId, input, approvalMode = null, presetId = null) =>
-    ipcRenderer.invoke('workflow:run', pid, workflowId, input, approvalMode, presetId),
+  runWorkflow: (pid, workflowId, input, approvalMode = null, presetId = null, modelSelection = null) =>
+    ipcRenderer.invoke('workflow:run', pid, workflowId, input, approvalMode, presetId, modelSelection),
   getPendingWorkflowInteractions: (pid, runId) => ipcRenderer.invoke('workflow:pending', pid, runId),
   replyWorkflow: (pid, runId, text, approvalMode = null) =>
     ipcRenderer.invoke('workflow:reply', pid, runId, text, approvalMode),

@@ -9,6 +9,27 @@ import { StackStore } from '../core/stackstore.js';
 import { parseStack } from '#kernel';
 import { buildSurface } from '../src/v2/buildSurface.js';
 
+test('an in-process Build surface refreshes its live stack after a command', async () => {
+  let stack = { id: 'preview', root: { id: 'root', kind: 'sequence', children: [] } };
+  const subscribers = new Set();
+  const raw = {
+    get stack() { return stack; },
+    commands: {
+      async invoke(name, args, caller) {
+        stack = { ...stack, name: args.name };
+        const record = { command: name, args, caller };
+        for (const listener of subscribers) listener(record);
+      },
+      subscribe(listener) { subscribers.add(listener); return () => subscribers.delete(listener); },
+    },
+  };
+  const surface = await buildSurface({ v2Build: async () => raw });
+  const unsubscribe = surface.commands.subscribe(() => {});
+  await surface.commands.invoke('stack:rename', { name: 'Updated preview' }, 'human');
+  assert.equal(surface.stack.name, 'Updated preview');
+  unsubscribe();
+});
+
 test('the desktop Build bridge opens, edits, and persists a real canonical stack', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-v2-build-'));
   const store = new StackStore(path.join(dir, 'stacks'), { parseStack });
@@ -43,6 +64,8 @@ blocks:
     assert.equal(surface.stack.id, 'pipeline');
     assert.equal(surface.blocks.resolve('flyt-blocks-core:work').title, 'Work');
     assert.ok(surface.library.stacks.some(stack => stack.id === 'pipeline'));
+    assert.ok(surface.library.plugins.some(plugin => plugin.id === 'blocks-core' && plugin.builtin),
+      'the Library is projected from the managed profile that supplied its blocks');
     let event = null;
     const unsubscribe = surface.commands.subscribe(record => { event = record; });
     await surface.commands.invoke('stack:configure-block', {
@@ -55,6 +78,36 @@ blocks:
     unsubscribe();
   } finally {
     detach(); controller.dispose(); await booted.dispose();
+  }
+});
+
+test('removing a step is allowed when an unrelated pre-existing config error remains', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-v2-repair-'));
+  const store = new StackStore(path.join(dir, 'stacks'), { parseStack });
+  store.save('pipeline', `version: 2
+id: pipeline
+name: Pipeline
+blocks:
+  - id: work
+    use: flyt-blocks-core:work
+    config:
+      obsoleteSetting: old-runtime-value
+  - id: remove-me
+    use: flyt-blocks-judgement:human-checkpoint
+`);
+  const booted = await bootKernel({ call: true, env: {}, profile: 'flyt-desktop', runsRoot: path.join(dir, 'runs') });
+  const controller = await createV2BuildController(booted, { stacks: store });
+
+  try {
+    assert.match(controller.snapshot().validation.errors[0].message, /obsoleteSetting: unknown property/);
+    await controller.invoke('stack:remove-block', { nodeId: 'remove-me' }, 'human');
+    const saved = store.load('pipeline');
+    assert.deepEqual(saved.root.children.map(node => node.id), ['work']);
+    assert.equal(saved.root.children[0].config.obsoleteSetting, 'old-runtime-value',
+      'the repair command preserves, rather than silently deleting, unrelated authored config');
+  } finally {
+    controller.dispose();
+    await booted.dispose();
   }
 });
 

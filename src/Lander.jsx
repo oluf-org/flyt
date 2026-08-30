@@ -29,6 +29,12 @@ import ConfigModal from './ConfigModal.jsx';
 import { sigil } from './sigil.js';
 import { runStatus, runTimeLabel } from './runList.js';
 import LaunchInputs from './LaunchInputs.jsx';
+import { ModelBadge, ModelPicker, workerLabel } from './ModelPicker.jsx';
+import {
+  effortCopy, selectedWorkflowPreset, workflowOutcome, workflowSteps,
+} from './v2/workflowUx.js';
+import { WORKFLOW_MODEL_TIERS, workerForTier, workersForTier } from './modelTiers.js';
+import { defaultModeId } from './workflowModes.js';
 
 // One workflow chip + its listbox popover. Owns only its open/close and roving
 // focus; the selection and the pick handler come from the parent, so a slot and
@@ -43,7 +49,11 @@ function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef,
   const listRef = useRef(null);
 
   const selectedFlow = flows.find(f => f.id === flowId) ?? null;
-  const selectedMode = selectedFlow?.modes?.find(m => m.id === modeId) ?? null;
+  // A workflow with modes always runs in one of them, so the chip names the
+  // one a run would use — the chosen mode, or the default. Naming only the
+  // workflow would leave the effort dial unreadable from the composer.
+  const runningMode = flowsOnly ? null : (modeId ?? defaultModeId(selectedFlow));
+  const selectedMode = selectedFlow?.modes?.find(m => m.id === runningMode) ?? null;
   const chipLabel = selectedFlow
     ? (selectedMode ? `${selectedFlow.name} · ${selectedMode.name}` : selectedFlow.name)
     : (flows.length ? 'Select workflow' : 'No workflows');
@@ -112,9 +122,16 @@ function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef,
       {open && (
         <div className="lander-picker" role="listbox" aria-label={ariaLabel} ref={listRef} onKeyDown={onListKeyDown}>
           {flows.map(f => {
-            // A flow with modes expands to a flat list: the flow itself (its
-            // stored default) followed by each named mode (T4).
-            const flowSelected = f.id === flowId && !modeId;
+            // A flow with modes expands to a flat list: the workflow, then each
+            // of its modes. The workflow row is not a fourth choice — it picks
+            // the default mode, which is what a run names when nobody chose.
+            const modes = flowsOnly ? [] : (f.modes ?? []);
+            const fallbackMode = defaultModeId(f);
+            // With modes, the workflow row is a shortcut to the default one:
+            // picking "no mode" would be picking a fourth way to run it that
+            // the runner does not have.
+            const flowSelected = f.id === flowId
+              && (modes.length ? (modeId ?? fallbackMode) === fallbackMode : !modeId);
             return (
               <Fragment key={f.id}>
                 <button
@@ -123,14 +140,14 @@ function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef,
                   tabIndex={-1}
                   aria-selected={flowSelected}
                   className={'lander-picker-item' + (flowSelected ? ' selected' : '')}
-                  onClick={() => pick(f.id, null)}
+                  onClick={() => pick(f.id, modes.length ? fallbackMode : null)}
                 >
                   <span className="lander-picker-check" aria-hidden>{flowSelected ? '✓' : ''}</span>
                   <span className="lander-picker-name">{f.name}</span>
-                  {f.modes?.length > 0 && <span className="lander-picker-badge">{f.modes.length} modes</span>}
+                  {modes.length > 0 && <span className="lander-picker-badge">{modes.length} modes</span>}
                 </button>
                 {!flowsOnly && (f.modes ?? []).map(m => {
-                  const modeSelected = f.id === flowId && modeId === m.id;
+                  const modeSelected = f.id === flowId && (modeId ?? fallbackMode) === m.id;
                   const cfg = configs[f.id]?.find(c => c.id === m.id) ?? null;
                   return (
                     <button
@@ -146,6 +163,7 @@ function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef,
                       <span className="lander-picker-check" aria-hidden>{modeSelected ? '✓' : ''}</span>
                       <span className="lander-picker-name">
                         {m.name}
+                        {m.id === fallbackMode && <span className="lander-picker-default">default</span>}
                         {cfg?.badges?.length > 0 && (
                           <span className="lander-picker-badges">
                             {cfg.badges.slice(0, 3).map((b, i) => <span key={i} className="lander-picker-diff">{b}</span>)}
@@ -175,14 +193,32 @@ export default function Lander({
   declaredInputs = [], declaredValues, onDeclaredInput,
   models = [], activeModels = [],
   hasKey = true, claudeSubActive = false, onOpenSettings,
-  busy, inputRef, onSubmit, onOpenProject, onOpenFolder
+  busy, inputRef, onSubmit, onOpenProject, onOpenFolder,
+  submitKind = 'run', onSubmitKind = null,
+  queueLevel = 'low', onQueueLevel = null,
+  fallbackWorker = null, modelTiers = {}, defaultTier = 'standard', blockTiers = {}, authoredBlockTiers = {}, modelOverrides = {},
+  onDefaultTier = null, onStepTier = null, onModelTier = null,
+  onStepWorker = null, onResetStepWorker = null,
+  queueReceipt = null,
+  returnRun = null, onReturnRun = null,
 }) {
   const [text, setText] = useState('');
   const [configOpen, setConfigOpen] = useState(false);
+  const [modelsOpen, setModelsOpen] = useState(false);
   const localRef = useRef(null);
   const taRef = inputRef ?? localRef;
   const canRun = text.trim().length > 0 && !busy;
   const selectedFlow = flows.find(f => f.id === flowId) ?? null;
+  const selectedPreset = selectedWorkflowPreset(selectedFlow, modeId);
+  const selectedSteps = workflowSteps(selectedFlow, modeId);
+  const modelSteps = selectedSteps.filter(step => step.modelBacked !== false);
+  const queued = submitKind === 'loop';
+  const customModelCount = new Set([
+    ...Object.keys(blockTiers ?? {}), ...Object.keys(modelOverrides ?? {}),
+  ]).size;
+  const defaultWorker = workerForTier(modelTiers, defaultTier, fallbackWorker) ?? fallbackWorker;
+
+  useEffect(() => setModelsOpen(false), [flowId]);
 
   // Slot B falls back to slot A's flow (default mode) until the user repoints it.
   const bFlowId = slotB?.flowId ?? flowId;
@@ -262,7 +298,7 @@ export default function Lander({
           <div className="lander-composer-footer">
             {/* Workflow choice (L3 / T11). One chip normally; two slots (A vs B)
                 when Compare is on — each an independent flow+mode selection. */}
-            {compareOn ? (
+            {!queued && compareOn ? (
               <div className="lander-compare-slots">
                 <span className="compare-slot-label" aria-hidden>A</span>
                 <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow A" composerRef={taRef} configs={configs} />
@@ -270,7 +306,7 @@ export default function Lander({
                 <span className="compare-slot-label" aria-hidden>B</span>
                 <WorkflowPicker flows={flows} flowId={bFlowId} modeId={bModeId} onPick={onSelectB} ariaLabel="Workflow B" composerRef={taRef} configs={configs} />
               </div>
-            ) : (
+            ) : !queued ? (
               <div className="lander-workflow-group">
                 <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow" composerRef={taRef} configs={configs} flowsOnly={!canonicalWorkflows} />
                 {/* The cog is the "later stage" of choosing: which config of the
@@ -289,11 +325,19 @@ export default function Lander({
                   <span aria-hidden>⚙</span>
                 </button>}
               </div>
+            ) : (
+              <div className="lander-queue-level" role="group" aria-label="Starting effort">
+                <span>Starting effort</span>
+                {['low', 'medium', 'high'].map(level => (
+                  <button key={level} type="button" className={queueLevel === level ? 'active' : ''}
+                    aria-pressed={queueLevel === level} onClick={() => onQueueLevel?.(level)}>{level}</button>
+                ))}
+              </div>
             )}
 
             {/* Compare toggle (T11): splits the chip into A/B slots and fires two
                 runs from one prompt. Off by default — the common path is one run. */}
-            {onToggleCompare && (
+            {!queued && onToggleCompare && (
               <button
                 type="button"
                 className={'lander-compare-toggle' + (compareOn ? ' active' : '')}
@@ -306,21 +350,161 @@ export default function Lander({
               </button>
             )}
 
+            <div className="lander-submit-kind" role="group" aria-label="What should happen">
+              <button type="button" className={!queued ? 'active' : ''} aria-pressed={!queued}
+                onClick={() => onSubmitKind?.('run')} title="Run the selected workflow now and show its result here">Run now</button>
+              <button type="button" className={queued ? 'active' : ''} aria-pressed={queued}
+                onClick={() => onSubmitKind?.('loop')} title="Add this request to the Loop queue without running a workflow now">Add to Loop</button>
+            </div>
+
             <button
               type="button"
               className="lander-run primary"
               onClick={submit}
               disabled={!canRun}
             >
-              {busy ? 'Starting…' : compareOn ? 'Compare' : 'Run'}<kbd className="shortcut">↵</kbd>
+              {busy ? (queued ? 'Adding…' : 'Starting…') : queued ? 'Add task' : compareOn ? 'Compare' : 'Run'}<kbd className="shortcut">↵</kbd>
             </button>
           </div>
         </div>
 
+        {queued ? (
+          <section className="lander-run-preview queue" aria-label="Loop task summary">
+            <div className="lander-preview-head">
+              <div><span className="section-label">ADD TO LOOP</span><strong>Queue for unattended work</strong></div>
+              <span className="lander-preview-model">{queueLevel} effort</span>
+            </div>
+            <p>This creates one backlog task. It does not run the selected workflow or start the Loop.</p>
+            <div className="lander-preview-result"><span aria-hidden>→</span> The Loop claims it later, in an isolated worktree, and can escalate its effort if it fails.</div>
+          </section>
+        ) : selectedFlow ? (
+          <section className="lander-run-preview" aria-label="Selected workflow summary">
+            <div className="lander-preview-head">
+              <div>
+                <span className="section-label">RUN NOW</span>
+                <strong>{selectedFlow.name}{selectedPreset ? ` · ${selectedPreset.name}` : ''}</strong>
+              </div>
+              <span className="lander-preview-kind">Workflow</span>
+            </div>
+            <p>{selectedPreset?.description || selectedFlow.description}</p>
+            {selectedPreset?.id && effortCopy[selectedPreset.id] && <p className="lander-preview-effort">{effortCopy[selectedPreset.id]}</p>}
+            {selectedSteps.length > 0 && <div className="lander-preview-steps" aria-label="Workflow steps">
+              {selectedSteps.map((step, index) => <Fragment key={step.id}>
+                {index > 0 && <span className="lander-preview-arrow" aria-hidden>→</span>}
+                <span className={'lander-preview-step' + (step.checkpoint ? ' checkpoint' : '')}><strong>{step.title}</strong>
+                  {step.checkpoint
+                    ? <small>human approval</small>
+                    : <small>{WORKFLOW_MODEL_TIERS.find(tier => tier.id === step.modelTier)?.name ?? step.modelTier ?? step.effort ?? 'Workflow default'}</small>}
+                </span>
+              </Fragment>)}
+            </div>}
+            <div className="lander-model-bar">
+              <span className="lander-model-label">Model profile</span>
+              <select className="lander-tier-select" value={defaultTier} onChange={event => onDefaultTier?.(event.target.value)}
+                aria-label="Default workflow model profile">
+                {WORKFLOW_MODEL_TIERS.map(tier => {
+                  const worker = workerForTier(modelTiers, tier.id, fallbackWorker);
+                  const fallbacks = tier.id === 'free'
+                    ? Math.max(0, workersForTier(modelTiers, tier.id).length - 1)
+                    : 0;
+                  return <option key={tier.id} value={tier.id} disabled={!worker?.model}>
+                    {tier.name}{worker?.model
+                      ? tier.id === 'free' && fallbacks
+                        ? ` · ${workerLabel(worker)} + ${fallbacks} fallback${fallbacks === 1 ? '' : 's'}`
+                        : ` · ${workerLabel(worker)}`
+                      : ' · not configured'}
+                  </option>;
+                })}
+              </select>
+              <button type="button" className={'lander-model-tune' + (modelsOpen ? ' active' : '')}
+                onClick={() => setModelsOpen(open => !open)} aria-expanded={modelsOpen}>
+                Configure{customModelCount ? ` · ${customModelCount} assigned` : ''} <span aria-hidden>{modelsOpen ? '▴' : '▾'}</span>
+              </button>
+            </div>
+            {modelsOpen && <div className="lander-model-config">
+              <div className="lander-tier-head">
+                <div><strong>Model profiles</strong><small>Change a model once; every block using that profile follows. Profiles may share a model.</small></div>
+              </div>
+              <div className="lander-tier-grid" aria-label="Workflow model profiles">
+                {WORKFLOW_MODEL_TIERS.map(tier => {
+                  const freeCandidates = tier.id === 'free' ? workersForTier(modelTiers, 'free') : [];
+                  return <div className={'lander-tier-row' + (tier.id === 'free' ? ' free-chain' : '')} key={tier.id}>
+                    <span><strong>{tier.name}</strong><small>{tier.hint}</small></span>
+                    {tier.id === 'free' ? <div className="lander-free-chain">
+                      {freeCandidates.map((worker, index) => <div className="lander-free-candidate" key={`${worker.provider}/${worker.model}/${index}`}>
+                        <small>{index === 0 ? 'Primary' : `Fallback ${index}`}</small>
+                        <ModelPicker worker={worker} activeModels={activeModels}
+                          onChange={next => onModelTier?.('free', next, index)} idPrefix={`landing-tier-free-${index}`} />
+                        {index > 0 && <button type="button" className="link lander-free-remove"
+                          onClick={() => onModelTier?.('free', null, index)} aria-label={`Remove free fallback ${index}`}>Remove</button>}
+                      </div>)}
+                      {freeCandidates.length < 4 && <div className="lander-free-candidate add">
+                        <small>{freeCandidates.length ? `Fallback ${freeCandidates.length}` : 'Primary'}</small>
+                        <ModelPicker worker={null} activeModels={activeModels}
+                          onChange={next => onModelTier?.('free', next, freeCandidates.length)}
+                          idPrefix={`landing-tier-free-${freeCandidates.length}`}
+                          placeholder={freeCandidates.length ? 'Add free fallback' : 'Choose free model'} />
+                      </div>}
+                      <p>Tries these in order. It never falls through to a paid profile.</p>
+                    </div> : <ModelPicker worker={modelTiers?.[tier.id] ?? null} activeModels={activeModels}
+                      onChange={worker => onModelTier?.(tier.id, worker)} idPrefix={`landing-tier-${tier.id}`}
+                      placeholder={`Uses default · ${workerLabel(fallbackWorker)}`} />}
+                  </div>;
+                })}
+              </div>
+              {modelSteps.length > 0 && <>
+                <div className="lander-tier-head blocks"><div><strong>Blocks</strong><small>Pick a profile, or click the model badge for a one-off model.</small></div></div>
+                <div className="lander-step-models" aria-label="Models by workflow step">
+                  {modelSteps.map(step => {
+                    const custom = modelOverrides?.[step.id] ?? null;
+                    const assignedTier = blockTiers?.[step.id] ?? null;
+                    const authoredTier = authoredBlockTiers?.[step.id] ?? null;
+                    const tierId = assignedTier ?? authoredTier;
+                    const effective = custom
+                      ?? workerForTier(modelTiers, tierId ?? defaultTier, fallbackWorker)
+                      ?? defaultWorker;
+                    return <div className="lander-step-model" key={step.id}>
+                      <span className="lander-step-model-copy"><strong>{step.title}</strong><small>{step.effort ? `${step.effort} reasoning` : 'workflow step'}</small></span>
+                      <select value={custom ? 'custom' : (tierId ?? 'default')}
+                        onChange={event => event.target.value !== 'custom' && onStepTier?.(step.id, event.target.value === 'default' ? null : event.target.value)}
+                        aria-label={`${step.title} model profile`}>
+                        <option value="default">Workflow default</option>
+                        {WORKFLOW_MODEL_TIERS.map(tier => {
+                          const worker = workerForTier(modelTiers, tier.id, fallbackWorker);
+                          return <option key={tier.id} value={tier.id} disabled={!worker?.model}>{tier.name}</option>;
+                        })}
+                        {custom && <option value="custom">Specific model</option>}
+                      </select>
+                      <ModelBadge worker={effective} activeModels={activeModels}
+                        onChange={worker => onStepWorker?.(step.id, worker)}
+                        title={`${step.title}: ${custom ? 'specific model' : tierId ? `${tierId} profile` : 'workflow default'} — click for a one-off model`} />
+                      {(custom || assignedTier) && <button type="button" className="link lander-model-reset" onClick={() => onResetStepWorker?.(step.id)}>Reset</button>}
+                    </div>;
+                  })}
+                </div>
+              </>}
+            </div>}
+            <div className="lander-preview-result"><span aria-hidden>→</span> {workflowOutcome(selectedFlow)}. Loop queue writes are unavailable in this mode.</div>
+          </section>
+        ) : null}
+
+        {queueReceipt && (
+          <div className="lander-queue-receipt" role="status">
+            <span aria-hidden>✓</span><span><strong>{queueReceipt.title}</strong> added to Loop as <code>{queueReceipt.id}</code>. It has not started yet.</span>
+          </div>
+        )}
+
+        {returnRun && (
+          <button type="button" className="lander-return-run" onClick={onReturnRun}>
+            <span aria-hidden>↩</span><span><small>RETURN TO RUN</small><strong>{returnRun.name}</strong></span>
+            <span className="lander-return-stage">{returnRun.stage}</span>
+          </button>
+        )}
+
         {/* First-ever-launch (no key): a single quiet line under the composer,
             not a wall (§3). The run path still works for mock/no-file flows, so
             this informs rather than blocks. */}
-        {!hasKey && (
+        {!queued && !hasKey && (
           <div className="lander-hint">
             Add an OpenRouter key in{' '}
             <button type="button" className="link" onClick={onOpenSettings}>Settings</button>
@@ -330,7 +514,7 @@ export default function Lander({
 
         {/* Claude-subscription notice (DESIGN-SPEC.md §6): the user
             opted in, but each run should still say where its usage lands. */}
-        {claudeSubActive && (
+        {!queued && claudeSubActive && (
           <div className="lander-hint lander-hint-warn">
             <span aria-hidden>⚠</span> Runs may use your Claude subscription (via Claude Code) — plan limits apply.{' '}
             <button type="button" className="link" onClick={onOpenSettings}>Manage</button>

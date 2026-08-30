@@ -65,13 +65,22 @@ test('a model describes itself from the catalog, prices included', () => {
   assert.equal(e.action, 'pin');
 });
 
-test('a plugin that is not installed offers install, and one that is offers configure', () => {
+test('an installed plugin is managed, and one that is not is installed', () => {
   const [there, notThere] = fromPlugins([
-    { id: 'flyt-tools-repo', name: 'Repo tools', contributes: ['tools'], source: 'bundled' },
+    {
+      id: 'flyt-tools-repo', name: 'Repo tools', specifier: '@flyt/tools-repo',
+      contributes: ['tools'], source: 'bundle:@flyt/tools-repo', state: 'failed', builtin: false,
+    },
     { id: 'dsh-skill-badge', name: 'Skill badge', installed: false, contributes: ['skills'] },
   ]);
-  assert.equal(there.action, 'configure');
+  // One verb for every installed plugin, because which verbs a plugin can
+  // actually offer depends on state the catalog row does not carry — built-in,
+  // group, failed — and a button refused on press is worse than no button.
+  assert.equal(there.action, 'manage');
   assert.equal(notThere.action, 'install');
+  assert.equal(there.detail.state, 'failed', 'the row can say a plugin is broken without opening the manager');
+  assert.ok(there.tags.includes('@flyt/tools-repo'),
+    'the specifier is what somebody has in hand when they are looking for a package they installed');
 });
 
 test('a stack is opened, not inserted', () => {

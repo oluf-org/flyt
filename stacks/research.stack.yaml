@@ -18,6 +18,7 @@ blocks:
     use: flyt-blocks-core:research
     title: Look it up
     config:
+      modelTier: standard
       effect: artifact
       instructions: |
         Answer the question from pages you actually opened. Search first, then

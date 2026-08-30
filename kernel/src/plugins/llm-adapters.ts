@@ -148,24 +148,47 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
   if (typeof config?.resolve !== 'function') throw new Error('flyt-adapters needs a model resolver');
 
   const complete = async (request: LlmRequest, onText?: (t: string) => void): Promise<LlmResponse> => {
-    const source = config.resolve(request.model);
-    if (!source?.provider) {
-      throw new Error(`No connected provider can serve "${request.model}".`);
+    const candidates = [request.model, ...(request.fallbackModels ?? [])]
+      .filter((model, index, all) => Boolean(model) && all.indexOf(model) === index);
+    let source: ReturnType<ResolveSource> = null;
+    let answered: Awaited<ReturnType<CallModel>> | null = null;
+    let fallbackReason = '';
+    let lastFailure: unknown = null;
+
+    for (let index = 0; index < candidates.length; index++) {
+      const candidate = candidates[index];
+      let emittedText = false;
+      try {
+        source = config.resolve(candidate);
+        if (!source?.provider) {
+          throw new Error(`No connected provider can serve "${candidate}".`);
+        }
+        answered = await config.callModel({
+          provider: source.provider,
+          model: source.model,
+          messages: request.messages,
+          ...(source.apiKey ? { apiKey: source.apiKey } : {}),
+          ...(source.keyKind ? { keyKind: source.keyKind } : {}),
+          ...(source.cliHome ? { cliHome: source.cliHome } : {}),
+          ...(source.cliPath ? { cliPath: source.cliPath } : {}),
+          ...(toolsFor(request) ? { tools: toolsFor(request) } : {}),
+          ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),
+          ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+          ...(request.signal ? { signal: request.signal } : {}),
+          ...(onText ? { onText: (text: string) => { emittedText = true; onText(text); } } : {}),
+        });
+        if (index > 0) {
+          fallbackReason = `the configured Free fallback ${candidate} answered after ${index} earlier candidate${index === 1 ? '' : 's'} failed before output`;
+        }
+        break;
+      } catch (error) {
+        lastFailure = error;
+        // Never combine text from two models in one visible stream, and never
+        // turn an explicit cancellation into another provider call.
+        if (emittedText || request.signal?.aborted || index === candidates.length - 1) throw error;
+      }
     }
-    const answered = await config.callModel({
-      provider: source.provider,
-      model: source.model,
-      messages: request.messages,
-      ...(source.apiKey ? { apiKey: source.apiKey } : {}),
-      ...(source.keyKind ? { keyKind: source.keyKind } : {}),
-      ...(source.cliHome ? { cliHome: source.cliHome } : {}),
-      ...(source.cliPath ? { cliPath: source.cliPath } : {}),
-      ...(toolsFor(request) ? { tools: toolsFor(request) } : {}),
-      ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),
-      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-      ...(request.signal ? { signal: request.signal } : {}),
-      ...(onText ? { onText } : {}),
-    });
+    if (!answered || !source) throw lastFailure ?? new Error(`No connected provider can serve "${request.model}".`);
 
     const calls = answered.message?.tool_calls ?? [];
     return {
@@ -184,7 +207,7 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
       } : {}),
       finishReason: finishOf(answered.finishReason),
       ...(usageFrom(answered.usage) ? { usage: usageFrom(answered.usage) } : {}),
-      route: routeOf(request.model, answered, source.reason ?? ''),
+      route: routeOf(request.model, answered, fallbackReason || source.reason || ''),
     };
   };
 

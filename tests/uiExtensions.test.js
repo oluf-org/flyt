@@ -198,14 +198,22 @@ blocks:
       vite.ssrLoadModule('/src/v2/Shell.jsx'),
       vite.ssrLoadModule('/src/v2/Trace.jsx'),
     ]);
+    // Build with no workflow addressed is its gallery; the editor is what a
+    // workflow address opens. Both are asserted, because the second used to be
+    // the only view Build had.
+    const galleryHtml = renderToStaticMarkup(React.createElement(Shell, {
+      location: { dest: 'build', run: null, workflow: null }, build: emptySurface,
+    }));
+    assert.match(galleryHtml, /This project has no workflows/,
+      'a project with no stacks lands on the gallery saying so, not on an empty editor');
     const emptyHtml = renderToStaticMarkup(React.createElement(Shell, {
-      location: { dest: 'build', run: null }, build: emptySurface,
+      location: { dest: 'build', run: null, workflow: 'ui-proof' }, build: emptySurface,
     }));
     assert.match(emptyHtml, /CLEAN SLATE/,
       'the untouched production snapshot renders the explicit no-stack state before geometry');
     assert.doesNotMatch(emptyHtml, /Plugin prompt/);
     const buildHtml = renderToStaticMarkup(React.createElement(Shell, {
-      location: { dest: 'build', run: null }, build: surface,
+      location: { dest: 'build', run: null, workflow: 'ui-proof' }, build: surface,
     }));
     assert.match(buildHtml, /Plugin prompt/);
     assert.match(buildHtml, /data-plugin="example.ui.plugin"/);

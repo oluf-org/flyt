@@ -47,7 +47,7 @@ export interface SessionHandle {
    * a synthetic never-returned result rather than being dropped, because a
    * dropped call is how a resumed conversation silently changes shape.
    */
-  deriveMessages(upTo?: number): Promise<Message[]>;
+  deriveMessages(upTo?: number, blockId?: string): Promise<Message[]>;
   /** The highest seq written. 0 for an empty log. */
   head(): Promise<number>;
 }

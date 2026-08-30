@@ -5,7 +5,10 @@ import './workStyles.css';
 
 function blockNodes(node, out = []) {
   if (!node) return out;
-  if (node.kind === 'block') out.push(node);
+  if (node.kind === 'block') {
+    out.push(node);
+    for (const child of node.generated ?? []) blockNodes(child, out);
+  }
   else {
     for (const child of node.children ?? []) blockNodes(child, out);
     if (node.kind === 'if') for (const child of node.else ?? []) blockNodes(child, out);
@@ -23,7 +26,7 @@ function Interaction({ interaction, onDecide, onAnswer }) {
     </div></section>;
   return <section className="work-interaction question" aria-live="assertive"><span className="section-label">Question · {interaction.blockId}</span>
     <h3>{interaction.question}</h3>{interaction.context && <p>{interaction.context}</p>}{interaction.options?.length > 0 && <div className="work-options">
-      {interaction.options.map(option => <button key={option} onClick={() => setAnswer(option)} className={answer === option ? 'active' : ''}>{option}</button>)}</div>}
+      {interaction.options.map(option => <button key={option} onClick={() => onAnswer?.(option)}>{option}</button>)}</div>}
     <textarea rows="3" value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Answer this block directly" />
     <button className="work-allow" disabled={!answer.trim()} onClick={() => onAnswer?.(answer)}>Send answer to block</button></section>;
 }
@@ -56,15 +59,23 @@ function DetailsRail({ watching, view, runs, onOpenRun }) {
 export default function Work({
   stack = null, blocks = null, trace = null, runId = null, composer = null, snapshot = null,
   interaction = null, onDecide = null, onAnswer = null, onReply = null, replyBusy = false,
-  runs = [], onOpenRun = null,
+  runs = [], onOpenRun = null, onNewChat = null, onOpenFlow = null,
 }) {
   const view = runView(trace);
   const [reply, setReply] = useState('');
+  const runModels = useMemo(() => [...new Set((trace?.turns ?? []).flatMap(turn => (
+    (turn.steps ?? []).map(step => step.request?.model).filter(Boolean)
+  )))], [trace]);
   const summary = snapshot?.conversation?.filter(turn => turn.role === 'assistant').at(-1) ?? null;
   const runModel = { ...view, summary: summary?.text ?? null, input: snapshot?.meta?.userMessage ?? snapshot?.prompt ?? '' };
   if (!stack) return <div className="v2-work" data-v2>{composer}<p className="muted work-empty">Choose a workflow and send a message to start.</p></div>;
-  return <div className="v2-work work-run-mode" data-v2><header className="work-run-head"><div><span className="section-label">{view.running ? 'Block run' : 'Run'}</span>
-    <h1>{stack.name ?? stack.id}</h1></div><span className={`work-stage stage-${view.stage}`}>{view.stage ?? 'starting'}</span><code>{runId}</code></header>
+  return <div className="v2-work work-run-mode" data-v2><header className="work-run-head">
+    <button type="button" className="work-new-chat" onClick={onNewChat}><span aria-hidden>＋</span> New chat</button>
+    <div className="work-run-title"><span className="section-label">{view.running ? 'Block run' : 'Run'}</span><h1>{stack.name ?? stack.id}</h1></div>
+    {runModels.length > 0 && <div className="work-run-models" title="Models actually requested by this run"><span>Models</span>{runModels.map(model => <code key={model}>{model}</code>)}</div>}
+    <span className={`work-stage stage-${view.stage}`}>{view.stage ?? 'starting'}</span>
+    <button type="button" className="work-open-flow" onClick={onOpenFlow} title="Open this workflow in Build; Work returns to this same run">Open flow</button>
+    <code className="work-run-id">{runId}</code></header>
     {view.error && <p className="work-error" role="alert">{view.error}</p>}
     {summary?.degraded && <p className="work-warning" role="status">Conversation summary used the deterministic fallback{summary.reason ? `: ${summary.reason}` : '.'}</p>}
     <div className="work-run-grid"><RunRail stack={stack} view={view}/><main className="work-run-main">

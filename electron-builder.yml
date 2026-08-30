@@ -5,6 +5,7 @@ appId: com.olaaxe.flyt
 productName: Flyt
 directories:
   output: release
+beforePack: scripts/build-before-pack.mjs
 afterPack: scripts/verify-packaged-app.mjs
 files:
   - dist/**

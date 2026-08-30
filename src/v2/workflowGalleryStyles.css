@@ -1,0 +1,121 @@
+/* Build's landing. A page like the Library page: real header, room to read, the
+   same measured type scale. Cards rather than rows because a workflow carries
+   four things worth seeing at once — what it is, what it costs in steps, which
+   modes it has, and when it last changed. */
+
+.workflow-gallery {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: clamp(20px, 3vw, 34px) clamp(20px, 4vw, 44px) clamp(28px, 4vw, 48px);
+  background:
+    radial-gradient(circle at 88% -6%, var(--accent-soft), transparent 26%),
+    var(--canvas);
+  color: var(--tx);
+}
+.workflow-gallery > * { width: min(1180px, 100%); margin-inline: auto; }
+.workflow-gallery button, .workflow-gallery input { font: inherit; }
+.wg-icon { flex: none; }
+
+.wg-head { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; }
+.wg-eyebrow { margin: 0; color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+.wg-head h1 { margin: 6px 0 0; font-size: clamp(22px, 2.6vw, 30px); font-weight: 600; line-height: 1.1; letter-spacing: -.025em; }
+.wg-lede { max-width: 62ch; margin: 8px 0 0; color: var(--dim); font-size: 13px; line-height: 1.6; }
+.wg-head-acts { flex: none; display: flex; align-items: center; gap: 10px; }
+
+.wg-search { display: flex; align-items: center; gap: 8px; padding: 7px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); color: var(--faint); }
+.wg-search input { width: 200px; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--tx); font-size: 12.5px; }
+.wg-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.wg-new, .wg-solid, .wg-ghost {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  border-radius: 8px; padding: 8px 13px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--card); color: var(--tx);
+  font-size: 12.5px; font-weight: 600;
+  transition: background-color .16s var(--spring), border-color .16s var(--spring), transform .16s var(--spring);
+}
+.wg-new, .wg-solid { background: var(--accent); border-color: var(--accent); color: #fff; }
+.wg-new:hover, .wg-solid:hover { filter: brightness(1.06); }
+.wg-ghost:hover { background: var(--side); }
+.wg-new:disabled, .wg-solid:disabled { opacity: .45; cursor: default; filter: none; }
+.wg-new:focus-visible, .wg-solid:focus-visible, .wg-ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wg-solid.big { padding: 10px 18px; font-size: 13px; }
+
+.wg-error { margin: 0; padding: 9px 14px; border: 1px solid var(--err); border-radius: 10px; background: var(--err-soft); color: var(--err); font-size: 12px; }
+.wg-none { margin: 0; color: var(--dim); font-size: 13px; }
+
+.wg-body { display: flex; flex-direction: column; gap: 26px; }
+
+.wg-section > header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--divider); }
+.wg-section > header h2 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--tx); }
+.wg-section > header p { margin: 0; flex: 1; min-width: 0; color: var(--faint); font-size: 11.5px; }
+.wg-section > header span { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+.wg-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(288px, 1fr)); }
+
+.wg-card {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: 13px; background: var(--card);
+  box-shadow: var(--shadow-rest); overflow: hidden;
+  transition: border-color .18s var(--spring), box-shadow .18s var(--spring), transform .18s var(--spring);
+}
+.wg-card:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); box-shadow: var(--shadow-float); transform: translateY(-1px); }
+.wg-card.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.wg-card.broken { border-color: var(--err); }
+
+/* The whole body is the open affordance: a card you must aim at a small link
+   inside of is a card that reads as a list row wearing a border. */
+.wg-card-open {
+  flex: 1; display: flex; flex-direction: column; gap: 7px;
+  padding: 15px 15px 13px; border: 0; background: transparent; color: inherit;
+  text-align: left; cursor: pointer;
+}
+.wg-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.wg-card-open > header { display: flex; align-items: center; gap: 8px; }
+.wg-card-open h3 { margin: 0; font-size: 14.5px; font-weight: 600; letter-spacing: -.01em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.wg-open-badge { flex: none; padding: 2px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.wg-card-id { font: 10.5px var(--mono, ui-monospace, monospace); color: var(--faint); }
+.wg-card-desc { margin: 0; color: var(--dim); font-size: 12px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.wg-card-error { margin: 0; display: flex; align-items: flex-start; gap: 6px; color: var(--err); font-size: 11.5px; line-height: 1.45; }
+
+.wg-modes { display: flex; flex-wrap: wrap; gap: 5px; margin: 3px 0 0; }
+.wg-modes.none { color: var(--faint); font-size: 11px; }
+.wg-mode { display: inline-flex; align-items: center; gap: 5px; padding: 2.5px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--side); color: var(--dim); font-size: 11px; }
+.wg-mode.is-default { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.wg-mode em { font-style: normal; font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; opacity: .8; }
+
+.wg-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px 9px 15px; border-top: 1px solid var(--divider); background: color-mix(in srgb, var(--side) 55%, transparent); }
+.wg-card-meta { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.wg-card-acts { display: flex; align-items: center; gap: 6px; }
+.wg-card-acts .wg-ghost, .wg-card-acts .wg-solid { padding: 5px 10px; font-size: 11.5px; }
+
+.wg-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: clamp(28px, 5vw, 52px); border: 1px dashed var(--border); border-radius: 14px; background: var(--card); }
+.wg-empty h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.wg-empty p { margin: 0; color: var(--dim); font-size: 13px; }
+.wg-empty .wg-solid { margin-top: 10px; }
+
+.wg-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, var(--canvas) 62%, transparent); backdrop-filter: blur(3px); }
+.wg-dialog {
+  width: min(430px, 100%); display: flex; flex-direction: column; gap: 9px;
+  padding: 20px; border: 1px solid var(--border); border-radius: 14px;
+  background: var(--card); box-shadow: var(--shadow-selected);
+}
+.wg-dialog h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.015em; }
+.wg-dialog-copy { margin: 0 0 4px; color: var(--dim); font-size: 12px; line-height: 1.55; }
+.wg-dialog label { display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--dim); }
+.wg-dialog label small { font-weight: 400; color: var(--faint); }
+.wg-dialog input { padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--canvas); color: var(--tx); font-size: 13px; font-weight: 400; }
+.wg-dialog input:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.wg-dialog-error { margin: 0; color: var(--err); font-size: 11.5px; }
+.wg-dialog-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+
+@media (max-width: 860px) {
+  .wg-head { flex-direction: column; align-items: stretch; gap: 14px; }
+  .wg-head-acts { justify-content: space-between; }
+  .wg-search input { width: 100%; }
+  .wg-search { flex: 1; }
+}
