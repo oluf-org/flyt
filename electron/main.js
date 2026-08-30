@@ -309,7 +309,14 @@ ipcMain.handle('v2:build', async () => {
   const host = await v2Host();
   return host ? { ...host.bridge.build(), pluginReview: publicPluginReview() } : null;
 });
+let lastRendererDiagnostic = { signature: '', at: 0 };
 ipcMain.handle('diagnostics:renderer', (_event, details = null) => {
+  const signature = (() => { try { return JSON.stringify(details); } catch { return String(details); } })();
+  const now = Date.now();
+  if (signature === lastRendererDiagnostic.signature && now - lastRendererDiagnostic.at < 5_000) {
+    return { ok: true, deduped: true, file: diagnostics.file };
+  }
+  lastRendererDiagnostic = { signature, at: now };
   diagnostics.error('renderer.error', details);
   return { ok: true, file: diagnostics.file };
 });
@@ -1116,16 +1123,37 @@ function setupAutoUpdate() {
 }
 
 app.whenReady().then(() => { createWindow(); setupAutoUpdate(); });
-app.on('before-quit', () => {
-  detachV2UiExtensions?.();
-  detachV2UiExtensions = null;
-  detachV2PluginReviews?.();
-  detachV2PluginReviews = null;
-  detachV2Plugins?.();
-  detachV2Plugins = null;
-  v2BuildController?.dispose?.();
-  v2BuildController = null;
-  void v2HostPromise?.then(host => host?.booted.dispose());
+let quitCleanupStarted = false;
+let quitCleanupFinished = false;
+app.on('before-quit', event => {
+  if (quitCleanupFinished) return;
+  event.preventDefault();
+  if (quitCleanupStarted) return;
+  quitCleanupStarted = true;
+  const cleanup = async () => {
+    await api.shutdown('application closing');
+    detachV2UiExtensions?.();
+    detachV2UiExtensions = null;
+    detachV2PluginReviews?.();
+    detachV2PluginReviews = null;
+    detachV2Plugins?.();
+    detachV2Plugins = null;
+    v2BuildController?.dispose?.();
+    v2BuildController = null;
+    await v2HostPromise?.then(host => host?.booted.dispose());
+  };
+  // Never turn graceful shutdown into an app that cannot be closed. Calls get
+  // their abort signal immediately; two seconds is only for the durable unwind
+  // and plugin disposal to finish.
+  let quitTimeoutId;
+  const timeout = new Promise(resolve => { quitTimeoutId = setTimeout(resolve, 2_000); });
+  void Promise.race([cleanup(), timeout])
+    .catch(error => diagnostics.error('process.shutdown', error))
+    .finally(() => {
+      clearTimeout(quitTimeoutId);
+      quitCleanupFinished = true;
+      app.quit();
+    });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

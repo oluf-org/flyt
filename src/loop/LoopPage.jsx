@@ -166,6 +166,7 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
       // belongs to the run view, and mirroring it here would be a second copy
       // of every buffer in the app.
       if (!held) return;
+      if (!payload.full && !payload.patch) return;
       const next = applyPatch(held, payload);
       if (next.refetch) {
         window.flyt.getSnapshot(projectId, runId)

@@ -39,6 +39,7 @@
 .work-details-tabs button { border: 0; padding: 6px; background: transparent; color: var(--faint); text-transform: capitalize; font-size: 11px; cursor: pointer; border-radius: 6px; }.work-details-tabs button.active { color: var(--tx); background: var(--card); }
 .work-log, .work-results, .work-runs { min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 9px; }
 .work-open-trace { border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; background: var(--card); color: var(--tx); cursor: pointer; }
+.work-show-earlier { border: 1px dashed var(--border); border-radius: 6px; padding: 7px 9px; background: transparent; color: var(--dim); cursor: pointer; }
 .work-query { border: 1px solid var(--border); border-radius: 7px; background: var(--card); }
 .work-query > summary { display: flex; justify-content: space-between; gap: 8px; padding: 9px; color: var(--faint); font-size: 9px; cursor: pointer; }
 .work-query-body { display: grid; gap: 8px; padding: 0 9px 9px; }

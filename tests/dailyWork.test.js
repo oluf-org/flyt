@@ -12,7 +12,7 @@ import { runView } from '../src/v2/runView.js';
 import { traceView } from '../src/v2/traceView.js';
 import { INITIAL, MODELS } from '../src/v2/shellRouting.js';
 import {
-  DAILY_PROJECT_ACTIONS, dailyProjectBridge, launchDailyPrompt, subscribeDailyRun,
+  DAILY_PROJECT_ACTIONS, applyDailyRunUpdate, dailyProjectBridge, launchDailyPrompt, subscribeDailyRun,
 } from '../src/v2/dailyWorkBridge.js';
 
 const snapshot = {
@@ -194,4 +194,31 @@ test('live updates refresh only the run Work is actually following', async () =>
   assert.equal(seen.at(-1).runId, 'run-1');
   unsubscribe();
   assert.equal(unsubscribed, true);
+});
+
+test('canonical event and snapshot deltas update Work without rereading the run', async () => {
+  const canonical = watchingFromRun('run-1', { ...snapshot, rev: 4 }, [
+    { seq: 1, at: 't1', type: 'run.created', data: { runId: 'run-1' } },
+    { seq: 2, at: 't2', type: 'turn.start', data: { runId: 'run-1', turn: 1, blockId: 'fix' } },
+    { seq: 3, at: 't3', type: 'step.start', data: { runId: 'run-1', blockId: 'fix', step: 1 } },
+    { seq: 4, at: 't4', type: 'llm.request', data: { callId: 'c1', blockId: 'fix', model: 'fast' } },
+  ]);
+  const streamed = applyDailyRunUpdate(canonical, {
+    runId: 'run-1', events: [{ seq: 5, at: 't5', type: 'llm.stream', data: { callId: 'c1', text: 'live' } }],
+  });
+  assert.equal(streamed.resync, false);
+  assert.equal(streamed.watching.cursor, 5);
+  assert.equal(traceView(streamed.watching.trace).turns[0].steps[0].request.content, 'live');
+
+  const patched = applyDailyRunUpdate(streamed.watching, {
+    runId: 'run-1', base: 4, rev: 5, patch: { meta: { ...snapshot.meta, stage: 'done' } },
+  });
+  assert.equal(patched.resync, false);
+  assert.equal(patched.watching.snapshot.rev, 5);
+  assert.equal(patched.watching.snapshot.meta.stage, 'done');
+
+  const missed = applyDailyRunUpdate(patched.watching, {
+    runId: 'run-1', events: [{ seq: 7, at: 't7', type: 'turn.end', data: {} }],
+  });
+  assert.equal(missed.resync, true, 'a sequence gap is repaired with one explicit resync');
 });

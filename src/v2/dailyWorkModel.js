@@ -103,7 +103,10 @@ function modelEvents(log, runId, startSeq) {
 export function watchingFromRun(runId, snapshot, log = []) {
   if (!runId || !snapshot || snapshot.retired) return null;
   if (Array.isArray(log) && log.some(event => event?.type === 'run.created')) {
-    return { runId, stack: stackFromSnapshot(snapshot), trace: foldTrace(log), snapshot };
+    const cursor = log.reduce((highest, event) => (
+      Number.isFinite(event?.seq) ? Math.max(highest, event.seq) : highest
+    ), 0);
+    return { runId, stack: stackFromSnapshot(snapshot), trace: foldTrace(log), snapshot, cursor };
   }
   const events = [];
   let seq = 1;
@@ -135,7 +138,10 @@ export function watchingFromRun(runId, snapshot, log = []) {
     events.push({ seq: seq++, at, type: 'run.error', data: { error: String(snapshot.meta.error) } });
   }
   events.push({ seq: seq++, at, type: 'run.stage', data: { stage } });
-  return { runId, stack: stackFromSnapshot(snapshot), trace: foldTrace(events), snapshot };
+  // Legacy daily runs have no canonical event cursor. Their model-call trace
+  // is synthesized from run.log, so a live snapshot update must still resync
+  // both sources instead of attempting to append kernel events.
+  return { runId, stack: stackFromSnapshot(snapshot), trace: foldTrace(events), snapshot, cursor: null };
 }
 
 export function initialFlowId(flows, saved = null) {

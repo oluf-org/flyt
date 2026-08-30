@@ -56,6 +56,7 @@ export default function CompareRun({
       const { runId } = payload;
       if (payload.projectId && payload.projectId !== projectId) return;
       if (!runIds.includes(runId)) return;
+      if (!payload.full && !payload.patch) return;
       const cur = snapsRef.current[runId];
       if (payload.full) {
         setSnaps(prev => ({ ...prev, [runId]: { ...payload.full, rev: payload.rev } }));

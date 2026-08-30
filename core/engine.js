@@ -591,11 +591,12 @@ export function createEngine({
   // monotonic rev, and push only the diff. The consumer applies patches on top
   // of the full snapshot it fetched via run:snapshot; the rev/base pair lets it
   // detect a missed update and resync.
-  const pushState = new Map(); // projectId -> { pending, channels, lastActivity, activityTimer }
+  const pushState = new Map(); // projectId -> { pending, eventJobs, channels, lastActivity, activityTimer }
   const pushStateFor = projectId => {
     let s = pushState.get(projectId);
     if (!s) pushState.set(projectId, s = {
       pending: new Map(),   // runId -> serialized snapshot job
+      eventJobs: new Map(), // runId -> buffered canonical session events
       channels: new Map(),  // runId -> { snapshot, rev }
       lastActivity: null,
       activityTimer: null
@@ -702,10 +703,37 @@ export function createEngine({
   const pushUpdateFor = projectId => pushSnapshotFor(
     projectId, runId => registry.get(projectId).store.snapshot(runId)
   );
+
+  // Canonical kernel events already contain the exact live delta Trace needs.
+  // Forward them in small batches instead of rebuilding, diffing and then
+  // re-reading an ever-growing snapshot and log for every stream notification.
+  const pushEventsFor = projectId => (runId, event) => {
+    if (!runId || !event || !Number.isFinite(event.seq) || !canEmit()) return;
+    const s = pushStateFor(projectId);
+    let job = s.eventJobs.get(runId);
+    if (!job) {
+      job = { events: [], timer: null };
+      s.eventJobs.set(runId, job);
+    }
+    job.events.push(event);
+    if (job.timer) return;
+    job.timer = setTimeout(() => {
+      job.timer = null;
+      if (pushState.get(projectId) !== s || !canEmit() || !shouldPush(projectId)) {
+        job.events.length = 0;
+        s.eventJobs.delete(runId);
+        return;
+      }
+      const events = job.events.splice(0);
+      if (events.length) emit('run:update', { projectId, runId, events });
+      if (!job.events.length) s.eventJobs.delete(runId);
+    }, PUSH_COALESCE_MS);
+  };
   const dropPushState = projectId => {
     const s = pushState.get(projectId);
     if (!s) return;
     for (const job of s.pending.values()) if (job.timer) clearTimeout(job.timer);
+    for (const job of s.eventJobs.values()) if (job.timer) clearTimeout(job.timer);
     if (s.activityTimer) clearTimeout(s.activityTimer);
     pushState.delete(projectId);
   };
@@ -852,7 +880,8 @@ export function createEngine({
     hasKey, subscriptionStatus, resolveModelSource, capabilityCache,
     capabilityProbe: effectiveCapabilityProbe, effectiveSafetyModel,
     // Push
-    pushStateFor, broadcastActivity, pushUpdateFor, pushSnapshotFor, emitLoop, loopLog, loopLogFor, emitChat, emitWorkflow,
+    pushStateFor, broadcastActivity, pushUpdateFor, pushSnapshotFor, pushEventsFor,
+    emitLoop, loopLog, loopLogFor, emitChat, emitWorkflow,
     // A project id that is gone for good (an appdata project adopted into a
     // real folder) takes its push channels with it.
     dropPushState,

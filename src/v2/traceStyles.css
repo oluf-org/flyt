@@ -18,6 +18,7 @@
   margin: 0 0 10px;
   color: var(--dim);
 }
+.tr-show-earlier { width: 100%; margin: 0 0 8px; padding: 7px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--dim); cursor: pointer; }
 
 .tr-empty { color: var(--dim); }
 .tr-empty .section-label { display: block; margin-bottom: 6px; }

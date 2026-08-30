@@ -30,6 +30,7 @@ import { loadToolSuite, runToolSuite, SUITE_DIR } from './toolbench.js';
 import {
   bootLoopKernel, startStackRun, stopStackRun, resumeStackRun,
   restartStackBlock, snapshotStackRun, snapshotStoredStackRun, storedStackRunMetadata, isKernelRun,
+  SNAPSHOT_UPDATE_EVENTS,
 } from './kernelRunner.js';
 import { StackStore } from './stackstore.js';
 import { summarizeWorkflowRun } from './conversationSupervisor.js';
@@ -198,8 +199,9 @@ export function createApi(engine) {
       // than coupling delivery to host lifetime; this also preserves the final
       // done/failed transition during teardown.
       const pushKernelUpdate = engine.pushSnapshotFor(entry.id, runId => (
-        snapshotStoredStackRun(entry.store.rootDir, runId, composed?.kernelModule)
+        snapshotStoredStackRun(entry.store.rootDir, runId, composed?.kernelModule, { materialise: false })
       ));
+      const pushKernelEvents = engine.pushEventsFor(entry.id);
       host = await bootLoopKernel({
         runsRoot: entry.store.rootDir,
         workspaceDir: workspace,
@@ -225,7 +227,14 @@ export function createApi(engine) {
         askHuman,
         askBlock,
         requireLaunchable,
-        onSessionEvent: runId => pushKernelUpdate(runId),
+        onSessionEvent: (runId, event) => {
+          pushKernelEvents(runId, event);
+          // Stream and step detail changes Trace only and is already delivered
+          // above. Rebuild the compatibility snapshot only at events that can
+          // actually alter Work, keeping the live cost proportional to useful
+          // state changes rather than model token count.
+          if (!event?.type || SNAPSHOT_UPDATE_EVENTS.has(event.type)) pushKernelUpdate(runId);
+        },
         ...(engine.kernelCallModel ? { call: engine.kernelCallModel } : {}),
       });
       composed = host;
@@ -2335,5 +2344,29 @@ export function createApi(engine) {
     status: projectId => supervisors.get(projectId)?.status() ?? null
   });
 
-  return { commands, invoke, names: () => Object.keys(commands) };
+  /**
+   * Signal every process-owned run before a desktop/server host exits. The
+   * durable unwind continues through the same public stop paths as a user
+   * request, including aborting active provider and CLI calls.
+   */
+  async function shutdown(reason = 'application closing') {
+    for (const supervisor of supervisors.values()) {
+      try { if (supervisor?.running) supervisor.stop(reason); } catch { /* continue with owned runs */ }
+    }
+    const stops = [];
+    for (const project of registry.listOpen()) {
+      let entry;
+      try { entry = registry.get(project.id); } catch { continue; }
+      for (const runId of entry.runner?.live ?? []) {
+        try { entry.runner.stop(runId); } catch { /* another stop may have won */ }
+      }
+      for (const [runId, host] of entry.kernelRuns ?? []) {
+        stops.push(Promise.resolve(host?.ctx?.agents?.stop(runId, reason)).catch(() => false));
+      }
+    }
+    await Promise.allSettled(stops);
+    return { stopped: stops.length };
+  }
+
+  return { commands, invoke, shutdown, names: () => Object.keys(commands) };
 }

@@ -222,3 +222,23 @@ test('a transient async snapshot failure retries without another notification', 
   assert.equal(calls, 2);
   assert.equal(update.payload.full.meta.stage, 'done');
 });
+
+test('canonical run events are coalesced and do no snapshot work', async () => {
+  const events = [];
+  const { engine, dataRoot } = makeEngine({ emit: (type, payload) => events.push({ type, payload }) });
+  const workspace = path.join(dataRoot, 'work');
+  fs.mkdirSync(workspace, { recursive: true });
+  const { project } = engine.registry.open(workspace);
+  const push = engine.pushEventsFor(project.id);
+  push('kernel-run', { seq: 1, type: 'turn.start', data: {} });
+  push('kernel-run', { seq: 2, type: 'llm.stream', data: { text: 'a' } });
+  push('kernel-run', { seq: 3, type: 'llm.stream', data: { text: 'b' } });
+
+  const update = await waitFor(() => events.find(event => event.type === 'run:update'), {
+    label: 'coalesced canonical events',
+  });
+  assert.deepEqual(update.payload.events.map(event => event.seq), [1, 2, 3]);
+  assert.equal(update.payload.full, undefined);
+  assert.equal(update.payload.patch, undefined);
+  assert.equal(engine.pushStateFor(project.id).pending.size, 0);
+});

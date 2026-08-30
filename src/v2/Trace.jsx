@@ -14,7 +14,7 @@
 // unfinished rather than as empty, and a result is shown whole rather than
 // previewed — the one time a preview is not enough is the time somebody came
 // here.
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { traceView } from './traceView.js';
 import { duration } from './traceView.js';
 import { ToolContributionView, PluginContributionSection } from './PluginContributionView.jsx';
@@ -182,12 +182,26 @@ function Turn({ turn, uiExtensions }) {
   );
 }
 
+function OtherEvents({ events }) {
+  const [open, setOpen] = useState(false);
+  return <details className="tr-others" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary>{events.length} event(s) this surface does not have a shape for</summary>
+    {/* JSON formatting a large plugin payload is intentionally deferred until
+        the person opens it; collapsed details still mount their children. */}
+    {open && <Pre value={events} />}
+  </details>;
+}
+
+const TURN_PAGE = 50;
+
 /**
  * @param trace — a folded trace from `src/traceModel.js`, live or finished.
  * @param runId — which run this is the record of.
  */
 export default function Trace({ trace = null, runId = null, uiExtensions = [] }) {
-  const view = traceView(trace);
+  const view = useMemo(() => traceView(trace), [trace]);
+  const [visibleTurns, setVisibleTurns] = useState(TURN_PAGE);
+  useEffect(() => setVisibleTurns(TURN_PAGE), [runId]);
   if (!view.turns.length) {
     return (
       <div className="tr-empty" role="status">
@@ -207,21 +221,17 @@ export default function Trace({ trace = null, runId = null, uiExtensions = [] })
         {view.costUsd != null ? ` · ${money(view.costUsd)}` : ''}
         {view.unfinished ? ' · still going' : ''}
       </p>
-      {view.turns.map(turn => <Turn key={turn.id} turn={turn} uiExtensions={uiExtensions} />)}
+      {view.turns.length > visibleTurns && <button type="button" className="tr-show-earlier"
+        onClick={() => setVisibleTurns(count => count + TURN_PAGE)}>
+        Show {Math.min(TURN_PAGE, view.turns.length - visibleTurns)} earlier turns
+      </button>}
+      {view.turns.slice(-visibleTurns).map(turn => <Turn key={turn.id} turn={turn} uiExtensions={uiExtensions} />)}
       {uiExtensions.filter(row => row?.contribution?.point === 'trace-decoration'
         && view.others.some(event => event?.event === row.contribution.event)).map(row =>
           <PluginContributionSection key={`${row.pluginId}:${row.contribution.id}`}
             contribution={row.contribution} pluginId={row.pluginId}
             label={`${row.contribution.event} trace decoration`} />)}
-      {view.others.length > 0 && (
-        <details className="tr-others">
-          <summary>{view.others.length} event(s) this surface does not have a shape for</summary>
-          {/* A plugin's own events are still this run's record. Hiding them
-              would make Trace stop being the record and start being a summary
-              of the parts we happened to have written a renderer for. */}
-          <Pre value={view.others} />
-        </details>
-      )}
+      {view.others.length > 0 && <OtherEvents events={view.others} />}
     </div>
   );
 }

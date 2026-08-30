@@ -155,7 +155,13 @@ export default function DailyRoot() {
     const projectId = projects.active;
     const workflowId = build?.stack?.id;
     if (!projectId || !workflowId) { setBlockRunHistory([]); return () => { live = false; }; }
-    Promise.all((runs ?? []).slice(0, 30).map(async run => {
+    // The run list already carries its workflow identity. Filtering the index
+    // first avoids opening and parsing thirty full snapshots every time a live
+    // run updates or the Build surface changes selection.
+    const candidates = (runs ?? []).filter(run => (
+      (run.stackId ?? run.flowId) === workflowId
+    )).slice(0, 10);
+    Promise.all(candidates.map(async run => {
       try {
         const snapshot = await window.flyt.getSnapshot(projectId, run.id);
         if (snapshot?.meta?.stackId !== workflowId) return [];
@@ -203,6 +209,7 @@ export default function DailyRoot() {
   useEffect(() => subscribeDailyRun(window.flyt, {
     getProjectId: () => activeRef.current,
     getRunId: () => watchingRef.current?.runId,
+    getWatching: () => watchingRef.current,
     onWatching: next => {
       if (!next) return;
       watchingRef.current = next;

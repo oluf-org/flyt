@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import BlockEditor from './BlockEditor.jsx';
 import { runView } from './runView.js';
 import { traceView, duration } from './traceView.js';
@@ -31,37 +31,57 @@ function QueryPre({ value }) {
   return <pre className="work-query-pre">{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre>;
 }
 
-function DetailsRail({ watching, view, runs, onOpenRun, onOpenTrace }) {
+function QueryEntry({ entry, isLatest = false }) {
+  const [open, setOpen] = useState(isLatest);
+  useEffect(() => { if (!isLatest) setOpen(false); }, [isLatest]);
+  return <details className="work-query" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary><code>{entry.blockId}</code><span>{entry.request?.model}</span></summary>
+    {open && <div className="work-query-body">
+    {entry.request?.attempts?.map(attempt => <div className={`work-attempt state-${attempt.status}`} key={attempt.index}>
+      <strong>{attempt.status === 'started' ? 'Waiting for' : attempt.status === 'failed' ? 'Failed' : 'Answered by'} {attempt.effective}</strong>
+      {attempt.ms != null && <span>{duration(attempt.ms)}</span>}{attempt.error && <small>{attempt.error}</small>}
+    </div>)}
+    {(entry.request?.tokens || entry.request?.costUsd != null || entry.request?.tokensPerSecond != null) && <p className="work-metrics">
+      {[entry.request.tokens, entry.request.tokensPerSecond != null ? `${entry.request.tokensPerSecond.toFixed(1)} tokens/s` : null,
+        entry.request.costUsd != null ? `$${entry.request.costUsd.toFixed(4)}` : null].filter(Boolean).join(' · ')}
+    </p>}
+    <dl className="work-query-facts">
+      <dt>Finish</dt><dd>{entry.request?.settled ? entry.request.finishReason : 'waiting'}</dd>
+      {entry.request?.maxTokens != null && <><dt>Token ceiling</dt><dd>{entry.request.maxTokens.toLocaleString()}</dd></>}
+      {entry.request?.route?.line && <><dt>Route</dt><dd>{entry.request.route.line}</dd></>}
+    </dl>
+    <details><summary>Request sent</summary><QueryPre value={entry.prompt ?? 'This older run did not record the assembled request. Its system and user messages remain in the full Trace log.'} /></details>
+    {entry.request?.reasoning && <details><summary>Internal reasoning ({entry.request.reasoning.length.toLocaleString()} chars)</summary><QueryPre value={entry.request.reasoning} /></details>}
+    <details open={!entry.request?.content}><summary>Visible response</summary>
+      <QueryPre value={entry.request?.content || `No visible response. Finish reason: ${entry.request?.finishReason ?? 'unknown'}.`} />
+    </details>
+    {entry.calls.map(call => <div className="work-tool" key={call.callId}><strong>{call.name}</strong><span>{call.unfinished ? 'running' : call.error ? 'error' : 'done'}</span></div>)}</div>}
+  </details>;
+}
+
+const LOG_PAGE = 40;
+
+function DetailsRail({ traceDetails, runId, view, runs, onOpenRun, onOpenTrace }) {
   const [tab, setTab] = useState('log');
-  const log = useMemo(() => traceView(watching?.trace).turns.flatMap(turn => turn.steps.map(step => ({
+  const [visibleLog, setVisibleLog] = useState(LOG_PAGE);
+  useEffect(() => setVisibleLog(LOG_PAGE), [runId]);
+  const log = useMemo(() => (traceDetails?.turns ?? []).flatMap(turn => turn.steps.map(step => ({
     blockId: step.blockId, step: step.step, prompt: step.prompt, request: step.request, calls: step.tools ?? [],
-  }))), [watching]);
+  }))), [traceDetails]);
+  const shownLog = log.slice(-visibleLog);
   const results = Object.entries(view.blocks).filter(([, block]) => block.showing);
   return <aside className="work-details"><div className="work-details-tabs">{['log', 'result', 'runs'].map(name => <button key={name}
     className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>{name}</button>)}</div>
     {tab === 'log' && <div className="work-log">
       {log.length > 0 && <button type="button" className="work-open-trace" onClick={onOpenTrace}>Open full Trace</button>}
-      {log.length ? log.map((entry, index) => <details className="work-query" key={`${entry.blockId}:${entry.step}:${index}`}>
-      <summary><code>{entry.blockId}</code><span>{entry.request?.model}</span></summary><div className="work-query-body">
-      {entry.request?.attempts?.map(attempt => <div className={`work-attempt state-${attempt.status}`} key={attempt.index}>
-        <strong>{attempt.status === 'started' ? 'Waiting for' : attempt.status === 'failed' ? 'Failed' : 'Answered by'} {attempt.effective}</strong>
-        {attempt.ms != null && <span>{duration(attempt.ms)}</span>}{attempt.error && <small>{attempt.error}</small>}
-      </div>)}
-      {(entry.request?.tokens || entry.request?.costUsd != null || entry.request?.tokensPerSecond != null) && <p className="work-metrics">
-        {[entry.request.tokens, entry.request.tokensPerSecond != null ? `${entry.request.tokensPerSecond.toFixed(1)} tokens/s` : null,
-          entry.request.costUsd != null ? `$${entry.request.costUsd.toFixed(4)}` : null].filter(Boolean).join(' · ')}
-      </p>}
-      <dl className="work-query-facts">
-        <dt>Finish</dt><dd>{entry.request?.settled ? entry.request.finishReason : 'waiting'}</dd>
-        {entry.request?.maxTokens != null && <><dt>Token ceiling</dt><dd>{entry.request.maxTokens.toLocaleString()}</dd></>}
-        {entry.request?.route?.line && <><dt>Route</dt><dd>{entry.request.route.line}</dd></>}
-      </dl>
-      <details><summary>Request sent</summary><QueryPre value={entry.prompt ?? 'This older run did not record the assembled request. Its system and user messages remain in the full Trace log.'} /></details>
-      {entry.request?.reasoning && <details><summary>Internal reasoning ({entry.request.reasoning.length.toLocaleString()} chars)</summary><QueryPre value={entry.request.reasoning} /></details>}
-      <details open={!entry.request?.content}><summary>Visible response</summary>
-        <QueryPre value={entry.request?.content || `No visible response. Finish reason: ${entry.request?.finishReason ?? 'unknown'}.`} />
-      </details>
-      {entry.calls.map(call => <div className="work-tool" key={call.callId}><strong>{call.name}</strong><span>{call.unfinished ? 'running' : call.error ? 'error' : 'done'}</span></div>)}</div></details>)
+      {log.length ? <>
+        {shownLog.length < log.length && <button type="button" className="work-show-earlier" onClick={() => setVisibleLog(count => count + LOG_PAGE)}>
+          Show {Math.min(LOG_PAGE, log.length - shownLog.length)} earlier queries
+        </button>}
+        {shownLog.map((entry, index) => <QueryEntry entry={entry}
+          key={`${entry.blockId}:${entry.step}:${log.length - shownLog.length + index}`}
+          isLatest={index === shownLog.length - 1} />)}
+      </>
       : <p className="muted">Waiting for the first model event…</p>}</div>}
     {tab === 'result' && <div className="work-results">{results.length ? results.map(([id, block]) => <article key={id}><code>{id}</code><pre>{block.showing}</pre></article>)
       : <p className="muted">No output yet.</p>}</div>}
@@ -124,6 +144,6 @@ export default function Work({
       {!view.running && !interaction && <form className="work-reply" onSubmit={event => { event.preventDefault(); if (!reply.trim()) return; onReply?.(reply); setReply(''); }}>
         <textarea rows="2" value={reply} onChange={event => setReply(event.target.value)} placeholder="Continue this conversation…" />
         <button type="submit" disabled={replyBusy || !reply.trim()}>{replyBusy ? 'Starting…' : 'Send'}</button></form>}
-    </main><DetailsRail watching={{ trace }} view={view} runs={runs} onOpenRun={onOpenRun} onOpenTrace={onOpenTrace}/></div>
+    </main><DetailsRail traceDetails={detailedTrace} runId={runId} view={view} runs={runs} onOpenRun={onOpenRun} onOpenTrace={onOpenTrace}/></div>
   </div>;
 }
