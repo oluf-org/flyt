@@ -47,14 +47,25 @@ function Request({ request }) {
     <div className="tr-request">
       <dl className="tr-facts">
         <dt>model</dt><dd className="mono">{request.model}</dd>
+        {request.configuredModel && <><dt>configured</dt><dd className="mono">{request.configuredModel}</dd></>}
+        {request.maxTokens != null && <><dt>token ceiling</dt><dd>{request.maxTokens.toLocaleString()}</dd></>}
         <dt>finish</dt>
         <dd className={request.settled ? '' : 'tr-unfinished'}>
           {request.settled ? request.finishReason : 'nothing came back — the request is unsettled'}
         </dd>
         {request.tokens && <><dt>usage</dt><dd>{request.tokens}</dd></>}
         {request.costUsd != null && <><dt>cost</dt><dd>{money(request.costUsd)}</dd></>}
+        {request.tokensPerSecond != null && <><dt>speed</dt><dd>{request.tokensPerSecond.toFixed(1)} tokens/s</dd></>}
         {request.ms != null && <><dt>took</dt><dd>{duration(request.ms)}</dd></>}
       </dl>
+      {request.attempts?.length > 0 && <div className="tr-attempts" aria-label="Model attempt history">
+        {request.attempts.map(attempt => <p key={attempt.index} className={`tr-attempt state-${attempt.status}`}>
+          <span>{attempt.status === 'started' ? 'Waiting for' : attempt.status === 'failed' ? 'Failed' : 'Answered by'}</span>
+          <code>{attempt.effective}</code>
+          {attempt.ms != null && <small>{duration(attempt.ms)}</small>}
+          {attempt.error && <em>{attempt.error}</em>}
+        </p>)}
+      </div>}
       {request.route && (
         <p className={`tr-route${request.route.degraded ? ' degraded' : ''}`}>
           <span className="section-label">{request.route.degraded ? 'DEGRADED ROUTE' : 'ROUTE'}</span>

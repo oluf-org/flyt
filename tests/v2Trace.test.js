@@ -23,7 +23,11 @@ const RUN = [
   { seq: 2, at: '2026-08-22T10:00:01.000Z', type: 'turn.start', data: { runId: 'r1', turn: 1, blockId: 'work' } },
   { seq: 3, at: '2026-08-22T10:00:01.100Z', type: 'step.start', data: { runId: 'r1', blockId: 'work', step: 1 } },
   { seq: 4, at: '2026-08-22T10:00:01.200Z', type: 'step.prompt', data: { content: 'You are a block.\n\nDo the thing.' } },
-  { seq: 5, at: '2026-08-22T10:00:01.300Z', type: 'llm.request', data: { callId: 'q1', model: 'a/model' } },
+  { seq: 5, at: '2026-08-22T10:00:01.300Z', type: 'llm.request', data: { callId: 'q1', model: 'a/model', configuredModel: 'preferred/model', maxTokens: 12288 } },
+  { seq: 5.1, at: '2026-08-22T10:00:01.400Z', type: 'llm.attempt', data: { callId: 'q1', index: 0, model: 'a/model', provider: 'openrouter', resolvedModel: 'a/model', status: 'started' } },
+  { seq: 5.2, at: '2026-08-22T10:00:02.000Z', type: 'llm.attempt', data: { callId: 'q1', index: 0, model: 'a/model', provider: 'openrouter', resolvedModel: 'a/model', status: 'failed', error: 'rate limited' } },
+  { seq: 5.3, at: '2026-08-22T10:00:02.100Z', type: 'llm.attempt', data: { callId: 'q1', index: 1, model: 'b/other', provider: 'openrouter', resolvedModel: 'b/other', status: 'started' } },
+  { seq: 5.4, at: '2026-08-22T10:00:04.200Z', type: 'llm.attempt', data: { callId: 'q1', index: 1, model: 'b/other', provider: 'openrouter', resolvedModel: 'b/other', status: 'succeeded' } },
   {
     seq: 6, at: '2026-08-22T10:00:04.300Z', type: 'llm.response',
     data: {
@@ -56,6 +60,12 @@ test('a finished run becomes turns holding steps holding what they did', () => {
   assert.equal(step.request.finishReason, 'tool_calls');
   assert.equal(step.request.tokens, '900 in · 120 out · 80 reasoning');
   assert.equal(step.request.costUsd, 0.004);
+  assert.equal(step.request.configuredModel, 'preferred/model');
+  assert.equal(step.request.maxTokens, 12288);
+  assert.equal(step.request.attempts[0].status, 'failed');
+  assert.equal(step.request.attempts[0].error, 'rate limited');
+  assert.equal(step.request.attempts[1].effective, 'openrouter/b/other');
+  assert.ok(step.request.tokensPerSecond > 50 && step.request.tokensPerSecond < 60);
 });
 
 test('reasoning is kept apart from content, which is the whole of D40 here', () => {
@@ -92,7 +102,7 @@ test('a tool call shows its arguments and its complete result, not a preview', (
 });
 
 test('a call that never returned is unfinished, not empty', () => {
-  const cut = RUN.slice(0, 7); // seq 8 is the tool.result, and it never arrived
+  const cut = RUN.slice(0, 11); // tool.result is next, and it never arrived
   const step = traceView(foldTrace(cut)).turns[0].steps[0];
   const call = step.tools[0];
   assert.equal(call.unfinished, true);
@@ -155,11 +165,11 @@ test('a finished run’s trace opens from its log alone, with no live process', 
 
 test('a live trace grows from a cursor instead of being re-read whole', () => {
   const live = emptyTrace();
-  feed(live, RUN.slice(0, 6));
+  feed(live, RUN.slice(0, 10));
   assert.equal(traceView(live).turns[0].steps[0].request.settled, true);
   assert.equal(traceView(live).unfinished, true);
 
-  feed(live, RUN.slice(6));
+  feed(live, RUN.slice(10));
   const done = traceView(live);
   assert.equal(done.unfinished, false);
   assert.deepEqual(done, traceView(foldTrace(RUN)),

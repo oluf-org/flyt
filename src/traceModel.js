@@ -29,6 +29,7 @@ const STEP_START = 'step.start';
 const STEP_END = 'step.end';
 const STEP_PROMPT = 'step.prompt';
 const LLM_REQUEST = 'llm.request';
+const LLM_ATTEMPT = 'llm.attempt';
 const LLM_STREAM = 'llm.stream';
 const LLM_RESPONSE = 'llm.response';
 const TOOL_CALL = 'tool.call';
@@ -46,7 +47,7 @@ const PERMISSION_DECISION = 'permission.decision';
  */
 export const FOLDED_EVENTS = [
   TURN_START, TURN_END, STEP_START, STEP_END, STEP_PROMPT,
-  LLM_REQUEST, LLM_STREAM, LLM_RESPONSE, TOOL_CALL, TOOL_RESULT, PERMISSION_DECISION
+  LLM_REQUEST, LLM_ATTEMPT, LLM_STREAM, LLM_RESPONSE, TOOL_CALL, TOOL_RESULT, PERMISSION_DECISION
 ];
 
 function asRecord(value) {
@@ -91,6 +92,18 @@ function findToolCall(trace, callId) {
       for (let c = calls.length - 1; c >= 0; c--) {
         if (String(calls[c].callId) === want) return calls[c];
       }
+    }
+  }
+  return null;
+}
+
+/** Find a model request by call id, newest first. */
+function findRequest(trace, callId) {
+  const want = callId == null ? null : String(callId);
+  for (let t = trace.turns.length - 1; t >= 0; t--) {
+    for (let s = trace.turns[t].steps.length - 1; s >= 0; s--) {
+      const request = trace.turns[t].steps[s].request;
+      if (request && (want === null || String(request.callId) === want)) return request;
     }
   }
   return null;
@@ -198,15 +211,42 @@ export function feed(trace, events) {
           callId: data.callId ?? null,
           provider: data.provider ?? null,
           model: data.model ?? null,
+          configuredModel: data.configuredModel ?? null,
+          maxTokens: Number.isFinite(data.maxTokens) ? data.maxTokens : null,
           prompt: data.prompt ?? null,
           requestedAt: event.at ?? null,
+          respondedAt: null,
           settled: false,
           finishReason: null,
           usage: null,
           route: null,
           content: null,
           reasoning: null,
+          attempts: [],
         };
+        break;
+      }
+
+      case LLM_ATTEMPT: {
+        const request = findRequest(trace, data.callId) ?? openStep(trace)?.request ?? null;
+        if (!request) break;
+        const index = typeof data.index === 'number' ? data.index : request.attempts.length;
+        let attempt = request.attempts.find(item => item.index === index);
+        if (!attempt) {
+          attempt = {
+            index, model: data.model ?? request.model ?? null, provider: data.provider ?? null,
+            resolvedModel: data.resolvedModel ?? null, status: 'started', error: null,
+            startedAt: event.at ?? null, endedAt: null,
+          };
+          request.attempts.push(attempt);
+        }
+        if (data.model != null) attempt.model = data.model;
+        if (data.provider != null) attempt.provider = data.provider;
+        if (data.resolvedModel != null) attempt.resolvedModel = data.resolvedModel;
+        if (data.status != null) attempt.status = data.status;
+        if (data.error != null) attempt.error = String(data.error);
+        if (data.status === 'started') attempt.startedAt = event.at ?? attempt.startedAt;
+        if (data.status === 'failed' || data.status === 'succeeded') attempt.endedAt = event.at ?? attempt.endedAt;
         break;
       }
 
@@ -215,6 +255,7 @@ export function feed(trace, events) {
         const request = step?.request ?? null;
         if (request) {
           request.settled = true;
+          request.respondedAt = event.at ?? request.respondedAt;
           if (data.finishReason != null) request.finishReason = data.finishReason;
           if (data.usage != null) request.usage = data.usage;
           if (data.route != null) request.route = data.route;

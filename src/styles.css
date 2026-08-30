@@ -1025,6 +1025,12 @@ kbd.shortcut {
   display: inline-flex; align-items: center; gap: 2px; padding: 2px;
   border: 1px solid var(--border); border-radius: 8px; background: var(--side);
 }
+
+/* Renderer failures replace the white screen with a recoverable, inspectable state. */
+.fatal-renderer { min-height: 100vh; box-sizing: border-box; display: grid; place-content: center; justify-items: start; gap: 12px; padding: 40px; background: var(--canvas); color: var(--tx); }
+.fatal-renderer h1, .fatal-renderer p { margin: 0; max-width: 680px; }.fatal-renderer p { color: var(--dim); line-height: 1.55; }
+.fatal-renderer pre { box-sizing: border-box; width: min(760px, calc(100vw - 80px)); max-height: 280px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--err); white-space: pre-wrap; }
+.fatal-renderer > div { display: flex; gap: 8px; }.fatal-renderer button { border: 1px solid var(--border); border-radius: 7px; padding: 8px 12px; background: var(--card); color: var(--tx); cursor: pointer; }
 .lander-submit-kind button {
   border: 0; border-radius: 6px; padding: 5px 8px; background: transparent;
   color: var(--dim); font: inherit; font-size: 11px; cursor: pointer;

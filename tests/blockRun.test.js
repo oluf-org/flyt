@@ -26,7 +26,14 @@ function scriptedLlm(script) {
     seen,
     seam: {
       stream(request) {
-        seen.push({ model: request.model, messages: request.messages, tools: (request.tools ?? []).map(t => t.name) });
+        seen.push({
+          model: request.model,
+          fallbackModels: [...(request.fallbackModels ?? [])],
+          messages: request.messages,
+          tools: (request.tools ?? []).map(t => t.name),
+          maxTokens: request.maxTokens ?? null,
+          temperature: request.temperature ?? null,
+        });
         const answer = answerFor();
         const chunks = [
           ...(answer.reasoning ? [{ reasoning: answer.reasoning }] : []),
@@ -40,9 +47,9 @@ function scriptedLlm(script) {
               content: answer.content ?? '',
               ...(answer.reasoning ? { reasoning: answer.reasoning } : {}),
               ...(answer.toolCalls ? { toolCalls: answer.toolCalls } : {}),
-              finishReason: answer.toolCalls?.length ? 'tool_calls' : 'stop',
+              finishReason: answer.finishReason ?? (answer.toolCalls?.length ? 'tool_calls' : 'stop'),
               usage: { inputTokens: 10, outputTokens: 3 },
-              route: { requested: request.model, effective: 'fake', reason: 'the fake answered', degraded: false },
+              route: answer.route ?? { requested: request.model, effective: 'fake', reason: 'the fake answered', degraded: false },
             };
           },
         };
@@ -120,7 +127,7 @@ test('a block with no tool calls runs, and its events fire in the documented ord
 
   assert.deepEqual(await typesIn(boot.session), [
     'turn.start', 'message.system', 'message.user',
-    'step.start', 'llm.request', 'llm.stream', 'llm.response', 'step.end',
+    'step.start', 'step.prompt', 'llm.request', 'llm.stream', 'llm.response', 'step.end',
     'turn.end',
   ]);
   await boot.kernel.dispose();
@@ -225,11 +232,98 @@ test('the loop is bounded, and hitting the bound says so rather than looking fin
   // the failure a bound exists for.
   const result = await loopIn(boot, { maxSteps: 3 });
   assert.equal(result.stopped, 'bound');
-  assert.match(result.reason, /all 3 of its steps/);
+  assert.match(result.reason, /all 3 of its hard-bounded steps/);
   assert.equal(boot.llm.seen.length, 3, 'three steps, not four and not forever');
   const types = await typesIn(boot.session);
   assert.equal(types.filter(t => t === 'step.start').length, 3);
   assert.equal(types.at(-1), 'turn.end', 'and the turn is closed, so the log is not left open');
+  await boot.kernel.dispose();
+});
+
+test('a query records its exact assembled request and carries structural call controls', async () => {
+  const boot = await bootFor([{ content: 'Done.' }]);
+  await loopIn(boot, { maxTokens: 12_288, temperature: 0.1 });
+  assert.equal(boot.llm.seen[0].maxTokens, 12_288);
+  assert.equal(boot.llm.seen[0].temperature, 0.1);
+  const events = [];
+  for await (const event of boot.session.read()) events.push(event);
+  const prompt = events.find(event => event.type === 'step.prompt');
+  assert.deepEqual(prompt.data.content.messages.map(message => [message.role, message.content]), [
+    ['system', 'You are a block.'], ['user', 'Do the thing.'],
+  ]);
+  assert.equal(events.find(event => event.type === 'llm.request').data.maxTokens, 12_288);
+  await boot.kernel.dispose();
+});
+
+test('a working agent warns at its soft step threshold and keeps going', async () => {
+  const calls = [1, 2, 3].map(index => ({
+    content: '', toolCalls: [{ id: `c${index}`, name: 'peek', args: { index } }],
+  }));
+  const boot = await bootFor([...calls, { content: 'Finished after the warning.' }], {
+    tools: [{
+      name: 'peek', description: 'Look.', parameters: { type: 'object' },
+      classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+      async execute() { return { content: 'useful context' }; },
+    }],
+    ceiling: ['peek'],
+  });
+
+  const result = await loopIn(boot, { softMaxSteps: 3 });
+  assert.equal(result.stopped, 'answered');
+  assert.equal(result.steps, 4);
+  assert.equal(result.content, 'Finished after the warning.');
+  const events = [];
+  for await (const event of boot.session.read()) events.push(event);
+  const warning = events.find(event => event.type === 'block.warning' && event.data.code === 'soft_step_limit');
+  assert.match(warning.data.reason, /soft limit.*continue/i);
+  assert.equal(warning.data.transient, true);
+  assert.equal(boot.llm.seen.length, 4, 'the warning did not stop the next query');
+  await boot.kernel.dispose();
+});
+
+test('a token-truncated worker warns and continues in another query', async () => {
+  const boot = await bootFor([
+    { content: 'partial work', finishReason: 'length' },
+    { content: 'finished work', finishReason: 'stop' },
+  ]);
+
+  const result = await loopIn(boot, { maxTokens: 32_768, continueOnLength: true });
+  assert.equal(result.stopped, 'answered');
+  assert.equal(result.steps, 2);
+  assert.equal(result.content, 'partial workfinished work', 'the continued deliverable retains the truncated prefix');
+  assert.equal(boot.llm.seen.length, 2);
+  assert.match(boot.llm.seen[1].messages.at(-1).content, /Continue from where it stopped/);
+  const events = [];
+  for await (const event of boot.session.read()) events.push(event);
+  assert.ok(events.some(event => event.type === 'block.warning' && event.data.code === 'soft_token_limit'));
+  await boot.kernel.dispose();
+});
+
+test('a fallback that answered is preferred for the remaining tool steps', async () => {
+  const boot = await bootFor([
+    {
+      content: '',
+      toolCalls: [{ id: 'c1', name: 'peek', args: {} }],
+      route: {
+        requested: 'free-primary', effective: 'openrouter/free-backup',
+        reason: 'the configured fallback answered', degraded: true,
+      },
+    },
+    { content: 'done' },
+  ], {
+    tools: [{
+      name: 'peek', description: 'Look.', parameters: { type: 'object' },
+      classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+      async execute() { return { content: 'ok' }; },
+    }],
+    ceiling: ['peek'],
+  });
+
+  await loopIn(boot, { model: 'free-primary', fallbackModels: ['free-backup', 'free-last'] });
+  assert.deepEqual(boot.llm.seen.map(call => [call.model, call.fallbackModels]), [
+    ['free-primary', ['free-backup', 'free-last']],
+    ['free-backup', ['free-last', 'free-primary']],
+  ]);
   await boot.kernel.dispose();
 });
 

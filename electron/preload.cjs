@@ -3,6 +3,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Run-scoped calls take the projectId of the tab they act for (D22 T7); flows,
 // templates and settings are global (T2) and stay unscoped.
 const api = {
+  reportRendererError: details => ipcRenderer.invoke('diagnostics:renderer', details),
+  diagnosticsPath: () => ipcRenderer.invoke('diagnostics:path'),
+  revealDiagnostics: () => ipcRenderer.invoke('diagnostics:reveal'),
   v2Build: () => ipcRenderer.invoke('v2:build'),
   v2PluginReview: () => ipcRenderer.invoke('v2:plugin-review'),
   v2DecidePluginReview: decisions => ipcRenderer.invoke('v2:plugin-review-decide', decisions),
@@ -82,6 +85,7 @@ const api = {
   getSnapshot: (pid, runId) => ipcRenderer.invoke('run:snapshot', pid, runId),
   readRunLog: (pid, runId) => ipcRenderer.invoke('run:log', pid, runId),
   openRunFolder: (pid, runId) => ipcRenderer.invoke('run:openFolder', pid, runId),
+  revealRunLog: (pid, runId) => ipcRenderer.invoke('run:revealLog', pid, runId),
   openRunArtifact: (pid, runId, relPath) => ipcRenderer.invoke('run:openArtifact', pid, runId, relPath),
   pickWorkspace: () => ipcRenderer.invoke('workspace:pick'),
   openWorkspace: (pid, runId) => ipcRenderer.invoke('workspace:open', pid, runId),

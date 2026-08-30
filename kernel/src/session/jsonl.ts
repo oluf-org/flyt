@@ -60,6 +60,7 @@ export const SESSION_EVENTS = [
   'message.system',
   'message.user',
   'llm.request',
+  'llm.attempt',
   'llm.stream',
   'llm.response',
   // What it did
@@ -68,6 +69,7 @@ export const SESSION_EVENTS = [
   'tool.result',
   // What the block produced
   'block.status',
+  'block.warning',
   'block.output',
   // System-owned conversation projection. It is deliberately not an
   // `llm.response`: the no-tool supervisor is outside the authored workflow.
@@ -287,6 +289,7 @@ export function deriveMessages(events: readonly SessionEvent[], upTo?: number, b
       }
 
       case 'tool.call': {
+        if (data.modelVisible === false) break;
         // A runner that logs the call separately from the response: record it
         // as requested so a missing result is still noticed.
         const id = String(data.callId ?? data.id ?? '');
@@ -295,6 +298,7 @@ export function deriveMessages(events: readonly SessionEvent[], upTo?: number, b
       }
 
       case 'tool.result': {
+        if (data.modelVisible === false) break;
         const id = String(data.callId ?? data.id ?? '');
         const pending = requested.get(id);
         if (pending) pending.answered = true;

@@ -1,20 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import BlockEditor from './BlockEditor.jsx';
 import { runView } from './runView.js';
+import { traceView, duration } from './traceView.js';
+import { workflowBlockNodes } from './workflowTree.js';
 import './workStyles.css';
-
-function blockNodes(node, out = []) {
-  if (!node) return out;
-  if (node.kind === 'block') {
-    out.push(node);
-    for (const child of node.generated ?? []) blockNodes(child, out);
-  }
-  else {
-    for (const child of node.children ?? []) blockNodes(child, out);
-    if (node.kind === 'if') for (const child of node.else ?? []) blockNodes(child, out);
-  }
-  return out;
-}
 
 function Interaction({ interaction, onDecide, onAnswer }) {
   const [answer, setAnswer] = useState('');
@@ -33,21 +22,46 @@ function Interaction({ interaction, onDecide, onAnswer }) {
 
 function RunRail({ stack, view }) {
   return <aside className="work-run-rail" aria-label="Run progress"><span className="section-label">Run</span>
-    {blockNodes(stack.root).map((node, index) => { const status = view.blocks[node.id]?.status ?? 'pending'; return <div key={node.id} className={`work-rail-step state-${status}`}>
+    {workflowBlockNodes(stack.root).map((node, index) => { const status = view.blocks[node.id]?.status ?? 'pending'; return <div key={node.id} className={`work-rail-step state-${status}`}>
       <span className="work-rail-index">{status === 'done' ? '✓' : status === 'failed' ? '!' : index + 1}</span><span><strong>{node.title ?? node.id}</strong><small>{status}</small></span></div>; })}
   </aside>;
 }
 
-function DetailsRail({ watching, view, runs, onOpenRun }) {
+function QueryPre({ value }) {
+  return <pre className="work-query-pre">{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre>;
+}
+
+function DetailsRail({ watching, view, runs, onOpenRun, onOpenTrace }) {
   const [tab, setTab] = useState('log');
-  const log = useMemo(() => (watching?.trace?.turns ?? []).flatMap(turn => turn.steps.map(step => ({
-    blockId: step.blockId, model: step.request?.model, content: step.request?.content, calls: step.toolCalls ?? [],
+  const log = useMemo(() => traceView(watching?.trace).turns.flatMap(turn => turn.steps.map(step => ({
+    blockId: step.blockId, step: step.step, prompt: step.prompt, request: step.request, calls: step.tools ?? [],
   }))), [watching]);
   const results = Object.entries(view.blocks).filter(([, block]) => block.showing);
   return <aside className="work-details"><div className="work-details-tabs">{['log', 'result', 'runs'].map(name => <button key={name}
     className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>{name}</button>)}</div>
-    {tab === 'log' && <div className="work-log">{log.length ? log.map((entry, index) => <article key={index}><header><code>{entry.blockId}</code><span>{entry.model}</span></header>
-      {entry.content && <p>{entry.content}</p>}{entry.calls.map(call => <div className="work-tool" key={call.callId}><strong>{call.name}</strong><span>{call.finished ? 'done' : 'running'}</span></div>)}</article>)
+    {tab === 'log' && <div className="work-log">
+      {log.length > 0 && <button type="button" className="work-open-trace" onClick={onOpenTrace}>Open full Trace</button>}
+      {log.length ? log.map((entry, index) => <details className="work-query" key={`${entry.blockId}:${entry.step}:${index}`}>
+      <summary><code>{entry.blockId}</code><span>{entry.request?.model}</span></summary><div className="work-query-body">
+      {entry.request?.attempts?.map(attempt => <div className={`work-attempt state-${attempt.status}`} key={attempt.index}>
+        <strong>{attempt.status === 'started' ? 'Waiting for' : attempt.status === 'failed' ? 'Failed' : 'Answered by'} {attempt.effective}</strong>
+        {attempt.ms != null && <span>{duration(attempt.ms)}</span>}{attempt.error && <small>{attempt.error}</small>}
+      </div>)}
+      {(entry.request?.tokens || entry.request?.costUsd != null || entry.request?.tokensPerSecond != null) && <p className="work-metrics">
+        {[entry.request.tokens, entry.request.tokensPerSecond != null ? `${entry.request.tokensPerSecond.toFixed(1)} tokens/s` : null,
+          entry.request.costUsd != null ? `$${entry.request.costUsd.toFixed(4)}` : null].filter(Boolean).join(' · ')}
+      </p>}
+      <dl className="work-query-facts">
+        <dt>Finish</dt><dd>{entry.request?.settled ? entry.request.finishReason : 'waiting'}</dd>
+        {entry.request?.maxTokens != null && <><dt>Token ceiling</dt><dd>{entry.request.maxTokens.toLocaleString()}</dd></>}
+        {entry.request?.route?.line && <><dt>Route</dt><dd>{entry.request.route.line}</dd></>}
+      </dl>
+      <details><summary>Request sent</summary><QueryPre value={entry.prompt ?? 'This older run did not record the assembled request. Its system and user messages remain in the full Trace log.'} /></details>
+      {entry.request?.reasoning && <details><summary>Internal reasoning ({entry.request.reasoning.length.toLocaleString()} chars)</summary><QueryPre value={entry.request.reasoning} /></details>}
+      <details open={!entry.request?.content}><summary>Visible response</summary>
+        <QueryPre value={entry.request?.content || `No visible response. Finish reason: ${entry.request?.finishReason ?? 'unknown'}.`} />
+      </details>
+      {entry.calls.map(call => <div className="work-tool" key={call.callId}><strong>{call.name}</strong><span>{call.unfinished ? 'running' : call.error ? 'error' : 'done'}</span></div>)}</div></details>)
       : <p className="muted">Waiting for the first model event…</p>}</div>}
     {tab === 'result' && <div className="work-results">{results.length ? results.map(([id, block]) => <article key={id}><code>{id}</code><pre>{block.showing}</pre></article>)
       : <p className="muted">No output yet.</p>}</div>}
@@ -59,13 +73,18 @@ function DetailsRail({ watching, view, runs, onOpenRun }) {
 export default function Work({
   stack = null, blocks = null, trace = null, runId = null, composer = null, snapshot = null,
   interaction = null, onDecide = null, onAnswer = null, onReply = null, replyBusy = false,
-  runs = [], onOpenRun = null, onNewChat = null, onOpenFlow = null,
+  runs = [], onOpenRun = null, onNewChat = null, onOpenFlow = null, onOpenTrace = null,
+  onRetryFailed = null, retryBusy = false, retryError = '', onRevealRunLog = null,
+  onRevealDiagnosticLog = null, onStopRun = null, stopBusy = false,
 }) {
   const view = runView(trace);
+  const detailedTrace = useMemo(() => traceView(trace), [trace]);
   const [reply, setReply] = useState('');
   const runModels = useMemo(() => [...new Set((trace?.turns ?? []).flatMap(turn => (
     (turn.steps ?? []).map(step => step.request?.model).filter(Boolean)
   )))], [trace]);
+  const latestRequest = detailedTrace.turns.flatMap(turn => turn.steps.map(step => step.request)).filter(Boolean).at(-1) ?? null;
+  const latestAttempt = latestRequest?.attempts?.at(-1) ?? null;
   const summary = snapshot?.conversation?.filter(turn => turn.role === 'assistant').at(-1) ?? null;
   const runModel = { ...view, summary: summary?.text ?? null, input: snapshot?.meta?.userMessage ?? snapshot?.prompt ?? '' };
   if (!stack) return <div className="v2-work" data-v2>{composer}<p className="muted work-empty">Choose a workflow and send a message to start.</p></div>;
@@ -74,16 +93,37 @@ export default function Work({
     <div className="work-run-title"><span className="section-label">{view.running ? 'Block run' : 'Run'}</span><h1>{stack.name ?? stack.id}</h1></div>
     {runModels.length > 0 && <div className="work-run-models" title="Models actually requested by this run"><span>Models</span>{runModels.map(model => <code key={model}>{model}</code>)}</div>}
     <span className={`work-stage stage-${view.stage}`}>{view.stage ?? 'starting'}</span>
+    {view.running && <button type="button" className="work-stop" disabled={stopBusy} onClick={onStopRun}>
+      {stopBusy ? 'Stopping…' : 'Stop run'}
+    </button>}
     <button type="button" className="work-open-flow" onClick={onOpenFlow} title="Open this workflow in Build; Work returns to this same run">Open flow</button>
     <code className="work-run-id">{runId}</code></header>
-    {view.error && <p className="work-error" role="alert">{view.error}</p>}
-    {summary?.degraded && <p className="work-warning" role="status">Conversation summary used the deterministic fallback{summary.reason ? `: ${summary.reason}` : '.'}</p>}
+    {view.error && <section className="work-failure" role="alert">
+      <strong>{view.error}</strong><div className="work-failure-actions">
+        {view.errorBlockId && <button type="button" className="work-retry" disabled={retryBusy}
+          onClick={() => onRetryFailed?.(view.errorBlockId)}>{retryBusy ? 'Restarting…' : `Retry ${view.errorBlockId}`}</button>}
+        <button type="button" onClick={onOpenTrace}>Inspect queries</button>
+        <button type="button" onClick={onRevealRunLog}>Reveal raw run log</button>
+        <button type="button" onClick={onRevealDiagnosticLog}>Show app log</button>
+      </div>{retryError && <small>{retryError}</small>}
+    </section>}
+    {view.warnings?.map(warning => <p className="work-warning" role="status" key={warning.blockId}>
+      <strong>{warning.blockId} degraded:</strong> {warning.message}
+    </p>)}
+    {latestAttempt && <p className={`work-model-status state-${latestAttempt.status}`} role="status">
+      <strong>{latestAttempt.status === 'started' ? 'Waiting for' : latestAttempt.status === 'failed' ? 'Model failed' : 'Response from'}</strong>
+      <code>{latestAttempt.effective}</code>
+      {latestAttempt.error && <span>{latestAttempt.error}</span>}
+      {latestRequest.tokensPerSecond != null && <span>{latestRequest.tokensPerSecond.toFixed(1)} tokens/s</span>}
+      {latestRequest.costUsd != null && <span>${latestRequest.costUsd.toFixed(4)}</span>}
+    </p>}
+    {summary?.degraded && <p className="work-warning" role="status"><strong>Post-run conversation summary degraded.</strong> This happened after the workflow settled and did not cause its failure{summary.reason ? `: ${summary.reason}` : '.'}</p>}
     <div className="work-run-grid"><RunRail stack={stack} view={view}/><main className="work-run-main">
       <BlockEditor stack={stack} blocks={blocks} mode="run" run={runModel}/>
       <Interaction interaction={interaction} onDecide={onDecide} onAnswer={onAnswer}/>
       {!view.running && !interaction && <form className="work-reply" onSubmit={event => { event.preventDefault(); if (!reply.trim()) return; onReply?.(reply); setReply(''); }}>
         <textarea rows="2" value={reply} onChange={event => setReply(event.target.value)} placeholder="Continue this conversation…" />
         <button type="submit" disabled={replyBusy || !reply.trim()}>{replyBusy ? 'Starting…' : 'Send'}</button></form>}
-    </main><DetailsRail watching={{ trace }} view={view} runs={runs} onOpenRun={onOpenRun}/></div>
+    </main><DetailsRail watching={{ trace }} view={view} runs={runs} onOpenRun={onOpenRun} onOpenTrace={onOpenTrace}/></div>
   </div>;
 }

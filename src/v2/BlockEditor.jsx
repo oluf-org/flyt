@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BlockConfigurationView } from './PluginContributionView.jsx';
 import { WORKFLOW_MODEL_TIERS } from '../modelTiers.js';
 import { defaultModeId, workflowModes } from './workflowUx.js';
+import { generatedChildren, workflowNodes } from './workflowTree.js';
 import './blockEditorStyles.css';
 
 const TOUCH_MS = 600;
@@ -32,19 +33,8 @@ const titleOf = (node, blocks) => node.title || blocks?.resolve?.(node.use)?.tit
 const definitionOf = (node, blocks) => node?.kind === 'block' ? blocks?.resolve?.(node.use) ?? null : null;
 const statusOf = (run, id) => run?.blocks?.[id]?.status ?? 'pending';
 
-function walkNode(node, out = []) {
-  out.push(node);
-  if (node?.kind === 'block') {
-    for (const child of node.generated ?? []) walkNode(child, out);
-  } else {
-    for (const child of node.children ?? []) walkNode(child, out);
-    if (node.kind === 'if') for (const child of node.else ?? []) walkNode(child, out);
-  }
-  return out;
-}
-
 function parentSlot(root, nodeId) {
-  for (const parent of walkNode(root, [])) {
+  for (const parent of workflowNodes(root, [])) {
     if (parent.kind === 'block') continue;
     const index = (parent.children ?? []).findIndex(child => child.id === nodeId);
     if (index >= 0) return { container: parent.id, index };
@@ -56,10 +46,10 @@ function parentSlot(root, nodeId) {
   return null;
 }
 
-const nodeById = (root, id) => walkNode(root, []).find(node => node.id === id) ?? null;
+const nodeById = (root, id) => workflowNodes(root, []).find(node => node.id === id) ?? null;
 
 function contextFor(root, id) {
-  const all = walkNode(root, []).filter(node => node.kind === 'block');
+  const all = workflowNodes(root, []).filter(node => node.kind === 'block');
   const index = all.findIndex(node => node.id === id);
   return {
     upstream: index > 0 ? all.slice(0, index).map(node => node.id) : [],
@@ -69,7 +59,7 @@ function contextFor(root, id) {
 
 function uniqueId(root, seed) {
   const base = String(seed || 'block').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'block';
-  const ids = new Set(walkNode(root, []).map(node => node.id));
+  const ids = new Set(workflowNodes(root, []).map(node => node.id));
   if (!ids.has(base)) return base;
   let index = 2;
   while (ids.has(`${base}-${index}`)) index += 1;
@@ -226,14 +216,14 @@ function Palette({ blocks, root, selected, commands, onError, setDragging }) {
     if (!selected) { onError('Select a block or control to wrap first.'); return; }
     const id = uniqueId(root, kind);
     const selectedNode = nodeById(root, selected);
-    const ordered = walkNode(root, []);
+    const ordered = workflowNodes(root, []);
     const selectedIndex = ordered.findIndex(node => node.id === selected);
     const upstreamOutput = ordered.slice(0, selectedIndex).filter(node => node.kind === 'block')
       .flatMap(node => (node.outputs ?? []).map(output => ({ node, output }))).at(-1);
     const upstreamList = ordered.slice(0, selectedIndex).filter(node => node.kind === 'block')
       .flatMap(node => (node.outputs ?? []).filter(output => output.type === 'list').map(output => ({ node, output }))).at(-1);
     const bodyOutput = selectedNode
-      ? walkNode(selectedNode, []).filter(node => node.kind === 'block')
+      ? workflowNodes(selectedNode, []).filter(node => node.kind === 'block')
         .flatMap(node => (node.outputs ?? []).map(output => ({ node, output }))).at(-1)
       : null;
     let config = kind === 'repeat' ? { count: 2 } : kind === 'parallel' ? { maxParallel: 2 } : {};
@@ -378,6 +368,7 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
   };
   const override = preview?.overrides?.[node.id] ?? null;
   if (node.kind === 'block') {
+    const generated = generatedChildren(node);
     const card = <article {...common} className={`be-block${selected === node.id ? ' selected' : ''}${missing ? ' missing' : ''}${touched?.nodeId === node.id ? ` touched by-${touched.caller}` : ''}${dragging === node.id ? ' dragging' : ''}${override ? ' overridden' : ''}${node.generated === true ? ' generated' : ''}`}>
     <span className="be-grip"><Icon name="grip"/></span><span className="be-block-glyph"><Icon name="blocks"/></span>
     <span className="be-block-copy"><strong>{titleOf(node, blocks)}</strong><small>{missing ? `Missing · ${node.use}` : node.use}</small>
@@ -391,9 +382,9 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
     {editable && <button type="button" className="be-delete" aria-label={`Delete ${titleOf(node, blocks)}`} onClick={event => { event.stopPropagation(); onDelete(node); }}><Icon name="trash"/></button>}
     {output && <details className="be-inline-output" open={status === 'active'}><summary>Output</summary><pre>{output}</pre></details>}
     </article>;
-    if (!(node.generated ?? []).length) return card;
-    return <section className="be-generated-group" data-parent-id={node.id}>{card}<header><span>Generated tasks</span><small>{node.generated.length} blocks · created for this run</small></header>
-      <div className="be-generated-children">{node.generated.map(child => <NodeView key={child.id} node={child} root={root} blocks={blocks}
+    if (!generated.length) return card;
+    return <section className="be-generated-group" data-parent-id={node.id}>{card}<header><span>Generated tasks</span><small>{generated.length} blocks · created for this run</small></header>
+      <div className="be-generated-children">{generated.map(child => <NodeView key={child.id} node={child} root={root} blocks={blocks}
         commands={null} selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
         dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} preview={preview} onDelete={onDelete} onError={onError} />)}</div></section>;
   }

@@ -62,7 +62,7 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D20 | Keep one current overview, one architecture reference, one compact decision register, and the stack/block/tool contracts. Retire completed plans to git history. | Current; replaces the prior documentation structure |
 | D35 | The outermost autonomous loop is a supervisor over a durable backlog, isolated worktrees, harness-run gates, review, canary, spend caps, heartbeats, benchmarks, and references. | Current |
 | D39 | A failure must say what failed, preserve partial evidence, and offer a retry that may choose another model. | Current |
-| D40 | Every model call records finish reason, usage, timing, and content/reasoning split. Liveness leases and `why`/`probe`/`doctor` make live and failed runs diagnosable. | Current |
+| D40 | Every model call records each provider/model attempt, fallback reason, finish reason, usage, timing, throughput, cost, and content/reasoning split. Liveness leases, persistent desktop diagnostics, and `why`/`probe`/`doctor` make live and failed runs diagnosable. | Current |
 | D41 | Loop models are chosen at launch/configuration time by effort band, and backlog work remains inspectable and editable through one command surface. | Current |
 | D42 | Real runs, not code inspection alone, are the acceptance test for model resolution, gate behavior, and backlog claimability; operational failures require regression tests. | Current |
 | D43 | Backlog tasks may be removed through the backlog API, and task ids are monotonic so deletion cannot silently reuse history. | Current |
@@ -109,6 +109,8 @@ Adopted 2026-08-21 and cut over in Phase 5. The implementation plan is retired t
 | D80 | A workflow is one graph and its modes are named settings over it. A mode may change only the config of existing blocks; a workflow with modes always runs in one of them, and the default is the mode marked `default: true` or the first written. | Current; refines D52 |
 | D81 | Build is a gallery of every workflow plus the editor for one of them, and which view shows is a property of the location. New and Duplicate are one host operation and both end with the new workflow open. | Current; extends D60 |
 | D82 | Plan & dispatch is one authored block that materializes a validated dependency DAG as run-only child blocks. Parallelism modes change planning bias and wave bounds, but required producer edges and declared same-file writes always serialize. Generated children are durable session facts and never silently rewrite the workflow. | Current; extends D7, D8 and D80 |
+| D83 | A failed workflow offers a block-scoped retry that preserves completed upstream blocks. Every model query records the exact assembled request and token ceiling, and Work/Trace expose request, reasoning, response, route, finish reason, usage and attempts separately. | Current; extends D55 and D60 |
+| D84 | Working-agent step limits are soft: warn and continue until the worker answers or is cancelled. Length-truncated worker responses continue in another logged query. Explicit hard bounds remain for small control turns, and parallel dispatch reports every failed child in a wave. | Current; refines D7, D8 and D83 |
 
 ## Open decisions
 

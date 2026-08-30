@@ -60,6 +60,8 @@ export default function Shell({
   workflowInteraction = null, onWorkflowDecide = null, onWorkflowAnswer = null,
   onWorkflowReply = null, workflowReplyBusy = false, runs = [], onOpenRun = null,
   onNewChat = null, onOpenFlow = null, onOpenSettings = null,
+  onRetryFailed = null, retryBusy = false, retryError = '', onRevealRunLog = null,
+  onRevealDiagnosticLog = null, onStopRun = null, stopBusy = false,
 }) {
   const [focus, setFocus] = useState(location ?? INITIAL);
   const loc = resolveLocation(location, focus);
@@ -248,6 +250,14 @@ export default function Shell({
                   onOpenRun={onOpenRun}
                   onNewChat={onNewChat}
                   onOpenFlow={onOpenFlow}
+                  onOpenTrace={() => setTracing(true)}
+                  onRetryFailed={onRetryFailed}
+                  retryBusy={retryBusy}
+                  retryError={retryError}
+                  onStopRun={onStopRun}
+                  stopBusy={stopBusy}
+                  onRevealRunLog={onRevealRunLog}
+                  onRevealDiagnosticLog={onRevealDiagnosticLog}
                 />}
         </section>
       </div>

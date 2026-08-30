@@ -59,23 +59,50 @@ test('a model nothing can serve is refused, naming it', async () => {
 test('a configured fallback resolves and runs only after an earlier model fails before output', async () => {
   const kernel = createKernel();
   const seen = [];
+  const retry = [];
+  const attempts = [];
   await kernel.ctx.plugin(flytAdapters, {
     resolve: model => ({ provider: model === 'free-a' ? 'first' : 'second', model }),
     async callModel(req) {
       seen.push(`${req.provider}/${req.model}`);
+      retry.push(req.retry ?? null);
       if (req.model === 'free-a') throw new Error('free-a is at capacity');
       return { text: 'backup answered', finishReason: 'stop', provider: req.provider, model: req.model };
     },
   });
   const answer = await kernel.ctx.llm.complete(request({
     model: 'free-a', fallbackModels: ['free-b'],
+    onAttempt: attempt => attempts.push(attempt),
   }));
   assert.deepEqual(seen, ['first/free-a', 'second/free-b']);
+  assert.deepEqual(retry, [{ attempts: 1 }, null],
+    'intermediate fallback rungs fail over once; the final rung keeps normal provider retries');
   assert.equal(answer.content, 'backup answered');
   assert.equal(answer.route.requested, 'free-a');
   assert.equal(answer.route.effective, 'second/free-b');
   assert.match(answer.route.reason, /configured Free fallback free-b/);
+  assert.deepEqual(attempts.map(attempt => [attempt.model, attempt.provider, attempt.status]), [
+    ['free-a', 'first', 'started'], ['free-a', 'first', 'failed'],
+    ['free-b', 'second', 'started'], ['free-b', 'second', 'succeeded'],
+  ], 'each candidate is observable while it is waiting, not reconstructed after success');
   await kernel.dispose();
+});
+
+test('provider-neutral tool messages are translated to the OpenAI wire contract', async () => {
+  const boot = await bootLlm();
+  await boot.kernel.ctx.llm.complete(request({ messages: [
+    { role: 'user', content: 'inspect it' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'peek', args: { at: 'x' } }] },
+    { role: 'tool', content: 'three files', toolCallId: 'c1', name: 'peek' },
+  ] }));
+  assert.deepEqual(boot.seen[0].messages, [
+    { role: 'user', content: 'inspect it' },
+    { role: 'assistant', content: null, tool_calls: [{
+      id: 'c1', type: 'function', function: { name: 'peek', arguments: '{"at":"x"}' },
+    }] },
+    { role: 'tool', content: 'three files', tool_call_id: 'c1', name: 'peek' },
+  ]);
+  await boot.kernel.dispose();
 });
 
 test('a fallback is not started after the first model streamed visible text', async () => {

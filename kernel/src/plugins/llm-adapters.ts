@@ -43,6 +43,7 @@ export interface CallModel {
     keyKind?: string;
     cliHome?: string;
     cliPath?: string;
+    retry?: { attempts?: number; baseMs?: number; maxMs?: number };
     signal?: AbortSignal;
     onText?: (text: string, options?: { final?: boolean }) => void;
   }): Promise<{
@@ -83,6 +84,29 @@ function toolsFor(request: LlmRequest): unknown {
     type: 'function',
     function: { name: t.name, description: t.description, parameters: t.parameters },
   }));
+}
+
+/** Translate the kernel's provider-neutral messages to OpenAI chat wire shape. */
+function messagesFor(request: LlmRequest): unknown[] {
+  return request.messages.map(message => {
+    if (message.role === 'assistant' && message.toolCalls?.length) {
+      return {
+        role: 'assistant', content: message.content || null,
+        tool_calls: message.toolCalls.map(call => ({
+          id: call.id, type: 'function',
+          function: { name: call.name, arguments: JSON.stringify(call.args ?? {}) },
+        })),
+      };
+    }
+    if (message.role === 'tool') {
+      return {
+        role: 'tool', content: message.content,
+        tool_call_id: message.toolCallId ?? '',
+        ...(message.name ? { name: message.name } : {}),
+      };
+    }
+    return { role: message.role, content: message.content };
+  });
 }
 
 function usageFrom(raw: unknown): Usage | undefined {
@@ -153,20 +177,26 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
     let source: ReturnType<ResolveSource> = null;
     let answered: Awaited<ReturnType<CallModel>> | null = null;
     let fallbackReason = '';
+    const failures: string[] = [];
     let lastFailure: unknown = null;
 
     for (let index = 0; index < candidates.length; index++) {
       const candidate = candidates[index];
+      source = null;
       let emittedText = false;
       try {
         source = config.resolve(candidate);
         if (!source?.provider) {
           throw new Error(`No connected provider can serve "${candidate}".`);
         }
+        await request.onAttempt?.({
+          index, model: candidate, provider: source.provider, resolvedModel: source.model,
+          status: 'started',
+        });
         answered = await config.callModel({
           provider: source.provider,
           model: source.model,
-          messages: request.messages,
+          messages: messagesFor(request),
           ...(source.apiKey ? { apiKey: source.apiKey } : {}),
           ...(source.keyKind ? { keyKind: source.keyKind } : {}),
           ...(source.cliHome ? { cliHome: source.cliHome } : {}),
@@ -174,15 +204,33 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           ...(toolsFor(request) ? { tools: toolsFor(request) } : {}),
           ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),
           ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+          // An explicit fallback chain is already the retry budget at this
+          // layer. Intermediate candidates get one provider attempt so a 429
+          // becomes a visible fallback promptly; the final candidate retains
+          // the core adapter's ordinary retry/backoff resilience.
+          ...(index < candidates.length - 1 ? { retry: { attempts: 1 } } : {}),
           ...(request.signal ? { signal: request.signal } : {}),
-          ...(onText ? { onText: (text: string) => { emittedText = true; onText(text); } } : {}),
+          ...(onText ? { onText: (text: string) => { if (text) emittedText = true; onText(text); } } : {}),
+        });
+        await request.onAttempt?.({
+          index, model: candidate, provider: answered.provider ?? source.provider,
+          resolvedModel: answered.resolvedModel || answered.model || source.model,
+          status: 'succeeded',
         });
         if (index > 0) {
-          fallbackReason = `the configured Free fallback ${candidate} answered after ${index} earlier candidate${index === 1 ? '' : 's'} failed before output`;
+          fallbackReason = `the configured Free fallback ${candidate} answered after ${failures.join('; ')}`;
         }
         break;
       } catch (error) {
         lastFailure = error;
+        const message = String((error as Error)?.message ?? error).replace(/\s+/g, ' ').slice(0, 500);
+        failures.push(`${candidate} failed: ${message}`);
+        await request.onAttempt?.({
+          index, model: candidate,
+          ...(source?.provider ? { provider: source.provider } : {}),
+          ...(source?.model ? { resolvedModel: source.model } : {}),
+          status: 'failed', error: message,
+        });
         // Never combine text from two models in one visible stream, and never
         // turn an explicit cancellation into another provider call.
         if (emittedText || request.signal?.aborted || index === candidates.length - 1) throw error;

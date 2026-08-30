@@ -44,11 +44,7 @@ blocks:
       parallelism: "medium"
       minTasks: 1
       maxTasks: 12
-      workerMaxSteps: 24
+      workerMaxSteps: 120
+      workerMaxTokens: 32768
       effort: "medium"
       workerInstructions: "Finish the assigned task and verify its acceptance criteria. Do not expand into work owned by another generated task."
-  - id: plan-start
-    use: flyt-blocks-core:plan-start
-    title: "Plan"
-    config:
-      modelTier: "standard"

@@ -10,8 +10,116 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { JsonValue } from '../types.js';
-import type { BlockDefinition, BlockRun } from '../blocks/types.js';
+import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js';
 import { AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
+
+const PROMPT_REFINER_SYSTEM = [
+  'Rewrite the request into a precise, self-contained brief: goal, constraints, deliverable, acceptance.',
+  'If an ambiguity would materially change the work, call ask_human and wait for its answer.',
+  'You refine the request; you do not inspect or execute it. That role boundary is not an ambiguity: never ask whether you should refine, plan, or execute. Always produce the downstream brief.',
+  'Preserve references such as "this repository" or "the bound workspace" for downstream blocks, and never ask the user for repository paths or file contents.',
+  'You may ask at most one question. After its answer, make any remaining assumptions explicit and finish the brief.',
+  'Never return an unanswered question as the brief. Otherwise take the reading a competent person would and mark the assumption.',
+].join(' ');
+
+/** A final refiner answer must be a brief, never a question accidentally sent downstream. */
+export function unansweredRefinerQuestion(text: string): string | null {
+  const lines = String(text ?? '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const questions = lines.filter(line => /\?\s*$/.test(line));
+  if (!questions.length) return null;
+  return questions.slice(0, 3).join('\n').slice(0, 1200);
+}
+
+async function askRefinerQuestion(run: BlockRun, question: string): Promise<string> {
+  const session = await run.ctx.sessions.open(run.runId);
+  const callId = `${run.blockId}-clarification`;
+  const args = {
+    question,
+    context: 'The prompt refiner cannot produce a final brief until this consequential ambiguity is answered.',
+  };
+  await session.append({ type: 'tool.call', data: {
+    callId, blockId: run.blockId, name: 'ask_human', args, modelVisible: false,
+  } });
+  const result = await run.ctx.tools.execute({
+    runId: run.runId, blockId: run.blockId, step: 1,
+    call: { id: callId, name: 'ask_human', args }, ceiling: run.ceiling,
+    ...(run.signal ? { signal: run.signal } : {}),
+  });
+  await session.append({
+    type: 'tool.result',
+    data: {
+      callId, blockId: run.blockId, name: 'ask_human', content: result.content ?? '', modelVisible: false,
+      ...(result.error ? { error: result.error } : {}),
+    },
+  });
+  if (result.error) throw new Error(result.error);
+  try { return String((JSON.parse(result.content ?? '{}') as { answer?: unknown }).answer ?? ''); }
+  catch { return String(result.content ?? ''); }
+}
+
+async function deterministicRefinerFallback(run: BlockRun, reason: string): Promise<BlockOutcome> {
+  const session = await run.ctx.sessions.open(run.runId);
+  let answer = '';
+  for await (const event of session.read()) {
+    const data = event.data as Record<string, unknown>;
+    if (event.type !== 'tool.result' || data.name !== 'ask_human' || !data.content) continue;
+    try { answer = String((JSON.parse(String(data.content)) as { answer?: unknown }).answer ?? answer); }
+    catch { /* the original request remains a valid brief */ }
+  }
+  const output = [
+    '# Goal', run.input.trim(),
+    answer ? `# User clarification\n${answer.trim()}` : '',
+    '# Execution note',
+    'The prompt refiner did not produce a usable final brief. Preserve the request as written, resolve repository references against the bound workspace, make only reversible assumptions, and state consequential assumptions in the result.',
+  ].filter(Boolean).join('\n\n');
+  await session.append({
+    type: 'block.warning',
+    data: { blockId: run.blockId, code: 'refiner_degraded', reason, content: 'Continuing with the original request.' },
+  });
+  return { status: 'done', output, structured: { brief: output } };
+}
+
+/** Questions about the refiner's role or repository transport are not user decisions. */
+function guardRefinerQuestion(call: { name: string; args: JsonValue }): string | null {
+  if (call.name !== 'ask_human') return null;
+  const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
+    ? call.args as Record<string, JsonValue> : {};
+  const question = String(args.question ?? '');
+  if (/(?:repository|workspace)\s+path|(?:paste|provide|send|share)\b[^?]{0,80}\bcontents?|file[- ]reading tool|(?:do not|don\'t) have (?:a )?(?:file[- ]?)?read tool|only (?:available )?tool/i.test(question)) {
+    return 'The bound workspace reference and file access belong to downstream workers. Preserve the reference and produce the brief without asking the user for paths or contents.';
+  }
+  if (/should i\s+(?:refine|plan|execute)|do you want me to\s+(?:refine|plan|execute)|my role is to refine/i.test(question)) {
+    return 'Whether to refine is not an ambiguity. Produce the downstream brief now.';
+  }
+  return null;
+}
+
+async function executePromptRefiner(run: BlockRun): Promise<BlockOutcome> {
+  let first: BlockOutcome;
+  try {
+    first = await executeAiStep(run, PROMPT_REFINER_SYSTEM, { name: 'brief' }, {
+      toolLimits: { ask_human: 1 }, toolGuard: guardRefinerQuestion, maxSteps: 4,
+    });
+  } catch (error) {
+    return deterministicRefinerFallback(run, String((error as Error)?.message ?? error));
+  }
+  if (first.status !== 'done') return deterministicRefinerFallback(run, first.error ?? 'The refiner did not finish.');
+  const question = unansweredRefinerQuestion(first.output);
+  if (!question) return first;
+  try {
+    const answer = await askRefinerQuestion(run, question);
+    const settled = await executeAiStep({
+      ...run,
+      input: `${run.input}\n\nCLARIFICATION FROM THE USER:\n${answer}\n\nReturn the final brief now. Do not ask another question.`,
+    }, PROMPT_REFINER_SYSTEM, { name: 'brief' }, {
+      turn: 2, toolLimits: { ask_human: 0 }, toolGuard: guardRefinerQuestion, maxSteps: 2,
+    });
+    return settled.status === 'done'
+      ? settled : deterministicRefinerFallback(run, settled.error ?? 'The refiner did not finish after clarification.');
+  } catch (error) {
+    return deterministicRefinerFallback(run, String((error as Error)?.message ?? error));
+  }
+}
 
 /** Cordis plugin name. */
 export const name = 'flyt-blocks-judgement';
@@ -47,10 +155,14 @@ export const compareBlock = judge(
 export const promptRefinerBlock = judge(
   'flyt-blocks-judgement:prompt-refiner', 'Prompt refiner',
   'Rewrite the request into a precise, self-contained brief (goal, constraints, deliverable, acceptance).',
-  'Rewrite the request into a precise, self-contained brief: goal, constraints, deliverable, acceptance. Ask a clarifying question only when an ambiguity would materially change the work; otherwise take the reading a competent person would and mark it.',
+  PROMPT_REFINER_SYSTEM,
   { name: 'brief' },
   ['ask_human'],
 );
+
+// The generic judgement constructor is intentionally simple. Refinement adds
+// the human-interaction guard above so a prose question cannot become a brief.
+promptRefinerBlock.execute = executePromptRefiner;
 
 /**
  * A deterministic, optional human boundary. It spends no model call: the

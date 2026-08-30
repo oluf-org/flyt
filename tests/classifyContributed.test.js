@@ -402,9 +402,9 @@ test('the install pass rejects a looser edit atomically', async () => {
           }),
         }),
       /"second" cannot be classified more loosely/);
-    assert.equal(kernel.ctx.tools.get('first').classification, undefined,
-      'validation finishes before any decision is applied');
-    assert.equal(kernel.ctx.tools.get('second').classification, undefined);
+    assert.equal(kernel.ctx.tools.get('first'), undefined,
+      'failed-batch rollback removes every contribution before any decision is applied');
+    assert.equal(kernel.ctx.tools.get('second'), undefined);
   } finally { await kernel.dispose(); }
 });
 

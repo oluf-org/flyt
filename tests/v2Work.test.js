@@ -74,19 +74,33 @@ test('a failed block carries its reason', () => {
   const view = runView(foldTrace([
     ...RUN.slice(0, 2),
     { seq: 3, at: 't1', type: 'block.status', data: { blockId: 'plan', status: 'failed', error: 'the file was not there' } },
-    { seq: 4, at: 't1', type: 'run.error', data: { error: 'Block "plan" failed: the file was not there' } },
+    { seq: 4, at: 't1', type: 'run.error', data: { error: 'Block "plan" failed: the file was not there', blockId: 'plan' } },
     { seq: 5, at: 't1', type: 'run.stage', data: { stage: 'failed' } },
   ]));
   assert.equal(view.blocks.plan.status, 'failed');
   assert.equal(view.blocks.plan.error, 'the file was not there');
   assert.match(view.error, /Block "plan" failed/);
+  assert.equal(view.errorBlockId, 'plan');
   assert.equal(view.running, false);
 });
 
+test('a soft running-limit warning remains visible while active and clears after success', () => {
+  const active = foldTrace([
+    ...RUN.slice(0, 3),
+    { seq: 4, at: 't2', type: 'block.warning', data: { blockId: 'plan', transient: true, code: 'soft_step_limit', reason: 'Still working after 120 steps.' } },
+  ]);
+  assert.deepEqual(runView(active).warnings, [{ blockId: 'plan', message: 'Still working after 120 steps.' }]);
+
+  feed(active, [
+    { seq: 5, at: 't3', type: 'block.status', data: { blockId: 'plan', status: 'done' } },
+  ]);
+  assert.deepEqual(runView(active).warnings, []);
+});
+
 test('the stage comes from the log, not from a caller remembering', () => {
-  assert.deepEqual(runStage(foldTrace(RUN)), { stage: 'execution', error: null });
-  assert.deepEqual(runStage(foldTrace(FINISHED)), { stage: 'done', error: null });
-  assert.deepEqual(runStage(foldTrace([])), { stage: null, error: null });
+  assert.deepEqual(runStage(foldTrace(RUN)), { stage: 'execution', error: null, errorBlockId: null });
+  assert.deepEqual(runStage(foldTrace(FINISHED)), { stage: 'done', error: null, errorBlockId: null });
+  assert.deepEqual(runStage(foldTrace([])), { stage: null, error: null, errorBlockId: null });
   // The LAST stage wins: a resumed run has been through several.
   assert.equal(runStage(foldTrace([
     { seq: 1, at: 't', type: 'run.stage', data: { stage: 'stopped' } },
@@ -129,4 +143,10 @@ test('Work draws the stack through the editor rather than drawing it again', () 
     'two renderings of one stack are two renderings that drift');
   assert.doesNotMatch(work, /editorGeometry|layout\(/,
     'and the geometry is not recomputed here, which is how the drift would start');
+  assert.match(work, /Retry \$\{view\.errorBlockId\}/, 'a failed workflow offers the failed block as an obvious retry');
+  assert.match(work, /Inspect queries/);
+  assert.match(work, /Request sent/);
+  assert.match(work, /Internal reasoning/);
+  assert.match(work, /Visible response/);
+  assert.match(work, /Stop run/, 'a soft-unbounded worker remains manually stoppable');
 });

@@ -10,7 +10,7 @@
 import type { JsonValue } from '../types.js';
 import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js';
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
-import { executeWork, LOOP_CEILING } from './blocks-core.js';
+import { DEFAULT_WORKER_MAX_TOKENS, executeWork, LOOP_CEILING } from './blocks-core.js';
 
 export const name = 'flyt-blocks-task-graph';
 export const inject = ['blocks', 'sessions'];
@@ -21,6 +21,13 @@ export type ParallelismLevel = (typeof PARALLELISM_LEVELS)[number];
 const ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const DEFAULT_MAX_TASKS = 12;
 const HARD_MAX_TASKS = 24;
+// max_tokens bounds hidden reasoning and visible JSON together. The installed
+// Fable run 2026-08-30T13-39-49 exhausted 4,069/4,096 and 4,094/4,096 tokens
+// in reasoning on its plan and repair turns, leaving content empty both times.
+// This is a ceiling, not prepaid spend: ordinary planners still pay only for
+// what they use, while reasoning models have room left to emit the plan.
+const PLANNER_MAX_TOKENS = 61_440;
+const PLANNER_REPAIR_MAX_TOKENS = 81_920;
 const DEFAULT_WAVE: Record<ParallelismLevel, number> = { no: 1, low: 2, medium: 4, high: 8 };
 
 export interface GeneratedTask {
@@ -95,7 +102,10 @@ function cycleIn(tasks: readonly GeneratedTask[]): string[] | null {
  */
 export function parseTaskGraphPlan(
   text: string,
-  { minTasks = 1, maxTasks = DEFAULT_MAX_TASKS, parallelism = 'medium' as ParallelismLevel } = {},
+  {
+    minTasks = 1, maxTasks = DEFAULT_MAX_TASKS, parallelism = 'medium' as ParallelismLevel,
+    readOnly = false,
+  } = {},
 ): PlanParseResult {
   const raw = extractTaskGraphJson(text) as Record<string, unknown> | null;
   const errors: string[] = [];
@@ -130,6 +140,12 @@ export function parseTaskGraphPlan(
       return [name, parsed ?? []];
     })) as Record<'dependsOn' | 'produces' | 'requires' | 'optional' | 'writeFiles', string[]>;
     tasks.push({ id, title, goal, ...fields });
+  }
+
+  if (readOnly) for (const task of tasks) {
+    if (task.writeFiles.length) {
+      errors.push(`${task.id}.writeFiles must be empty because the brief is read-only`);
+    }
   }
 
   const known = new Set(tasks.map(task => task.id));
@@ -200,7 +216,28 @@ function plannerSystem(parallelism: ParallelismLevel, minTasks: number, maxTasks
     '{"summary":"...","tasks":[{"id":"lowercase-id","title":"...","goal":"complete worker brief with acceptance criteria","dependsOn":[],"produces":[],"requires":[],"optional":[],"writeFiles":[]}]}',
     'produces/requires/optional are named artifacts or facts, not filenames. writeFiles contains every file the task expects to modify.',
     'Keep each task independently verifiable. Do not create coordination-only tasks. Do not put two tasks in parallel when one needs the other\'s result.',
+    'Every worker can inspect the bound workspace. Do not create a broad repository-inventory or exploration task for other workers; give each worker a focused deliverable and let it perform its own targeted reads.',
+    'Do not narrate your analysis. Begin the visible response with { and finish the complete JSON object before stopping.',
   ].join('\n');
+}
+
+function plannerFailure(
+  result: Awaited<ReturnType<typeof runAgentLoop>>,
+  errors: readonly string[],
+  maxTokens: number,
+): string {
+  const completion = result.usage?.completionTokens;
+  const reasoning = result.usage?.reasoningTokens;
+  if (!result.content.trim() && result.finishReason === 'length') {
+    const split = reasoning != null
+      ? ` It spent ${reasoning}${completion != null ? ` of ${completion}` : ''} completion tokens on internal reasoning and returned no visible JSON.`
+      : ' It returned no visible JSON.';
+    return `Planner response was cut off at its ${maxTokens.toLocaleString('en-US')}-token ceiling.${split} Retry this block or choose another model.`;
+  }
+  if (!result.content.trim()) {
+    return `Planner returned no visible plan (finish reason: ${result.finishReason}). Retry this block or choose another model.`;
+  }
+  return `Planner returned an invalid task graph: ${errors.join('; ')}`;
 }
 
 function taskInput(task: GeneratedTask, original: string, completed: ReadonlyMap<string, BlockOutcome>): string {
@@ -237,6 +274,11 @@ const str = (value: JsonValue | undefined, fallback = ''): string => typeof valu
 const integer = (value: JsonValue | undefined, fallback: number, min: number, max: number): number =>
   typeof value === 'number' && Number.isInteger(value) ? Math.max(min, Math.min(max, value)) : fallback;
 
+/** A conservative, explicit read-only promise in the brief. */
+function isReadOnlyBrief(input: string): boolean {
+  return /\bread[- ]only\b|\bno (?:file )?(?:writes?|modifications?|changes?)\b|\bdo not (?:modify|write|edit|create (?:files?|artifacts?))\b/i.test(input);
+}
+
 export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
   const session = await run.ctx.sessions.open(run.runId);
   const parallelism = PARALLELISM_LEVELS.includes(run.config.parallelism as ParallelismLevel)
@@ -247,6 +289,9 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
   const model = str(run.config.model, 'openrouter/auto');
   const fallbackModels = Array.isArray(run.config.modelFallbacks)
     ? run.config.modelFallbacks.filter((item): item is string => typeof item === 'string' && Boolean(item)) : [];
+  const authoredPlannerSystem = str(run.config.systemPrompt);
+  const system = authoredPlannerSystem || plannerSystem(parallelism, minTasks, maxTasks);
+  const readOnly = isReadOnlyBrief(run.input);
 
   // Reuse the accepted plan on resume. The plan artifact is written before any
   // child is announced, so a crash cannot leave unexplainable generated work.
@@ -255,27 +300,37 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
     const data = event.data as Record<string, unknown>;
     if (event.type === 'block.output' && data.blockId === run.blockId && data.port === 'plan') planText = String(data.content ?? '');
   }
-  let parsed = planText ? parseTaskGraphPlan(planText, { minTasks, maxTasks, parallelism }) : null;
+  let parsed = planText ? parseTaskGraphPlan(planText, { minTasks, maxTasks, parallelism, readOnly }) : null;
   if (!parsed?.ok) {
     const planned = await runAgentLoop({
       ctx: run.ctx, session, runId: run.runId, blockId: `${run.blockId}.planner`, turn: 1,
-      model, fallbackModels, system: plannerSystem(parallelism, minTasks, maxTasks), input: run.input,
-      tools: [], ceiling: [], maxSteps: 1, isolated: true, ...(run.signal ? { signal: run.signal } : {}),
+      model, fallbackModels, system, input: run.input,
+      tools: [], ceiling: [], maxSteps: 1, maxTokens: PLANNER_MAX_TOKENS,
+      temperature: 0.1, isolated: true, ...(run.signal ? { signal: run.signal } : {}),
     });
     if (planned.stopped !== 'answered') return { status: 'failed', output: planned.content, error: planned.reason ?? planned.stopped };
     planText = planned.content;
-    parsed = parseTaskGraphPlan(planText, { minTasks, maxTasks, parallelism });
+    parsed = parseTaskGraphPlan(planText, { minTasks, maxTasks, parallelism, readOnly });
+    let lastPlanner = planned;
+    let lastPlannerBudget = PLANNER_MAX_TOKENS;
     if (!parsed.ok) {
       const repaired = await runAgentLoop({
         ctx: run.ctx, session, runId: run.runId, blockId: `${run.blockId}.planner-repair`, turn: 2,
-        model, fallbackModels, system: plannerSystem(parallelism, minTasks, maxTasks),
+        model, fallbackModels, system,
         input: `The prior plan was invalid:\n- ${parsed.errors.join('\n- ')}\n\nOriginal brief:\n${run.input}\n\nReturn a corrected complete JSON plan.`,
-        tools: [], ceiling: [], maxSteps: 1, isolated: true, ...(run.signal ? { signal: run.signal } : {}),
+        tools: [], ceiling: [], maxSteps: 1, maxTokens: PLANNER_REPAIR_MAX_TOKENS,
+        temperature: 0, isolated: true, ...(run.signal ? { signal: run.signal } : {}),
       });
+      if (repaired.stopped !== 'answered') return { status: 'failed', output: repaired.content, error: repaired.reason ?? repaired.stopped };
       planText = repaired.content;
-      parsed = parseTaskGraphPlan(planText, { minTasks, maxTasks, parallelism });
+      parsed = parseTaskGraphPlan(planText, { minTasks, maxTasks, parallelism, readOnly });
+      lastPlanner = repaired;
+      lastPlannerBudget = PLANNER_REPAIR_MAX_TOKENS;
     }
-    if (!parsed.ok || !parsed.plan) return { status: 'failed', output: planText, error: `Planner returned an invalid task graph: ${parsed.errors.join('; ')}` };
+    if (!parsed.ok || !parsed.plan) return {
+      status: 'failed', output: planText,
+      error: plannerFailure(lastPlanner, parsed.errors, lastPlannerBudget),
+    };
     await session.append({ type: 'block.output', data: { blockId: run.blockId, port: 'plan', content: planText } });
   }
   const plan = parsed.plan!;
@@ -305,12 +360,22 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
       } });
       let outcome: BlockOutcome;
       try {
+        // A task that declares no writes is a read-only task, not merely a
+        // writer that happens not to use its authority. Narrow its ceiling
+        // before schemas reach the model, so it cannot churn through approval
+        // prompts for create_file/bash while producing an analysis.
+        const childCeiling = task.writeFiles.length
+          ? run.ceiling
+          : run.ceiling.filter(name => run.ctx.tools.get(name)?.classification?.effect === 'read');
         outcome = await executeWork({
           ...run, blockId: childId, input: taskInput(task, run.input, completed),
+          ceiling: childCeiling,
           config: {
             model, ...(fallbackModels.length ? { modelFallbacks: fallbackModels } : {}),
+            ...(run.config.workerSystemPrompt ? { systemPrompt: run.config.workerSystemPrompt } : {}),
             ...(run.config.effort ? { effort: run.config.effort } : {}),
-            ...(run.config.workerMaxSteps ? { maxSteps: run.config.workerMaxSteps } : {}),
+            maxSteps: integer(run.config.workerMaxSteps, MAX_STEPS, 1, 100_000),
+            maxTokens: integer(run.config.workerMaxTokens, DEFAULT_WORKER_MAX_TOKENS, 1, 131_072),
             isolated: true,
             instructions: `Work only on this generated task. Respect its expected write scope.\n${str(run.config.workerInstructions)}`.trim(),
           },
@@ -328,11 +393,13 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
       } });
       return { task, outcome };
     }));
-    const failed = outcomes.find(item => item.outcome.status === 'failed');
+    const failed = outcomes.filter(item => item.outcome.status === 'failed');
     for (const item of outcomes) if (item.outcome.status === 'done') completed.set(item.task.id, item.outcome);
-    if (failed) return {
-      status: 'failed', output: failed.outcome.output,
-      error: `Generated task "${failed.task.title}" failed: ${failed.outcome.error ?? 'unknown error'}`,
+    if (failed.length) return {
+      status: 'failed', output: failed.map(item => item.outcome.output).filter(Boolean).join('\n\n'),
+      error: failed.length === 1
+        ? `Generated task "${failed[0].task.title}" failed: ${failed[0].outcome.error ?? 'unknown error'}`
+        : `${failed.length} generated tasks failed: ${failed.map(item => `"${item.task.title}": ${item.outcome.error ?? 'unknown error'}`).join('; ')}`,
     };
   }
 
@@ -349,6 +416,14 @@ export const TASK_GRAPH_SETTINGS = {
     model: { type: 'string', description: 'Model used by the planner and generated workers.' },
     modelTier: { title: 'Model tier', enum: ['free', 'economy', 'standard', 'frontier'], description: 'Stable cost/quality profile.' },
     modelFallbacks: { type: 'array', items: { type: 'string' }, maxItems: 3 },
+    systemPrompt: {
+      title: 'Planner system prompt', type: 'string', format: 'multiline',
+      description: 'Replace the planning agent’s standing system prompt for this workflow instance.',
+    },
+    workerSystemPrompt: {
+      title: 'Worker system prompt', type: 'string', format: 'multiline',
+      description: 'Replace the generated workers’ standing system prompt for this workflow instance.',
+    },
     parallelism: {
       title: 'Parallel work', enum: PARALLELISM_LEVELS,
       description: 'No is serial. Low is conservative, Medium balanced, High aggressive except for hard dependencies and declared write conflicts.',
@@ -357,7 +432,8 @@ export const TASK_GRAPH_SETTINGS = {
     maxTasks: { title: 'Maximum tasks', type: 'integer', minimum: 1, maximum: HARD_MAX_TASKS },
     maxParallel: { title: 'Maximum simultaneous tasks', type: 'integer', minimum: 1, maximum: HARD_MAX_TASKS },
     effort: { enum: ['low', 'medium', 'high'], description: 'How hard generated workers should think.' },
-    workerMaxSteps: { title: 'Worker tool rounds', type: 'integer', minimum: 1, maximum: MAX_STEPS },
+    workerMaxSteps: { title: 'Warn after worker tool rounds', type: 'integer', minimum: 1, maximum: 100_000, description: 'Soft threshold only. The worker warns and continues.' },
+    workerMaxTokens: { title: 'Worker tokens per query', type: 'integer', minimum: 1, maximum: 131_072, description: 'A worker cut off here automatically continues in another query.' },
     workerInstructions: { title: 'Worker instructions', type: 'string', format: 'multiline' },
   },
 } as const;

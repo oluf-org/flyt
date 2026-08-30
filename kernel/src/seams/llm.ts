@@ -9,6 +9,16 @@
 import type { Message, Usage } from '../types.js';
 import type { LlmChunk, RouteRecord } from '../events.js';
 
+/** One durable change in the provider/model attempt ladder for a request. */
+export interface LlmAttempt {
+  index: number;
+  model: string;
+  provider?: string;
+  resolvedModel?: string;
+  status: 'started' | 'failed' | 'succeeded';
+  error?: string;
+}
+
 /** One model request. */
 export interface LlmRequest {
   /** The model id as the caller asked for it, before routing. */
@@ -22,6 +32,8 @@ export interface LlmRequest {
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  /** Observability hook. The runner persists each callback before continuing. */
+  onAttempt?: (attempt: LlmAttempt) => Promise<void> | void;
 }
 
 /** A settled model response. */

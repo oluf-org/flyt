@@ -32,6 +32,14 @@ export function blockStates(trace) {
       at.status = data.status;
       at.at = event.at ?? at.at;
       if (data.error) at.error = String(data.error);
+      if (['done', 'failed', 'skipped'].includes(data.status) && at.warningTransient) {
+        delete at.warning;
+        delete at.warningTransient;
+      }
+    }
+    if (event.type === 'block.warning') {
+      at.warning = String(data.reason ?? data.content ?? 'This block degraded.');
+      at.warningTransient = data.transient === true;
     }
     if (event.type === 'block.output') at.output = String(data.content ?? '');
     states[blockId] = at;
@@ -63,11 +71,21 @@ export function liveOutput(trace, blockId) {
 export function runStage(trace) {
   let stage = null;
   let error = null;
+  let errorBlockId = null;
   for (const event of trace?.others ?? []) {
-    if (event?.type === 'run.stage' && typeof event.data?.stage === 'string') stage = event.data.stage;
-    if (event?.type === 'run.error' && event.data?.error) error = String(event.data.error);
+    if (event?.type === 'run.stage' && typeof event.data?.stage === 'string') {
+      stage = event.data.stage;
+      if (stage === 'execution' || stage === 'resumed' || stage === 'done') {
+        error = null;
+        errorBlockId = null;
+      }
+    }
+    if (event?.type === 'run.error' && event.data?.error) {
+      error = String(event.data.error);
+      errorBlockId = typeof event.data.blockId === 'string' ? event.data.blockId : null;
+    }
   }
-  return { stage, error };
+  return { stage, error, errorBlockId };
 }
 
 /**
@@ -78,7 +96,7 @@ export function runStage(trace) {
  */
 export function runView(trace) {
   const states = blockStates(trace);
-  const { stage, error } = runStage(trace);
+  const { stage, error, errorBlockId } = runStage(trace);
   const blocks = {};
   for (const [blockId, at] of Object.entries(states)) {
     blocks[blockId] = {
@@ -97,6 +115,8 @@ export function runView(trace) {
     active,
     stage,
     error,
+    errorBlockId,
+    warnings: Object.entries(blocks).filter(([, block]) => block.warning).map(([blockId, block]) => ({ blockId, message: block.warning })),
     running: stage === 'execution' || stage === 'resumed' || active.length > 0,
   };
 }

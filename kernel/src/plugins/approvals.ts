@@ -13,7 +13,10 @@
  *    whatever the approval mode says, because approval answers "may this run
  *    now", not "may this exist".
  * 3. **Then the mode decides**: `always` proceeds unattended, `smart` proceeds
- *    for a call it can screen as safe, `ask` puts it to a person.
+ *    for a call it can screen as safe, and `ask` lets a classified local read
+ *    through while putting anything with side effects or untrusted input to a
+ *    person. "Ask permission" protects the project; it must not make an agent
+ *    ask before it can even inspect the project.
  *
  * A mode of `ask` with nobody to ask is a denial. That is the whole reason the
  * decision type has three cases instead of two.
@@ -34,7 +37,7 @@ export interface Verdict {
 
 /** How this surface approves. */
 export interface ApprovalsConfig {
-  /** `ask` pauses for every call, `smart` pauses for what it cannot clear, `always` is unattended. */
+  /** `ask` pauses for side effects, `smart` pauses for what it cannot clear, `always` is unattended. */
   mode?: 'ask' | 'smart' | 'always';
   /** Who to ask. Absent means nobody is there — which turns `ask` into `deny`. */
   ask?: AskHuman;
@@ -111,7 +114,15 @@ export function apply(ctx: Context, config: ApprovalsConfig = {}): () => void {
       return ask(exec, `${tool.name}: ${verdict.reason}`);
     }
 
-    return ask(exec, `${tool.name} wants to run`);
+    // The desktop describes Ask permission as pausing before writes and shell
+    // commands. Keep that promise here. This is deliberately narrower than
+    // simply checking `effect === "read"`: a connector may be read-only yet
+    // return untrusted external text, which still deserves a person's look in
+    // the conservative mode.
+    const verdict = await screen(exec, tool.classification);
+    if (verdict.risk === 'safe') return next();
+
+    return ask(exec, `${tool.name}: ${verdict.reason}`);
   });
 
   async function ask(exec: ToolExecution, reason: string): Promise<PreToolDecision> {

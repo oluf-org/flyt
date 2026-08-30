@@ -94,7 +94,8 @@ import { fileURLToPath } from 'node:url';
 const src = p => fs.readFileSync(fileURLToPath(new URL(`../src/${p}`, import.meta.url)), 'utf8');
 
 test('the window mounts the cutover Root and no renderer reads the retired flag', () => {
-  assert.match(src('main.jsx'), /render\(<Root \/>\)/);
+  assert.match(src('main.jsx'), /render\(<RendererBoundary><Root \/><\/RendererBoundary>\)/,
+    'the cutover Root remains mounted inside the renderer crash boundary');
   const roots = fs.readdirSync(fileURLToPath(new URL('../src', import.meta.url)))
     .filter(f => f.endsWith('.jsx') || f.endsWith('.js'))
     .filter(f => f !== 'Root.jsx' && /getSettings\(\)[\s\S]{0,400}\.v2\b/.test(src(f)));
@@ -171,6 +172,8 @@ test('the daily host wires the surviving entry controls into the v2 shell', () =
   assert.match(host, /workflowModelTiers/);
   assert.doesNotMatch(host, /launchDailyPrompt/);
   assert.match(host, /subscribeDailyRun/);
+  assert.match(host, /restartNode\(projectId, runId, blockId/);
+  assert.match(host, /revealRunLog/);
   assert.match(shell, /composer=\{composer\}/);
   assert.match(shell, /loc\.dest === MODELS/);
   assert.doesNotMatch(host, /FlowCanvas|NodesPage|settings\.v2/);
@@ -188,4 +191,10 @@ test('Build exposes organized library groups, resize separators, and explicit dr
   assert.doesNotMatch(editorCss, /#8b5cf6/, 'the Builder does not introduce a separate purple control color');
   assert.match(library, /className="lib-group"/);
   assert.match(library, /KIND_LABEL/);
+});
+test('Work receives the manual stop path required by soft worker limits', () => {
+  const shell = src('v2/Shell.jsx');
+  const root = src('v2/DailyRoot.jsx');
+  assert.match(shell, /onStopRun=\{onStopRun\}/);
+  assert.match(root, /window\.flyt\.stopRun\(projectId, runId\)/);
 });

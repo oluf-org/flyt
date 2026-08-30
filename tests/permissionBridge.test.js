@@ -116,6 +116,30 @@ test('ask, smart and always behave the same for a plugin tool as for a built-in 
   }
 });
 
+test('ask lets classified local reads through and asks before side effects', async () => {
+  const asked = [];
+  const kernel = createKernel();
+  const ran = [];
+  try {
+    await kernel.ctx.plugin(flytTools);
+    await kernel.ctx.plugin(flytApprovals, {
+      mode: 'ask',
+      ask: async (_exec, reason) => { asked.push(reason); return false; },
+    });
+    await installReviewed(kernel.ctx, aPluginContributing({ name: 'inspect_it', classification: CLASSIFIED_READ }, ran));
+    await installReviewed(kernel.ctx, aPluginContributing({ name: 'change_it', classification: CLASSIFIED_WRITE }, ran));
+
+    const read = await kernel.ctx.tools.execute(aCall('inspect_it', ['inspect_it', 'change_it']));
+    assert.equal(read.content, 'inspect_it ran');
+    assert.deepEqual(asked, [], 'inspecting the bound workspace does not create approval fatigue');
+
+    const write = await kernel.ctx.tools.execute(aCall('change_it', ['inspect_it', 'change_it']));
+    assert.match(write.error, /refused/);
+    assert.match(asked[0], /writes to the workspace/);
+    assert.deepEqual(ran, [['inspect_it', {}, 'work']], 'the refused write body never ran');
+  } finally { await kernel.dispose(); }
+});
+
 test('smart clears a read and stops at a write', async () => {
   const asked = [];
   const kernel = createKernel();

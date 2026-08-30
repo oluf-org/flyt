@@ -58,6 +58,9 @@ export default function DailyRoot() {
   const [workflowInteraction, setWorkflowInteraction] = useState(null);
   const [blockRunHistory, setBlockRunHistory] = useState([]);
   const [replyBusy, setReplyBusy] = useState(false);
+  const [retryBusy, setRetryBusy] = useState(false);
+  const [stopBusy, setStopBusy] = useState(false);
+  const [retryError, setRetryError] = useState('');
   const [submitKind, setSubmitKind] = useState('run');
   const [queueLevel, setQueueLevel] = useState('low');
   const [queueReceipt, setQueueReceipt] = useState(null);
@@ -526,6 +529,41 @@ export default function DailyRoot() {
             setLocation(current => ({ ...current, dest: BUILD, run: current.run, workflow: stackId ?? build?.stack?.id ?? null }));
           } catch (err) { setError(cleanIpcError(err)); }
         }}
+        onRetryFailed={async blockId => {
+          const projectId = activeRef.current;
+          const runId = watchingRef.current?.runId;
+          if (!projectId || !runId || !blockId || retryBusy) return;
+          setRetryBusy(true); setRetryError(''); setError('');
+          try {
+            await window.flyt.restartNode(projectId, runId, blockId, '');
+            await watchRun(projectId, runId);
+            await refreshRuns(projectId);
+          } catch (err) {
+            const message = cleanIpcError(err);
+            setRetryError(message);
+            setError(message);
+          } finally { setRetryBusy(false); }
+        }}
+        retryBusy={retryBusy}
+        retryError={retryError}
+        stopBusy={stopBusy}
+        onStopRun={async () => {
+          const projectId = activeRef.current;
+          const runId = watchingRef.current?.runId;
+          if (!projectId || !runId || stopBusy) return;
+          setStopBusy(true); setError('');
+          try {
+            await window.flyt.stopRun(projectId, runId);
+            await watchRun(projectId, runId);
+            await refreshRuns(projectId);
+          } catch (err) { setError(cleanIpcError(err)); }
+          finally { setStopBusy(false); }
+        }}
+        onRevealRunLog={() => {
+          const runId = watchingRef.current?.runId;
+          if (activeRef.current && runId) window.flyt.revealRunLog?.(activeRef.current, runId);
+        }}
+        onRevealDiagnosticLog={() => window.flyt.revealDiagnosticLog?.()}
         workflowInteraction={workflowInteraction}
         onWorkflowDecide={async approved => {
           const at = workflowInteraction; if (!at) return;

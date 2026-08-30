@@ -84,6 +84,14 @@
   border-radius: 6px;
 }
 
+.tr-attempts { display: grid; gap: 5px; margin: 0 0 8px; }
+.tr-attempt { display: grid; grid-template-columns: 74px minmax(0, 1fr) max-content; gap: 8px; margin: 0; padding: 5px 8px; border-radius: 6px; background: var(--canvas); color: var(--dim); }
+.tr-attempt span, .tr-attempt small { color: var(--faint); }
+.tr-attempt code { overflow: hidden; text-overflow: ellipsis; }
+.tr-attempt em { grid-column: 2 / -1; color: var(--err); font-style: normal; font-size: 11px; }
+.tr-attempt.state-failed { background: var(--err-soft); }
+.tr-attempt.state-started { background: var(--accent-soft); }
+
 .tr-unfinished { color: var(--warn); margin: 0 0 8px; }
 .tr-none { color: var(--faint); margin: 0 0 8px; }
 

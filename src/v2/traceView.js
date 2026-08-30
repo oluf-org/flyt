@@ -45,15 +45,32 @@ export function requestView(request, step) {
       usage.cachedTokens ? `${usage.cachedTokens} cached` : null,
     ].filter(Boolean).join(' · ')
     : null;
+  const attempts = (request.attempts ?? []).map(attempt => ({
+    index: attempt.index,
+    model: attempt.model ?? '(unrecorded)',
+    provider: attempt.provider ?? '(unresolved provider)',
+    effective: [attempt.provider, attempt.resolvedModel].filter(Boolean).join('/') || attempt.model || '(unrecorded)',
+    status: attempt.status ?? 'started',
+    error: attempt.error ?? null,
+    ms: between(attempt.startedAt, attempt.endedAt),
+  }));
+  const answered = [...(request.attempts ?? [])].reverse().find(attempt => attempt.status === 'succeeded');
+  const responseMs = between(answered?.startedAt ?? request.requestedAt, request.respondedAt ?? step?.endedAt);
+  const tokensPerSecond = usage?.completionTokens != null && responseMs > 0
+    ? usage.completionTokens / (responseMs / 1000) : null;
   return {
     model: request.model ?? '(unrecorded)',
+    configuredModel: request.configuredModel ?? null,
+    maxTokens: request.maxTokens ?? null,
     settled: request.settled === true,
     // An unsettled request is the live case and the crashed case at once, and
     // the reader can tell which from whether the run is still going.
     finishReason: request.settled ? (request.finishReason ?? '(none recorded)') : null,
     tokens,
     costUsd: usage?.costUsd ?? null,
-    ms: between(request.requestedAt, step?.endedAt),
+    ms: between(request.requestedAt, request.respondedAt ?? step?.endedAt),
+    tokensPerSecond,
+    attempts,
     // D40: reasoning is kept apart from content everywhere, including here. A
     // surface that concatenates them is a surface that cannot answer "how much
     // of what I paid for was thinking".

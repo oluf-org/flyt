@@ -25,6 +25,8 @@ import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
 import { AI_STEP_OUTPUT, AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
 
+export const DEFAULT_WORKER_MAX_TOKENS = 32_768;
+
 /** Cordis plugin name. */
 export const name = 'flyt-blocks-core';
 
@@ -97,8 +99,13 @@ export const WORK_SETTINGS = {
       type: 'array', items: { type: 'string' }, maxItems: 3,
       description: 'Ordered alternatives in the same explicit cost profile.',
     },
+    systemPrompt: {
+      type: 'string', format: 'multiline',
+      description: 'Replace this block’s standing system prompt for this workflow instance.',
+    },
     instructions: { type: 'string', description: 'Appended to the standing instructions above.' },
-    maxSteps: { type: 'integer', minimum: 1, description: 'Tool rounds before it must answer.' },
+    maxSteps: { type: 'integer', minimum: 1, description: 'Soft tool-round threshold: warn here, then continue working.' },
+    maxTokens: { type: 'integer', minimum: 1, maximum: 131_072, description: 'Per-query output ceiling. A truncated worker automatically continues in another query.' },
     effort: {
       enum: ['low', 'medium', 'high'],
       description: 'How hard to think. A hint, not a route — the pipeline effort dial writes here.',
@@ -122,6 +129,7 @@ const str = (value: JsonValue | undefined, fallback = ''): string =>
 async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<BlockOutcome> {
   const session = await run.ctx.sessions.open(run.runId);
   const instructions = str(run.config.instructions);
+  const systemPrompt = str(run.config.systemPrompt, standingSystem);
   const tools = run.ctx.tools.list().filter(t => run.ceiling.includes(t.name));
 
   const result = await runAgentLoop({
@@ -136,11 +144,13 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
     fallbackModels: Array.isArray(run.config.modelFallbacks)
       ? run.config.modelFallbacks.filter((model): model is string => typeof model === 'string' && Boolean(model))
       : [],
-    system: instructions ? `${standingSystem}\n\n${instructions}` : standingSystem,
+    system: instructions ? `${systemPrompt}\n\n${instructions}` : systemPrompt,
     input: run.input,
     tools,
     ceiling: run.ceiling,
-    maxSteps: typeof run.config.maxSteps === 'number' ? run.config.maxSteps : MAX_STEPS,
+    softMaxSteps: typeof run.config.maxSteps === 'number' ? run.config.maxSteps : MAX_STEPS,
+    maxTokens: typeof run.config.maxTokens === 'number' ? run.config.maxTokens : DEFAULT_WORKER_MAX_TOKENS,
+    continueOnLength: true,
     isolated: run.config.isolated === true,
     ...(run.signal ? { signal: run.signal } : {}),
   });

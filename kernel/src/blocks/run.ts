@@ -18,18 +18,20 @@
  * @module #kernel/blocks/run
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { JsonValue, Message, ToolCall } from '../types.js';
+import type { JsonValue, Message, ToolCall, ToolResult, Usage } from '../types.js';
 import type { SessionHandle } from '../seams/sessions.js';
 import type { LlmChunk, LlmSettled, StepRef } from '../events.js';
 import type { ToolDefinition } from '../seams/tools.js';
 
 /**
- * How many steps one block gets before it must answer.
+ * How many steps one block gets before the run warns that it is taking longer
+ * than expected.
  *
- * An unbounded agent loop is a budget with no floor under it. The number is a
- * default and not a law: a block declares its own, and a caller may say.
+ * This is deliberately a soft threshold for working agents. They keep going
+ * after the warning until they answer, are cancelled, or an explicit hard
+ * bound supplied by a tightly-scoped control block is reached.
  */
-export const MAX_STEPS = 24;
+export const MAX_STEPS = 120;
 
 /** Why the loop stopped, in the four ways that are not "the model finished". */
 export type StopReason = 'answered' | 'bound' | 'cancelled' | 'vetoed';
@@ -46,6 +48,10 @@ export interface LoopResult {
   reason?: string;
   /** The finish reason of the last model response. */
   finishReason: string;
+  /** Internal reasoning from the last response, kept separate from content. */
+  reasoning?: string;
+  /** Usage from the last response, so a block can diagnose token starvation. */
+  usage?: Usage;
   /** The message list as the log holds it, after the loop. */
   messages: Message[];
 }
@@ -72,6 +78,22 @@ export interface LoopOptions {
   /** The ceiling itself, carried onto each execution so the gate can read it. */
   ceiling?: readonly string[];
   maxSteps?: number;
+  /** Warn at this many steps and continue. Further warnings use exponential
+   * milestones so a long run stays visible without flooding the log. */
+  softMaxSteps?: number;
+  /** Whole-completion ceiling. Reasoning models need headroom beyond the
+   * visible answer budget because providers count both against max_tokens. */
+  maxTokens?: number;
+  /** Sampling temperature for bounded structural turns such as planning. */
+  temperature?: number;
+  /** A provider token ceiling is necessarily hard per request. When enabled,
+   * a length-truncated response is logged, warned, and continued in a new
+   * request instead of being mistaken for a finished block. */
+  continueOnLength?: boolean;
+  /** Per-tool call caps for role-specific loops such as clarification. */
+  toolLimits?: Readonly<Record<string, number>>;
+  /** Role-specific semantic refusal before a call reaches the shared gate. */
+  toolGuard?: (call: ToolCall) => string | null | undefined;
   /** Read only this block's tagged conversation from the canonical run log. */
   isolated?: boolean;
   signal?: AbortSignal;
@@ -91,7 +113,9 @@ function schemasFor(tools: readonly ToolDefinition[]): { name: string; descripti
 export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   const {
     ctx, session, runId, blockId, turn, model, fallbackModels = [], system, input,
-    tools = [], ceiling = [], maxSteps = MAX_STEPS, isolated = false, signal,
+    tools = [], ceiling = [], maxSteps, softMaxSteps = MAX_STEPS, maxTokens, temperature,
+    continueOnLength = false,
+    toolLimits = {}, toolGuard, isolated = false, signal,
   } = options;
 
   await session.append({ type: 'turn.start', data: { runId, turn, blockId } });
@@ -106,13 +130,27 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
 
   const schemas = schemasFor(tools);
   let content = '';
+  const continuedContent: string[] = [];
+  let reasoning = '';
+  let usage: Usage | undefined;
   let finishReason = 'unknown';
   let stopped: StopReason = 'bound';
-  let reason: string | undefined =
-    `The block used all ${maxSteps} of its steps without finishing.`;
+  let reason: string | undefined = maxSteps == null
+    ? undefined
+    : `The block used all ${maxSteps} of its hard-bounded steps without finishing.`;
   let step = 0;
+  let stepsRun = 0;
+  let nextSoftWarning = Math.max(1, Math.floor(softMaxSteps));
+  const toolUses = new Map<string, number>();
+  // Once an ordered fallback has answered, prefer it for the rest of this
+  // block turn. A tool-using response can need many follow-up steps; retrying a
+  // rate-limited primary before every one adds minutes of identical failure.
+  // Earlier rungs remain at the end as a last resort if the winner later goes
+  // away, so affinity improves progress without silently narrowing the chain.
+  let routeModels = [model, ...fallbackModels];
 
-  for (step = 1; step <= maxSteps; step++) {
+  for (step = 1; ; step++) {
+    if (maxSteps != null && step > maxSteps) break;
     const ref: StepRef = { runId, blockId, step };
 
     if (signal?.aborted) {
@@ -139,15 +177,42 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     // request, because the request is the log.
     const messages = await session.deriveMessages(undefined, isolated ? blockId : undefined);
     const callId = `${blockId}-${step}`;
+    const [requestModel, ...requestFallbacks] = routeModels;
+    await session.append({
+      type: 'step.prompt',
+      data: {
+        blockId, step,
+        // The messages are already canonical session events. Recording their
+        // exact assembled request here makes one query inspectable without a
+        // reader having to reconstruct the conversation by hand.
+        content: {
+          messages: messages as unknown as JsonValue,
+          tools: schemas.map(schema => schema.name),
+        } as unknown as JsonValue,
+      },
+    });
     await session.append({
       type: 'llm.request',
-      data: { callId, model, blockId, step, tools: schemas.map(s => s.name), messages: messages.length },
+      data: {
+        callId, model: requestModel, blockId, step,
+        ...(requestModel !== model ? { configuredModel: model } : {}),
+        ...(maxTokens ? { maxTokens } : {}),
+        tools: schemas.map(s => s.name), messages: messages.length,
+      },
     });
 
     const stream = ctx.llm.stream({
-      model, messages, signal,
-      ...(fallbackModels.length ? { fallbackModels } : {}),
+      model: requestModel, messages, signal,
+      ...(requestFallbacks.length ? { fallbackModels: requestFallbacks } : {}),
       ...(schemas.length ? { tools: schemas } : {}),
+      ...(maxTokens ? { maxTokens } : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
+      onAttempt: async attempt => {
+        await session.append({
+          type: 'llm.attempt',
+          data: { callId, blockId, step, ...attempt },
+        });
+      },
     });
     for await (const chunk of stream) {
       ctx.emit('llm/stream', ref, chunk as LlmChunk);
@@ -165,8 +230,15 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       });
     }
     const answer = await stream.settled();
+    stepsRun = step;
+
+    const winner = routeModels.findIndex(candidate =>
+      answer.route?.effective === candidate || answer.route?.effective?.endsWith(`/${candidate}`));
+    if (winner > 0) routeModels = [...routeModels.slice(winner), ...routeModels.slice(0, winner)];
 
     content = answer.content ?? '';
+    reasoning = answer.reasoning ?? '';
+    usage = answer.usage;
     finishReason = answer.finishReason ?? 'unknown';
     const calls: ToolCall[] = (answer.toolCalls ?? []).map(c => ({
       id: c.id, name: c.name, args: (c.args ?? null) as JsonValue,
@@ -191,7 +263,23 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       ...(answer.route ? { route: answer.route } : {}),
     };
 
+    if (!calls.length && finishReason === 'length' && continueOnLength) {
+      if (content) continuedContent.push(content);
+      await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
+      ctx.emit('step/end', ref, settled);
+      const continuation = `The provider stopped this response at its ${maxTokens?.toLocaleString('en-US') ?? 'configured'}-token ceiling. The block is still working and will continue in another request.`;
+      await session.append({ type: 'block.warning', data: {
+        blockId, code: 'soft_token_limit', transient: true, reason: continuation,
+      } });
+      await session.append({ type: 'message.user', data: {
+        blockId,
+        content: 'Your previous response reached the provider output limit. Continue from where it stopped. Do not repeat completed work; finish the task and then answer normally.',
+      } });
+      continue;
+    }
+
     if (!calls.length) {
+      if (continuedContent.length) content = [...continuedContent, content].join('');
       await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
       ctx.emit('step/end', ref, settled);
       stopped = 'answered';
@@ -205,7 +293,21 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       // `tools/pre-execute` gate, then the body, then `tools/post-execute` —
       // so a refusal comes back as a result the model can read rather than as
       // an exception the scheduler has to interpret.
-      const result = await ctx.tools.execute({ ...ref, call, ceiling, ...(signal ? { signal } : {}) });
+      const used = toolUses.get(call.name) ?? 0;
+      const limit = toolLimits[call.name];
+      let result: ToolResult;
+      if (Number.isInteger(limit) && used >= limit) {
+        result = {
+          content: `Refused: ${call.name} has already used its ${limit}-call budget in this block. Make a reasonable explicit assumption and finish the deliverable.`,
+          error: `${call.name} call budget exhausted`,
+        };
+      } else {
+        toolUses.set(call.name, used + 1);
+        const guarded = toolGuard?.(call);
+        result = guarded
+          ? { content: `Refused: ${guarded}`, error: `${call.name} call refused by this block` }
+          : await ctx.tools.execute({ ...ref, call, ceiling, ...(signal ? { signal } : {}) });
+      }
       await session.append({
         type: 'tool.result',
         data: {
@@ -218,6 +320,18 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
 
     await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
     ctx.emit('step/end', ref, settled);
+
+    if (step >= nextSoftWarning) {
+      const warning = `The block has used ${step.toLocaleString('en-US')} steps and is still working. This is a soft limit: execution will continue until the block answers or you stop it.`;
+      await session.append({ type: 'block.warning', data: {
+        blockId, code: 'soft_step_limit', transient: true, reason: warning,
+      } });
+      await session.append({ type: 'message.system', data: {
+        blockId,
+        content: `You have used ${step.toLocaleString('en-US')} tool rounds. Keep working if necessary, but avoid repeating reads or checks and finish the deliverable as soon as it is complete.`,
+      } });
+      nextSoftWarning *= 2;
+    }
   }
 
   const messages = await session.deriveMessages(undefined, isolated ? blockId : undefined);
@@ -229,10 +343,12 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
 
   return {
     content,
-    steps: Math.min(step, maxSteps),
+    steps: stepsRun,
     stopped,
     ...(reason ? { reason } : {}),
     finishReason,
+    ...(reasoning ? { reasoning } : {}),
+    ...(usage ? { usage } : {}),
     messages,
   };
 }

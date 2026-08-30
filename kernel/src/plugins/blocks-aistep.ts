@@ -43,12 +43,16 @@ export const AI_STEP_SETTINGS = {
       type: 'array', items: { type: 'string' }, maxItems: 3,
       description: 'Ordered alternatives in the same explicit cost profile.',
     },
+    systemPrompt: {
+      type: 'string', format: 'multiline',
+      description: 'Replace this block’s standing system prompt for this workflow instance.',
+    },
     instructions: { type: 'string', description: 'Appended to the block’s standing brief.' },
     effort: {
       enum: ['low', 'medium', 'high'],
       description: 'How hard to think, carried from the v1 node. A hint, not a route.',
     },
-    maxSteps: { type: 'integer', minimum: 1, description: 'Tool rounds before it must answer.' },
+    maxSteps: { type: 'integer', minimum: 1, description: 'Soft tool-round threshold: warn here, then continue working.' },
   },
 } as const;
 
@@ -75,14 +79,21 @@ export const AI_STEP_OUTPUT = 'text';
  */
 export async function executeAiStep(
   run: BlockRun, brief: string, output: { name: string; type?: 'string' | 'list' } = { name: AI_STEP_OUTPUT },
+  options: {
+    turn?: number;
+    toolLimits?: Readonly<Record<string, number>>;
+    toolGuard?: (call: { id: string; name: string; args: JsonValue }) => string | null | undefined;
+    maxSteps?: number;
+  } = {},
 ): Promise<BlockOutcome> {
   const session = await run.ctx.sessions.open(run.runId);
   const instructions = str(run.config.instructions);
   const effort = str(run.config.effort);
+  const standing = str(run.config.systemPrompt, brief);
   const tools = run.ctx.tools.list().filter(t => run.ceiling.includes(t.name));
 
   const system = [
-    brief,
+    standing,
     ...(effort ? [`\nWork at ${effort.toUpperCase()} effort.`] : []),
     ...(instructions ? [`\n${instructions}`] : []),
   ].join('');
@@ -92,7 +103,7 @@ export async function executeAiStep(
     session,
     runId: run.runId,
     blockId: run.blockId,
-    turn: 1,
+    turn: options.turn ?? 1,
     model: str(run.config.model, 'openrouter/auto'),
     fallbackModels: Array.isArray(run.config.modelFallbacks)
       ? run.config.modelFallbacks.filter((model): model is string => typeof model === 'string' && Boolean(model))
@@ -101,7 +112,10 @@ export async function executeAiStep(
     input: run.input,
     tools,
     ceiling: run.ceiling,
-    maxSteps: typeof run.config.maxSteps === 'number' ? run.config.maxSteps : MAX_STEPS,
+    ...(options.maxSteps != null ? { maxSteps: options.maxSteps } : {}),
+    softMaxSteps: typeof run.config.maxSteps === 'number' ? run.config.maxSteps : MAX_STEPS,
+    ...(options.toolLimits ? { toolLimits: options.toolLimits } : {}),
+    ...(options.toolGuard ? { toolGuard: options.toolGuard } : {}),
     ...(run.signal ? { signal: run.signal } : {}),
   });
 

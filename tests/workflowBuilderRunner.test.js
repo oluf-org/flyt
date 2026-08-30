@@ -109,6 +109,156 @@ test('Fable materializes and completes its generated task blocks through the wor
   assert.match(snapshot.nodeOutputs.dispatch, /completed worker 2/);
 });
 
+test('a failed Fable planner can restart only dispatch and keep the completed refiner', async () => {
+  let call = 0;
+  const seen = [];
+  const plan = JSON.stringify({
+    summary: 'Recovered plan.',
+    tasks: [{ id: 'finish', title: 'Finish', goal: 'Finish after the recovered plan.', dependsOn: [], produces: [], requires: [], optional: [], writeFiles: [] }],
+  });
+  const { api, projectId } = await workflowHarness(async request => {
+    call += 1; seen.push(request);
+    if (call === 1) return { text: 'A refined brief.', finishReason: 'stop', provider: 'script', model: request.model };
+    if (call === 2 || call === 3) return {
+      text: '', reasoning: 'analysis consumed the whole response', finishReason: 'length',
+      usage: { completion_tokens: 4096, completion_tokens_details: { reasoning_tokens: call === 2 ? 4069 : 4094 } },
+      provider: 'script', model: request.model,
+    };
+    return { text: call === 4 ? plan : 'Recovered worker finished.', finishReason: 'stop', provider: 'script', model: request.model };
+  });
+  const started = await api.invoke('workflow:run', {
+    projectId, workflowId: 'fable-at-home', input: 'Build the feature.', presetId: 'medium', approvalMode: 'always',
+  });
+  const failed = await waitForAsync(async () => {
+    const current = await api.invoke('run:snapshot', { projectId, runId: started.runId });
+    return current.meta.stage === 'failed' ? current : null;
+  }, 'reasoning-starved Fable planner');
+  assert.match(failed.meta.error, /81,920-token ceiling/);
+  assert.match(failed.meta.error, /4094 of 4096 completion tokens/);
+  assert.deepEqual(seen.slice(1, 3).map(request => request.maxTokens), [61_440, 81_920]);
+
+  await api.invoke('run:restartNode', { projectId, runId: started.runId, nodeId: 'dispatch' });
+  const recovered = await waitForAsync(async () => {
+    const current = await api.invoke('run:snapshot', { projectId, runId: started.runId });
+    return current.meta.stage === 'done' ? current : null;
+  }, 'restarted Fable dispatch');
+  assert.equal(call, 5, 'the refiner stayed completed; only planning and its generated worker reran');
+  assert.equal(recovered.meta.nodeStatus['prompt-refiner'], 'done');
+  assert.equal(recovered.meta.nodeStatus.dispatch, 'done');
+  assert.match(recovered.nodeOutputs.dispatch, /Recovered worker finished/);
+  const log = await api.invoke('run:log', { projectId, runId: started.runId });
+  assert.ok(log.some(event => event.type === 'block.status' && event.data?.blockId === 'dispatch' && event.data?.status === 'pending'));
+  assert.ok(log.some(event => event.type === 'run.stage' && event.data?.stage === 'resumed'));
+});
+
+test('a prose question from Fable refiner is parked for the user and never reaches its planner', async () => {
+  let call = 0;
+  const seen = [];
+  const plan = JSON.stringify({
+    summary: 'One task.',
+    tasks: [{ id: 'review', title: 'Review', goal: 'Return the requested review.', dependsOn: [], produces: [], requires: [], optional: [], writeFiles: [] }],
+  });
+  const { api, projectId } = await workflowHarness(async request => {
+    call += 1; seen.push(request);
+    const text = call === 1 ? 'Which output format should I use?'
+      : call === 2 ? 'Produce a Markdown review with explicit acceptance criteria.'
+        : call === 3 ? plan : 'Completed the Markdown review.';
+    return { text, finishReason: 'stop', provider: 'script', model: request.model };
+  });
+  const started = await api.invoke('workflow:run', {
+    projectId, workflowId: 'fable-at-home', input: 'Prepare the review.', presetId: 'low', approvalMode: 'ask',
+  });
+  const pending = await waitForAsync(async () => {
+    const rows = await api.invoke('workflow:pending', { projectId, runId: started.runId });
+    return rows.find(row => row.kind === 'question' && row.blockId === 'prompt-refiner') ?? null;
+  }, 'intercepted refiner question');
+  assert.equal(pending.question, 'Which output format should I use?');
+  assert.equal(call, 1, 'the planner was not called with the unanswered question');
+
+  await api.invoke('workflow:answer', {
+    projectId, runId: started.runId, questionId: pending.questionId, answer: 'Markdown',
+  });
+  const snapshot = await waitForAsync(async () => {
+    const current = await api.invoke('run:snapshot', { projectId, runId: started.runId });
+    return current.meta.stage === 'done' ? current : null;
+  }, 'Fable after refiner answer');
+  assert.match(snapshot.nodeOutputs['prompt-refiner'], /Markdown review/);
+  assert.match(snapshot.nodeOutputs.dispatch, /Completed the Markdown review/);
+  assert.match(JSON.stringify(seen[2].messages), /Markdown review/, 'only the settled brief reached planning');
+});
+
+test('Fable refuses refiner meta-questions without bothering the user or planner', async () => {
+  let call = 0;
+  const plan = JSON.stringify({
+    summary: 'One focused task.',
+    tasks: [{ id: 'inspect', title: 'Inspect', goal: 'Inspect the bound workspace.', dependsOn: [], produces: [], requires: [], optional: [], writeFiles: [] }],
+  });
+  const { api, events, projectId } = await workflowHarness(async request => {
+    call += 1;
+    if (call === 1) return {
+      text: '', finishReason: 'tool_calls', provider: 'script', model: request.model,
+      message: { tool_calls: [{ id: 'meta-question', function: {
+        name: 'ask_human', arguments: JSON.stringify({ question: 'I do not have a file-reading tool. Could you provide the contents of package.json?' }),
+      } }] },
+    };
+    const text = call === 2 ? 'Inspect the current bound workspace and return the requested evidence.'
+      : call === 3 ? plan : 'Inspection complete.';
+    return { text, finishReason: 'stop', provider: 'script', model: request.model };
+  });
+
+  const started = await api.invoke('workflow:run', {
+    projectId, workflowId: 'fable-at-home', input: 'Inspect this repository.', presetId: 'low', approvalMode: 'ask',
+  });
+  const snapshot = await waitForAsync(async () => {
+    const current = await api.invoke('run:snapshot', { projectId, runId: started.runId });
+    return current.meta.stage === 'done' ? current : null;
+  }, 'Fable after refusing a meta-question');
+
+  assert.equal(events.some(event => event.type === 'workflow:event' && event.payload.kind === 'question'), false);
+  assert.match(snapshot.nodeOutputs['prompt-refiner'], /bound workspace/);
+  assert.match(snapshot.nodeOutputs.dispatch, /Inspection complete/);
+  const log = await api.invoke('run:log', { projectId, runId: started.runId });
+  assert.match(log.find(event => event.type === 'tool.result' && event.data?.callId === 'meta-question')?.data?.error ?? '', /refused by this block/);
+});
+
+test('Fable degrades to the original request when a Free refiner never finishes questioning', async () => {
+  let call = 0;
+  const plan = JSON.stringify({
+    summary: 'Fallback task.',
+    tasks: [{ id: 'finish', title: 'Finish', goal: 'Use the preserved request.', dependsOn: [], produces: [], requires: [], optional: [], writeFiles: [] }],
+  });
+  const { api, projectId } = await workflowHarness(async request => {
+    call += 1;
+    if (call <= 4) return {
+      text: '', finishReason: 'tool_calls', provider: 'script', model: request.model,
+      message: { tool_calls: [{ id: `ask-${call}`, function: {
+        name: 'ask_human', arguments: JSON.stringify({ question: `Question ${call}?` }),
+      } }] },
+    };
+    return { text: call === 5 ? plan : 'Finished from the preserved request.', finishReason: 'stop', provider: 'script', model: request.model };
+  });
+  const started = await api.invoke('workflow:run', {
+    projectId, workflowId: 'fable-at-home', input: 'Preserve this exact request.', presetId: 'low', approvalMode: 'ask',
+  });
+  const pending = await waitForAsync(async () => {
+    const rows = await api.invoke('workflow:pending', { projectId, runId: started.runId });
+    return rows.find(row => row.kind === 'question') ?? null;
+  }, 'one bounded refiner question');
+  await api.invoke('workflow:answer', {
+    projectId, runId: started.runId, questionId: pending.questionId, answer: 'Use the bound workspace.',
+  });
+  const snapshot = await waitForAsync(async () => {
+    const current = await api.invoke('run:snapshot', { projectId, runId: started.runId });
+    return current.meta.stage === 'done' ? current : null;
+  }, 'deterministically degraded refiner');
+  assert.match(snapshot.nodeOutputs['prompt-refiner'], /Preserve this exact request/);
+  assert.match(snapshot.nodeOutputs['prompt-refiner'], /prompt refiner did not produce a usable final brief/i);
+  assert.match(snapshot.nodeOutputs.dispatch, /Finished from the preserved request/);
+  const log = await api.invoke('run:log', { projectId, runId: started.runId });
+  assert.equal(log.filter(event => event.type === 'block.warning' && event.data?.code === 'refiner_degraded').length, 1);
+  assert.equal(call, 6, 'one question plus bounded refusals, then planning and work');
+});
+
 test('a Pipeline run pins every leaf, records the preset, and ends with a fallback chat summary', async () => {
   const seen = [];
   const { api, projectId } = await workflowHarness(async request => {

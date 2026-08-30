@@ -24,17 +24,25 @@ Every block declares:
 - `ceiling`: the maximum tool reach this block may ever receive; and
 - `execute`: the host-only implementation, never sent to the renderer.
 
+Every model-backed built-in exposes `systemPrompt` in its settings. Leaving it empty uses the block plugin's standing prompt; setting it in a stack's `config:` replaces that standing prompt for that workflow instance, while `instructions` remains an append-only specialization. `task-graph` exposes two prompt boundaries because it owns two roles: `systemPrompt` replaces the planner prompt and `workerSystemPrompt` replaces the generated workers' standing prompt. The resolved config and every `message.system` are recorded with the run, so an override is inspectable after the stack changes.
+
+Prompt refinement has a stricter interaction contract than ordinary model output. A consequential clarification must use `ask_human`; a prose question is intercepted before downstream planning, the block gets at most one human-question call, and an exhausted or unusable Free refiner degrades visibly to the original request plus any answer instead of forwarding an unanswered question or stopping the workflow.
+
 Classification is not a grant. A plugin tool arrives unclassified and unreachable; conservative inference proposes effects, a human may confirm or make them stricter, and a stack still has to name a ceiling that reaches it. A skill's `requiresTools` is likewise a request, never authority and never allowed above the block's static ceiling.
 
 ## Composition
 
 Blocks live inside `sequence`, `parallel`, `repeat`, `foreach`, `until`, and `if` containers. Containment is the graph. A sequence passes its result forward; parallel lanes receive the same input and remain isolated until the container aggregates them. Repetition and predicates are statically bounded before execution. See [`STACK_LANG.md`](./STACK_LANG.md) for the exact grammar.
 
-`flyt-blocks-core:task-graph` is a leaf in the authored language and a run-time container in Work. Its planner produces a bounded DAG; validation rejects unknown dependencies, duplicate outputs, missing required producers, and cycles before child work is announced. Data producers and same-file writers receive deterministic edges, then ready tasks run in bounded waves. The generated child blocks are durable run events nested under the authored block, never edits silently written back to the workflow.
+`flyt-blocks-core:task-graph` is a leaf in the authored language and a run-time container in Work. Its planner produces a bounded DAG; validation rejects unknown dependencies, duplicate outputs, missing required producers, and cycles before child work is announced. An explicitly read-only brief also rejects any generated non-empty `writeFiles` scope before a child exists. Data producers and same-file writers receive deterministic edges, then ready tasks run in bounded waves. A generated task with an empty `writeFiles` declaration receives a read-only ceiling, so an analysis worker cannot spend its turn requesting writers or shell. The generated child blocks are durable run events nested under the authored block, never edits silently written back to the workflow.
 
 ## Execution and evidence
 
 The kernel runner resolves every `use` before spending, intersects the run and block ceilings, and executes tools only through `tools/pre-execute`. Each durable step appends to `session.jsonl`; Work and Trace fold the same log, and the run folder is a rebuildable projection. A block that fails, stops, or loses a tool response remains visible as that state rather than as an empty success.
+
+Every model query also records its assembled messages, offered tools, token ceiling, route, attempts, finish reason, usage, internal reasoning, and visible response as distinct fields. A failed block can be retried in place: completed upstream blocks remain complete and only the selected block and its downstream generated work run again.
+
+Working-agent round limits are soft. The default warning threshold is 120 rounds; crossing it records a visible warning and the worker continues until it answers or is cancelled, with later warnings at exponential milestones. Worker queries allow 32,768 output tokens by default. A provider `length` stop records a warning and continues in a new query rather than making a partial response look finished. Small structural and clarification turns may still declare a hard bound.
 
 ## Adding a block
 

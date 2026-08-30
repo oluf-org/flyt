@@ -52,6 +52,8 @@ Supported composition is the closed container set `sequence`, `parallel`, `repea
 
 A node receives its task, selected upstream outputs, template instructions, instance instructions, project skills, and any explicit `contextSpec`. When no narrow context is declared, upstream content may still be broad; automatic context-strategy selection remains an open design choice.
 
+Built-in model-backed blocks publish their standing system prompt through their block contract and accept a per-instance `systemPrompt` replacement in stack config. Ordinary `instructions` append after it. The task-graph block exposes planner and generated-worker replacements separately. Resolution happens before execution and the exact system message is appended to `session.jsonl` before the request, so a workflow-specific prompt remains attributable and editable in Build without mutating the plugin default or another workflow.
+
 Skills are names on a template, resolved at run time from `.flyt/skills/<name>.md`. Names are validated and paths are confined. A missing skill is logged and skipped, never silently treated as present and never fatal to the run.
 
 Every model and tool interaction leaves evidence. Tool results are stored in full while the model receives a bounded preview plus a handle. Summary nodes are run artifacts with provenance; they do not mutate the source flow. Retrospectives describe problems and tool experience but do not autonomously rewrite routing or prompts.
@@ -84,7 +86,7 @@ Loop work adds git-worktree isolation, declared gates, a reviewer model, a post-
 
 ## 6. Models and provider authentication
 
-Provider adapters share `callModel()`, streaming, retry, timeout, usage, and error contracts. Supported routes include direct API providers, OpenRouter, the mock provider, and explicitly enabled vendor CLI runtimes.
+Provider adapters share `callModel()`, streaming, retry, timeout, usage, and error contracts. Supported routes include direct API providers, OpenRouter, the mock provider, and explicitly enabled vendor CLI runtimes. In an explicit fallback chain, intermediate candidates get one provider attempt and the final candidate retains ordinary retry/backoff, so capacity errors fail over promptly without giving up resilience at the end. A fallback that answers becomes the preferred route for the remaining steps of that block turn; prior rungs remain last-resort candidates, but a rate-limited primary is not retried before every tool follow-up.
 
 Resolution uses a pinned source when one is chosen; otherwise it walks the configured provider priority and selects the first connected provider that can serve the model. Node/category configuration and Loop effort bands select models without requiring a routing model call. A learned capability matrix or LLM tiebreaker is a possible extension, not current behavior.
 
@@ -96,11 +98,19 @@ The Models page ranks a separate “Popular on OpenRouter” creator section fro
 
 Model output streams into the session log and reaches the renderer as folded trace updates. Sending chat replaces the composer with block-run mode. Build edits the source stack through commands; Work renders the resolved stack read-only while it runs. Both use the same derived containment geometry and the statuses pending, running, waiting, approval, input, done, failed, and skipped.
 
+Each model step appends a `step.prompt` containing the exact assembled message/tool request before `llm.request`, followed by separate reasoning and visible response fields. Work's log rows expand into that query record; Trace retains the same record as nested turns and steps. A failed run names its failed block and offers Retry, Inspect queries, Reveal raw run log, and Show app log. Retrying marks only that block pending, preserves completed upstream outputs, and resumes the same run. Plan & dispatch gives reasoning models completion headroom beyond the visible JSON budget; if the ceiling is still exhausted, the failure names the ceiling, finish reason, and reasoning-token split instead of reporting only a parser symptom.
+
+Repository-working blocks warn after 120 model/tool rounds instead of failing at that point. They continue until the model answers or the run is cancelled, and repeat the warning only at exponentially larger milestones. Their default per-query output ceiling is 32,768 tokens; an answer stopped for `length` is continued as another fully logged query. These warnings are live/transient and clear when the worker settles. Explicit hard step bounds remain available for small control roles such as a one-pass planner or clarification turn. A parallel dispatcher aggregates all failed children in the wave into the run error.
+
+Each provider/model candidate is a durable `llm.attempt` event before the network call. A failed candidate records its bounded reason before the next candidate starts; the successful candidate closes the ladder and the response records route, usage, cost, and finish reason. Work shows the current provider/model while waiting plus fallback failures and settled speed/cost; Trace preserves the full ladder, latency, output tokens per second, usage, price, and degraded route. A missing response stays unsettled rather than disappearing.
+
 Every non-empty container deletion asks whether to delete the subtree, unwrap its children, or cancel. Keyboard moves and drag/drop invoke the same registered stack commands as agent edits. Each accepted or refused authoring command is appended outside the canonical stack to authoring provenance with before/after source hashes; prior immutable run history remains session-owned.
 
 Attended tool approvals and a block's direct `ask_human` question are process-owned pending interactions. A renderer reconnect queries them again and sends the decision or answer directly back to the waiting call. These interactions never pay for a Conversation Supervisor turn.
 
 Completed nodes survive a crash. On startup, interrupted work is reconciled to a non-running state and the user chooses Resume. Completed nodes are reconstructed from persisted status and are not re-executed. A tool approval whose call stack died is failed honestly rather than pretending the pending call still exists.
+
+Desktop and renderer failures also append to `<userData>/logs/flyt.jsonl`. A React error boundary replaces a white renderer with reload and diagnostic-log actions. If the renderer process itself exits unexpectedly, Electron records the reason and reloads the view once; workflow execution remains in the main process and the reloaded renderer reconstructs it from the session log.
 
 Failures retain the thrown error, node status, model-call record, and partial output. A failed node can be retried, optionally with another model. `flyt why`, `probe`, and `doctor` expose the same evidence without requiring the desktop UI.
 

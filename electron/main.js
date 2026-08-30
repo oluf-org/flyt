@@ -26,12 +26,17 @@ import { migrateUserDataDir } from '../core/migrate.js';
 import { bootKernel } from '../core/v2.js';
 import { createV2BuildController, createV2HostBridge } from '../core/v2Host.js';
 import { persistPluginConfig, persistPluginRemoval } from '../core/pluginPatch.js';
+import { createDiagnosticLog } from '../core/diagnosticLog.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Where the app's own code and bundled assets live. When packaged this is
 // INSIDE app.asar — readable, never writable (fs.mkdirSync there fails with
 // ENOTDIR because the archive is a file, not a directory).
 const projectRoot = path.join(__dirname, '..');
+const diagnostics = createDiagnosticLog(path.join(app.getPath('userData'), 'logs', 'flyt.jsonl'));
+diagnostics.info('process.start', { version: app.getVersion(), packaged: app.isPackaged, platform: process.platform });
+process.on('uncaughtExceptionMonitor', error => diagnostics.error('process.uncaughtException', error));
+process.on('unhandledRejection', reason => diagnostics.error('process.unhandledRejection', reason));
 // --- One-shot userData migration into the renamed profile (D29) -----------
 // Electron derives userData from the app name, so the rename silently orphans
 // every existing install's settings.json, project registry and seeded flows.
@@ -89,8 +94,8 @@ const engine = createEngine({
   // T7/T9: only the ACTIVE tab is worth diffing for. Background projects keep
   // executing (the engine is main-process) and resync from files on activation.
   shouldPush: projectId => projectId === registry.activeId,
-  log: msg => console.log(`${LOG_TAG} ${msg}`),
-  warn: msg => console.warn(`${LOG_TAG} ${msg}`)
+  log: msg => { console.log(`${LOG_TAG} ${msg}`); diagnostics.info('engine', msg); },
+  warn: msg => { console.warn(`${LOG_TAG} ${msg}`); diagnostics.warn('engine', msg); }
 });
 const {
   baseConfig, flows, stackRoot, nodeLibrary, toolLibrary, registry, runtimeConfig, settings,
@@ -116,6 +121,7 @@ let detachV2PluginReviews = null;
 let detachV2Plugins = null;
 let v2BuildController = null;
 let v2Prepared = null;
+let rendererReloadAt = 0;
 
 // The `home` layer of the plugin composition. bootKernel READS it; the plugin
 // manager WRITES it, and both have to name the same file or a configuration
@@ -262,6 +268,19 @@ function createWindow() {
       win.webContents.send('tabs:key', { kind: 'release' });
     }
   });
+  win.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+    if (isMainFrame) diagnostics.error('renderer.did-fail-load', { code, description, url });
+  });
+  win.webContents.on('render-process-gone', (_event, details) => {
+    diagnostics.error('renderer.process-gone', details);
+    // Execution lives in the main process. Rebuild the view from the durable
+    // run log once instead of leaving a white screen while work continues.
+    const now = Date.now();
+    if (details?.reason !== 'clean-exit' && now - rendererReloadAt > 30_000 && win && !win.isDestroyed()) {
+      rendererReloadAt = now;
+      setTimeout(() => { if (win && !win.isDestroyed()) win.reload(); }, 500);
+    }
+  });
   if (process.env.VITE_DEV_SERVER) {
     win.loadURL(process.env.VITE_DEV_SERVER);
   } else {
@@ -290,6 +309,12 @@ ipcMain.handle('v2:build', async () => {
   const host = await v2Host();
   return host ? { ...host.bridge.build(), pluginReview: publicPluginReview() } : null;
 });
+ipcMain.handle('diagnostics:renderer', (_event, details = null) => {
+  diagnostics.error('renderer.error', details);
+  return { ok: true, file: diagnostics.file };
+});
+ipcMain.handle('diagnostics:path', () => diagnostics.file);
+ipcMain.handle('diagnostics:reveal', () => shell.showItemInFolder(diagnostics.file));
 ipcMain.handle('v2:plugin-review', async () => { await v2Host(); return publicPluginReview(); });
 ipcMain.handle('v2:plugin-review-decide', async (_event, decisions = {}) => {
   await v2Host();
@@ -573,6 +598,13 @@ ipcMain.handle('run:judge', async (_e, projectId, runIdA, runIdB, comparisonId =
 // leaving the canvas silently stale until an unrelated change happened to resend
 // the field.
 ipcMain.handle('run:openFolder', (_e, projectId, runId) => shell.openPath(proj(projectId).store.runDir(runId)));
+ipcMain.handle('run:revealLog', (_e, projectId, runId) => {
+  const dir = proj(projectId).store.runDir(runId);
+  const target = ['session.jsonl', 'log.jsonl'].map(name => path.join(dir, name)).find(file => fs.existsSync(file));
+  if (!target) return shell.openPath(dir);
+  shell.showItemInFolder(target);
+  return target;
+});
 
 // --- Workspace binding (target project folder for a run) ---
 ipcMain.handle('workspace:pick', async () => {
