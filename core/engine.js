@@ -45,6 +45,7 @@ import { v2Flag } from './v2.js';
 import { LoopLog } from './loopLog.js';
 import { TelemetryStore } from './telemetry.js';
 import { projectHistory, flatCsv } from './telemetryProjection.js';
+import { reconcileStoredStackRuns } from './kernelRunner.js';
 
 const PUSH_COALESCE_MS = 80;
 const PUSH_SNAPSHOT_RETRIES = 1;
@@ -897,6 +898,8 @@ export function createEngine({
       // once so the run view can offer Resume (V1 task 7).
       const interrupted = runner.reconcileInterrupted();
       if (interrupted.length) log(`${projectId}: ${interrupted.length} interrupted run(s) marked resumable`);
+      const interruptedKernel = reconcileStoredStackRuns(store.rootDir);
+      if (interruptedKernel.length) log(`${projectId}: ${interruptedKernel.length} kernel run(s) marked interrupted`);
       return runner;
     },
     onPersist: () => {

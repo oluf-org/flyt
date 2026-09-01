@@ -21,6 +21,8 @@ const PHASE_LABELS = {
   tool: 'Using a tool',
   'awaiting-approval': 'Needs approval',
   paused: 'Paused',
+  pausing: 'Pausing',
+  stopping: 'Stopping',
   stalled: 'May be stalled',
   failed: 'Failed',
   cancelled: 'Cancelled',
@@ -62,6 +64,8 @@ function phaseFor(snapshot, { live, ageMs, staleMs, hasTool, hasStream, node }) 
   if (['done', 'complete', 'completed'].includes(stage)) return 'complete';
   if (stage === 'awaiting_approval' || meta.pendingGateKind || meta.pendingToolCall) return 'awaiting-approval';
   if (stage === 'paused' || meta.paused === true) return 'paused';
+  if (stage === 'pausing') return 'pausing';
+  if (stage === 'stopping') return 'stopping';
   if (live && ageMs >= staleMs) return 'stalled';
   if (live && hasTool) return 'tool';
   if (live && hasStream) return 'streaming';

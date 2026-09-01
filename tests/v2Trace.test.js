@@ -113,6 +113,24 @@ test('a call that never returned is unfinished, not empty', () => {
   assert.equal(traceView(foldTrace(cut)).unfinished, true);
 });
 
+test('partial tool input is shown separately and never claims the tool ran', () => {
+  const partial = [
+    RUN[1], RUN[2], RUN[4],
+    { seq: 6, at: '2026-08-22T10:00:02.000Z', type: 'tool.input.start', data: {
+      requestCallId: 'q1', inputId: 'input-1', index: 0, toolCallId: 'c1', name: 'write_file',
+    } },
+    { seq: 7, at: '2026-08-22T10:00:02.100Z', type: 'tool.input.delta', data: {
+      inputId: 'input-1', index: 0, delta: '{"path":"half',
+    } },
+  ];
+  const step = traceView(foldTrace(partial)).turns[0].steps[0];
+  assert.equal(step.toolInputs.length, 1);
+  assert.equal(step.toolInputs[0].name, 'write_file');
+  assert.equal(step.toolInputs[0].arguments, '{"path":"half');
+  assert.equal(step.toolInputs[0].complete, false);
+  assert.equal(step.tools.length, 0, 'no llm.response/tool.call means no execution claim');
+});
+
 test('a request with nothing back yet is unsettled, and shows no finish reason', () => {
   const midflight = traceView(foldTrace(RUN.slice(0, 5))).turns[0].steps[0];
   assert.equal(midflight.request.settled, false);

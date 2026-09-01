@@ -45,7 +45,8 @@ export const SESSION_EVENTS = [
   // The run
   'run.created',
   'stack.resolved',
-  // `stage` is one of: execution, resumed, stopped, done, failed. `resumed`
+  // `stage` is one of: execution, pausing, paused, resumed, stopping, stopped,
+  // interrupted, done, failed. `resumed`
   // carries how much was replayed rather than re-run, and is followed by
   // `execution` — a run picked up from its log is a run that is going again.
   'run.stage',
@@ -62,6 +63,12 @@ export const SESSION_EVENTS = [
   'llm.request',
   'llm.attempt',
   'llm.stream',
+  // Native function arguments are durable while still being assembled. These
+  // are trace/recovery evidence, not model-visible messages; only the later
+  // authoritative `llm.response` may commit a call into the conversation.
+  'tool.input.start',
+  'tool.input.delta',
+  'tool.input.end',
   'llm.response',
   // What it did
   'tool.call',

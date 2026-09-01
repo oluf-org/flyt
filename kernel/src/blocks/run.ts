@@ -298,6 +298,24 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     };
     for await (const chunk of stream) {
       ctx.emit('llm/stream', ref, chunk as LlmChunk);
+      if (chunk.toolInput) {
+        // Structured tool input is a crash-recovery boundary, not display
+        // telemetry. Flush older prose first, then durably append this exact
+        // fragment immediately; it must never wait behind the text timer.
+        await flushStream();
+        const input = chunk.toolInput;
+        await session.append({
+          type: `tool.input.${input.phase}`,
+          data: {
+            requestCallId: callId, blockId, step,
+            inputId: input.inputId, index: input.index,
+            ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
+            ...(input.name ? { name: input.name } : {}),
+            ...(input.delta !== undefined ? { delta: input.delta } : {}),
+            ...(input.arguments !== undefined ? { arguments: input.arguments } : {}),
+          },
+        });
+      }
       if (chunk.text) streamText += chunk.text;
       if (chunk.reasoning) streamReasoning += chunk.reasoning;
       if (Date.now() - lastStreamFlush >= SESSION_STREAM_FLUSH_MS) await flushStream();

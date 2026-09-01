@@ -270,6 +270,79 @@ test('a narrated call to an offered tool is repaired into a native call, never e
   await boot.kernel.dispose();
 });
 
+test('all schema errors from one tool call reach the model in one logged result', async () => {
+  let ran = 0;
+  const boot = await bootFor([
+    {
+      content: '',
+      toolCalls: [{ id: 'bad-args', name: 'peek', args: { path: 7, extra: true } }],
+    },
+    { content: 'I corrected both arguments from the validation result.' },
+  ], {
+    tools: [{
+      name: 'peek', description: 'Look.',
+      parameters: {
+        type: 'object', additionalProperties: false, required: ['path', 'depth'],
+        properties: { path: { type: 'string' }, depth: { type: 'integer', minimum: 1 } },
+      },
+      classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+      async execute() { ran += 1; return { content: 'must not run' }; },
+    }],
+    ceiling: ['peek'],
+  });
+
+  const result = await loopIn(boot);
+  const received = boot.llm.seen[1].messages.filter(message => message.role === 'tool');
+  assert.equal(received.length, 1, 'one invalid call becomes one model-visible tool result');
+  assert.match(received[0].content, /3 argument errors/);
+  assert.match(received[0].content, /args\.depth/);
+  assert.match(received[0].content, /args\.extra/);
+  assert.match(received[0].content, /args\.path/);
+  assert.equal(ran, 0);
+  assert.equal(result.content, 'I corrected both arguments from the validation result.');
+
+  const logged = boot.session.readSync().filter(event =>
+    event.type === 'tool.result' && event.data.callId === 'bad-args');
+  assert.equal(logged.length, 1, 'the aggregate result is durable as one event too');
+  assert.match(logged[0].data.error, /args\.depth.*args\.extra.*args\.path/);
+  await boot.kernel.dispose();
+});
+
+test('tool input start/delta/end fragments are durable before the settled response', async () => {
+  const boot = await bootFor([
+    {
+      content: '',
+      chunks: [
+        { toolInput: { inputId: 'input-1', index: 0, phase: 'start', toolCallId: 'c1', name: 'peek' } },
+        { toolInput: { inputId: 'input-1', index: 0, phase: 'delta', toolCallId: 'c1', name: 'peek', delta: '{"at":' } },
+        { toolInput: { inputId: 'input-1', index: 0, phase: 'delta', toolCallId: 'c1', name: 'peek', delta: '"x"}' } },
+        { toolInput: { inputId: 'input-1', index: 0, phase: 'end', toolCallId: 'c1', name: 'peek', arguments: '{"at":"x"}' } },
+      ],
+      toolCalls: [{ id: 'c1', name: 'peek', args: { at: 'x' } }],
+    },
+    { content: 'done' },
+  ], {
+    tools: [{
+      name: 'peek', description: 'Look.', parameters: { type: 'object' },
+      classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+      async execute() { return { content: 'ok' }; },
+    }],
+    ceiling: ['peek'],
+  });
+
+  await loopIn(boot);
+  const events = boot.session.readSync();
+  const lifecycle = events.filter(event => event.type.startsWith('tool.input.'));
+  assert.deepEqual(lifecycle.map(event => event.type), [
+    'tool.input.start', 'tool.input.delta', 'tool.input.delta', 'tool.input.end',
+  ]);
+  assert.equal(lifecycle.map(event => event.data.delta ?? '').join(''), '{"at":"x"}');
+  assert.equal(lifecycle.at(-1).data.arguments, '{"at":"x"}');
+  assert.ok(lifecycle.at(-1).seq < events.find(event => event.type === 'llm.response').seq,
+    'the complete input is durable before the response can commit the call');
+  await boot.kernel.dispose();
+});
+
 test('a reasoning-only worker turn is retained and prompted for an actionable next turn', async () => {
   const boot = await bootFor([
     { content: '', reasoning: 'I worked through the task.', finishReason: 'stop' },

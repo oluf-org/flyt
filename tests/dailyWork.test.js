@@ -196,6 +196,18 @@ test('live updates refresh only the run Work is actually following', async () =>
   assert.equal(unsubscribed, true);
 });
 
+test('a legacy failure identifies its failed block even when its status marker is stale active', () => {
+  const failed = watchingFromRun('r-failed', {
+    ...snapshot,
+    meta: { ...snapshot.meta, stage: 'failed', error: 'Fix failed', nodeStatus: { fix: 'active' } },
+    retrospectives: { fix: { status: 'failed', error: 'provider exited' } },
+  }, []);
+  const view = runView(failed.trace);
+  assert.equal(view.running, false);
+  assert.equal(view.blocks.fix.status, 'failed');
+  assert.equal(view.errorBlockId, 'fix');
+});
+
 test('canonical event and snapshot deltas update Work without rereading the run', async () => {
   const canonical = watchingFromRun('run-1', { ...snapshot, rev: 4 }, [
     { seq: 1, at: 't1', type: 'run.created', data: { runId: 'run-1' } },

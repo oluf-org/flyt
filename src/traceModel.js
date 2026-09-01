@@ -32,6 +32,9 @@ const LLM_REQUEST = 'llm.request';
 const LLM_ATTEMPT = 'llm.attempt';
 const LLM_STREAM = 'llm.stream';
 const LLM_RESPONSE = 'llm.response';
+const TOOL_INPUT_START = 'tool.input.start';
+const TOOL_INPUT_DELTA = 'tool.input.delta';
+const TOOL_INPUT_END = 'tool.input.end';
 const TOOL_CALL = 'tool.call';
 const TOOL_RESULT = 'tool.result';
 const PERMISSION_DECISION = 'permission.decision';
@@ -47,7 +50,9 @@ const PERMISSION_DECISION = 'permission.decision';
  */
 export const FOLDED_EVENTS = [
   TURN_START, TURN_END, STEP_START, STEP_END, STEP_PROMPT,
-  LLM_REQUEST, LLM_ATTEMPT, LLM_STREAM, LLM_RESPONSE, TOOL_CALL, TOOL_RESULT, PERMISSION_DECISION
+  LLM_REQUEST, LLM_ATTEMPT, LLM_STREAM,
+  TOOL_INPUT_START, TOOL_INPUT_DELTA, TOOL_INPUT_END,
+  LLM_RESPONSE, TOOL_CALL, TOOL_RESULT, PERMISSION_DECISION
 ];
 
 function asRecord(value) {
@@ -91,6 +96,22 @@ function findToolCall(trace, callId) {
       const calls = steps[s].toolCalls;
       for (let c = calls.length - 1; c >= 0; c--) {
         if (String(calls[c].callId) === want) return calls[c];
+      }
+    }
+  }
+  return null;
+}
+
+/** Find one streamed tool input by its request-local durable identity. */
+function findToolInput(trace, inputId) {
+  if (inputId === null || inputId === undefined) return null;
+  const want = String(inputId);
+  for (let t = trace.turns.length - 1; t >= 0; t--) {
+    const steps = trace.turns[t].steps;
+    for (let s = steps.length - 1; s >= 0; s--) {
+      const inputs = steps[s].toolInputs;
+      for (let i = inputs.length - 1; i >= 0; i--) {
+        if (String(inputs[i].inputId) === want) return inputs[i];
       }
     }
   }
@@ -176,6 +197,7 @@ export function feed(trace, events) {
           finished: false,
           prompt: null,
           request: null,
+          toolInputs: [],
           toolCalls: [],
           decisions: [],
         });
@@ -265,10 +287,19 @@ export function feed(trace, events) {
         // The response may carry the tool calls the model asked for; they are
         // part of this step's record too, attached by id.
         const calls = Array.isArray(data.toolCalls) ? data.toolCalls : [];
-        for (const call of calls) {
+        for (let callIndex = 0; callIndex < calls.length; callIndex++) {
+          const call = calls[callIndex];
           const record = asRecord(call);
           const id = record.id ?? null;
           if (id == null) continue;
+          // The settled response is authoritative. Retain interrupted inputs,
+          // but mark the one this response committed so the UI replaces its
+          // partial/raw view with the ordinary parsed tool-call record.
+          const streamed = [...(step?.toolInputs ?? [])].reverse().find(input =>
+            input.committed !== true
+            && (String(input.toolCallId ?? '') === String(id)
+              || (input.requestCallId === data.callId && input.index === callIndex)));
+          if (streamed) streamed.committed = true;
           if (!findToolCall(trace, id)) {
             step?.toolCalls.push({
               callId: String(id),
@@ -288,6 +319,45 @@ export function feed(trace, events) {
         if (!request) break;
         if (data.text != null) request.content = `${request.content ?? ''}${String(data.text)}`;
         if (data.reasoning != null) request.reasoning = `${request.reasoning ?? ''}${String(data.reasoning)}`;
+        break;
+      }
+
+      case TOOL_INPUT_START: {
+        const step = openStep(trace);
+        if (!step || data.inputId == null) break;
+        if (findToolInput(trace, data.inputId)) break;
+        step.toolInputs.push({
+          inputId: String(data.inputId),
+          requestCallId: data.requestCallId ?? null,
+          index: Number.isInteger(data.index) ? data.index : step.toolInputs.length,
+          toolCallId: data.toolCallId ?? null,
+          name: data.name ?? null,
+          arguments: '',
+          complete: false,
+          committed: false,
+          startedAt: event.at ?? null,
+          endedAt: null,
+        });
+        break;
+      }
+
+      case TOOL_INPUT_DELTA: {
+        const input = findToolInput(trace, data.inputId);
+        if (!input) break;
+        if (data.toolCallId != null) input.toolCallId = data.toolCallId;
+        if (data.name != null) input.name = data.name;
+        input.arguments += String(data.delta ?? '');
+        break;
+      }
+
+      case TOOL_INPUT_END: {
+        const input = findToolInput(trace, data.inputId);
+        if (!input) break;
+        if (data.toolCallId != null) input.toolCallId = data.toolCallId;
+        if (data.name != null) input.name = data.name;
+        if (data.arguments != null) input.arguments = String(data.arguments);
+        input.complete = true;
+        input.endedAt = event.at ?? null;
         break;
       }
 

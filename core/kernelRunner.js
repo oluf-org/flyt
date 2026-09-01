@@ -7,6 +7,7 @@
 // written in run.created before execution begins.
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { bootKernel } from './v2.js';
 import { StackStore } from './stackstore.js';
 import { Workspace } from './workspace.js';
@@ -505,6 +506,100 @@ export async function stopStackRun(ctx, id, reason = 'stopped by request') {
   } catch (err) {
     return { ok: false, error: 'stop-failed', message: String(err?.message ?? err) };
   }
+}
+
+export async function pauseStackRun(ctx, id, reason = 'paused by request') {
+  if (!ctx?.agents) return { ok: false, error: 'kernel-unavailable', message: 'No agents seam.' };
+  try {
+    const paused = await ctx.agents.pause(id, reason);
+    return paused
+      ? { ok: true, state: 'pausing' }
+      : { ok: false, error: 'not-live-or-paused', message: `Kernel run ${id} is not live or is already pausing.` };
+  } catch (err) {
+    return { ok: false, error: 'pause-failed', message: String(err?.message ?? err) };
+  }
+}
+
+export async function continueStackRun(ctx, id) {
+  if (!ctx?.agents) return { ok: false, error: 'kernel-unavailable', message: 'No agents seam.' };
+  try {
+    const continued = await ctx.agents.continue(id);
+    return continued
+      ? { ok: true, state: 'resuming' }
+      : { ok: false, error: 'not-paused', message: `Kernel run ${id} is not paused.` };
+  } catch (err) {
+    return { ok: false, error: 'resume-failed', message: String(err?.message ?? err) };
+  }
+}
+
+const STORED_TERMINAL_STAGES = new Set(['done', 'failed', 'stopped', 'interrupted', 'cancelled', 'rejected']);
+
+/**
+ * Close kernel records left non-terminal by a process exit. The JSONL remains
+ * canonical; meta.json is updated as an immediate index projection so History
+ * cannot keep saying "running" before anybody opens the run.
+ */
+export function reconcileStoredStackRuns(runsRoot, reason = 'The process ended before the workflow settled.') {
+  const reconciled = [];
+  let dirs = [];
+  try { dirs = fs.readdirSync(runsRoot, { withFileTypes: true }).filter(row => row.isDirectory()); }
+  catch { return reconciled; }
+  for (const dir of dirs) {
+    const runId = dir.name;
+    const file = path.join(runsRoot, runId, 'session.jsonl');
+    if (!fs.existsSync(file)) continue;
+    const leaseFile = path.join(runsRoot, runId, 'live.json');
+    try {
+      const lease = JSON.parse(fs.readFileSync(leaseFile, 'utf8'));
+      const fresh = Date.now() - Number(lease.beatAt ?? 0) < 60_000;
+      let live = fresh && lease.host && lease.host !== os.hostname();
+      if (fresh && (!lease.host || lease.host === os.hostname())) {
+        try { process.kill(Number(lease.pid), 0); live = true; }
+        catch (error) { live = error?.code === 'EPERM'; }
+      }
+      if (live) continue;
+    } catch { /* no usable owner lease */ }
+    const events = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean)
+      .flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+    if (!events.some(event => event?.type === 'run.created')) continue;
+    const lastStage = events.filter(event => event?.type === 'run.stage').at(-1)?.data?.stage ?? null;
+    if (STORED_TERMINAL_STAGES.has(String(lastStage))) continue;
+    let seq = Math.max(0, ...events.map(event => Number(event?.seq) || 0));
+    const at = new Date().toISOString();
+    const latestBlock = new Map();
+    for (const event of events) {
+      if (event?.type === 'block.status' && event.data?.blockId) {
+        latestBlock.set(String(event.data.blockId), String(event.data.status ?? 'pending'));
+      }
+    }
+    const appended = [];
+    for (const [blockId, status] of latestBlock) {
+      if (status === 'active') appended.push({
+        seq: ++seq, at, type: 'block.status',
+        data: { blockId, status: 'pending', reason: 'interrupted before this block settled' },
+      });
+    }
+    appended.push({
+      seq: ++seq, at, type: 'run.stage',
+      data: { stage: 'interrupted', reason, previousStage: lastStage },
+    });
+    fs.appendFileSync(file, appended.map(event => JSON.stringify(event)).join('\n') + '\n', 'utf8');
+    try { fs.rmSync(leaseFile, { force: true }); } catch { /* already absent */ }
+
+    const metaFile = path.join(runsRoot, runId, 'meta.json');
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+      const settle = statuses => Object.fromEntries(Object.entries(statuses ?? {})
+        .map(([id, status]) => [id, status === 'active' ? 'pending' : status]));
+      fs.writeFileSync(metaFile, JSON.stringify({
+        ...meta, stage: 'interrupted', updatedAt: at,
+        currentBlockId: null, currentNodeId: null,
+        blockStatus: settle(meta.blockStatus), nodeStatus: settle(meta.nodeStatus),
+      }, null, 2), 'utf8');
+    } catch { /* the canonical log above is sufficient to rebuild this projection */ }
+    reconciled.push(runId);
+  }
+  return reconciled;
 }
 
 export async function resumeStackRun(host, id) {

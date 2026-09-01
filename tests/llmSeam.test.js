@@ -220,6 +220,36 @@ test('a stream yields deltas, because the adapters deliver the whole turn each t
   await boot.kernel.dispose();
 });
 
+test('structured tool input crosses the bridge as stable start/delta/end chunks', async () => {
+  const boot = await bootLlm({
+    answer: {
+      text: '', finishReason: 'tool_calls',
+      message: { tool_calls: [{ id: 'call-1', function: { name: 'write_file', arguments: '{"path":"a"}' } }] },
+    },
+    async capture(req) {
+      req.onText?.('→ write_file({"path":', { toolInputEvents: [
+        { phase: 'start', index: 0, id: 'call-1', name: 'write_file' },
+        { phase: 'delta', index: 0, id: 'call-1', name: 'write_file', delta: '{"path":' },
+      ] });
+      req.onText?.('→ write_file({"path":"a"})', { toolInputEvents: [
+        { phase: 'delta', index: 0, id: 'call-1', name: 'write_file', delta: '"a"}' },
+        { phase: 'end', index: 0, id: 'call-1', name: 'write_file', arguments: '{"path":"a"}' },
+      ] });
+    },
+  });
+
+  const chunks = [];
+  const stream = boot.kernel.ctx.llm.stream(request());
+  for await (const chunk of stream) chunks.push(chunk);
+  const inputs = chunks.filter(chunk => chunk.toolInput).map(chunk => chunk.toolInput);
+  assert.deepEqual(inputs.map(input => input.phase), ['start', 'delta', 'delta', 'end']);
+  assert.equal(new Set(inputs.map(input => input.inputId)).size, 1,
+    'every fragment of one provider call has one durable identity');
+  assert.equal(inputs.map(input => input.delta ?? '').join(''), '{"path":"a"}');
+  assert.equal(inputs.at(-1).arguments, '{"path":"a"}');
+  await boot.kernel.dispose();
+});
+
 test('a stream that fails throws where the caller is looking, not into the void', async () => {
   const kernel = createKernel();
   await kernel.ctx.plugin(flytAdapters, {

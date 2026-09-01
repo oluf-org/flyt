@@ -411,10 +411,9 @@ test('run:restartNode durably re-pins a failed kernel block and starts it on the
   assert.deepEqual(metadata.routing, { costTier: 'low' });
   assert.equal((await api.invoke('run:snapshot', { projectId, runId })).meta.stage, 'done');
 
-  await assert.rejects(
-    () => api.invoke('run:pause', { projectId, runId }),
-    error => error?.status === 409 && error?.code === 'kernel_control_unsupported',
-  );
+  const pauseEnded = await api.invoke('run:pause', { projectId, runId });
+  assert.equal(pauseEnded.ok, false);
+  assert.equal(pauseEnded.error, 'not-live');
   await waitFor(() => entry.kernelRuns?.size === 0 && entry.kernelHosts?.size === 0,
     { label: 'restarted kernel host disposal' });
 });

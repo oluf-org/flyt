@@ -30,8 +30,9 @@ blocks:
 async function bootStop(execute) {
   const kernel = createKernel();
   const record = [];
+  const root = tmp();
   await kernel.ctx.plugin(flytBlocks);
-  await kernel.ctx.plugin(sessionJsonl, { root: tmp() });
+  await kernel.ctx.plugin(sessionJsonl, { root });
   await kernel.ctx.plugin({
     name: 'demo-blocks',
     inject: ['blocks'],
@@ -52,7 +53,7 @@ async function bootStop(execute) {
   });
   const stack = parseStack(THREE);
   await kernel.ctx.plugin(flytStackRunner, { stacks: { resolve: () => stack.root } });
-  return { kernel, record };
+  return { kernel, record, root };
 }
 
 const eventsIn = async (kernel, runId) => {
@@ -207,4 +208,35 @@ blocks:
   assert.deepEqual(started.sort(), ['la', 'ma'],
     'the wave that was in flight completed, and the third lane never started');
   await kernel.dispose();
+});
+
+test('pause is visible immediately, lands between blocks, and resumes the same run', async () => {
+  let entered;
+  let release;
+  const inside = new Promise(resolve => { entered = resolve; });
+  const hold = new Promise(resolve => { release = resolve; });
+  const boot = await bootStop(async ({ blockId }) => {
+    if (blockId === 'one') { entered(); await hold; }
+    return { status: 'done', output: `${blockId} done` };
+  });
+  const run = await boot.kernel.ctx.agents.start({ id: 'demo', runId: 'run-pause' }, 'in');
+  await inside;
+
+  assert.equal(await boot.kernel.ctx.agents.pause(run.runId), true);
+  let events = await eventsIn(boot.kernel, run.runId);
+  assert.equal(events.filter(event => event.type === 'run.stage').at(-1).data.stage, 'pausing');
+  release();
+  for (let i = 0; i < 100; i++) {
+    events = await eventsIn(boot.kernel, run.runId);
+    if (events.some(event => event.type === 'run.stage' && event.data.stage === 'paused')) break;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.deepEqual(boot.record, ['one'], 'the next block did not start while paused');
+  assert.equal(await boot.kernel.ctx.agents.continue(run.runId), true);
+  assert.equal((await run.settled()).status, 'done');
+  assert.deepEqual(boot.record, ['one', 'two', 'three']);
+  events = await eventsIn(boot.kernel, run.runId);
+  assert.ok(events.some(event => event.type === 'run.stage' && event.data.stage === 'paused'));
+  assert.ok(events.some(event => event.type === 'run.stage' && event.data.stage === 'resumed'));
+  await boot.kernel.dispose();
 });

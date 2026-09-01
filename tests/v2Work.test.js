@@ -98,9 +98,9 @@ test('a soft running-limit warning remains visible while active and clears after
 });
 
 test('the stage comes from the log, not from a caller remembering', () => {
-  assert.deepEqual(runStage(foldTrace(RUN)), { stage: 'execution', error: null, errorBlockId: null });
-  assert.deepEqual(runStage(foldTrace(FINISHED)), { stage: 'done', error: null, errorBlockId: null });
-  assert.deepEqual(runStage(foldTrace([])), { stage: null, error: null, errorBlockId: null });
+  assert.deepEqual(runStage(foldTrace(RUN)), { stage: 'execution', error: null, errorBlockId: null, reason: null });
+  assert.deepEqual(runStage(foldTrace(FINISHED)), { stage: 'done', error: null, errorBlockId: null, reason: null });
+  assert.deepEqual(runStage(foldTrace([])), { stage: null, error: null, errorBlockId: null, reason: null });
   // The LAST stage wins: a resumed run has been through several.
   assert.equal(runStage(foldTrace([
     { seq: 1, at: 't', type: 'run.stage', data: { stage: 'stopped' } },
@@ -135,6 +135,39 @@ test('a run with no blocks recorded yet is not a run with no blocks', () => {
   assert.equal(view.running, true, 'the stage says execution — the blocks just have not started');
   assert.deepEqual(blockStates(null), {}, 'and no trace at all is not a crash');
   assert.equal(liveOutput(null, 'plan'), null);
+});
+
+test('a terminal run never inherits a stale active block', () => {
+  const failed = runView(foldTrace([
+    ...RUN,
+    { seq: 8, at: 't3', type: 'run.error', data: { error: 'scheduler crashed' } },
+    { seq: 9, at: 't3', type: 'run.stage', data: { stage: 'failed' } },
+  ]));
+  assert.equal(failed.running, false);
+  assert.deepEqual(failed.active, []);
+  assert.equal(failed.blocks.plan.status, 'failed');
+
+  const stopped = runView(foldTrace([
+    ...RUN,
+    { seq: 8, at: 't3', type: 'run.stage', data: { stage: 'stopped' } },
+  ]));
+  assert.equal(stopped.running, false);
+  assert.equal(stopped.resumable, true);
+  assert.equal(stopped.blocks.plan.status, 'pending');
+});
+
+test('pause and stop transitions are explicit control states', () => {
+  for (const [stage, fact] of [['pausing', 'pausing'], ['paused', 'paused'], ['stopping', 'stopping']]) {
+    const view = runView(foldTrace([
+      ...RUN.slice(0, 2),
+      { seq: 3, at: 't2', type: 'run.stage', data: { stage } },
+    ]));
+    assert.equal(view[fact], true);
+  }
+  assert.equal(runView(foldTrace([
+    ...RUN.slice(0, 2),
+    { seq: 3, at: 't2', type: 'run.stage', data: { stage: 'paused' } },
+  ])).resumable, true);
 });
 
 test('Work draws the stack through the editor rather than drawing it again', () => {

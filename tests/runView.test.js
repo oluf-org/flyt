@@ -75,7 +75,7 @@ test('a live run clocks to now; a finished run freezes at its last write', () =>
 });
 
 test('isTerminal matches the runner stages', () => {
-  for (const s of ['done', 'failed', 'rejected']) assert.equal(isTerminal(s), true);
+  for (const s of ['done', 'failed', 'rejected', 'stopped', 'interrupted']) assert.equal(isTerminal(s), true);
   for (const s of ['execution', 'awaiting_approval', 'planning']) assert.equal(isTerminal(s), false);
 });
 

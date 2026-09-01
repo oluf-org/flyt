@@ -79,8 +79,9 @@ export default function Shell({
   workflowInteraction = null, onWorkflowDecide = null, onWorkflowAnswer = null,
   onWorkflowReply = null, workflowReplyBusy = false, runs = [], onOpenRun = null,
   onNewChat = null, onOpenFlow = null, onOpenSettings = null,
-  onRetryFailed = null, retryBusy = false, retryError = '', onRevealRunLog = null,
+  onRetryFailed = null, retryBusy = false, retryError = '', controlError = '', onRevealRunLog = null,
   onRevealDiagnosticLog = null, onStopRun = null, stopBusy = false,
+  onPauseRun = null, pauseBusy = false, onResumeRun = null, resumeBusy = false,
   projects = { tabs: [], active: null },
 }) {
   const [focus, setFocus] = useState(location ?? INITIAL);
@@ -298,8 +299,13 @@ export default function Shell({
                   onRetryFailed={onRetryFailed}
                   retryBusy={retryBusy}
                   retryError={retryError}
+                  controlError={controlError}
                   onStopRun={onStopRun}
                   stopBusy={stopBusy}
+                  onPauseRun={onPauseRun}
+                  pauseBusy={pauseBusy}
+                  onResumeRun={onResumeRun}
+                  resumeBusy={resumeBusy}
                   onRevealRunLog={onRevealRunLog}
                   onRevealDiagnosticLog={onRevealDiagnosticLog}
                 />}

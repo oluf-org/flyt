@@ -187,22 +187,42 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
         // delivered a few characters at a time, to be concatenated in arrival
         // order. Reassembling them here is what lets a tool-using turn stream
         // and still hand the loop the exact message shape it echoes back.
+        const toolInputEvents = [];
         for (const f of choice?.delta?.tool_calls ?? []) {
           const i = f.index ?? 0;
+          const isNew = !frags.has(i);
           const call = frags.get(i) ?? { id: '', type: 'function', function: { name: '', arguments: '' } };
           if (f.id) call.id = f.id;
           if (f.type) call.type = f.type;
           if (f.function?.name) call.function.name = f.function.name;
           if (f.function?.arguments) call.function.arguments += f.function.arguments;
           frags.set(i, call);
+          // Keep the structured input beside the watchable rendered string.
+          // The kernel turns these into durable start/delta/end events; if the
+          // process dies before the final response, the exact partial JSON is
+          // still recoverable instead of vanishing with this in-memory map.
+          if (isNew) toolInputEvents.push({
+            phase: 'start', index: i,
+            ...(call.id ? { id: call.id } : {}),
+            ...(call.function.name ? { name: call.function.name } : {})
+          });
+          if (!isNew || f.function?.arguments) toolInputEvents.push({
+            phase: 'delta', index: i,
+            ...(call.id ? { id: call.id } : {}),
+            ...(call.function.name ? { name: call.function.name } : {}),
+            delta: String(f.function?.arguments ?? '')
+          });
           moved = true;
         }
 
-        if (moved) onText(renderTurn(text, frags, reasoning), { telemetry: {
-          contentChars: text.length,
-          reasoningChars: reasoning.length,
-          toolInputChars: [...frags.values()].reduce((n, call) => n + String(call.function?.arguments ?? '').length, 0),
-        } });
+        if (moved) onText(renderTurn(text, frags, reasoning), {
+          ...(toolInputEvents.length ? { toolInputEvents } : {}),
+          telemetry: {
+            contentChars: text.length,
+            reasoningChars: reasoning.length,
+            toolInputChars: [...frags.values()].reduce((n, call) => n + String(call.function?.arguments ?? '').length, 0),
+          }
+        });
         if (choice?.finish_reason) finishReason = choice.finish_reason;
         if (chunk.usage) usage = chunk.usage;
         if (chunk.model) resolvedModel = chunk.model;
@@ -210,11 +230,20 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
 
       // The turn is fully assembled: emit it unthrottled, so its last and most
       // informative state (a tool call WITH its arguments) is what stands.
-      onText(renderTurn(text, frags, reasoning), { final: true, telemetry: {
-        contentChars: text.length,
-        reasoningChars: reasoning.length,
-        toolInputChars: [...frags.values()].reduce((n, call) => n + String(call.function?.arguments ?? '').length, 0),
-      } });
+      onText(renderTurn(text, frags, reasoning), {
+        final: true,
+        ...(frags.size ? { toolInputEvents: [...frags.entries()].sort((a, b) => a[0] - b[0]).map(([index, call]) => ({
+          phase: 'end', index,
+          ...(call.id ? { id: call.id } : {}),
+          ...(call.function.name ? { name: call.function.name } : {}),
+          arguments: String(call.function.arguments ?? '')
+        })) } : {}),
+        telemetry: {
+          contentChars: text.length,
+          reasoningChars: reasoning.length,
+          toolInputChars: [...frags.values()].reduce((n, call) => n + String(call.function?.arguments ?? '').length, 0),
+        }
+      });
 
       const toolCalls = [...frags.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c);
       // Zero parsed tool calls + known native markup in the content = the model

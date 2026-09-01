@@ -572,10 +572,14 @@ test('native tool calls stream, and reassemble into the message the loop echoes'
     '[DONE]'
   ]));
   const seen = [];
+  const toolInputEvents = [];
   const r = await callModel({
     provider: 'openrouter', model: 'm', messages: [{ role: 'user', content: 'p' }],
     tools: [{ type: 'function', function: { name: 'write_file', description: '', parameters: {} } }],
-    apiKey: 'k', onText: t => seen.push(t)
+    apiKey: 'k', onText: (text, options) => {
+      seen.push(text);
+      toolInputEvents.push(...(options?.toolInputEvents ?? []));
+    }
   });
 
   assert.equal(calls[0].body.stream, true, 'a tool-using turn must stream');
@@ -596,6 +600,14 @@ test('native tool calls stream, and reassemble into the message the loop echoes'
   // A completed call renders as real lines, not an escaped JSON blob: a file's
   // content arrives with its newlines escaped and is unreadable dumped raw.
   assert.ok(seen.at(-1).includes('→ write_file\npath: src/a.js\ncontent: x'));
+  assert.deepEqual(toolInputEvents.map(event => event.phase),
+    ['start', 'delta', 'delta', 'delta', 'end']);
+  assert.equal(toolInputEvents.filter(event => event.phase === 'delta').map(event => event.delta).join(''),
+    '{"path":"src/a.js","content":"x"}', 'the exact provider fragments survive beside the rendered view');
+  assert.deepEqual(toolInputEvents.at(-1), {
+    phase: 'end', index: 0, id: 'call_1', name: 'write_file',
+    arguments: '{"path":"src/a.js","content":"x"}',
+  });
 });
 
 test('a turn that is only tool calls still streams something watchable', async () => {

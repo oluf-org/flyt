@@ -7,7 +7,7 @@
 // a stopped run is done moving, and its finished nodes stay inspectable).
 // Duplicated rather than imported: that module reaches node:fs through its
 // adapter/tool imports, and this one runs in the renderer.
-const TERMINAL = new Set(['done', 'failed', 'rejected', 'cancelled']);
+const TERMINAL = new Set(['done', 'failed', 'rejected', 'cancelled', 'stopped', 'interrupted']);
 
 export const isTerminal = stage => TERMINAL.has(stage);
 

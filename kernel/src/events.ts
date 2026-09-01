@@ -26,6 +26,23 @@ export interface StepRef {
   step: number;
 }
 
+/** One structured fragment of a native tool call while the model emits it. */
+export interface ToolInputStreamEvent {
+  /** Stable within one model request, including across parallel tool calls. */
+  inputId: string;
+  /** Provider tool-call index; ordering is by this index, not arrival. */
+  index: number;
+  phase: 'start' | 'delta' | 'end';
+  /** Provider call id, once it has arrived. */
+  toolCallId?: string;
+  /** Tool name, once it has arrived. */
+  name?: string;
+  /** Exact JSON-string fragment for a delta. */
+  delta?: string;
+  /** Exact complete JSON string on end. */
+  arguments?: string;
+}
+
 /** A pending tool call, on its way through the gate. */
 export interface ToolExecution extends StepRef {
   call: ToolCall;
@@ -60,6 +77,8 @@ export interface LlmChunk {
   reasoning?: string;
   /** A tool call the model completed. */
   toolCall?: ToolCall;
+  /** A native tool call's arguments while they are still being assembled. */
+  toolInput?: ToolInputStreamEvent;
 }
 
 /** Why a model stopped, plus what it cost. */

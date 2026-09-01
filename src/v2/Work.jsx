@@ -94,8 +94,9 @@ export default function Work({
   stack = null, blocks = null, trace = null, runId = null, composer = null, snapshot = null,
   interaction = null, onDecide = null, onAnswer = null, onReply = null, replyBusy = false,
   runs = [], onOpenRun = null, onNewChat = null, onOpenFlow = null, onOpenTrace = null,
-  onRetryFailed = null, retryBusy = false, retryError = '', onRevealRunLog = null,
+  onRetryFailed = null, retryBusy = false, retryError = '', controlError = '', onRevealRunLog = null,
   onRevealDiagnosticLog = null, onStopRun = null, stopBusy = false,
+  onPauseRun = null, pauseBusy = false, onResumeRun = null, resumeBusy = false,
 }) {
   const view = runView(trace);
   const detailedTrace = useMemo(() => traceView(trace), [trace]);
@@ -113,11 +114,23 @@ export default function Work({
     <div className="work-run-title"><span className="section-label">{view.running ? 'Block run' : 'Run'}</span><h1>{stack.name ?? stack.id}</h1></div>
     {runModels.length > 0 && <div className="work-run-models" title="Models actually requested by this run"><span>Models</span>{runModels.map(model => <code key={model}>{model}</code>)}</div>}
     <span className={`work-stage stage-${view.stage}`}>{view.stage ?? 'starting'}</span>
-    {view.running && <button type="button" className="work-stop" disabled={stopBusy} onClick={onStopRun}>
-      {stopBusy ? 'Stopping…' : 'Stop run'}
+    {(view.running || view.paused) && !view.stopping && <button type="button" className="work-pause"
+      disabled={pauseBusy || resumeBusy || view.pausing}
+      onClick={view.paused ? onResumeRun : onPauseRun}>
+      {view.paused ? (resumeBusy ? 'Resuming…' : 'Resume run') : (pauseBusy || view.pausing ? 'Pausing…' : 'Pause run')}
     </button>}
+    {(view.running || view.paused) && <button type="button" className="work-stop" disabled={stopBusy || view.stopping} onClick={onStopRun}>
+      {stopBusy || view.stopping ? 'Stopping…' : 'Stop run'}
+    </button>}
+    {!view.running && !view.paused && view.resumable && <button type="button" className="work-resume"
+      disabled={resumeBusy} onClick={onResumeRun}>{resumeBusy ? 'Resuming…' : 'Resume run'}</button>}
     <button type="button" className="work-open-flow" onClick={onOpenFlow} title="Open this workflow in Build; Work returns to this same run">Open flow</button>
     <code className="work-run-id">{runId}</code></header>
+    {controlError && <p className="work-error" role="alert">{controlError}</p>}
+    {(view.stage === 'stopped' || view.stage === 'interrupted') && <p className="work-lifecycle" role="status">
+      <strong>{view.stage === 'interrupted' ? 'This run was interrupted.' : 'This run was stopped.'}</strong>
+      {view.reason ? ` ${view.reason}` : ''} Resume continues from the last durable block.
+    </p>}
     {view.error && <section className="work-failure" role="alert">
       <strong>{view.error}</strong><div className="work-failure-actions">
         {view.errorBlockId && <button type="button" className="work-retry" disabled={retryBusy}
@@ -141,7 +154,7 @@ export default function Work({
     <div className="work-run-grid"><RunRail stack={stack} view={view}/><main className="work-run-main">
       <BlockEditor stack={stack} blocks={blocks} mode="run" run={runModel}/>
       <Interaction interaction={interaction} onDecide={onDecide} onAnswer={onAnswer}/>
-      {!view.running && !interaction && <form className="work-reply" onSubmit={event => { event.preventDefault(); if (!reply.trim()) return; onReply?.(reply); setReply(''); }}>
+      {!view.running && !view.resumable && !view.stopping && !interaction && <form className="work-reply" onSubmit={event => { event.preventDefault(); if (!reply.trim()) return; onReply?.(reply); setReply(''); }}>
         <textarea rows="2" value={reply} onChange={event => setReply(event.target.value)} placeholder="Continue this conversation…" />
         <button type="submit" disabled={replyBusy || !reply.trim()}>{replyBusy ? 'Starting…' : 'Send'}</button></form>}
     </main><DetailsRail traceDetails={detailedTrace} runId={runId} view={view} runs={runs} onOpenRun={onOpenRun} onOpenTrace={onOpenTrace}/></div>

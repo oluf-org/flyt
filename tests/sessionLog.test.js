@@ -95,6 +95,28 @@ test('a call that never returned is reconstructed, not dropped', async () => {
   } finally { cleanup(); }
 });
 
+test('partial tool input is durable recovery evidence but not an invented conversation call', async () => {
+  const { dir, cleanup } = tempRuns();
+  try {
+    const session = await new JsonlSessionStore(dir).open('run-1');
+    await session.append({ type: 'message.user', data: { content: 'Write it.' } });
+    await session.append({ type: 'llm.request', data: { callId: 'request-1', model: 'm' } });
+    await session.append({ type: 'tool.input.start', data: {
+      requestCallId: 'request-1', inputId: 'input-1', index: 0, toolCallId: 'call-1', name: 'write_file',
+    } });
+    await session.append({ type: 'tool.input.delta', data: {
+      requestCallId: 'request-1', inputId: 'input-1', index: 0, delta: '{"path":"unfinished',
+    } });
+    // The process ends before tool.input.end and before llm.response.
+
+    const reopened = await new JsonlSessionStore(dir).read('run-1');
+    assert.deepEqual(reopened.readSync().slice(-2).map(event => event.type),
+      ['tool.input.start', 'tool.input.delta']);
+    assert.deepEqual(await reopened.deriveMessages(), [{ role: 'user', content: 'Write it.' }],
+      'an uncommitted partial input is never promoted into a call the model did not finish');
+  } finally { cleanup(); }
+});
+
 test('replay from a cursor returns only what the caller has not seen', async () => {
   const { dir, cleanup } = tempRuns();
   try {

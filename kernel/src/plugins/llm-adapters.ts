@@ -45,7 +45,17 @@ export interface CallModel {
     cliPath?: string;
     retry?: { attempts?: number; baseMs?: number; maxMs?: number };
     signal?: AbortSignal;
-    onText?: (text: string, options?: { final?: boolean }) => void;
+    onText?: (text: string, options?: {
+      final?: boolean;
+      toolInputEvents?: readonly {
+        phase: 'start' | 'delta' | 'end';
+        index: number;
+        id?: string;
+        name?: string;
+        delta?: string;
+        arguments?: string;
+      }[];
+    }) => void;
   }): Promise<{
     text?: string;
     reasoning?: string;
@@ -172,7 +182,11 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
   if (typeof config?.callModel !== 'function') throw new Error('flyt-adapters needs a callModel');
   if (typeof config?.resolve !== 'function') throw new Error('flyt-adapters needs a model resolver');
 
-  const complete = async (request: LlmRequest, onText?: (t: string) => void): Promise<LlmResponse> => {
+  type TextOptions = Parameters<NonNullable<Parameters<CallModel>[0]['onText']>>[1];
+  const complete = async (
+    request: LlmRequest,
+    onText?: (text: string, options?: TextOptions) => void,
+  ): Promise<LlmResponse> => {
     const candidates = [request.model, ...(request.fallbackModels ?? [])]
       .filter((model, index, all) => Boolean(model) && all.indexOf(model) === index);
     let source: ReturnType<ResolveSource> = null;
@@ -211,7 +225,10 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           // the core adapter's ordinary retry/backoff resilience.
           ...(index < candidates.length - 1 ? { retry: { attempts: 1 } } : {}),
           ...(request.signal ? { signal: request.signal } : {}),
-          ...(onText ? { onText: (text: string) => { if (text) emittedText = true; onText(text); } } : {}),
+          ...(onText ? { onText: (text: string, options?: TextOptions) => {
+            if (text || options?.toolInputEvents?.length) emittedText = true;
+            onText(text, options);
+          } } : {}),
         });
         await request.onAttempt?.({
           index, model: candidate, provider: answered.provider ?? source.provider,
@@ -277,9 +294,33 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
       let seen = '';
       let done = false;
       let failure: unknown = null;
+      let nextInputId = 0;
+      const activeInputs = new Map<number, string>();
 
       const push = (chunk: LlmChunk): void => { queue.push(chunk); wake?.(); wake = null; };
-      const settledPromise = complete(request, whole => {
+      const settledPromise = complete(request, (whole, options) => {
+        for (const event of options?.toolInputEvents ?? []) {
+          let inputId = activeInputs.get(event.index);
+          if (event.phase === 'start' || !inputId) {
+            inputId = `input-${++nextInputId}`;
+            activeInputs.set(event.index, inputId);
+            // A provider should start before it sends a delta/end. Preserve a
+            // useful lifecycle even for a third-party bridge that does not.
+            if (event.phase !== 'start') push({ toolInput: {
+              inputId, index: event.index, phase: 'start',
+              ...(event.id ? { toolCallId: event.id } : {}),
+              ...(event.name ? { name: event.name } : {}),
+            } });
+          }
+          push({ toolInput: {
+            inputId, index: event.index, phase: event.phase,
+            ...(event.id ? { toolCallId: event.id } : {}),
+            ...(event.name ? { name: event.name } : {}),
+            ...(event.delta !== undefined ? { delta: event.delta } : {}),
+            ...(event.arguments !== undefined ? { arguments: event.arguments } : {}),
+          } });
+          if (event.phase === 'end') activeInputs.delete(event.index);
+        }
         if (typeof whole !== 'string' || !whole.startsWith(seen)) { seen = whole ?? ''; return; }
         const delta = whole.slice(seen.length);
         seen = whole;

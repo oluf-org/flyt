@@ -175,7 +175,10 @@ const snapshots = {
       name: 'Learn from a repo',
       createdAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
       updatedAt: new Date(Date.now() - 60 * 1000).toISOString(),
-      nodeStatus: { in: 'done', inputs: 'done', orient: 'failed', read: 'pending', out: 'pending' },
+      // Deliberately stale `active` under a terminal run: historical/crashed
+      // records can contain this exact mismatch, and Work must still render
+      // the run-level failure as authoritative rather than claim it is live.
+      nodeStatus: { in: 'done', inputs: 'done', orient: 'active', read: 'pending', out: 'pending' },
       error: 'Node orient (orient) failed: Codex CLI failed: Error loading config.toml: unknown variant `priority`, expected `fast` or `flex` in `service_tier`'
     },
     prompt: 'We are in an agent orchestration app, and want to learn how this other repo is handling agents working on long tasks.',
@@ -735,11 +738,45 @@ export function installDevMock() {
     rejectPlan: async () => {},
     // No OS to nudge in the browser shell — the gate dialog itself is visible.
     signalApprovalGate: async () => {},
-    resumeRun: async () => {},
-    // Run-control stubs (RUN-CONTROL): the browser shell has no live engine,
-    // so these resolve with inert ok payloads — just enough to not crash.
-    stopRun: async () => ({ ok: true }),
-    pauseRun: async () => ({ ok: true }),
+    resumeRun: async (_pid, runId) => {
+      const snap = snapshots[runId];
+      if (!snap || !['paused', 'stopped', 'interrupted'].includes(snap.meta?.stage)) {
+        return { ok: false, error: 'not-paused', message: `Mock run ${runId} is not paused.` };
+      }
+      snap.meta = { ...snap.meta, stage: 'resumed' };
+      const next = Object.entries(snap.meta.nodeStatus ?? {}).find(([, status]) => status === 'pending')?.[0];
+      if (next) snap.meta.nodeStatus = { ...snap.meta.nodeStatus, [next]: 'active' };
+      pushRun(runId);
+      return { ok: true, state: 'resuming' };
+    },
+    // Browser-preview lifecycle mirrors the real two-step state changes so the
+    // controls and their intermediate copy can be exercised without Electron.
+    stopRun: async (_pid, runId) => {
+      const snap = snapshots[runId];
+      if (!snap) return { ok: false, error: 'unknown-run', message: `No mock run ${runId}.` };
+      snap.meta = { ...snap.meta, stage: 'stopping' }; pushRun(runId);
+      setTimeout(() => {
+        snap.meta = { ...snap.meta, stage: 'stopped' };
+        snap.meta.nodeStatus = Object.fromEntries(Object.entries(snap.meta.nodeStatus ?? {})
+          .map(([id, status]) => [id, status === 'active' ? 'pending' : status]));
+        pushRun(runId);
+      }, 500);
+      return { ok: true, state: 'stopping' };
+    },
+    pauseRun: async (_pid, runId) => {
+      const snap = snapshots[runId];
+      if (!snap || !['execution', 'resumed'].includes(snap.meta?.stage)) {
+        return { ok: false, error: 'not-live', message: `Mock run ${runId} is not running.` };
+      }
+      snap.meta = { ...snap.meta, stage: 'pausing' }; pushRun(runId);
+      setTimeout(() => {
+        snap.meta = { ...snap.meta, stage: 'paused' };
+        snap.meta.nodeStatus = Object.fromEntries(Object.entries(snap.meta.nodeStatus ?? {})
+          .map(([id, status]) => [id, status === 'active' ? 'pending' : status]));
+        pushRun(runId);
+      }, 500);
+      return { ok: true, state: 'pausing' };
+    },
     // Restart is the one stub that must not be inert: it carries the worker
     // re-pin (D39), and a mock that swallowed it would look exactly like the
     // stale-bridge case the renderer now warns about. So it applies the pin to

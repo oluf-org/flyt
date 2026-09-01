@@ -10,6 +10,8 @@
 
 /** A block's state, as the log tells it. */
 export const BLOCK_STATES = ['pending', 'active', 'done', 'failed', 'waiting', 'approval', 'input', 'skipped'];
+const TERMINAL_STAGES = new Set(['done', 'failed', 'stopped', 'interrupted', 'cancelled', 'rejected']);
+const ACTIVE_STAGES = new Set(['execution', 'resumed', 'pausing', 'paused', 'stopping']);
 
 /**
  * Which blocks a run has touched, and how they ended.
@@ -72,9 +74,11 @@ export function runStage(trace) {
   let stage = null;
   let error = null;
   let errorBlockId = null;
+  let reason = null;
   for (const event of trace?.others ?? []) {
     if (event?.type === 'run.stage' && typeof event.data?.stage === 'string') {
       stage = event.data.stage;
+      reason = event.data?.reason ? String(event.data.reason) : null;
       if (stage === 'execution' || stage === 'resumed' || stage === 'done') {
         error = null;
         errorBlockId = null;
@@ -85,7 +89,7 @@ export function runStage(trace) {
       errorBlockId = typeof event.data.blockId === 'string' ? event.data.blockId : null;
     }
   }
-  return { stage, error, errorBlockId };
+  return { stage, error, errorBlockId, reason };
 }
 
 /**
@@ -96,7 +100,15 @@ export function runStage(trace) {
  */
 export function runView(trace) {
   const states = blockStates(trace);
-  const { stage, error, errorBlockId } = runStage(trace);
+  const { stage, error, errorBlockId, reason } = runStage(trace);
+  // A terminal run cannot have live blocks, even if the process died or the
+  // scheduler failed between the active and terminal block events. Preserve
+  // the raw trace for inspection; make the operational view truthful.
+  if (TERMINAL_STAGES.has(stage)) {
+    for (const block of Object.values(states)) {
+      if (block.status === 'active') block.status = stage === 'failed' ? 'failed' : 'pending';
+    }
+  }
   const blocks = {};
   for (const [blockId, at] of Object.entries(states)) {
     blocks[blockId] = {
@@ -116,7 +128,12 @@ export function runView(trace) {
     stage,
     error,
     errorBlockId,
+    reason,
     warnings: Object.entries(blocks).filter(([, block]) => block.warning).map(([blockId, block]) => ({ blockId, message: block.warning })),
-    running: stage === 'execution' || stage === 'resumed' || active.length > 0,
+    running: ACTIVE_STAGES.has(stage) && !['paused', 'interrupted'].includes(stage),
+    pausing: stage === 'pausing',
+    paused: stage === 'paused',
+    stopping: stage === 'stopping',
+    resumable: stage === 'paused' || stage === 'stopped' || stage === 'interrupted',
   };
 }

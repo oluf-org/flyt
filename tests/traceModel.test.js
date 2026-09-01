@@ -126,6 +126,49 @@ test('a tool call with no result is present and marked as having none', () => {
   assert.equal(call.result, null);
 });
 
+test('an interrupted streamed tool input remains visible without becoming an executable call', () => {
+  const trace = foldTrace([
+    { seq: 1, at: 't0', type: 'turn.start', data: { runId: 'r', turn: 1 } },
+    { seq: 2, at: 't1', type: 'step.start', data: { runId: 'r', blockId: 'work', step: 1 } },
+    { seq: 3, at: 't2', type: 'llm.request', data: { callId: 'request-1', model: 'm' } },
+    { seq: 4, at: 't3', type: 'tool.input.start', data: {
+      requestCallId: 'request-1', inputId: 'input-1', index: 0, toolCallId: 'call-1', name: 'write_file',
+    } },
+    { seq: 5, at: 't4', type: 'tool.input.delta', data: {
+      requestCallId: 'request-1', inputId: 'input-1', index: 0, delta: '{"path":"partial',
+    } },
+  ]);
+  const step = trace.turns[0].steps[0];
+  assert.equal(step.toolInputs.length, 1);
+  assert.equal(step.toolInputs[0].arguments, '{"path":"partial');
+  assert.equal(step.toolInputs[0].complete, false);
+  assert.equal(step.toolInputs[0].committed, false);
+  assert.equal(step.toolCalls.length, 0, 'partial input is evidence, not an executable call');
+});
+
+test('a settled response replaces its completed streamed input instead of duplicating it', () => {
+  const events = [
+    { seq: 1, at: 't0', type: 'turn.start', data: { runId: 'r', turn: 1 } },
+    { seq: 2, at: 't1', type: 'step.start', data: { runId: 'r', blockId: 'work', step: 1 } },
+    { seq: 3, at: 't2', type: 'llm.request', data: { callId: 'request-1', model: 'm' } },
+    { seq: 4, at: 't3', type: 'tool.input.start', data: {
+      requestCallId: 'request-1', inputId: 'input-1', index: 0, toolCallId: 'call-1', name: 'write_file',
+    } },
+    { seq: 5, at: 't4', type: 'tool.input.delta', data: { inputId: 'input-1', delta: '{"path":"a"}' } },
+    { seq: 6, at: 't5', type: 'tool.input.end', data: {
+      inputId: 'input-1', index: 0, toolCallId: 'call-1', name: 'write_file', arguments: '{"path":"a"}',
+    } },
+    { seq: 7, at: 't6', type: 'llm.response', data: {
+      callId: 'request-1', finishReason: 'tool_calls',
+      toolCalls: [{ id: 'call-1', name: 'write_file', args: { path: 'a' } }],
+    } },
+  ];
+  const step = foldTrace(events).turns[0].steps[0];
+  assert.equal(step.toolInputs[0].complete, true);
+  assert.equal(step.toolInputs[0].committed, true);
+  assert.equal(step.toolCalls.length, 1);
+});
+
 test('feeding events in two batches gives the same result as feeding them in one', () => {
   const one = foldTrace(finishedTurn);
   const two = emptyTrace();

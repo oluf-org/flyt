@@ -1,6 +1,8 @@
-// The gap DESIGN-SPEC §9 lists as permanent: a tool call in flight when the
-// process dies cannot be reconstructed. This is that case, with a real process
-// really being killed — not a simulated one — and the log replayed afterwards.
+// Crash recovery at both sides of the tool boundary, with a real process
+// really being killed — not a simulated one. A committed call that dies inside
+// execution is reconstructed with an unknown-effect result; an input that dies
+// while the model is still generating it remains exact partial evidence and is
+// never promoted into something executable.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -33,6 +35,21 @@ await session.append({ type: 'llm.response', data: {
 } });
 await session.append({ type: 'tool.call', data: { callId: 'call-1', name: 'bash' } });
 // ...the tool is now running, and the process dies here.
+process.kill(process.pid, 'SIGKILL');
+await new Promise(() => {});
+`;
+
+const A_MODEL_INPUT_THAT_DIES = `
+const { JsonlSessionStore } = await import(process.argv[3]);
+const session = await new JsonlSessionStore(process.argv[2]).open('run-input');
+await session.append({ type: 'message.user', data: { content: 'Write a file.' } });
+await session.append({ type: 'llm.request', data: { callId: 'request-1', model: 'm' } });
+await session.append({ type: 'tool.input.start', data: {
+  requestCallId: 'request-1', inputId: 'input-1', index: 0, toolCallId: 'call-1', name: 'write_file'
+} });
+await session.append({ type: 'tool.input.delta', data: {
+  requestCallId: 'request-1', inputId: 'input-1', index: 0, delta: '{"path":"half'
+} });
 process.kill(process.pid, 'SIGKILL');
 await new Promise(() => {});
 `;
@@ -88,5 +105,24 @@ test('a run killed mid-append leaves a log the next writer can continue', async 
     const messages = await session.deriveMessages();
     assert.match(messages[messages.length - 1].content, /did not survive a restart/,
       'and the reconstructed answer is the real one now, not the synthetic one');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a process killed while the model streams tool arguments leaves the exact partial input', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-input-crash-'));
+  try {
+    const script = path.join(dir, 'a-model-input-that-dies.mjs');
+    fs.writeFileSync(script, A_MODEL_INPUT_THAT_DIES, 'utf8');
+    const child = spawnSync(process.execPath, [script, dir, KERNEL], { cwd: repo, encoding: 'utf8' });
+    assert.notEqual(child.status, 0);
+
+    const session = await new JsonlSessionStore(dir).read('run-input');
+    const events = session.readSync();
+    assert.deepEqual(events.map(event => event.type), [
+      'message.user', 'llm.request', 'tool.input.start', 'tool.input.delta',
+    ]);
+    assert.equal(events.at(-1).data.delta, '{"path":"half');
+    assert.deepEqual(await session.deriveMessages(), [{ role: 'user', content: 'Write a file.' }],
+      'recovery retries the interrupted model step; it does not execute a half-generated call');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

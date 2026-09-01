@@ -184,3 +184,11 @@ test('interrupted describes runs that never finished, not ones that resumed to t
   // A run interrupted, then resumed to completion, is simply Done.
   assert.equal(runStatus({ stage: 'done', interrupted: true }).kind, 'done');
 });
+
+test('kernel lifecycle stages never fall back to a false Running label', () => {
+  assert.deepEqual(runStatus({ stage: 'pausing' }), { kind: 'running', label: 'Pausing' });
+  assert.deepEqual(runStatus({ stage: 'paused' }), { kind: 'waiting', label: 'Paused' });
+  assert.deepEqual(runStatus({ stage: 'stopping' }), { kind: 'running', label: 'Stopping' });
+  assert.deepEqual(runStatus({ stage: 'stopped' }), { kind: 'interrupted', label: 'Stopped' });
+  assert.deepEqual(runStatus({ stage: 'interrupted' }), { kind: 'interrupted', label: 'Interrupted' });
+});

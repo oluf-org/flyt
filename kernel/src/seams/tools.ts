@@ -36,7 +36,7 @@ export interface ToolDefinition {
   parameters: JsonValue;
   /** Absent until a human confirms one; an unclassified tool cannot be granted. */
   classification?: ToolClassification;
-  /** Run one accepted call. Never called for a call the gate refused. */
+  /** Run one schema-valid, accepted call. Never called for invalid arguments or a call the gate refused. */
   execute(args: JsonValue, exec: ToolExecution): Promise<ToolResult>;
 }
 
@@ -53,9 +53,10 @@ export interface ToolsSeam {
   /**
    * Run a call through the gate.
    *
-   * `tools/pre-execute` decides first: a denial returns a refusal result and
-   * the tool body never runs. Everything a plugin contributes reaches
-   * execution through this method and no other.
+   * The kernel validates all arguments first and returns every schema error in
+   * one result. `tools/pre-execute` then decides: a denial returns a refusal
+   * result and the tool body never runs. Everything a plugin contributes
+   * reaches execution through this method and no other.
    */
   execute(exec: ToolExecution): Promise<ToolResult>;
 }

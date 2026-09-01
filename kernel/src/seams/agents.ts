@@ -45,6 +45,10 @@ export interface AgentRun {
   settled(): Promise<RunOutcome>;
   /** Ask it to stop. It stops at the next durable boundary, never mid-write. */
   stop(reason: string): Promise<void>;
+  /** Hold before the next block starts. False means it was already requested. */
+  pause(reason?: string): Promise<boolean>;
+  /** Release a requested or landed pause. False means it was not paused. */
+  continue(): Promise<boolean>;
 }
 
 /** The seam. Provider: `flyt-stack-runner`. */
@@ -62,6 +66,10 @@ export interface AgentsSeam {
   get(runId: string): AgentRun | undefined;
   /** Ask a live run to stop at its next durable boundary. False when it is not live here. */
   stop(runId: string, reason: string): Promise<boolean>;
+  /** Ask a live run to hold at its next durable boundary. */
+  pause(runId: string, reason?: string): Promise<boolean>;
+  /** Release a live run's pause. */
+  continue(runId: string): Promise<boolean>;
 }
 
 declare module '@deepseek-ai/cordis' {

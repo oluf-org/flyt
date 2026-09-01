@@ -15,6 +15,9 @@ import type { PostToolDecision, PreToolDecision, ToolExecution } from '../events
 import { SEAM_NAMES, type SeamName } from '../seams/index.js';
 import { classifyContributedTool, atLeastAsStrict, describe } from './classify.js';
 import { belongsToTrustedPlugin } from './trusted-install.js';
+import {
+  compileToolArguments, invalidToolArguments, type ToolArgumentValidator,
+} from '../tools/json-schema.js';
 
 /** The single human review pass required when installing a plugin. */
 export interface ToolClassificationProposal extends ToolClassification {
@@ -248,6 +251,7 @@ export function refusal(reason: string): ToolResult {
 interface RegistryState {
   registered: Map<string, ToolDefinition>;
   owners: Map<string, symbol>;
+  validators: Map<string, ToolArgumentValidator>;
 }
 
 // The mutation capability is module-private. Cordis derives service views with
@@ -316,14 +320,14 @@ export class ToolRegistry extends Service implements ToolsSeam {
   constructor(ctx: Context) {
     super(ctx, 'tools');
     Object.defineProperty(this, REGISTRY_STATE, {
-      value: { registered: new Map(), owners: new Map() } satisfies RegistryState,
+      value: { registered: new Map(), owners: new Map(), validators: new Map() } satisfies RegistryState,
     });
   }
 
   /** Register a tool, owned by the calling plugin's fiber. Emits `tools/change`. */
   register(tool: ToolDefinition): () => void {
     if (!tool?.name) throw new Error('A tool needs a name');
-    const { registered, owners } = stateOf(this);
+    const { registered, owners, validators } = stateOf(this);
     if (registered.has(tool.name)) throw new Error(`A tool named "${tool.name}" is already registered`);
     const ctx = this.ctx;
     const ownership = Symbol(tool.name);
@@ -342,9 +346,14 @@ export class ToolRegistry extends Service implements ToolsSeam {
     // Always detach registration from the caller's object and freeze the
     // registry-owned record. Quarantine additionally strips any claimed grant.
     const safeTool = storedDefinition(quarantined ? { ...tool, classification: undefined } : tool);
+    // Compile before registration becomes visible. From this point onward the
+    // registry can guarantee that every reachable tool has an enforceable
+    // parameters schema; unresolved/external refs fail closed here.
+    const validateArguments = compileToolArguments(tool.name, safeTool.parameters);
     return ctx.effect(() => {
       registered.set(tool.name, safeTool);
       owners.set(tool.name, ownership);
+      validators.set(tool.name, validateArguments);
       ctx.emit('tools/change');
       return () => {
         // Classification replaces the stored definition. Ownership is separate
@@ -353,6 +362,7 @@ export class ToolRegistry extends Service implements ToolsSeam {
         if (owners.get(tool.name) !== ownership) return;
         registered.delete(tool.name);
         owners.delete(tool.name);
+        validators.delete(tool.name);
         ctx.emit('tools/change');
       };
     }) as () => void;
@@ -394,13 +404,26 @@ export class ToolRegistry extends Service implements ToolsSeam {
   /**
    * Run a call through the gate.
    *
-   * `tools/pre-execute` decides first: a denial returns a refusal result and
-   * the tool body never runs. Everything a plugin contributes reaches
+   * Arguments are validated first and every diagnostic is returned in one
+   * result. `tools/pre-execute` then decides: a denial returns a refusal result
+   * and the tool body never runs. Everything a plugin contributes reaches
    * execution through this method and no other.
    */
   async execute(exec: ToolExecution): Promise<ToolResult> {
     const ctx = this.ctx;
     ctx.emit('tool/call', exec);
+
+    const state = stateOf(this);
+    const tool = state.registered.get(exec.call.name);
+    if (!tool) return refusal(`there is no tool named "${exec.call.name}"`);
+
+    // Validation is a kernel invariant, not a courtesy left to individual
+    // tools. It happens before approval so a malformed write cannot wake a
+    // person or run a policy screen, and all failures return together in the
+    // single tool result the model will see.
+    const errors = state.validators.get(exec.call.name)?.(exec.call.args)
+      ?? ['args: no compiled parameters schema is available'];
+    if (errors.length) return invalidToolArguments(exec.call.name, errors);
 
     const decision: PreToolDecision = await ctx.waterfall(
       'tools/pre-execute', exec, async () => ({ decision: 'allow' }),
@@ -413,9 +436,6 @@ export class ToolRegistry extends Service implements ToolsSeam {
         : decision.reason;
       return refusal(reason);
     }
-
-    const tool = stateOf(this).registered.get(exec.call.name);
-    if (!tool) return refusal(`there is no tool named "${exec.call.name}"`);
 
     let result: ToolResult;
     try {

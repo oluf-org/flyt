@@ -73,7 +73,9 @@ export function runTimeTitle(run) {
   return Number.isFinite(t) ? new Date(t).toLocaleString() : 'Unknown time';
 }
 
-const TERMINAL_LABEL = { done: 'Done', failed: 'Failed', rejected: 'Rejected' };
+const TERMINAL_LABEL = {
+  done: 'Done', failed: 'Failed', rejected: 'Rejected', stopped: 'Stopped', interrupted: 'Interrupted'
+};
 const STAGE_LABEL = {
   prompt: 'Queued',
   planning: 'Planning',
@@ -85,6 +87,10 @@ const STAGE_LABEL = {
   awaiting_input: 'Needs an answer',
   routing: 'Routing',
   execution: 'Running',
+  resumed: 'Running',
+  pausing: 'Pausing',
+  paused: 'Paused',
+  stopping: 'Stopping',
   verification: 'Verifying'
 };
 
@@ -96,9 +102,12 @@ const STAGE_LABEL = {
 export function runStatus(run) {
   const stage = run?.stage;
   if (stage === 'cancelled') return { kind: 'interrupted', label: 'Stopped' };
+  if (stage === 'stopped' || stage === 'interrupted') {
+    return { kind: 'interrupted', label: TERMINAL_LABEL[stage] };
+  }
   if (isTerminal(stage)) return { kind: stage, label: TERMINAL_LABEL[stage] ?? 'Done' };
   if (run?.interrupted) return { kind: 'interrupted', label: 'Interrupted' };
-  if (stage === 'awaiting_approval' || stage === 'awaiting_input') {
+  if (stage === 'awaiting_approval' || stage === 'awaiting_input' || stage === 'paused') {
     return { kind: 'waiting', label: STAGE_LABEL[stage] };
   }
   return { kind: 'running', label: STAGE_LABEL[stage] ?? 'Running' };

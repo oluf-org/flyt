@@ -200,4 +200,6 @@ test('Work receives the manual stop path required by soft worker limits', () => 
   const root = src('v2/DailyRoot.jsx');
   assert.match(shell, /onStopRun=\{onStopRun\}/);
   assert.match(root, /window\.flyt\.stopRun\(projectId, runId\)/);
+  assert.match(root, /window\.flyt\.pauseRun\(projectId, runId\)/);
+  assert.match(root, /window\.flyt\.resumeRun\(projectId, runId\)/);
 });

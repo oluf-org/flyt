@@ -243,6 +243,19 @@ export function projectRun(events: readonly SessionEvent[], runId: string): RunP
     });
   }
 
+  // The run lifecycle is authoritative over transient block markers. A crash
+  // or scheduler-level exception can occur after `active` was appended but
+  // before that block had a chance to append its own terminal status. Keeping
+  // that marker active makes every projection claim work is still happening
+  // after the run has explicitly ended.
+  if (['done', 'failed', 'stopped', 'interrupted', 'cancelled', 'rejected'].includes(meta.stage)) {
+    for (const [id, status] of Object.entries(meta.blockStatus)) {
+      if (status !== 'active') continue;
+      meta.blockStatus[id] = meta.stage === 'failed' ? 'failed' : 'pending';
+    }
+    meta.currentBlockId = null;
+  }
+
   if (!meta.createdAt) meta.createdAt = events[0]?.at ?? '';
   if (!meta.updatedAt) meta.updatedAt = meta.createdAt;
   return projection;

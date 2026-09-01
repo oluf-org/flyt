@@ -87,6 +87,9 @@ class Run implements AgentRun {
   private settledPromise: Promise<RunOutcome>;
   private stopRequest: string | null = null;
   private abortController = new AbortController();
+  private pauseRequest = false;
+  private pauseGate: Promise<void> | null = null;
+  private releasePause: (() => void) | null = null;
 
   constructor(runId: string, walk: (run: Run) => Promise<RunOutcome>) {
     this.runId = runId;
@@ -113,7 +116,42 @@ class Run implements AgentRun {
     // through a shutdown has to be able to finish it, and a run that already
     // settled has nothing to stop.
     this.stopRequest ??= reason || 'stopped';
+    this.pauseRequest = false;
+    this.releasePause?.();
+    this.releasePause = null;
     this.abortController.abort(this.stopRequest);
+  }
+
+  async pause(_reason?: string): Promise<boolean> {
+    if (this.stopRequest || this.pauseRequest || this.pauseGate) return false;
+    this.pauseRequest = true;
+    return true;
+  }
+
+  async continue(): Promise<boolean> {
+    if (!this.pauseRequest && !this.pauseGate) return false;
+    this.pauseRequest = false;
+    this.releasePause?.();
+    this.releasePause = null;
+    return true;
+  }
+
+  /** Cooperatively hold between durable block boundaries. */
+  async waitIfPaused(session: SessionHandle): Promise<void> {
+    if (!this.pauseRequest || this.stopRequest) return;
+    const ownsGate = !this.pauseGate;
+    if (ownsGate) {
+      this.pauseGate = new Promise(resolve => { this.releasePause = resolve; });
+      await session.append({
+        type: 'run.stage',
+        data: { stage: 'paused', afterBlock: this.lastBlockId },
+      });
+    }
+    await this.pauseGate;
+    if (ownsGate) {
+      this.pauseGate = null;
+      this.releasePause = null;
+    }
   }
 }
 
@@ -236,7 +274,10 @@ export class StackRunner extends Service implements AgentsSeam {
           error: String((events.findLast(e => e.type === 'run.error')?.data as { error?: unknown })?.error
             ?? 'the run failed'),
         };
-      return { runId, settled: async () => settled, stop: async () => {} };
+      return {
+        runId, settled: async () => settled, stop: async () => {},
+        pause: async () => false, continue: async () => false,
+      };
     }
 
     const root = this.stacks?.resolve(stackId) ?? null;
@@ -291,7 +332,35 @@ export class StackRunner extends Service implements AgentsSeam {
   async stop(runId: string, reason: string): Promise<boolean> {
     const run = this.runs.get(runId);
     if (!run) return false;
+    const session = await this.ctx.sessions.open(runId);
+    await session.append({
+      type: 'run.stage',
+      data: { stage: 'stopping', reason: reason || 'stopped', afterBlock: run.lastBlockId },
+    });
     await run.stop(reason);
+    return true;
+  }
+
+  async pause(runId: string, reason = 'paused by request'): Promise<boolean> {
+    const run = this.runs.get(runId);
+    if (!run || !await run.pause(reason)) return false;
+    const session = await this.ctx.sessions.open(runId);
+    await session.append({
+      type: 'run.stage',
+      data: { stage: 'pausing', reason, afterBlock: run.lastBlockId },
+    });
+    return true;
+  }
+
+  async continue(runId: string): Promise<boolean> {
+    const run = this.runs.get(runId);
+    if (!run) return false;
+    if (!await run.continue()) return false;
+    const session = await this.ctx.sessions.open(runId);
+    await session.append({
+      type: 'run.stage',
+      data: { stage: 'resumed', afterBlock: run.lastBlockId },
+    });
     return true;
   }
 
@@ -347,6 +416,8 @@ export class StackRunner extends Service implements AgentsSeam {
     run: Run, node: StackNode, input: string, session: SessionHandle,
     done: Map<string, BlockOutcome>,
   ): Promise<BlockStep[]> {
+    await run.waitIfPaused(session);
+    if (run.stopReason) return [];
     if (node.kind === 'block') return [await this.runBlock(run, node, input, session, done)];
     if (node.kind === 'parallel') return this.runParallel(run, node, input, session, done);
     if (node.kind === 'repeat') return this.runRepeat(run, node, input, session, done);

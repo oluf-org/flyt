@@ -135,7 +135,11 @@ export function watchingFromRun(runId, snapshot, log = []) {
   }
   const stage = String(snapshot.meta?.stage ?? 'execution');
   if (snapshot.meta?.error) {
-    events.push({ seq: seq++, at, type: 'run.error', data: { error: String(snapshot.meta.error) } });
+    const failedNode = nodes.find(node => normalizeBlockStatus(snapshot.meta?.nodeStatus?.[node.id]) === 'failed'
+      || normalizeBlockStatus(snapshot.retrospectives?.[node.id]?.status) === 'failed');
+    events.push({ seq: seq++, at, type: 'run.error', data: {
+      error: String(snapshot.meta.error), ...(failedNode ? { blockId: failedNode.id } : {}),
+    } });
   }
   events.push({ seq: seq++, at, type: 'run.stage', data: { stage } });
   // Legacy daily runs have no canonical event cursor. Their model-call trace

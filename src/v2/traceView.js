@@ -122,6 +122,20 @@ export function toolView(call, decisions = []) {
   };
 }
 
+/** A structured tool input that never became an authoritative response call. */
+export function toolInputView(input) {
+  return {
+    inputId: input.inputId,
+    requestCallId: input.requestCallId ?? null,
+    toolCallId: input.toolCallId ?? null,
+    index: input.index,
+    name: input.name ?? '(name pending)',
+    arguments: input.arguments ?? '',
+    complete: input.complete === true,
+    ms: between(input.startedAt, input.endedAt),
+  };
+}
+
 /** One step, with everything it did. */
 export function stepView(step) {
   return {
@@ -132,6 +146,9 @@ export function stepView(step) {
     ms: between(step.startedAt, step.endedAt),
     prompt: step.prompt ?? null,
     request: requestView(step.request, step),
+    // Inputs committed by llm.response are represented by the parsed ordinary
+    // tool call below. Everything else is partial/crash evidence and remains.
+    toolInputs: (step.toolInputs ?? []).filter(input => input.committed !== true).map(toolInputView),
     tools: step.toolCalls.map(call => toolView(call, step.decisions)),
     // A decision about a call this step never recorded still belongs to the
     // step: a denial can be the reason there is no call.

@@ -124,10 +124,34 @@ export function ToolCall({ call, uiExtensions = [], initiallyOpen = false }) {
   );
 }
 
+function ToolInput({ input }) {
+  const [open, setOpen] = useState(false);
+  const detail = input.complete ? 'input assembled' : 'input incomplete';
+  return (
+    <Fold
+      label={<span className="mono">{input.name}</span>}
+      detail={detail}
+      tone="warn"
+      open={open}
+      onToggle={() => setOpen(value => !value)}
+    >
+      <p className="section-label">RAW ARGUMENTS {input.complete ? '' : 'SO FAR'}</p>
+      <Pre value={input.arguments} />
+      <p className="tr-unfinished">
+        {input.complete
+          ? 'The model finished assembling this tool input, but no committed response or tool execution followed.'
+          : 'No tool-input end event is recorded. It may still be streaming, or the process may have ended mid-input.'}
+        {' '}No tool execution was recorded.
+      </p>
+    </Fold>
+  );
+}
+
 function Step({ step, uiExtensions }) {
   const [open, setOpen] = useState(false);
   const bits = [
     step.request?.model,
+    step.toolInputs.length ? `${step.toolInputs.length} partial tool input(s)` : null,
     step.tools.length ? `${step.tools.length} tool call(s)` : null,
     step.ms != null ? duration(step.ms) : null,
     step.finished ? null : 'running',
@@ -147,6 +171,7 @@ function Step({ step, uiExtensions }) {
         </details>
       )}
       <Request request={step.request} />
+      {step.toolInputs.map(input => <ToolInput key={input.inputId} input={input} />)}
       {step.tools.map(call => <ToolCall key={call.callId} call={call} uiExtensions={uiExtensions} />)}
       {step.orphanDecisions.map(d => (
         <p key={`${d.callId}-${d.at}`} className={`tr-decision ${d.decision}`}>

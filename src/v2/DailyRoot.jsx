@@ -61,6 +61,8 @@ export default function DailyRoot() {
   const [replyBusy, setReplyBusy] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
   const [stopBusy, setStopBusy] = useState(false);
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const [resumeBusy, setResumeBusy] = useState(false);
   const [retryError, setRetryError] = useState('');
   const [submitKind, setSubmitKind] = useState('run');
   const [queueLevel, setQueueLevel] = useState('low');
@@ -555,18 +557,49 @@ export default function DailyRoot() {
         }}
         retryBusy={retryBusy}
         retryError={retryError}
+        controlError={error}
         stopBusy={stopBusy}
+        pauseBusy={pauseBusy}
+        resumeBusy={resumeBusy}
         onStopRun={async () => {
           const projectId = activeRef.current;
           const runId = watchingRef.current?.runId;
           if (!projectId || !runId || stopBusy) return;
           setStopBusy(true); setError('');
           try {
-            await window.flyt.stopRun(projectId, runId);
+            const result = await window.flyt.stopRun(projectId, runId);
+            if (result?.ok === false) throw new Error(result.message ?? result.error ?? 'The run could not be stopped.');
+            setWorkflowInteraction(null);
             await watchRun(projectId, runId);
             await refreshRuns(projectId);
           } catch (err) { setError(cleanIpcError(err)); }
           finally { setStopBusy(false); }
+        }}
+        onPauseRun={async () => {
+          const projectId = activeRef.current;
+          const runId = watchingRef.current?.runId;
+          if (!projectId || !runId || pauseBusy) return;
+          setPauseBusy(true); setError('');
+          try {
+            const result = await window.flyt.pauseRun(projectId, runId);
+            if (result?.ok === false) throw new Error(result.message ?? result.error ?? 'The run could not be paused.');
+            await watchRun(projectId, runId);
+            await refreshRuns(projectId);
+          } catch (err) { setError(cleanIpcError(err)); }
+          finally { setPauseBusy(false); }
+        }}
+        onResumeRun={async () => {
+          const projectId = activeRef.current;
+          const runId = watchingRef.current?.runId;
+          if (!projectId || !runId || resumeBusy) return;
+          setResumeBusy(true); setError('');
+          try {
+            const result = await window.flyt.resumeRun(projectId, runId);
+            if (result?.ok === false) throw new Error(result.message ?? result.error ?? 'The run could not be resumed.');
+            await watchRun(projectId, runId);
+            await refreshRuns(projectId);
+          } catch (err) { setError(cleanIpcError(err)); }
+          finally { setResumeBusy(false); }
         }}
         onRevealRunLog={() => {
           const runId = watchingRef.current?.runId;

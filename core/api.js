@@ -13,6 +13,7 @@
 // caller asking for one gets an honest error rather than a silent no-op.
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
 import { correctionFields } from './repair.js';
@@ -28,7 +29,7 @@ import { isDestructive } from '../src/toolTypes.js';
 import { pythonStatus, setupPython } from './python.js';
 import { loadToolSuite, runToolSuite, SUITE_DIR } from './toolbench.js';
 import {
-  bootLoopKernel, startStackRun, stopStackRun, resumeStackRun,
+  bootLoopKernel, startStackRun, stopStackRun, pauseStackRun, continueStackRun, resumeStackRun,
   restartStackBlock, snapshotStackRun, snapshotStoredStackRun, storedStackRunMetadata, isKernelRun,
   SNAPSHOT_UPDATE_EVENTS,
 } from './kernelRunner.js';
@@ -146,6 +147,19 @@ export function createApi(engine) {
   const workflowApprovals = new Map();
   const workflowQuestions = new Map();
 
+  const settleWorkflowInteractions = (projectId, runId) => {
+    for (const [key, pending] of workflowApprovals) {
+      if (pending?.interaction?.projectId !== projectId || pending?.interaction?.runId !== runId) continue;
+      workflowApprovals.delete(key);
+      pending.resolve(false);
+    }
+    for (const [key, pending] of workflowQuestions) {
+      if (pending?.interaction?.projectId !== projectId || pending?.interaction?.runId !== runId) continue;
+      workflowQuestions.delete(key);
+      pending.resolve(null);
+    }
+  };
+
   // A project id that isn't open is a caller error, not a crash. The CLI hands
   // these straight to the user, so the message names the id it was given.
   const proj = projectId => {
@@ -251,6 +265,13 @@ export function createApi(engine) {
     entry.kernelWatches ??= new Map();
     if (entry.kernelWatches.get(run.runId) === run) return;
     entry.kernelWatches.set(run.runId, run);
+    const beat = () => entry.store.writeLease(run.runId, {
+      pid: process.pid, host: os.hostname(), startedAt: new Date().toISOString(), beatAt: Date.now(),
+      runtime: 'kernel',
+    });
+    beat();
+    const leaseTimer = setInterval(beat, 5_000);
+    leaseTimer.unref?.();
     void run.settled().then(async outcome => {
       await onSettled?.(outcome);
       await snapshotStackRun(host.ctx, run.runId, host.kernelModule);
@@ -262,6 +283,8 @@ export function createApi(engine) {
       // finally. Ownership is the AgentRun identity, not merely the host: a
       // same-route restart deliberately reuses its host.
       const ownsWatch = entry.kernelWatches?.get(run.runId) === run;
+      clearInterval(leaseTimer);
+      if (ownsWatch) entry.store.clearLease(run.runId);
       if (ownsWatch && entry.kernelRuns?.get(run.runId) === host) entry.kernelRuns.delete(run.runId);
       if (ownsWatch) entry.kernelWatches.delete(run.runId);
       const stillUsed = [...(entry.kernelRuns?.values() ?? [])].some(candidate => candidate === host);
@@ -1193,6 +1216,8 @@ export function createApi(engine) {
     'run:resume': async ({ projectId, runId }) => {
       const entry = proj(projectId);
       if (!isKernelRun(entry.store, runId)) return runnerFor(projectId).resume(runId);
+      const liveHost = entry.kernelRuns?.get(runId);
+      if (liveHost?.ctx?.agents?.get(runId)) return continueStackRun(liveHost.ctx, runId);
       const host = await resumeKernelHost(entry, runId);
       const { run } = await resumeStackRun(host, runId);
       watchKernelRun(entry, host, run);
@@ -1203,11 +1228,16 @@ export function createApi(engine) {
       if (!isKernelRun(entry.store, runId)) return runnerFor(projectId).stop(runId);
       const host = entry.kernelRuns?.get(runId);
       if (!host) return { ok: false, error: 'not-live', message: `Kernel run ${runId} is not live in this process.` };
+      settleWorkflowInteractions(projectId, runId);
       return stopStackRun(host.ctx, runId, reason);
     },
-    'run:pause': ({ projectId, runId }) => dailyRunControl(
-      projectId, runId, 'pause', runner => runner.pause(runId)
-    ),
+    'run:pause': async ({ projectId, runId }) => {
+      const entry = proj(projectId);
+      if (!isKernelRun(entry.store, runId)) return runnerFor(projectId).pause(runId);
+      const host = entry.kernelRuns?.get(runId);
+      if (!host) return { ok: false, error: 'not-live', message: `Kernel run ${runId} is not live in this process.` };
+      return pauseStackRun(host.ctx, runId);
+    },
     // `worker` re-pins the node's model for this attempt only (D39) — the way
     // back from "the step failed because of the model it was pointed at".
     'run:restartNode': async ({ projectId, runId, nodeId, guidance = '', worker = null }) => {
@@ -2376,7 +2406,12 @@ export function createApi(engine) {
         try { entry.runner.stop(runId); } catch { /* another stop may have won */ }
       }
       for (const [runId, host] of entry.kernelRuns ?? []) {
-        stops.push(Promise.resolve(host?.ctx?.agents?.stop(runId, reason)).catch(() => false));
+        stops.push((async () => {
+          const run = host?.ctx?.agents?.get(runId);
+          const stopped = await host?.ctx?.agents?.stop(runId, reason);
+          if (run) await run.settled();
+          return stopped;
+        })().catch(() => false));
       }
     }
     await Promise.allSettled(stops);

@@ -23,6 +23,11 @@
 // dropped: a tool call's name arrives first and claims the throttle window, and
 // its arguments — the part that says what the agent is actually doing — stream
 // in behind it and vanish.
+//
+// opts.toolInputEvents carries the structured start/delta/end lifecycle for
+// native tool arguments. It is separate from the rendered text because the
+// rendered view is lossy; a durable kernel log needs the exact JSON fragments
+// to make a partial call visible and recoverable after a crash.
 import { anthropicAdapter } from './anthropic.js';
 import { openrouterAdapter } from './openrouter.js';
 import { openaiAdapter } from './openai.js';

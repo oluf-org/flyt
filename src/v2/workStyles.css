@@ -10,8 +10,11 @@
 .work-run-models > span { color: var(--faint); font-size: 8px; text-transform: uppercase; letter-spacing: .06em; }
 .work-run-models code { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 6px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 9px; }
 .work-stage { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; padding: 4px 8px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); }
-.stage-done { color: var(--ok); background: color-mix(in srgb, var(--ok) 11%, transparent); }.stage-failed { color: var(--err); background: var(--err-soft); }
+.stage-done { color: var(--ok); background: color-mix(in srgb, var(--ok) 11%, transparent); }.stage-failed, .stage-interrupted { color: var(--err); background: var(--err-soft); }
+.stage-paused, .stage-pausing { color: #a45b04; background: color-mix(in srgb, #d97706 11%, var(--card)); }
+.stage-stopped, .stage-stopping { color: var(--dim); background: var(--side); }
 .work-error { margin: 0; padding: 8px 14px; background: var(--err-soft); color: var(--err); border-bottom: 1px solid var(--border); font-size: 12px; }
+.work-lifecycle { margin: 0; padding: 8px 14px; background: var(--side); color: var(--dim); border-bottom: 1px solid var(--border); font-size: 12px; }
 .work-failure { margin: 0; padding: 10px 14px; background: var(--err-soft); color: var(--err); border-bottom: 1px solid var(--border); font-size: 12px; }
 .work-failure-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .work-failure-actions button { border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; background: var(--card); color: var(--tx); cursor: pointer; }
@@ -20,6 +23,8 @@
 .work-failure > small { display: block; margin-top: 7px; }
 .work-stop { border: 1px solid color-mix(in srgb, var(--err) 38%, var(--border)); border-radius: 6px; padding: 6px 9px; background: var(--card); color: var(--err); cursor: pointer; }
 .work-stop:disabled { opacity: .55; cursor: wait; }
+.work-pause, .work-resume { border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; background: var(--card); color: var(--accent); cursor: pointer; }
+.work-pause:disabled, .work-resume:disabled { opacity: .55; cursor: wait; }
 .work-warning { margin: 0; padding: 8px 14px; color: #a45b04; background: color-mix(in srgb, #d97706 11%, var(--card)); border-bottom: 1px solid var(--border); font-size: 12px; }
 .work-model-status { margin: 0; display: flex; align-items: center; gap: 9px; padding: 7px 14px; border-bottom: 1px solid var(--border); background: var(--accent-soft); color: var(--dim); font-size: 11px; }
 .work-model-status code { color: var(--tx); }.work-model-status span { color: var(--faint); }
