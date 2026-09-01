@@ -100,6 +100,11 @@ function tmpEngine(loopModels, modelFacts) {
   return { engine, dataRoot };
 }
 
+function closeTmp({ engine, dataRoot }) {
+  engine.telemetry.close();
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+}
+
 // Only OpenRouter's two balance endpoints are answered, so a doctor that starts
 // fetching something else fails loudly here instead of quietly reading a
 // balance payload. `account` defaults to the same numbers as the key, which is
@@ -121,8 +126,10 @@ async function withCredit({ limit, usage, account = null }, fn) {
   try { return await fn(); } finally { globalThis.fetch = real; }
 }
 
-test('doctor reports an unaffordable balance in the provider\'s own terms', async () => {
-  const { engine, dataRoot } = tmpEngine({ high: 'dear/model' }, { 'dear/model': { outUsdPerM: 1310.77 } });
+test('doctor reports an unaffordable balance in the provider\'s own terms', async (t) => {
+  const fixture = tmpEngine({ high: 'dear/model' }, { 'dear/model': { outUsdPerM: 1310.77 } });
+  t.after(() => closeTmp(fixture));
+  const { engine } = fixture;
   const report = await withCredit({ limit: 65, usage: 65 - 1.85 }, () => doctor(engine));
 
   const finding = report.findings.find(f => /cannot fund an ordinary request/.test(f.message));
@@ -131,28 +138,32 @@ test('doctor reports an unaffordable balance in the provider\'s own terms', asyn
   assert.match(finding.message, new RegExp(`up to ${effortBudget(DEFAULT_EFFORT)} tokens`));
   assert.match(finding.message, /affords 1411/);
   assert.match(finding.message, /dear\/model/, 'and which model it is about');
-  fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
-test('doctor is quiet when the balance can fund a request', async () => {
-  const { engine, dataRoot } = tmpEngine({ high: 'ordinary/model' }, { 'ordinary/model': { outUsdPerM: 10 } });
+test('doctor is quiet when the balance can fund a request', async (t) => {
+  const fixture = tmpEngine({ high: 'ordinary/model' }, { 'ordinary/model': { outUsdPerM: 10 } });
+  t.after(() => closeTmp(fixture));
+  const { engine } = fixture;
   const report = await withCredit({ limit: 50, usage: 30 }, () => doctor(engine));
   assert.ok(!report.findings.some(f => /cannot fund|affords|could not be checked/.test(f.message)),
     report.findings.map(f => f.message).join('\n'));
-  fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
-test('a balance that cannot be checked says so, once it is low enough to matter', async () => {
+test('a balance that cannot be checked says so, once it is low enough to matter', async (t) => {
   // The unknowable, which the first version reported as nothing. "No finding"
   // and "checked, and fine" have to look different, or the check quietly does
   // not exist — and it is only worth saying where it changes what to do.
+  const lowFixture = tmpEngine({ high: 'unpriced/model' }, {});
+  const healthyFixture = tmpEngine({ high: 'unpriced/model' }, {});
+  t.after(() => closeTmp(lowFixture));
+  t.after(() => closeTmp(healthyFixture));
   const low = await withCredit({ limit: 65, usage: 63.15 },
-    () => doctor(tmpEngine({ high: 'unpriced/model' }, {}).engine));
+    () => doctor(lowFixture.engine));
   assert.ok(low.findings.some(f => f.level === 'info' && /could not be checked/.test(f.message)),
     low.findings.map(f => f.message).join('\n'));
 
   const healthy = await withCredit({ limit: 65, usage: 5 },
-    () => doctor(tmpEngine({ high: 'unpriced/model' }, {}).engine));
+    () => doctor(healthyFixture.engine));
   assert.ok(!healthy.findings.some(f => /could not be checked/.test(f.message)),
     'a healthy key is not worth a note about pricing');
 });
@@ -195,8 +206,10 @@ test('an endpoint that could not be read does not vote, and does not take doctor
   assert.equal(bindingCredit(null, null), null);
 });
 
-test('doctor names both ceilings when they disagree, and neither when they do not', async () => {
-  const { engine, dataRoot } = tmpEngine({ high: 'ordinary/model' }, { 'ordinary/model': { outUsdPerM: 10 } });
+test('doctor names both ceilings when they disagree, and neither when they do not', async (t) => {
+  const fixture = tmpEngine({ high: 'ordinary/model' }, { 'ordinary/model': { outUsdPerM: 10 } });
+  t.after(() => closeTmp(fixture));
+  const { engine } = fixture;
   const apart = await withCredit(
     { limit: 65, usage: 63.27, account: { limit: 102, usage: 92.21 } },
     () => doctor(engine));
@@ -209,11 +222,12 @@ test('doctor names both ceilings when they disagree, and neither when they do no
   const also = together.findings.map(f => f.message).join('\n');
   assert.match(also, /has \$1\.73 left/);
   assert.ok(!/smaller of the two/.test(also), also);
-  fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
-test('a spent ceiling says which one, because the two repairs differ', async () => {
-  const { engine, dataRoot } = tmpEngine({ high: 'ordinary/model' }, { 'ordinary/model': { outUsdPerM: 10 } });
+test('a spent ceiling says which one, because the two repairs differ', async (t) => {
+  const fixture = tmpEngine({ high: 'ordinary/model' }, { 'ordinary/model': { outUsdPerM: 10 } });
+  t.after(() => closeTmp(fixture));
+  const { engine } = fixture;
 
   const keySpent = await withCredit(
     { limit: 65, usage: 65, account: { limit: 102, usage: 50 } }, () => doctor(engine));
@@ -226,19 +240,19 @@ test('a spent ceiling says which one, because the two repairs differ', async () 
   const a = accountSpent.findings.find(f => /is spent/.test(f.message));
   assert.match(a.message, /The OpenRouter account is spent/);
   assert.match(a.message, /Add credit/);
-  fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
-test('the affordability check reads the binding number, not the roomier one', async () => {
+test('the affordability check reads the binding number, not the roomier one', async (t) => {
   // The check inherits whatever balance is in front of it, so it has to be the
   // one that binds — otherwise it answers "can this fund a request" against a
   // ceiling that is not the one about to stop the call.
-  const { engine, dataRoot } = tmpEngine({ high: 'dear/model' }, { 'dear/model': { outUsdPerM: 1310.77 } });
+  const fixture = tmpEngine({ high: 'dear/model' }, { 'dear/model': { outUsdPerM: 1310.77 } });
+  t.after(() => closeTmp(fixture));
+  const { engine } = fixture;
   const report = await withCredit(
     // The key is nearly out; the account has plenty. The key binds.
     { limit: 65, usage: 63.15, account: { limit: 1000, usage: 0 } },
     () => doctor(engine));
   assert.ok(report.findings.some(f => /cannot fund an ordinary request/.test(f.message)),
     report.findings.map(f => f.message).join('\n'));
-  fs.rmSync(dataRoot, { recursive: true, force: true });
 });
