@@ -27,6 +27,41 @@ function seedRun(store, { meta = {}, log = [], calls = {} } = {}) {
   return runId;
 }
 
+test('canonical diagnostics explain failed blocks, never-returned calls, failed tools and live interactions', () => {
+  const store = makeStore();
+  const runId = 'canonical-diagnostic';
+  const dir = store.runDir(runId);
+  fs.mkdirSync(dir, { recursive: true });
+  const rows = [
+    { type: 'run.created', data: { stackId: 'research', input: 'why?' } },
+    { type: 'run.stage', data: { stage: 'running' } },
+    { type: 'block.status', data: { blockId: 'look', status: 'active' } },
+    { type: 'llm.request', data: { callId: 'call-never', blockId: 'look', model: 'provider/model' } },
+    { type: 'llm.attempt', data: { callId: 'call-never', blockId: 'look', provider: 'provider', attempt: 2 } },
+    { type: 'tool.call', data: { callId: 'tool-1', blockId: 'look', name: 'web_fetch', args: {} } },
+    { type: 'tool.result', data: { callId: 'tool-1', blockId: 'look', name: 'web_fetch', error: 'network refused', content: '' } },
+    { type: 'block.status', data: { blockId: 'look', status: 'failed' } },
+    { type: 'run.error', data: { blockId: 'look', error: 'research failed' } },
+    { type: 'run.stage', data: { stage: 'failed' } },
+  ].map((row, index) => ({ seq: index + 1, at: `2026-09-01T00:00:${String(index).padStart(2, '0')}.000Z`, ...row }));
+  fs.writeFileSync(path.join(dir, 'session.jsonl'), `${rows.map(row => JSON.stringify(row)).join('\n')}\n`);
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({
+    runId, stackId: 'research', stage: 'failed', error: 'research failed', blockStatus: { look: 'failed' },
+  }));
+
+  const report = explainRun(store, runId, { interactions: [{
+    kind: 'question', projectId: 'p', runId, blockId: 'look', questionId: 'q1', question: 'Which source?',
+  }] });
+  assert.equal(report.verdict, 'failed');
+  assert.equal(report.nodes[0].node, 'look');
+  assert.equal(report.nodes[0].inFlight, true);
+  assert.equal(report.signals.unsettledRequests[0].callId, 'call-never');
+  assert.deepEqual(report.signals.tools, [{ name: 'web_fetch', calls: 1, failed: 1 }]);
+  assert.equal(report.signals.providerAttempts.length, 1);
+  assert.equal(report.asking.durable, false);
+  assert.ok(report.suggestions.some(suggestion => /NEVER_RETURNED/.test(suggestion)));
+});
+
 test('a truncated node is diagnosed as a budget problem, with the budget named', () => {
   const store = makeStore();
   const runId = seedRun(store, {

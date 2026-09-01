@@ -23,10 +23,13 @@
  * @module #kernel/plugins/llm-adapters
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { Usage } from '../types.js';
+import type { JsonValue, ProviderReplay, Usage } from '../types.js';
 import type { LlmChunk, RouteRecord } from '../events.js';
 import type { LlmRequest, LlmResponse, LlmSeam, LlmStream, ModelInfo } from '../seams/llm.js';
 import { provideSeam } from '../seams/index.js';
+import {
+  defaultModelCapabilityRegistry, manageContextBudget, type ModelCapabilityProfile,
+} from '../models/capabilities.js';
 
 /** What the JS core's `callModel` accepts, as much of it as this bridge uses. */
 export interface CallModel {
@@ -44,7 +47,17 @@ export interface CallModel {
     cliHome?: string;
     cliPath?: string;
     retry?: { attempts?: number; baseMs?: number; maxMs?: number };
+    responseFormat?: { name: string; description?: string; schema: JsonValue; strict?: boolean };
+    reasoning?: { effort?: string; mode?: string; context?: string; summary?: string };
+    toolChoice?: unknown;
     signal?: AbortSignal;
+    onRetry?: (record: Record<string, unknown>) => void;
+    onCall?: (record: Record<string, unknown>) => void;
+    requestedOutputBudget?: number;
+    effectiveOutputBudget?: number;
+    contextUtilization?: number;
+    contextTokens?: number;
+    contextLimit?: number;
     onText?: (text: string, options?: {
       final?: boolean;
       toolInputEvents?: readonly {
@@ -65,6 +78,7 @@ export interface CallModel {
     provider?: string;
     model?: string;
     unparsedToolCall?: string | null;
+    replay?: ProviderReplay;
     message?: { tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] };
   }>;
 }
@@ -83,6 +97,7 @@ export interface LlmAdaptersConfig {
   resolve: ResolveSource;
   /** What the seam can reach, for `models()`. */
   models?: () => Promise<ModelInfo[]> | ModelInfo[];
+  capability?: (model: string, provider: string) => Promise<ModelCapabilityProfile> | ModelCapabilityProfile;
 }
 
 /** Cordis plugin name. */
@@ -98,11 +113,12 @@ function toolsFor(request: LlmRequest): unknown {
 }
 
 /** Translate the kernel's provider-neutral messages to OpenAI chat wire shape. */
-function messagesFor(request: LlmRequest): unknown[] {
-  return request.messages.map(message => {
+function messagesFor(request: LlmRequest, messages = request.messages): unknown[] {
+  return messages.map(message => {
     if (message.role === 'assistant' && message.toolCalls?.length) {
       return {
         role: 'assistant', content: message.content || null,
+        ...(message.replay ? { replay: message.replay } : {}),
         tool_calls: message.toolCalls.map(call => ({
           id: call.id, type: 'function',
           function: { name: call.name, arguments: JSON.stringify(call.args ?? {}) },
@@ -114,9 +130,10 @@ function messagesFor(request: LlmRequest): unknown[] {
         role: 'tool', content: message.content,
         tool_call_id: message.toolCallId ?? '',
         ...(message.name ? { name: message.name } : {}),
+        ...(message.handle ? { handle: message.handle } : {}),
       };
     }
-    return { role: message.role, content: message.content };
+    return { role: message.role, content: message.content, ...(message.replay ? { replay: message.replay } : {}) };
   });
 }
 
@@ -133,6 +150,9 @@ function usageFrom(raw: unknown): Usage | undefined {
   if (reasoning !== undefined) usage.reasoningTokens = reasoning;
   const cached = n((u.prompt_tokens_details as Record<string, unknown> | undefined)?.cached_tokens);
   if (cached !== undefined) usage.cachedTokens = cached;
+  const cacheWrite = n((u.prompt_tokens_details as Record<string, unknown> | undefined)?.cache_write_tokens)
+    ?? n(u.cache_write_tokens);
+  if (cacheWrite !== undefined) usage.cacheWriteTokens = cacheWrite;
   const cost = n(u.cost) ?? n(u.total_cost);
   if (cost !== undefined) usage.costUsd = cost;
   return usage;
@@ -199,6 +219,7 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
       const candidate = candidates[index];
       source = null;
       let emittedText = false;
+      const telemetryWrites: Promise<unknown>[] = [];
       try {
         source = config.resolve(candidate);
         if (!source?.provider) {
@@ -208,16 +229,91 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           index, model: candidate, provider: source.provider, resolvedModel: source.model,
           status: 'started',
         });
+        const profile = await config.capability?.(source.model, source.provider)
+          ?? defaultModelCapabilityRegistry.get(source.model, source.provider);
+        const offeredTools = [...(request.tools ?? [])];
+        const structured = request.structuredOutput;
+        const canSchema = structured && profile.structuredOutput.jsonSchema.value === true;
+        const canSynthetic = structured && !canSchema && profile.tools.native.value === true;
+        const structuredMode = canSchema ? 'provider_json_schema' : canSynthetic ? 'synthetic_tool' : structured ? 'textual_json' : 'none';
+        const acceptedReasoning = new Set(profile.reasoning.acceptedRequestFields.value);
+        const endpointReasoning = source.provider === 'openai'
+          ? new Set(['reasoning.effort'])
+          : ['openrouter', 'anthropic'].includes(source.provider)
+            ? new Set(['reasoning.effort'])
+            : null;
+        const effectiveReasoning = request.reasoning ? Object.fromEntries(Object.entries(request.reasoning).filter(([key, value]) =>
+          value !== undefined
+          && (acceptedReasoning.has(`reasoning.${key}`) || profile.reasoning.acceptedRequestFields.confidence === 'unknown')
+          && (!endpointReasoning || endpointReasoning.has(`reasoning.${key}`))))
+          : undefined;
+        if (canSynthetic) offeredTools.push({
+          name: structured.name,
+          description: structured.description ?? 'Submit the validated structured response.',
+          parameters: structured.schema,
+        });
+        const candidateMessages = structured && !canSchema && !canSynthetic
+          ? [...request.messages, {
+              role: 'system' as const,
+              content: `This provider has no usable native structured channel. Return only the JSON value matching schema "${structured.name}" as a textual fallback; do not wrap it in prose or a code fence.`,
+            }]
+          : request.messages;
+        const budget = manageContextBudget({
+          messages: candidateMessages,
+          tools: offeredTools,
+          attachments: request.attachments,
+          requestedOutput: request.maxTokens,
+          profile,
+        });
+        if (structured) budget.resolutions.push({
+          field: 'structured_output', requested: 'json_schema',
+          modelLimit: profile.structuredOutput.jsonSchema.value,
+          providerLimit: profile.structuredOutput.syntheticTool.value,
+          effective: structuredMode,
+          reason: canSchema
+            ? 'the model/provider reports native JSON Schema support'
+            : canSynthetic
+              ? 'native schema was unavailable, so the reserved submission tool is forced'
+              : 'neither native schema nor native tool submission is known usable',
+        });
+        for (const [key, value] of Object.entries(request.reasoning ?? {})) {
+          if (value === undefined) continue;
+          const path = `reasoning.${key}`;
+          const accepted = Object.hasOwn(effectiveReasoning ?? {}, key);
+          budget.resolutions.push({
+            field: path, requested: value, modelLimit: key === 'effort' ? profile.reasoning.variants.value : null,
+            providerLimit: endpointReasoning ? [...endpointReasoning] : profile.reasoning.acceptedRequestFields.value,
+            effective: accepted ? value : null,
+            reason: accepted ? 'the attributed model/provider contract accepts this request field' : 'unsupported request field was omitted before dispatch',
+          });
+        }
+        await request.onBudget?.(budget);
         answered = await config.callModel({
           provider: source.provider,
           model: source.model,
-          messages: messagesFor(request),
+          messages: messagesFor(request, budget.messages),
           ...(source.apiKey ? { apiKey: source.apiKey } : {}),
           ...(source.keyKind ? { keyKind: source.keyKind } : {}),
           ...(source.cliHome ? { cliHome: source.cliHome } : {}),
           ...(source.cliPath ? { cliPath: source.cliPath } : {}),
-          ...(toolsFor(request) ? { tools: toolsFor(request) } : {}),
-          ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),
+          ...(offeredTools.length ? { tools: offeredTools.map(t => ({
+            type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters },
+          })) } : {}),
+          maxTokens: budget.effectiveOutput,
+          ...(canSchema ? { responseFormat: structured } : {}),
+          ...(canSynthetic ? { toolChoice: { type: 'function', function: { name: structured.name } } } : {}),
+          ...(effectiveReasoning && Object.keys(effectiveReasoning).length ? { reasoning: effectiveReasoning } : {}),
+          onRetry: record => {
+            if (request.onTelemetry) telemetryWrites.push(Promise.resolve(request.onTelemetry({ kind: 'retry', ...(record as Record<string, JsonValue>) })));
+          },
+          onCall: record => {
+            if (request.onTelemetry) telemetryWrites.push(Promise.resolve(request.onTelemetry({ kind: 'call', ...(record as Record<string, JsonValue>) })));
+          },
+          requestedOutputBudget: budget.requestedOutput,
+          effectiveOutputBudget: budget.effectiveOutput,
+          contextUtilization: budget.contextUtilization,
+          contextTokens: budget.effective.total,
+          contextLimit: budget.contextLimit,
           ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
           // An explicit fallback chain is already the retry budget at this
           // layer. Intermediate candidates get one provider attempt so a 429
@@ -230,6 +326,7 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
             onText(text, options);
           } } : {}),
         });
+        await Promise.allSettled(telemetryWrites);
         await request.onAttempt?.({
           index, model: candidate, provider: answered.provider ?? source.provider,
           resolvedModel: answered.resolvedModel || answered.model || source.model,
@@ -240,6 +337,7 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
         }
         break;
       } catch (error) {
+        await Promise.allSettled(telemetryWrites);
         lastFailure = error;
         const message = String((error as Error)?.message ?? error).replace(/\s+/g, ' ').slice(0, 500);
         failures.push(`${candidate} failed: ${message}`);
@@ -257,11 +355,18 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
     if (!answered || !source) throw lastFailure ?? new Error(`No connected provider can serve "${request.model}".`);
 
     const calls = answered.message?.tool_calls ?? [];
+    const structuredCall = request.structuredOutput
+      ? calls.find(call => call.function?.name === request.structuredOutput?.name)
+      : undefined;
+    const structuredOutput = structuredCall
+      ? parseArgs(structuredCall.function?.arguments)
+      : request.structuredOutput ? parseStructured(answered.text) : undefined;
+    const ordinaryCalls = structuredCall ? calls.filter(call => call !== structuredCall) : calls;
     return {
       content: answered.text ?? '',
       ...(answered.reasoning ? { reasoning: answered.reasoning } : {}),
-      ...(calls.length ? {
-        toolCalls: calls.map((c, i) => ({
+      ...(ordinaryCalls.length ? {
+        toolCalls: ordinaryCalls.map((c, i) => ({
           id: String(c.id ?? `call-${i}`),
           name: String(c.function?.name ?? ''),
           // Arguments arrive as a JSON STRING. A call whose arguments will not
@@ -271,6 +376,8 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           args: parseArgs(c.function?.arguments),
         })),
       } : {}),
+      ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+      ...(answered.replay ? { replay: answered.replay } : {}),
       ...(answered.unparsedToolCall ? { unparsedToolCall: answered.unparsedToolCall } : {}),
       finishReason: finishOf(answered.finishReason),
       ...(usageFrom(answered.usage) ? { usage: usageFrom(answered.usage) } : {}),
@@ -350,6 +457,12 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
     async models(): Promise<ModelInfo[]> {
       return (await config.models?.()) ?? [];
     },
+    async capability(model: string): Promise<ModelCapabilityProfile> {
+      const source = config.resolve(model);
+      if (!source?.provider) return defaultModelCapabilityRegistry.get(model);
+      return await config.capability?.(source.model, source.provider)
+        ?? defaultModelCapabilityRegistry.get(source.model, source.provider);
+    },
   };
 
   return provideSeam(ctx, 'llm', seam);
@@ -359,4 +472,9 @@ function parseArgs(raw: unknown): import('../types.js').JsonValue {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== 'string') return raw as import('../types.js').JsonValue;
   try { return JSON.parse(raw); } catch { return { _unparsed: raw }; }
+}
+
+function parseStructured(raw: unknown): JsonValue | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  try { return JSON.parse(raw) as JsonValue; } catch { return undefined; }
 }

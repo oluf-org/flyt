@@ -16,6 +16,7 @@
 import { Service, type Context } from '@deepseek-ai/cordis';
 import type { JsonValue } from '../types.js';
 import type { CommandCaller, CommandDefinition, CommandsSeam } from '../seams/commands.js';
+import { compileContract } from '../api/contract.js';
 
 /** Cordis plugin name. */
 export const name = 'flyt-api';
@@ -30,6 +31,7 @@ export const name = 'flyt-api';
  */
 export class CommandMap extends Service implements CommandsSeam {
   private registered = new Map<string, CommandDefinition>();
+  private validators = new Map<string, ReturnType<typeof compileContract>[string]>();
 
   constructor(ctx: Context) {
     super(ctx, 'commands');
@@ -48,13 +50,24 @@ export class CommandMap extends Service implements CommandsSeam {
     if (this.registered.has(command.name)) {
       throw new Error(`A command named "${command.name}" is already registered`);
     }
+    // `parameters` is the compatibility schema consumed by the editor/model.
+    // Only the new canonical `request` opts the in-process map into adapter-
+    // style validation; legacy handlers retain their established diagnostics.
+    const request = command.request ?? {};
+    const response = command.response ?? {};
+    const error = command.error ?? {};
+    const compiled = compileContract({ [command.name]: {
+      description: command.description, request, response, error, ...(command.events ? { events: command.events } : {}),
+    } })[command.name];
     const registered = this.registered;
     const ctx = this.ctx;
     return ctx.effect(() => {
       registered.set(command.name, command);
+      this.validators.set(command.name, compiled);
       return () => {
         if (registered.get(command.name) !== command) return;
         registered.delete(command.name);
+        this.validators.delete(command.name);
       };
     }) as () => void;
   }
@@ -81,9 +94,13 @@ export class CommandMap extends Service implements CommandsSeam {
     }
     const ctx = this.ctx;
     const at = new Date().toISOString();
+    const requestProblems = this.validators.get(commandName)?.request(args ?? null) ?? [];
+    if (requestProblems.length) throw new Error(`Invalid ${commandName} request: ${requestProblems.join('; ')}`);
     let result: JsonValue;
     try {
       result = await command.handler(args ?? null);
+      const responseProblems = this.validators.get(commandName)?.response(result) ?? [];
+      if (responseProblems.length) throw new Error(`Invalid ${commandName} response: ${responseProblems.join('; ')}`);
     } catch (err) {
       // The failure is announced too. An edit that was attempted and refused is
       // a thing the editor has to stop animating, and a thing a person watching

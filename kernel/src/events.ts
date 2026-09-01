@@ -16,6 +16,7 @@
  * @module #kernel/events
  */
 import type { Message, ToolCall, ToolResult, Usage, JsonValue } from './types.js';
+import type { PermissionPolicy } from './security/permissions.js';
 
 /** Where a turn happens: one run, one block, one step within it. */
 export interface StepRef {
@@ -48,8 +49,17 @@ export interface ToolExecution extends StepRef {
   call: ToolCall;
   /** The block's static ceiling at the moment of the call. Never widened downstream. */
   ceiling: readonly string[];
+  /** Optional resource policy. The static ceiling is checked before this narrower layer. */
+  permissionPolicy?: PermissionPolicy;
   /** Cancellation: a gate that waits must observe this. */
   signal?: AbortSignal;
+  /** Durable lifecycle hook owned by the runner/session. */
+  onState?: (transition: {
+    callId: string;
+    state: 'received' | 'normalized' | 'validated' | 'authorized' | 'running' | 'completed' | 'failed' | 'interrupted';
+    reason?: string;
+    diagnostics?: string[];
+  }) => Promise<void> | void;
 }
 
 /**

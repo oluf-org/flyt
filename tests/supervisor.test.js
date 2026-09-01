@@ -333,19 +333,18 @@ function fakeEngine({ backlog = null, stages = {}, gateKind = 'pre', output = nu
       }
       return result;
     }
-    // `restartNode` refuses a run that is still walking, and it stays refused
+    // `restartBlock` refuses a run that is still walking, and it stays refused
     // for a moment after `stop()` returns — the real runner clears its stop
     // request in the walk's `finally`, not in `stop()`. A fake that always said
     // yes hid the whole defect: the two cheapest rungs of the ladder called
     // this on a LIVE run, by definition, and got an exception every time.
     if (name === 'run:stop') { const r = runs.get(args.runId); if (r) r.unwinding = true; return true; }
-    if (name === 'run:restartNode') {
+    if (name === 'run:restartBlock') {
       const r = runs.get(args.runId);
       if (!r || r.unwinding !== false) throw new Error('run is live — stop or pause it first');
       r.unwinding = undefined;   // it walks again
       return true;
     }
-    if (name === 'run:approve') return true;
     if (name === 'work:release') return { released: true };
     if (name === 'work:discard') {
       // Modelled, not stubbed. A no-op here hid a real bug for a week: the
@@ -455,7 +454,7 @@ test('a stalled task is nudged before it is escalated', async () => {
   });
 
   await sup.run({ maxTasks: 1 });
-  const restarts = engine.calls.filter(c => c.name === 'run:restartNode');
+  const restarts = engine.calls.filter(c => c.name === 'run:restartBlock');
   assert.ok(restarts.length >= 1, 'the cheapest rung is tried first');
   assert.match(restarts[0].args.guidance, /SUPERVISOR:/);
   assert.match(restarts[0].args.guidance, /byte-identical/, 'the evidence goes with the nudge');
@@ -468,7 +467,7 @@ test('a stalled task is nudged before it is escalated', async () => {
 });
 
 test('a nudge stops the run first, because a stalled run is a live one', async () => {
-  // The defect, watched live: nudge called `run:restartNode` on the spinning
+  // The defect, watched live: nudge called `run:restartBlock` on the spinning
   // run, the runner refused it -- "run is live -- stop or pause it first" --
   // and the exception skipped the counter reset, so the next poll tripped the
   // same detector and burned the next rung. Nudge, restart and escalate went by
@@ -482,9 +481,9 @@ test('a nudge stops the run first, because a stalled run is a live one', async (
   });
 
   await sup.run({ maxTasks: 1 });
-  const names = engine.calls.filter(c => c.name === 'run:stop' || c.name === 'run:restartNode');
+  const names = engine.calls.filter(c => c.name === 'run:stop' || c.name === 'run:restartBlock');
   assert.equal(names[0].name, 'run:stop', 'the run is stopped before the restart is asked for');
-  const restart = engine.calls.find(c => c.name === 'run:restartNode');
+  const restart = engine.calls.find(c => c.name === 'run:restartBlock');
   assert.ok(restart, 'and the restart is taken on a later poll rather than thrown away');
   assert.match(restart.args.guidance, /SUPERVISOR:/);
 });
@@ -497,7 +496,7 @@ test('a restart the runner never accepts gives up its rung instead of holding th
   backlog.add({ title: 'never unwinds', goal: 'g', level: 'low' });
   const engine = fakeEngine({ backlog, stages: { default: ['running'] } });
   const stuck = async (name, args) => {
-    if (name === 'run:restartNode') throw new Error('run is live — stop or pause it first');
+    if (name === 'run:restartBlock') throw new Error('run is live — stop or pause it first');
     return engine.invoke(name, args);
   };
   const sup = new Supervisor({
@@ -535,7 +534,7 @@ test('with nothing to restart, the ladder moves down a rung instead of falling o
   });
 
   await sup.run({ maxTasks: 1 });
-  assert.equal(engine.calls.filter(c => c.name === 'run:restartNode').length, 0, 'there was nothing to restart');
+  assert.equal(engine.calls.filter(c => c.name === 'run:restartBlock').length, 0, 'there was nothing to restart');
   const task = backlog.get('t-0001');
   assert.equal(task.status, 'queued', 'escalated back to the queue, not parked');
   assert.equal(task.level, 'medium');
@@ -1648,11 +1647,7 @@ test('the report puts what needs a person above what does not', () => {
   assert.match(md, /A gate asked something\./);
 });
 
-test('a planning gate is answered, because something stricter judges the change later', async () => {
-  // The shipped default pipeline has one of these. Parking on it would park
-  // EVERY task and the loop would achieve nothing — while the landing sequence
-  // (harness-run gates, a reviewer on the diff, a canary on the merge) judges
-  // the actual change rather than the intention, afterwards.
+test('an unattended planning gate is parked for a human decision', async () => {
   const backlog = makeBacklog();
   backlog.add({ title: 'plans first', goal: 'g' });
   const engine = fakeEngine({
@@ -1662,8 +1657,9 @@ test('a planning gate is answered, because something stricter judges the change 
   const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 1 });
 
   await sup.run({ maxTasks: 1 });
-  assert.ok(engine.calls.some(c => c.name === 'run:approve'), 'the loop answered it');
-  assert.equal(backlog.get('t-0001').status, 'landed');
+  assert.ok(engine.calls.some(c => c.name === 'run:stop'), 'the unattended run was stopped');
+  assert.equal(backlog.get('t-0001').status, 'parked');
+  assert.match(backlog.get('t-0001').blockedReason, /gate asked for a decision/);
 });
 
 test('a task that cannot be observed is parked rather than spun on forever', async () => {

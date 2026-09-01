@@ -415,7 +415,10 @@ export class ToolRegistry extends Service implements ToolsSeam {
 
     const state = stateOf(this);
     const tool = state.registered.get(exec.call.name);
-    if (!tool) return refusal(`there is no tool named "${exec.call.name}"`);
+    if (!tool) {
+      await exec.onState?.({ callId: exec.call.id, state: 'failed', reason: `there is no tool named "${exec.call.name}"` });
+      return refusal(`there is no tool named "${exec.call.name}"`);
+    }
 
     // Validation is a kernel invariant, not a courtesy left to individual
     // tools. It happens before approval so a malformed write cannot wake a
@@ -423,19 +426,33 @@ export class ToolRegistry extends Service implements ToolsSeam {
     // single tool result the model will see.
     const errors = state.validators.get(exec.call.name)?.(exec.call.args)
       ?? ['args: no compiled parameters schema is available'];
-    if (errors.length) return invalidToolArguments(exec.call.name, errors);
+    if (errors.length) {
+      await exec.onState?.({ callId: exec.call.id, state: 'failed', reason: 'argument validation failed', diagnostics: [...errors] });
+      return invalidToolArguments(exec.call.name, errors);
+    }
+    await exec.onState?.({ callId: exec.call.id, state: 'validated' });
 
-    const decision: PreToolDecision = await ctx.waterfall(
-      'tools/pre-execute', exec, async () => ({ decision: 'allow' }),
-    );
+    let decision: PreToolDecision;
+    try {
+      decision = await ctx.waterfall(
+        'tools/pre-execute', exec, async () => ({ decision: 'allow' }),
+      );
+    } catch (error) {
+      const reason = String((error as Error)?.message ?? error);
+      await exec.onState?.({ callId: exec.call.id, state: 'failed', reason: `authorization failed: ${reason}` });
+      return refusal(`authorization failed: ${reason}`);
+    }
     if (decision.decision !== 'allow') {
       // `ask` reaching here unanswered is a denial: a surface that cannot ask
       // has not been given permission, it has failed to obtain it.
       const reason = decision.decision === 'ask'
         ? `${decision.reason} (nobody was available to approve it)`
         : decision.reason;
+      await exec.onState?.({ callId: exec.call.id, state: 'failed', reason: `authorization refused: ${reason}` });
       return refusal(reason);
     }
+    await exec.onState?.({ callId: exec.call.id, state: 'authorized' });
+    await exec.onState?.({ callId: exec.call.id, state: 'running' });
 
     let result: ToolResult;
     try {
@@ -447,10 +464,24 @@ export class ToolRegistry extends Service implements ToolsSeam {
       result = { content: `Error: ${message}`, error: message };
     }
 
-    const settled: PostToolDecision = await ctx.waterfall(
-      'tools/post-execute', exec, result, async () => ({ decision: 'accept', result }),
-    );
-    return settled.decision === 'accept' ? settled.result : refusal(settled.reason);
+    let settled: PostToolDecision;
+    try {
+      settled = await ctx.waterfall(
+        'tools/post-execute', exec, result, async () => ({ decision: 'accept', result }),
+      );
+    } catch (error) {
+      const reason = String((error as Error)?.message ?? error);
+      await exec.onState?.({ callId: exec.call.id, state: exec.signal?.aborted ? 'interrupted' : 'failed', reason: `result authorization failed: ${reason}` });
+      return refusal(`result authorization failed: ${reason}`);
+    }
+    const final = settled.decision === 'accept' ? settled.result : refusal(settled.reason);
+    const interrupted = exec.signal?.aborted;
+    await exec.onState?.({
+      callId: exec.call.id,
+      state: interrupted ? 'interrupted' : final.error ? 'failed' : 'completed',
+      ...(interrupted ? { reason: 'execution was cancelled' } : final.error ? { reason: final.error } : {}),
+    });
+    return final;
   }
 }
 

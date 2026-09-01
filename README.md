@@ -43,7 +43,7 @@ Chat lists only stacks marked `launchable: true`. Pipeline's Low, Medium, and Hi
 
 `flyt` exposes the core command map for diagnostics, providers, tools, projects, runs, and the Loop supervisor. Machine-readable commands accept `--json`. `flyt why`, `flyt doctor`, and `flyt probe` expose run and provider evidence without requiring the desktop UI.
 
-The compatibility execution path used by the current Loop supervisor retains its internal flow-shaped contracts while projects migrate; those names are isolated from the shipping Work/Build product model and from canonical stack files.
+Desktop Work, the `flyt` CLI, and the unattended Loop all start canonical stacks through one process-local `RunController`. The controller owns kernel-host pooling, leases, controls, settlement, and shutdown; no product path can start the historical graph runner. Runs without `session.jsonl` remain readable as migration history, but they are never resumed or mutated.
 
 ## Repository map
 

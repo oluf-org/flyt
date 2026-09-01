@@ -24,6 +24,7 @@ import type { JsonValue } from '../types.js';
 import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js';
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
 import { AI_STEP_OUTPUT, AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
+import type { PermissionPolicy, PermissionRule, SavedApproval } from '../security/permissions.js';
 
 export const DEFAULT_WORKER_MAX_TOKENS = 32_768;
 
@@ -131,6 +132,19 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
   const instructions = str(run.config.instructions);
   const systemPrompt = str(run.config.systemPrompt, standingSystem);
   const tools = run.ctx.tools.list().filter(t => run.ceiling.includes(t.name));
+  const permissionRules = Array.isArray(run.config.permissionRules)
+    ? run.config.permissionRules as unknown as PermissionRule[] : [];
+  const savedApprovals = Array.isArray(run.config.savedApprovals)
+    ? run.config.savedApprovals as unknown as SavedApproval[] : [];
+  const protectedSecrets = Array.isArray(run.config.protectedSecrets)
+    ? run.config.protectedSecrets.filter((item): item is string => typeof item === 'string') : [];
+  const permissionPolicy: PermissionPolicy | undefined = (permissionRules.length || savedApprovals.length || protectedSecrets.length) && run.ctx.fs?.root ? {
+    projectId: str(run.config.projectId, run.ctx.fs.root),
+    projectRoot: run.ctx.fs.root,
+    rules: permissionRules,
+    savedApprovals,
+    protectedSecrets,
+  } : undefined;
 
   const result = await runAgentLoop({
     ctx: run.ctx,
@@ -148,6 +162,8 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
     input: run.input,
     tools,
     ceiling: run.ceiling,
+    ...(permissionPolicy ? { permissionPolicy } : {}),
+    toolConcurrency: typeof run.config.toolConcurrency === 'number' ? run.config.toolConcurrency : 4,
     softMaxSteps: typeof run.config.maxSteps === 'number' ? run.config.maxSteps : MAX_STEPS,
     maxTokens: typeof run.config.maxTokens === 'number' ? run.config.maxTokens : DEFAULT_WORKER_MAX_TOKENS,
     continueOnLength: true,

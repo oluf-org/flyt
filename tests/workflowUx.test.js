@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   effortCopy, modelForWorkflow, queueTaskFromPrompt, workflowOutcome, workflowSteps,
 } from '../src/v2/workflowUx.js';
-import { desktopWorkflowCeiling } from '../core/kernelRunner.js';
+import { desktopWorkflowCeiling } from '../core/kernelHost.js';
 
 const pipeline = {
   id: 'pipeline',

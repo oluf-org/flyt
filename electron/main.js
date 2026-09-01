@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { applySearchProviderKeys, createEngine } from '../core/engine.js';
 import { createApi } from '../core/api.js';
-import { APPROVAL_MODES } from '../core/stackRunner.js';
+import { APPROVAL_MODES } from '../core/approval.js';
 import { SAFETY_MODEL_CANDIDATES } from '../core/safetyCheck.js';
 import { DEFAULT_PROJECT_ID } from '../core/projects.js';
 import { lintText } from '../core/stacklang/lint.js';
@@ -455,15 +455,16 @@ bindIpc('workflow:answer', (projectId, runId, questionId, answer = '') =>
 bindIpc('run:list', projectId => ({ projectId }));
 bindIpc('run:log', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:snapshot', (projectId, runId) => ({ projectId, runId }));
-bindIpc('run:approve', (projectId, runId) => ({ projectId, runId }));
-bindIpc('run:reject', (projectId, runId, reason) => ({ projectId, runId, reason }));
 bindIpc('run:resume', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:stop', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:pause', (projectId, runId) => ({ projectId, runId }));
-bindIpc('run:restartNode', (projectId, runId, nodeId, guidance = '', worker = null) =>
-  ({ projectId, runId, nodeId, guidance, worker }));
-bindIpc('run:followUp', (projectId, runId, text) => ({ projectId, runId, text }));
-bindIpc('run:answerInput', (projectId, runId, text) => ({ projectId, runId, text }));
+bindIpc('run:restartBlock', (projectId, runId, blockId, guidance = '', worker = null) =>
+  ({ projectId, runId, blockId, guidance, worker }));
+bindIpc('run:rename', (projectId, runId, name) => ({ projectId, runId, name }));
+bindIpc('run:delete', (projectId, runId) => ({ projectId, runId }));
+bindIpc('compare:begin', projectId => ({ projectId }));
+bindIpc('compare:save', (projectId, record) => ({ projectId, record }));
+bindIpc('compare:list', projectId => ({ projectId }));
 // The loop (DESIGN-SPEC.md §8): the same commands the CLI and the HTTP server bind,
 // so the desktop view is a third front door onto one implementation rather than
 // a second implementation of the same panel.
@@ -552,65 +553,6 @@ ipcMain.handle('app:approvalGate', (_e, info = {}) => {
 // Soft pause (RUN-CONTROL): the run holds at the next wave boundary — the wave
 // in flight always settles first. meta.paused flips true only once the hold
 // has actually landed; run:resume releases it.
-// Re-run one node and everything downstream of it (RUN-CONTROL), with optional
-// guidance injected into the retry prompt. Only on a non-live run.
-// Fork a finished run at a node (RUN-CONTROL): upstream outputs are preserved
-// as context, downstream nodes re-run in the copy.
-ipcMain.handle('run:branch', (_e, projectId, runId, nodeId) => proj(projectId).runner.branch(runId, nodeId));
-// Plain-language status read on one node (RUN-CONTROL): status, (partial)
-// output, retrospective, log tail, and a model-written summary.
-ipcMain.handle('run:investigateNode', (_e, projectId, runId, nodeId) =>
-  proj(projectId).runner.investigateNode(runId, nodeId));
-// Summary nodes (DESIGN-SPEC.md §7): summarize one or more node outputs into
-// a run artifact (summaries/<key>.md + index.json); delete removes both; move
-// persists a dragged card's canvas position.
-ipcMain.handle('run:summarize', (_e, projectId, runId, sourceIds, position = null) =>
-  proj(projectId).runner.summarizeOutputs(runId, sourceIds, { position }));
-ipcMain.handle('run:deleteSummary', (_e, projectId, runId, summaryId) =>
-  proj(projectId).runner.deleteSummary(runId, summaryId));
-ipcMain.handle('run:moveSummary', (_e, projectId, runId, summaryId, position) =>
-  proj(projectId).runner.moveSummary(runId, summaryId, position));
-// Reply to a finished run (DECISIONS.md D21): the flow grows with a continuation
-// subgraph and the walk executes it; completed nodes are never re-run.
-// Answer a run parked at the refiner's awaiting_input gate (DECISIONS.md D27).
-// Distinct from run:followUp — this closes an in-flight question and re-runs
-// the refine node with the answer; it does not open a new follow-up turn.
-// Summaries, not bare ids: the list names, groups and sorts runs, and reading
-// meta + prompt per run is a handful of small synchronous reads.
-ipcMain.handle('run:rename', (_e, projectId, runId, name) => proj(projectId).store.setRunName(runId, name));
-// Deleting a run this process is still walking would pull the files out from
-// under the runner mid-step (it writes meta/log/outputs as it goes), so refuse
-// while it's live and let the caller say why.
-ipcMain.handle('run:delete', (_e, projectId, runId) => {
-  const entry = proj(projectId);
-  if (entry.runner.live.has(runId)) throw new Error('This run is still executing. Wait for it to finish before deleting it.');
-  entry.store.deleteRun(runId);
-  entry.store.deleteComparisonsFor(runId); // P2: pairings naming the run go with it
-  pushStateFor(entry.id).channels.delete(runId); // drop the patch baseline; the id is gone for good
-  return true;
-});
-
-// --- Comparison records (DECISIONS.md D27) ---
-// compare:begin mints the shared group id BEFORE the two runs start (their
-// metas carry it from creation); compare:save persists the record and stamps
-// both runs (label A/B) — including retroactively for rematch/manual pairs.
-ipcMain.handle('compare:begin', (_e, projectId) => ({ id: proj(projectId).store.newComparisonId() }));
-ipcMain.handle('compare:save', (_e, projectId, rec) => proj(projectId).store.saveComparison(rec ?? {}));
-ipcMain.handle('compare:list', (_e, projectId) => proj(projectId).store.listComparisons());
-// P3 (T13): judge a pair. The runner makes the blind compare-role call and
-// returns the parsed verdict; this handler owns the record — explicit
-// comparisonId when the renderer knows it, else the newest record for the
-// pair, else a fresh 'manual' one (judging an unrecorded pair still lands in
-// a record, so the verdict is never orphaned). Re-judging replaces verdict.
-ipcMain.handle('run:judge', async (_e, projectId, runIdA, runIdB, comparisonId = null) => {
-  const entry = proj(projectId);
-  const verdict = await entry.runner.judgeComparison(runIdA, runIdB, { judgeModel: settings.judgeModel ?? null });
-  const records = entry.store.listComparisons();
-  let rec = comparisonId ? records.find(c => c.id === comparisonId) : null;
-  rec ??= records.find(c => c.runIds?.[0] === runIdA && c.runIds?.[1] === runIdB);
-  rec ??= entry.store.saveComparison({ runIds: [runIdA, runIdB], origin: 'manual' });
-  return entry.store.saveComparisonVerdict(rec.id, verdict);
-});
 // Full snapshot + the rev naming it, for a renderer that fetches one (on first
 // view or after a missed patch). The two are minted from the SAME instant and
 // recorded as this run's baseline, because the whole patch scheme rests on a rev

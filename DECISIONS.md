@@ -19,6 +19,7 @@ This is a compact register of rules that still shape the product. Detailed inter
 | D25 | Every project tab opens on Work; Build is one hop away and Trace opens over either when a run is addressed. | Current; supersedes lander wording |
 | D26 | Avoid large backdrop blur, animated mesh gradients, 3D tilt, and fake skeleton shimmer. Modern Chromium CSS is welcome when it improves clarity. | Current |
 | D76 | Workflow is the user-facing name for a reusable canonical stack. Build renders its containment as a deterministic snapping block program; Work renders the same program read-only while it runs. Chat lists only workflows explicitly marked launchable. | Current; extends D4-D6 and D59 |
+| D77 | One process-local `RunController` is the sole owner of new execution for desktop, CLI, and Loop profiles. Canonical `session.jsonl` is the only writable run record; pre-kernel run folders are migration-only and read-only. | Current; supersedes the execution half of D45 and D73 |
 | D77 | The chat request is a system-owned virtual Input block. It is visible in Build and Work but is not stored as an executable YAML block. Sending replaces the composer with the run surface; the conversation and final status summary continue below the stack. | Current |
 
 ## Execution, composition, and data

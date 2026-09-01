@@ -5,9 +5,6 @@
 // it the already battle-tested provider adapters and built-in tool bodies,
 // each wrapped behind the kernel seams. Every fact needed to reopen a run is
 // written in run.created before execution begins.
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import { bootKernel } from './v2.js';
 import { StackStore } from './stackstore.js';
 import { Workspace } from './workspace.js';
@@ -15,6 +12,7 @@ import { callModel } from './adapters/index.js';
 import { executeTool, getTools } from './tools/index.js';
 import { loadSkills, skillsSection } from './skills.js';
 import { captureWorkspaceSignature } from './effect.js';
+import { snapshotStackRun } from './runProjection.js';
 
 const safeJson = value => {
   try { return JSON.stringify(value); } catch { return String(value ?? ''); }
@@ -94,211 +92,8 @@ function configuredTree(root, {
   return visit(root);
 }
 
-async function eventsFor(ctx, id) {
-  const session = await ctx.sessions.read(id);
-  const events = [];
-  for await (const event of session.read()) events.push(event);
-  return events;
-}
-
-/**
- * Generated task-graph children are run-time facts, not authored YAML. Fold
- * their first announcement into a display-only `generated` list on the parent
- * block so Work can show the X blocks the agent created without pretending
- * Build owns them or writing them back to the workflow file.
- */
-export function stackWithGeneratedTasks(stack, events) {
-  if (!stack || typeof stack !== 'object') return stack;
-  const byParent = new Map();
-  for (const event of events ?? []) {
-    if (event?.type !== 'block.status') continue;
-    const data = event.data ?? {};
-    if (!data.parentId || !data.taskId || !data.blockId) continue;
-    const rows = byParent.get(String(data.parentId)) ?? new Map();
-    if (!rows.has(String(data.taskId))) rows.set(String(data.taskId), {
-      kind: 'block', id: String(data.blockId), use: String(data.use ?? 'flyt-blocks-core:work'),
-      title: String(data.title ?? data.taskId), config: {}, generated: true,
-      dependsOn: Array.isArray(data.dependsOn) ? data.dependsOn.map(String) : [],
-    });
-    byParent.set(String(data.parentId), rows);
-  }
-  if (!byParent.size) return stack;
-  const visit = node => {
-    if (!node || typeof node !== 'object') return node;
-    if (node.kind === 'block') {
-      const generated = byParent.get(String(node.id));
-      return generated ? { ...node, generated: [...generated.values()] } : { ...node };
-    }
-    return {
-      ...node,
-      children: (node.children ?? []).map(visit),
-      ...(node.else ? { else: node.else.map(visit) } : {}),
-    };
-  };
-  return visit(stack);
-}
-
-function compatibilitySnapshot(kernel, events, id, runsRoot, { materialise = true } = {}) {
-  const relevant = events.filter(event => COMPATIBILITY_EVENTS.has(event?.type));
-  const projected = kernel.projectRun(relevant, id);
-  projected.stack = stackWithGeneratedTasks(projected.stack, relevant);
-  const created = relevant.find(event => event.type === 'run.created')?.data ?? {};
-  if (materialise) kernel.materialise(path.join(runsRoot, id), projected);
-
-  const toolCalls = relevant.filter(event => event.type === 'tool.result').map(event => ({
-    tool: event.data?.name ?? 'tool',
-    ok: !event.data?.error,
-    error: event.data?.error ?? null,
-    at: event.at,
-  }));
-  const usage = projected.calls.reduce((total, call) => {
-    const raw = call.usage ?? {};
-    for (const [key, value] of Object.entries(raw)) {
-      if (typeof value === 'number') total[key] = (total[key] ?? 0) + value;
-    }
-    return total;
-  }, {});
-  const blocks = Object.keys(projected.meta.blockStatus);
-  const retrospectives = Object.fromEntries(blocks.map(blockId => [blockId, {
-    status: projected.meta.blockStatus[blockId],
-    toolCalls,
-    usage,
-  }]));
-  const conversation = relevant.flatMap(event => {
-    if (event.type === 'message.user') return [{ role: 'user', text: String(event.data?.content ?? ''), at: event.at }];
-    if (event.type === 'supervisor.summary') return [{
-      role: 'assistant', text: String(event.data?.content ?? ''), at: event.at,
-      supervisor: true, degraded: Boolean(event.data?.degraded), reason: event.data?.reason ?? null,
-    }];
-    return [];
-  });
-
-  return {
-    meta: {
-      ...projected.meta,
-      conversationId: created.conversationId ?? null,
-      parentRunId: created.parentRunId ?? null,
-      presetId: created.presetId ?? null,
-      model: created.model ?? null,
-      provider: created.provider ?? null,
-      blockWorkers: created.blockWorkers ?? {},
-      defaultFallbacks: created.defaultFallbacks ?? [],
-      blockFallbacks: created.blockFallbacks ?? {},
-      supervisorSummary: created.supervisorSummary !== false,
-      userMessage: created.userMessage ?? created.input ?? null,
-      nodeStatus: { ...projected.meta.blockStatus },
-      currentNodeId: projected.meta.currentBlockId,
-    },
-    prompt: projected.prompt,
-    stack: projected.stack ? {
-      version: 2,
-      id: projected.meta.stackId ?? 'workflow-run',
-      name: projected.meta.stackName ?? projected.meta.stackId ?? 'Workflow run',
-      description: '', launchable: true, presets: {}, root: projected.stack,
-    } : null,
-    flow: null,
-    tasks: null,
-    retrospectives,
-    nodeOutputs: { ...projected.blocks },
-    taskOutputs: {},
-    followups: [],
-    summaries: [],
-    conversation,
-    session: { head: events.at(-1)?.seq ?? 0, canonical: true },
-  };
-}
-
-/** Events that change the compatibility snapshot rather than Trace alone. */
-export const SNAPSHOT_UPDATE_EVENTS = new Set([
-  'run.created', 'run.reconfigured', 'stack.resolved', 'run.stage', 'run.error',
-  'block.status', 'block.output',
-  'llm.response', 'tool.result', 'message.user', 'supervisor.summary',
-]);
-
-// Requests are required to fold the later response into a call record, but do
-// not themselves change the Work snapshot enough to justify rebuilding it.
-const COMPATIBILITY_EVENTS = new Set([...SNAPSHOT_UPDATE_EVENTS, 'llm.request']);
-
-/** A Supervisor-shaped snapshot derived only from the canonical session. */
-export async function snapshotStackRun(ctx, id, kernelModule = null, options = {}) {
-  const kernel = kernelModule ?? await import('#kernel');
-  return compatibilitySnapshot(kernel, await eventsFor(ctx, id), id, ctx.__flytRunsRoot, options);
-}
-
-/**
- * Incremental reader for stored sessions. A live snapshot used to read and
- * parse the complete growing JSONL on every coalesced token update. Keeping a
- * byte cursor makes the total file I/O linear in the run size.
- */
-export class StoredStackSnapshotReader {
-  #files = new Map();
-  #maxFiles;
-
-  constructor({ maxFiles = 64 } = {}) { this.#maxFiles = Math.max(1, Number(maxFiles) || 64); }
-
-  events(runsRoot, id) {
-    const file = path.join(runsRoot, id, 'session.jsonl');
-    if (!fs.existsSync(file)) throw new Error(`Run "${id}" has no kernel session log.`);
-    const size = fs.statSync(file).size;
-    let state = this.#files.get(file);
-    if (!state || size < state.offset) state = { offset: 0, tail: '', events: [] };
-    if (size > state.offset) {
-      const length = size - state.offset;
-      const buffer = Buffer.allocUnsafe(length);
-      const fd = fs.openSync(file, 'r');
-      try { fs.readSync(fd, buffer, 0, length, state.offset); } finally { fs.closeSync(fd); }
-      const text = state.tail + buffer.toString('utf8');
-      const lines = text.split(/\r?\n/);
-      state.tail = text.endsWith('\n') ? '' : (lines.pop() ?? '');
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try { state.events.push(JSON.parse(line)); } catch { /* a malformed line remains evidence on disk */ }
-      }
-      state.offset = size;
-    }
-    this.#files.delete(file);
-    this.#files.set(file, state);
-    while (this.#files.size > this.#maxFiles) this.#files.delete(this.#files.keys().next().value);
-    return state.events;
-  }
-
-  drop(runsRoot, id) { this.#files.delete(path.join(runsRoot, id, 'session.jsonl')); }
-
-  async snapshot(runsRoot, id, kernelModule = null, options = {}) {
-    const kernel = kernelModule ?? await import('#kernel');
-    return compatibilitySnapshot(kernel, this.events(runsRoot, id), id, runsRoot, options);
-  }
-}
-
-const storedSnapshots = new StoredStackSnapshotReader();
-
-/** Read a kernel run after its process is gone; no live host is required. */
-export async function snapshotStoredStackRun(runsRoot, id, kernelModule = null, options = {}) {
-  return storedSnapshots.snapshot(runsRoot, id, kernelModule, options);
-}
-
-/** Durable launch metadata, used to reconstruct a host for resume. */
-export function storedStackRunMetadata(runsRoot, id) {
-  const file = path.join(runsRoot, id, 'session.jsonl');
-  if (!fs.existsSync(file)) return null;
-  let metadata = null;
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    if (!line.trim()) continue;
-    let event;
-    try { event = JSON.parse(line); } catch { continue; }
-    if (event.type === 'run.created') metadata = { ...(event.data ?? {}) };
-    if (event.type === 'run.reconfigured' && metadata) metadata = { ...metadata, ...(event.data ?? {}) };
-  }
-  return metadata;
-}
-
-/** Does this run folder contain the kernel's canonical record? */
-export function isKernelRun(store, id) {
-  return Boolean(store && fs.existsSync(path.join(store.runDir(id), 'session.jsonl')));
-}
-
-/** Boot one worktree-scoped Loop host. */
-export async function bootLoopKernel({
+/** Boot one already-resolved Flyt run host. */
+export async function bootRunKernel({
   runsRoot, workspaceDir, stackRoot = null, store = null,
   approvalMode = 'always', runtimeConfig = {}, resolveModelSource = null,
   worker = null, blockWorkers = {}, defaultFallbacks = [], blockFallbacks = {},
@@ -326,7 +121,7 @@ export async function bootLoopKernel({
     } : null,
     load: importer,
   });
-  if (!booted) throw Object.assign(new Error('The kernel is off, so Loop cannot start a task.'), { code: 'kernel_unavailable' });
+  if (!booted) throw Object.assign(new Error('The required kernel profile could not be composed.'), { code: 'kernel_unavailable' });
 
   // A seam-only test can inspect the composed profile. Production execution
   // supplies the rest and fails closed if any is absent.
@@ -360,6 +155,33 @@ export async function bootLoopKernel({
       : (requested === model ? pinnedProvider : null);
     return resolveModelSource(requested, provider);
   };
+  const capability = (resolvedModel, provider) => {
+    const profile = kernel.defaultModelCapabilityRegistry.get(resolvedModel, provider);
+    const facts = runtimeConfig.modelFacts?.[resolvedModel]
+      ?? runtimeConfig.modelFacts?.[`${provider}/${resolvedModel}`]
+      ?? {};
+    const catalogSource = `Persisted ${provider} model catalog fact`;
+    profile.provenance = {
+      value: `${provider}/${resolvedModel}`,
+      confidence: 'reported',
+      source: Object.keys(facts).length ? catalogSource : profile.provenance.source,
+    };
+    if (Number.isFinite(facts.contextLength) && facts.contextLength > 0) {
+      profile.limits.contextTokens = { value: facts.contextLength, confidence: 'reported', source: catalogSource };
+      profile.limits.maxInputTokens = { value: facts.contextLength, confidence: 'inferred', source: catalogSource };
+    }
+    if (typeof facts.supportsTools === 'boolean') {
+      profile.tools.native = { value: facts.supportsTools, confidence: 'reported', source: catalogSource };
+      profile.structuredOutput.syntheticTool = { value: facts.supportsTools, confidence: 'inferred', source: catalogSource };
+    }
+    if (Number.isFinite(facts.inUsdPerM)) profile.pricing.inputPerMillion = {
+      value: facts.inUsdPerM, confidence: 'reported', source: catalogSource,
+    };
+    if (Number.isFinite(facts.outUsdPerM)) profile.pricing.outputPerMillion = {
+      value: facts.outUsdPerM, confidence: 'reported', source: catalogSource,
+    };
+    return profile;
+  };
   const callThrough = request => call({
     ...(runtimeConfig.retry ? { retry: runtimeConfig.retry } : {}),
     ...(runtimeConfig.timeout ? { timeout: runtimeConfig.timeout } : {}),
@@ -376,7 +198,7 @@ export async function bootLoopKernel({
   await booted.install([
     { id: 'run-projection', name: kernel.BUILTIN.runProjection, config: { root: runsRoot } },
     { id: 'workspace-fs', name: kernel.BUILTIN.fs, config: { root: workspace.root } },
-    { id: 'llm-adapters', name: kernel.BUILTIN.adapters, config: { callModel: callThrough, resolve } },
+    { id: 'llm-adapters', name: kernel.BUILTIN.adapters, config: { callModel: callThrough, resolve, capability } },
   ]);
   if (typeof onSessionEvent === 'function') {
     booted.ctx.on('session/append', (runId, event) => onSessionEvent(runId, event));
@@ -407,6 +229,7 @@ export async function bootLoopKernel({
           defaultWorker: worker, projectConfig: workspace.readConfig(), settings,
           gateTimeoutMs: runtimeConfig.gateTimeoutMs,
           config: runtimeConfig, signal: execution.signal,
+          canonicalSession: true,
           // Long tools use this between their durable call/result boundaries.
           // It deliberately reuses the host's coalesced session observer.
           notify: () => onSessionEvent?.(execution.runId, { type: 'tool.progress', data: null }),
@@ -449,7 +272,7 @@ export async function bootLoopKernel({
         if (presetId && !preset) throw new Error(`Workflow "${id}" has no preset "${presetId}".`);
         return configuredTree(stack.root, {
           model, level, skillText, blockWorkers, defaultFallbacks, blockFallbacks,
-          tierWorkers, useAuthoredTiers: profile === 'flyt-desktop',
+          tierWorkers, useAuthoredTiers: profile !== 'flyt-loop-worker',
           overrides: preset?.overrides ?? {},
         });
       },
@@ -483,7 +306,7 @@ export async function bootLoopKernel({
 
 export async function startStackRun({ host = null, ctx = host?.ctx, stackId, input, id = null, metadata = null } = {}) {
   if (!ctx?.agents) {
-    throw Object.assign(new Error('The kernel has no agents seam; the production Loop host did not compose.'), { code: 'kernel_unavailable' });
+    throw Object.assign(new Error('The kernel has no agents seam; the production run host did not compose.'), { code: 'kernel_unavailable' });
   }
   const startedId = id ?? newRunId();
   host?.beginRun?.(startedId);
@@ -530,76 +353,6 @@ export async function continueStackRun(ctx, id) {
   } catch (err) {
     return { ok: false, error: 'resume-failed', message: String(err?.message ?? err) };
   }
-}
-
-const STORED_TERMINAL_STAGES = new Set(['done', 'failed', 'stopped', 'interrupted', 'cancelled', 'rejected']);
-
-/**
- * Close kernel records left non-terminal by a process exit. The JSONL remains
- * canonical; meta.json is updated as an immediate index projection so History
- * cannot keep saying "running" before anybody opens the run.
- */
-export function reconcileStoredStackRuns(runsRoot, reason = 'The process ended before the workflow settled.') {
-  const reconciled = [];
-  let dirs = [];
-  try { dirs = fs.readdirSync(runsRoot, { withFileTypes: true }).filter(row => row.isDirectory()); }
-  catch { return reconciled; }
-  for (const dir of dirs) {
-    const runId = dir.name;
-    const file = path.join(runsRoot, runId, 'session.jsonl');
-    if (!fs.existsSync(file)) continue;
-    const leaseFile = path.join(runsRoot, runId, 'live.json');
-    try {
-      const lease = JSON.parse(fs.readFileSync(leaseFile, 'utf8'));
-      const fresh = Date.now() - Number(lease.beatAt ?? 0) < 60_000;
-      let live = fresh && lease.host && lease.host !== os.hostname();
-      if (fresh && (!lease.host || lease.host === os.hostname())) {
-        try { process.kill(Number(lease.pid), 0); live = true; }
-        catch (error) { live = error?.code === 'EPERM'; }
-      }
-      if (live) continue;
-    } catch { /* no usable owner lease */ }
-    const events = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean)
-      .flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
-    if (!events.some(event => event?.type === 'run.created')) continue;
-    const lastStage = events.filter(event => event?.type === 'run.stage').at(-1)?.data?.stage ?? null;
-    if (STORED_TERMINAL_STAGES.has(String(lastStage))) continue;
-    let seq = Math.max(0, ...events.map(event => Number(event?.seq) || 0));
-    const at = new Date().toISOString();
-    const latestBlock = new Map();
-    for (const event of events) {
-      if (event?.type === 'block.status' && event.data?.blockId) {
-        latestBlock.set(String(event.data.blockId), String(event.data.status ?? 'pending'));
-      }
-    }
-    const appended = [];
-    for (const [blockId, status] of latestBlock) {
-      if (status === 'active') appended.push({
-        seq: ++seq, at, type: 'block.status',
-        data: { blockId, status: 'pending', reason: 'interrupted before this block settled' },
-      });
-    }
-    appended.push({
-      seq: ++seq, at, type: 'run.stage',
-      data: { stage: 'interrupted', reason, previousStage: lastStage },
-    });
-    fs.appendFileSync(file, appended.map(event => JSON.stringify(event)).join('\n') + '\n', 'utf8');
-    try { fs.rmSync(leaseFile, { force: true }); } catch { /* already absent */ }
-
-    const metaFile = path.join(runsRoot, runId, 'meta.json');
-    try {
-      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-      const settle = statuses => Object.fromEntries(Object.entries(statuses ?? {})
-        .map(([id, status]) => [id, status === 'active' ? 'pending' : status]));
-      fs.writeFileSync(metaFile, JSON.stringify({
-        ...meta, stage: 'interrupted', updatedAt: at,
-        currentBlockId: null, currentNodeId: null,
-        blockStatus: settle(meta.blockStatus), nodeStatus: settle(meta.nodeStatus),
-      }, null, 2), 'utf8');
-    } catch { /* the canonical log above is sufficient to rebuild this projection */ }
-    reconciled.push(runId);
-  }
-  return reconciled;
 }
 
 export async function resumeStackRun(host, id) {

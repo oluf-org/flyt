@@ -14,8 +14,13 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import type { Message, ToolCall, JsonValue } from '../types.js';
 import type { SessionEvent, SessionEventInput, SessionHandle, SessionsSeam } from '../seams/sessions.js';
+export { SESSION_EVENTS } from './events.js';
+import { SESSION_EVENT_SET } from './events.js';
+import { materialise, projectRun } from './projection.js';
+export type { SessionEventMap, SessionEventType, DurableSessionEvent, DurableSessionEventInput } from './events.js';
 
 /** The event types {@link deriveMessages} folds. Everything else is trace detail. */
 export const MESSAGE_EVENTS = [
@@ -41,51 +46,6 @@ export const MESSAGE_EVENTS = [
  * session event is a line in a file that outlives the process. They are named
  * apart because confusing them is a category error, not a typo.
  */
-export const SESSION_EVENTS = [
-  // The run
-  'run.created',
-  'stack.resolved',
-  // `stage` is one of: execution, pausing, paused, resumed, stopping, stopped,
-  // interrupted, done, failed. `resumed`
-  // carries how much was replayed rather than re-run, and is followed by
-  // `execution` — a run picked up from its log is a run that is going again.
-  'run.stage',
-  'run.error',
-  // A block's turn, and the steps within it
-  'turn.start',
-  'step.start',
-  'step.prompt',
-  'step.end',
-  'turn.end',
-  // What the model was asked and what it said
-  'message.system',
-  'message.user',
-  'llm.request',
-  'llm.attempt',
-  'llm.stream',
-  // Native function arguments are durable while still being assembled. These
-  // are trace/recovery evidence, not model-visible messages; only the later
-  // authoritative `llm.response` may commit a call into the conversation.
-  'tool.input.start',
-  'tool.input.delta',
-  'tool.input.end',
-  'llm.response',
-  // What it did
-  'tool.call',
-  'permission.decision',
-  'tool.result',
-  // What the block produced
-  'block.status',
-  'block.warning',
-  'block.output',
-  // System-owned conversation projection. It is deliberately not an
-  // `llm.response`: the no-tool supervisor is outside the authored workflow.
-  'supervisor.summary',
-] as const;
-
-/** One of the session log's event types. */
-export type SessionEventType = (typeof SESSION_EVENTS)[number];
-
 /** A line the reader could not parse, kept rather than swallowed. */
 export interface LogProblem {
   /** 1-based line number in the file. */
@@ -203,6 +163,12 @@ export class JsonlSession implements SessionHandle {
     if (!event || typeof event.type !== 'string' || !event.type) {
       throw new Error('A session event needs a type');
     }
+    const extension = asRecord(event.data)._extension;
+    const ignorableExtension = event.type.startsWith('extension.')
+      && Boolean(asRecord(extension).ignorable);
+    if (!SESSION_EVENT_SET.has(event.type) && !ignorableExtension) {
+      throw new Error(`Unknown durable session event "${event.type}". Ignorable extensions must use an extension.* type and data._extension.ignorable=true.`);
+    }
     this.#sync();
     const written: SessionEvent = {
       seq: this.#head + 1,
@@ -286,6 +252,7 @@ export function deriveMessages(events: readonly SessionEvent[], upTo?: number, b
           : [];
         const message: Message = { role: 'assistant', content: String(data.content ?? '') };
         if (data.reasoning) message.reasoning = String(data.reasoning);
+        if (data.replay && typeof data.replay === 'object') message.replay = data.replay as Message['replay'];
         if (toolCalls.length) message.toolCalls = toolCalls;
         messages.push(message);
         for (const call of toolCalls) requested.set(call.id, { name: call.name, answered: false });
@@ -320,6 +287,7 @@ export function deriveMessages(events: readonly SessionEvent[], upTo?: number, b
         };
         const name = String(data.name ?? pending?.name ?? '');
         if (name) message.name = name;
+        if (data.handle) message.handle = String(data.handle);
         messages.push(message);
         break;
       }
@@ -400,4 +368,65 @@ export class JsonlSessionStore implements SessionsSeam {
       .sort()
       .reverse();
   }
+}
+
+const TERMINAL_STAGES = new Set(['done', 'failed', 'stopped', 'interrupted', 'cancelled', 'rejected']);
+
+function defaultLeaseLive(lease: Record<string, any>): boolean {
+  const fresh = Date.now() - Number(lease.beatAt ?? 0) < 60_000;
+  if (!fresh) return false;
+  if (lease.host && lease.host !== os.hostname()) return true;
+  try { process.kill(Number(lease.pid), 0); return true; }
+  catch (error: any) { return error?.code === 'EPERM'; }
+}
+
+/**
+ * Close canonical sessions left non-terminal by a dead process.
+ *
+ * All writes go through JsonlSession.append, so confinement, torn-tail repair,
+ * dense sequencing and event validation are identical to ordinary execution.
+ */
+export async function repairInterruptedSessions(root: string, {
+  reason = 'The process ended before the workflow settled.',
+  isLeaseLive = defaultLeaseLive,
+}: {
+  reason?: string;
+  isLeaseLive?: (lease: Record<string, any>, runId: string) => boolean | Promise<boolean>;
+} = {}): Promise<string[]> {
+  const store = new JsonlSessionStore(root);
+  const repaired: string[] = [];
+  for (const runId of await store.list()) {
+    const leaseFile = path.join(root, runId, 'live.json');
+    let lease: Record<string, any> | null = null;
+    try { lease = asRecord(JSON.parse(fs.readFileSync(leaseFile, 'utf8'))); } catch { /* no lease */ }
+    if (lease && await isLeaseLive(lease, runId)) continue;
+
+    const session = await store.open(runId);
+    const events = session.readSync();
+    if (!events.some(event => event.type === 'run.created')) continue;
+    const lastStage = events.filter(event => event.type === 'run.stage').at(-1)?.data as Record<string, any> | undefined;
+    if (TERMINAL_STAGES.has(String(lastStage?.stage ?? ''))) continue;
+
+    const latestBlocks = new Map<string, string>();
+    for (const event of events) {
+      if (event.type !== 'block.status') continue;
+      const data = asRecord(event.data);
+      if (data.blockId) latestBlocks.set(String(data.blockId), String(data.status ?? 'pending'));
+    }
+    for (const [blockId, status] of latestBlocks) {
+      if (status !== 'active') continue;
+      await session.append({
+        type: 'block.status',
+        data: { blockId, status: 'pending', reason: 'interrupted before this block settled' },
+      });
+    }
+    await session.append({
+      type: 'run.stage',
+      data: { stage: 'interrupted', reason, previousStage: String(lastStage?.stage ?? '') },
+    });
+    materialise(path.join(root, runId), projectRun(session.readSync(), runId));
+    try { fs.rmSync(leaseFile, { force: true }); } catch { /* already absent */ }
+    repaired.push(runId);
+  }
+  return repaired;
 }

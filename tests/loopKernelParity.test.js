@@ -13,9 +13,11 @@ import { registerProvider } from '../core/adapters/index.js';
 import { git } from '../core/worktree.js';
 import { waitFor } from './helpers.js';
 import {
-  bootLoopKernel, isKernelRun, resumeStackRun, snapshotStackRun,
-  snapshotStoredStackRun, startStackRun, stopStackRun, storedStackRunMetadata,
-} from '../core/kernelRunner.js';
+  bootRunKernel, resumeStackRun, startStackRun, stopStackRun,
+} from '../core/kernelHost.js';
+import {
+  isCanonicalRun, snapshotStackRun, snapshotStoredStackRun, storedStackRunMetadata,
+} from '../core/runProjection.js';
 
 const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const stackRoot = path.join(projectRoot, 'stacks');
@@ -42,7 +44,7 @@ async function hostFor({
   approvalMode = 'always', definitionsRoot = stackRoot,
   worker = { provider: 'script', model: 'worker-model' }, runtimeConfig = {},
 }) {
-  return bootLoopKernel({
+  return bootRunKernel({
     workspaceDir: workspace, runsRoot, store, stackRoot: definitionsRoot,
     approvalMode, worker,
     level: 'high', loopTaskId: taskId, skills,
@@ -79,7 +81,7 @@ test('production Loop host edits only its worktree and exposes durable status an
   assert.equal(snapshot.meta.loopTaskId, 't-kernel');
   assert.equal(snapshot.meta.nodeStatus.work, 'done');
   assert.equal(snapshot.session.canonical, true);
-  assert.equal(isKernelRun(store, started.runId), true);
+  assert.equal(isCanonicalRun(store, started.runId), true);
   assert.equal(storedStackRunMetadata(runsRoot, started.runId).model, 'worker-model');
 
   const spend = spendFromRun(store, started.runId);
@@ -336,7 +338,7 @@ test('kernel session activity uses the existing live and incremental run channel
   assert.deepEqual(await api.invoke('run:live', { projectId }), { [projectId]: [] });
 });
 
-test('run:restartNode durably re-pins a failed kernel block and starts it on the new route', async () => {
+test('run:restartBlock durably re-pins a failed kernel block and starts it on the new route', async () => {
   const repo = tmp('flyt-kernel-repin-work-');
   const dataRoot = tmp('flyt-kernel-repin-data-');
   await git(['init', '-b', 'main'], { cwd: repo });
@@ -384,8 +386,8 @@ test('run:restartNode durably re-pins a failed kernel block and starts it on the
   }, { label: 'first kernel attempt to fail' });
 
   const guidance = 'Use the file tool and make the requested edit.';
-  await api.invoke('run:restartNode', {
-    projectId, runId, nodeId: 'work', guidance,
+  await api.invoke('run:restartBlock', {
+    projectId, runId, blockId: 'work', guidance,
     worker: { provider: 'mock', model: 'mock-new', routing: { costTier: 'low' } },
   });
   await waitFor(() => {
@@ -414,7 +416,7 @@ test('run:restartNode durably re-pins a failed kernel block and starts it on the
   const pauseEnded = await api.invoke('run:pause', { projectId, runId });
   assert.equal(pauseEnded.ok, false);
   assert.equal(pauseEnded.error, 'not-live');
-  await waitFor(() => entry.kernelRuns?.size === 0 && entry.kernelHosts?.size === 0,
+  await waitFor(() => api.runController.list(projectId).length === 0,
     { label: 'restarted kernel host disposal' });
 });
 
@@ -497,7 +499,7 @@ test('a fresh Supervisor claim reaches kernel, gates, review, merge and canary',
   assert.equal(fs.readFileSync(path.join(repo, 'target.js'), 'utf8').trim(), 'export const value = 2;');
   assert.equal(landed.status, 'landed');
   assert.equal(landed.runIds.length, 1);
-  assert.equal(isKernelRun(engine.registry.get(projectId).store, landed.runIds[0]), true);
+  assert.equal(isCanonicalRun(engine.registry.get(projectId).store, landed.runIds[0]), true);
   let status = await api.invoke('loop:status', { projectId });
   const statusDeadline = Date.now() + 5_000;
   while ((status.running || status.landed !== 1) && Date.now() < statusDeadline) {
@@ -508,6 +510,6 @@ test('a fresh Supervisor claim reaches kernel, gates, review, merge and canary',
   assert.equal(status.running, false);
   assert.ok((await api.invoke('ledger:totals', { projectId })).calls >= 2);
   const entry = engine.registry.get(projectId);
-  await waitFor(() => entry.kernelRuns?.size === 0 && entry.kernelHosts?.size === 0,
+  await waitFor(() => api.runController.list(projectId).length === 0,
     { timeoutMs: 5_000, label: 'settled kernel host disposal' });
 });

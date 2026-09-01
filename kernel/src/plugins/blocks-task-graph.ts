@@ -11,6 +11,8 @@ import type { JsonValue } from '../types.js';
 import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js';
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
 import { DEFAULT_WORKER_MAX_TOKENS, executeWork, LOOP_CEILING } from './blocks-core.js';
+import { childSessionIdentity } from '../session/children.js';
+import type { WorkerProfileRegistry } from '../workers/profiles.js';
 
 export const name = 'flyt-blocks-task-graph';
 export const inject = ['blocks', 'sessions'];
@@ -45,7 +47,46 @@ export interface GeneratedTask {
 export interface TaskGraphPlan {
   tasks: GeneratedTask[];
   summary: string;
+  /** Harness-authored, ordered explanation of every post-repair transformation. */
+  transformations?: GraphTransformation[];
+  degraded?: boolean;
 }
+
+export interface GraphTransformation {
+  action: 'preserve_task' | 'remove_task' | 'remove_edge' | 'remove_artifact_claim' | 'topological_reorder' | 'single_worker_fallback';
+  target: string;
+  reason: string;
+}
+
+export const TASK_GRAPH_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['summary', 'tasks'],
+  properties: {
+    summary: { type: 'string' },
+    tasks: {
+      type: 'array', minItems: 1, maxItems: HARD_MAX_TASKS,
+      items: {
+        type: 'object', additionalProperties: false,
+        required: ['id', 'title', 'goal', 'dependsOn', 'produces', 'requires', 'optional', 'writeFiles'],
+        properties: {
+          id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,47}$' },
+          title: { type: 'string', minLength: 1 }, goal: { type: 'string', minLength: 1 },
+          dependsOn: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+          produces: { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true },
+          requires: { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true },
+          optional: { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true },
+          writeFiles: { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true },
+        },
+      },
+    },
+  },
+} as const;
+
+const TASK_GRAPH_OUTPUT = {
+  name: 'submit_task_graph',
+  description: 'Submit the complete executable task graph.',
+  schema: TASK_GRAPH_SCHEMA as unknown as JsonValue,
+  strict: true,
+} as const;
 
 export interface PlanParseResult {
   ok: boolean;
@@ -117,7 +158,7 @@ export function parseTaskGraphPlan(
     return { ok: false, plan: null, errors: ['tasks must be a non-empty array'] };
   }
   const cap = Math.max(1, Math.min(HARD_MAX_TASKS, Math.floor(maxTasks)));
-  const floor = Math.max(1, Math.min(cap, Math.floor(minTasks)));
+  const floor = raw.degraded === true ? 1 : Math.max(1, Math.min(cap, Math.floor(minTasks)));
   if (raw.tasks.length < floor) errors.push(`plan has ${raw.tasks.length} tasks; this block requires at least ${floor}`);
   if (raw.tasks.length > cap) errors.push(`plan has ${raw.tasks.length} tasks; this block allows ${cap}`);
 
@@ -198,7 +239,11 @@ export function parseTaskGraphPlan(
   if (cycle) errors.push(`dependency cycle: ${cycle.join(' -> ')}`);
   return errors.length
     ? { ok: false, plan: null, errors }
-    : { ok: true, plan: { tasks, summary: typeof raw.summary === 'string' ? raw.summary.trim() : '' }, errors: [] };
+    : { ok: true, plan: {
+        tasks, summary: typeof raw.summary === 'string' ? raw.summary.trim() : '',
+        ...(raw.degraded === true ? { degraded: true } : {}),
+        ...(Array.isArray(raw.transformations) ? { transformations: raw.transformations as unknown as GraphTransformation[] } : {}),
+      }, errors: [] };
 }
 
 const POLICY: Record<ParallelismLevel, string> = {
@@ -213,13 +258,127 @@ function plannerSystem(parallelism: ParallelismLevel, minTasks: number, maxTasks
     'ROLE: task-graph-planner',
     'Turn the brief into a bounded dependency graph that worker agents can execute.',
     POLICY[parallelism],
-    `Create between ${minTasks} and ${maxTasks} tasks. Return ONLY one JSON object, with this shape:`,
-    '{"summary":"...","tasks":[{"id":"lowercase-id","title":"...","goal":"complete worker brief with acceptance criteria","dependsOn":[],"produces":[],"requires":[],"optional":[],"writeFiles":[]}]}',
+    `Create between ${minTasks} and ${maxTasks} tasks through the configured structured response channel.`,
     'produces/requires/optional are named artifacts or facts, not filenames. writeFiles contains every file the task expects to modify.',
     'Keep each task independently verifiable. Do not create coordination-only tasks. Do not put two tasks in parallel when one needs the other\'s result.',
     'Every worker can inspect the bound workspace. Do not create a broad repository-inventory or exploration task for other workers; give each worker a focused deliverable and let it perform its own targeted reads.',
-    'Do not narrate your analysis. Begin the visible response with { and finish the complete JSON object before stopping.',
+    'Do not embed JSON in prose. Submit the graph through the native schema response or submit_task_graph tool when offered.',
   ].join('\n');
+}
+
+function topological(tasks: GeneratedTask[]): GeneratedTask[] | null {
+  const indexed = new Map(tasks.map((task, index) => [task.id, index]));
+  const pending = new Map(tasks.map(task => [task.id, new Set(task.dependsOn)]));
+  const out: GeneratedTask[] = [];
+  while (pending.size) {
+    const ready = [...pending.keys()].filter(id => pending.get(id)?.size === 0)
+      .sort((a, b) => (indexed.get(a) ?? 0) - (indexed.get(b) ?? 0));
+    if (!ready.length) return null;
+    for (const id of ready) {
+      pending.delete(id);
+      out.push(tasks.find(task => task.id === id)!);
+      for (const deps of pending.values()) deps.delete(id);
+    }
+  }
+  return out;
+}
+
+/** Best-effort safety-preserving graph salvage after bounded repairs are exhausted. */
+export function degradeTaskGraphPlan(
+  text: string,
+  brief: string,
+  { maxTasks = DEFAULT_MAX_TASKS, parallelism = 'medium' as ParallelismLevel, readOnly = false } = {},
+): { plan: TaskGraphPlan | null; transformations: GraphTransformation[]; reason?: string } {
+  const raw = extractTaskGraphJson(text) as Record<string, unknown> | null;
+  const transformations: GraphTransformation[] = [];
+  const values = Array.isArray(raw?.tasks) ? raw.tasks : [];
+  const tasks: GeneratedTask[] = [];
+  const seen = new Set<string>();
+  for (const [index, value] of values.entries()) {
+    const task = value as Record<string, unknown> | null;
+    const id = typeof task?.id === 'string' ? task.id.trim() : '';
+    const fields = task ? Object.fromEntries(['dependsOn', 'produces', 'requires', 'optional', 'writeFiles']
+      .map(name => [name, strings(task[name] ?? [])])) : {};
+    const safe = task && ID.test(id) && !seen.has(id)
+      && typeof task.title === 'string' && task.title.trim()
+      && typeof task.goal === 'string' && task.goal.trim()
+      && Object.values(fields).every(Boolean)
+      && (!readOnly || (fields.writeFiles as string[]).length === 0);
+    if (!safe) {
+      transformations.push({ action: 'remove_task', target: id || `tasks[${index}]`, reason: 'task fields were not independently executable after repair exhaustion' });
+      continue;
+    }
+    seen.add(id);
+    tasks.push({
+      id, title: String(task.title).trim(), goal: String(task.goal).trim(),
+      dependsOn: fields.dependsOn as string[], produces: fields.produces as string[],
+      requires: fields.requires as string[], optional: fields.optional as string[],
+      writeFiles: fields.writeFiles as string[],
+    });
+    transformations.push({ action: 'preserve_task', target: id, reason: 'task fields were valid and its deliverable remains unambiguous' });
+    if (tasks.length >= Math.max(1, Math.min(HARD_MAX_TASKS, maxTasks))) break;
+  }
+
+  if (!tasks.length) {
+    const simple = brief.length <= 1_200 && !/\b(parallel|independent workers?|multi-agent|separate tasks?)\b/i.test(brief);
+    if (!simple) return { plan: null, transformations, reason: 'no valid tasks remained and a one-worker fallback could materially change a complex request' };
+    const task: GeneratedTask = {
+      id: 'complete-request', title: 'Complete the request', goal: brief,
+      dependsOn: [], produces: ['completed-request'], requires: [], optional: [], writeFiles: readOnly ? [] : ['*'],
+    };
+    transformations.push({ action: 'single_worker_fallback', target: task.id, reason: 'the request is simple and no safe graph structure survived' });
+    return { plan: { summary: 'Single-worker fallback after planner repair exhaustion.', tasks: [task], transformations, degraded: true }, transformations };
+  }
+
+  const ids = new Set(tasks.map(task => task.id));
+  for (const task of tasks) {
+    const before = [...task.dependsOn];
+    task.dependsOn = task.dependsOn.filter(dep => dep !== task.id && ids.has(dep));
+    for (const dep of before.filter(dep => !task.dependsOn.includes(dep))) transformations.push({
+      action: 'remove_edge', target: `${task.id} -> ${dep}`, reason: dep === task.id ? 'self-dependency is invalid' : 'dependency target does not exist',
+    });
+  }
+  const producers = new Map<string, string>();
+  for (const task of tasks) task.produces = task.produces.filter(output => {
+    const prior = producers.get(output);
+    if (!prior) { producers.set(output, task.id); return true; }
+    transformations.push({ action: 'remove_artifact_claim', target: `${task.id}:${output}`, reason: `${prior} already has the deterministic producer claim` });
+    return false;
+  });
+  for (const task of tasks) {
+    for (const required of [...task.requires]) {
+      const producer = producers.get(required);
+      if (producer && producer !== task.id && !task.dependsOn.includes(producer)) task.dependsOn.push(producer);
+      if (!producer) {
+        task.requires = task.requires.filter(item => item !== required);
+        transformations.push({ action: 'remove_edge', target: `${task.id} requires ${required}`, reason: 'no unambiguous producer exists' });
+      }
+    }
+  }
+  if (parallelism === 'no') for (let index = 1; index < tasks.length; index++) {
+    if (!tasks[index].dependsOn.includes(tasks[index - 1].id)) tasks[index].dependsOn.push(tasks[index - 1].id);
+  }
+  let ordered = topological(tasks);
+  // Break only invalid cyclic edges, from later authored tasks first, until a
+  // deterministic topological order exists.
+  while (!ordered) {
+    const cycle = cycleIn(tasks);
+    if (!cycle || cycle.length < 2) break;
+    const from = tasks.find(task => task.id === cycle.at(-2));
+    const to = cycle.at(-1)!;
+    if (!from) break;
+    from.dependsOn = from.dependsOn.filter(dep => dep !== to);
+    transformations.push({ action: 'remove_edge', target: `${from.id} -> ${to}`, reason: 'removed the deterministic closing edge of a dependency cycle' });
+    ordered = topological(tasks);
+  }
+  if (!ordered) return { plan: null, transformations, reason: 'the remaining dependencies could not be made safe deterministically' };
+  if (ordered.some((task, index) => task.id !== tasks[index]?.id)) transformations.push({
+    action: 'topological_reorder', target: ordered.map(task => task.id).join(' -> '), reason: 'ordered executable dependencies deterministically',
+  });
+  return {
+    plan: { summary: typeof raw?.summary === 'string' ? raw.summary.trim() : '', tasks: ordered, transformations, degraded: true },
+    transformations,
+  };
 }
 
 /** A static validator's feedback for the next planner turn. */
@@ -235,6 +394,7 @@ export function taskGraphRepairPrompt(
     'Do not re-plan from scratch. Return only one complete JSON object and no analysis.',
     '',
     'STATIC VALIDATION DIAGNOSTICS:',
+    JSON.stringify({ type: 'task_graph_validation_result', attempt, diagnostics: errors }),
     ...errors.map((error, index) => `${index + 1}. ${error}`),
     '',
     'REPAIR RULES:',
@@ -310,14 +470,22 @@ function isReadOnlyBrief(input: string): boolean {
 
 export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
   const session = await run.ctx.sessions.open(run.runId);
+  const profiles = (run.ctx as typeof run.ctx & { workerProfiles?: WorkerProfileRegistry }).workerProfiles;
+  const profileId = str(run.config.workerProfile, 'default-work');
+  const profile = profiles?.get(profileId);
+  if (profiles && !profile) return {
+    status: 'failed', output: '',
+    error: `Unknown worker profile "${profileId}". Available: ${profiles.list().map(item => item.id).join(', ') || 'none'}`,
+  };
   const parallelism = PARALLELISM_LEVELS.includes(run.config.parallelism as ParallelismLevel)
     ? run.config.parallelism as ParallelismLevel : 'medium';
   const maxTasks = integer(run.config.maxTasks, DEFAULT_MAX_TASKS, 1, HARD_MAX_TASKS);
   const minTasks = integer(run.config.minTasks, 1, 1, maxTasks);
   const maxParallel = integer(run.config.maxParallel, DEFAULT_WAVE[parallelism], 1, HARD_MAX_TASKS);
-  const model = str(run.config.model, 'openrouter/auto');
+  const model = str(run.config.model, profile?.preferredModel ?? 'openrouter/auto');
   const fallbackModels = Array.isArray(run.config.modelFallbacks)
-    ? run.config.modelFallbacks.filter((item): item is string => typeof item === 'string' && Boolean(item)) : [];
+    ? run.config.modelFallbacks.filter((item): item is string => typeof item === 'string' && Boolean(item))
+    : [...(profile?.fallbacks ?? [])];
   const authoredPlannerSystem = str(run.config.systemPrompt);
   const system = authoredPlannerSystem || plannerSystem(parallelism, minTasks, maxTasks);
   const readOnly = isReadOnlyBrief(run.input);
@@ -335,10 +503,13 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
       ctx: run.ctx, session, runId: run.runId, blockId: `${run.blockId}.planner`, turn: 1,
       model, fallbackModels, system, input: run.input,
       tools: [], ceiling: [], maxSteps: 1, maxTokens: PLANNER_MAX_TOKENS,
+      structuredOutput: TASK_GRAPH_OUTPUT,
       temperature: 0.1, isolated: true, ...(run.signal ? { signal: run.signal } : {}),
     });
     if (planned.stopped !== 'answered') return { status: 'failed', output: planned.content, error: planned.reason ?? planned.stopped };
-    planText = planned.content;
+    planText = planned.structuredOutput !== undefined
+      ? JSON.stringify(planned.structuredOutput)
+      : planned.content;
     parsed = parseTaskGraphPlan(planText, { minTasks, maxTasks, parallelism, readOnly });
     let lastPlanner = planned;
     let lastPlannerBudget = PLANNER_MAX_TOKENS;
@@ -357,18 +528,45 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
         model, fallbackModels, system,
         input: taskGraphRepairPrompt(invalidPlan, diagnostics, run.input, attempt),
         tools: [], ceiling: [], maxSteps: 1, maxTokens: PLANNER_REPAIR_MAX_TOKENS,
+        structuredOutput: TASK_GRAPH_OUTPUT,
         temperature: 0, isolated: true, ...(run.signal ? { signal: run.signal } : {}),
       });
       if (repaired.stopped !== 'answered') return { status: 'failed', output: repaired.content, error: repaired.reason ?? repaired.stopped };
-      planText = repaired.content;
+      planText = repaired.structuredOutput !== undefined
+        ? JSON.stringify(repaired.structuredOutput)
+        : repaired.content;
       parsed = parseTaskGraphPlan(planText, { minTasks, maxTasks, parallelism, readOnly });
       lastPlanner = repaired;
       lastPlannerBudget = PLANNER_REPAIR_MAX_TOKENS;
     }
-    if (!parsed.ok || !parsed.plan) return {
-      status: 'failed', output: planText,
-      error: plannerFailure(lastPlanner, parsed.errors, lastPlannerBudget),
-    };
+    if (!parsed.ok || !parsed.plan) {
+      // Repeated reasoning-only exhaustion is not a malformed graph to
+      // salvage: there is no planner-authored task boundary at all, and the
+      // same model is likely to starve a one-worker fallback. Preserve the
+      // actionable token diagnosis so a restart can choose a larger budget or
+      // another model without pretending a materially different run was safe.
+      if (!planText.trim() && lastPlanner.finishReason === 'length') return {
+        status: 'failed', output: planText,
+        error: plannerFailure(lastPlanner, parsed.errors, lastPlannerBudget),
+      };
+      const degraded = degradeTaskGraphPlan(planText, run.input, { maxTasks, parallelism, readOnly });
+      await session.append({ type: 'block.warning', data: {
+        blockId: run.blockId, code: 'task_graph_degraded', transient: false,
+        diagnostics: parsed.errors,
+        transformations: degraded.transformations as unknown as JsonValue,
+        reason: degraded.reason ?? 'repair attempts were exhausted; safe graph transformations were applied',
+      } });
+      if (!degraded.plan) return {
+        status: 'failed', output: planText,
+        error: `${plannerFailure(lastPlanner, parsed.errors, lastPlannerBudget)} ${degraded.reason ?? ''}`.trim(),
+      };
+      if (!run.ctx.tools) return {
+        status: 'failed', output: planText,
+        error: plannerFailure(lastPlanner, parsed.errors, lastPlannerBudget),
+      };
+      planText = JSON.stringify(degraded.plan, null, 2);
+      parsed = { ok: true, plan: degraded.plan, errors: [] };
+    }
     await session.append({ type: 'block.output', data: { blockId: run.blockId, port: 'plan', content: planText } });
   }
   const plan = parsed.plan!;
@@ -392,9 +590,22 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
     if (!ready.length) return { status: 'failed', output: '', error: 'The generated task graph has no ready task; its dependencies cannot be satisfied.' };
     const outcomes = await Promise.all(ready.map(async task => {
       const childId = `${run.blockId}.${task.id}`;
+      const identity = childSessionIdentity({
+        parentRunId: run.runId, parentBlockId: run.blockId, taskId: task.id,
+        profileId, contextBoundary: profile?.context.mode ?? 'isolated',
+      });
+      const childSession = await run.ctx.sessions.open(identity.sessionId);
+      const startedAt = new Date().toISOString();
+      await session.append({ type: 'child.session', data: {
+        ...identity, stage: 'active', title: task.title, startedAt,
+      } });
+      await childSession.append({ type: 'child.session', data: {
+        ...identity, stage: 'active', title: task.title, startedAt,
+      } });
       await session.append({ type: 'block.status', data: {
         blockId: childId, parentId: run.blockId, taskId: task.id, title: task.title,
         use: 'flyt-blocks-core:work', status: 'active', dependsOn: task.dependsOn,
+        sessionId: identity.sessionId, profileId,
       } });
       let outcome: BlockOutcome;
       try {
@@ -402,31 +613,43 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
         // writer that happens not to use its authority. Narrow its ceiling
         // before schemas reach the model, so it cannot churn through approval
         // prompts for create_file/bash while producing an analysis.
+        const profiledCeiling = profile
+          ? run.ceiling.filter(name => profile.toolCeiling.includes(name)) : run.ceiling;
         const childCeiling = task.writeFiles.length
-          ? run.ceiling
-          : run.ceiling.filter(name => run.ctx.tools.get(name)?.classification?.effect === 'read');
+          ? profiledCeiling
+          : profiledCeiling.filter(name => run.ctx.tools.get(name)?.classification?.effect === 'read');
         outcome = await executeWork({
-          ...run, blockId: childId, input: taskInput(task, run.input, completed),
+          ...run, runId: identity.sessionId, blockId: 'worker', input: taskInput(task, run.input, completed),
           ceiling: childCeiling,
           config: {
             model, ...(fallbackModels.length ? { modelFallbacks: fallbackModels } : {}),
-            ...(run.config.workerSystemPrompt ? { systemPrompt: run.config.workerSystemPrompt } : {}),
-            ...(run.config.effort ? { effort: run.config.effort } : {}),
-            maxSteps: integer(run.config.workerMaxSteps, MAX_STEPS, 1, 100_000),
+            systemPrompt: str(run.config.workerSystemPrompt, profile?.systemPrompt),
+            effort: run.config.effort ?? profile?.reasoning ?? 'medium',
+            permissionRules: (profile?.permissionRules ?? []) as unknown as JsonValue,
+            maxSteps: integer(run.config.workerMaxSteps, profile?.warnings?.steps ?? MAX_STEPS, 1, 100_000),
             maxTokens: integer(run.config.workerMaxTokens, DEFAULT_WORKER_MAX_TOKENS, 1, 131_072),
-            isolated: true,
+            isolated: profile?.context.mode !== 'shared',
             instructions: `Work only on this generated task. Respect its expected write scope.\n${str(run.config.workerInstructions)}`.trim(),
           },
         });
       } catch (error) {
         outcome = { status: 'failed', output: '', error: String((error as Error)?.message ?? error) };
       }
+      const finishedAt = new Date().toISOString();
+      const lifecycle = {
+        ...identity, stage: outcome.status, title: task.title, finishedAt,
+        metrics: { events: await childSession.head() },
+        ...(outcome.error ? { error: outcome.error } : {}),
+      };
+      await childSession.append({ type: 'child.session', data: lifecycle as unknown as JsonValue });
+      await session.append({ type: 'child.session', data: lifecycle as unknown as JsonValue });
       if (outcome.output) await session.append({ type: 'block.output', data: {
         blockId: childId, parentId: run.blockId, taskId: task.id, content: outcome.output,
       } });
       await session.append({ type: 'block.status', data: {
         blockId: childId, parentId: run.blockId, taskId: task.id, title: task.title,
         use: 'flyt-blocks-core:work', status: outcome.status, dependsOn: task.dependsOn,
+        sessionId: identity.sessionId, profileId,
         ...(outcome.error ? { error: outcome.error } : {}),
       } });
       return { task, outcome };
@@ -452,6 +675,7 @@ export const TASK_GRAPH_SETTINGS = {
   type: 'object', additionalProperties: false,
   properties: {
     model: { type: 'string', description: 'Model used by the planner and generated workers.' },
+    workerProfile: { type: 'string', description: 'Reusable profile referenced by each generated task.' },
     modelTier: { title: 'Model tier', enum: ['free', 'economy', 'standard', 'frontier'], description: 'Stable cost/quality profile.' },
     modelFallbacks: { type: 'array', items: { type: 'string' }, maxItems: 3 },
     systemPrompt: {

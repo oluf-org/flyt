@@ -7,7 +7,11 @@
  * @module #kernel/seams/llm
  */
 import type { Message, Usage } from '../types.js';
+import type { JsonValue, ProviderReplay } from '../types.js';
 import type { LlmChunk, RouteRecord } from '../events.js';
+import type {
+  AttachmentBudget, ContextBudgetDecision, ModelCapabilityProfile,
+} from '../models/capabilities.js';
 
 /** One durable change in the provider/model attempt ladder for a request. */
 export interface LlmAttempt {
@@ -17,6 +21,22 @@ export interface LlmAttempt {
   resolvedModel?: string;
   status: 'started' | 'failed' | 'succeeded';
   error?: string;
+  retryDelayMs?: number;
+  reason?: string;
+}
+
+export interface StructuredOutputRequest {
+  name: string;
+  description?: string;
+  schema: JsonValue;
+  strict?: boolean;
+}
+
+export interface ReasoningRequest {
+  effort?: string;
+  mode?: string;
+  context?: string;
+  summary?: string;
 }
 
 /** One model request. */
@@ -31,9 +51,16 @@ export interface LlmRequest {
   tools?: readonly { name: string; description: string; parameters: unknown }[];
   temperature?: number;
   maxTokens?: number;
+  attachments?: readonly AttachmentBudget[];
+  structuredOutput?: StructuredOutputRequest;
+  reasoning?: ReasoningRequest;
   signal?: AbortSignal;
   /** Observability hook. The runner persists each callback before continuing. */
   onAttempt?: (attempt: LlmAttempt) => Promise<void> | void;
+  /** The exact requested/effective budget record, emitted before dispatch. */
+  onBudget?: (decision: ContextBudgetDecision) => Promise<void> | void;
+  /** Transport/retry telemetry from the provider adapter. */
+  onTelemetry?: (record: Record<string, JsonValue>) => Promise<void> | void;
 }
 
 /** A settled model response. */
@@ -41,6 +68,8 @@ export interface LlmResponse {
   content: string;
   reasoning?: string;
   toolCalls?: readonly { id: string; name: string; args: unknown }[];
+  structuredOutput?: JsonValue;
+  replay?: ProviderReplay;
   /** Provider-native tool markup that reached content instead of a parsed call.
    * Kept as evidence so the loop can request one native-call repair without
    * guessing arguments or pretending the attempted tool ran. */
@@ -58,6 +87,7 @@ export interface ModelInfo {
   available: boolean;
   /** Why it is unavailable, when it is. */
   unavailableReason?: string;
+  capability?: ModelCapabilityProfile;
 }
 
 /**
@@ -83,6 +113,8 @@ export interface LlmSeam {
   complete(request: LlmRequest): Promise<LlmResponse>;
   /** What this seam can reach right now, including what it cannot and why. */
   models(): Promise<ModelInfo[]>;
+  /** Complete attributed facts, including explicit unknowns. */
+  capability(model: string): Promise<ModelCapabilityProfile>;
 }
 
 declare module '@deepseek-ai/cordis' {

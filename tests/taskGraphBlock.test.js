@@ -7,7 +7,7 @@ import {
   createKernel, flytTools, sessionJsonl, provideSeam,
   executeTaskGraph, parseTaskGraphPlan, taskGraphRepairPrompt,
 } from '#kernel';
-import { stackWithGeneratedTasks } from '../core/kernelRunner.js';
+import { stackWithGeneratedTasks } from '../core/runProjection.js';
 
 const contract = tasks => JSON.stringify({ summary: 'Generated plan.', tasks });
 const task = (id, over = {}) => ({

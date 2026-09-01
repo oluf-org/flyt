@@ -1,0 +1,15 @@
+{
+  "native": { "id": "c1", "function": { "name": "read_file", "arguments": "{\"path\":\"README.md\"}" } },
+  "emptyArguments": { "id": "c2", "function": { "name": "list_tasks", "arguments": "" } },
+  "omittedArguments": { "id": "c3", "function": { "name": "list_tasks" } },
+  "stringifiedArguments": { "id": "c4", "function": { "name": "read_file", "arguments": "\"{\\\"path\\\":\\\"README.md\\\"}\"" } },
+  "caseMismatch": { "id": "c5", "function": { "name": "Read_File", "arguments": "{}" } },
+  "unknown": { "id": "c6", "function": { "name": "invented_tool", "arguments": "{}" } },
+  "partial": [
+    { "index": 1, "id": "b", "function": { "name": "write_file", "arguments": "{\"path\":" } },
+    { "index": 0, "id": "a", "function": { "name": "read_file", "arguments": "{\"path\":\"A\"}" } },
+    { "index": 1, "function": { "arguments": "\"B\",\"content\":\"x\"}" } }
+  ],
+  "encryptedReplay": [{ "type": "reasoning", "encrypted_content": "ciphertext" }],
+  "signedReplay": [{ "type": "thinking", "thinking": "opaque thought", "signature": "signature" }]
+}

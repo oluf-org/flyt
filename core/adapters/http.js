@@ -96,8 +96,11 @@ export async function* sseEvents(readable) {
 //   an extension one provider offers (OpenRouter's routing plugins) lives in
 //   that provider's file instead of leaking into the shared factory every
 //   provider uses.
-export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'Add it in Settings.', envKey = null, extendBody = null }) {
-  return async function openaiCompatibleAdapter({ model, system, prompt, messages, tools, maxTokens, apiKey, onText, signal, ...rest }) {
+export function openaiCompatible({
+  provider, baseUrl, headers = {}, keyHelp = 'Add it in Settings.', envKey = null,
+  extendBody = null, extractReplay = null,
+}) {
+  return async function openaiCompatibleAdapter({ model, system, prompt, messages, tools, maxTokens, apiKey, onText, signal, onTransport, ...rest }) {
     const key = apiKey || (envKey ? process.env[envKey] : null);
     if (!key) throw new Error(`${provider} API key is not set. ${keyHelp}`);
 
@@ -123,6 +126,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
 
     extendBody?.(body, { model, ...rest });
 
+    onTransport?.({ phase: 'dispatch', at: new Date().toISOString() });
     const res = await fetch(baseUrl, {
       method: 'POST',
       headers: {
@@ -135,6 +139,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       // with an AbortError when it fires; the stream loop below checks it too.
       ...(signal ? { signal } : {})
     });
+    onTransport?.({ phase: 'headers', at: new Date().toISOString(), status: res.status });
 
     if (!res.ok) {
       throw apiError(provider, res, await res.text());
@@ -157,6 +162,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       // `openrouter/auto`, so without this every retrospective, log line and
       // ledger entry would say "auto" and nobody could tell what ran.
       let resolvedModel = null;
+      const replayItems = [];
       const frags = new Map(); // tool_call index -> the call being assembled
 
       for await (const event of sseEvents(res.body)) {
@@ -214,6 +220,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
           });
           moved = true;
         }
+        if (Array.isArray(choice?.delta?.reasoning_details)) replayItems.push(...choice.delta.reasoning_details);
 
         if (moved) onText(renderTurn(text, frags, reasoning), {
           ...(toolInputEvents.length ? { toolInputEvents } : {}),
@@ -262,8 +269,12 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
           { transient: true }
         );
       }
+      const replay = replayItems.length
+        ? { provider: provider.toLowerCase().replaceAll(' ', ''), items: replayItems, required: true, protection: 'provider-dependent' }
+        : null;
       return {
         text, reasoning, usage, finishReason, resolvedModel,
+        ...(replay ? { replay } : {}),
         ...(unparsedToolCall ? { unparsedToolCall } : {}),
         message: {
           role: 'assistant',
@@ -278,6 +289,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
     if (!choice?.message) throw new Error(`${provider} returned no choices: ${JSON.stringify(data).slice(0, 300)}`);
     const unparsedToolCall = choice.message.tool_calls?.length
       ? null : unparsedToolDialect(choice.message.content);
+    const replay = extractReplay?.(choice.message) ?? null;
     return {
       text: choice.message.content ?? '',
       reasoning: typeof choice.message.reasoning === 'string' ? choice.message.reasoning : '',
@@ -286,6 +298,7 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
       // See the streaming branch: the Auto Router answers as a different model
       // than the one requested, and that is the only place it says which.
       resolvedModel: data.model ?? null,
+      ...(replay ? { replay } : {}),
       ...(unparsedToolCall ? { unparsedToolCall } : {}),
       message: choice.message
     };

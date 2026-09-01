@@ -91,6 +91,7 @@ function usageMeasurements(usage = {}, record = {}) {
     completionTokens: sum(usage, ['completion_tokens', 'output_tokens']),
     reasoningTokens: sum(detail, ['reasoning_tokens']) ?? sum(usage, ['reasoning_tokens']),
     cachedTokens: sum(usage.prompt_tokens_details, ['cached_tokens']) ?? sum(usage, ['cached_tokens']),
+    cacheWriteTokens: sum(usage.prompt_tokens_details, ['cache_write_tokens']) ?? sum(usage, ['cache_write_tokens']),
     costUsd: safeNumber(record.cost ?? usage.cost ?? usage.total_cost),
   };
 }
@@ -131,7 +132,15 @@ export function normalizeRunLog(projectId, runId, entry, monotonicMs = performan
         fallbackRung: entry.fallbackRung ?? 0, messages: entry.messages, promptChars: entry.promptChars,
         toolSchemasOffered: entry.toolNames ?? [], toolSchemaCount: entry.tools ?? 0,
         outputCeiling: entry.maxTokens, temperature: entry.temperature ?? null, effort: entry.effort ?? null,
-      }, measurements: { queueTimeMs: safeNumber(entry.queueTimeMs) } });
+        queuedAt: entry.queuedAt ?? null, dispatchAt: entry.dispatchAt ?? null,
+        headersAt: entry.headersAt ?? null, completedAt: entry.completedAt ?? null,
+      }, measurements: {
+        queueTimeMs: safeNumber(entry.queueTimeMs),
+        requestedOutputBudget: safeNumber(entry.requestedOutputBudget ?? entry.maxTokens),
+        effectiveOutputBudget: safeNumber(entry.effectiveOutputBudget ?? entry.maxTokens),
+        contextTokens: safeNumber(entry.contextTokens), contextLimit: safeNumber(entry.contextLimit),
+        contextUtilization: safeNumber(entry.contextUtilization),
+      } });
     const milestones = [
       ['llm.first_byte', entry.firstByteMs], ['llm.first_reasoning', entry.firstReasoningMs],
       ['llm.first_visible_content', entry.firstVisibleMs], ['llm.first_tool_input', entry.firstToolInputMs],
@@ -148,6 +157,8 @@ export function normalizeRunLog(projectId, runId, entry, monotonicMs = performan
         ok: entry.ok !== false, errorClass: entry.errorClass ?? (entry.ok === false ? 'model_error' : null),
         error: entry.error ?? null, nativeToolCalls: entry.toolCalls ?? 0,
         unparsedDialect: entry.unparsedToolCall ?? null,
+        firstByteAt: entry.firstByteAt ?? null, firstReasoningAt: entry.firstReasoningAt ?? null,
+        firstVisibleAt: entry.firstVisibleAt ?? null, firstToolCallAt: entry.firstToolCallAt ?? null,
       }, measurements: {
         durationMs: safeNumber(entry.attemptMs ?? entry.ms), totalDurationMs: safeNumber(entry.ms), visibleChars: safeNumber(entry.contentChars),
         reasoningChars: safeNumber(entry.reasoningChars), streamedChars: safeNumber(entry.streamedChars),
@@ -184,16 +195,38 @@ export function normalizeSessionEvent(projectId, runId, event) {
     : event.type === 'llm.response' ? 'llm.result'
     : event.type === 'tool.call' ? 'tool.call'
     : event.type === 'tool.result' ? 'tool.result'
+    : event.type === 'tool.state' ? 'tool.state'
+    : event.type === 'context.budget' ? 'llm.context_budget'
+    : event.type === 'context.checkpoint' ? 'compaction.checkpoint'
     : event.type === 'permission.decision' ? 'tool.approval'
     : event.type;
   const source = event.type === 'llm.response' && data.usage ? 'provider_reported' : 'harness_observed';
   const attributes = event.type === 'tool.call'
     ? { tool: data.call?.name ?? data.name ?? null, callId: data.call?.id ?? data.callId ?? null, ...structuralArgs(data.call?.arguments ?? data.args) }
     : clean(data);
+  const measurements = event.type === 'llm.response'
+    ? {
+        ...usageMeasurements(data.usage ?? {}, data),
+        requestedOutputBudget: safeNumber(data.requestedOutputBudget),
+        effectiveOutputBudget: safeNumber(data.effectiveOutputBudget),
+        toolCallRepairCount: safeNumber(data.toolCallRepairCount),
+        toolValidationCount: safeNumber(data.toolValidationCount),
+        tokensSinceDurableProgress: safeNumber(data.tokensSinceDurableProgress),
+        costSinceDurableProgress: safeNumber(data.costSinceDurableProgress),
+      }
+    : event.type === 'context.budget' ? {
+        requestedTokens: safeNumber(data.requested?.total), effectiveTokens: safeNumber(data.effective?.total),
+        contextLimit: safeNumber(data.contextLimit), contextUtilization: safeNumber(data.contextUtilization),
+        requestedOutputBudget: safeNumber(data.requestedOutput), effectiveOutputBudget: safeNumber(data.effectiveOutput),
+      }
+    : event.type === 'context.checkpoint' ? {
+        inputTokens: safeNumber(data.inputTokens), outputTokens: safeNumber(data.outputTokens),
+        compressionRatio: safeNumber(data.compressionRatio),
+      } : {};
   return envelope({
     projectId, runId, traceId: runId, blockId: data.blockId ?? null, step: data.step,
     at: event.at, kind, source, attributes,
-    measurements: event.type === 'llm.response' ? usageMeasurements(data.usage ?? {}, data) : {},
+    measurements,
   });
 }
 

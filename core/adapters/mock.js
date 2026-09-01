@@ -3,11 +3,18 @@
 // returns plausible, correctly-shaped output for that node type.
 import { abortError } from './http.js';
 
-export async function mockAdapter({ system, prompt, onText, signal }) {
+export async function mockAdapter({ system, prompt, messages = [], onText, signal }) {
   // RUN-CONTROL: honor the stop signal like a real adapter would (fetch +
   // stream checks), so stop() works against mock runs too.
   if (signal?.aborted) throw abortError();
   await sleepAbortable(600 + Math.random() * 900, signal); // simulate latency so the canvas animates
+  // The canonical kernel speaks the provider-neutral messages contract while
+  // the legacy runtime supplied separate system/prompt strings. Keep the mock
+  // honest on both front doors so offline end-to-end verification exercises
+  // the same adapter boundary as production providers.
+  system = String(system ?? messages.filter(message => message?.role === 'system')
+    .map(message => message.content ?? '').join('\n\n'));
+  prompt = String(prompt ?? [...messages].reverse().find(message => message?.role === 'user')?.content ?? '');
   let role = (system.match(/ROLE:\s*([\w-]+)/) ?? [])[1] ?? 'generic';
   // Also recognize explicit role in the prompt/context for flow aiSteps that put role in user message
   if (!role || role === 'generic') {

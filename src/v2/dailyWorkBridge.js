@@ -26,7 +26,6 @@ export async function readDailyRun(flyt, projectId, runId) {
   ]);
   return watchingFromRun(runId, snapshot, log);
 }
-
 /**
  * Apply one pushed kernel delta without touching disk again. Returns a resync
  * request only when a revision or event sequence proves that a message was
@@ -115,31 +114,4 @@ export function subscribeDailyRun(flyt, {
     if (applied.resync) { void resync(); return; }
     if (applied.watching !== current) onWatching(applied.watching);
   });
-}
-
-/** Launch the normal prompt path, including the first projectless prompt. */
-export async function launchDailyPrompt({
-  flyt, projectId, flowId, text, approvalMode = null, modeId = null,
-  overrides = {}, inputs = {}, hasDeclaredInputs = false,
-}) {
-  let projectPayload = null;
-  if (!projectId) {
-    projectPayload = await flyt.createProject(text);
-    projectId = projectPayload.opened;
-    await flyt.saveProjectState?.(projectId, { runFlowId: flowId, runModeId: modeId });
-  }
-  const launch = {
-    ...(modeId ? { modeId } : {}),
-    ...(Object.keys(overrides).length ? { overrides } : {}),
-    ...(hasDeclaredInputs ? { inputs } : {}),
-  };
-  const runId = await flyt.runFlow(
-    projectId, flowId, text, null, approvalMode,
-    Object.keys(launch).length ? launch : null,
-  );
-  const [watching, runs] = await Promise.all([
-    readDailyRun(flyt, projectId, runId),
-    flyt.listRuns(projectId),
-  ]);
-  return { projectId, projectPayload, runId, watching, runs: runs ?? [] };
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { reconcileStoredStackRuns } from '../core/kernelRunner.js';
+import { repairInterruptedSessions } from '#kernel';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-kernel-lifecycle-'));
 
@@ -22,14 +22,14 @@ const unfinished = id => [
   { seq: 3, at: '2026-01-01T00:00:02.000Z', type: 'block.status', data: { blockId: 'work', status: 'active' } },
 ];
 
-test('startup reconciliation closes a dead kernel run and removes stale active state', () => {
+test('startup repair closes a dead kernel run and removes stale active state', async () => {
   const root = tmp();
   writeRun(root, 'dead-run', unfinished('dead-run'));
   fs.writeFileSync(path.join(root, 'dead-run', 'live.json'), JSON.stringify({
     pid: 0x7ffffff0, host: os.hostname(), beatAt: Date.now(),
   }));
 
-  assert.deepEqual(reconcileStoredStackRuns(root), ['dead-run']);
+  assert.deepEqual(await repairInterruptedSessions(root), ['dead-run']);
   const events = fs.readFileSync(path.join(root, 'dead-run', 'session.jsonl'), 'utf8')
     .trim().split('\n').map(line => JSON.parse(line));
   assert.equal(events.at(-1).data.stage, 'interrupted');
@@ -40,16 +40,16 @@ test('startup reconciliation closes a dead kernel run and removes stale active s
   assert.equal(meta.blockStatus.work, 'pending');
   assert.equal(meta.currentBlockId, null);
   assert.equal(fs.existsSync(path.join(root, 'dead-run', 'live.json')), false);
-  assert.deepEqual(reconcileStoredStackRuns(root), [], 'reconciliation is idempotent');
+  assert.deepEqual(await repairInterruptedSessions(root), [], 'repair is idempotent');
 });
 
-test('startup reconciliation does not interrupt a run owned by a live process', () => {
+test('startup repair does not interrupt a run owned by a live process', async () => {
   const root = tmp();
   writeRun(root, 'live-run', unfinished('live-run'));
   fs.writeFileSync(path.join(root, 'live-run', 'live.json'), JSON.stringify({
     pid: process.pid, host: os.hostname(), beatAt: Date.now(),
   }));
-  assert.deepEqual(reconcileStoredStackRuns(root), []);
+  assert.deepEqual(await repairInterruptedSessions(root), []);
   const events = fs.readFileSync(path.join(root, 'live-run', 'session.jsonl'), 'utf8')
     .trim().split('\n').map(line => JSON.parse(line));
   assert.equal(events.at(-1).data.status, 'active');

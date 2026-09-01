@@ -3,12 +3,21 @@
 // BYO-key contract: the caller's key wins; OPENAI_API_KEY is only a shell
 // fallback (same pattern as the anthropic adapter).
 import { openaiCompatible } from './http.js';
+import { applyOpenAIRequest, openAIReplay, replayOpenAIMessage } from './transforms/openai.js';
 
 export const openaiAdapter = openaiCompatible({
   provider: 'OpenAI',
   baseUrl: 'https://api.openai.com/v1/chat/completions',
   keyHelp: 'Add it in Settings → Providers, or set OPENAI_API_KEY.',
-  envKey: 'OPENAI_API_KEY'
+  envKey: 'OPENAI_API_KEY',
+  extractReplay: openAIReplay,
+  extendBody(body, options) {
+    body.messages = body.messages.map(message => {
+      const { replay: _replay, handle: _handle, ...base } = message;
+      return { ...base, ...replayOpenAIMessage(message) };
+    });
+    applyOpenAIRequest(body, options);
+  },
 });
 
 // DESIGN-SPEC.md §6: OpenAI serves gpt-* chat models and the o-series

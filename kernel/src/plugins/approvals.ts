@@ -25,6 +25,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { PreToolDecision, ToolExecution } from '../events.js';
+import { evaluatePermission } from '../security/permissions.js';
 
 /** Ask a person. Resolving false, or never being provided, is a refusal. */
 export type AskHuman = (exec: ToolExecution, reason: string) => Promise<boolean>;
@@ -102,6 +103,16 @@ export function apply(ctx: Context, config: ApprovalsConfig = {}): () => void {
         decision: 'deny',
         reason: `"${tool.name}" is not in this block's ceiling`,
       };
+    }
+
+    // Resource policy is deliberately inside classification + ceiling. No
+    // saved approval or later allow can make an unreachable tool reachable.
+    if (exec.permissionPolicy) {
+      const resource = evaluatePermission(exec.permissionPolicy, {
+        action: tool.name, effect: tool.classification.effect, args: exec.call.args,
+      });
+      if (resource.decision === 'deny') return { decision: 'deny', reason: resource.reason };
+      if (resource.decision === 'ask') return ask(exec, `${tool.name}: ${resource.reason}`);
     }
 
     if (config.bypass?.includes(tool.name)) return next();

@@ -24,6 +24,18 @@ export interface Message {
   toolCallId?: string;
   /** For a `tool` message, the tool that produced it. */
   name?: string;
+  /** Durable artifact handle for a bounded tool preview. */
+  handle?: string;
+  /** Opaque provider-native items required to replay signed/encrypted reasoning. */
+  replay?: ProviderReplay;
+}
+
+/** Provider-native replay data. It is persisted verbatim and never interpreted by another provider. */
+export interface ProviderReplay {
+  provider: string;
+  items: JsonValue[];
+  required: boolean;
+  protection: 'none' | 'signed' | 'encrypted' | 'provider-dependent';
 }
 
 /** A model's request to run one tool. */
@@ -51,5 +63,6 @@ export interface Usage {
   completionTokens?: number;
   reasoningTokens?: number;
   cachedTokens?: number;
+  cacheWriteTokens?: number;
   costUsd?: number;
 }

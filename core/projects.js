@@ -17,11 +17,9 @@
 // with the projectless lander. Opening a folder or running from that lander is
 // what creates the next tab.
 //
-// The registry owns one RunStore + StackRunner per open project (created lazily,
-// permanent for the process so a closed tab's runner keeps executing, T13),
-// where per-project files live (T2a), tab lifecycle, and browser-style session
-// persistence into settings.json (T17). Engine wiring is injected via
-// `createRunner`, so this module stays testable without a live pipeline.
+// The registry owns one RunStore per known project and no executor. Canonical
+// live runs are process-scoped in RunController, so closing or reopening a tab
+// changes visibility without creating, replacing, or stopping execution.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -96,20 +94,20 @@ export class ProjectRegistry {
    * @param {string} opts.defaultRunsDir   app-root runs/ (the legacy scratch project's data, T3)
    * @param {string} opts.appDataDir       Electron userData path
    * @param {() => 'workspace'|'appdata'} opts.getStorage  T2a setting, read per open
-   * @param {(store: RunStore, projectId: string) => object} opts.createRunner
+   * @param {(projectId: string) => number} [opts.liveCount] process-local liveness provider
    * @param {() => void} [opts.onPersist]  called after any mutation worth saving
    * @param {(used: string[]) => string} [opts.pickColor]  the auto-assignment rule;
    *        default is uniform among template presets the other projects don't use
    */
-  constructor({ defaultRunsDir, appDataDir, getStorage, createRunner, onPersist, pickColor, telemetry = null }) {
+  constructor({ defaultRunsDir, appDataDir, getStorage, liveCount, onPersist, pickColor, telemetry = null }) {
     this.defaultRunsDir = defaultRunsDir;
     this.appDataDir = appDataDir;
     this.appProjectsDir = path.join(appDataDir, 'projects');
     this.getStorage = getStorage ?? (() => 'workspace');
-    this.createRunner = createRunner;
+    this.liveCount = liveCount ?? (() => 0);
     this.telemetry = telemetry;
     this.onPersist = onPersist ?? (() => {});
-    this.entries = new Map();   // id -> { id, kind, folder, appDir, workspaceRoot, name, store, runner }
+    this.entries = new Map();   // id -> { id, kind, folder, appDir, workspaceRoot, name, store }
     this.openIds = [];          // tab order, left to right
     this.activeId = null;       // null = projectless (L6): no tab open
     this.recents = [];          // bound folders only, most recent first
@@ -129,8 +127,8 @@ export class ProjectRegistry {
   #displayName(id, fallback) { return this.names[id] ?? fallback; }
 
   // Create (or find) the entry for a bound folder (or the legacy default).
-  // Entries are permanent for the process lifetime — a closed tab's runner keeps
-  // executing (T13), so reopening the folder reuses the same store (T5).
+  // Entries are permanent for the process lifetime, so reopening reuses the
+  // same store while RunController continues independently of tab visibility.
   #entryFor(folder) {
     const id = projectIdFor(folder);
     let entry = this.entries.get(id);
@@ -153,7 +151,6 @@ export class ProjectRegistry {
       workspaceRoot: resolved, // a bound tab IS the workspace (T19)
       name: this.#displayName(id, projectName(resolved)),
       store,
-      runner: this.createRunner(store, id)
     };
     this.entries.set(id, entry);
     return entry;
@@ -177,7 +174,6 @@ export class ProjectRegistry {
       workspaceRoot: path.join(appDir, 'workspace'),
       name: this.#displayName(id, slug),
       store,
-      runner: this.createRunner(store, id)
     };
     this.entries.set(id, entry);
     return entry;
@@ -216,7 +212,7 @@ export class ProjectRegistry {
    * A project this process can DRIVE but that is not a tab.
    *
    * The benchmark (DESIGN-SPEC.md §8) works a throwaway clone: it needs a store,
-   * a runner, a backlog and a ledger for that directory, and every command in
+   * a run store, a backlog and a ledger for that directory, and every command in
    * `core/api.js` resolves those through this registry. What it must not do is
    * join the user's session — a tab for a directory that will be deleted in
    * twenty minutes, stealing focus and sitting in recents afterwards, is a
@@ -230,8 +226,8 @@ export class ProjectRegistry {
   }
 
   /**
-   * Forget an attached project. Refuses an open tab, whose runner is permanent
-   * for the process by design (T13) — a closed tab keeps executing.
+   * Forget an attached project. Refuses an open tab; callers must also ensure
+   * the process-local controller has no live run for a detached project.
    */
   detach(id) {
     if (this.openIds.includes(id)) throw new Error(`"${id}" is an open tab; close it instead.`);
@@ -325,7 +321,7 @@ export class ProjectRegistry {
   adoptAppdata(id, folder) {
     if (!isAppdataId(id)) throw new Error('Only an app-managed project can be moved to a folder.');
     const old = this.get(id);
-    if (old.runner?.live?.size) {
+    if (this.liveCount(id) > 0) {
       throw new Error('This project has a run in progress. Wait for it to finish before moving it to a folder.');
     }
     const resolved = path.resolve(String(folder ?? ''));
@@ -373,8 +369,8 @@ export class ProjectRegistry {
     return { entry, oldId: id, newId };
   }
 
-  // Close a tab. The runner keeps executing (T13) — only the tab goes; the entry
-  // (store + runner) stays live in this process. Closing the last tab leaves the
+  // Close a tab. The controller keeps executing (T13) — only the tab goes; the
+  // store stays addressable in this process. Closing the last tab leaves the
   // projectless state (L6): activeId = null, an empty strip the lander fills.
   close(id) {
     const idx = this.openIds.indexOf(id);
@@ -435,7 +431,7 @@ export class ProjectRegistry {
         name: e.name,
         kind: e.kind,
         colorHex: this.colors[e.id] ?? null, // the project record's theme color
-        live: e.runner?.live?.size ?? 0,
+        live: this.liveCount(e.id),
         state: this.tabState[id] ?? {}
       };
     });

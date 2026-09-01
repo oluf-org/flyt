@@ -22,6 +22,7 @@ import type { SessionEvent } from '../seams/sessions.js';
 /** What the run folder's `meta.json` says. The same shape v1 wrote, in v2 nouns. */
 export interface RunMeta {
   runId: string;
+  name: string | null;
   createdAt: string;
   updatedAt: string;
   /** prompt | planning | awaiting_approval | awaiting_input | execution | done | failed | ... */
@@ -35,6 +36,22 @@ export interface RunMeta {
   approvalMode: string | null;
   /** Set when this run is a Loop worker's attempt at a backlog task. */
   loopTaskId: string | null;
+  conversationId: string | null;
+  parentRunId: string | null;
+  userMessage: string | null;
+  supervisorSummary: boolean;
+  requireLaunchable: boolean;
+  profile: string | null;
+  presetId: string | null;
+  model: string | null;
+  provider: string | null;
+  routing: JsonValue;
+  blockWorkers: JsonValue;
+  defaultFallbacks: JsonValue;
+  blockFallbacks: JsonValue;
+  tierWorkers: JsonValue;
+  level: string | null;
+  skills: JsonValue;
   /** blockId -> pending | active | done | failed | skipped. */
   blockStatus: Record<string, string>;
 }
@@ -89,6 +106,7 @@ function asRecord(value: unknown): Record<string, any> {
 function emptyMeta(runId: string): RunMeta {
   return {
     runId,
+    name: null,
     createdAt: '',
     updatedAt: '',
     stage: 'prompt',
@@ -99,6 +117,22 @@ function emptyMeta(runId: string): RunMeta {
     workspace: null,
     approvalMode: null,
     loopTaskId: null,
+    conversationId: null,
+    parentRunId: null,
+    userMessage: null,
+    supervisorSummary: true,
+    requireLaunchable: false,
+    profile: null,
+    presetId: null,
+    model: null,
+    provider: null,
+    routing: null,
+    blockWorkers: {},
+    defaultFallbacks: [],
+    blockFallbacks: {},
+    tierWorkers: {},
+    level: null,
+    skills: [],
     blockStatus: {},
   };
 }
@@ -135,8 +169,39 @@ export function projectRun(events: readonly SessionEvent[], runId: string): RunP
         meta.workspace = data.workspace ? String(data.workspace) : meta.workspace;
         meta.approvalMode = data.approvalMode ? String(data.approvalMode) : meta.approvalMode;
         meta.loopTaskId = data.loopTaskId ? String(data.loopTaskId) : meta.loopTaskId;
+        meta.conversationId = data.conversationId ? String(data.conversationId) : meta.conversationId;
+        meta.parentRunId = data.parentRunId ? String(data.parentRunId) : meta.parentRunId;
+        meta.userMessage = data.userMessage == null ? (typeof data.input === 'string' ? data.input : meta.userMessage) : String(data.userMessage);
+        meta.supervisorSummary = data.supervisorSummary !== false;
+        meta.requireLaunchable = Boolean(data.requireLaunchable);
+        meta.profile = data.profile ? String(data.profile) : meta.profile;
+        meta.presetId = data.presetId ? String(data.presetId) : meta.presetId;
+        meta.model = data.model ? String(data.model) : meta.model;
+        meta.provider = data.provider ? String(data.provider) : meta.provider;
+        if ('routing' in data) meta.routing = (data.routing ?? null) as JsonValue;
+        if ('blockWorkers' in data) meta.blockWorkers = (data.blockWorkers ?? {}) as JsonValue;
+        if ('defaultFallbacks' in data) meta.defaultFallbacks = (data.defaultFallbacks ?? []) as JsonValue;
+        if ('blockFallbacks' in data) meta.blockFallbacks = (data.blockFallbacks ?? {}) as JsonValue;
+        if ('tierWorkers' in data) meta.tierWorkers = (data.tierWorkers ?? {}) as JsonValue;
+        meta.level = data.level ? String(data.level) : meta.level;
+        if ('skills' in data) meta.skills = (data.skills ?? []) as JsonValue;
         if (typeof data.prompt === 'string') projection.prompt = data.prompt;
         else if (typeof data.input === 'string') projection.prompt = data.input;
+        break;
+
+      case 'run.named':
+        meta.name = data.name == null ? null : String(data.name);
+        break;
+
+      case 'run.reconfigured':
+        if ('model' in data) meta.model = data.model == null ? null : String(data.model);
+        if ('provider' in data) meta.provider = data.provider == null ? null : String(data.provider);
+        if ('routing' in data) meta.routing = (data.routing ?? null) as JsonValue;
+        if ('blockWorkers' in data) meta.blockWorkers = (data.blockWorkers ?? {}) as JsonValue;
+        if ('defaultFallbacks' in data) meta.defaultFallbacks = (data.defaultFallbacks ?? []) as JsonValue;
+        if ('blockFallbacks' in data) meta.blockFallbacks = (data.blockFallbacks ?? {}) as JsonValue;
+        if ('tierWorkers' in data) meta.tierWorkers = (data.tierWorkers ?? {}) as JsonValue;
+        if ('level' in data) meta.level = data.level == null ? null : String(data.level);
         break;
 
       case 'stack.resolved':
@@ -479,6 +544,7 @@ export function readLegacyRun(dir: string): RunProjection {
   const old = asRecord(readJson('meta.json'));
   Object.assign(projection.meta, {
     runId: String(old.runId ?? runId),
+    name: old.name == null ? null : String(old.name),
     createdAt: String(old.createdAt ?? ''),
     updatedAt: String(old.updatedAt ?? old.createdAt ?? ''),
     stage: String(old.stage ?? 'unknown'),

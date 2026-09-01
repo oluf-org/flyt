@@ -22,6 +22,12 @@ import type { JsonValue, Message, ToolCall, ToolResult, Usage } from '../types.j
 import type { SessionHandle } from '../seams/sessions.js';
 import type { LlmChunk, LlmSettled, StepRef } from '../events.js';
 import type { ToolDefinition } from '../seams/tools.js';
+import type { StructuredOutputRequest, ReasoningRequest } from '../seams/llm.js';
+import { normalizeToolCall, reconcileToolCallStates, terminalToolState, type ToolCallState } from '../tool-call-state.js';
+import type { PermissionPolicy } from '../security/permissions.js';
+import { executeCompatibleCalls } from '../tools/scheduler.js';
+import { ProgressDetector, type RepetitionEvidence } from '../tools/progress.js';
+import type { InterceptionRegistry } from '../plugins/interceptions.js';
 
 /**
  * How many steps one block gets before the run warns that it is taking longer
@@ -60,6 +66,8 @@ export interface LoopResult {
   reasoning?: string;
   /** Usage from the last response, so a block can diagnose token starvation. */
   usage?: Usage;
+  /** Schema-constrained provider result or synthetic submission payload. */
+  structuredOutput?: JsonValue;
   /** The message list as the log holds it, after the loop. */
   messages: Message[];
 }
@@ -85,6 +93,12 @@ export interface LoopOptions {
   tools?: readonly ToolDefinition[];
   /** The ceiling itself, carried onto each execution so the gate can read it. */
   ceiling?: readonly string[];
+  /** Resource-scoped rules beneath the static ceiling. */
+  permissionPolicy?: PermissionPolicy;
+  /** Bounded parallelism for compatible read-only calls in one response. */
+  toolConcurrency?: number;
+  /** Explicit attended decision required once repeated evidence is a clear loop. */
+  approveRepeatedLoop?: (evidence: RepetitionEvidence) => Promise<boolean>;
   maxSteps?: number;
   /** Warn at this many steps and continue. Further warnings use exponential
    * milestones so a long run stays visible without flooding the log. */
@@ -94,6 +108,8 @@ export interface LoopOptions {
   maxTokens?: number;
   /** Sampling temperature for bounded structural turns such as planning. */
   temperature?: number;
+  structuredOutput?: StructuredOutputRequest;
+  reasoning?: ReasoningRequest;
   /** A provider token ceiling is necessarily hard per request. When enabled,
    * a length-truncated response is logged, warned, and continued in a new
    * request instead of being mistaken for a finished block. */
@@ -175,10 +191,24 @@ function turnRepairInstruction(diagnosis: TurnRepairDiagnosis): string {
 export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   const {
     ctx, session, runId, blockId, turn, model, fallbackModels = [], system, input,
-    tools = [], ceiling = [], maxSteps, softMaxSteps = MAX_STEPS, maxTokens, temperature,
+    tools = [], ceiling = [], permissionPolicy, toolConcurrency = 4, approveRepeatedLoop,
+    maxSteps, softMaxSteps = MAX_STEPS, maxTokens, temperature,
+    structuredOutput, reasoning: reasoningRequest,
     continueOnLength = false, maxTurnRepairs = 2,
     toolLimits = {}, toolGuard, isolated = false, signal,
   } = options;
+
+  // A process restart never leaves a call looking live. Reconciliation is an
+  // explicit durable transition; the original call id is settled in place.
+  const priorEvents = [];
+  for await (const event of session.read()) priorEvents.push(event);
+  for (const call of reconcileToolCallStates(priorEvents, blockId)) {
+    if (terminalToolState(call.state)) continue;
+    await session.append({ type: 'tool.state', data: {
+      blockId, callId: call.callId, state: 'interrupted',
+      reason: `restart reconciliation settled a nonterminal ${call.state} call`, reconciled: true,
+    } });
+  }
 
   await session.append({ type: 'turn.start', data: { runId, turn, blockId } });
   ctx.emit('turn/start', { runId, turn });
@@ -195,6 +225,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   const continuedContent: string[] = [];
   let reasoning = '';
   let usage: Usage | undefined;
+  let structured: JsonValue | undefined;
   let finishReason = 'unknown';
   let stopped: StopReason = 'bound';
   let reason: string | undefined = maxSteps == null
@@ -204,7 +235,11 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   let stepsRun = 0;
   let nextSoftWarning = Math.max(1, Math.floor(softMaxSteps));
   const toolUses = new Map<string, number>();
+  const progress = new ProgressDetector();
   let turnRepairs = 0;
+  let toolValidationFailures = 0;
+  let tokensSinceDurableProgress = 0;
+  let costSinceDurableProgress = 0;
   // Once an ordered fallback has answered, prefer it for the rest of this
   // block turn. A tool-using response can need many follow-up steps; retrying a
   // rate-limited primary before every one adds minutes of identical failure.
@@ -238,9 +273,49 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     // "model-visible means logged" a property of the code rather than a rule
     // somebody has to keep: a message that is not in the log is not in the
     // request, because the request is the log.
-    const messages = await session.deriveMessages(undefined, isolated ? blockId : undefined);
+    let messages = await session.deriveMessages(undefined, isolated ? blockId : undefined);
     const callId = `${blockId}-${step}`;
-    const [requestModel, ...requestFallbacks] = routeModels;
+    let [requestModel, ...requestFallbacks] = routeModels;
+    let requestSchemas = schemas;
+    const interceptions = (ctx as typeof ctx & { interceptions?: InterceptionRegistry }).interceptions;
+    const traceInterception = async (trace: readonly { point: string; plugin: string; order: number; mutated: boolean; beforeHash: string; afterHash: string }[]) => {
+      for (const item of trace) await session.append({ type: 'plugin.interception', data: {
+        callId, blockId, step, ...item,
+      } });
+    };
+    if (interceptions) {
+      const preparedTools: typeof schemas = [];
+      for (const schema of requestSchemas) {
+        const prepared = await interceptions.apply('tool.definition.prepared', schema as unknown as JsonValue);
+        await traceInterception(prepared.trace);
+        const value = prepared.payload as Record<string, unknown>;
+        if (typeof value.name !== 'string' || typeof value.description !== 'string' || !value.parameters) {
+          throw new Error('A tool.definition.prepared hook produced an invalid tool definition');
+        }
+        preparedTools.push(value as unknown as typeof schema);
+      }
+      requestSchemas = preparedTools;
+      const assembled = await interceptions.apply('context.assembled', {
+        messages: messages as unknown as JsonValue,
+        tools: requestSchemas as unknown as JsonValue,
+      });
+      await traceInterception(assembled.trace);
+      const value = assembled.payload as { messages?: unknown; tools?: unknown };
+      if (Array.isArray(value.messages)) messages = value.messages as Message[];
+      if (Array.isArray(value.tools)) requestSchemas = value.tools as typeof schemas;
+
+      const prepared = await interceptions.apply('model.request.prepared', {
+        model: requestModel, fallbackModels: requestFallbacks,
+        messages: messages as unknown as JsonValue, tools: requestSchemas as unknown as JsonValue,
+        maxTokens: maxTokens ?? null, temperature: temperature ?? null,
+      });
+      await traceInterception(prepared.trace);
+      const request = prepared.payload as Record<string, unknown>;
+      if (typeof request.model === 'string' && request.model) requestModel = request.model;
+      if (Array.isArray(request.fallbackModels)) requestFallbacks = request.fallbackModels.filter((item): item is string => typeof item === 'string');
+      if (Array.isArray(request.messages)) messages = request.messages as Message[];
+      if (Array.isArray(request.tools)) requestSchemas = request.tools as typeof schemas;
+    }
     await session.append({
       type: 'step.prompt',
       data: {
@@ -250,7 +325,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
         // reader having to reconstruct the conversation by hand.
         content: {
           messages: messages as unknown as JsonValue,
-          tools: schemas.map(schema => schema.name),
+          tools: requestSchemas.map(schema => schema.name),
         } as unknown as JsonValue,
       },
     });
@@ -260,21 +335,45 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
         callId, model: requestModel, blockId, step,
         ...(requestModel !== model ? { configuredModel: model } : {}),
         ...(maxTokens ? { maxTokens } : {}),
-        tools: schemas.map(s => s.name), messages: messages.length,
+        tools: requestSchemas.map(s => s.name), messages: messages.length,
       },
     });
 
     const stream = ctx.llm.stream({
       model: requestModel, messages, signal,
       ...(requestFallbacks.length ? { fallbackModels: requestFallbacks } : {}),
-      ...(schemas.length ? { tools: schemas } : {}),
+      ...(requestSchemas.length ? { tools: requestSchemas } : {}),
       ...(maxTokens ? { maxTokens } : {}),
       ...(temperature !== undefined ? { temperature } : {}),
+      ...(structuredOutput ? { structuredOutput } : {}),
+      ...(reasoningRequest ? { reasoning: reasoningRequest } : {}),
       onAttempt: async attempt => {
         await session.append({
           type: 'llm.attempt',
           data: { callId, blockId, step, ...attempt },
         });
+      },
+      onBudget: async decision => {
+        await session.append({ type: 'context.budget', data: {
+          callId, blockId, step,
+          requested: decision.requested as unknown as JsonValue,
+          effective: decision.effective as unknown as JsonValue,
+          contextLimit: decision.contextLimit,
+          contextUtilization: decision.contextUtilization,
+          requestedOutput: decision.requestedOutput,
+          effectiveOutput: decision.effectiveOutput,
+          resolutions: decision.resolutions as unknown as JsonValue,
+          actions: decision.actions as unknown as JsonValue,
+        } });
+        if (decision.checkpoint) await session.append({ type: 'context.checkpoint', data: {
+          callId, blockId, step, content: decision.checkpoint,
+          inputTokens: decision.requested.total,
+          outputTokens: decision.effective.total,
+          compressionRatio: Number((decision.effective.total / decision.requested.total).toFixed(6)),
+        } });
+      },
+      onTelemetry: async record => {
+        await session.append({ type: 'llm.telemetry', data: { callId, blockId, step, ...record } });
       },
     });
     let streamText = '';
@@ -334,10 +433,28 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     content = answer.content ?? '';
     reasoning = answer.reasoning ?? '';
     usage = answer.usage;
+    structured = answer.structuredOutput;
     finishReason = answer.finishReason ?? 'unknown';
-    const calls: ToolCall[] = (answer.toolCalls ?? []).map(c => ({
-      id: c.id, name: c.name, args: (c.args ?? null) as JsonValue,
-    }));
+    const offeredNames = requestSchemas.map(schema => schema.name);
+    let calls: ToolCall[] = (answer.toolCalls ?? []).map(c => normalizeToolCall({
+      id: c.id, name: c.name, args: (c.args ?? {}) as JsonValue,
+    }, offeredNames));
+    if (interceptions) {
+      const hooked: ToolCall[] = [];
+      for (const call of calls) {
+        const normalized = await interceptions.apply('tool.call.normalized', call as unknown as JsonValue);
+        await traceInterception(normalized.trace);
+        const value = normalized.payload as Record<string, unknown>;
+        hooked.push(normalizeToolCall({
+          id: typeof value.id === 'string' ? value.id : call.id,
+          name: typeof value.name === 'string' ? value.name : call.name,
+          args: (value.args ?? call.args) as JsonValue,
+        }, offeredNames));
+      }
+      calls = hooked;
+    }
+    tokensSinceDurableProgress += (answer.usage?.promptTokens ?? 0) + (answer.usage?.completionTokens ?? 0);
+    costSinceDurableProgress += answer.usage?.costUsd ?? 0;
 
     await session.append({
       type: 'llm.response',
@@ -345,11 +462,19 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
         callId, blockId,
         content,
         ...(answer.reasoning ? { reasoning: answer.reasoning } : {}),
+        ...(answer.replay ? { replay: answer.replay as unknown as JsonValue } : {}),
+        ...(structured !== undefined ? { structuredOutput: structured } : {}),
         ...(calls.length ? { toolCalls: calls as unknown as JsonValue } : {}),
         ...(answer.unparsedToolCall ? { unparsedToolCall: answer.unparsedToolCall } : {}),
         finishReason,
         ...(answer.usage ? { usage: answer.usage as unknown as JsonValue } : {}),
         ...(answer.route ? { route: answer.route as unknown as JsonValue } : {}),
+        requestedOutputBudget: maxTokens ?? null,
+        effectiveOutputBudget: null,
+        toolCallRepairCount: turnRepairs,
+        toolValidationCount: toolValidationFailures,
+        tokensSinceDurableProgress,
+        costSinceDurableProgress,
       },
     });
 
@@ -374,7 +499,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       continue;
     }
 
-    const repair = !calls.length && tools.length
+    const repair = structured === undefined && !calls.length && tools.length
       ? diagnoseTurnRepair(content, schemas.map(schema => schema.name), answer.unparsedToolCall)
       : null;
     if (repair) {
@@ -412,8 +537,19 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       break;
     }
 
+    // State/call events are committed in model call order before any body can
+    // finish. Safe reads may execute out of order; results below are appended
+    // only after the scheduler restores this order.
     for (const call of calls) {
+      await session.append({ type: 'tool.state', data: { callId: call.id, blockId, state: 'received' } });
+      await session.append({ type: 'tool.state', data: {
+        callId: call.id, blockId, state: 'normalized', name: call.name, args: call.args,
+      } });
       await session.append({ type: 'tool.call', data: { callId: call.id, blockId, name: call.name, args: call.args } });
+    }
+    const results = await executeCompatibleCalls(
+      calls.map(call => ({ call, tool: ctx.tools.get(call.name) })),
+      async ({ call }) => {
       // The ONE path. `ctx.tools.execute` dispatches `tool/call`, then the
       // `tools/pre-execute` gate, then the body, then `tools/post-execute` —
       // so a refusal comes back as a result the model can read rather than as
@@ -426,21 +562,85 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
           content: `Refused: ${call.name} has already used its ${limit}-call budget in this block. Make a reasonable explicit assumption and finish the deliverable.`,
           error: `${call.name} call budget exhausted`,
         };
+        await session.append({ type: 'tool.state', data: {
+          callId: call.id, blockId, state: 'failed', ...(result.error ? { reason: result.error } : {}),
+        } });
       } else {
         toolUses.set(call.name, used + 1);
         const guarded = toolGuard?.(call);
-        result = guarded
-          ? { content: `Refused: ${guarded}`, error: `${call.name} call refused by this block` }
-          : await ctx.tools.execute({ ...ref, call, ceiling, ...(signal ? { signal } : {}) });
+        if (guarded) {
+          result = { content: `Refused: ${guarded}`, error: `${call.name} call refused by this block` };
+          await session.append({ type: 'tool.state', data: {
+            callId: call.id, blockId, state: 'failed', ...(result.error ? { reason: result.error } : {}),
+          } });
+        } else {
+          result = await ctx.tools.execute({
+            ...ref, call, ceiling, ...(signal ? { signal } : {}),
+            ...(permissionPolicy ? { permissionPolicy } : {}),
+            onState: async transition => {
+              if (transition.diagnostics?.length) toolValidationFailures += 1;
+              await session.append({ type: 'tool.state', data: {
+                blockId, callId: transition.callId, state: transition.state,
+                ...(transition.reason ? { reason: transition.reason } : {}),
+                ...(transition.diagnostics ? { diagnostics: transition.diagnostics } : {}),
+              } });
+            },
+          });
+        }
       }
+      return result;
+    }, toolConcurrency);
+
+    let clearLoop: RepetitionEvidence | undefined;
+    for (let index = 0; index < calls.length; index++) {
+      const call = calls[index];
+      const result = results[index];
       await session.append({
         type: 'tool.result',
         data: {
           callId: call.id, blockId, name: call.name,
           content: result.content ?? '',
+          ...(result.handle ? { handle: result.handle } : {}),
           ...(result.error ? { error: result.error } : {}),
+          durableProgress: !result.error && ctx.tools.get(call.name)?.classification?.effect !== 'read',
         },
       });
+      if (!result.error && ctx.tools.get(call.name)?.classification?.effect !== 'read') {
+        progress.durableProgress();
+        tokensSinceDurableProgress = 0;
+        costSinceDurableProgress = 0;
+      }
+      const repeated = progress.record(call, Boolean(result.error), tokensSinceDurableProgress);
+      if (repeated.warning) {
+        await session.append({ type: 'tool.repetition', data: {
+          blockId, callId: call.id, name: call.name, args: call.args,
+          fingerprint: repeated.fingerprint, count: repeated.count,
+          failureCount: repeated.failureCount, tokens: repeated.tokensSinceDurableProgress,
+          durableStateChanged: repeated.durableStateChanged, clearLoop: repeated.clearLoop,
+        } });
+        if (!repeated.clearLoop) await session.append({ type: 'message.system', data: {
+          blockId,
+          content: `You repeated the identical ${call.name} call ${repeated.count} times. Before calling it again, explain what hypothesis changed and why the same input can now produce progress.`,
+        } });
+      }
+      if (repeated.clearLoop) clearLoop = repeated;
+    }
+
+    if (clearLoop) {
+      const allowed = approveRepeatedLoop ? await approveRepeatedLoop(clearLoop) : false;
+      await session.append({ type: 'permission.decision', data: {
+        blockId, callId: clearLoop.call.id, kind: 'repeated_tool_loop',
+        decision: allowed ? 'allow' : 'deny', count: clearLoop.count,
+        failureCount: clearLoop.failureCount, tokens: clearLoop.tokensSinceDurableProgress,
+        durableStateChanged: clearLoop.durableStateChanged,
+      } });
+      if (!allowed) {
+        stopped = 'vetoed';
+        reason = `Repeated identical ${clearLoop.call.name} calls formed a clear loop; permission to continue was not granted.`;
+        await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
+        ctx.emit('step/end', ref, settled);
+        break;
+      }
     }
 
     await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
@@ -474,6 +674,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     finishReason,
     ...(reasoning ? { reasoning } : {}),
     ...(usage ? { usage } : {}),
+    ...(structured !== undefined ? { structuredOutput: structured } : {}),
     messages,
   };
 }

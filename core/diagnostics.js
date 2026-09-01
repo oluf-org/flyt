@@ -43,15 +43,149 @@ const GATE_MEANING = {
   escalation: 'an evaluation concluded a human has to decide'
 };
 
-/**
- * Explain one run: what it was doing, where it stopped, and what the model
- * calls at that point actually did.
- *
- * @param {RunStore} store
- * @param {string} runId
- * @returns {object} a structured explanation (see `summary` for the prose)
- */
-export function explainRun(store, runId) {
+const readJson = file => {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+};
+
+/** Read the canonical record without depending on the live kernel host. */
+export function readCanonicalEvidence(runsRoot, runId, { interactions = [] } = {}) {
+  const dir = path.join(runsRoot, runId);
+  const file = path.join(dir, 'session.jsonl');
+  const events = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).flatMap(line => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+  const meta = readJson(path.join(dir, 'meta.json')) ?? {};
+  const stack = readJson(path.join(dir, 'stack.json'));
+  const calls = events.filter(event => event.type === 'llm.request' || event.type === 'llm.response'
+    || event.type === 'llm.attempt' || event.type === 'llm.telemetry');
+  const tools = events.filter(event => event.type === 'tool.call' || event.type === 'tool.state'
+    || event.type === 'tool.result');
+  const blocks = events.filter(event => event.type === 'block.status' || event.type === 'block.output');
+  return { kind: 'canonical', runId, meta, events, calls, tools, stack, blocks, interactions };
+}
+
+/** Preserve the historical reader behind an explicit migration boundary. */
+export function readLegacyEvidence(store, runId) {
+  return { kind: 'legacy', explanation: explainLegacyRun(store, runId) };
+}
+
+/** Turn either storage reader's evidence into the stable diagnostic shape. */
+export function explainEvidence(evidence) {
+  if (evidence.kind === 'legacy') return evidence.explanation;
+  const { runId, meta, events, interactions = [] } = evidence;
+  const status = new Map();
+  const requests = new Map();
+  const responses = new Map();
+  const attempts = [];
+  const toolCalls = new Map();
+  const toolResults = new Map();
+  let error = meta.error ?? null;
+  let errorBlock = null;
+  for (const event of events) {
+    const data = event.data ?? {};
+    if (event.type === 'block.status' && data.blockId) status.set(String(data.blockId), String(data.status ?? 'pending'));
+    if (event.type === 'run.error') { error = String(data.error ?? error ?? 'unknown error'); errorBlock = data.blockId ?? null; }
+    if (event.type === 'llm.request' && data.callId) requests.set(String(data.callId), event);
+    if (event.type === 'llm.response' && data.callId) responses.set(String(data.callId), event);
+    if (event.type === 'llm.attempt') attempts.push(event);
+    if (event.type === 'tool.call' && data.callId) toolCalls.set(String(data.callId), event);
+    if (event.type === 'tool.result' && data.callId) toolResults.set(String(data.callId), event);
+  }
+  const unsettled = [...requests].filter(([callId]) => !responses.has(callId));
+  const failedTools = [...toolCalls].filter(([callId]) => {
+    const result = toolResults.get(callId)?.data ?? {};
+    return !toolResults.has(callId) || Boolean(result.error) || result.ok === false;
+  });
+  const ids = new Set([
+    ...[...status].filter(([, value]) => BLOCKING.has(value)).map(([id]) => id),
+    ...(errorBlock ? [String(errorBlock)] : []),
+    ...unsettled.map(([, event]) => String(event.data?.blockId ?? '')).filter(Boolean),
+    ...failedTools.map(([, event]) => String(event.data?.blockId ?? '')).filter(Boolean),
+  ]);
+  const nodes = [...ids].map(node => {
+    const nodeRequests = [...requests.values()].filter(event => String(event.data?.blockId ?? '') === node);
+    const nodeResponses = nodeRequests.flatMap(request => responses.has(String(request.data.callId))
+      ? [responses.get(String(request.data.callId))] : []);
+    const nodeTools = [...toolCalls].filter(([, event]) => String(event.data?.blockId ?? '') === node);
+    const nodeUnsettled = nodeRequests.filter(request => !responses.has(String(request.data.callId)));
+    const usage = nodeResponses.reduce((total, event) => {
+      const row = event.data?.usage ?? {};
+      total.prompt += Number(row.promptTokens ?? row.prompt_tokens ?? 0);
+      total.completion += Number(row.completionTokens ?? row.completion_tokens ?? 0);
+      return total;
+    }, { prompt: 0, completion: 0 });
+    const last = nodeResponses.at(-1)?.data ?? null;
+    return {
+      node,
+      status: status.get(node) ?? (nodeUnsettled.length ? 'active' : 'failed'),
+      traced: true,
+      ...(nodeUnsettled.length ? { inFlight: true, runningForMs: null } : {}),
+      role: null,
+      model: last?.model ?? nodeRequests.at(-1)?.data?.model ?? null,
+      error: node === String(errorBlock ?? '') ? error : null,
+      calls: {
+        total: nodeRequests.length, failed: 0,
+        truncated: nodeResponses.filter(event => event.data?.finishReason === 'length').length,
+        emptyTurns: 0, transientRetries: attempts.filter(event => event.data?.blockId === node).length,
+        toolCalls: nodeTools.length, contentChars: nodeResponses.reduce((n, event) => n + String(event.data?.content ?? '').length, 0),
+        reasoningChars: nodeResponses.reduce((n, event) => n + Number(event.data?.reasoningChars ?? 0), 0),
+        reasoningShare: null, totalMs: nodeResponses.reduce((n, event) => n + Number(event.data?.durationMs ?? 0), 0),
+        slowestMs: nodeResponses.reduce((n, event) => Math.max(n, Number(event.data?.durationMs ?? 0)), 0),
+        usage,
+      },
+      lastCall: last,
+      problems: [],
+      suggestions: nodeUnsettled.length
+        ? ['A model request has no matching response (NEVER_RETURNED). The process may have ended or the provider call never settled.']
+        : [],
+    };
+  });
+  const byTool = new Map();
+  for (const [callId, event] of toolCalls) {
+    const name = String(event.data?.name ?? 'tool');
+    const row = byTool.get(name) ?? { name, calls: 0, failed: 0 };
+    row.calls += 1;
+    const result = toolResults.get(callId)?.data ?? {};
+    if (!toolResults.has(callId) || result.error || result.ok === false) row.failed += 1;
+    byTool.set(name, row);
+  }
+  const stage = String(meta.stage ?? [...events].reverse().find(event => event.type === 'run.stage')?.data?.stage ?? 'unknown');
+  const asking = interactions.find(item => item.kind === 'question');
+  const approval = interactions.find(item => item.kind === 'approval');
+  return {
+    runId, stage, flow: meta.stackName ?? meta.stackId ?? null, error,
+    ...(asking ? { asking: { node: asking.blockId ?? null, title: asking.blockId ?? null, questions: [asking], durable: false } } : {}),
+    ...(approval ? { gate: { kind: 'tool', meaning: GATE_MEANING.tool, node: approval.blockId ?? null,
+      title: approval.blockId ?? null, tool: approval.tool ?? null, reason: approval.reason ?? null, durable: false } } : {}),
+    startedAt: meta.createdAt ?? events[0]?.at ?? null,
+    updatedAt: meta.updatedAt ?? events.at(-1)?.at ?? null,
+    verdict: stage === 'done' ? 'completed' : stage === 'failed' ? 'failed'
+      : stage === 'interrupted' ? 'interrupted (NEVER_RETURNED evidence may remain)'
+        : interactions.length ? 'waiting for attended input (process-local)' : nodes.some(node => node.inFlight) ? 'still running' : stage,
+    nodes,
+    signals: {
+      modelCalls: requests.size, modelMs: [...responses.values()].reduce((n, event) => n + Number(event.data?.durationMs ?? 0), 0),
+      toolCalls: toolCalls.size, tools: [...byTool.values()].sort((a, b) => b.calls - a.calls),
+      transientRetries: attempts.length, emptyTurns: 0,
+      truncatedOutputs: [...responses.values()].filter(event => event.data?.finishReason === 'length').length,
+      nodeRestarts: events.filter(event => event.type === 'run.reconfigured').length,
+      usd: [...responses.values()].reduce((n, event) => n + Number(event.data?.usage?.cost ?? 0), 0),
+      unsettledRequests: unsettled.map(([callId, event]) => ({ callId, blockId: event.data?.blockId ?? null })),
+      providerAttempts: attempts.map(event => event.data),
+    },
+    suggestions: [...new Set(nodes.flatMap(node => node.suggestions))],
+  };
+}
+
+/** Dispatch diagnostics by authoritative storage format. */
+export function explainRun(store, runId, { interactions = [] } = {}) {
+  const session = path.join(store.runDir(runId), 'session.jsonl');
+  return explainEvidence(fs.existsSync(session)
+    ? readCanonicalEvidence(store.rootDir, runId, { interactions })
+    : readLegacyEvidence(store, runId));
+}
+
+function explainLegacyRun(store, runId) {
   const meta = store.readMeta(runId);
   if (!meta) throw new Error(`No run "${runId}" in this project.`);
   const log = store.readLog(runId) ?? [];

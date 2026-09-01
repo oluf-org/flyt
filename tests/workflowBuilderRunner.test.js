@@ -137,7 +137,7 @@ test('a failed Fable planner can restart only dispatch and keep the completed re
   assert.match(failed.meta.error, /4094 of 4096 completion tokens/);
   assert.deepEqual(seen.slice(1, 5).map(request => request.maxTokens), [61_440, 81_920, 81_920, 81_920]);
 
-  await api.invoke('run:restartNode', { projectId, runId: started.runId, nodeId: 'dispatch' });
+  await api.invoke('run:restartBlock', { projectId, runId: started.runId, blockId: 'dispatch' });
   const recovered = await waitForAsync(async () => {
     const current = await api.invoke('run:snapshot', { projectId, runId: started.runId });
     return current.meta.stage === 'done' ? current : null;

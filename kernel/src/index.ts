@@ -20,7 +20,18 @@ export * from './stack/index.js';
 export * from './blocks/types.js';
 export * from './blocks/run.js';
 export * from './session/jsonl.js';
+export * from './session/events.js';
 export * from './session/projection.js';
+export * from './session/children.js';
+export * from './session/index.js';
+export * from './fs/transactional-patches.js';
+export * from './api/contract.js';
+export * from './config/layers.js';
+export * from './plugins/interceptions.js';
+export * from './security/permissions.js';
+export * from './workers/profiles.js';
+export * from './tools/scheduler.js';
+export * from './tools/progress.js';
 export * as sessionJsonl from './plugins/session-jsonl.js';
 export * as flytTools from './plugins/tools.js';
 export * as flytApprovals from './plugins/approvals.js';
@@ -37,14 +48,25 @@ export * as flytBlocksCore from './plugins/blocks-core.js';
 export * as flytBlocksJudgement from './plugins/blocks-judgement.js';
 export * as flytBlocksInquiry from './plugins/blocks-inquiry.js';
 export * as flytBlocksLoop from './plugins/blocks-loop.js';
+export * as flytWorkerProfiles from './plugins/worker-profiles.js';
 export {
-  taskGraphBlock, executeTaskGraph, parseTaskGraphPlan, taskGraphRepairPrompt, PARALLELISM_LEVELS,
+  taskGraphBlock, executeTaskGraph, parseTaskGraphPlan, taskGraphRepairPrompt, degradeTaskGraphPlan,
+  TASK_GRAPH_SCHEMA, PARALLELISM_LEVELS,
 } from './plugins/blocks-task-graph.js';
 export {
   workBlock, researchBlock,
   LOOP_CEILING, RESEARCH_CEILING, WORK_SYSTEM,
 } from './plugins/blocks-core.js';
 export { routeOf } from './plugins/llm-adapters.js';
+export {
+  ModelCapabilityRegistry, defaultModelCapabilityRegistry, unknownCapability, manageContextBudget,
+} from './models/capabilities.js';
+export { TOOL_CALL_STATES, assertToolTransition, normalizeToolCall, reconcileToolCallStates, terminalToolState } from './tool-call-state.js';
+export type {
+  Fact, FactConfidence, ModelCapabilityProfile, RequestValueResolution,
+  ContextBudgetBreakdown, ContextBudgetDecision, ContextPolicyAction,
+} from './models/capabilities.js';
+export type { ToolCallState, ToolStateTransition, ReconciledToolCall } from './tool-call-state.js';
 export { StackRunner } from './plugins/stack-runner.js';
 export type { StackSource, StackRunnerConfig } from './plugins/stack-runner.js';
 export { BlockRegistry, missingBlocks } from './plugins/blocks.js';

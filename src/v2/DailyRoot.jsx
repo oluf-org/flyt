@@ -546,7 +546,7 @@ export default function DailyRoot() {
           if (!projectId || !runId || !blockId || retryBusy) return;
           setRetryBusy(true); setRetryError(''); setError('');
           try {
-            await window.flyt.restartNode(projectId, runId, blockId, '');
+            await window.flyt.restartBlock(projectId, runId, blockId, '');
             await watchRun(projectId, runId);
             await refreshRuns(projectId);
           } catch (err) {

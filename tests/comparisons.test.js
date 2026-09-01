@@ -1,16 +1,13 @@
 // DECISIONS.md D27 — comparison records + compareGroup provenance.
 // A comparison is a persisted relationship between two runs in one project;
 // the record lives in comparisons/<id>.json (verdict slot reserved for P3),
-// and both runs carry meta.compareGroup so siblings are discoverable from
-// either side.
+// and run projections are joined with it at read time rather than stamped.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RunStore } from '../core/state.js';
-import { StackRunner } from '../core/stackRunner.js';
-import { makeStore, setScript, testConfig, waitForStage, makeFlow, node, edge } from './helpers.js';
 
 // A store whose comparisons/ dir lands inside the temp dir (sibling of runs/).
 function makeProjectStore() {
@@ -24,7 +21,7 @@ function twoRuns(store) {
   return [a, b];
 }
 
-test('saveComparison writes the record with a null verdict slot and stamps both runs', () => {
+test('saveComparison writes the project-level record without mutating run projections', () => {
   const store = makeProjectStore();
   const [a, b] = twoRuns(store);
   const rec = store.saveComparison({ runIds: [a, b], origin: 'launch' });
@@ -35,15 +32,15 @@ test('saveComparison writes the record with a null verdict slot and stamps both 
   assert.equal(rec.verdict, null); // P3 lands the judge verdict here
   assert.ok(rec.createdAt);
 
-  // The file is on disk under comparisons/, and both metas point at the group.
+  // The file is on disk under comparisons/, and neither run projection is a
+  // second writable source for the relationship.
   const onDisk = JSON.parse(fs.readFileSync(store.comparisonPath(rec.id), 'utf8'));
   assert.deepEqual(onDisk, rec);
-  assert.deepEqual(store.readMeta(a).compareGroup, { id: rec.id, label: 'A' });
-  assert.deepEqual(store.readMeta(b).compareGroup, { id: rec.id, label: 'B' });
+  assert.equal(store.readMeta(a).compareGroup, undefined);
+  assert.equal(store.readMeta(b).compareGroup, undefined);
 
   assert.deepEqual(store.listComparisons(), [rec]);
 });
-
 test('saveComparison validates the pair and the origin', () => {
   const store = makeProjectStore();
   const [a] = twoRuns(store);
@@ -53,14 +50,14 @@ test('saveComparison validates the pair and the origin', () => {
   assert.throws(() => store.saveComparison({ runIds: [a, 'b'], origin: 'sweep' }), /Unknown comparison origin/);
 });
 
-test('an existing group stamp wins; update preserves createdAt and verdict', () => {
+test('updating one comparison preserves its createdAt and verdict', () => {
   const store = makeProjectStore();
   const [a, b] = twoRuns(store);
   const first = store.saveComparison({ runIds: [a, b], origin: 'launch' });
   const second = store.saveComparison({ runIds: [a, b], origin: 'manual' });
-  // A different pairing gets its own id; the meta stamp stays with the first.
+  // A different pairing gets its own id; neither one stamps run meta.
   assert.notEqual(first.id, second.id);
-  assert.equal(store.readMeta(a).compareGroup.id, first.id);
+  assert.equal(store.readMeta(a).compareGroup, undefined);
 
   // Updating the same record (P3 will do this with a verdict) keeps history.
   const p = store.comparisonPath(first.id);
@@ -78,37 +75,4 @@ test('listComparisons is newest-first and tolerates a missing dir; delete cleans
   store.saveComparison({ runIds: [a, b], origin: 'manual' });
   store.deleteComparisonsFor(a);
   assert.deepEqual(store.listComparisons(), []);
-});
-
-// --- runner.start writes compareGroup into run meta -------------------------
-
-function cmpFlow() {
-  return makeFlow(
-    [node('input', 'input', { text: 'brief' }),
-     node('step', 'aiStep', { role: 'custom', title: 'Step' }),
-     node('output', 'output')],
-    [edge('input', 'step'), edge('step', 'output')]);
-}
-
-test('start() records compareGroup in meta when given, omits it otherwise', async () => {
-  const store = makeStore();
-  setScript(() => 'ok');
-  const runner = new StackRunner(store, testConfig());
-
-  const a = runner.start(cmpFlow(), { userInput: 'brief', compareGroup: { id: 'cmp-x', label: 'A' } });
-  await waitForStage(store, a, ['done', 'failed']);
-  assert.deepEqual(store.readMeta(a).compareGroup, { id: 'cmp-x', label: 'A' });
-
-  const b = runner.start(cmpFlow(), { userInput: 'brief' });
-  await waitForStage(store, b, ['done', 'failed']);
-  assert.equal(store.readMeta(b).compareGroup, undefined);
-});
-
-test('start() normalizes a bogus label to A', async () => {
-  const store = makeStore();
-  setScript(() => 'ok');
-  const runner = new StackRunner(store, testConfig());
-  const runId = runner.start(cmpFlow(), { userInput: 'brief', compareGroup: { id: 'cmp-y', label: 'C' } });
-  await waitForStage(store, runId, ['done', 'failed']);
-  assert.deepEqual(store.readMeta(runId).compareGroup, { id: 'cmp-y', label: 'A' });
 });

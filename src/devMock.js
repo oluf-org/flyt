@@ -507,6 +507,7 @@ const mockProjects = {
 // The mock's snapshot push channel (see onRunUpdate). Bumping the rev keeps the
 // renderer's stale-push guards happy without a diff engine behind them.
 const pushListeners = new Set();
+const mockSessionEvents = new Map();
 let mockRev = 0;
 const pushRun = runId => {
   const full = snapshots[runId];
@@ -717,6 +718,7 @@ export function installDevMock() {
     // Synthesize a plausible in-order log from a finished mock run's flow, so the
     // replay scrubber can be previewed in the browser dev shell.
     readRunLog: async (_pid, id) => {
+      if (mockSessionEvents.has(id)) return structuredClone(mockSessionEvents.get(id));
       const snap = snapshots[id];
       if (!snap?.flow) return [];
       const log = [];
@@ -734,8 +736,6 @@ export function installDevMock() {
       }
       return log;
     },
-    approvePlan: async () => {},
-    rejectPlan: async () => {},
     // No OS to nudge in the browser shell — the gate dialog itself is visible.
     signalApprovalGate: async () => {},
     resumeRun: async (_pid, runId) => {
@@ -781,7 +781,7 @@ export function installDevMock() {
     // re-pin (D39), and a mock that swallowed it would look exactly like the
     // stale-bridge case the renderer now warns about. So it applies the pin to
     // the fixture, rewinds the node, and echoes the pin back like the engine.
-    restartNode: async (_pid, runId, nodeId, _guidance, worker = null) => {
+    restartBlock: async (_pid, runId, nodeId, _guidance, worker = null) => {
       const snap = snapshots[runId];
       if (!snap?.flow) return { ok: true };
       const node = snap.flow.nodes.find(n => n.id === nodeId);
@@ -792,18 +792,6 @@ export function installDevMock() {
       pushRun(runId);
       return worker?.model ? { ok: true, worker } : { ok: true };
     },
-    branchRun: async (_pid, runId) => ({ ok: true, runId }),
-    investigateNode: async () => ({
-      ok: true, status: 'done', output: '', retro: null, logTail: [],
-      summary: '(mock) This node completed normally.', model: 'mock'
-    }),
-    followUpRun: async () => ({ turn: 1 }),
-    answerInput: async () => ({ ok: true }),
-    // Summary-node stubs (B4): no engine in the browser shell — summarize
-    // reports the no-model state so the retry card path can be previewed.
-    summarizeRun: async () => ({ ok: false, error: 'no-model' }),
-    deleteSummary: async () => ({ ok: true }),
-    moveSummary: async () => ({ ok: true }),
     openRunFolder: async () => {},
     pickWorkspace: async () => null, // no native folder picker in the browser dev shell
     openWorkspace: async () => {},
@@ -989,6 +977,13 @@ export function installDevMock() {
         },
         {
           use: 'flyt:evaluate', title: 'Evaluate', description: 'Check the result against explicit criteria.', category: 'quality',
+          settings: { type: 'object', properties: {
+            model: { type: 'string' }, modelTier: { enum: ['free', 'economy', 'standard', 'frontier'] },
+          } },
+        },
+        {
+          use: 'flyt-blocks-core:research', title: 'Research',
+          description: 'Answer from opened sources while treating network content as untrusted.', category: 'inquiry',
           settings: { type: 'object', properties: {
             model: { type: 'string' }, modelTier: { enum: ['free', 'economy', 'standard', 'frontier'] },
           } },
@@ -1266,17 +1261,59 @@ export function installDevMock() {
           ]
         }
       : { fields: [], declared: [] },
-    // Rotate over the fixture runs so a Compare launch (T11) — two runFlow
-    // calls from one prompt — yields two DISTINCT panes to preview. The first
-    // call still returns the newest (the gate run) for the single-run chat.
-    runFlow: async (_pid) => {
-      const ids = Object.keys(snapshots).sort().reverse();
-      if (!ids.length) return null;
-      return ids[mockRunCursor++ % ids.length];
-    },
-    runWorkflow: async (_pid) => {
-      const ids = Object.keys(snapshots).sort().reverse();
-      return { runId: ids[mockRunCursor++ % ids.length], conversationId: 'mock-conversation' };
+    runWorkflow: async (_pid, workflowId, input) => {
+      // The preview must launch what the composer actually submitted. Rotating
+      // into an unrelated fixture made a successful click look like somebody
+      // else's archived failure and could not exercise canonical event folding.
+      const runId = `run-preview-${Date.now().toString(36)}`;
+      const createdAt = new Date().toISOString();
+      const workflow = (await window.flyt.listWorkflows()).find(item => item.id === workflowId)
+        ?? { id: workflowId, name: workflowId, steps: [] };
+      const steps = workflow.steps?.length ? workflow.steps : [{
+        id: 'answer', title: workflow.name ?? 'Answer', use: 'flyt-blocks-core:general-analysis',
+      }];
+      const root = {
+        id: 'root', kind: 'sequence', children: steps.map(step => ({
+          id: step.id, kind: 'block', use: step.use, title: step.title, config: {},
+        })),
+      };
+      const answer = workflowId === 'research'
+        ? `# Verification result\n\nA single canonical event log improves crash recovery because the app can replay one ordered record to reconstruct block state, model calls, tool results, and terminal status. An interrupted process leaves explicit unmatched calls and active blocks, so startup repair can mark the run interrupted without guessing from several mutable files.\n\nTask received: ${String(input ?? '')}`
+        : `# Verification result\n\nThe browser preview completed the ${workflow.name ?? workflowId} workflow for:\n\n${String(input ?? '')}`;
+      const events = [];
+      const add = (type, data) => events.push({ seq: events.length + 1, at: new Date().toISOString(), type, data });
+      add('run.created', { runId, stackId: workflowId, input: String(input ?? ''), profile: 'flyt-desktop' });
+      add('stack.resolved', { stackId: workflowId, stackName: workflow.name, stack: root });
+      add('run.stage', { stage: 'execution' });
+      for (const [index, step] of steps.entries()) {
+        add('block.status', { blockId: step.id, status: 'active' });
+        const callId = `preview-call-${index + 1}`;
+        add('turn.start', { runId, turn: index + 1, blockId: step.id });
+        add('step.start', { runId, blockId: step.id, step: 1 });
+        add('llm.request', { callId, blockId: step.id, provider: 'mock', model: 'mock-large' });
+        add('llm.response', { callId, blockId: step.id, provider: 'mock', model: 'mock-large',
+          content: index === steps.length - 1 ? answer : `Completed ${step.title}.`, finishReason: 'stop',
+          usage: { promptTokens: 120, completionTokens: 80 } });
+        add('step.end', { runId, blockId: step.id, step: 1, finishReason: 'stop' });
+        add('turn.end', { runId, turn: index + 1, blockId: step.id });
+        add('block.output', { blockId: step.id, content: index === steps.length - 1 ? answer : `Completed ${step.title}.` });
+        add('block.status', { blockId: step.id, status: 'done' });
+      }
+      add('run.stage', { stage: 'done' });
+      snapshots[runId] = {
+        meta: {
+          runId, stage: 'done', stackId: workflowId, stackName: workflow.name,
+          flowId: workflowId, flowName: workflow.name, createdAt, updatedAt: new Date().toISOString(),
+          blockStatus: Object.fromEntries(steps.map(step => [step.id, 'done'])),
+          nodeStatus: Object.fromEntries(steps.map(step => [step.id, 'done'])),
+        },
+        prompt: String(input ?? ''),
+        stack: { version: 2, id: workflowId, name: workflow.name, root },
+        flow: null, retrospectives: {}, nodeOutputs: { [steps.at(-1).id]: answer }, taskOutputs: {},
+        followups: [], summaries: [], conversation: [],
+      };
+      mockSessionEvents.set(runId, events);
+      return { runId, conversationId: `preview-conversation-${Date.now().toString(36)}` };
     },
     getPendingWorkflowInteractions: async () => [],
     replyWorkflow: async (_pid, _runId) => {
@@ -1296,24 +1333,6 @@ export function installDevMock() {
       return rec;
     },
     listComparisons: async (_pid) => [...mockComparisons],
-    // P3 preview: a canned verdict, written straight into the pair's record.
-    judgeRuns: async (_pid, a, b, cmpId = null) => {
-      let rec = cmpId ? mockComparisons.find(c => c.id === cmpId) : null;
-      rec ??= mockComparisons.find(c => c.runIds?.[0] === a && c.runIds?.[1] === b);
-      if (!rec) {
-        rec = { id: 'cmp-mock-' + Date.now().toString(36), runIds: [a, b], createdAt: new Date().toISOString(), origin: 'manual', verdict: null };
-        mockComparisons.unshift(rec);
-      }
-      rec.verdict = {
-        summary: '# Comparison\n\n## Agreements\nBoth answer the brief.\n\n## Differences\nB is more thorough; A is terser.\n\n## Verdict\nB edges it on completeness.',
-        winner: 'B',
-        axes: { correctness: 'tie', completeness: 'B' },
-        notes: 'B covers the edge cases A skips; correctness is equal.',
-        judgeModel: 'mock-judge',
-        at: new Date().toISOString()
-      };
-      return rec;
-    },
     listNodeTemplates: async () => [...mockTemplates.values()].map(t => normalizeTemplate(structuredClone(t)))
       .sort((a, b) => a.name.localeCompare(b.name)),
     saveNodeTemplate: async tpl => { mockTemplates.set(tpl.id, structuredClone(tpl)); return tpl; },

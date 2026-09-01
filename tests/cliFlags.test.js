@@ -144,7 +144,7 @@ test('flyt retry refuses a missing argument, and a run that is not there', () =>
   const missing = run(['retry', 'no-such-run-xyz', 'work']);
   assert.equal(missing.status, 1);
   const said = missing.stderr + missing.stdout;
-  assert.match(said, /No run "no-such-run-xyz"/);
+  assert.match(said, /was not found in this project/);
   assert.ok(!/ENOENT|at .*\.js:\d+/.test(said), `no stack trace:\n${said}`);
 });
 
@@ -221,10 +221,10 @@ test('flyt why: an approval gate leads with the decision, and says it once', () 
   assert.match(out, /a checkpoint: this node asks before it runs/);
   assert.equal(out.split('waiting for your decision').length - 1, 1,
     'the verdict line already said it; saying it again buries the point');
-  // The two things the reader came for.
-  assert.match(out, /flyt approve run-1/);
-  assert.match(out, /flyt reject {2}run-1/);
-  assert.ok(out.indexOf('flyt approve') < out.indexOf('9 model call'),
+  // The action stays attached to the process that owns the interaction.
+  assert.match(out, /decide it in the attended desktop session/);
+  assert.match(out, /--gates approve at launch/);
+  assert.ok(out.indexOf('decide it') < out.indexOf('9 model call'),
     'the decision comes before the machinery');
 });
 

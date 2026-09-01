@@ -1,7 +1,7 @@
 // Project registry (D22): tab lifecycle (open/focus/close/reorder), storage
 // location resolution (T2a), persistence round-trip and browser-style restore
-// with missing folders dropped (T17). The runner is injected as a stub — the
-// registry's job is bookkeeping, not execution.
+// with missing folders dropped (T17). The registry's job is bookkeeping, not
+// execution; liveness is injected from RunController.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -20,7 +20,7 @@ function makeRegistry(overrides = {}) {
     defaultRunsDir: path.join(root, 'runs'),
     appDataDir: path.join(root, 'appdata'),
     getStorage: () => 'workspace',
-    createRunner: () => ({ live: new Set() }),
+    liveCount: () => 0,
     ...overrides
   });
   return { registry, root };
@@ -266,7 +266,7 @@ test('projects: adopt never clobbers an existing file in the target folder', () 
 });
 
 test('projects: adopt refuses a live run, a non-folder, and a non-appdata id', () => {
-  const { registry } = makeRegistry({ createRunner: () => ({ live: new Set(['run-x']) }) });
+  const { registry } = makeRegistry({ liveCount: () => 1 });
   const { project } = registry.createAppdata('Busy work');
   assert.throws(() => registry.adoptAppdata(project.id, tmp()), /in progress/);
 
@@ -287,21 +287,14 @@ test('projects: rename overrides the display name for a bound folder too', () =>
   assert.equal(registry.listOpen()[0].name, 'My Repo');
 });
 
-test('projects: workspace storage creates .flyt on open; runners are per project', () => {
-  const runners = [];
-  const { registry } = makeRegistry({
-    createRunner: (store, projectId) => {
-      const r = { live: new Set(), store, projectId };
-      runners.push(r);
-      return r;
-    }
-  });
+test('projects: workspace storage creates .flyt on open; stores are per project', () => {
+  const { registry } = makeRegistry();
   const folder = tmp();
-  registry.open(null);
-  registry.open(folder);
+  const defaultEntry = registry.open(null).project;
+  const folderEntry = registry.open(folder).project;
   assert.ok(fs.existsSync(path.join(folder, '.flyt', '.gitignore')));
   assert.ok(fs.existsSync(path.join(folder, '.flyt', 'runs')));
-  assert.equal(runners.length, 2);
-  assert.equal(runners[1].projectId, projectIdFor(folder));
-  assert.notEqual(runners[0].store.rootDir, runners[1].store.rootDir);
+  assert.equal(defaultEntry.runner, undefined);
+  assert.equal(folderEntry.runner, undefined);
+  assert.notEqual(defaultEntry.store.rootDir, folderEntry.store.rootDir);
 });

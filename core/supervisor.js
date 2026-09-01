@@ -1084,8 +1084,8 @@ export class Supervisor {
     if (hb.pendingRestart) {
       const { nodeId, guidance, rung, stall } = hb.pendingRestart;
       try {
-        await this.invoke('run:restartNode', {
-          projectId: this.projectId, runId: hb.runId, nodeId, guidance
+        await this.invoke('run:restartBlock', {
+          projectId: this.projectId, runId: hb.runId, blockId: nodeId, guidance
         });
       } catch (err) {
         // Still unwinding. A bound, because a restart that never lands must not
@@ -1142,30 +1142,10 @@ export class Supervisor {
     // a problem the cheapest rung might have fixed.
     hb.currentNode = currentNodeOf(snapshot);
 
-    // A gate. Which KIND decides whether the loop may answer it (§10).
-    //
-    //   'pre'        — a node's requiresApproval: "does this plan look right?".
-    //                  In loop mode the real check is the landing sequence —
-    //                  harness-run gates, a reviewer on the diff, a canary on
-    //                  the merge — all of which happen after this and judge the
-    //                  actual change rather than the intention. Auto-approving
-    //                  is defensible precisely because something stricter comes
-    //                  later. The shipped default pipeline has one of these, so
-    //                  without this the loop parks every task and achieves
-    //                  nothing.
-    //   'escalation' — step-eval concluded a human must decide. That is the
-    //                  case this loop exists to defer, not to answer.
-    //   'tool'       — a call that wanted more than approvalMode: 'always'
-    //                  allows. Fail-closed: park it.
+    // The unattended profile has no human authority. A pending attended gate
+    // is therefore a composition error and is parked, never auto-approved.
     if (stage === 'awaiting_approval') {
       const kind = snapshot.meta?.pendingGateKind ?? 'pre';
-      const mayAnswer = (this.config.loop?.autoApprove ?? ['pre']).includes(kind);
-      if (mayAnswer) {
-        this.log(`  ${taskId} approving ${kind} gate (the landing sequence is the real check)`, { taskId });
-        await this.invoke('run:approve', { projectId: this.projectId, runId: hb.runId });
-        hb.lastProgressAt = this.now(); // answering a gate IS headway
-        return;
-      }
       await this.invoke('run:stop', { projectId: this.projectId, runId: hb.runId });
       await this.#discard(taskId);
       this.#park(taskId, `A ${kind} gate asked for a decision this loop is not allowed to make.`);

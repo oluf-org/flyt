@@ -20,6 +20,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { decode, encode, readFileShaped, sniff, toEol } from './textFile.js';
 import type { TextShape } from './textFile.js';
+import {
+  applyMutationBatch, contentHash, ABSENT_HASH,
+  type DiagnoseBatch, type FilePatch, type MutationBatchResult,
+} from '../fs/transactional-patches.js';
 
 /** One directory entry. */
 export interface FsEntry {
@@ -35,6 +39,10 @@ export interface FsSeam {
   readonly root: string;
   read(path: string): Promise<string>;
   write(path: string, content: string): Promise<void>;
+  /** Current optimistic-concurrency hash, or `absent`. */
+  hash(path: string): Promise<string>;
+  /** Canonical worker mutation path: hash-checked, diagnosed, diffed and reversible. */
+  patch(patches: readonly FilePatch[], diagnose?: DiagnoseBatch): Promise<MutationBatchResult>;
   /** True when the path exists inside the root. False — never a throw — when it does not. */
   exists(path: string): Promise<boolean>;
   list(path?: string): Promise<FsEntry[]>;
@@ -121,6 +129,16 @@ export function createFsSeam(root: string): FsSeam {
       const toWrite = shape ? toEol(content, shape.eol) : String(content ?? '');
       const bytes = shape ? encode(toWrite, shape) : Buffer.from(toWrite, 'utf8');
       fs.writeFileSync(abs, bytes);
+    },
+
+    async hash(relPath: string): Promise<string> {
+      const abs = resolveInside(resolvedRoot, relPath);
+      return fs.existsSync(abs) && fs.statSync(abs).isFile()
+        ? contentHash(fs.readFileSync(abs)) : ABSENT_HASH;
+    },
+
+    async patch(patches: readonly FilePatch[], diagnose?: DiagnoseBatch): Promise<MutationBatchResult> {
+      return applyMutationBatch(resolvedRoot, patches, diagnose);
     },
 
     async exists(relPath: string): Promise<boolean> {

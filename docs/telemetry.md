@@ -15,6 +15,21 @@ Model requests/results, stream milestones, planner diagnostics, tool calls and a
 
 The global store is stricter than a run log: model bodies are represented by counts, tool arguments by sorted keys/byte counts/SHA-256 hashes, and secret-shaped fields are redacted recursively. Complete tool results remain in their run artifact and History links to that artifact.
 
+## Request-level fields
+
+Each request can be reconstructed from correlated `llm.request`, `context.budget`, `llm.telemetry`, stream milestone, `llm.response`, `tool.state`, and optional `context.checkpoint` events. Together they record:
+
+- queue, dispatch, headers, first byte, first reasoning, first visible text, first tool call, and completion timestamps;
+- input, output, reasoning, cached-read, and cache-write tokens;
+- requested and effective output budgets plus pre-dispatch context utilization;
+- finish reason and provider/model route;
+- tool-call repair and validation counts;
+- compaction input/output tokens, selected policy actions, and compression ratio;
+- retry/failover reason and delay;
+- tokens and cost accumulated since the last durable workspace progress.
+
+Unavailable provider values remain `null`; the harness does not turn missing measurements into zeroes. Estimated values retain `source: estimated`.
+
 ## Performance properties
 
 - Execution code only enqueues small metadata objects.

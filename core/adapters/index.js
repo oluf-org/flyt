@@ -238,6 +238,7 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
   const idleMs = adapter.selfTimed ? 0 : (timeout?.idleMs ?? DEFAULT_TIMEOUT.idleMs);
   const hardMs = timeout?.hardMs ?? DEFAULT_TIMEOUT.hardMs;
   const started = Date.now();
+  const queuedAt = new Date(started).toISOString();
   let lastErr;
   for (let attempt = 0; attempt < attempts; attempt++) {
     // RUN-CONTROL: a stop that landed between attempts (or before the first)
@@ -245,6 +246,14 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
     if (signal?.aborted) throw abortError();
     const deadline = startDeadline({ provider, signal, idleMs, hardMs });
     const attemptStarted = Date.now();
+    const transport = { dispatchAt: null, headersAt: null, status: null };
+    const onTransport = event => {
+      if (event?.phase === 'dispatch') transport.dispatchAt = event.at ?? new Date().toISOString();
+      if (event?.phase === 'headers') {
+        transport.headersAt = event.at ?? new Date().toISOString();
+        transport.status = event.status ?? null;
+      }
+    };
     // Streaming keeps the deadline alive: each emission proves the connection
     // is moving, so only silence is counted against it.
     // Streamed characters are counted whether or not the caller wanted them,
@@ -298,7 +307,7 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
       // Extra fields (rest — e.g. kimi's keyKind, stamped by the main process)
       // pass straight through to the adapter; callers never handle them.
       const result = await Promise.race([
-        adapter({ model, system, prompt, maxTokens, apiKey, messages, tools, onText: watched, signal: deadline.signal, ...rest }),
+        adapter({ model, system, prompt, maxTokens, apiKey, messages, tools, onText: watched, signal: deadline.signal, onTransport, ...rest }),
         deadline.expired
       ]);
       const settled = {
@@ -314,7 +323,7 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
       if (firstVisibleMs == null && String(result?.text ?? '').length) firstVisibleMs = responseMs;
       if (firstToolInputMs == null && result?.message?.tool_calls?.length) firstToolInputMs = responseMs;
       report(onCall, {
-        provider, model, maxTokens, system, prompt, messages, tools, attempt, started, attemptStarted,
+        provider, model, maxTokens, system, prompt, messages, tools, attempt, started, queuedAt, attemptStarted, transport,
         firstByteMs, firstReasoningMs, firstVisibleMs, firstToolInputMs, lastChunkMs,
         tokensBeforeFirstVisible, tokensBeforeFirstTool, streamIdleGaps, ...rest
       }, settled, null);
@@ -325,7 +334,7 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
       // as a deliberate stop — but the caller's own signal outranks both, since
       // a stop landing during a timeout is still a stop.
       const ctx = {
-        provider, model, maxTokens, system, prompt, messages, tools, attempt, started, attemptStarted, streamedChars,
+        provider, model, maxTokens, system, prompt, messages, tools, attempt, started, queuedAt, attemptStarted, transport, streamedChars,
         firstByteMs, firstReasoningMs, firstVisibleMs, firstToolInputMs, lastChunkMs,
         tokensBeforeFirstVisible, tokensBeforeFirstTool, streamIdleGaps, ...rest
       };
@@ -387,6 +396,21 @@ export function callRecord(ctx, result, error) {
     model: ctx.model,
     ...(result?.resolvedModel && result.resolvedModel !== ctx.model ? { servedBy: result.resolvedModel } : {}),
     maxTokens: ctx.maxTokens ?? null,
+    requestedOutputBudget: ctx.requestedOutputBudget ?? ctx.maxTokens ?? null,
+    effectiveOutputBudget: ctx.effectiveOutputBudget ?? ctx.maxTokens ?? null,
+    contextTokens: ctx.contextTokens ?? null,
+    contextLimit: ctx.contextLimit ?? null,
+    contextUtilization: ctx.contextUtilization ?? null,
+    queuedAt: ctx.queuedAt ?? new Date(ctx.started).toISOString(),
+    dispatchAt: ctx.transport?.dispatchAt ?? new Date(ctx.attemptStarted ?? ctx.started).toISOString(),
+    headersAt: ctx.transport?.headersAt ?? null,
+    firstByteAt: ctx.firstByteMs == null ? null : new Date((ctx.attemptStarted ?? ctx.started) + ctx.firstByteMs).toISOString(),
+    firstReasoningAt: ctx.firstReasoningMs == null ? null : new Date((ctx.attemptStarted ?? ctx.started) + ctx.firstReasoningMs).toISOString(),
+    firstVisibleAt: ctx.firstVisibleMs == null ? null : new Date((ctx.attemptStarted ?? ctx.started) + ctx.firstVisibleMs).toISOString(),
+    firstToolCallAt: ctx.firstToolInputMs == null ? null : new Date((ctx.attemptStarted ?? ctx.started) + ctx.firstToolInputMs).toISOString(),
+    completedAt: new Date().toISOString(),
+    httpStatus: ctx.transport?.status ?? null,
+    queueTimeMs: Math.max(0, (ctx.attemptStarted ?? ctx.started) - ctx.started),
     startedAt: new Date(ctx.attemptStarted ?? ctx.started).toISOString(),
     messages: msgs ? msgs.length : 2,
     promptChars,

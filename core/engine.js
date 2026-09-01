@@ -20,7 +20,7 @@ import { FlowStore } from './flowstore.js';
 import { NodeStore } from './nodestore.js';
 import { ToolStore } from './toolstore.js';
 import { loadLibrary } from './tools/index.js';
-import { StackRunner, normalizeApprovalMode } from './stackRunner.js';
+import { normalizeApprovalMode } from './approval.js';
 import { pickSafetyModel, SAFETY_MODEL_CANDIDATES } from './safetyCheck.js';
 import { ProjectRegistry } from './projects.js';
 import { Backlog } from './backlog.js';
@@ -45,7 +45,6 @@ import { v2Flag } from './v2.js';
 import { LoopLog } from './loopLog.js';
 import { TelemetryStore } from './telemetry.js';
 import { projectHistory, flatCsv } from './telemetryProjection.js';
-import { reconcileStoredStackRuns } from './kernelRunner.js';
 
 const PUSH_COALESCE_MS = 80;
 const PUSH_SNAPSHOT_RETRIES = 1;
@@ -633,11 +632,8 @@ export function createEngine({
   function broadcastActivity(projectId, { recheck = true } = {}) {
     if (!canEmit()) return;
     const s = pushStateFor(projectId);
-    const entry = registry.get(projectId);
-    const live = [...new Set([
-      ...(entry.runner?.live ?? []),
-      ...(entry.kernelRuns?.keys() ?? []),
-    ])];
+    registry.get(projectId); // validate before publishing activity
+    const live = runController?.list(projectId) ?? [];
     const sig = live.join('\n');
     if (sig !== s.lastActivity) {
       s.lastActivity = sig;
@@ -856,52 +852,18 @@ export function createEngine({
     return l;
   }
 
-  // Filled in by core/api.js, which owns the per-project Supervisor map. The
-  // engine holds the slot so a StackRunner can reach the loop without either
-  // module importing the other.
+  // Filled in by core/api.js, which owns the per-project Supervisor map.
   const loopDriver = { start: null, status: null };
   const setLoopDriver = d => Object.assign(loopDriver, d);
 
+  let runController = null;
   const registry = new ProjectRegistry({
     defaultRunsDir: path.join(dataRoot, 'runs'),
     appDataDir: userDataDir,
     // T2a: the storage location is a Settings choice, read at project-open time.
     getStorage: () => (settings.projectStorage === 'appdata' ? 'appdata' : 'workspace'),
     telemetry,
-    createRunner: (store, projectId) => {
-      const runner = new StackRunner(store, runtimeConfig, pushUpdateFor(projectId), nodeLibrary, flows);
-      // Lazy for the reason above, and a property rather than a constructor
-      // argument so every existing StackRunner call site is untouched.
-      Object.defineProperty(runner, 'backlog', { get: () => backlogFor(projectId), configurable: true });
-      Object.defineProperty(runner, 'ledger', { get: () => ledgerFor(projectId), configurable: true });
-      // The worktree pool, for read_run's diff. Lazy for the same reason the
-      // two above are: a project that never runs the loop never makes one.
-      Object.defineProperty(runner, 'pool', { get: () => { try { return poolFor(projectId); } catch { return null; } }, configurable: true });
-      // A flow's `loop` node hands its tasks to the SAME supervisor the Loop
-      // page drives — one queue, one picker, one process (D36 P4.2). api.js
-      // owns the supervisor map, so it registers the driver; this is only the
-      // slot it registers into.
-      Object.defineProperty(runner, 'loopHost', {
-        get: () => ({
-          projectId,
-          backlog: backlogFor(projectId),
-          ledger: ledgerFor(projectId),
-          start: opts => loopDriver.start?.({ projectId, ...opts }),
-          status: () => loopDriver.status?.(projectId) ?? null
-        }),
-        configurable: true
-      });
-      Object.defineProperty(runner, 'feedback', { get: () => feedbackFor(projectId), configurable: true });
-      runner.references = references;
-      // Nothing is live when a project first opens in this process, so any run
-      // still in a non-terminal stage was cut off by the app dying. Flag those
-      // once so the run view can offer Resume (V1 task 7).
-      const interrupted = runner.reconcileInterrupted();
-      if (interrupted.length) log(`${projectId}: ${interrupted.length} interrupted run(s) marked resumable`);
-      const interruptedKernel = reconcileStoredStackRuns(store.rootDir);
-      if (interruptedKernel.length) log(`${projectId}: ${interruptedKernel.length} kernel run(s) marked interrupted`);
-      return runner;
-    },
+    liveCount: projectId => runController?.list(projectId).length ?? 0,
     onPersist: () => {
       // Registry mutations own their record fields; the persisted map is rebuilt
       // from the live one rather than merged, so a removed key (detach) cannot
@@ -924,6 +886,8 @@ export function createEngine({
     // Config + settings
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,
     setLoopDriver,
+    setRunController(controller) { runController = controller; },
+    get runController() { return runController; },
     // Providers
     hasKey, subscriptionStatus, resolveModelSource, capabilityCache,
     capabilityProbe: effectiveCapabilityProbe, effectiveSafetyModel,

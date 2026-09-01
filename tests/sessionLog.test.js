@@ -269,6 +269,19 @@ test('an event with no type is refused rather than written', async () => {
   } finally { cleanup(); }
 });
 
+test('unknown durable events fail closed unless explicitly marked ignorable extensions', async () => {
+  const { dir, cleanup } = tempRuns();
+  try {
+    const session = await new JsonlSessionStore(dir).open('run-1');
+    await assert.rejects(() => session.append({ type: 'surprise.event', data: {} }), /Unknown durable session event/);
+    await assert.rejects(() => session.append({ type: 'extension.vendor', data: {} }), /ignorable=true/);
+    const written = await session.append({
+      type: 'extension.vendor', data: { _extension: { ignorable: true }, value: 'safe to skip' },
+    });
+    assert.equal(written.seq, 1);
+  } finally { cleanup(); }
+});
+
 test('deriveMessages folds a log it was handed, with no file in sight', () => {
   const messages = deriveMessages([
     { seq: 1, at: '', type: 'message.user', data: { content: 'hi' } },

@@ -4,7 +4,7 @@
 
 Unattended Loop work has one execution route:
 
-`Supervisor` → `stack:run` → `stacks/loop-task.stack.yaml` → kernel `StackRunner` → canonical `session.jsonl`
+`Supervisor` → `stack:run` → `RunController` (`flyt-loop-worker`) → `stacks/loop-task.stack.yaml` → kernel agent service → canonical `session.jsonl`
 
 There is no `flow:run` fallback. A kernel composition or start failure is a harness failure, and the Supervisor parks the task with that evidence instead of creating a run with different control and recovery semantics.
 
@@ -12,7 +12,7 @@ The familiar Work entry remains intentionally separate. It still uses editable d
 
 ## Host composition
 
-`core/kernelRunner.js` builds one worktree-scoped kernel host and installs:
+`core/kernelHost.js` composes a worktree-scoped kernel host. `core/runController.js` pools equivalent hosts, owns every live `AgentRun`, writes leases, and disposes a host only after its last identity-bound owner settles. The host installs:
 
 - the canonical JSONL session store and run projection;
 - the filesystem seam rooted at the exact task worktree;
@@ -32,8 +32,8 @@ Each run records workspace, approval mode, task, provider/model, Auto Router ban
 - `run:stop` calls the live kernel agent registry and reports `not-live` honestly when another process owns the run or it has already settled.
 - `run:resume` reconstructs the host from `run.created` metadata. Completed blocks are replayed; active blocks run again.
 - An interrupted tool call is represented by a synthetic `NEVER_RETURNED` tool result when messages are derived, so the resumed model sees the break instead of a silently altered conversation.
-- `run:restartNode` can re-pin the worker. It writes durable `run.reconfigured`, pending, and guidance events, reconstructs a host with the replacement provider/model/routing, and starts the failed block again in the same session. A later resume uses the replacement route rather than stale `run.created` values.
-- Daily-workflow-only controls (`run:approve`, `run:reject`, `run:pause`, `run:followUp`, and `run:answerInput`) reject kernel run IDs explicitly. Kernel approvals happen synchronously at the tool seam; silently addressing the legacy runner would report control over a run it does not own.
+- `run:restartBlock` can re-pin the worker. It writes durable `run.reconfigured`, pending, and guidance events, reconstructs a host with the replacement provider/model/routing, and starts the failed block again in the same session. A later resume uses the replacement route rather than stale `run.created` values.
+- `run:stop`, `run:pause`, `run:resume`, and `run:restartBlock` all address `RunController`. Attended approvals and questions use `workflow:decide` and `workflow:answer` in the process that owns the run.
 - A settled run is materialised once more, removed from the live host maps, and its plugin graph is disposed. Later inspection reads the durable session, preventing one resident kernel per unattended attempt.
 
 ## Safety and observability
@@ -53,7 +53,7 @@ The following Loop-only scaffolding is gone:
 - the temporary `npm run flow -- lint` alias; and
 - the compatibility projection test.
 
-`core/stackRunner.js`, `FlowStore`, `NodeStore`, and the workflow DSL remain because the product still exposes the familiar daily Work and workflow-library experience. They no longer participate in Loop supervision. Removing them would remove current user-facing behavior and is a separate migration, not Loop cleanup.
+`core/stackRunner.js` and pre-kernel run folders remain only for migration inspection and historical tests. They do not participate in desktop, CLI, or Loop execution. Canonical stack authoring remains the only supported product authoring surface.
 
 ## Verification contract
 

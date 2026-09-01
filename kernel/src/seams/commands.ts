@@ -16,6 +16,14 @@ export interface CommandDefinition {
   description: string;
   /** JSON Schema for the arguments, so a model can call it as a tool. */
   parameters?: JsonValue;
+  /** Canonical request schema. `parameters` remains its compatibility alias. */
+  request?: JsonValue;
+  /** Successful response schema. */
+  response?: JsonValue;
+  /** Structured error payload schema for HTTP/IPC/CLI adapters. */
+  error?: JsonValue;
+  /** Event payload schemas emitted by this operation. */
+  events?: Readonly<Record<string, JsonValue>>;
   handler(args: JsonValue): Promise<JsonValue>;
 }
 

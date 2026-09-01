@@ -47,30 +47,12 @@ const api = {
     ipcRenderer.on('v2:plugins-change', handler);
     return () => ipcRenderer.removeListener('v2:plugins-change', handler);
   },
-  approvePlan: (pid, runId) => ipcRenderer.invoke('run:approve', pid, runId),
-  rejectPlan: (pid, runId, reason) => ipcRenderer.invoke('run:reject', pid, runId, reason),
   resumeRun: (pid, runId) => ipcRenderer.invoke('run:resume', pid, runId),
-  // --- Run control (RUN-CONTROL): stop / pause / restart / branch / investigate.
-  // resumeRun doubles as the pause-release; restartNode/branchRun reject while live.
+  // Canonical run control. Resume doubles as pause release or cold recovery.
   stopRun: (pid, runId) => ipcRenderer.invoke('run:stop', pid, runId),
   pauseRun: (pid, runId) => ipcRenderer.invoke('run:pause', pid, runId),
-  // `worker` ({ provider, model }) re-pins the node's model for the retry (D39);
-  // omit it to re-run exactly as configured.
-  restartNode: (pid, runId, nodeId, guidance, worker = null) =>
-    ipcRenderer.invoke('run:restartNode', pid, runId, nodeId, guidance, worker),
-  branchRun: (pid, runId, nodeId) => ipcRenderer.invoke('run:branch', pid, runId, nodeId),
-  investigateNode: (pid, runId, nodeId) =>
-    ipcRenderer.invoke('run:investigateNode', pid, runId, nodeId),
-  // Summary nodes (B4): summarize sources / delete / persist a dragged position.
-  summarizeRun: (pid, runId, sourceIds, position = null) =>
-    ipcRenderer.invoke('run:summarize', pid, runId, sourceIds, position),
-  deleteSummary: (pid, runId, summaryId) =>
-    ipcRenderer.invoke('run:deleteSummary', pid, runId, summaryId),
-  moveSummary: (pid, runId, summaryId, position) =>
-    ipcRenderer.invoke('run:moveSummary', pid, runId, summaryId, position),
-  followUpRun: (pid, runId, text) => ipcRenderer.invoke('run:followUp', pid, runId, text),
-  // Answer a run parked at the refiner's awaiting_input gate (DECISIONS.md D27).
-  answerInput: (pid, runId, text) => ipcRenderer.invoke('run:answerInput', pid, runId, text),
+  restartBlock: (pid, runId, blockId, guidance, worker = null) =>
+    ipcRenderer.invoke('run:restartBlock', pid, runId, blockId, guidance, worker),
   // Approval gates: the chat run tells the main process when a run parks at a
   // gate (and when it settles), so an unfocused window can raise an OS
   // notification + taskbar flash — a stopped workflow must find the user.
@@ -82,7 +64,6 @@ const api = {
   beginCompare: (pid) => ipcRenderer.invoke('compare:begin', pid),
   saveCompare: (pid, rec) => ipcRenderer.invoke('compare:save', pid, rec),
   listComparisons: (pid) => ipcRenderer.invoke('compare:list', pid),
-  judgeRuns: (pid, a, b, cmpId = null) => ipcRenderer.invoke('run:judge', pid, a, b, cmpId),
   renameRun: (pid, runId, name) => ipcRenderer.invoke('run:rename', pid, runId, name),
   deleteRun: (pid, runId) => ipcRenderer.invoke('run:delete', pid, runId),
   getSnapshot: (pid, runId) => ipcRenderer.invoke('run:snapshot', pid, runId),
@@ -92,8 +73,6 @@ const api = {
   openRunArtifact: (pid, runId, relPath) => ipcRenderer.invoke('run:openArtifact', pid, runId, relPath),
   pickWorkspace: () => ipcRenderer.invoke('workspace:pick'),
   openWorkspace: (pid, runId) => ipcRenderer.invoke('workspace:open', pid, runId),
-  runFlow: (pid, id, userInput, workspaceDir, approvalMode, launch = null) =>
-    ipcRenderer.invoke('flow:run', pid, id, userInput, workspaceDir, approvalMode, launch),
   listWorkflows: () => ipcRenderer.invoke('workflow:list'),
   runWorkflow: (pid, workflowId, input, approvalMode = null, presetId = null, modelSelection = null) =>
     ipcRenderer.invoke('workflow:run', pid, workflowId, input, approvalMode, presetId, modelSelection),

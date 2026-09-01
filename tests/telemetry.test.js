@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { TelemetryStore, normalizeRunLog, structuralArgs } from '../core/telemetry.js';
+import { TelemetryStore, normalizeRunLog, normalizeSessionEvent, structuralArgs } from '../core/telemetry.js';
 import { flatCsv, projectHistory } from '../core/telemetryProjection.js';
 
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-telemetry-'));
@@ -38,6 +38,45 @@ test('model audit records become correlated request, milestone and provider resu
   assert.equal(events.at(-1).source, 'provider_reported');
   assert.equal(events.at(-1).measurements.reasoningTokens, 30);
   assert.equal(events.at(-1).taskId, 't-1');
+});
+
+test('request telemetry retains transport, budgets, cache writes, compaction, repair and progress counters', () => {
+  const events = normalizeRunLog('p', 'r', {
+    ts: '2026-09-01T10:00:02.000Z', event: 'model_call', provider: 'openai', model: 'gpt',
+    queuedAt: '2026-09-01T10:00:00.000Z', dispatchAt: '2026-09-01T10:00:00.010Z',
+    headersAt: '2026-09-01T10:00:00.100Z', completedAt: '2026-09-01T10:00:02.000Z',
+    requestedOutputBudget: 4096, effectiveOutputBudget: 3000,
+    contextTokens: 7000, contextLimit: 10000, contextUtilization: .7,
+    usage: { input_tokens: 100, output_tokens: 20, cached_tokens: 50, cache_write_tokens: 25 },
+  });
+  assert.equal(events[0].attributes.dispatchAt, '2026-09-01T10:00:00.010Z');
+  assert.equal(events[0].measurements.effectiveOutputBudget, 3000);
+  assert.equal(events[0].measurements.contextUtilization, .7);
+  assert.equal(events.at(-1).measurements.cacheWriteTokens, 25);
+
+  const budget = normalizeSessionEvent('p', 'r', {
+    at: '2026-09-01T10:00:00Z', type: 'context.budget', data: {
+      requested: { total: 9000 }, effective: { total: 6000 }, contextLimit: 10000,
+      contextUtilization: .6, requestedOutput: 4096, effectiveOutput: 2048,
+    },
+  });
+  assert.equal(budget.kind, 'llm.context_budget');
+  assert.equal(budget.measurements.effectiveTokens, 6000);
+
+  const checkpoint = normalizeSessionEvent('p', 'r', {
+    at: '2026-09-01T10:00:00Z', type: 'context.checkpoint',
+    data: { inputTokens: 9000, outputTokens: 3000, compressionRatio: 1 / 3 },
+  });
+  assert.equal(checkpoint.measurements.compressionRatio, 1 / 3);
+
+  const response = normalizeSessionEvent('p', 'r', {
+    at: '2026-09-01T10:00:00Z', type: 'llm.response', data: {
+      toolCallRepairCount: 2, toolValidationCount: 1,
+      tokensSinceDurableProgress: 1200, costSinceDurableProgress: .08,
+    },
+  });
+  assert.equal(response.measurements.toolCallRepairCount, 2);
+  assert.equal(response.measurements.tokensSinceDurableProgress, 1200);
 });
 
 test('tool telemetry retains safe structure rather than argument payloads', () => {

@@ -40,6 +40,8 @@ export const BUILTIN = {
   fs: 'flyt:fs',
   adapters: 'flyt:llm-adapters',
   stackRunner: 'flyt:stack-runner',
+  workerProfiles: 'flyt:worker-profiles',
+  interceptions: 'flyt:interceptions',
 } as const;
 
 export interface BuiltinMetadata {
@@ -65,6 +67,8 @@ const BUILTIN_METADATA: Record<string, BuiltinMetadata> = {
   [BUILTIN.fs]: { name: 'Filesystem seam', description: 'Binds plugin file access to one workspace root.', contributes: ['filesystem'] },
   [BUILTIN.adapters]: { name: 'LLM adapters', description: 'Routes kernel model requests to configured providers.', contributes: ['models'] },
   [BUILTIN.stackRunner]: { name: 'Stack runner', description: 'Executes registered blocks from canonical stacks.', contributes: ['runner'] },
+  [BUILTIN.workerProfiles]: { name: 'Worker profiles', description: 'Reusable generated-worker configuration and policy.', contributes: ['workers'] },
+  [BUILTIN.interceptions]: { name: 'Interceptions', description: 'Ordered typed observation and trusted request mutation hooks.', contributes: ['hooks'] },
 };
 
 const BUILTIN_NAMES = new Set<string>(Object.values(BUILTIN));
@@ -98,11 +102,15 @@ export async function builtinImporter(name: string): Promise<unknown> {
     case BUILTIN.fs: return import('./plugins/fs.js');
     case BUILTIN.adapters: return import('./plugins/llm-adapters.js');
     case BUILTIN.stackRunner: return import('./plugins/stack-runner.js');
+    case BUILTIN.workerProfiles: return import('./plugins/worker-profiles.js');
+    case BUILTIN.interceptions: return import('./plugins/interceptions.js');
     default: return import(name);
   }
 }
 
 const BLOCKS: Entry[] = [
+  { id: 'worker-profiles', name: BUILTIN.workerProfiles },
+  { id: 'interceptions', name: BUILTIN.interceptions },
   { id: 'blocks', name: BUILTIN.blocks },
   { id: 'blocks-core', name: BUILTIN.blocksCore },
   { id: 'blocks-task-graph', name: BUILTIN.blocksTaskGraph },

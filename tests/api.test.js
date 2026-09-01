@@ -254,14 +254,14 @@ test('a loop running in another process is visible here — and a dead one is no
   assert.equal(fs.existsSync(path.join(workspace, '.flyt', 'loop-stop')), false);
 });
 
-test('a run can be started and gated entirely through the map', async () => {
+test('a canonical workflow can be started and observed entirely through the map', async () => {
   const { api, engine, dataRoot } = makeApi();
   const workspace = path.join(dataRoot, 'work');
   fs.mkdirSync(workspace, { recursive: true });
   const { id: projectId } = await api.invoke('project:open', { folder: workspace });
 
-  const runId = await api.invoke('flow:run', {
-    projectId, flowId: 'assistant', userInput: 'via the map', approvalMode: 'always'
+  const { runId } = await api.invoke('workflow:run', {
+    projectId, workflowId: 'research', input: 'via the map', approvalMode: 'always'
   });
   assert.ok(runId);
 
@@ -271,14 +271,10 @@ test('a run can be started and gated entirely through the map', async () => {
   assert.ok(Array.isArray(live[projectId]));
 
   const { store } = engine.registry.get(projectId);
-  for (let i = 0; i < 6; i++) {
-    const stage = await waitFor(
-      () => ['done', 'failed', 'awaiting_approval'].find(s => store.readMeta(runId)?.stage === s),
-      { label: 'settle', timeoutMs: 60000 });
-    if (stage !== 'awaiting_approval') { assert.equal(stage, 'done'); break; }
-    await api.invoke('run:approve', { projectId, runId });
-    await waitFor(() => store.readMeta(runId)?.stage !== 'awaiting_approval', { label: 'gate clear', timeoutMs: 20000 });
-  }
+  const stage = await waitFor(
+    () => ['done', 'failed'].find(value => store.readMeta(runId)?.stage === value),
+    { label: 'settle', timeoutMs: 60000 });
+  assert.equal(stage, 'done', JSON.stringify(store.snapshot(runId)));
 
   const snap = await api.invoke('run:snapshot', { projectId, runId });
   assert.equal(snap.meta.stage, 'done');
@@ -366,7 +362,9 @@ test('the event stream carries engine events to an attached client', async () =>
     const workspace = path.join(dataRoot, 'work');
     fs.mkdirSync(workspace, { recursive: true });
     const { id: projectId } = await api.invoke('project:open', { folder: workspace });
-    await call('flow:run', { projectId, flowId: 'assistant', userInput: 'stream me', approvalMode: 'always' });
+    await call('workflow:run', {
+      projectId, workflowId: 'research', input: 'stream me', approvalMode: 'always',
+    });
 
     await waitFor(() => (seen.includes('event: run:update') ? true : null),
       { label: 'a run:update frame', timeoutMs: 30000 });

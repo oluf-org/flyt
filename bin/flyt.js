@@ -20,7 +20,7 @@ import { createEngine } from '../core/engine.js';
 import { createApi, ApiError } from '../core/api.js';
 import { createServer } from '../core/server.js';
 import { defaultUserDataDir } from '../core/brand.js';
-import { renderQuestions } from '../core/stackRunner.js';
+import { renderQuestions } from '../core/questions.js';
 
 const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -40,8 +40,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
   flyt runs                           list runs in the current project
   flyt snapshot <runId>               the run's current state
   flyt log <runId> [--quiet]          the run's event log (--event a,b --node n --tail N)
-  flyt approve|reject|stop <runId>    answer a gate or stop a run
-  flyt answer <runId> "<text>"        reply to a node that stopped to ask
+  flyt stop <runId>                   stop a live run owned by this process
   flyt retry <runId> <nodeId>         run one node again, and wait for the run
                 [--guidance "<what to do differently>"] [--model <id>]
                                       (waits for the run, and shows the next round)
@@ -149,9 +148,6 @@ const GLOBAL_FLAGS = new Set([
 ]);
 
 const COMMAND_FLAGS = {
-  answer: ['gates', 'text', 'timeout'],
-  approve: ['reason'],
-  reject: ['reason'],
   archive: ['card', 'date', 'limit'],
   bench: ['keep', 'only', 'revision', 'suite'],
   call: ['arg', 'arg-json'],
@@ -322,22 +318,27 @@ async function waitForRun(api, projectId, runId, { timeoutSec, autoApprove, answ
     const stage = snap.meta?.stage;
     if (stage !== lastStage) { say(`  ${stage}`); lastStage = stage; }
     if (stage === 'done' || stage === 'failed') return { stage, snapshot: snap };
-    if (stage === 'awaiting_approval') {
-      if (!autoApprove) return { stage, snapshot: snap };
-      say('  gate — approving (--gates approve)');
-      await api.invoke('run:approve', { projectId, runId });
-    }
-    // The input gate. Previously this fell through to the poll, so a run that
-    // stopped to ask a question sat here for the full 30-minute timeout and
-    // then reported `timeout` — the one stage where the run is healthy, waiting
-    // on the caller, and says nothing about it. Now the questions come back to
-    // whoever started the run, which is the entire point of asking them.
-    if (stage === 'awaiting_input') {
-      if (!queued.length) return { stage, snapshot: snap };
-      const next = queued.shift();
-      say(`  question — answering (--answer, ${queued.length} left)`);
-      await api.invoke('run:answerInput', { projectId, runId, text: next });
-      lastStage = null;
+    const pending = await api.invoke('workflow:pending', { projectId, runId });
+    for (const interaction of pending) {
+      if (interaction.kind === 'approval') {
+        if (!autoApprove) return { stage: 'awaiting_approval', snapshot: snap };
+        say('  approval — approving (--gates approve)');
+        await api.invoke('workflow:decide', {
+          projectId, runId, callId: interaction.callId, approved: true,
+        });
+      }
+      if (interaction.kind === 'question') {
+        if (!queued.length) return {
+          stage: 'awaiting_input',
+          snapshot: { ...snap, meta: { ...snap.meta, pendingNodeId: interaction.blockId, pendingQuestions: [interaction] } },
+        };
+        const next = queued.shift();
+        say(`  question — answering (--answer, ${queued.length} left)`);
+        await api.invoke('workflow:answer', {
+          projectId, runId, questionId: interaction.questionId, answer: next,
+        });
+        lastStage = null;
+      }
     }
     if (Date.now() > deadline) return { stage: 'timeout', snapshot: snap };
     await sleep(500);
@@ -392,7 +393,8 @@ function renderQuestionGate(runId, meta) {
     if (q.why) lines.push(`     why: ${q.why}`);
     if (q.options?.length) lines.push(`     options: ${q.options.join(' | ')}`);
   }
-  lines.push('', `Answer all of them in one reply:`, `  flyt answer ${runId} "<your answer>"`);
+  lines.push('', 'This question belongs to the process that launched the run.',
+    'For a terminal workflow, provide the answer at launch with: --answer "<your answer>"');
   return lines.join('\n');
 }
 
@@ -1228,7 +1230,7 @@ async function main() {
     // These three commands answer a gate and return nothing meaningful — the
     // engine's ack is `undefined`, and printing it said `undefined`, which
     // reads as a failure at 1am. Say what happened and where the run went.
-    case 'approve': case 'reject': case 'stop': {
+    case 'stop': {
       const projectId = openProject(api, engine);
       const runId = positional[1];
       if (!runId) return die(`flyt ${command} <runId>`);
@@ -1237,11 +1239,8 @@ async function main() {
       // printing success anyway once reported stopping a run it never touched.
       // A failed result dies non-zero with the reason; only a real success
       // prints the new stage.
-      const res = await api.invoke(`run:${command}`, {
-        projectId, runId,
-        ...(command === 'reject' ? { reason: String(flags.reason ?? '') } : {})
-      });
-      const done = { approve: 'approved', reject: 'rejected', stop: 'stopped' }[command];
+      const res = await api.invoke('run:stop', { projectId, runId });
+      const done = 'stopped';
       if (res && res.ok === false) {
         const msg = res.message || res.error || `${command} failed`;
         return die(`${runId} NOT ${done}: ${msg}`);
@@ -1251,40 +1250,6 @@ async function main() {
       return out(asJson
         ? { ok: true, runId, action: done, stage, ...(note ? { how: note.trim() } : {}) }
         : `${runId} ${done}${note} — now ${stage}`);
-    }
-
-    // A node that stops to ASK could not be answered from here, only approved
-    // or killed — so a headless run that asked one question sat until it timed
-    // out, and the only way to move it was the desktop app. `flyt why` would
-    // say it was waiting; nothing could reply.
-    case 'answer': {
-      const runId = positional[1];
-      const text = String(flags.text ?? positional.slice(2).join(' ') ?? '').trim();
-      if (!runId || !text) return die('flyt answer <runId> "<your answer>"');
-      const projectId = openProject(api, engine);
-      await api.invoke('run:answerInput', { projectId, runId, text });
-      // Answering resumes the run, so this command waits on it exactly as
-      // `flyt run` does: an interrogation is several rounds, and a reply that
-      // returned `{ok:true}` and dropped the caller left them polling
-      // `flyt snapshot` to find out whether they were asked again.
-      const { stage, snapshot } = await waitForRun(api, projectId, runId, {
-        timeoutSec: Number(flags.timeout ?? 1800),
-        autoApprove: flags.gates === 'approve'
-      });
-      if (asJson) {
-        return out({
-          ok: stage === 'done', runId, stage,
-          ...(stage === 'awaiting_input' ? { questions: snapshot.meta?.pendingQuestions ?? [] } : {}),
-          snapshot
-        });
-      }
-      if (stage === 'awaiting_input') {
-        say(`run ${runId}: waiting on you`);
-        return out(renderQuestionGate(runId, snapshot.meta));
-      }
-      say(`run ${runId}: ${stage}`);
-      process.exitCode = stage === 'done' ? 0 : 1;
-      return out(runDeliverable(snapshot) ?? `(no output; stage ${stage})`);
     }
 
     // The way back from a node that finished badly (D39). `restartNode` has
@@ -1305,8 +1270,8 @@ async function main() {
       // and it is what the node actually receives as `retry-for-<nodeId>`.
       const guidance = typeof flags.guidance === 'string' ? flags.guidance : '';
       try {
-        await api.invoke('run:restartNode', {
-          projectId, runId, nodeId, guidance, worker: namedWorker(flags.model)
+        await api.invoke('run:restartBlock', {
+          projectId, runId, blockId: nodeId, guidance, worker: namedWorker(flags.model)
         });
       } catch (err) {
         // The runner's own words. "run is live — stop or pause it first",
@@ -1396,23 +1361,17 @@ async function main() {
         runInputs[String(pair).slice(0, at).trim()] = String(pair).slice(at + 1);
       }
       const projectId = openProject(api, engine);
-      const runId = await api.invoke('flow:run', {
+      const typedInput = Object.keys(runInputs).length
+        ? `${String(flags.input ?? positional.slice(2).join(' ') ?? '')}\n\nTYPED INPUTS:\n${Object.entries(runInputs).map(([name, value]) => `${name}: ${value}`).join('\n')}`
+        : String(flags.input ?? positional.slice(2).join(' ') ?? '');
+      const started = await api.runCliWorkflow({
         projectId,
-        flowId,
-        userInput: String(flags.input ?? positional.slice(2).join(' ') ?? ''),
+        workflowId: flowId,
+        input: typedInput,
         approvalMode: typeof flags.approval === 'string' ? flags.approval : null,
-        // t-0084: a CLI run is ATTENDED — this process parks on waitForRun and
-        // answers through `run:answerInput` (or --answer pre-loads the replies).
-        // This is its own signal, deliberately not approvalMode: 'always' also
-        // governs the t-0083 node pre-gate, the context file and scripted runs,
-        // and flipping it would park every unattended run again.
-        attended: flags.gates !== 'approve',
         level: typeof flags.level === 'string' ? flags.level : null,
-        // Typed run inputs (D36 P1): --in name=value, repeatable. A flow that
-        // declares inputs cannot be started without them, so the headless front
-        // door needs a way to supply them.
-        ...(Object.keys(runInputs).length ? { launch: { inputs: runInputs } } : {})
       });
+      const runId = started.runId;
       say(`run ${runId} started`);
       const { stage, snapshot } = await waitForRun(api, projectId, runId, {
         timeoutSec: Number(flags.timeout ?? 1800),
@@ -1475,7 +1434,7 @@ export function renderWhy(r) {
     L.push(`  "${r.asking.title ?? r.asking.node}" is waiting for you:`);
     for (const line of renderQuestions(r.asking.questions).split('\n')) L.push(`    ${line}`);
     L.push('');
-    L.push(`  flyt answer ${r.runId} "<your answer>"`);
+    L.push('  answer it in the attended desktop session, or pass --answer when launching a terminal workflow');
   }
   // An approval gate gets the same treatment: the decision comes before the
   // machinery. The difference from a question is that these need approve or
@@ -1500,8 +1459,7 @@ export function renderWhy(r) {
       if (g.reason) L.push(`    why: ${g.reason}`);
     }
     L.push('');
-    L.push(`  flyt approve ${r.runId}   let it continue`);
-    L.push(`  flyt reject  ${r.runId}   stop here`);
+    L.push('  decide it in the attended desktop session; terminal workflows use --gates approve at launch');
   }
   const s = r.signals;
   L.push(`  ${s.modelCalls} model call(s) over ${ms(s.modelMs)}, ${s.toolCalls} tool call(s)`

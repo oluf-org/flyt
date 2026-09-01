@@ -13,7 +13,6 @@
 // caller asking for one gets an honest error rather than a silent no-op.
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
 import { correctionFields } from './repair.js';
@@ -28,11 +27,13 @@ import { SUBSCRIPTION_PROVIDERS } from './modelSource.js';
 import { isDestructive } from '../src/toolTypes.js';
 import { pythonStatus, setupPython } from './python.js';
 import { loadToolSuite, runToolSuite, SUITE_DIR } from './toolbench.js';
+import { bootRunKernel } from './kernelHost.js';
 import {
-  bootLoopKernel, startStackRun, stopStackRun, pauseStackRun, continueStackRun, resumeStackRun,
-  restartStackBlock, snapshotStackRun, snapshotStoredStackRun, storedStackRunMetadata, isKernelRun,
-  SNAPSHOT_UPDATE_EVENTS,
-} from './kernelRunner.js';
+  snapshotStackRun, snapshotStoredStackRun, storedStackRunMetadata, isCanonicalRun,
+  appendStoredRunEvent, storedSnapshots, SNAPSHOT_UPDATE_EVENTS,
+} from './runProjection.js';
+import { RunController } from './runController.js';
+import { repairInterruptedSessions } from '#kernel';
 import { StackStore } from './stackstore.js';
 import { summarizeWorkflowRun } from './conversationSupervisor.js';
 
@@ -90,7 +91,7 @@ export function loopWorkerProblem(worker) {
 }
 import { Supervisor, renderReport } from './supervisor.js';
 import { reviewWorker } from './diffReview.js';
-import { APPROVAL_MODES } from './stackRunner.js';
+import { APPROVAL_MODES } from './approval.js';
 import { lintFlow } from './stacklang/lint.js';
 import {
   loadSuite, runBenchmark, saveCard, listCards, readCard, recentCards,
@@ -173,125 +174,12 @@ export function createApi(engine) {
     } catch { /* fall through to the honest 404 */ }
     throw new ApiError(`No open project "${projectId}".`, { status: 404, code: 'no_project' });
   };
-  const runnerFor = projectId => proj(projectId).runner;
-
-  // Daily workflows and Loop stacks deliberately have different control
-  // protocols. Never let a kernel run fall through to the daily runner: that
-  // can acknowledge a control against a different in-memory registry while
-  // the requested run carries on unchanged.
-  const dailyRunControl = (projectId, runId, action, invoke) => {
-    const entry = proj(projectId);
-    if (isKernelRun(entry.store, runId)) {
-      throw new ApiError(`Kernel run "${runId}" does not support ${action} through the daily workflow control API.`, {
-        status: 409, code: 'kernel_control_unsupported'
-      });
-    }
-    return invoke(entry.runner);
-  };
-
-  /** Compose (or reuse) the worktree-scoped production Loop host. */
-  const loopKernelHost = async (entry, {
-    workspace, approvalMode = 'always', worker = null, level = null,
-    blockWorkers = {}, defaultFallbacks = [], blockFallbacks = {}, tierWorkers = {},
-    loopTaskId = null, skills = null,
-    profile = 'flyt-loop-worker', presetId = null, askHuman = null, askBlock = null,
-    requireLaunchable = false,
-  }) => {
-    entry.kernelHosts ??= new Map();
-    entry.kernelRuns ??= new Map();
-    const route = `${worker?.provider ?? 'auto'}/${worker?.model ?? 'auto'}`;
-    const routing = worker?.routing && typeof worker.routing === 'object'
-      ? JSON.stringify(worker.routing) : '';
-    const blockRoutes = JSON.stringify(blockWorkers ?? {});
-    const fallbackRoutes = JSON.stringify({ defaultFallbacks, blockFallbacks, tierWorkers });
-    const key = `${workspace}\n${route}\n${routing}\n${blockRoutes}\n${fallbackRoutes}\n${approvalMode}\n${level ?? ''}\n${loopTaskId ?? ''}\n${profile}\n${presetId ?? ''}`;
-    let host = entry.kernelHosts.get(key);
-    if (!host) {
-      let composed = null;
-      // Session append notifications are coalesced, so their snapshot may run
-      // after the live host has been disposed. Read the canonical JSONL rather
-      // than coupling delivery to host lifetime; this also preserves the final
-      // done/failed transition during teardown.
-      const pushKernelUpdate = engine.pushSnapshotFor(entry.id, runId => (
-        snapshotStoredStackRun(entry.store.rootDir, runId, composed?.kernelModule, { materialise: false })
-      ));
-      const pushKernelEvents = engine.pushEventsFor(entry.id);
-      host = await bootLoopKernel({
-        runsRoot: entry.store.rootDir,
-        workspaceDir: workspace,
-        stackRoot,
-        store: entry.store,
-        approvalMode,
-        runtimeConfig,
-        resolveModelSource: engine.resolveModelSource,
-        worker,
-        blockWorkers,
-        defaultFallbacks,
-        blockFallbacks,
-        tierWorkers,
-        level,
-        loopTaskId,
-        skills,
-        backlog: engine.backlogFor(entry.id),
-        pool: engine.poolFor(entry.id),
-        references: engine.references,
-        settings: publicSettings(),
-        profile,
-        presetId,
-        askHuman,
-        askBlock,
-        requireLaunchable,
-        onSessionEvent: (runId, event) => {
-          pushKernelEvents(runId, event);
-          // Stream and step detail changes Trace only and is already delivered
-          // above. Rebuild the compatibility snapshot only at events that can
-          // actually alter Work, keeping the live cost proportional to useful
-          // state changes rather than model token count.
-          if (!event?.type || SNAPSHOT_UPDATE_EVENTS.has(event.type)) pushKernelUpdate(runId);
-        },
-        ...(engine.kernelCallModel ? { call: engine.kernelCallModel } : {}),
-      });
-      composed = host;
-      Object.defineProperty(host, 'cacheKey', { value: key, configurable: true });
-      entry.kernelHosts.set(key, host);
-    }
-    return host;
-  };
-
-  // A kernel host is scoped to one worktree/route. Once its last live run has
-  // settled, the session on disk is the source of truth and keeping the whole
-  // plugin graph resident only leaks one host per unattended attempt.
-  const watchKernelRun = (entry, host, run, { onSettled = null } = {}) => {
-    entry.kernelWatches ??= new Map();
-    if (entry.kernelWatches.get(run.runId) === run) return;
-    entry.kernelWatches.set(run.runId, run);
-    const beat = () => entry.store.writeLease(run.runId, {
-      pid: process.pid, host: os.hostname(), startedAt: new Date().toISOString(), beatAt: Date.now(),
-      runtime: 'kernel',
-    });
-    beat();
-    const leaseTimer = setInterval(beat, 5_000);
-    leaseTimer.unref?.();
-    void run.settled().then(async outcome => {
-      await onSettled?.(outcome);
-      await snapshotStackRun(host.ctx, run.runId, host.kernelModule);
-    }).catch(() => {
-      // The canonical session is still readable even if compatibility
-      // materialisation failed. The next snapshot call rebuilds it from JSONL.
-    }).finally(async () => {
-      // A restart can replace this watcher before the old promise reaches its
-      // finally. Ownership is the AgentRun identity, not merely the host: a
-      // same-route restart deliberately reuses its host.
-      const ownsWatch = entry.kernelWatches?.get(run.runId) === run;
-      clearInterval(leaseTimer);
-      if (ownsWatch) entry.store.clearLease(run.runId);
-      if (ownsWatch && entry.kernelRuns?.get(run.runId) === host) entry.kernelRuns.delete(run.runId);
-      if (ownsWatch) entry.kernelWatches.delete(run.runId);
-      const stillUsed = [...(entry.kernelRuns?.values() ?? [])].some(candidate => candidate === host);
-      if (stillUsed) return;
-      if (entry.kernelHosts?.get(host.cacheKey) === host) entry.kernelHosts.delete(host.cacheKey);
-      try { await host.dispose(); } catch { /* settled run remains durable */ }
-    });
+  const legacyControl = (entry, runId) => {
+    if (isCanonicalRun(entry.store, runId)) return null;
+    return {
+      ok: false, code: 'legacy_run_read_only', error: 'legacy-run-read-only',
+      message: 'This historical run has no canonical session and can only be inspected or deleted.',
+    };
   };
 
   const workflowAskHuman = entry => async (exec, reason) => {
@@ -318,6 +206,62 @@ export function createApi(engine) {
       engine.emitWorkflow?.(entry.id, interaction);
     });
   };
+
+  /** Compose one already-resolved Cordis host; pooling belongs to RunController. */
+  const composeRunHost = async (projectId, request) => {
+    const entry = proj(projectId);
+    let composed = null;
+    const pushUpdate = engine.pushSnapshotFor(entry.id, runId => (
+      snapshotStoredStackRun(entry.store.rootDir, runId, composed?.kernelModule, { materialise: false })
+    ));
+    const pushEvents = engine.pushEventsFor(entry.id);
+    composed = await bootRunKernel({
+      runsRoot: request.runsRoot ?? entry.store.rootDir,
+      workspaceDir: request.workspace,
+      stackRoot,
+      store: entry.store,
+      approvalMode: request.approvalMode,
+      runtimeConfig,
+      resolveModelSource: engine.resolveModelSource,
+      worker: request.worker ?? null,
+      blockWorkers: request.blockWorkers ?? {},
+      defaultFallbacks: request.defaultFallbacks ?? [],
+      blockFallbacks: request.blockFallbacks ?? {},
+      tierWorkers: request.tierWorkers ?? {},
+      level: request.level ?? null,
+      loopTaskId: request.loopTaskId ?? null,
+      skills: request.skills ?? null,
+      backlog: engine.backlogFor(entry.id),
+      pool: engine.poolFor(entry.id),
+      references: engine.references,
+      settings: publicSettings(),
+      profile: request.profile,
+      presetId: request.presetId ?? null,
+      askHuman: request.askHuman ?? (request.profile === 'flyt-loop-worker' ? null : workflowAskHuman(entry)),
+      askBlock: request.askBlock ?? (request.profile === 'flyt-loop-worker' ? null : workflowAskBlock(entry)),
+      requireLaunchable: Boolean(request.requireLaunchable),
+      ceiling: request.ceiling ?? null,
+      onSessionEvent: (runId, event) => {
+        pushEvents(runId, event);
+        if (!event?.type || SNAPSHOT_UPDATE_EVENTS.has(event.type)) pushUpdate(runId);
+      },
+      ...(engine.kernelCallModel ? { call: engine.kernelCallModel } : {}),
+    });
+    return composed;
+  };
+
+  const runController = new RunController({
+    bootHost: composeRunHost,
+    runsRootForProject: projectId => proj(projectId).store.rootDir,
+    storeForProject: projectId => proj(projectId).store,
+    repairStored: repairInterruptedSessions,
+    onActivity: projectId => engine.broadcastActivity(projectId),
+    onSettled: ({ phase, error, record }) => engine.emitWorkflow?.(record.projectId, {
+      kind: 'warning', runId: record.runId,
+      message: `Final ${phase} work failed: ${String(error?.message ?? error)}`,
+    }),
+  });
+  engine.setRunController?.(runController);
 
   const supervisorWorker = () => {
     const configured = runtimeConfig.workers?.supervisor;
@@ -384,7 +328,7 @@ export function createApi(engine) {
   const startWorkflow = async ({
     projectId, workflowId, input = '', approvalMode = null, presetId = null,
     conversationId = null, parentRunId = null, userMessage = null,
-    modelSelection = null,
+    modelSelection = null, profile = 'flyt-desktop', level = null,
   }) => {
     const entry = proj(projectId);
     presetId = await resolvePresetId(workflowId, presetId);
@@ -396,6 +340,7 @@ export function createApi(engine) {
       ...(candidate.routing && typeof candidate.routing === 'object' ? { routing: candidate.routing } : {}),
     } : null;
     const defaultWorker = normalizeWorker(modelSelection?.defaultWorker)
+      ?? (level ? workerForLevel(level, { allowedModels: runtimeConfig.loop?.allowedModels ?? null }) : null)
       ?? normalizeWorker(runtimeConfig.workers?.executor);
     const blockWorkers = Object.fromEntries(Object.entries(modelSelection?.blocks ?? {})
       .map(([blockId, candidate]) => [blockId, normalizeWorker(candidate)])
@@ -406,80 +351,33 @@ export function createApi(engine) {
     const blockFallbacks = Object.fromEntries(Object.entries(modelSelection?.blockFallbacks ?? {})
       .map(([blockId, candidates]) => [blockId, normalizeFallbacks(candidates)])
       .filter(([, candidates]) => candidates.length));
-    const host = await loopKernelHost(entry, {
-      workspace,
-      approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : runtimeConfig.approvalMode,
-      worker: defaultWorker,
-      blockWorkers,
-      defaultFallbacks,
-      blockFallbacks,
-      tierWorkers: runtimeConfig.workflowModelTiers ?? {},
-      profile: 'flyt-desktop', presetId,
-      askHuman: workflowAskHuman(entry), askBlock: workflowAskBlock(entry), requireLaunchable: true,
-    });
     const conversation = conversationId || `conversation-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const { runId, run } = await startStackRun({
-      host, stackId: workflowId, input,
+    const { runId } = await runController.start({
+      projectId,
+      stackId: workflowId,
+      input,
+      host: {
+        runsRoot: entry.store.rootDir,
+        workspace,
+        approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : runtimeConfig.approvalMode,
+        worker: defaultWorker,
+        blockWorkers,
+        defaultFallbacks,
+        blockFallbacks,
+        tierWorkers: runtimeConfig.workflowModelTiers ?? {},
+        level,
+        profile,
+        presetId,
+        requireLaunchable: true,
+      },
       metadata: {
         conversationId: conversation, parentRunId, presetId,
         supervisorSummary: runtimeConfig.supervisor?.terminalSummary !== false,
         userMessage: String(userMessage ?? input),
       },
+      afterSettled: (_outcome, record) => appendWorkflowSummary(entry, record.host, record.runId),
     });
-    entry.kernelRuns.set(runId, host);
-    watchKernelRun(entry, host, run, {
-      onSettled: () => appendWorkflowSummary(entry, host, runId),
-    });
-    engine.broadcastActivity(entry.id);
     return { runId, conversationId: conversation };
-  };
-
-  /** Recreate the exact host a durable run says it used. */
-  const resumeKernelHost = async (entry, runId, workerOverride = null, blockId = null) => {
-    const live = entry.kernelRuns?.get(runId);
-    if (!workerOverride && live) return live;
-    if (workerOverride && live?.ctx.agents.get(runId)) {
-      throw new ApiError(`Kernel run "${runId}" is still live; stop it before changing its worker.`, {
-        status: 409, code: 'kernel_run_live'
-      });
-    }
-    const meta = storedStackRunMetadata(entry.store.rootDir, runId);
-    if (!meta?.workspace) throw new ApiError(`Kernel run "${runId}" does not record a workspace, so it cannot be resumed safely.`, {
-      status: 409, code: 'kernel_resume_metadata_missing'
-    });
-    const desktopBlockOverride = Boolean(workerOverride?.model && blockId && meta.profile === 'flyt-desktop');
-    const blockWorkers = desktopBlockOverride
-      ? { ...(meta.blockWorkers ?? {}), [blockId]: workerOverride }
-      : (meta.blockWorkers ?? {});
-    const blockFallbacks = desktopBlockOverride
-      ? { ...(meta.blockFallbacks ?? {}), [blockId]: [] }
-      : (meta.blockFallbacks ?? {});
-    const host = await loopKernelHost(entry, {
-      workspace: meta.workspace,
-      approvalMode: meta.approvalMode ?? 'always',
-      worker: workerOverride?.model && !desktopBlockOverride
-        ? {
-          provider: workerOverride.provider ?? 'auto', model: workerOverride.model,
-          ...(workerOverride.routing && typeof workerOverride.routing === 'object'
-            ? { routing: workerOverride.routing } : {}),
-        }
-        : meta.model ? {
-          provider: meta.provider ?? 'auto', model: meta.model,
-          ...(meta.routing && typeof meta.routing === 'object' ? { routing: meta.routing } : {}),
-        } : null,
-      blockWorkers,
-      defaultFallbacks: meta.defaultFallbacks ?? [],
-      blockFallbacks,
-      tierWorkers: meta.tierWorkers ?? {},
-      level: meta.level ?? null,
-      loopTaskId: meta.loopTaskId ?? null,
-      skills: Array.isArray(meta.skills) ? meta.skills : null,
-      profile: meta.profile ?? 'flyt-loop-worker',
-      presetId: meta.presetId ?? null,
-      requireLaunchable: Boolean(meta.requireLaunchable),
-    });
-    entry.kernelRuns.set(runId, host);
-    return host;
   };
   const feedbackFor = projectId => {
     proj(projectId);
@@ -960,59 +858,11 @@ export function createApi(engine) {
     // The workspace is bound at run time (D15) — a bound tab IS its workspace
     // (T19), an appdata project has its own managed one (L5), and only an
     // unbound project picks one per run (or none, for mock/no-file flows).
-    'flow:run': ({ projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, attended = null, launch = null, level = null, worker = null, loopTaskId = null, skills = null }) => {
-      const entry = proj(projectId);
-      let workspace = null;
-      // An explicit workspaceDir WINS, even for a bound project. That is how the
-      // supervisor points a run at the task's worktree instead of the main
-      // checkout — without it the isolation is built and then bypassed, and
-      // every task edits the repo the loop is merging into.
-      if (workspaceDir) workspace = new Workspace(workspaceDir).ensure().root;
-      else if (entry.folder) workspace = new Workspace(entry.folder).ensure().root;
-      else if (entry.kind === 'appdata') workspace = new Workspace(entry.workspaceRoot).ensure().root;
-      // launch (DECISIONS.md D27) carries the picked mode and any exposed
-      // run-input overrides: { modeId?, overrides? }.
-      // An effort band for this run (§8): every node that has not pinned its own
-      // worker routes through OpenRouter's Auto Router at that cost tier. Set on
-      // the runner's config rather than baked into the flow, because the level
-      // belongs to the ATTEMPT — a retry runs the same flow one rung up.
-      //
-      // A NAMED worker wins over a band, and is the same slot rather than a
-      // second one: "which model does an unpinned node use" has to have exactly
-      // one answer, or a run would be routed by whichever branch was written
-      // last. Asking for a band is asking someone else to name the model; naming
-      // it yourself is the same decision made earlier.
-      entry.runner.config.levelWorker = worker?.provider && worker?.model
-        ? { ...worker }
-        : level
-          ? workerForLevel(level, { allowedModels: runtimeConfig.loop?.allowedModels ?? null })
-          : null;
-      return entry.runner.start(flows.load(flowId), {
-        userInput: String(userInput ?? ''),
-        workspace,
-        approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : runtimeConfig.approvalMode,
-        modeId: launch?.modeId ?? null,
-        overrides: launch?.overrides ?? null,
-        // Typed run inputs (D36 P1). Without this the composer collects them
-        // and the runner never sees them.
-        inputs: launch?.inputs ?? null,
-        compareGroup: launch?.compareGroup ?? null,
-        // Which backlog task this run IS, when the supervisor started it. The
-        // supervisor records that run's spend against the task when the task
-        // ends, so the runner must not also record it as an unattributed flow
-        // run — one call, one ledger line.
-        loopTaskId,
-        // Expertise the CALLER knows this run needs, on top of whatever the
-        // flow's templates already attach (core/backlog.js `skills`). A backlog
-        // task carries it because "this job needs to know how tools are
-        // authored here" is a property of the job, not of the pipeline every
-        // job runs through.
-        skills: Array.isArray(skills) ? skills : null,
-        // t-0084: did the caller promise somebody on the other end? Only
-        // `flyt run` passes true today; the loop and scripted callers leave it
-        // unset and the run stays unattended no matter its approvalMode.
-        attended
-      });
+    'flow:run': () => {
+      throw new ApiError(
+        'This flow cannot be executed by the retired runner. Open or save it as a canonical workflow first.',
+        { status: 410, code: 'legacy_flow_execution_removed' },
+      );
     },
 
     'workflow:list': async () => {
@@ -1142,9 +992,7 @@ export function createApi(engine) {
       });
     },
 
-    // The Loop execution path. It is deliberately separate from flow:run:
-    // daily prompting can keep the familiar workflow UX while unattended
-    // supervision has one production-kernel record and no fallback semantics.
+    // Supervisor launch: a narrower profile, through the same controller.
     'stack:run': async ({
       projectId, stackId, input = '', workspaceDir = null,
       approvalMode = 'always', runId = null, worker = null, level = null,
@@ -1156,30 +1004,41 @@ export function createApi(engine) {
         : entry.folder
           ? new Workspace(entry.folder).ensure().root
           : new Workspace(entry.workspaceRoot).ensure().root;
-      const host = await loopKernelHost(entry, {
-        workspace,
-        approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : 'always',
-        worker, level, loopTaskId, skills,
+      const { runId: startedId } = await runController.start({
+        projectId, runId, stackId, input,
+        host: {
+          runsRoot: entry.store.rootDir,
+          workspace,
+          approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : 'always',
+          worker, level, loopTaskId, skills,
+          profile: 'flyt-loop-worker', requireLaunchable: false,
+        },
+        metadata: { loopTaskId },
       });
-      const { runId: startedId, run } = await startStackRun({ host, stackId, input, id: runId });
-      entry.kernelRuns.set(startedId, host);
-      watchKernelRun(entry, host, run);
       return startedId;
     },
 
     'stack:stop': async ({ projectId, runId, reason = 'stopped by request' }) => {
       const entry = proj(projectId);
-      const host = entry.kernelRuns?.get(runId);
-      if (!host) return { ok: false, error: 'not-live', message: `No kernel run ${runId} in this process.` };
-      return stopStackRun(host.ctx, runId, reason);
+      return legacyControl(entry, runId) ?? runController.stop(projectId, runId, reason);
     },
 
-    'run:list': ({ projectId }) => proj(projectId).store.runSummaries(),
+    'run:list': ({ projectId }) => {
+      const store = proj(projectId).store;
+      const comparisons = store.listComparisons();
+      const membership = new Map();
+      for (const rec of comparisons) {
+        rec.runIds?.forEach((id, index) => {
+          if (!membership.has(id)) membership.set(id, { id: rec.id, label: index === 0 ? 'A' : 'B' });
+        });
+      }
+      return store.runSummaries().map(row => ({ ...row, compareGroup: membership.get(row.id) ?? null }));
+    },
     'run:log': ({ projectId, runId }) => {
       const store = proj(projectId).store;
       const retired = store.runRetirement(runId);
       if (retired) return { retired: true, runId, ...retired };
-      if (isKernelRun(store, runId)) {
+      if (isCanonicalRun(store, runId)) {
         return fs.readFileSync(path.join(store.runDir(runId), 'session.jsonl'), 'utf8')
           .split(/\r?\n/).filter(Boolean).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
       }
@@ -1192,82 +1051,96 @@ export function createApi(engine) {
       const entry = proj(projectId);
       const retired = entry.store.runRetirement(runId);
       if (retired) return { retired: true, runId, ...retired };
+      if (!fs.existsSync(entry.store.runDir(runId))) {
+        throw new ApiError(`Run "${runId}" was not found in this project.`, {
+          status: 404, code: 'run_not_found',
+        });
+      }
       const chans = engine.pushStateFor(entry.id).channels;
-      const host = entry.kernelRuns?.get(runId);
-      const snapshot = isKernelRun(entry.store, runId)
-        ? host
-          ? await snapshotStackRun(host.ctx, runId, host.kernelModule)
+      const live = runController.get(projectId, runId);
+      const snapshot = isCanonicalRun(entry.store, runId)
+        ? live
+          ? await snapshotStackRun(live.host.ctx, runId, live.host.kernelModule)
           : await snapshotStoredStackRun(entry.store.rootDir, runId)
         : entry.store.snapshot(runId);
       const rev = (chans.get(runId)?.rev ?? 0) + 1;
       chans.set(runId, { snapshot, rev });
-      return { ...snapshot, rev };
+      const comparison = entry.store.listComparisons().find(rec => rec.runIds?.includes(runId));
+      return {
+        ...snapshot,
+        meta: {
+          ...(snapshot.meta ?? {}),
+          compareGroup: comparison ? {
+            id: comparison.id, label: comparison.runIds[0] === runId ? 'A' : 'B',
+          } : null,
+        },
+        rev,
+      };
     },
 
-    // --- Run control -------------------------------------------------------
-    // A gate can be answered with no renderer in the process, which is what
-    // lets the supervisor park a task instead of blocking on one (§10).
-    'run:approve': ({ projectId, runId }) => dailyRunControl(
-      projectId, runId, 'plan approval', runner => runner.approvePlan(runId)
-    ),
-    'run:reject': ({ projectId, runId, reason = '' }) => dailyRunControl(
-      projectId, runId, 'plan rejection', runner => runner.rejectPlan(runId, reason)
-    ),
+    'run:rename': async ({ projectId, runId, name }) => {
+      const entry = proj(projectId);
+      const normalized = String(name ?? '').trim() || null;
+      if (!isCanonicalRun(entry.store, runId)) return entry.store.setRunName(runId, normalized);
+      const live = runController.get(projectId, runId);
+      if (live) {
+        const session = await live.host.ctx.sessions.open(runId);
+        await session.append({ type: 'run.named', data: { name: normalized } });
+        await snapshotStackRun(live.host.ctx, runId, live.host.kernelModule);
+      } else {
+        await appendStoredRunEvent(entry.store.rootDir, runId, { type: 'run.named', data: { name: normalized } });
+      }
+      return { ok: true, runId, name: normalized };
+    },
+
+    'run:delete': ({ projectId, runId }) => {
+      const entry = proj(projectId);
+      if (runController.isLive(projectId, runId)) {
+        throw new ApiError('This run is still executing. Wait for it to finish before deleting it.', {
+          status: 409, code: 'run_already_live',
+        });
+      }
+      entry.store.deleteRun(runId);
+      entry.store.deleteComparisonsFor(runId);
+      engine.pushStateFor(entry.id).channels.delete(runId);
+      storedSnapshots.drop(entry.store.rootDir, runId);
+      return true;
+    },
+
+    'compare:begin': ({ projectId }) => ({ id: proj(projectId).store.newComparisonId() }),
+    'compare:save': ({ projectId, record }) => proj(projectId).store.saveComparison(record ?? {}),
+    'compare:list': ({ projectId }) => proj(projectId).store.listComparisons(),
+
+    // --- Canonical run control --------------------------------------------
     'run:resume': async ({ projectId, runId }) => {
       const entry = proj(projectId);
-      if (!isKernelRun(entry.store, runId)) return runnerFor(projectId).resume(runId);
-      const liveHost = entry.kernelRuns?.get(runId);
-      if (liveHost?.ctx?.agents?.get(runId)) return continueStackRun(liveHost.ctx, runId);
-      const host = await resumeKernelHost(entry, runId);
-      const { run } = await resumeStackRun(host, runId);
-      watchKernelRun(entry, host, run);
+      const legacy = legacyControl(entry, runId);
+      if (legacy) return legacy;
+      await runController.resume({ projectId, runId });
       return { ok: true, runId };
     },
     'run:stop': async ({ projectId, runId, reason = 'stopped by request' }) => {
       const entry = proj(projectId);
-      if (!isKernelRun(entry.store, runId)) return runnerFor(projectId).stop(runId);
-      const host = entry.kernelRuns?.get(runId);
-      if (!host) return { ok: false, error: 'not-live', message: `Kernel run ${runId} is not live in this process.` };
+      const legacy = legacyControl(entry, runId);
+      if (legacy) return legacy;
       settleWorkflowInteractions(projectId, runId);
-      return stopStackRun(host.ctx, runId, reason);
+      return runController.stop(projectId, runId, reason);
     },
     'run:pause': async ({ projectId, runId }) => {
       const entry = proj(projectId);
-      if (!isKernelRun(entry.store, runId)) return runnerFor(projectId).pause(runId);
-      const host = entry.kernelRuns?.get(runId);
-      if (!host) return { ok: false, error: 'not-live', message: `Kernel run ${runId} is not live in this process.` };
-      return pauseStackRun(host.ctx, runId);
+      return legacyControl(entry, runId) ?? runController.pause(projectId, runId);
     },
     // `worker` re-pins the node's model for this attempt only (D39) — the way
     // back from "the step failed because of the model it was pointed at".
-    'run:restartNode': async ({ projectId, runId, nodeId, guidance = '', worker = null }) => {
+    'run:restartBlock': async ({ projectId, runId, blockId, guidance = '', worker = null }) => {
       const entry = proj(projectId);
-      if (!isKernelRun(entry.store, runId)) {
-        return runnerFor(projectId).restartNode(runId, nodeId, String(guidance ?? ''), worker ?? null);
-      }
-      const override = worker?.model ? worker : null;
-      const host = await resumeKernelHost(entry, runId, override, nodeId);
-      const desktopBlockOverride = Boolean(override && host.metadata.profile === 'flyt-desktop');
-      const { run } = await restartStackBlock(
-        host, runId, nodeId, String(guidance ?? ''),
-        desktopBlockOverride ? {
-          blockWorkers: host.metadata.blockWorkers,
-          blockFallbacks: host.metadata.blockFallbacks,
-        } : override ? {
-          model: override.model, provider: override.provider ?? 'auto',
-          // Explicit null clears an old Auto Router band on future resumes.
-          routing: override.routing ?? null,
-        } : null,
-      );
-      watchKernelRun(entry, host, run);
-      return { ok: true, runId, blockId: nodeId };
+      const legacy = legacyControl(entry, runId);
+      if (legacy) return legacy;
+      await runController.restartBlock({
+        projectId, runId, blockId, guidance: String(guidance ?? ''), worker: worker?.model ? worker : null,
+      });
+      return { ok: true, runId, blockId };
     },
-    'run:followUp': ({ projectId, runId, text }) => dailyRunControl(
-      projectId, runId, 'follow-up', runner => runner.followUp(runId, String(text ?? ''))
-    ),
-    'run:answerInput': ({ projectId, runId, text }) => dailyRunControl(
-      projectId, runId, 'input answers', runner => runner.answerInput(runId, String(text ?? ''))
-    ),
 
     // --- Backlog (DESIGN-SPEC.md §8) --------------------------------------------
     //
@@ -2276,7 +2149,12 @@ export function createApi(engine) {
     // to run it again: what happened here, does this model work, and is the
     // configuration sane. Commands rather than a CLI-only feature, so the
     // desktop app and any agent driving the HTTP API reach the same answers.
-    'run:explain': ({ projectId, runId }) => explainRun(proj(projectId).store, runId),
+    'run:explain': ({ projectId, runId }) => explainRun(proj(projectId).store, runId, {
+      interactions: [
+        ...[...workflowApprovals.values()].map(row => row.interaction),
+        ...[...workflowQuestions.values()].map(row => row.interaction),
+      ].filter(row => row.projectId === projectId && row.runId === runId),
+    }),
 
     'model:probe': async ({ model, provider = null, maxTokens = null, stream = true }) => {
       const target = provider
@@ -2358,10 +2236,7 @@ export function createApi(engine) {
     // the thing a crash destroys and a file cannot tell you.
     'run:live': ({ projectId = null } = {}) => {
       const ids = projectId ? [projectId] : registry.listOpen().map(p => p.id);
-      return Object.fromEntries(ids.map(id => {
-        const entry = registry.get(id);
-        return [id, [...new Set([...(entry?.runner?.live ?? []), ...(entry?.kernelRuns?.keys() ?? [])])]];
-      }));
+      return Object.fromEntries(ids.map(id => [id, runController.list(id)]));
     }
   };
 
@@ -2398,25 +2273,9 @@ export function createApi(engine) {
     for (const supervisor of supervisors.values()) {
       try { if (supervisor?.running) supervisor.stop(reason); } catch { /* continue with owned runs */ }
     }
-    const stops = [];
-    for (const project of registry.listOpen()) {
-      let entry;
-      try { entry = registry.get(project.id); } catch { continue; }
-      for (const runId of entry.runner?.live ?? []) {
-        try { entry.runner.stop(runId); } catch { /* another stop may have won */ }
-      }
-      for (const [runId, host] of entry.kernelRuns ?? []) {
-        stops.push((async () => {
-          const run = host?.ctx?.agents?.get(runId);
-          const stopped = await host?.ctx?.agents?.stop(runId, reason);
-          if (run) await run.settled();
-          return stopped;
-        })().catch(() => false));
-      }
-    }
-    await Promise.allSettled(stops);
-    return { stopped: stops.length };
+    return runController.shutdown(reason);
   }
 
-  return { commands, invoke, shutdown, names: () => Object.keys(commands) };
+  const runCliWorkflow = args => startWorkflow({ ...args, profile: 'flyt-cli' });
+  return { commands, invoke, shutdown, runCliWorkflow, runController, names: () => Object.keys(commands) };
 }

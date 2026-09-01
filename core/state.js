@@ -49,6 +49,17 @@ export class RunStore {
 
   runDir(runId) { return path.join(this.rootDir, runId); }
 
+  isCanonical(runId) {
+    return fs.existsSync(path.join(this.runDir(runId), 'session.jsonl'));
+  }
+
+  #assertLegacyMutation(runId, operation) {
+    if (!this.isCanonical(runId)) return;
+    throw Object.assign(new Error(
+      `${operation} cannot mutate canonical run "${runId}"; append a session event and rebuild its projection.`,
+    ), { code: 'canonical_projection_read_only' });
+  }
+
   // A retired task's run folder is MOVED to the archive and replaced with a
   // pointer stub written by core/archive.js relocateRetiredRuns:
   //   { taskId, retiredAt, archivePath, revivedAt? }
@@ -116,6 +127,7 @@ export class RunStore {
   // string, so the run falls back to its prompt-derived name (the same rule the
   // flow-name field follows). Returns the name the run now shows.
   setRunName(runId, name) {
+    this.#assertLegacyMutation(runId, 'setRunName');
     const meta = this.readMeta(runId);
     const clean = String(name ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_RUN_NAME);
     if (clean) meta.name = clean; else delete meta.name;
@@ -149,6 +161,7 @@ export class RunStore {
     return readJson(path.join(this.runDir(runId), 'meta.json'));
   }
   writeMeta(runId, meta) {
+    this.#assertLegacyMutation(runId, 'writeMeta');
     let current = null;
     try { current = this.readMeta(runId); } catch { /* first write */ }
     const incoming = meta?.toolActivity ?? {};
@@ -240,6 +253,7 @@ export class RunStore {
   // concurrently, and a counter in memory is exactly the state a crash
   // destroys — the directory is the counter.
   writeToolResult(runId, record) {
+    this.#assertLegacyMutation(runId, 'writeToolResult');
     const dir = this.toolResultsDir(runId);
     fs.mkdirSync(dir, { recursive: true });
     const name = String(record?.tool ?? 'tool').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -331,6 +345,7 @@ export class RunStore {
     return path.join(this.runDir(runId), 'nodes', `${String(nodeId).replace(/[^a-zA-Z0-9_-]/g, '_')}.md`);
   }
   writeNodeOutput(runId, nodeId, markdown) {
+    this.#assertLegacyMutation(runId, 'writeNodeOutput');
     const p = this.nodeOutputPath(runId, nodeId);
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, markdown, 'utf8');
@@ -548,11 +563,9 @@ export class RunStore {
     return path.join(this.#comparisonsDir(), `${id}.json`);
   }
 
-  // Create or update a comparison record, then stamp meta.compareGroup on both
-  // runs (label A/B by runIds order) so the pairing is discoverable from
-  // either side. Runs already carrying a group keep it (a run may sit in
-  // several comparisons; the meta pointer is first-come). An update preserves
-  // createdAt and any verdict P3 has written.
+  // Create or update the project-level comparison record. Run projections are
+  // never stamped: callers join this relationship while listing/reading, so a
+  // projection rebuild cannot erase or fork the source of truth.
   saveComparison({ id = null, runIds, origin = 'manual' } = {}) {
     if (!Array.isArray(runIds) || runIds.length !== 2
       || runIds.some(r => typeof r !== 'string' || !r) || runIds[0] === runIds[1]) {
@@ -574,14 +587,6 @@ export class RunStore {
     };
     fs.mkdirSync(this.#comparisonsDir(), { recursive: true });
     writeJson(p, record);
-    for (const [i, label] of [[0, 'A'], [1, 'B']]) {
-      try {
-        const meta = this.readMeta(runIds[i]);
-        if (meta && !meta.compareGroup) {
-          this.writeMeta(runIds[i], { ...meta, compareGroup: { id: cid, label } });
-        }
-      } catch { /* run unreadable/gone — the record still stands */ }
-    }
     return record;
   }
 
@@ -644,6 +649,7 @@ export class RunStore {
   // instead — entries emitted while tasks overlap carry `node: executor:<id>`,
   // so one task's story can still be followed end to end.
   appendLog(runId, entry) {
+    this.#assertLegacyMutation(runId, 'appendLog');
     const recorded = { ts: new Date().toISOString(), ...entry };
     const line = JSON.stringify(recorded);
     fs.appendFileSync(path.join(this.runDir(runId), 'log.jsonl'), line + '\n', 'utf8');

@@ -11,30 +11,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applySearchProviderKeys, createEngine } from '../core/engine.js';
+import { createApi } from '../core/api.js';
 import { waitFor } from './helpers.js';
 
 const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-engine-'));
 
-// Drive a run to a terminal stage, approving node gates as they come.
-//
-// approvalMode: 'always' covers TOOL calls; a node's own `requiresApproval` is
-// a separate, deliberate stop and the shipped default pipeline has one. Doing
-// it here proves the thing the supervisor will need — that a gate can be
-// answered with no renderer in the process (DESIGN-SPEC.md §8).
-async function settleRun(runner, store, runId, { gates = 6 } = {}) {
-  for (let i = 0; i <= gates; i++) {
-    const stage = await waitFor(
-      () => ['done', 'failed', 'awaiting_approval'].find(s => store.readMeta(runId)?.stage === s),
-      { label: 'run to settle', timeoutMs: 60000 });
-    if (stage !== 'awaiting_approval') return stage;
-    runner.approvePlan(runId);
-    // The stage flips asynchronously; wait for it to leave the gate so the next
-    // poll can't read the gate we just answered.
-    await waitFor(() => store.readMeta(runId)?.stage !== 'awaiting_approval',
-      { label: 'gate to clear', timeoutMs: 20000 });
+async function settleRun(api, projectId, runId) {
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    const stage = (await api.invoke('run:snapshot', { projectId, runId })).meta?.stage;
+    if (['done', 'failed'].includes(stage)) return stage;
+    await new Promise(resolve => setTimeout(resolve, 20));
   }
-  throw new Error(`run ${runId} kept parking at gates`);
+  throw new Error('Timed out waiting for canonical run to settle');
 }
 
 // A fresh data root every time: the engine seeds flows/nodes/tools into it, so
@@ -113,31 +103,30 @@ test('fresh engine startup seeds a familiar daily prompt, not a Loop projection'
   ]);
 });
 
-test('a flow runs end to end headlessly, and emits the same events the UI consumes', async () => {
+test('a canonical workflow runs end to end headlessly and emits the UI events', async () => {
   const events = [];
   const { engine, dataRoot } = makeEngine({ emit: (type, payload) => events.push({ type, payload }) });
 
   // Mock provider: no key, no network — the point here is the wiring, not the model.
   engine.settings.workers = { executor: { provider: 'mock', model: 'mock-large' } };
   engine.rebuildRuntimeConfig();
+  const api = createApi(engine);
 
   const workspace = path.join(dataRoot, 'work');
   fs.mkdirSync(workspace, { recursive: true });
   const { project } = engine.registry.open(workspace);
-  const { runner, store } = engine.registry.get(project.id);
+  const { runId } = await api.invoke('workflow:run', {
+    projectId: project.id, workflowId: 'research', input: 'headless smoke', approvalMode: 'always',
+  });
+  assert.ok(runId);
+  assert.equal(await settleRun(api, project.id, runId), 'done');
 
-  const flow = engine.flows.load('assistant');
-  const runId = runner.start(flow, { userInput: 'headless smoke', workspace, approvalMode: 'always' });
-  assert.ok(runId, 'a run id came back synchronously');
-
-  assert.equal(await settleRun(runner, store, runId), 'done');
-
-  // The push plumbing is engine-side now, so a headless consumer sees exactly
-  // what the renderer sees: a full snapshot first, then diffs against it.
+  // Canonical runs push their durable event delta. Consumers fold it directly
+  // and use run:snapshot only for an explicit initial read or gap repair.
   await waitFor(() => events.some(e => e.type === 'run:update'), { label: 'a run:update', timeoutMs: 5000 });
   const updates = events.filter(e => e.type === 'run:update' && e.payload.runId === runId);
-  assert.equal(updates[0].payload.base, null, 'first push is a full snapshot');
-  assert.ok(updates[0].payload.full, 'and carries it');
+  assert.ok(updates[0].payload.events?.length, 'the first push carries canonical events');
+  assert.equal(updates[0].payload.full, undefined, 'no duplicate snapshot projection is pushed');
   assert.ok(events.some(e => e.type === 'project:activity'), 'live-run activity was broadcast');
 });
 
@@ -149,15 +138,15 @@ test('shouldPush gates the expensive half without silencing activity', async () 
   });
   engine.settings.workers = { executor: { provider: 'mock', model: 'mock-large' } };
   engine.rebuildRuntimeConfig();
+  const api = createApi(engine);
 
   const workspace = path.join(dataRoot, 'work');
   fs.mkdirSync(workspace, { recursive: true });
   const { project } = engine.registry.open(workspace);
-  const { runner, store } = engine.registry.get(project.id);
-  const flow = engine.flows.load('assistant');
-  const runId = runner.start(flow, { userInput: 'background', workspace, approvalMode: 'always' });
-
-  assert.equal(await settleRun(runner, store, runId), 'done');
+  const { runId } = await api.invoke('workflow:run', {
+    projectId: project.id, workflowId: 'research', input: 'background', approvalMode: 'always',
+  });
+  assert.equal(await settleRun(api, project.id, runId), 'done');
   assert.ok(!events.some(e => e.type === 'run:update'), 'no snapshot/diff work was done for nobody');
   assert.ok(events.some(e => e.type === 'project:activity'), 'but the live indicator still got the truth');
 });

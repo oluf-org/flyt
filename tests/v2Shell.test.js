@@ -175,7 +175,7 @@ test('the daily host wires the surviving entry controls into the v2 shell', () =
   assert.match(host, /workflowModelTiers/);
   assert.doesNotMatch(host, /launchDailyPrompt/);
   assert.match(host, /subscribeDailyRun/);
-  assert.match(host, /restartNode\(projectId, runId, blockId/);
+  assert.match(host, /restartBlock\(projectId, runId, blockId/);
   assert.match(host, /revealRunLog/);
   assert.match(shell, /composer=\{composer\}/);
   assert.match(shell, /loc\.dest === MODELS/);

@@ -194,7 +194,9 @@ export async function executeTool(name, args, ctx) {
 
     // A store is optional; appendLog on a configured store is not. Losing the
     // required completion audit is an execution failure, never silent.
-    ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: callerOf(ctx), ...record });
+    if (!ctx.canonicalSession) {
+      ctx.store?.appendLog(ctx.runId, { event: 'tool_call', node: callerOf(ctx), ...record });
+    }
     return record;
   } finally {
     if (liveEdge) {
@@ -207,6 +209,7 @@ export async function executeTool(name, args, ctx) {
 // Live chrome is auxiliary observability. A corrupt or read-only meta snapshot
 // must not change whether the underlying tool succeeds, fails, or is audited.
 function writeActivity(ctx, node, state) {
+  if (ctx?.canonicalSession) return null;
   try { return ctx.store?.writeToolActivity?.(ctx.runId, node, state) ?? null; }
   catch { return null; }
 }
@@ -227,6 +230,7 @@ function callerOf(ctx) {
 // to write must never fail a call that already succeeded: a full disk should
 // cost you the archive, not the work.
 function archiveResult(record, tool, ctx) {
+  if (ctx?.canonicalSession) return;
   if (!ctx?.store?.writeToolResult || !ctx.runId || record.result === undefined) return;
   const shape = tool?.result ?? {};
   if (shape.artifact === false) return;

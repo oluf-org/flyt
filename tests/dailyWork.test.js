@@ -12,7 +12,7 @@ import { runView } from '../src/v2/runView.js';
 import { traceView } from '../src/v2/traceView.js';
 import { INITIAL, MODELS } from '../src/v2/shellRouting.js';
 import {
-  DAILY_PROJECT_ACTIONS, applyDailyRunUpdate, dailyProjectBridge, launchDailyPrompt, subscribeDailyRun,
+  DAILY_PROJECT_ACTIONS, applyDailyRunUpdate, dailyProjectBridge, subscribeDailyRun,
 } from '../src/v2/dailyWorkBridge.js';
 
 const snapshot = {
@@ -76,7 +76,7 @@ test('the production preload and browser mock both expose every daily-host seam'
     'listProjects', 'openProject', 'createProject', 'renameProject', 'adoptProject',
     'revealProject', 'closeProject', 'activateProject', 'reorderProjects',
     'projectRecents', 'removeProjectRecent', 'pickProjectFolder', 'listFlows',
-    'listConfigs', 'flowLaunchInputs', 'runFlow', 'listRuns', 'getSnapshot',
+    'listConfigs', 'runWorkflow', 'listRuns', 'getSnapshot',
     'readRunLog', 'getSettings', 'listModels', 'modelRankings', 'setSettings',
     'saveProjectState',
   ];
@@ -145,33 +145,6 @@ test('every project tab action crosses the same behavior-tested bridge', async (
   await projects.reorderProjects(['p2', 'p1']);
   assert.deepEqual(calls.map(call => call[0]), DAILY_PROJECT_ACTIONS);
   assert.deepEqual(calls.at(-1), ['reorderProjects', ['p2', 'p1']]);
-});
-
-test('a projectless prompt creates, remembers, launches and follows the run', async () => {
-  const calls = [];
-  const flyt = {
-    createProject: async text => { calls.push(['createProject', text]); return { opened: 'appdata:first' }; },
-    saveProjectState: async (...args) => calls.push(['saveProjectState', ...args]),
-    runFlow: async (...args) => { calls.push(['runFlow', ...args]); return 'run-1'; },
-    getSnapshot: async (...args) => { calls.push(['getSnapshot', ...args]); return snapshot; },
-    readRunLog: async (...args) => { calls.push(['readRunLog', ...args]); return []; },
-    listRuns: async (...args) => { calls.push(['listRuns', ...args]); return [{ id: 'run-1' }]; },
-  };
-  const result = await launchDailyPrompt({
-    flyt, projectId: null, flowId: 'quick-fix', text: 'Fix the build',
-    approvalMode: 'smart', modeId: 'careful', overrides: { fix: { effort: 'high' } },
-    inputs: { repo: 'owner/repo' }, hasDeclaredInputs: true,
-  });
-  assert.equal(result.projectId, 'appdata:first');
-  assert.equal(result.runId, 'run-1');
-  assert.equal(result.watching.runId, 'run-1');
-  assert.deepEqual(result.runs, [{ id: 'run-1' }]);
-  assert.deepEqual(calls[1], ['saveProjectState', 'appdata:first', {
-    runFlowId: 'quick-fix', runModeId: 'careful',
-  }]);
-  assert.deepEqual(calls[2], ['runFlow', 'appdata:first', 'quick-fix', 'Fix the build', null, 'smart', {
-    modeId: 'careful', overrides: { fix: { effort: 'high' } }, inputs: { repo: 'owner/repo' },
-  }]);
 });
 
 test('live updates refresh only the run Work is actually following', async () => {

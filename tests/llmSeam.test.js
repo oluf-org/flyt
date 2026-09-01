@@ -49,6 +49,50 @@ test('a request reaches the adapter with its provider, key and tools resolved', 
   await boot.kernel.dispose();
 });
 
+test('structured output negotiates native schema, synthetic submission tool, then textual JSON', async () => {
+  const schema = { type: 'object', required: ['tasks'], properties: { tasks: { type: 'array' } } };
+  const structuredOutput = { name: 'submit_task_graph', schema, strict: true };
+
+  const native = await bootLlm({
+    resolve: model => ({ provider: 'openai', model }),
+    answer: { text: '{"tasks":[]}' },
+  });
+  let budget;
+  const nativeAnswer = await native.kernel.ctx.llm.complete(request({
+    model: 'gpt-5.6-sol', structuredOutput, maxTokens: 200_000,
+    reasoning: { effort: 'high', mode: 'pro' }, onBudget: record => { budget = record; },
+  }));
+  assert.equal(native.seen[0].responseFormat.name, 'submit_task_graph');
+  assert.deepEqual(nativeAnswer.structuredOutput, { tasks: [] });
+  assert.equal(budget.resolutions.find(item => item.field === 'max_output_tokens').requested, 200_000);
+  assert.equal(budget.resolutions.find(item => item.field === 'max_output_tokens').modelLimit, 128_000);
+  assert.equal(budget.resolutions.find(item => item.field === 'structured_output').effective, 'provider_json_schema');
+  assert.equal(budget.resolutions.find(item => item.field === 'reasoning.effort').effective, 'high');
+  await native.kernel.dispose();
+
+  const synthetic = await bootLlm({
+    answer: { text: '', finishReason: 'tool_calls', message: { tool_calls: [{
+      id: 'submit', function: { name: 'submit_task_graph', arguments: '{"tasks":[]}' },
+    }] } },
+  });
+  const syntheticAnswer = await synthetic.kernel.ctx.llm.complete(request({ structuredOutput }));
+  assert.equal(synthetic.seen[0].responseFormat, undefined);
+  assert.equal(synthetic.seen[0].tools.at(-1).function.name, 'submit_task_graph');
+  assert.deepEqual(syntheticAnswer.structuredOutput, { tasks: [] });
+  assert.equal(syntheticAnswer.toolCalls, undefined, 'the submission settles as output, not a pending executable call');
+  await synthetic.kernel.dispose();
+
+  const textual = await bootLlm({
+    resolve: model => ({ provider: 'local', model }),
+    answer: { text: '{"tasks":[]}' },
+  });
+  const textualAnswer = await textual.kernel.ctx.llm.complete(request({ model: 'local-model', structuredOutput }));
+  assert.equal(textual.seen[0].tools, undefined);
+  assert.match(textual.seen[0].messages.at(-1).content, /textual fallback/);
+  assert.deepEqual(textualAnswer.structuredOutput, { tasks: [] });
+  await textual.kernel.dispose();
+});
+
 test('a model nothing can serve is refused, naming it', async () => {
   const boot = await bootLlm({ resolve: () => null });
   await assert.rejects(() => boot.kernel.ctx.llm.complete(request({ model: 'nobody/knows' })),
