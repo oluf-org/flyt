@@ -27,6 +27,7 @@ import { bootKernel } from '../core/v2.js';
 import { createV2BuildController, createV2HostBridge } from '../core/v2Host.js';
 import { persistPluginConfig, persistPluginRemoval } from '../core/pluginPatch.js';
 import { createDiagnosticLog } from '../core/diagnosticLog.js';
+import { projectWindowChrome, STOCK_WINDOW_CHROME } from '../src/lib/projectChrome.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Where the app's own code and bundled assets live. When packaged this is
@@ -109,10 +110,7 @@ const isMac = process.platform === 'darwin';
 // Native window chrome, themed to the app's --app title-bar token so the
 // custom title bar we render in the renderer flows seamlessly into the OS
 // window controls. Colors mirror the light/dark tokens in styles.css.
-const CHROME = {
-  light: { color: '#1f2724', symbolColor: '#e6ebe8', height: 40 },
-  dark:  { color: '#0f1512', symbolColor: '#dfe7e2', height: 40 }
-};
+const CHROME = STOCK_WINDOW_CHROME;
 
 let win = null;
 let v2HostPromise = null;
@@ -153,6 +151,13 @@ async function v2Host() {
       },
     }).then(async booted => {
       if (!booted) return null;
+      // Canonical kernel sessions bypass RunStore, so subscribe at their one
+      // append seam and feed the same global envelope/index as compatibility
+      // runs. The session JSONL remains the immutable per-run authority.
+      booted.ctx.on('session/append', (runId, event) => {
+        try { engine.telemetry.recordSessionEvent(registry.activeId ?? DEFAULT_PROJECT_ID, runId, event); }
+        catch { /* telemetry cannot affect a workflow */ }
+      });
       v2BuildController = await createV2BuildController(booted, { stackRoot });
       const bridge = createV2HostBridge(booted, { build: () => v2BuildController.snapshot() });
       v2BuildController.subscribe(record => {
@@ -322,6 +327,19 @@ ipcMain.handle('diagnostics:renderer', (_event, details = null) => {
 });
 ipcMain.handle('diagnostics:path', () => diagnostics.file);
 ipcMain.handle('diagnostics:reveal', () => shell.showItemInFolder(diagnostics.file));
+ipcMain.handle('history:summary', (_event, filters = {}) => engine.telemetryQuery(filters ?? {}));
+ipcMain.handle('history:trace', (_event, runId) => engine.telemetryTrace(String(runId ?? '')));
+ipcMain.handle('history:export', async (_event, format = 'jsonl', filters = {}) => {
+  const type = format === 'csv' ? 'csv' : 'jsonl';
+  const picked = await dialog.showSaveDialog(win, {
+    title: `Export transparency history as ${type.toUpperCase()}`,
+    defaultPath: `flyt-history-${new Date().toISOString().slice(0, 10)}.${type}`,
+    filters: [{ name: type === 'csv' ? 'CSV projection' : 'Raw JSON Lines', extensions: [type] }],
+  });
+  if (picked.canceled || !picked.filePath) return { cancelled: true };
+  fs.writeFileSync(picked.filePath, engine.telemetryExport(type, filters ?? {}), 'utf8');
+  return { cancelled: false, file: picked.filePath };
+});
 ipcMain.handle('v2:plugin-review', async () => { await v2Host(); return publicPluginReview(); });
 ipcMain.handle('v2:plugin-review-decide', async (_event, decisions = {}) => {
   await v2Host();
@@ -665,6 +683,15 @@ ipcMain.handle('project:rename', (_e, projectId, name) => {
   registry.rename(projectId, String(name ?? ''));
   updateWindowTitle();
   return projectListPayload();
+});
+// The project record's theme color (per-project theming): hex present = set it
+// (the settings page's preset swatches and custom picker share this one write
+// path and it persists immediately), hex omitted = read the stored value. The
+// renderer derives the whole theme from this one field.
+ipcMain.handle('project:color', (_e, projectId, hex = null) => {
+  const entry = proj(projectId);
+  if (hex != null) registry.setColor(entry.id, hex);
+  return { id: entry.id, name: entry.name, colorHex: registry.colorOf(entry.id) };
 });
 // Adopt an appdata project into a real folder (Phase 6, "Move to folder…"): the
 // registry migrates the files and swaps the tab in place, returning the id remap
@@ -1094,10 +1121,12 @@ ipcMain.handle('provider:test', async (_e, provider) => {
     return { ok: false, error: String(err?.message ?? err).slice(0, 300) };
   }
 });
-// Re-tint the native window controls when the renderer flips theme.
-ipcMain.handle('titlebar:setTheme', (_e, mode) => {
+// Re-tint the native window controls when the renderer flips theme or active
+// project. The native overlay cannot see renderer CSS, so it receives the
+// active color and mirrors project-theme.css's title-bar mix main-side.
+ipcMain.handle('titlebar:setTheme', (_e, mode, projectColor = null) => {
   if (isMac || !win || win.isDestroyed() || !win.setTitleBarOverlay) return;
-  win.setTitleBarOverlay(CHROME[mode] ?? CHROME.light);
+  win.setTitleBarOverlay(projectWindowChrome(mode, projectColor));
 });
 
 // The custom title bar replaces the native menu; drop the default one.
@@ -1132,6 +1161,7 @@ app.on('before-quit', event => {
   quitCleanupStarted = true;
   const cleanup = async () => {
     await api.shutdown('application closing');
+    engine.telemetry.close();
     detachV2UiExtensions?.();
     detachV2UiExtensions = null;
     detachV2PluginReviews?.();

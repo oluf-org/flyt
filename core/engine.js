@@ -37,11 +37,14 @@ import {
   PROVIDER_IDS, KEYED_PROVIDERS, SUBSCRIPTION_PROVIDERS, DEFAULT_PRIORITY,
   migrateSettings, createResolver, createCapabilityCache
 } from './modelSource.js';
+import { pickProjectColorHex } from '../src/lib/projectTheme.js';
 import { claudeCredentialStatus, resolveClaudeCli } from './adapters/claudeCode.js';
 import { codexCredentialStatus, resolveCodexCli } from './adapters/codexCli.js';
 import { supportsToolsFor } from './agent.js';
 import { v2Flag } from './v2.js';
 import { LoopLog } from './loopLog.js';
+import { TelemetryStore } from './telemetry.js';
+import { projectHistory, flatCsv } from './telemetryProjection.js';
 
 const PUSH_COALESCE_MS = 80;
 const PUSH_SNAPSHOT_RETRIES = 1;
@@ -263,6 +266,25 @@ export function createEngine({
     }
   };
   persistSettings(); // seal the migration (legacy openrouterApiKey is gone after this)
+
+  // One-time backfill for profiles written before projects carried a color
+  // (per-project color theming): restored entries here never went through the
+  // registry's create/open paths before main.js calls restore(), so they would
+  // otherwise render unthemed until their first open. Performed only when the
+  // map is missing — never a second pass over a profile a person may have
+  // hand-edited since.
+  if (settings.projects && !settings.projects.colors) {
+    const legacyColors = {};
+    const used = [];
+    for (const desc of settings.projects.open ?? []) {
+      if (typeof desc !== 'string' && typeof desc?.appdata !== 'string') continue;
+      const id = typeof desc === 'string' ? path.resolve(desc) : `appdata:${desc.appdata}`;
+      legacyColors[id] = pickProjectColorHex(used);
+      used.push(legacyColors[id]);
+    }
+    settings.projects = { ...settings.projects, colors: legacyColors };
+    persistSettings(); // seal the backfill
+  }
 
   // Sign-in + CLI presence for one subscription provider (cheap fs checks).
   function subscriptionStatus(provider) {
@@ -729,6 +751,21 @@ export function createEngine({
       if (!job.events.length) s.eventJobs.delete(runId);
     }, PUSH_COALESCE_MS);
   };
+
+  // One user-level analytical store across projects. Raw events are portable
+  // JSONL; SQLite, when present, is only a WAL-backed query index.
+  // User-level even in development: analytics must not appear in the source
+  // checkout merely because the desktop app was run from it.
+  const telemetry = new TelemetryStore(path.join(userDataDir, 'telemetry'));
+  const telemetryQuery = (filters = {}) => {
+    const events = telemetry.read(filters);
+    return projectHistory(events, { ...filters, backend: telemetry.backend });
+  };
+  const telemetryTrace = (runId) => telemetry.read({ runId, limit: 250_000 });
+  const telemetryExport = (format = 'jsonl', filters = {}) => {
+    const events = telemetry.read({ ...filters, limit: 250_000 });
+    return format === 'csv' ? flatCsv(events) : events.map(event => JSON.stringify(event)).join('\n') + (events.length ? '\n' : '');
+  };
   const dropPushState = projectId => {
     const s = pushState.get(projectId);
     if (!s) return;
@@ -829,6 +866,7 @@ export function createEngine({
     appDataDir: userDataDir,
     // T2a: the storage location is a Settings choice, read at project-open time.
     getStorage: () => (settings.projectStorage === 'appdata' ? 'appdata' : 'workspace'),
+    telemetry,
     createRunner: (store, projectId) => {
       const runner = new StackRunner(store, runtimeConfig, pushUpdateFor(projectId), nodeLibrary, flows);
       // Lazy for the reason above, and a property rather than a constructor
@@ -862,9 +900,15 @@ export function createEngine({
       return runner;
     },
     onPersist: () => {
+      // Registry mutations own their record fields; the persisted map is rebuilt
+      // from the live one rather than merged, so a removed key (detach) cannot
+      // resurrect. setColor() and restore() hand back to this hook.
       settings.projects = registry.serialize();
       persistSettings();
-    }
+    },
+    // Assignment itself goes through this hook, so tests and hosts can observe
+    // or substitute it; default is the theme module's unused-preset picker.
+    pickColor: used => pickProjectColorHex(used)
   });
 
   return {
@@ -872,6 +916,7 @@ export function createEngine({
     projectRoot, dataRoot, userDataDir, settingsPath, dataDir, seedFromBundle,
     // Stores
     flows, stackRoot, nodeLibrary, toolLibrary, registry, backlogFor, feedbackFor, poolFor, ledgerFor, references,
+    telemetry, telemetryQuery, telemetryTrace, telemetryExport,
     configDirOf,
     // Config + settings
     baseConfig, runtimeConfig, settings, persistSettings, rebuildRuntimeConfig, publicSettings,

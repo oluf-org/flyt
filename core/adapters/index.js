@@ -239,6 +239,7 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
     // ends the call immediately — an abort is never retried below either.
     if (signal?.aborted) throw abortError();
     const deadline = startDeadline({ provider, signal, idleMs, hardMs });
+    const attemptStarted = Date.now();
     // Streaming keeps the deadline alive: each emission proves the connection
     // is moving, so only silence is counted against it.
     // Streamed characters are counted whether or not the caller wanted them,
@@ -258,8 +259,31 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
     // never the sum of them: summing counts a 10k answer delivered in 200
     // emissions as a million characters, and this number prices a ledger line.
     let streamedChars = 0;
+    let firstByteMs = null, firstReasoningMs = null, firstVisibleMs = null, firstToolInputMs = null;
+    let lastChunkMs = null, lastStreamAt = null;
+    let tokensBeforeFirstVisible = null, tokensBeforeFirstTool = null;
+    const streamIdleGaps = [];
     const watched = onText
       ? (text, opts) => {
+        const now = Date.now();
+        const elapsed = now - attemptStarted;
+        const telemetry = opts?.telemetry ?? {};
+        if (firstByteMs == null) firstByteMs = elapsed;
+        if (lastStreamAt != null && now - lastStreamAt >= 1_000 && streamIdleGaps.length < 20) streamIdleGaps.push(now - lastStreamAt);
+        lastStreamAt = now; lastChunkMs = elapsed;
+        const rendered = String(text ?? '');
+        const reasoningChars = Number(telemetry.reasoningChars) || (rendered.startsWith('⟢ thinking…') ? rendered.length : 0);
+        const contentChars = Number(telemetry.contentChars) || ((!rendered.startsWith('⟢ thinking…') && !rendered.trimStart().startsWith('→')) ? rendered.length : 0);
+        const toolInputChars = Number(telemetry.toolInputChars) || (rendered.includes('→ ') ? rendered.length : 0);
+        if (firstReasoningMs == null && reasoningChars > 0) firstReasoningMs = elapsed;
+        if (firstVisibleMs == null && contentChars > 0) {
+          firstVisibleMs = elapsed;
+          tokensBeforeFirstVisible = Math.round((reasoningChars + contentChars + toolInputChars) / CHARS_PER_TOKEN);
+        }
+        if (firstToolInputMs == null && toolInputChars > 0) {
+          firstToolInputMs = elapsed;
+          tokensBeforeFirstTool = Math.round((reasoningChars + contentChars + toolInputChars) / CHARS_PER_TOKEN);
+        }
         streamedChars = Math.max(streamedChars, String(text ?? '').length);
         deadline.touch();
         return onText(text, opts);
@@ -277,14 +301,29 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
         durationMs: Date.now() - started,
         ...(attempt > 0 ? { retries: attempt } : {})
       };
-      report(onCall, { provider, model, maxTokens, system, prompt, messages, tools, attempt, started, ...rest }, settled, null);
+      // A non-streaming response still has an observed first response time; it
+      // simply cannot distinguish first byte from the complete body.
+      const responseMs = Date.now() - attemptStarted;
+      if (firstByteMs == null) firstByteMs = responseMs;
+      if (firstReasoningMs == null && String(result?.reasoning ?? '').length) firstReasoningMs = responseMs;
+      if (firstVisibleMs == null && String(result?.text ?? '').length) firstVisibleMs = responseMs;
+      if (firstToolInputMs == null && result?.message?.tool_calls?.length) firstToolInputMs = responseMs;
+      report(onCall, {
+        provider, model, maxTokens, system, prompt, messages, tools, attempt, started, attemptStarted,
+        firstByteMs, firstReasoningMs, firstVisibleMs, firstToolInputMs, lastChunkMs,
+        tokensBeforeFirstVisible, tokensBeforeFirstTool, streamIdleGaps, ...rest
+      }, settled, null);
       return settled;
     } catch (err) {
       // Precedence matters. Aborting the adapter is HOW a deadline is enforced,
       // so a fired deadline arrives here as an AbortError that must not be read
       // as a deliberate stop — but the caller's own signal outranks both, since
       // a stop landing during a timeout is still a stop.
-      const ctx = { provider, model, maxTokens, system, prompt, messages, tools, attempt, started, streamedChars, ...rest };
+      const ctx = {
+        provider, model, maxTokens, system, prompt, messages, tools, attempt, started, attemptStarted, streamedChars,
+        firstByteMs, firstReasoningMs, firstVisibleMs, firstToolInputMs, lastChunkMs,
+        tokensBeforeFirstVisible, tokensBeforeFirstTool, streamIdleGaps, ...rest
+      };
       if (signal?.aborted) {
         const aborted = isAbortError(err) ? err : abortError();
         report(onCall, ctx, null, aborted);
@@ -343,10 +382,21 @@ export function callRecord(ctx, result, error) {
     model: ctx.model,
     ...(result?.resolvedModel && result.resolvedModel !== ctx.model ? { servedBy: result.resolvedModel } : {}),
     maxTokens: ctx.maxTokens ?? null,
+    startedAt: new Date(ctx.attemptStarted ?? ctx.started).toISOString(),
     messages: msgs ? msgs.length : 2,
     promptChars,
     tools: Array.isArray(ctx.tools) ? ctx.tools.length : 0,
+    toolNames: Array.isArray(ctx.tools) ? ctx.tools.map(tool => tool?.function?.name ?? tool?.name).filter(Boolean).slice(0, 100) : [],
     ms: Date.now() - ctx.started,
+    attemptMs: Date.now() - (ctx.attemptStarted ?? ctx.started),
+    firstByteMs: ctx.firstByteMs ?? null,
+    firstReasoningMs: ctx.firstReasoningMs ?? null,
+    firstVisibleMs: ctx.firstVisibleMs ?? null,
+    firstToolInputMs: ctx.firstToolInputMs ?? null,
+    lastChunkMs: ctx.lastChunkMs ?? null,
+    streamIdleGaps: ctx.streamIdleGaps ?? [],
+    ...(ctx.tokensBeforeFirstVisible != null ? { tokensBeforeFirstVisible: ctx.tokensBeforeFirstVisible, milestoneTokensEstimated: true } : {}),
+    ...(ctx.tokensBeforeFirstTool != null ? { tokensBeforeFirstTool: ctx.tokensBeforeFirstTool, milestoneTokensEstimated: true } : {}),
     ...(ctx.attempt ? { attempts: ctx.attempt + 1 } : {}),
     ...(error
       ? {
@@ -375,6 +425,8 @@ export function callRecord(ctx, result, error) {
         contentChars: String(result?.text ?? '').length,
         reasoningChars: String(result?.reasoning ?? '').length,
         toolCalls: result?.message?.tool_calls?.length ?? 0,
+        ...(result?.cost != null ? { cost: result.cost } : {}),
+        ...(result?.unparsedToolCall ? { unparsedToolCall: result.unparsedToolCall } : {}),
         ...(result?.usage ? { usage: result.usage } : {})
       })
   };

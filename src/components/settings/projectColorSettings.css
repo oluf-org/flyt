@@ -1,0 +1,77 @@
+/* The Color section of the Settings page — swatch row, custom picker, hex read.
+   Sits beside the existing settings-section markup in styles.css; every token
+   comes from the compiled palette, so both themes are covered. */
+
+/* The 9 preset swatches. A swatch is small and round like the status pills;
+   `--swatch` carries the color so the selection ring can be the swatch's own
+   color rather than a second one. */
+.project-color-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.project-color-swatch {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--swatch);
+  cursor: pointer;
+  transition: transform .14s var(--spring, ease), border-color .14s ease, box-shadow .14s ease;
+}
+
+.project-color-swatch:hover:not(:disabled) {
+  transform: scale(1.12);
+  box-shadow: var(--shadow-rest);
+  border-color: var(--divider);
+}
+
+.project-color-swatch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.project-color-swatch.selected {
+  border-color: var(--canvas);
+  box-shadow: 0 0 0 2px var(--swatch);
+}
+
+.project-color-swatch:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+/* The custom picker row. The native control is a swatch that opens the OS
+   dialog; the compiled input styles in styles.css would paint its background
+   --card, so the control is given its own frame and the color the user picked
+   shows through the inner ::-webkit-color-swatch. The row keeps the standard
+   .settings-row input layout. */
+.project-color-custom {
+  align-items: center;
+}
+
+/* Two classes: the compiled `.settings-panel input` rule (0,1,1) would
+   otherwise out-rank a single class and paint the control's frame in
+   --card instead of the chip tint it is specified with here. */
+.project-color-custom .project-color-picker {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 26px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--chip);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.project-color-custom .project-color-picker::-webkit-color-swatch-wrapper { padding: 0; }
+.project-color-custom .project-color-picker::-webkit-color-swatch { border: none; border-radius: 5px; }
+
+.project-color-hex {
+  font-size: 11.5px;
+  letter-spacing: .04em;
+}

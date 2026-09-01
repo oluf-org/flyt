@@ -13,8 +13,9 @@ export const WORK = 'work';
 export const BUILD = 'build';
 export const LIBRARY = 'library';
 export const MODELS = 'models';
+export const HISTORY = 'history';
 
-export const DESTINATIONS = Object.freeze([WORK, BUILD, LIBRARY, MODELS]);
+export const DESTINATIONS = Object.freeze([WORK, BUILD, LIBRARY, MODELS, HISTORY]);
 
 /**
  * A location in the shell: a destination, an optional addressed run, and an
@@ -67,6 +68,7 @@ export function heading(dest) {
   if (dest === BUILD) return 'Build';
   if (dest === LIBRARY) return 'Library';
   if (dest === MODELS) return 'Models';
+  if (dest === HISTORY) return 'History';
   if (dest === WORK) return 'Work';
   return null;
 }
@@ -83,6 +85,7 @@ export function hint(dest) {
   if (dest === BUILD) return 'Build — every workflow in this project, and the one you are editing';
   if (dest === LIBRARY) return 'Library — everything installed, and the plugins that install it';
   if (dest === MODELS) return 'Models — the catalog and what each one costs';
+  if (dest === HISTORY) return 'History — global model behavior, metrics and technical traces';
   return null;
 }
 

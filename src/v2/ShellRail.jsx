@@ -42,6 +42,11 @@ const ICON = {
       <circle cx="16.5" cy="6.5" r=".8" fill="currentColor" stroke="none" /><circle cx="16.5" cy="12.5" r=".8" fill="currentColor" stroke="none" />
     </svg>
   ),
+  history: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 19V10M10 19V5M16 19v-7M22 19V8" /><path d="M3 19.5h20" />
+    </svg>
+  ),
   settings: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="12" cy="12" r="3" />

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { showPersistentActivity } from './activityStatus.js';
+import { normalizeHexColor } from './lib/projectTheme.js';
 
 // The project tab strip (D22, tabs demo A): one tab per open project, living
 // in the custom titlebar between the brand and the document name. Anatomy per
@@ -87,6 +88,7 @@ export default function TabStrip({ tabs, activeId, live, activity = {}, saveStat
             tabIndex={0}
             aria-selected={active}
             className={'tab' + (active ? ' active' : '') + (editing ? ' editing' : '')}
+            style={{ '--tab-project-color': normalizeHexColor(t.colorHex ?? t.color) ?? 'transparent' }}
             title={editing ? undefined : (t.folder ?? `${t.name} — an app-managed project (double-click to rename)`)}
             draggable={!editing}
             onDragStart={e => { dragId.current = t.id; e.dataTransfer.effectAllowed = 'move'; }}

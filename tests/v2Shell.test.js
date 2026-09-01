@@ -7,12 +7,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  WORK, BUILD, LIBRARY, MODELS, DESTINATIONS, INITIAL, navigate, heading, hint, traceOf, state,
+  WORK, BUILD, LIBRARY, MODELS, HISTORY, DESTINATIONS, INITIAL, navigate, heading, hint, traceOf, state,
   adjacent,
 } from '../src/v2/shellRouting.js';
 
-test('Work, Build, the Library and the model catalog are permanent destinations', () => {
-  assert.deepEqual(DESTINATIONS, [WORK, BUILD, LIBRARY, MODELS]);
+test('Work, Build, Library, Models and History are permanent destinations', () => {
+  assert.deepEqual(DESTINATIONS, [WORK, BUILD, LIBRARY, MODELS, HISTORY]);
   // Trace is not a peer: it is reached by a run address, never by picking it.
   assert.ok(!DESTINATIONS.includes('trace'));
   // The order is the rail's order, and the rail's sliding pill is positioned
@@ -32,18 +32,19 @@ test('headings name every permanent surface, and only those', () => {
   assert.equal(heading(BUILD), 'Build');
   assert.equal(heading(LIBRARY), 'Library');
   assert.equal(heading(MODELS), 'Models');
+  assert.equal(heading(HISTORY), 'History');
   assert.equal(heading('nonexistent'), null);
   assert.equal(heading('trace'), null);
-  // The rail is four icons and four one-word labels; the hint is the only
+  // The rail is icons and one-word labels; the hint is the only
   // place a destination gets to say what it is FOR.
   for (const dest of DESTINATIONS) assert.match(hint(dest), /^\w+ —/);
   assert.equal(hint('trace'), null);
 });
 
 test('every destination is reachable from every other in one hop', () => {
-  assert.deepEqual(adjacent({ dest: WORK, run: null }), [BUILD, LIBRARY, MODELS]);
-  assert.deepEqual(adjacent({ dest: BUILD, run: null }), [WORK, LIBRARY, MODELS]);
-  assert.deepEqual(adjacent({ dest: LIBRARY, run: null }), [WORK, BUILD, MODELS]);
+  assert.deepEqual(adjacent({ dest: WORK, run: null }), [BUILD, LIBRARY, MODELS, HISTORY]);
+  assert.deepEqual(adjacent({ dest: BUILD, run: null }), [WORK, LIBRARY, MODELS, HISTORY]);
+  assert.deepEqual(adjacent({ dest: LIBRARY, run: null }), [WORK, BUILD, MODELS, HISTORY]);
   // A run address is carried across either hop — that is the whole point of
   // it being a property of the location rather than of a destination.
   const watched = { dest: WORK, run: 'run-42' };
@@ -73,6 +74,8 @@ test('state is a judgement-proof view of the location', () => {
     { dest: LIBRARY, run: null, workflow: null, trace: null, surface: 'library', builder: 'gallery' });
   assert.deepEqual(state({ dest: MODELS, run: null }),
     { dest: MODELS, run: null, workflow: null, trace: null, surface: 'models', builder: 'gallery' });
+  assert.deepEqual(state({ dest: HISTORY, run: null }),
+    { dest: HISTORY, run: null, workflow: null, trace: null, surface: 'history', builder: 'gallery' });
   // Build with a workflow addressed is the editor for it; with none, the
   // gallery. One question, one answer, so the rail and the back button cannot
   // disagree about which view Build is showing.

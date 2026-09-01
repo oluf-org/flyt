@@ -6,6 +6,7 @@ import Settings from '../Settings.jsx';
 import TabDeck from '../TabDeck.jsx';
 import TabStrip, { NewTabPage } from '../TabStrip.jsx';
 import Shell from './Shell.jsx';
+import HistoryPage from './HistoryPage.jsx';
 import { BUILD, INITIAL, MODELS, WORK } from './shellRouting.js';
 import { initialFlowId, initialModeId } from './dailyWorkModel.js';
 import { defaultModeId, queueTaskFromPrompt } from './workflowUx.js';
@@ -517,6 +518,7 @@ export default function DailyRoot() {
   return (
     <ModelMetaProvider value={{ ...(settings ?? {}), catalog: models }}>
       <Shell
+        projects={projects}
         location={location}
         onNavigate={setLocation}
         build={buildView}
@@ -607,6 +609,7 @@ export default function DailyRoot() {
           onChanged={() => window.flyt.getSettings().then(setSettings)}
           onOpenSettings={() => setSettingsOpen(true)}
         />}
+        history={<HistoryPage />}
       />
       {newTabOpen && <NewTabPage
         recents={recents}
@@ -632,6 +635,20 @@ export default function DailyRoot() {
       {settingsOpen && <Settings
         onClose={() => setSettingsOpen(false)}
         onOpenModels={() => { setSettingsOpen(false); setLocation(current => ({ ...current, dest: MODELS })); }}
+        projects={projects}
+        onColorChange={async updated => {
+          // The Color section's write path: the API call already persisted
+          // main-side, so re-reading the project list and swapping it into
+          // state is the whole update — the same merge every tab lifecycle
+          // goes through, and the one the shell's theme effect watches
+          // (Shell → applyProjectTheme), which is what rethemes the live
+          // window with no reload. Projectless, the section renders its muted
+          // state and nothing reaches here.
+          if (!updated?.id) return;
+          try {
+            acceptProjects(await window.flyt.listProjects());
+          } catch (err) { setError(cleanIpcError(err)); }
+        }}
       />}
     </ModelMetaProvider>
   );

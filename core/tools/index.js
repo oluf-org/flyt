@@ -147,7 +147,7 @@ export const toolNames = () => [...registry.keys()];
 // put an artifact, so the full result stays inline exactly as before.
 export async function executeTool(name, args, ctx) {
   const started = Date.now();
-  const record = { tool: name, args, ok: false };
+  const record = { tool: name, args, ok: false, schemaValid: null, validationDiagnostics: [] };
   const tool = registry.get(name);
   const activityNode = ctx?.taskId ? `executor-${ctx.taskId}` : (ctx?.nodeId ?? 'run');
   // The existing meta snapshot and audit log are the activity protocol. Keep
@@ -160,9 +160,24 @@ export async function executeTool(name, args, ctx) {
     try { ctx?.notify?.(); } catch { /* observability cannot break a tool */ }
   }
   try {
-    if (!tool) throw new Error(`Unknown tool "${name}". Available: ${[...registry.keys()].join(', ')}`);
+    if (!tool) {
+      record.schemaValid = false;
+      record.validationDiagnostics = [`Unknown tool "${name}"`];
+      throw new Error(`Unknown tool "${name}". Available: ${[...registry.keys()].join(', ')}`);
+    }
+    // Classification is safe structural telemetry. Recording it here lets the
+    // projection distinguish a successful read from a successful workspace
+    // effect without inspecting arguments or result payloads.
+    record.effects = Array.isArray(tool.effects) ? [...tool.effects] : [];
+    record.scope = tool.scope ?? null;
+    record.risk = tool.risk ?? null;
     const errors = validateArgs(tool.parameters, args ?? {});
-    if (errors.length) throw new Error(`Invalid arguments: ${errors.join('; ')}`);
+    if (errors.length) {
+      record.schemaValid = false;
+      record.validationDiagnostics = errors.slice(0, 50);
+      throw new Error(`Invalid arguments: ${errors.join('; ')}`);
+    }
+    record.schemaValid = true;
     record.result = await tool.run(args, ctx) ?? { ok: true };
     record.ok = true;
   } catch (err) {

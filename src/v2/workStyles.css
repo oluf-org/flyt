@@ -15,7 +15,7 @@
 .work-failure { margin: 0; padding: 10px 14px; background: var(--err-soft); color: var(--err); border-bottom: 1px solid var(--border); font-size: 12px; }
 .work-failure-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .work-failure-actions button { border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; background: var(--card); color: var(--tx); cursor: pointer; }
-.work-failure-actions .work-retry { background: var(--accent); border-color: var(--accent); color: white; font-weight: 650; }
+.work-failure-actions .work-retry { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); font-weight: 650; }
 .work-failure-actions button:disabled { opacity: .55; cursor: wait; }
 .work-failure > small { display: block; margin-top: 7px; }
 .work-stop { border: 1px solid color-mix(in srgb, var(--err) 38%, var(--border)); border-radius: 6px; padding: 6px 9px; background: var(--card); color: var(--err); cursor: pointer; }
@@ -31,7 +31,7 @@
 .work-rail-step:not(:last-child)::after { content: ''; position: absolute; left: 12px; top: 31px; bottom: -7px; border-left: 1px solid var(--divider); }
 .work-rail-index { position: relative; z-index: 1; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 50%; background: var(--card); color: var(--faint); font-size: 10px; }
 .work-rail-step > span:last-child { min-width: 0; display: flex; flex-direction: column; }.work-rail-step strong { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }.work-rail-step small { font-size: 9px; color: var(--faint); text-transform: uppercase; }
-.work-rail-step.state-active .work-rail-index { color: white; background: var(--accent); border-color: var(--accent); }.work-rail-step.state-done .work-rail-index { color: white; background: var(--ok); border-color: var(--ok); }.work-rail-step.state-failed .work-rail-index { color: white; background: var(--err); border-color: var(--err); }
+.work-rail-step.state-active .work-rail-index { color: #fff; background: var(--running); border-color: var(--running); }.work-rail-step.state-done .work-rail-index { color: #fff; background: var(--ok); border-color: var(--ok); }.work-rail-step.state-failed .work-rail-index { color: #fff; background: var(--err); border-color: var(--err); }
 .work-run-main { min-width: 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
 .work-run-main > .block-editor { flex: none; min-height: min-content; }
 .work-details { min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--side); border-left: 1px solid var(--border); }
@@ -52,7 +52,7 @@
 .work-tool { display: flex; justify-content: space-between; margin-top: 6px; padding: 5px 7px; border-radius: 5px; background: var(--side); font-size: 10px; }
 .work-attempt { display: flex; flex-wrap: wrap; gap: 5px 8px; margin-top: 7px; padding: 6px 7px; border-radius: 5px; background: var(--side); font-size: 9px; }
 .work-attempt span { margin-left: auto; color: var(--faint); }.work-attempt small { flex-basis: 100%; color: var(--err); }
-.work-attempt.state-failed { background: var(--err-soft); }.work-attempt.state-started { background: var(--accent-soft); }
+.work-attempt.state-failed { background: var(--err-soft); }.work-attempt.state-started { background: var(--running-soft); }
 .work-log article p.work-metrics { color: var(--faint); font-size: 9px; }
 .work-query p.work-metrics { margin: 0; color: var(--faint); font-size: 9px; }
 .work-results article code { color: var(--faint); font-size: 9px; }.work-results pre { margin: 7px 0 0; white-space: pre-wrap; font: 10px/1.5 var(--mono, ui-monospace, monospace); }
@@ -60,11 +60,11 @@
 .work-interaction { margin: 0 auto 16px; width: min(720px, calc(100% - 36px)); box-sizing: border-box; padding: 14px; border: 1px solid; border-radius: 10px; background: var(--card); }
 .work-interaction.approval { border-color: #d97706; }.work-interaction.question { border-color: var(--accent); }
 .work-interaction h3 { margin: 5px 0; font-size: 14px; }.work-interaction p { color: var(--dim); font-size: 11px; }.work-interaction pre { max-height: 160px; overflow: auto; padding: 8px; background: var(--side); border-radius: 6px; font-size: 10px; white-space: pre-wrap; }
-.work-interaction > div { display: flex; flex-wrap: wrap; gap: 7px; }.work-interaction button { border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--tx); padding: 6px 10px; cursor: pointer; }.work-interaction .work-allow { background: var(--accent); color: white; border-color: var(--accent); }
+.work-interaction > div { display: flex; flex-wrap: wrap; gap: 7px; }.work-interaction button { border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--tx); padding: 6px 10px; cursor: pointer; }.work-interaction .work-allow { background: var(--accent-fill); color: var(--on-accent); border-color: var(--accent-fill); }
 .work-interaction textarea, .work-reply textarea { width: 100%; box-sizing: border-box; resize: vertical; border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--tx); padding: 8px; }
 .work-options { margin-bottom: 9px; }.work-options button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .work-reply { position: sticky; bottom: 0; margin-top: auto; display: flex; align-items: flex-end; gap: 8px; padding: 12px 18px; background: color-mix(in srgb, var(--canvas) 92%, transparent); border-top: 1px solid var(--border); backdrop-filter: blur(8px); }
-.work-reply button { border: 0; border-radius: 7px; padding: 8px 13px; background: var(--accent); color: white; cursor: pointer; }.work-reply button:disabled { opacity: .5; }
+.work-reply button { border: 0; border-radius: 7px; padding: 8px 13px; background: var(--accent-fill); color: var(--on-accent); cursor: pointer; }.work-reply button:disabled { opacity: .5; }
 @media (max-width: 1050px) { .work-run-grid { grid-template-columns: 150px minmax(380px, 1fr); }.work-details { display: none; } }
 @media (max-width: 900px) { .work-run-models, .work-run-id { display: none; } }
 @media (max-width: 760px) { .work-run-grid { grid-template-columns: 1fr; }.work-run-rail { display: none; }.work-open-flow { display: none; } }

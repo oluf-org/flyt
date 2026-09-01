@@ -17,9 +17,15 @@
 // Installation can publish a review while somebody is on Work or Models, and a
 // modal that only exists on one surface leaves that installation parked with
 // nothing on screen asking about it.
+//
+// The shell is also the project theme's host: the active project's color is
+// applied as CSS custom properties on the document root
+// (src/lib/applyProjectTheme.js, consumed by src/styles/project-theme.css),
+// re-applied on every active-project/color change so a recolor lands without
+// a reload, and removed when the last project closes.
 import React, { useEffect, useState } from 'react';
 import {
-  BUILD, INITIAL, LIBRARY, MODELS, builderView, closeWorkflow, heading, navigate, openWorkflow,
+  BUILD, HISTORY, INITIAL, LIBRARY, MODELS, builderView, closeWorkflow, heading, navigate, openWorkflow,
   resolveLocation, state, traceOf,
 } from './shellRouting.js';
 import BlockEditor from './BlockEditor.jsx';
@@ -31,6 +37,19 @@ import Work from './Work.jsx';
 import Library from './Library.jsx';
 import PluginTrustReview from './PluginTrustReview.jsx';
 import { PluginContributionSection } from './PluginContributionView.jsx';
+import {
+  applyProjectTheme,
+  clearProjectTheme,
+} from '../lib/applyProjectTheme.js';
+
+/** The active project record, when the host has one open. */
+export function activeProjectRecord(projectTabsState) {
+  const tabs = projectTabsState?.tabs;
+  if (!Array.isArray(tabs) || tabs.length === 0) return null;
+  const id = projectTabsState.active;
+  if (id == null) return null;
+  return tabs.find((tab) => tab?.id === id) ?? null;
+}
 
 /**
  * @param location — where the shell is, when a host is driving it. Omitted, the
@@ -56,12 +75,13 @@ import { PluginContributionSection } from './PluginContributionView.jsx';
  */
 export default function Shell({
   location = null, onNavigate, build = null, watching = null,
-  composer = null, projectTabs = null, models = null, onRunBuild = null,
+  composer = null, projectTabs = null, models = null, history = null, onRunBuild = null,
   workflowInteraction = null, onWorkflowDecide = null, onWorkflowAnswer = null,
   onWorkflowReply = null, workflowReplyBusy = false, runs = [], onOpenRun = null,
   onNewChat = null, onOpenFlow = null, onOpenSettings = null,
   onRetryFailed = null, retryBusy = false, retryError = '', onRevealRunLog = null,
   onRevealDiagnosticLog = null, onStopRun = null, stopBusy = false,
+  projects = { tabs: [], active: null },
 }) {
   const [focus, setFocus] = useState(location ?? INITIAL);
   const loc = resolveLocation(location, focus);
@@ -88,6 +108,28 @@ export default function Shell({
 
   const [makingWorkflow, setMakingWorkflow] = useState(false);
   const [workflowError, setWorkflowError] = useState('');
+
+  // The active project's color becomes CSS custom properties on the document
+  // root (src/styles/project-theme.css consumes them). Re-derived whenever
+  // the active tab or its color changes, so a color change lands without a
+  // reload; closing the last tab unthemes the window. Records without a
+  // color fall back to a default preset until persistence lands.
+  const activeProject = activeProjectRecord(projects);
+  const activeProjectId = activeProject?.id ?? null;
+  const activeProjectColor = activeProject?.colorHex ?? activeProject?.color ?? null;
+  useEffect(() => {
+    const mode = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    if (activeProjectId == null) {
+      clearProjectTheme();
+      window.flyt?.setTitleBarTheme?.(mode, null)?.catch?.(() => {});
+      return undefined;
+    }
+    const vars = applyProjectTheme(activeProject);
+    window.flyt?.setTitleBarTheme?.(mode, vars['--project-color'])?.catch?.(() => {});
+    return undefined;
+    // The color is a dependency so a re-colored project rethemes immediately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProjectId, activeProjectColor]);
 
   const move = next => {
     setTracing(false);
@@ -131,7 +173,7 @@ export default function Shell({
   const brokenPlugins = plugins.filter(plugin => plugin.state === 'failed').length;
 
   return (
-    <div className="v2-shell" data-v2>
+    <div className="v2-shell" data-v2 data-project-theme={activeProjectId != null ? '' : null}>
       <header className="v2-shell-nav" aria-label="Project">
         {projectTabs && <div className="v2-project-tabs">{projectTabs}</div>}
         <div className="v2-shell-nav-end">
@@ -163,6 +205,8 @@ export default function Shell({
           {showTrace && <h1>Trace</h1>}
           {showTrace
             ? <Trace trace={watching?.trace ?? null} runId={trace.run} uiExtensions={build?.uiExtensions ?? []} />
+            : loc.dest === HISTORY
+              ? history
             : loc.dest === MODELS
               ? models
               : loc.dest === LIBRARY

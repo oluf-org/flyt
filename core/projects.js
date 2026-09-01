@@ -29,6 +29,10 @@ import { RunStore } from './state.js';
 import { slugFromPrompt, dedupeSlug } from './projectName.js';
 import { configDirFor, adoptConfigDir } from './workspace.js';
 import { APP_NAME } from './brand.js';
+// Per-project theme color (src/lib/projectTheme.js owns the color math). The
+// registry persists `colorHex` on the project record and picks one for any
+// project that lacks one; the renderer only ever derives from the stored value.
+import { pickProjectColorHex, normalizeHexColor } from '../src/lib/projectTheme.js';
 
 export const DEFAULT_PROJECT_ID = 'default';
 export const DEFAULT_PROJECT_NAME = 'Scratch';
@@ -94,13 +98,16 @@ export class ProjectRegistry {
    * @param {() => 'workspace'|'appdata'} opts.getStorage  T2a setting, read per open
    * @param {(store: RunStore, projectId: string) => object} opts.createRunner
    * @param {() => void} [opts.onPersist]  called after any mutation worth saving
+   * @param {(used: string[]) => string} [opts.pickColor]  the auto-assignment rule;
+   *        default is uniform among template presets the other projects don't use
    */
-  constructor({ defaultRunsDir, appDataDir, getStorage, createRunner, onPersist }) {
+  constructor({ defaultRunsDir, appDataDir, getStorage, createRunner, onPersist, pickColor, telemetry = null }) {
     this.defaultRunsDir = defaultRunsDir;
     this.appDataDir = appDataDir;
     this.appProjectsDir = path.join(appDataDir, 'projects');
     this.getStorage = getStorage ?? (() => 'workspace');
     this.createRunner = createRunner;
+    this.telemetry = telemetry;
     this.onPersist = onPersist ?? (() => {});
     this.entries = new Map();   // id -> { id, kind, folder, appDir, workspaceRoot, name, store, runner }
     this.openIds = [];          // tab order, left to right
@@ -108,6 +115,8 @@ export class ProjectRegistry {
     this.recents = [];          // bound folders only, most recent first
     this.tabState = {};         // id -> slim renderer UI state (T8/T17 restore depth)
     this.names = {};            // id -> custom display name (rename overrides)
+    this.colors = {};           // id -> theme color, '#rrggbb' (project record field)
+    this.pickColor = pickColor ?? ((used = []) => pickProjectColorHex(used));
   }
 
   get(id) {
@@ -135,7 +144,7 @@ export class ProjectRegistry {
     const runsDir = runsDirFor(resolved, {
       storage, appDataDir: this.appDataDir, defaultRunsDir: this.defaultRunsDir
     });
-    const store = new RunStore(runsDir);
+    const store = new RunStore(runsDir, { projectId: id, telemetry: this.telemetry });
     entry = {
       id,
       kind: resolved == null ? 'default' : 'folder',
@@ -159,7 +168,7 @@ export class ProjectRegistry {
     let entry = this.entries.get(id);
     if (entry) return entry;
     const appDir = this.#appDirFor(slug);
-    const store = new RunStore(path.join(appDir, 'runs'));
+    const store = new RunStore(path.join(appDir, 'runs'), { projectId: id, telemetry: this.telemetry });
     entry = {
       id,
       kind: 'appdata',
@@ -185,13 +194,15 @@ export class ProjectRegistry {
 
   // Auto-create an appdata project from a prompt/name (L5): derive a unique
   // slug, lay down its runs/ + workspace/ dirs, and open it as the active tab.
-  // Deterministic and instant — the slug is a synchronous heuristic.
+  // Deterministic and instant — the slug is a synchronous heuristic. The theme
+  // color is assigned here, at creation, from a preset no other project uses.
   createAppdata(promptOrName) {
     const slug = dedupeSlug(slugFromPrompt(promptOrName), this.#takenSlugs());
     const appDir = this.#appDirFor(slug);
     fs.mkdirSync(path.join(appDir, 'runs'), { recursive: true });
     fs.mkdirSync(path.join(appDir, 'workspace'), { recursive: true });
     const entry = this.#appdataEntryFor(slug);
+    this.#colorFor(entry);
     if (!this.openIds.includes(entry.id)) this.openIds.push(entry.id);
     this.activeId = entry.id;
     this.onPersist();
@@ -229,6 +240,9 @@ export class ProjectRegistry {
 
   open(folder = null) {
     const entry = this.#entryFor(folder);
+    // "Whenever a project lacks a color" covers pre-color projects and anything
+    // else that arrived without one: assigned on first open, never reassigned.
+    this.#colorFor(entry);
     const already = this.openIds.includes(entry.id);
     if (!already) this.openIds.push(entry.id);
     this.activeId = entry.id;
@@ -250,6 +264,50 @@ export class ProjectRegistry {
     return entry;
   }
 
+  // --- Per-project theme color ----------------------------------------------
+  // The color IS part of the project record: chosen at creation, persisted in
+  // settings.json beside names/tabState, editable from the settings page. The
+  // renderer derives its theme from this stored value (src/lib/projectTheme.js
+  // owns the derivation); nothing else recomputes or guesses it.
+
+  // A project lacking a color gets one now: uniformly among the 9 template
+  // presets no OTHER project uses, falling back to the full template when all
+  // (or nearly all — the picker's own rule) are taken. Idempotent per project:
+  // a set color is never overwritten, so re-opens and renames do not churn it.
+  #colorFor(entry) {
+    const stored = normalizeHexColor(this.colors[entry.id]);
+    if (stored) return stored;
+    const used = [];
+    for (const [id, color] of Object.entries(this.colors)) {
+      if (id === entry.id) continue;
+      const hex = normalizeHexColor(color);
+      if (hex) used.push(hex);
+    }
+    const picked = this.pickColor(used);
+    this.colors[entry.id] = picked;
+    this.onPersist();
+    return picked;
+  }
+
+  // The settings page's one write path (presets and custom picker colors take
+  // the same one): normalize, store on the record, persist. Refuses junk rather
+  // than storing a color the theme derivation would have to reject later.
+  setColor(id, rawHex) {
+    const entry = this.get(id);
+    const hex = normalizeHexColor(rawHex);
+    if (!hex) throw new Error(`"${rawHex}" is not a hex color like "#dc4a3a".`);
+    this.colors[entry.id] = hex;
+    this.onPersist();
+    return entry;
+  }
+
+  // The theme color on the record ('#rrggbb'), or null when the project has
+  // none yet. The read half of setColor(); the renderer derives its theme from
+  // this value and never recomputes one.
+  colorOf(id) {
+    return normalizeHexColor(this.colors[this.get(id).id]) ?? null;
+  }
+
   // Adopt an appdata project into a real folder (DECISIONS.md D25):
   // "Move to folder…". The project's files migrate into the repo — its runs to
   // the folder's runs store, its workspace contents into the folder itself — and
@@ -261,6 +319,9 @@ export class ProjectRegistry {
   // are skipped); copies then removes the source, so a failed delete still
   // leaves every file safely in the destination. Returns the id remap so the
   // renderer can re-key its per-tab bundles.
+  // Adopt never mutates the theme color: it is part of the record, not of the
+  // address, so "Move to folder…" keeps it the way it keeps the name (the id
+  // changes, the project is the same one).
   adoptAppdata(id, folder) {
     if (!isAppdataId(id)) throw new Error('Only an app-managed project can be moved to a folder.');
     const old = this.get(id);
@@ -300,6 +361,7 @@ export class ProjectRegistry {
     const pos = this.openIds.indexOf(id);
     if (this.names[id]) { this.names[newId] = this.names[id]; delete this.names[id]; }
     if (this.tabState[id]) { this.tabState[newId] = this.tabState[id]; delete this.tabState[id]; }
+    if (this.colors[id]) { this.colors[newId] = this.colors[id]; delete this.colors[id]; }
     this.entries.delete(id); // no live runs (guarded) — safe to drop the appdata entry
     const entry = this.#entryFor(resolved); // fresh bound entry over the moved runs
     if (pos !== -1) this.openIds[pos] = newId;
@@ -372,6 +434,7 @@ export class ProjectRegistry {
         folder: e.folder,
         name: e.name,
         kind: e.kind,
+        colorHex: this.colors[e.id] ?? null, // the project record's theme color
         live: e.runner?.live?.size ?? 0,
         state: this.tabState[id] ?? {}
       };
@@ -395,7 +458,10 @@ export class ProjectRegistry {
       active: this.activeId,
       recents: this.recents,
       tabState: this.tabState,
-      names: this.names
+      names: this.names,
+      // Per-project record fields: the theme color. Keyed by id so a project
+      // keeps its color across launches without being an open tab.
+      colors: this.colors
     };
   }
 
@@ -406,6 +472,15 @@ export class ProjectRegistry {
   restore(saved = {}) {
     const dropped = [];
     this.names = { ...(saved.names ?? {}) };
+    // The theme color is the project record's, not the session's: adopt the map
+    // whole, so a project keeps its color even when it is not restored as a tab.
+    // Only well-formed values survive — a hand-edited settings.json must not be
+    // able to put junk where deriveProjectTheme() reads.
+    this.colors = {};
+    for (const [id, value] of Object.entries(saved.colors ?? {})) {
+      const hex = normalizeHexColor(value);
+      if (hex) this.colors[id] = hex;
+    }
     for (const desc of saved.open ?? []) {
       try {
         if (desc == null) continue; // legacy scratch — retired (L6)
@@ -431,6 +506,10 @@ export class ProjectRegistry {
     }
     this.names = Object.fromEntries(
       Object.entries(this.names).filter(([id]) => this.entries.has(id)));
+    // A project restored without a color — a pre-color settings.json, mostly —
+    // gets one now, from presets no restored project uses. #colorFor skips
+    // projects that already have theirs, so this only ever fills gaps.
+    for (const entry of this.entries.values()) this.#colorFor(entry);
     // Projectless when nothing survives (L6): no scratch fallback.
     this.activeId = this.openIds.includes(saved.active) ? saved.active : (this.openIds[0] ?? null);
     return { dropped };

@@ -6,8 +6,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export class RunStore {
-  constructor(rootDir) {
+  constructor(rootDir, { projectId = null, telemetry = null } = {}) {
     this.rootDir = rootDir; // e.g. <project>/runs
+    // Global analytics is a secondary sink. The per-run JSONL above remains
+    // authoritative and a telemetry failure must never change execution.
+    this.projectId = projectId;
+    this.telemetry = telemetry;
     // The directory remains authoritative; this is only the next known free
     // number in this process so a many-tool run does not rescan every prior
     // result for every new result (quadratic metadata I/O).
@@ -640,8 +644,11 @@ export class RunStore {
   // instead — entries emitted while tasks overlap carry `node: executor:<id>`,
   // so one task's story can still be followed end to end.
   appendLog(runId, entry) {
-    const line = JSON.stringify({ ts: new Date().toISOString(), ...entry });
+    const recorded = { ts: new Date().toISOString(), ...entry };
+    const line = JSON.stringify(recorded);
     fs.appendFileSync(path.join(this.runDir(runId), 'log.jsonl'), line + '\n', 'utf8');
+    try { this.telemetry?.recordRunLog?.(this.projectId, runId, recorded); }
+    catch { /* an analytical projection can never fail the run record */ }
   }
 
   // --- the liveness lease (D40) --------------------------------------------

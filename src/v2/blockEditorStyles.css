@@ -12,7 +12,7 @@
 .be-validity.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
 .be-validity.error { color: var(--err); background: var(--err-soft); }
 .be-primary, .be-secondary, .be-danger, .be-modal button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 7px; padding: 7px 11px; cursor: pointer; border: 1px solid var(--border); background: var(--card); color: var(--tx); }
-.be-primary { background: var(--accent); color: white; border-color: var(--accent); }
+.be-primary { background: var(--accent-fill); color: var(--on-accent); border-color: var(--accent-fill); }
 .be-primary:disabled { opacity: .45; cursor: default; }
 .be-danger { background: var(--err) !important; color: white !important; border-color: var(--err) !important; }
 .be-refusal { margin: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; background: var(--err-soft); color: var(--err); font-size: 12px; border-bottom: 1px solid var(--border); }
@@ -100,7 +100,7 @@
 .by-human { --be-touch: var(--accent); } .by-agent { --be-touch: var(--orch); }
 @keyframes be-settle { from { box-shadow: 0 0 0 4px color-mix(in srgb, var(--be-touch) 32%, transparent); } to { box-shadow: 0 0 0 0 transparent; } }
 .be-status { justify-self: end; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 3px 7px; border-radius: 999px; color: var(--faint); background: var(--side); }
-.status-active, .status-running { color: var(--accent); background: var(--accent-soft); }
+.status-active, .status-running { color: var(--running); background: var(--running-soft); }
 .status-done { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .status-failed { color: var(--err); background: var(--err-soft); }
 .status-waiting, .status-approval, .status-input { color: #d97706; background: color-mix(in srgb, #d97706 12%, transparent); }

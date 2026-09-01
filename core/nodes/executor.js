@@ -343,6 +343,15 @@ export async function runExecutorTask(store, runId, taskId, config = {}, { appro
       before: beforeSig,
       after: beforeSig ? captureWorkspaceSignature(workspace?.root ?? wsPath ?? null) : null
     });
+    store.appendLog(runId, {
+      event: 'effect_observed', node: `executor:${taskId}`,
+      effect: contract.mode, ok: effect.ok,
+      workspaceChange: effect.observed?.workspaceChange ?? null,
+      artifact: effect.observed?.artifact ?? null,
+      changedPaths: (effect.changedPaths ?? []).slice(0, 20),
+      outOfScopePaths: (effect.outOfScopePaths ?? []).slice(0, 20),
+      changedFiles: effect.changedPaths?.length ?? 0,
+    });
     if (!effect.ok) {
       store.appendLog(runId, {
         event: 'effect_missing', node: `executor:${taskId}`,

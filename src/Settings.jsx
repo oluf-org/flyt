@@ -5,12 +5,15 @@ import { canServe, MOCK_MODELS, PROVIDER_ORDER } from './providerMirror.js';
 import { FactChips } from './ModelPicker.jsx';
 import { proposeStarterSet, modelSetId, MODEL_SET_MAX } from '../core/modelSource.js';
 import ReposPanel from './ReposPanel.jsx';
+import ProjectColorSettings from './components/settings/ProjectColorSettings.tsx';
 
-// Settings page (DESIGN-SPEC.md §6): two tabs behind a slim rail.
+// Settings page (DESIGN-SPEC.md §6): tabs behind a slim rail.
 //   Providers — five compact cards (keys, test, Kimi key-kind), overview-first:
 //               a collapsed card is one line — name, status pill, model count.
 //   Models    — provider-priority chips, the curated active-models list with
 //               per-model source pins, add-a-model search, default worker.
+//   Project   — the active project's theme color (per-project theming):
+//               9 preset swatches + a custom picker, persisted immediately.
 // The renderer never sees a stored key — only per-provider hasKey flags come
 // back over IPC, and saving sends a key one way into the main process.
 
@@ -65,7 +68,7 @@ const SEARCH_PROVIDER_META = {
   },
 };
 
-export default function Settings({ onClose, onOpenProject = null, onOpenModels = null }) {
+export default function Settings({ onClose, onOpenProject = null, onOpenModels = null, projects = null, onColorChange = null }) {
   const [tab, setTab] = useState('providers');
   const [s, setS] = useState(null); // the public settings payload
   const [error, setError] = useState('');
@@ -100,7 +103,7 @@ export default function Settings({ onClose, onOpenProject = null, onOpenModels =
         </div>
 
         <div className="settings-tabs" role="tablist" aria-label="Settings sections">
-          {[['providers', 'Providers'], ['repos', 'Repositories'], ['safety', 'Safety']].map(([id, label]) => (
+          {[['providers', 'Providers'], ['repos', 'Repositories'], ['safety', 'Safety'], ['project', 'Project']].map(([id, label]) => (
             <button
               key={id} role="tab" aria-selected={tab === id}
               className={'settings-tab' + (tab === id ? ' active' : '')}
@@ -114,6 +117,9 @@ export default function Settings({ onClose, onOpenProject = null, onOpenModels =
           {s && tab === 'providers' && <ProvidersTab s={s} save={save} onKeySaved={onOpenModels} />}
           {s && tab === 'repos' && <ReposPanel onOpenProject={onOpenProject} />}
           {s && tab === 'safety' && <SafetyTab s={s} save={save} />}
+          {tab === 'project' && (
+            <ProjectColorSettings projects={projects} onColorChange={onColorChange} />
+          )}
           {error && <div className="settings-error mono">{error}</div>}
         </div>
       </div>

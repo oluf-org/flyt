@@ -198,7 +198,11 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
           moved = true;
         }
 
-        if (moved) onText(renderTurn(text, frags, reasoning));
+        if (moved) onText(renderTurn(text, frags, reasoning), { telemetry: {
+          contentChars: text.length,
+          reasoningChars: reasoning.length,
+          toolInputChars: [...frags.values()].reduce((n, call) => n + String(call.function?.arguments ?? '').length, 0),
+        } });
         if (choice?.finish_reason) finishReason = choice.finish_reason;
         if (chunk.usage) usage = chunk.usage;
         if (chunk.model) resolvedModel = chunk.model;
@@ -206,7 +210,11 @@ export function openaiCompatible({ provider, baseUrl, headers = {}, keyHelp = 'A
 
       // The turn is fully assembled: emit it unthrottled, so its last and most
       // informative state (a tool call WITH its arguments) is what stands.
-      onText(renderTurn(text, frags, reasoning), { final: true });
+      onText(renderTurn(text, frags, reasoning), { final: true, telemetry: {
+        contentChars: text.length,
+        reasoningChars: reasoning.length,
+        toolInputChars: [...frags.values()].reduce((n, call) => n + String(call.function?.arguments ?? '').length, 0),
+      } });
 
       const toolCalls = [...frags.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c);
       // Zero parsed tool calls + known native markup in the content = the model

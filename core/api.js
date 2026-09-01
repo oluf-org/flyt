@@ -888,6 +888,21 @@ export function createApi(engine) {
       return { id: project.id, name: project.name, kind: project.kind, folder: project.folder ?? null };
     },
 
+    // The project's theme color (per-project theming): the one field the
+    // settings page writes and every themed surface derives from. `hex` present
+    // = set it (a template preset or a custom picker value, normalized to
+    // #rrggbb); omitted = a read. One command so both front doors share it.
+    'project:color': ({ projectId, hex = null }) => {
+      const entry = registry.get(projectId);
+      if (hex != null) {
+        try { registry.setColor(entry.id, hex); }
+        catch (err) {
+          throw new ApiError(String(err?.message ?? err), { status: 400, code: 'bad_color' });
+        }
+      }
+      return { id: entry.id, name: entry.name, colorHex: registry.colorOf(entry.id) };
+    },
+
     // Clone a repository and open it as a project (D36 P1, generalised).
     //
     // The two things you might want to do with someone else's repository are

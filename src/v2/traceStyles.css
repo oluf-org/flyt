@@ -56,7 +56,7 @@
 
 /* Three tones, and each is a fact rather than a decoration: this is still
    running, this never came back, this failed. */
-.tr-fold.tone-live > .tr-fold-head .tr-fold-detail { color: var(--accent); }
+.tr-fold.tone-live > .tr-fold-head .tr-fold-detail { color: var(--running); }
 .tr-fold.tone-warn > .tr-fold-head .tr-fold-detail { color: var(--warn); }
 .tr-fold.tone-err  > .tr-fold-head .tr-fold-detail { color: var(--err); }
 
@@ -91,7 +91,7 @@
 .tr-attempt code { overflow: hidden; text-overflow: ellipsis; }
 .tr-attempt em { grid-column: 2 / -1; color: var(--err); font-style: normal; font-size: 11px; }
 .tr-attempt.state-failed { background: var(--err-soft); }
-.tr-attempt.state-started { background: var(--accent-soft); }
+.tr-attempt.state-started { background: var(--running-soft); }
 
 .tr-unfinished { color: var(--warn); margin: 0 0 8px; }
 .tr-none { color: var(--faint); margin: 0 0 8px; }

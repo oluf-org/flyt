@@ -6,6 +6,9 @@ const api = {
   reportRendererError: details => ipcRenderer.invoke('diagnostics:renderer', details),
   diagnosticsPath: () => ipcRenderer.invoke('diagnostics:path'),
   revealDiagnostics: () => ipcRenderer.invoke('diagnostics:reveal'),
+  historySummary: (filters = {}) => ipcRenderer.invoke('history:summary', filters),
+  historyTrace: (runId) => ipcRenderer.invoke('history:trace', runId),
+  exportHistory: (format = 'jsonl', filters = {}) => ipcRenderer.invoke('history:export', format, filters),
   v2Build: () => ipcRenderer.invoke('v2:build'),
   v2PluginReview: () => ipcRenderer.invoke('v2:plugin-review'),
   v2DecidePluginReview: decisions => ipcRenderer.invoke('v2:plugin-review-decide', decisions),
@@ -135,7 +138,7 @@ const api = {
   saveNodeTemplate: (tpl) => ipcRenderer.invoke('node:save', tpl),
   newNodeTemplate: () => ipcRenderer.invoke('node:new'),
   deleteNodeTemplate: (id) => ipcRenderer.invoke('node:delete', id),
-  setTitleBarTheme: (mode) => ipcRenderer.invoke('titlebar:setTheme', mode),
+  setTitleBarTheme: (mode, projectColor = null) => ipcRenderer.invoke('titlebar:setTheme', mode, projectColor),
   listTools: () => ipcRenderer.invoke('tool:list'),
 
   // --- The reference library (D36 P1) ---
@@ -156,6 +159,7 @@ const api = {
   openProject: (folder) => ipcRenderer.invoke('project:open', folder),
   createProject: (promptOrName) => ipcRenderer.invoke('project:create', promptOrName),
   renameProject: (pid, name) => ipcRenderer.invoke('project:rename', pid, name),
+  projectColor: (pid, hex = null) => ipcRenderer.invoke('project:color', pid, hex),
   adoptProject: (pid, folder) => ipcRenderer.invoke('project:adopt', pid, folder),
   revealProject: (pid) => ipcRenderer.invoke('project:reveal', pid),
   closeProject: (pid) => ipcRenderer.invoke('project:close', pid),

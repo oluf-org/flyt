@@ -2,6 +2,9 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import Root from './Root.jsx';
 import './styles.css';
+// Per-project theming (see src/lib/applyProjectTheme.js): loads after the
+// base sheet so its project-scoped token overrides win the cascade.
+import './styles/project-theme.css';
 
 const errorDetails = error => ({
   name: error?.name ?? 'Error', message: error?.message ?? String(error ?? 'Unknown renderer error'),

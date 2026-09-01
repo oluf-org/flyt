@@ -4,6 +4,7 @@
 import { SEED_NODE_TEMPLATES, normalizeTemplate, AGENT_TOOLS } from './flowTypes.js';
 import { slugFromPrompt, dedupeSlug } from '../core/projectName.js';
 import { factsFromCatalog } from '../core/modelSource.js';
+import { normalizeHexColor } from './lib/projectTheme.js';
 
 const snapshots = {
   // A finished flow run with one follow-up turn: previews the thread view +
@@ -494,8 +495,8 @@ const daysAgo = n => {
 // one shared run set.
 const mockProjects = {
   tabs: [
-    { id: 'appdata:fix-auth-flow', folder: null, kind: 'appdata', name: 'fix-auth-flow', live: 0, state: {} },
-    { id: 'D:\\demo\\habit-tracker', folder: 'D:\\demo\\habit-tracker', kind: 'folder', name: 'habit-tracker', live: 1, state: {} }
+    { id: 'appdata:fix-auth-flow', folder: null, kind: 'appdata', name: 'fix-auth-flow', colorHex: '#dc4a3a', live: 0, state: {} },
+    { id: 'D:\\demo\\habit-tracker', folder: 'D:\\demo\\habit-tracker', kind: 'folder', name: 'habit-tracker', colorHex: '#3e7fd4', live: 1, state: {} }
   ],
   active: 'appdata:fix-auth-flow',
   storage: 'workspace'
@@ -584,8 +585,66 @@ const mockPlugin = id => {
 // wait. The manager's busy states are real states, not decoration.
 const mockLatency = () => new Promise(resolve => setTimeout(resolve, 420));
 
+// A compact, internally consistent telemetry fixture keeps the browser preview
+// useful without teaching the renderer about the on-disk projection format.
+const mockHistoryRuns = [
+  { runId: 'run-history-refactor', at: daysAgo(0), status: 'verified', modelCalls: 3, toolCalls: 7, tokens: 18420, costUsd: 0.1842 },
+  { runId: 'run-history-tests', at: daysAgo(2), status: 'completed', modelCalls: 2, toolCalls: 4, tokens: 9230, costUsd: 0.0871 },
+  { runId: 'run-history-repair', at: daysAgo(6), status: 'failed', modelCalls: 2, toolCalls: 3, tokens: 11760, costUsd: 0.1215 },
+];
+const mockHistoryEvents = [
+  ['planner.candidate', 'harness_observed', { workflow: 'implementation', workflowVersion: 'v2', taskClass: 'code-change' }, { taskCount: 4, graphDepth: 3, graphWidth: 2 }],
+  ['planner.diagnostics', 'harness_observed', { codes: [], candidateHash: 'sha256:34c0…11d9' }, { diagnosticCount: 0 }],
+  ['planner.accepted', 'derived', { planHash: 'sha256:34c0…11d9', projectionVersion: 1 }, { repairAttempts: 0 }],
+  ['llm.request', 'harness_observed', { provider: 'openai', requestedModel: 'gpt-5.4', effectiveModel: 'gpt-5.4', fallbackRung: 0 }, { promptChars: 9182, configuredOutputCeiling: 24000, queueMs: 7 }],
+  ['llm.stream.first_reasoning', 'harness_observed', { model: 'gpt-5.4' }, { elapsedMs: 184 }],
+  ['llm.stream.first_visible', 'harness_observed', { model: 'gpt-5.4' }, { elapsedMs: 436, tokensBefore: 112 }],
+  ['tool.validation', 'harness_observed', { toolName: 'apply_patch', schemaValid: true, argumentKeys: ['patch'], argumentBytes: 4821, argumentHash: 'sha256:d782…9be0' }, { diagnosticCount: 0 }],
+  ['tool.result', 'harness_observed', { toolName: 'apply_patch', status: 'ok', artifact: 'artifacts/tool-apply-patch.txt' }, { durationMs: 19, resultBytes: 128 }],
+  ['workspace.patch', 'harness_observed', { snapshotHash: 'sha256:20ca…74f0', changedScopeMatch: true }, { filesModified: 6, bytesAdded: 14830, bytesDeleted: 391, diffLines: 476 }],
+  ['verification.gate', 'harness_observed', { gateName: 'npm test', commandHash: 'sha256:31bf…a78c', status: 'passed', supportsFinalClaim: true }, { durationMs: 3128, exitStatus: 0, testsPassed: 2276, testsFailed: 0 }],
+  ['llm.result', 'provider_reported', { provider: 'openai', model: 'gpt-5.4', finishReason: 'stop', outcome: 'success' }, { durationMs: 8642, promptTokens: 6120, completionTokens: 2840, reasoningTokens: 1090, cachedTokens: 2048, visibleChars: 4238, parsedCalls: 2, costUsd: 0.0614 }],
+].map((entry, index) => ({
+  schemaVersion: 1,
+  eventId: `evt_preview_${index}`,
+  traceId: 'run-history-refactor',
+  spanId: `span_preview_${index}`,
+  parentSpanId: index ? `span_preview_${Math.max(0, index - 1)}` : null,
+  runId: 'run-history-refactor',
+  projectId: 'appdata:fix-auth-flow',
+  taskId: index < 3 ? 'task-plan' : 'task-worker',
+  step: index,
+  at: new Date(Date.now() - (11 - index) * 18_000).toISOString(),
+  monotonicMs: index * 180,
+  kind: entry[0], source: entry[1], attributes: entry[2], measurements: entry[3],
+}));
+const mockHistorySummary = {
+  projectionVersion: 1,
+  backend: 'jsonl+sqlite',
+  totals: { runs: 38, modelCalls: 91, toolCalls: 247, promptTokens: 601240, completionTokens: 184820, reasoningTokens: 69210, cachedTokens: 132450, costUsd: 8.4193 },
+  latency: { timeToFirstReasoningMs: 212, timeToFirstVisibleTokenMs: 481, timeToFirstNativeToolCallMs: 1624, timeToFirstWorkspaceEffectMs: 4820, totalRunLatencyMs: 68240, modelP95Ms: 14280 },
+  quality: { nativeToolCallRate: 0.824, toolSchemaValidRate: 0.968, verificationClosureRate: 0.895, firstPassPlanValidRate: 0.842, noVisibleOutputRate: 0.022, streamIdleIncidence: 0.077, approvalWaitShare: 0.061, failedCallRecoveryRate: 0.786, repeatedToolCallRate: 0.049, unparsedDialectRate: 0.011, callsPerSuccessfulWorkspaceEffect: 3.14 },
+  planner: { acceptedPlans: 34, rejectedPlans: 7, diagnosticEvents: 12, repairsPerAcceptedPlan: 0.18 },
+  efficiency: { tokensPerAcceptedPlan: 23119, costPerAcceptedPlanUsd: 0.2476, tokensPerSuccessfulToolEffect: 9982, costPerSuccessfulToolEffectUsd: 0.1066, tokensPerVerifiedCompletion: 26482, costPerVerifiedCompletionUsd: 0.2831, verifiedCompletions: 30 },
+  models: [
+    { model: 'gpt-5.4', calls: 42, successRate: 0.929, reasoningTokenShare: 0.374, noVisibleOutputRate: 0, medianLatencyMs: 7640, p95LatencyMs: 14920, promptTokens: 302100, completionTokens: 89540, costUsd: 4.421 },
+    { model: 'claude-sonnet-4-5', calls: 31, successRate: 0.903, reasoningTokenShare: 0.291, noVisibleOutputRate: 0.032, medianLatencyMs: 6820, p95LatencyMs: 12830, promptTokens: 204820, completionTokens: 62210, costUsd: 3.112 },
+    { model: 'gemini-2.5-pro', calls: 18, successRate: 0.833, reasoningTokenShare: 0.441, noVisibleOutputRate: 0.056, medianLatencyMs: 8290, p95LatencyMs: 16110, promptTokens: 94320, completionTokens: 33070, costUsd: 0.8863 },
+  ],
+  comparisons: [
+    { workflow: 'implementation', workflowVersion: 'v2', preset: 'balanced', taskClass: 'code-change', model: 'gpt-5.4', outcome: 'success', calls: 34, reasoningTokenShare: 0.361, medianLatencyMs: 7390, promptTokens: 249200, completionTokens: 74280, costUsd: 3.712 },
+    { workflow: 'implementation', workflowVersion: 'v2', preset: 'balanced', taskClass: 'code-change', model: 'claude-sonnet-4-5', outcome: 'success', calls: 25, reasoningTokenShare: 0.277, medianLatencyMs: 6510, promptTokens: 168430, completionTokens: 51220, costUsd: 2.541 },
+    { workflow: 'implementation', workflowVersion: 'v2', preset: 'deep', taskClass: 'debugging', model: 'gemini-2.5-pro', outcome: 'failed', calls: 3, reasoningTokenShare: 0.492, medianLatencyMs: 11840, promptTokens: 18220, completionTokens: 7930, costUsd: 0.241 },
+  ],
+  runs: mockHistoryRuns,
+  facets: { models: ['gpt-5.4', 'claude-sonnet-4-5', 'gemini-2.5-pro'], projects: ['appdata:fix-auth-flow', 'workspace:current-project'] },
+};
+
 export function installDevMock() {
   window.flyt = {
+    historySummary: async () => structuredClone(mockHistorySummary),
+    historyTrace: async runId => runId === 'run-history-refactor' ? structuredClone(mockHistoryEvents) : [],
+    exportHistory: async format => ({ cancelled: false, file: `preview-history.${format === 'csv' ? 'csv' : 'jsonl'}` }),
     // --- The plugin manager, previewed ---
     v2Plugins: async () => mockPlugins.map(row => ({ ...row })),
     v2ConfigurePlugin: async (id, config) => {
@@ -735,6 +794,14 @@ export function installDevMock() {
       mockProjects.tabs.push({ id, folder: null, kind: 'appdata', name: slug, live: 0, state: {} });
       mockProjects.active = id;
       return { ...structuredClone(mockProjects), opened: id };
+    },
+    // Same one-field contract as the real bridge (project:color): hex present =
+    // set and return it, omitted = read. The mock's tabs carry `colorHex` like
+    // registry.listOpen() does, so preview exercises the themed surfaces.
+    projectColor: async (pid, hex = null) => {
+      const t = mockProjects.tabs.find(t => t.id === pid);
+      if (t && hex != null) t.colorHex = normalizeHexColor(hex) ?? t.colorHex;
+      return { id: pid, name: t?.name ?? pid, colorHex: t?.colorHex ?? null };
     },
     renameProject: async (pid, name) => {
       const t = mockProjects.tabs.find(t => t.id === pid);
