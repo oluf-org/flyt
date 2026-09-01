@@ -119,12 +119,12 @@ test('a failed Fable planner can restart only dispatch and keep the completed re
   const { api, projectId } = await workflowHarness(async request => {
     call += 1; seen.push(request);
     if (call === 1) return { text: 'A refined brief.', finishReason: 'stop', provider: 'script', model: request.model };
-    if (call === 2 || call === 3) return {
+    if (call >= 2 && call <= 5) return {
       text: '', reasoning: 'analysis consumed the whole response', finishReason: 'length',
       usage: { completion_tokens: 4096, completion_tokens_details: { reasoning_tokens: call === 2 ? 4069 : 4094 } },
       provider: 'script', model: request.model,
     };
-    return { text: call === 4 ? plan : 'Recovered worker finished.', finishReason: 'stop', provider: 'script', model: request.model };
+    return { text: call === 6 ? plan : 'Recovered worker finished.', finishReason: 'stop', provider: 'script', model: request.model };
   });
   const started = await api.invoke('workflow:run', {
     projectId, workflowId: 'fable-at-home', input: 'Build the feature.', presetId: 'medium', approvalMode: 'always',
@@ -132,17 +132,17 @@ test('a failed Fable planner can restart only dispatch and keep the completed re
   const failed = await waitForAsync(async () => {
     const current = await api.invoke('run:snapshot', { projectId, runId: started.runId });
     return current.meta.stage === 'failed' ? current : null;
-  }, 'reasoning-starved Fable planner');
+  }, 'Fable planner with no visible JSON');
   assert.match(failed.meta.error, /81,920-token ceiling/);
   assert.match(failed.meta.error, /4094 of 4096 completion tokens/);
-  assert.deepEqual(seen.slice(1, 3).map(request => request.maxTokens), [61_440, 81_920]);
+  assert.deepEqual(seen.slice(1, 5).map(request => request.maxTokens), [61_440, 81_920, 81_920, 81_920]);
 
   await api.invoke('run:restartNode', { projectId, runId: started.runId, nodeId: 'dispatch' });
   const recovered = await waitForAsync(async () => {
     const current = await api.invoke('run:snapshot', { projectId, runId: started.runId });
     return current.meta.stage === 'done' ? current : null;
   }, 'restarted Fable dispatch');
-  assert.equal(call, 5, 'the refiner stayed completed; only planning and its generated worker reran');
+  assert.equal(call, 7, 'the refiner stayed completed; only planning and its generated worker reran');
   assert.equal(recovered.meta.nodeStatus['prompt-refiner'], 'done');
   assert.equal(recovered.meta.nodeStatus.dispatch, 'done');
   assert.match(recovered.nodeOutputs.dispatch, /Recovered worker finished/);

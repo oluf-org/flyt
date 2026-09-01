@@ -54,6 +54,7 @@ export interface CallModel {
     resolvedModel?: string | null;
     provider?: string;
     model?: string;
+    unparsedToolCall?: string | null;
     message?: { tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] };
   }>;
 }
@@ -253,6 +254,7 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           args: parseArgs(c.function?.arguments),
         })),
       } : {}),
+      ...(answered.unparsedToolCall ? { unparsedToolCall: answered.unparsedToolCall } : {}),
       finishReason: finishOf(answered.finishReason),
       ...(usageFrom(answered.usage) ? { usage: usageFrom(answered.usage) } : {}),
       route: routeOf(request.model, answered, fallbackReason || source.reason || ''),

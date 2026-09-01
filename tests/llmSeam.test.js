@@ -142,6 +142,19 @@ test('tool calls arrive parsed, and one that will not parse is still a call', as
   await boot.kernel.dispose();
 });
 
+test('unparsed provider tool markup crosses the seam as explicit repair evidence', async () => {
+  const boot = await bootLlm({
+    answer: {
+      text: '<tool_call>{"name":"peek","arguments":{}}</tool_call>',
+      unparsedToolCall: 'hermes-qwen-tool-call',
+    },
+  });
+  const answer = await boot.kernel.ctx.llm.complete(request());
+  assert.equal(answer.unparsedToolCall, 'hermes-qwen-tool-call');
+  assert.equal(answer.toolCalls?.length ?? 0, 0);
+  await boot.kernel.dispose();
+});
+
 test('the route record says what answered, and whether that is what was asked for', () => {
   assert.deepEqual(
     routeOf('a/model', { provider: 'openrouter', model: 'a/model' }),

@@ -41,6 +41,10 @@ export interface LlmResponse {
   content: string;
   reasoning?: string;
   toolCalls?: readonly { id: string; name: string; args: unknown }[];
+  /** Provider-native tool markup that reached content instead of a parsed call.
+   * Kept as evidence so the loop can request one native-call repair without
+   * guessing arguments or pretending the attempted tool ran. */
+  unparsedToolCall?: string;
   finishReason: string;
   usage?: Usage;
   route: RouteRecord;

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   createKernel, flytTools, sessionJsonl, provideSeam,
-  executeTaskGraph, parseTaskGraphPlan,
+  executeTaskGraph, parseTaskGraphPlan, taskGraphRepairPrompt,
 } from '#kernel';
 import { stackWithGeneratedTasks } from '../core/kernelRunner.js';
 
@@ -39,6 +39,16 @@ test('invalid plans fail before materialization with actionable graph errors', (
   assert.equal(parsed.ok, false);
   assert.match(parsed.errors.join('\n'), /requires "missing-artifact", but no task produces it/);
   assert.match(parsed.errors.join('\n'), /dependency cycle: one -> two -> one/);
+});
+
+test('planner repair feedback includes the rejected JSON and exact static diagnostics', () => {
+  const invalid = contract([task('consumer', { requires: ['site-copy'] })]);
+  const errors = ['consumer requires "site-copy", but no task produces it'];
+  const prompt = taskGraphRepairPrompt(invalid, errors, 'Build a product page.', 2);
+  assert.match(prompt, /REPAIR ATTEMPT 2/);
+  assert.match(prompt, /consumer requires "site-copy", but no task produces it/);
+  assert.ok(prompt.includes(invalid), 'the planner repairs its candidate instead of reconstructing it from a summary');
+  assert.match(prompt, /Do not re-plan from scratch/);
 });
 
 test('a read-only brief rejects generated write scopes before any child runs', () => {
@@ -104,7 +114,7 @@ test('Plan & dispatch runs independent generated children together and records t
         workerSystemPrompt: 'CUSTOM GENERATED WORKER FOR THIS WORKFLOW',
       },
     });
-    assert.equal(outcome.status, 'done');
+    assert.equal(outcome.status, 'done', outcome.error);
     assert.equal(llm.seen[0].maxTokens, 61_440,
       'the planner has answer room after a reasoning model thinks');
     assert.equal(llm.seen[0].temperature, 0.1);
@@ -180,7 +190,56 @@ test('Plan & dispatch reports every failed task in a parallel wave', async () =>
   }
 });
 
-test('a reasoning-only planner retries with more headroom and fails with the real token diagnosis', async () => {
+test('Plan & dispatch can repair more than one distinct static graph failure before materializing work', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-task-graph-repairs-'));
+  const kernel = createKernel();
+  const invalidArtifact = contract([task('consumer', { requires: ['copy'] })]);
+  const invalidCycle = contract([
+    task('one', { dependsOn: ['two'] }),
+    task('two', { dependsOn: ['one'] }),
+  ]);
+  const valid = contract([task('finish')]);
+  const answers = [invalidArtifact, invalidCycle, valid, 'worker finished'];
+  const seen = [];
+  let call = 0;
+  const seam = {
+    stream(request) {
+      seen.push(request);
+      const content = answers[call++];
+      return {
+        async *[Symbol.asyncIterator]() { yield { text: content }; },
+        async settled() {
+          return { content, finishReason: 'stop', route: { requested: 'fake', effective: 'fake', reason: '', degraded: false } };
+        },
+      };
+    },
+    async complete() { throw new Error('stream only'); },
+    async models() { return []; },
+  };
+  await kernel.ctx.plugin(flytTools);
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  await kernel.ctx.plugin({ name: 'repairing-llm', apply(ctx) { return provideSeam(ctx, 'llm', seam); } });
+  try {
+    const outcome = await executeTaskGraph({
+      ctx: kernel.ctx, runId: 'repair-run', blockId: 'dispatch', input: 'Build it.', ceiling: [],
+      config: { model: 'fake', maxTasks: 4 },
+    });
+    assert.equal(outcome.status, 'done', outcome.error);
+    assert.equal(call, 4, 'two planner repairs were followed by exactly one generated worker');
+    assert.match(seen[1].messages.at(-1).content, /requires "copy", but no task produces it/);
+    assert.ok(seen[1].messages.at(-1).content.includes(invalidArtifact));
+    assert.match(seen[2].messages.at(-1).content, /dependency cycle: one -> two -> one/);
+    assert.ok(seen[2].messages.at(-1).content.includes(invalidCycle));
+    const events = (await kernel.ctx.sessions.read('repair-run')).readSync();
+    const warnings = events.filter(event => event.type === 'block.warning' && event.data.code === 'invalid_task_graph');
+    assert.deepEqual(warnings.map(event => event.data.attempt), [1, 2]);
+    assert.ok(warnings.every(event => Array.isArray(event.data.diagnostics) && event.data.diagnostics.length));
+  } finally {
+    await kernel.dispose();
+  }
+});
+
+test('a reasoning-only planner uses all bounded repair attempts and fails with the real token diagnosis', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-task-graph-reasoning-'));
   const kernel = createKernel();
   const seen = [];
@@ -211,8 +270,8 @@ test('a reasoning-only planner retries with more headroom and fails with the rea
       config: { model: 'fake', maxTasks: 4 },
     });
     assert.equal(outcome.status, 'failed');
-    assert.deepEqual(seen.map(request => request.maxTokens), [61_440, 81_920]);
-    assert.deepEqual(seen.map(request => request.temperature), [0.1, 0]);
+    assert.deepEqual(seen.map(request => request.maxTokens), [61_440, 81_920, 81_920, 81_920]);
+    assert.deepEqual(seen.map(request => request.temperature), [0.1, 0, 0, 0]);
     assert.match(outcome.error, /cut off at its 81,920-token ceiling/);
     assert.match(outcome.error, /4094 of 4096 completion tokens on internal reasoning/);
     assert.match(outcome.error, /Retry this block or choose another model/);

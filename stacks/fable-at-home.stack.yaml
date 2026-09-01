@@ -1,7 +1,7 @@
 version: 2
 id: fable-at-home
 name: "Fable at home"
-description: "Refine a request, then let an agent plan and dispatch a dependency-aware task graph."
+description: "Refine a request, validate and repair its dependency graph, then execute ready tasks with native-tool workers."
 launchable: true
 presets:
   no:
@@ -25,7 +25,7 @@ presets:
         parallelism: "medium"
   high:
     name: "High"
-    description: "Run everything in parallel except obvious dependencies and write conflicts."
+    description: "Run everything in parallel except real dependencies and write conflicts."
     overrides:
       dispatch:
         parallelism: "high"
@@ -34,8 +34,8 @@ blocks:
     use: flyt-blocks-judgement:prompt-refiner
     title: "Prompt refiner"
     config:
-      modelTier: "free"
-      instructions: "Refine the prompt, correct spelling, and surface consequential ambiguities. Return one clear, concise goal that a planning agent can decompose."
+      modelTier: "standard"
+      instructions: "Rewrite the request as a concise execution brief. Preserve explicit scope and constraints, and do not invent claims, features, benchmarks, dependencies, or acceptance thresholds. End with the concrete deliverable and a practical verification method."
   - id: dispatch
     use: flyt-blocks-core:task-graph
     title: "Plan & dispatch"
@@ -44,7 +44,4 @@ blocks:
       parallelism: "medium"
       minTasks: 1
       maxTasks: 12
-      workerMaxSteps: 120
-      workerMaxTokens: 32768
-      effort: "medium"
-      workerInstructions: "Finish the assigned task and verify its acceptance criteria. Do not expand into work owned by another generated task."
+      workerInstructions: "Use the native structured tool interface for file and shell work; never print or imitate a tool call. Stay inside this generated task's declared write scope, verify the concrete result with the cheapest relevant project gate, and report exact files changed plus any unverified assumptions."

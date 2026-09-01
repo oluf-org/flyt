@@ -28,6 +28,7 @@ const HARD_MAX_TASKS = 24;
 // what they use, while reasoning models have room left to emit the plan.
 const PLANNER_MAX_TOKENS = 61_440;
 const PLANNER_REPAIR_MAX_TOKENS = 81_920;
+const PLANNER_REPAIR_ATTEMPTS = 3;
 const DEFAULT_WAVE: Record<ParallelismLevel, number> = { no: 1, low: 2, medium: 4, high: 8 };
 
 export interface GeneratedTask {
@@ -221,6 +222,34 @@ function plannerSystem(parallelism: ParallelismLevel, minTasks: number, maxTasks
   ].join('\n');
 }
 
+/** A static validator's feedback for the next planner turn. */
+export function taskGraphRepairPrompt(
+  invalidPlan: string,
+  errors: readonly string[],
+  originalBrief: string,
+  attempt: number,
+): string {
+  return [
+    `REPAIR ATTEMPT ${attempt}: the task-graph validator rejected the JSON below.`,
+    'Make the smallest correction that resolves every diagnostic. Preserve valid task ids, goals and ordering.',
+    'Do not re-plan from scratch. Return only one complete JSON object and no analysis.',
+    '',
+    'STATIC VALIDATION DIAGNOSTICS:',
+    ...errors.map((error, index) => `${index + 1}. ${error}`),
+    '',
+    'REPAIR RULES:',
+    '- Every requires item must be named by exactly one task in produces; add the artifact to the actual producer or remove a requirement that is not real.',
+    '- Every dependsOn id must exist, self-dependencies are forbidden, and the final graph must be acyclic.',
+    '- Keep all array fields as arrays of non-empty strings and respect the declared read-only/write scope.',
+    '',
+    'PRIOR INVALID JSON:',
+    invalidPlan || '(the prior turn returned no visible JSON)',
+    '',
+    'ORIGINAL BRIEF:',
+    originalBrief,
+  ].join('\n');
+}
+
 function plannerFailure(
   result: Awaited<ReturnType<typeof runAgentLoop>>,
   errors: readonly string[],
@@ -313,11 +342,20 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
     parsed = parseTaskGraphPlan(planText, { minTasks, maxTasks, parallelism, readOnly });
     let lastPlanner = planned;
     let lastPlannerBudget = PLANNER_MAX_TOKENS;
-    if (!parsed.ok) {
+    for (let attempt = 1; !parsed.ok && attempt <= PLANNER_REPAIR_ATTEMPTS; attempt++) {
+      const invalidPlan = planText;
+      const diagnostics = [...parsed.errors];
+      await session.append({ type: 'block.warning', data: {
+        blockId: run.blockId,
+        code: 'invalid_task_graph', transient: true, attempt,
+        maxAttempts: PLANNER_REPAIR_ATTEMPTS,
+        diagnostics,
+        reason: `Planner graph failed ${diagnostics.length} static validation check(s); requesting a minimal repair.`,
+      } });
       const repaired = await runAgentLoop({
-        ctx: run.ctx, session, runId: run.runId, blockId: `${run.blockId}.planner-repair`, turn: 2,
+        ctx: run.ctx, session, runId: run.runId, blockId: `${run.blockId}.planner-repair-${attempt}`, turn: attempt + 1,
         model, fallbackModels, system,
-        input: `The prior plan was invalid:\n- ${parsed.errors.join('\n- ')}\n\nOriginal brief:\n${run.input}\n\nReturn a corrected complete JSON plan.`,
+        input: taskGraphRepairPrompt(invalidPlan, diagnostics, run.input, attempt),
         tools: [], ceiling: [], maxSteps: 1, maxTokens: PLANNER_REPAIR_MAX_TOKENS,
         temperature: 0, isolated: true, ...(run.signal ? { signal: run.signal } : {}),
       });

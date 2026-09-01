@@ -98,6 +98,9 @@ export interface LoopOptions {
    * a length-truncated response is logged, warned, and continued in a new
    * request instead of being mistaken for a finished block. */
   continueOnLength?: boolean;
+  /** How many unusable empty or non-native tool-call turns may be repaired.
+   * Repairs ask for a real call; they never infer or execute narrated args. */
+  maxTurnRepairs?: number;
   /** Per-tool call caps for role-specific loops such as clarification. */
   toolLimits?: Readonly<Record<string, number>>;
   /** Role-specific semantic refusal before a call reaches the shared gate. */
@@ -112,6 +115,57 @@ function schemasFor(tools: readonly ToolDefinition[]): { name: string; descripti
   return tools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
 }
 
+export interface TurnRepairDiagnosis {
+  kind: 'empty' | 'unparsed_tool_call';
+  /** Adapter dialect or the allowed tool name narrated as a zero-argument call. */
+  detail?: string;
+}
+
+/**
+ * Classify a turn that produced no usable answer.
+ *
+ * The textual-call match is intentionally narrow: the whole visible answer
+ * must be one or more zero-argument calls to tools that were actually offered.
+ * We use it only to ask the model for a native call on the next turn. Parsing
+ * and executing prose here would bypass schema validation and the approval
+ * gate, and would invent every missing argument.
+ */
+export function diagnoseTurnRepair(
+  content: string,
+  toolNames: readonly string[],
+  adapterDialect?: string,
+): TurnRepairDiagnosis | null {
+  if (adapterDialect) return { kind: 'unparsed_tool_call', detail: adapterDialect };
+  const source = String(content ?? '').trim();
+  if (!source) return { kind: 'empty' };
+  if (!toolNames.length) return null;
+  const calls = [...source.matchAll(/(?:^|\s)(?:→|➜|->)?\s*([A-Za-z_][A-Za-z0-9_-]*)\s*\(\s*\)\s*[.;]?/g)];
+  if (!calls.length) return null;
+  const residue = source
+    .replace(/(?:^|\s)(?:→|➜|->)?\s*([A-Za-z_][A-Za-z0-9_-]*)\s*\(\s*\)\s*[.;]?/g, '')
+    .trim();
+  const names = calls.map(match => match[1]);
+  return !residue && names.every(name => toolNames.includes(name))
+    ? { kind: 'unparsed_tool_call', detail: [...new Set(names)].join(', ') }
+    : null;
+}
+
+function turnRepairInstruction(diagnosis: TurnRepairDiagnosis): string {
+  if (diagnosis.kind === 'unparsed_tool_call') {
+    return [
+      `Your previous response attempted a tool call as visible text (${diagnosis.detail ?? 'unparsed syntax'}).`,
+      'No tool ran and you received no result. Do not repeat or imitate the text.',
+      'If an offered tool is needed, issue it now through the native tool-calling interface with complete structured arguments.',
+      'Otherwise provide the ordinary final answer now.',
+    ].join(' ');
+  }
+  return [
+    'Your previous response produced no visible answer or native tool call.',
+    'Any internal reasoning was recorded, but it is not an actionable result.',
+    'Continue now with a native tool call if work remains, or provide the ordinary final answer.',
+  ].join(' ');
+}
+
 /**
  * Run one block's agent loop.
  *
@@ -122,7 +176,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   const {
     ctx, session, runId, blockId, turn, model, fallbackModels = [], system, input,
     tools = [], ceiling = [], maxSteps, softMaxSteps = MAX_STEPS, maxTokens, temperature,
-    continueOnLength = false,
+    continueOnLength = false, maxTurnRepairs = 2,
     toolLimits = {}, toolGuard, isolated = false, signal,
   } = options;
 
@@ -150,6 +204,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   let stepsRun = 0;
   let nextSoftWarning = Math.max(1, Math.floor(softMaxSteps));
   const toolUses = new Map<string, number>();
+  let turnRepairs = 0;
   // Once an ordered fallback has answered, prefer it for the rest of this
   // block turn. A tool-using response can need many follow-up steps; retrying a
   // rate-limited primary before every one adds minutes of identical failure.
@@ -273,6 +328,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
         content,
         ...(answer.reasoning ? { reasoning: answer.reasoning } : {}),
         ...(calls.length ? { toolCalls: calls as unknown as JsonValue } : {}),
+        ...(answer.unparsedToolCall ? { unparsedToolCall: answer.unparsedToolCall } : {}),
         finishReason,
         ...(answer.usage ? { usage: answer.usage as unknown as JsonValue } : {}),
         ...(answer.route ? { route: answer.route as unknown as JsonValue } : {}),
@@ -296,6 +352,35 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       await session.append({ type: 'message.user', data: {
         blockId,
         content: 'Your previous response reached the provider output limit. Continue from where it stopped. Do not repeat completed work; finish the task and then answer normally.',
+      } });
+      continue;
+    }
+
+    const repair = !calls.length && tools.length
+      ? diagnoseTurnRepair(content, schemas.map(schema => schema.name), answer.unparsedToolCall)
+      : null;
+    if (repair) {
+      await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
+      ctx.emit('step/end', ref, settled);
+      if (turnRepairs >= Math.max(0, Math.floor(maxTurnRepairs))) {
+        stopped = 'bound';
+        reason = repair.kind === 'unparsed_tool_call'
+          ? `The model repeatedly emitted a non-native tool call (${repair.detail ?? 'unknown syntax'}); no tool ran.`
+          : 'The model repeatedly returned no visible answer or native tool call.';
+        break;
+      }
+      turnRepairs += 1;
+      await session.append({ type: 'block.warning', data: {
+        blockId,
+        code: repair.kind === 'unparsed_tool_call' ? 'tool_call_repair' : 'empty_turn_repair',
+        transient: true,
+        attempt: turnRepairs,
+        maxAttempts: Math.max(0, Math.floor(maxTurnRepairs)),
+        ...(repair.detail ? { detail: repair.detail } : {}),
+        reason: turnRepairInstruction(repair),
+      } });
+      await session.append({ type: 'message.user', data: {
+        blockId, content: turnRepairInstruction(repair),
       } });
       continue;
     }

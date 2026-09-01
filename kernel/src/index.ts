@@ -37,7 +37,9 @@ export * as flytBlocksCore from './plugins/blocks-core.js';
 export * as flytBlocksJudgement from './plugins/blocks-judgement.js';
 export * as flytBlocksInquiry from './plugins/blocks-inquiry.js';
 export * as flytBlocksLoop from './plugins/blocks-loop.js';
-export { taskGraphBlock, executeTaskGraph, parseTaskGraphPlan, PARALLELISM_LEVELS } from './plugins/blocks-task-graph.js';
+export {
+  taskGraphBlock, executeTaskGraph, parseTaskGraphPlan, taskGraphRepairPrompt, PARALLELISM_LEVELS,
+} from './plugins/blocks-task-graph.js';
 export {
   workBlock, researchBlock,
   LOOP_CEILING, RESEARCH_CEILING, WORK_SYSTEM,

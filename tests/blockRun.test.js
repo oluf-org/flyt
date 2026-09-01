@@ -47,6 +47,7 @@ function scriptedLlm(script) {
               content: answer.content ?? '',
               ...(answer.reasoning ? { reasoning: answer.reasoning } : {}),
               ...(answer.toolCalls ? { toolCalls: answer.toolCalls } : {}),
+              ...(answer.unparsedToolCall ? { unparsedToolCall: answer.unparsedToolCall } : {}),
               finishReason: answer.finishReason ?? (answer.toolCalls?.length ? 'tool_calls' : 'stop'),
               usage: { inputTokens: 10, outputTokens: 3 },
               route: answer.route ?? { requested: request.model, effective: 'fake', reason: 'the fake answered', degraded: false },
@@ -85,7 +86,7 @@ async function bootFor(script, { tools = [], ceiling = [] } = {}) {
     });
   }
   const session = await kernel.ctx.sessions.open('run-1');
-  return { kernel, llm, session, root, ceiling };
+  return { kernel, llm, session, root, ceiling, tools };
 }
 
 const loopIn = (boot, over = {}) => runAgentLoop({
@@ -97,6 +98,7 @@ const loopIn = (boot, over = {}) => runAgentLoop({
   model: 'a/model',
   system: 'You are a block.',
   input: 'Do the thing.',
+  tools: boot.tools,
   ceiling: boot.ceiling,
   ...over,
 });
@@ -237,6 +239,58 @@ test('the loop is bounded, and hitting the bound says so rather than looking fin
   const types = await typesIn(boot.session);
   assert.equal(types.filter(t => t === 'step.start').length, 3);
   assert.equal(types.at(-1), 'turn.end', 'and the turn is closed, so the log is not left open');
+  await boot.kernel.dispose();
+});
+
+test('a narrated call to an offered tool is repaired into a native call, never executed from prose', async () => {
+  let ran = 0;
+  const boot = await bootFor([
+    { content: '→ peek()' },
+    { content: '', toolCalls: [{ id: 'c1', name: 'peek', args: { at: 'workspace' } }] },
+    { content: 'Native call completed.' },
+  ], {
+    tools: [{
+      name: 'peek', description: 'Look.', parameters: { type: 'object' },
+      classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+      async execute(args) { ran += 1; assert.deepEqual(args, { at: 'workspace' }); return { content: 'ok' }; },
+    }],
+    ceiling: ['peek'],
+  });
+
+  const result = await loopIn(boot);
+  assert.equal(result.stopped, 'answered');
+  assert.equal(result.content, 'Native call completed.');
+  assert.equal(ran, 1, 'the visible peek() text never bypasses native parsing and the gate');
+  assert.equal(boot.llm.seen.length, 3);
+  assert.match(boot.llm.seen[1].messages.at(-1).content, /No tool ran/);
+  const events = boot.session.readSync();
+  const warning = events.find(event => event.type === 'block.warning' && event.data.code === 'tool_call_repair');
+  assert.equal(warning.data.detail, 'peek');
+  assert.equal(events.filter(event => event.type === 'tool.call').length, 1);
+  await boot.kernel.dispose();
+});
+
+test('a reasoning-only worker turn is retained and prompted for an actionable next turn', async () => {
+  const boot = await bootFor([
+    { content: '', reasoning: 'I worked through the task.', finishReason: 'stop' },
+    { content: 'Here is the answer.' },
+  ], {
+    tools: [{
+      name: 'peek', description: 'Look.', parameters: { type: 'object' },
+      classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+      async execute() { return { content: 'unused' }; },
+    }],
+    ceiling: ['peek'],
+  });
+
+  const result = await loopIn(boot);
+  assert.equal(result.stopped, 'answered');
+  assert.equal(result.content, 'Here is the answer.');
+  assert.equal(boot.llm.seen.length, 2);
+  assert.match(boot.llm.seen[1].messages.at(-1).content, /internal reasoning was recorded/i);
+  const events = boot.session.readSync();
+  assert.ok(events.some(event => event.type === 'llm.response' && event.data.reasoning === 'I worked through the task.'));
+  assert.ok(events.some(event => event.type === 'block.warning' && event.data.code === 'empty_turn_repair'));
   await boot.kernel.dispose();
 });
 
