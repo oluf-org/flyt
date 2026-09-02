@@ -9,17 +9,21 @@ const temp = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function localWorld(t, mode = 'workspace-write') {
-  const root = temp(`flyt-platform-${mode}-`);
+  const requestedRoot = temp(`flyt-platform-${mode}-`);
   const runs = temp('flyt-platform-runs-');
   try {
-    return { root, runs, world: await createLocalExecutionWorld({ workspaceRoot: root, mode,
+    const world = await createLocalExecutionWorld({ workspaceRoot: requestedRoot, mode,
       minimumEnforcement: 'partial', allowAttendedEscalation: false, runsTempRoot: runs,
       // GitHub's Windows hosted runner is elevated. Production launches still
       // refuse that posture; this option exists only to exercise the restricted
       // child token and ACL boundary on the ephemeral CI machine.
       allowElevatedWindowsRunnerForTest: process.platform === 'win32'
         && process.env.GITHUB_ACTIONS === 'true' && process.env.FLYT_RELEASE_SANDBOX_E2E === '1',
-    }) };
+    });
+    // macOS exposes os.tmpdir() through /var while its canonical filesystem path
+    // is /private/var. Exercise the exact path carried by the execution world so
+    // Seatbelt's subpath rules and the child process agree on one identity.
+    return { root: world.world.hostRoot, runs, world };
   } catch (error) {
     if (error?.code === 'SANDBOX_UNAVAILABLE' || /sandbox backend/i.test(String(error?.message))) {
       if (process.env.FLYT_RELEASE_SANDBOX_E2E === '1') throw error;

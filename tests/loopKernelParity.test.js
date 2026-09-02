@@ -78,7 +78,7 @@ test('production Loop host edits only its worktree and exposes durable status an
   assert.equal(outcome.status, 'done');
   assert.equal(fs.readFileSync(path.join(workspace, 'target.txt'), 'utf8'), 'after\n');
   assert.equal(snapshot.meta.stage, 'done');
-  assert.equal(snapshot.meta.workspace, workspace);
+  assert.equal(snapshot.meta.workspace, fs.realpathSync(workspace));
   assert.equal(snapshot.meta.loopTaskId, 't-kernel');
   assert.equal(snapshot.meta.nodeStatus.work, 'done');
   assert.equal(snapshot.session.canonical, true);
