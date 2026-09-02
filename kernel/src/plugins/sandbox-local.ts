@@ -19,6 +19,16 @@ export interface LocalSandboxOptions {
 const strength = (value: SandboxEnforcement | null): number => value === 'full' ? 2 : value === 'partial' ? 1 : 0;
 const successfulProbeCache = new Map<string, Promise<SandboxProbe>>();
 
+const actionableReason = (reason: string): string => {
+  if (process.platform === 'win32' && /logon identity|required for confined command tools|logon-session SID/i.test(reason)) {
+    return 'Confined command tools are unavailable for this Windows sign-in. Workflows that do not run commands can continue. Use a local Windows account, or explicitly choose danger-full-access in Settings for workflows you trust.';
+  }
+  if (process.platform === 'win32' && /0xC0000142|DLL_INIT_FAILED/i.test(reason)) {
+    return 'Confined command tools are incompatible with this Windows runtime. Workflows that do not run commands can continue. Explicitly choose danger-full-access in Settings only for workflows you trust.';
+  }
+  return reason;
+};
+
 export function createLocalSandbox(
   world: ExecutionWorldDescriptor,
   subprocess: SubprocessSeam,
@@ -100,10 +110,10 @@ export function createLocalSandbox(
       return ok
         ? { platform: process.platform, backend: selected.name, available: true, enforcement: selected.enforcement, checkedAt }
         : { platform: process.platform, backend: selected.name, available: false, enforcement: null, checkedAt,
-            reason: outcome.runnerFailed?.detail || handle.stderr.text || `functional probe exited ${outcome.exitCode}` };
+            reason: actionableReason(outcome.runnerFailed?.detail || handle.stderr.text || `functional probe exited ${outcome.exitCode}`) };
     } catch (error) {
       return { platform: process.platform, backend: selected.name, available: false, enforcement: null, checkedAt,
-        reason: String((error as Error)?.message ?? error) };
+        reason: actionableReason(String((error as Error)?.message ?? error)) };
     } finally {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
     }

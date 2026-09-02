@@ -43,10 +43,11 @@ async function hostFor({
   workspace, runsRoot, store, script, taskId = 't-kernel', skills = [],
   approvalMode = 'always', definitionsRoot = stackRoot,
   worker = { provider: 'script', model: 'worker-model' }, runtimeConfig = {},
+  sandboxMode = 'danger-full-access', windowsSandboxRunner = null,
 }) {
   return bootRunKernel({
     workspaceDir: workspace, runsRoot, store, stackRoot: definitionsRoot,
-    sandboxMode: 'danger-full-access',
+    sandboxMode, ...(windowsSandboxRunner ? { windowsSandboxRunner } : {}),
     approvalMode, worker,
     level: 'high', loopTaskId: taskId, skills,
     runtimeConfig, settings: {},
@@ -54,6 +55,28 @@ async function hostFor({
     call: script.call,
   });
 }
+
+test('a tool-free workflow runs when the Windows command sandbox is unavailable', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const runsRoot = tmp('flyt-kernel-deferred-sandbox-runs-');
+  const workspace = tmp('flyt-kernel-deferred-sandbox-work-');
+  const store = new RunStore(runsRoot);
+  const script = modelScript([{ text: 'A useful answer without local commands.', finishReason: 'stop' }]);
+  const host = await hostFor({
+    workspace, runsRoot, store, script, sandboxMode: 'workspace-write',
+    // Node is an existing executable but not the native runner, forcing the
+    // probe to fail without making host composition fail eagerly.
+    windowsSandboxRunner: process.execPath,
+  });
+  try {
+    const started = await startStackRun({ host, stackId: 'research', input: 'Answer directly.' });
+    const outcome = await started.run.settled();
+    assert.equal(outcome.status, 'done');
+    assert.equal(script.seen.length, 1, 'the model call ran despite the unavailable command backend');
+    assert.equal((await host.ctx.sandbox.probe(true)).available, false);
+  } finally { await host.dispose(); }
+});
 
 test('production Loop host edits only its worktree and exposes durable status and spend', async () => {
   const runsRoot = tmp('flyt-kernel-runs-');

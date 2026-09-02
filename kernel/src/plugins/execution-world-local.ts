@@ -46,18 +46,10 @@ export async function createLocalExecutionWorld(config: LocalExecutionWorldConfi
   const subprocess = createLocalSubprocess(world, path.join(providerTemp, 'processes'));
   const sandbox = createLocalSandbox(world, subprocess, path.join(providerTemp, 'probes'), config);
   fs.mkdirSync(path.join(providerTemp, 'probes'), { recursive: true, mode: 0o700 });
-  if (config.mode !== 'danger-full-access') {
-    const probe = await sandbox.probe();
-    if (!probe.available) {
-      await subprocess.dispose();
-      throw Object.assign(new Error(`Sandbox unavailable: ${probe.reason ?? 'functional probe failed'}`), { code: 'SANDBOX_UNAVAILABLE', probe });
-    }
-    const enough = config.minimumEnforcement === 'partial' || probe.enforcement === 'full';
-    if (!enough) {
-      await subprocess.dispose();
-      throw Object.assign(new Error(`Sandbox enforcement ${probe.enforcement} is weaker than required ${config.minimumEnforcement}.`), { code: 'SANDBOX_UNAVAILABLE', probe });
-    }
-  }
+  // Backend validation is deliberately lazy. File and network-only workflows
+  // do not launch local processes and should remain usable when a platform
+  // command sandbox is unavailable. sandbox.confine() probes before every
+  // first confined command and still fails closed; diagnostics probes eagerly.
   const policy = createSandboxPolicy({
     mode: config.mode, workspaceRoot: hostRoot, minimumEnforcement: config.minimumEnforcement,
     allowAttendedEscalation: config.allowAttendedEscalation,

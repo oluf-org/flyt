@@ -20,6 +20,7 @@ internal static class Program
     private const uint CREATE_SUSPENDED = 0x00000004;
     private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
+    private const uint HANDLE_FLAG_INHERIT = 0x00000001;
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
     private const int JobObjectExtendedLimitInformation = 9;
     private const uint INFINITE = 0xffffffff;
@@ -45,11 +46,10 @@ internal static class Program
             throw new InvalidOperationException("confined execution is refused while Flyt is elevated");
         Stage = "filesystem"; if (!IsNtfs(workspace) || (mode == "workspace-write" && !IsNtfs(temp)))
             throw new InvalidOperationException("the workspace and private temp must be on NTFS");
-        // Electron and other GUI hosts have no console. A console-subsystem child
-        // created under a WRITE_RESTRICTED token then tries to create its own and
-        // can die in loader initialisation with STATUS_DLL_INIT_FAILED. Give the
-        // runner a hidden console for the child to inherit; redirected stdio stays
-        // on the explicit pipe handles below.
+        // The restricted child must share a console. CREATE_NO_WINDOW and
+        // CREATE_NEW_CONSOLE make Node and other runtimes fail during DLL
+        // initialization under WRITE_RESTRICTED. GUI hosts have no console,
+        // so give the runner a hidden one for the child to inherit.
         Stage = "console"; EnsureHiddenConsole();
 
         // Windows runtime loaders open shared kernel objects during process
@@ -58,12 +58,12 @@ internal static class Program
         // CLR die before main (0xC0000142 / E_ACCESSDENIED). World is the baseline
         // read/runtime SID. It does not make the ordinary user check disappear,
         // and writable workspace/temp paths still need their private capability.
-        Stage = "logon SID";
+        Stage = "interactive session SID";
         var worldSid = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
         var logonSid = identity.Groups?.OfType<SecurityIdentifier>()
             .FirstOrDefault(sid => sid.Value.StartsWith("S-1-5-5-", StringComparison.Ordinal));
         if (logonSid is null)
-            throw new InvalidOperationException("the host token has no logon-session SID; restricted-token confinement is unavailable in this host");
+            throw new InvalidOperationException("Windows did not provide the logon identity required for confined command tools in this sign-in session");
         var workspaceSid = SidFromBytes(SHA256.HashData(Encoding.UTF8.GetBytes("flyt:workspace:v1:" + Canonical(workspace).ToUpperInvariant())));
         var tempSid = SidFromBytes(RandomNumberGenerator.GetBytes(32));
         var granted = new List<(string Path, SecurityIdentifier Sid)>();
@@ -82,7 +82,7 @@ internal static class Program
                 Environment.SetEnvironmentVariable("TEMP", temp);
                 Environment.SetEnvironmentVariable("TMP", temp);
             }
-            Stage = "restricted token"; using var restricted = RestrictedToken(restrictionSids, mode == "workspace-write" ? tempSid : null);
+            Stage = "restricted token"; using var restricted = RestrictedToken(restrictionSids, mode == "workspace-write" ? tempSid : worldSid);
             Stage = "process launch";
             return StartOwned(restricted.DangerousGetHandle(), command);
         }
@@ -218,10 +218,29 @@ internal static class Program
 
         var startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>(), dwFlags = STARTF_USESTDHANDLES,
             hStdInput = GetStdHandle(-10), hStdOutput = GetStdHandle(-11), hStdError = GetStdHandle(-12) };
+        var stdHandles = new[] { startup.hStdInput, startup.hStdOutput, startup.hStdError }.Distinct().ToArray();
+        if (stdHandles.Any(handle => handle == IntPtr.Zero || handle == new IntPtr(-1)))
+            throw new InvalidOperationException("the runner received an invalid standard handle");
+        // Node/libuv clears HANDLE_FLAG_INHERIT after it wires a child's stdio.
+        // The runner is that child, so turn inheritance back on while it creates
+        // the confined grandchild, then restore the original safe state.
+        foreach (var handle in stdHandles)
+            if (!SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) ThrowWin32("SetHandleInformation(enable inherit)");
         var commandLine = string.Join(" ", argv.Select(Quote));
-        if (!CreateProcessAsUser(token, argv[0], commandLine, IntPtr.Zero, IntPtr.Zero, true,
-            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT, IntPtr.Zero, null, ref startup, out var process))
-            ThrowWin32("CreateProcessAsUser");
+        PROCESS_INFORMATION process;
+        int createError = 0;
+        bool created;
+        try
+        {
+            created = CreateProcessAsUser(token, argv[0], commandLine, IntPtr.Zero, IntPtr.Zero, true,
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT, IntPtr.Zero, null, ref startup, out process);
+            if (!created) createError = Marshal.GetLastWin32Error();
+        }
+        finally
+        {
+            foreach (var handle in stdHandles) SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+        }
+        if (!created) throw new InvalidOperationException($"CreateProcessAsUser: {new Win32Exception(createError).Message} ({createError})");
         using var processHandle = new SafeKernel(process.hProcess);
         using var threadHandle = new SafeKernel(process.hThread);
         if (!AssignProcessToJobObject(job.DangerousGetHandle(), process.hProcess)) ThrowWin32("AssignProcessToJobObject");
@@ -288,6 +307,7 @@ internal static class Program
     [DllImport("kernel32", SetLastError = true)] private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
     [DllImport("kernel32", SetLastError = true)] private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
     [DllImport("kernel32", SetLastError = true)] private static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32", SetLastError = true)] private static extern bool SetHandleInformation(IntPtr hObject, uint dwMask, uint dwFlags);
     [DllImport("kernel32", SetLastError = true)] private static extern bool AllocConsole();
     [DllImport("kernel32")] private static extern IntPtr GetConsoleWindow();
     [DllImport("user32")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);

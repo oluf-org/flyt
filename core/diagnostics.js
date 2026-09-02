@@ -737,6 +737,9 @@ export async function doctor(engine, { probe = false, refresh = false, models = 
       });
       const checked = await owner.sandbox.probe(refresh);
       executionWorld = { ...executionWorld, backend: checked.backend, enforcement: checked.enforcement, probe: checked };
+      if (checked.available && minimumEnforcement === 'full' && checked.enforcement !== 'full') {
+        findings.push({ level: 'error', message: `The available ${checked.backend} sandbox provides ${checked.enforcement} enforcement, but Settings requires full enforcement. Commands will be refused.` });
+      }
       await owner.dispose();
     } catch (error) {
       const checked = error?.probe ?? { available: false, checkedAt: new Date().toISOString(), reason: String(error?.message ?? error) };

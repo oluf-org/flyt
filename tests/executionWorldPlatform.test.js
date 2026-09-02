@@ -20,6 +20,13 @@ async function localWorld(t, mode = 'workspace-write') {
       allowElevatedWindowsRunnerForTest: process.platform === 'win32'
         && process.env.GITHUB_ACTIONS === 'true' && process.env.FLYT_RELEASE_SANDBOX_E2E === '1',
     });
+    const probe = await world.sandbox.probe(true);
+    if (!probe.available) {
+      await world.dispose();
+      throw Object.assign(new Error(`Sandbox unavailable: ${probe.reason ?? 'functional probe failed'}`), {
+        code: 'SANDBOX_UNAVAILABLE', probe,
+      });
+    }
     // macOS exposes os.tmpdir() through /var while its canonical filesystem path
     // is /private/var. Exercise the exact path carried by the execution world so
     // Seatbelt's subpath rules and the child process agree on one identity.
