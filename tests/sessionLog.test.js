@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   createKernel, JsonlSessionStore, JsonlSession, deriveMessages, NEVER_RETURNED, sessionJsonl,
+  readSessionLogFile, MAX_INLINE_LEGACY_PROMPT_BYTES,
 } from '#kernel';
 
 function tempRuns() {
@@ -232,6 +233,66 @@ test('a corrupt line in the middle is reported, not swallowed', async () => {
     assert.equal(await reopened.head(), 2);
     assert.deepEqual(reopened.problems, [{ line: 2, reason: 'not a JSON event object' }]);
     assert.deepEqual(reopened.readSync().map(e => e.data.content), ['one', 'two']);
+  } finally { cleanup(); }
+});
+
+test('large legacy prompt snapshots reopen without a whole-file string or quadratic resident data', async () => {
+  const { dir, cleanup } = tempRuns();
+  try {
+    const store = new JsonlSessionStore(dir);
+    const writer = await store.open('run-1');
+    const duplicated = 'x'.repeat(MAX_INLINE_LEGACY_PROMPT_BYTES + 1_024);
+    for (let step = 1; step <= 12; step++) {
+      await writer.append({ type: 'step.prompt', data: {
+        blockId: 'work', step,
+        content: { messages: [{ role: 'user', content: duplicated }], tools: [] },
+      } });
+    }
+    await writer.append({ type: 'message.user', data: { content: 'still readable' } });
+    const file = store.fileFor('run-1');
+    const bytesBefore = fs.statSync(file).size;
+    assert.ok(bytesBefore > MAX_INLINE_LEGACY_PROMPT_BYTES * 12);
+
+    // The regression is specifically a readFileSync(file, 'utf8') of the
+    // complete log. Refuse that operation and prove the bounded reader still
+    // opens every event and retains later canonical messages.
+    const originalReadFileSync = fs.readFileSync;
+    fs.readFileSync = (candidate, ...args) => {
+      if (path.resolve(String(candidate)) === path.resolve(file)) {
+        throw new Error('whole session reads are forbidden');
+      }
+      return originalReadFileSync(candidate, ...args);
+    };
+    let reopened;
+    try {
+      reopened = await new JsonlSessionStore(dir).read('run-1');
+      assert.equal(await reopened.head(), 13);
+    } finally {
+      fs.readFileSync = originalReadFileSync;
+    }
+
+    const events = reopened.readSync();
+    assert.equal(events.length, 13);
+    assert.equal(events.filter(event => event.type === 'step.prompt'
+      && event.data.content.omitted === true).length, 12);
+    assert.equal(events.at(-1).data.content, 'still readable');
+    assert.equal(fs.statSync(file).size, bytesBefore, 'legacy evidence remains byte-for-byte on disk');
+  } finally { cleanup(); }
+});
+
+test('an individual event over the safety bound is skipped and reported without hiding later events', () => {
+  const { dir, cleanup } = tempRuns();
+  try {
+    const file = path.join(dir, 'oversized.jsonl');
+    fs.writeFileSync(file, [
+      JSON.stringify({ seq: 1, at: 't', type: 'message.user', data: { content: 'x'.repeat(4_000) } }),
+      JSON.stringify({ seq: 2, at: 't', type: 'message.user', data: { content: 'after' } }),
+    ].join('\n') + '\n');
+    const read = readSessionLogFile(file, { maxEventBytes: 1_024, maxInlinePromptBytes: 512 });
+    assert.equal(read.head, 2, 'the skipped complete event still occupies its durable sequence');
+    assert.deepEqual(read.events.map(event => event.seq), [2]);
+    assert.equal(read.events[0].data.content, 'after');
+    assert.match(read.problems[0].reason, /safety limit.*retained on disk/i);
   } finally { cleanup(); }
 });
 

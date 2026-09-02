@@ -62,6 +62,38 @@ test('canonical diagnostics explain failed blocks, never-returned calls, failed 
   assert.ok(report.suggestions.some(suggestion => /NEVER_RETURNED/.test(suggestion)));
 });
 
+test('canonical diagnostics never materialize the whole session log as one string', () => {
+  const store = makeStore();
+  const runId = 'large-canonical-diagnostic';
+  const dir = store.runDir(runId);
+  const file = path.join(dir, 'session.jsonl');
+  fs.mkdirSync(dir, { recursive: true });
+  const rows = [
+    { seq: 1, at: '2026-09-01T00:00:00.000Z', type: 'run.created', data: { stackId: 'research' } },
+    { seq: 2, at: '2026-09-01T00:00:01.000Z', type: 'step.prompt', data: {
+      blockId: 'look', content: { messages: [{ role: 'user', content: 'x'.repeat(300 * 1024) }] },
+    } },
+    { seq: 3, at: '2026-09-01T00:00:02.000Z', type: 'run.stage', data: { stage: 'done' } },
+  ];
+  fs.writeFileSync(file, `${rows.map(row => JSON.stringify(row)).join('\n')}\n`);
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ runId, stage: 'done' }));
+
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = function guardedRead(target, ...args) {
+    if (path.resolve(String(target)) === path.resolve(file)) {
+      throw new Error('session.jsonl must be scanned incrementally');
+    }
+    return originalRead.call(this, target, ...args);
+  };
+  try {
+    const report = explainRun(store, runId);
+    assert.equal(report.verdict, 'completed');
+    assert.equal(report.signals.modelCalls, 0);
+  } finally {
+    fs.readFileSync = originalRead;
+  }
+});
+
 test('a truncated node is diagnosed as a budget problem, with the budget named', () => {
   const store = makeStore();
   const runId = seedRun(store, {

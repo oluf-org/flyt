@@ -1052,8 +1052,7 @@ export function createApi(engine) {
       const retired = store.runRetirement(runId);
       if (retired) return { retired: true, runId, ...retired };
       if (isCanonicalRun(store, runId)) {
-        return fs.readFileSync(path.join(store.runDir(runId), 'session.jsonl'), 'utf8')
-          .split(/\r?\n/).filter(Boolean).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+        return storedSnapshots.events(store.rootDir, runId);
       }
       return store.readLog(runId);
     },

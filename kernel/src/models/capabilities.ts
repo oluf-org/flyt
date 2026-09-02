@@ -292,9 +292,14 @@ export function manageContextBudget(input: {
     reason: 'explicit attachment handles were selected and included in the attachment budget',
   });
 
-  const roomForOutput = Math.max(1, contextLimit - (requested.total - requestedOutput));
-  if (effectiveOutput > roomForOutput) effectiveOutput = roomForOutput;
-
+  // Keep the requested/model/provider output allowance while compacting the
+  // input. Clamping against the *uncompacted* request here used to make that
+  // clamp permanent: a large history reduced max_tokens to 1, compaction then
+  // freed almost the entire context window, but the request still went out
+  // with one output token. Reasoning models predictably answered that with
+  // finish_reason=length, and a continuation loop could repeat forever. The
+  // output is the final elastic component, so it is clamped only after input
+  // policy has done all the space-reclaiming it can do (below).
   let current = breakdown(messages, tools, attachments, effectiveOutput, overhead);
   if (current.total > contextLimit) {
     const pruned = replaceToolPreviews(messages);

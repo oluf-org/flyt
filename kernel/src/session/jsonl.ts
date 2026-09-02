@@ -53,6 +53,180 @@ export interface LogProblem {
   reason: string;
 }
 
+/**
+ * A single durable event should be comfortably larger than any model response
+ * the configured context windows permit. The bound is nevertheless explicit:
+ * malformed or hostile evidence stays on disk, but can never make reopening a
+ * run construct an unbounded JavaScript string.
+ */
+export const MAX_SESSION_EVENT_BYTES = 64 * 1024 * 1024;
+
+/** Old builds copied the complete conversation into every step.prompt. */
+export const MAX_INLINE_LEGACY_PROMPT_BYTES = 256 * 1024;
+const SESSION_READ_CHUNK_BYTES = 256 * 1024;
+const SESSION_HEADER_BYTES = 8 * 1024;
+
+export interface SessionLogRead {
+  events: SessionEvent[];
+  problems: LogProblem[];
+  head: number;
+  size: number;
+  /** Bytes ending at the last newline; the safe crash-repair boundary. */
+  completeBytes: number;
+  torn: boolean;
+}
+
+function headerNumber(prefix: string, key: string): number | undefined {
+  const match = prefix.match(new RegExp(`"${key}"\\s*:\\s*(\\d+)`));
+  return match ? Number(match[1]) : undefined;
+}
+
+function headerString(prefix: string, key: string): string | undefined {
+  const match = prefix.match(new RegExp(`"${key}"\\s*:\\s*"([^"\\\\]*)"`));
+  return match?.[1];
+}
+
+/**
+ * Read JSONL incrementally, with memory bounded by one ordinary event.
+ *
+ * Completed legacy step.prompt snapshots above 256 KiB are represented by a
+ * compact locator in memory. Their exact bytes remain untouched on disk; the
+ * messages they duplicated are already canonical events. Any other event over
+ * 64 MiB is reported and skipped rather than allowed to hit V8's hard string
+ * ceiling. This reader is shared by recovery, projection, trace and append.
+ */
+export function readSessionLogFile(file: string, {
+  maxEventBytes = MAX_SESSION_EVENT_BYTES,
+  maxInlinePromptBytes = MAX_INLINE_LEGACY_PROMPT_BYTES,
+}: {
+  /** Injectable for regression tests; production callers use the hard default. */
+  maxEventBytes?: number;
+  /** Injectable for regression tests; production callers use the hard default. */
+  maxInlinePromptBytes?: number;
+} = {}): SessionLogRead {
+  const stat = fs.statSync(file);
+  const events: SessionEvent[] = [];
+  const problems: LogProblem[] = [];
+  const chunk = Buffer.allocUnsafe(Math.min(SESSION_READ_CHUNK_BYTES, Math.max(1, stat.size)));
+  const fd = fs.openSync(file, 'r');
+  let position = 0;
+  let completeBytes = 0;
+  let lineNumber = 1;
+  let lineBytes = 0;
+  let parts: Buffer[] = [];
+  let prefix = Buffer.alloc(0);
+  let compactPrompt = false;
+  let oversized = false;
+  let head = 0;
+
+  const add = (segment: Buffer): void => {
+    if (!segment.length) return;
+    lineBytes += segment.length;
+    if (prefix.length < SESSION_HEADER_BYTES) {
+      prefix = Buffer.concat([
+        prefix,
+        Buffer.from(segment.subarray(0, SESSION_HEADER_BYTES - prefix.length)),
+      ]);
+    }
+    const header = prefix.toString('utf8');
+    if (!compactPrompt && lineBytes > maxInlinePromptBytes
+      && headerString(header, 'type') === 'step.prompt') {
+      compactPrompt = true;
+      parts = [];
+    }
+    if (!compactPrompt && !oversized && lineBytes > maxEventBytes) {
+      oversized = true;
+      parts = [];
+    }
+    if (!compactPrompt && !oversized) parts.push(Buffer.from(segment));
+  };
+
+  const finish = (): void => {
+    if (!lineBytes) {
+      lineNumber += 1;
+      return;
+    }
+    const header = prefix.toString('utf8');
+    const headerSeq = headerNumber(header, 'seq');
+    if (oversized) {
+      if (headerSeq !== undefined) head = Math.max(head, headerSeq);
+      problems.push({
+        line: lineNumber,
+        reason: `event exceeds the ${maxEventBytes}-byte in-memory safety limit; evidence retained on disk`,
+      });
+    } else if (compactPrompt) {
+      const seq = headerSeq;
+      const type = headerString(header, 'type');
+      if (seq === undefined || type !== 'step.prompt') {
+        problems.push({ line: lineNumber, reason: 'not a JSON event object' });
+      } else {
+        const blockId = headerString(header, 'blockId');
+        const step = headerNumber(header, 'step');
+        events.push({
+          seq,
+          at: headerString(header, 'at') ?? '',
+          type,
+          data: {
+            ...(blockId ? { blockId } : {}),
+            ...(step !== undefined ? { step } : {}),
+            content: {
+              source: 'legacy-step-prompt', omitted: true, bytes: lineBytes,
+              note: 'The duplicated prompt remains in session.jsonl; canonical message events are loaded instead.',
+            },
+          },
+        });
+        head = Math.max(head, seq);
+      }
+    } else {
+      let text = Buffer.concat(parts, lineBytes).toString('utf8');
+      if (text.endsWith('\r')) text = text.slice(0, -1);
+      const parsed = asRecord(parseLine(text));
+      if (typeof parsed.seq !== 'number') {
+        problems.push({ line: lineNumber, reason: 'not a JSON event object' });
+      } else {
+        head = Math.max(head, parsed.seq);
+        if (typeof parsed.type === 'string') {
+          events.push({
+            seq: parsed.seq,
+            at: String(parsed.at ?? ''),
+            type: parsed.type,
+            data: parsed.data ?? null,
+          });
+        }
+      }
+    }
+    lineNumber += 1;
+    lineBytes = 0;
+    parts = [];
+    prefix = Buffer.alloc(0);
+    compactPrompt = false;
+    oversized = false;
+  };
+
+  try {
+    while (position < stat.size) {
+      const read = fs.readSync(fd, chunk, 0, Math.min(chunk.length, stat.size - position), position);
+      if (!read) break;
+      let start = 0;
+      for (let index = 0; index < read; index++) {
+        if (chunk[index] !== 10) continue;
+        add(chunk.subarray(start, index));
+        finish();
+        completeBytes = position + index + 1;
+        start = index + 1;
+      }
+      if (start < read) add(chunk.subarray(start, read));
+      position += read;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  const torn = lineBytes > 0;
+  if (torn) problems.push({ line: lineNumber, reason: 'torn final line' });
+  return { events, problems, head, size: stat.size, completeBytes, torn };
+}
+
 /** What the model is told when a tool call died with the process. */
 export const NEVER_RETURNED =
   'This tool call never returned: the process ended while it was running. Its effect on the workspace is unknown.';
@@ -108,42 +282,20 @@ export class JsonlSession implements SessionHandle {
     if (!stat) { this.#head = 0; this.#size = -1; this.#events = []; return; }
     if (stat.size === this.#size) return;
 
-    const raw = fs.readFileSync(this.file, 'utf8');
-    const torn = raw.length > 0 && !raw.endsWith('\n');
-    const lines = raw.split('\n');
-    if (lines[lines.length - 1] === '') lines.pop();
-
+    const read = readSessionLogFile(this.file);
     this.problems.length = 0;
-    let head = 0;
-    let goodBytes = 0;
-    const events: SessionEvent[] = [];
-    for (let i = 0; i < lines.length; i++) {
-      const text = lines[i]!;
-      const parsed = asRecord(parseLine(text));
-      const lastLine = i === lines.length - 1;
-      if (typeof parsed.seq !== 'number') {
-        if (lastLine && torn) break;                       // a torn tail, repaired below
-        this.problems.push({ line: i + 1, reason: 'not a JSON event object' });
-        goodBytes += Buffer.byteLength(text, 'utf8') + 1;  // keep it; it is somebody's evidence
-        continue;
-      }
-      head = Math.max(head, parsed.seq);
-      if (typeof parsed.type === 'string') {
-        events.push({ seq: parsed.seq, at: String(parsed.at ?? ''), type: parsed.type, data: parsed.data ?? null });
-      }
-      goodBytes += Buffer.byteLength(text, 'utf8') + 1;
-    }
+    this.problems.push(...read.problems);
 
-    if (torn && !this.#readonly) {
-      fs.truncateSync(this.file, goodBytes);
-      this.problems.push({ line: lines.length, reason: 'torn final line, truncated' });
-      this.#size = goodBytes;
+    if (read.torn && !this.#readonly) {
+      fs.truncateSync(this.file, read.completeBytes);
+      const torn = this.problems.at(-1);
+      if (torn?.reason === 'torn final line') torn.reason = 'torn final line, truncated';
+      this.#size = read.completeBytes;
     } else {
-      if (torn) this.problems.push({ line: lines.length, reason: 'torn final line' });
       this.#size = stat.size;
     }
-    this.#head = head;
-    this.#events = events;
+    this.#head = read.head;
+    this.#events = read.events;
   }
 
   async head(): Promise<number> {

@@ -49,6 +49,25 @@ test('context manager records requested/model/provider/effective values and pres
   assert.equal(decision.resolutions[1].effective, decision.effectiveOutput);
 });
 
+test('context compaction restores output room instead of freezing an early one-token clamp', () => {
+  const profile = unknownCapability('small', 'test');
+  profile.limits.contextTokens = { value: 2_000, confidence: 'verified', source: 'fixture' };
+  profile.limits.maxOutputTokens = { value: 500, confidence: 'verified', source: 'fixture' };
+  profile.providerOverheadTokens = { value: 0, confidence: 'verified', source: 'fixture' };
+  const messages = [
+    ...Array.from({ length: 20 }, (_, index) => ({
+      role: index % 2 ? 'assistant' : 'user', content: `old-${index} ${'x'.repeat(1_000)}`,
+    })),
+    { role: 'user', content: 'Answer this recent question.' },
+  ];
+
+  const decision = manageContextBudget({ messages, requestedOutput: 500, profile });
+  assert.ok(decision.actions.some(action => action.action === 'retain_recent_turns'));
+  assert.equal(decision.effectiveOutput, 500,
+    'space reclaimed from old turns is available to the answer');
+  assert.ok(decision.effective.total <= decision.contextLimit);
+});
+
 test('canonical tool-call state rules normalize once and identify restart reconciliation targets', () => {
   assert.doesNotThrow(() => assertToolTransition(null, 'received'));
   assert.doesNotThrow(() => assertToolTransition('running', 'completed'));

@@ -429,6 +429,10 @@ function plannerFailure(
   return `Planner returned an invalid task graph: ${errors.join('; ')}`;
 }
 
+function isPlannerBudgetExhaustion(result: Awaited<ReturnType<typeof runAgentLoop>>): boolean {
+  return result.stopped === 'bound' && result.finishReason === 'length' && !result.content.trim();
+}
+
 function taskInput(task: GeneratedTask, original: string, completed: ReadonlyMap<string, BlockOutcome>): string {
   const dependencies = task.dependsOn.map(id => {
     const output = completed.get(id)?.output ?? '(no output)';
@@ -506,7 +510,13 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
       structuredOutput: TASK_GRAPH_OUTPUT,
       temperature: 0.1, isolated: true, ...(run.signal ? { signal: run.signal } : {}),
     });
-    if (planned.stopped !== 'answered') return { status: 'failed', output: planned.content, error: planned.reason ?? planned.stopped };
+    // The planner's own repair protocol owns retries for invalid/empty JSON.
+    // A one-step agent loop therefore hands reasoning-only token exhaustion
+    // back as invalid planner output instead of replacing the useful provider
+    // evidence with its generic step-bound reason.
+    if (planned.stopped !== 'answered' && !isPlannerBudgetExhaustion(planned)) {
+      return { status: 'failed', output: planned.content, error: planned.reason ?? planned.stopped };
+    }
     planText = planned.structuredOutput !== undefined
       ? JSON.stringify(planned.structuredOutput)
       : planned.content;
@@ -531,7 +541,9 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
         structuredOutput: TASK_GRAPH_OUTPUT,
         temperature: 0, isolated: true, ...(run.signal ? { signal: run.signal } : {}),
       });
-      if (repaired.stopped !== 'answered') return { status: 'failed', output: repaired.content, error: repaired.reason ?? repaired.stopped };
+      if (repaired.stopped !== 'answered' && !isPlannerBudgetExhaustion(repaired)) {
+        return { status: 'failed', output: repaired.content, error: repaired.reason ?? repaired.stopped };
+      }
       planText = repaired.structuredOutput !== undefined
         ? JSON.stringify(repaired.structuredOutput)
         : repaired.content;

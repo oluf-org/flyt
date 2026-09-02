@@ -19,6 +19,7 @@
 // nothing here prints.
 import fs from 'node:fs';
 import path from 'node:path';
+import { readSessionLogFile } from '#kernel';
 import { callModel } from './adapters/index.js';
 import { incidentHeadline } from './incidents.js';
 import { CAPABILITY_MAX_MODELS_PER_OPERATION, SUBSCRIPTION_PROVIDERS } from './modelSource.js';
@@ -51,9 +52,7 @@ const readJson = file => {
 export function readCanonicalEvidence(runsRoot, runId, { interactions = [] } = {}) {
   const dir = path.join(runsRoot, runId);
   const file = path.join(dir, 'session.jsonl');
-  const events = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).flatMap(line => {
-    try { return [JSON.parse(line)]; } catch { return []; }
-  });
+  const events = readSessionLogFile(file).events;
   const meta = readJson(path.join(dir, 'meta.json')) ?? {};
   const stack = readJson(path.join(dir, 'stack.json'));
   const calls = events.filter(event => event.type === 'llm.request' || event.type === 'llm.response'

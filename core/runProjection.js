@@ -5,6 +5,7 @@
 // session.jsonl is dispatched to RunStore's read-only compatibility reader.
 import fs from 'node:fs';
 import path from 'node:path';
+import { readSessionLogFile } from '#kernel';
 
 async function eventsFor(ctx, id) {
   const session = await ctx.sessions.read(id);
@@ -119,20 +120,10 @@ export class StoredStackSnapshotReader {
     if (!fs.existsSync(file)) throw new Error(`Run "${id}" has no canonical session log.`);
     const size = fs.statSync(file).size;
     let state = this.#files.get(file);
-    if (!state || size < state.offset) state = { offset: 0, tail: '', events: [] };
-    if (size > state.offset) {
-      const buffer = Buffer.allocUnsafe(size - state.offset);
-      const fd = fs.openSync(file, 'r');
-      try { fs.readSync(fd, buffer, 0, buffer.length, state.offset); } finally { fs.closeSync(fd); }
-      const text = state.tail + buffer.toString('utf8');
-      const lines = text.split(/\r?\n/);
-      state.tail = text.endsWith('\n') ? '' : (lines.pop() ?? '');
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try { state.events.push(JSON.parse(line)); } catch { /* malformed evidence remains on disk */ }
-      }
-      state.offset = size;
-    }
+    // Historical runs change only when an explicit append command mutates
+    // them. Re-scan on size change through the kernel's bounded line reader;
+    // never allocate `size` bytes or turn the complete JSONL into one string.
+    if (!state || size !== state.size) state = { size, events: readSessionLogFile(file).events };
     this.#files.delete(file);
     this.#files.set(file, state);
     while (this.#files.size > this.#maxFiles) this.#files.delete(this.#files.keys().next().value);
@@ -158,10 +149,7 @@ export function storedStackRunMetadata(runsRoot, id) {
   const file = path.join(runsRoot, id, 'session.jsonl');
   if (!fs.existsSync(file)) return null;
   let metadata = null;
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    if (!line.trim()) continue;
-    let event;
-    try { event = JSON.parse(line); } catch { continue; }
+  for (const event of readSessionLogFile(file).events) {
     if (event.type === 'run.created') metadata = { ...(event.data ?? {}) };
     if (event.type === 'run.reconfigured' && metadata) metadata = { ...metadata, ...(event.data ?? {}) };
   }

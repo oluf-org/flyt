@@ -47,6 +47,13 @@ export const MAX_STEPS = 120;
  */
 export const SESSION_STREAM_FLUSH_MS = 120;
 
+/**
+ * A visible answer may legitimately span several provider-sized responses,
+ * but "continue forever" is not a recovery policy. This default still permits
+ * more than a quarter-million generated tokens at the ordinary 32k ceiling.
+ */
+export const MAX_LENGTH_CONTINUATIONS = 8;
+
 /** Why the loop stopped, in the four ways that are not "the model finished". */
 export type StopReason = 'answered' | 'bound' | 'cancelled' | 'vetoed';
 
@@ -117,6 +124,8 @@ export interface LoopOptions {
   /** How many unusable empty or non-native tool-call turns may be repaired.
    * Repairs ask for a real call; they never infer or execute narrated args. */
   maxTurnRepairs?: number;
+  /** Hard bound on visible, length-truncated continuations in one block turn. */
+  maxLengthContinuations?: number;
   /** Per-tool call caps for role-specific loops such as clarification. */
   toolLimits?: Readonly<Record<string, number>>;
   /** Role-specific semantic refusal before a call reaches the shared gate. */
@@ -195,6 +204,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     maxSteps, softMaxSteps = MAX_STEPS, maxTokens, temperature,
     structuredOutput, reasoning: reasoningRequest,
     continueOnLength = false, maxTurnRepairs = 2,
+    maxLengthContinuations = MAX_LENGTH_CONTINUATIONS,
     toolLimits = {}, toolGuard, isolated = false, signal,
   } = options;
 
@@ -237,6 +247,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   const toolUses = new Map<string, number>();
   const progress = new ProgressDetector();
   let turnRepairs = 0;
+  let lengthContinuations = 0;
   let toolValidationFailures = 0;
   let tokensSinceDurableProgress = 0;
   let costSinceDurableProgress = 0;
@@ -320,11 +331,16 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       type: 'step.prompt',
       data: {
         blockId, step,
-        // The messages are already canonical session events. Recording their
-        // exact assembled request here makes one query inspectable without a
-        // reader having to reconstruct the conversation by hand.
+        // The messages already exist as canonical session events. Copying the
+        // whole growing conversation into every step made the append-only log
+        // quadratic: one pathological run accumulated 1.3 GB from 266 prompt
+        // snapshots while its actual responses occupied 5 MB. Keep a compact
+        // locator here; context.budget records the effective token shape and
+        // the preceding message events remain the lossless source.
         content: {
-          messages: messages as unknown as JsonValue,
+          source: 'canonical-session',
+          throughSeq: await session.head(),
+          messageCount: messages.length,
           tools: requestSchemas.map(schema => schema.name),
         } as unknown as JsonValue,
       },
@@ -484,7 +500,21 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       ...(answer.route ? { route: answer.route } : {}),
     };
 
-    if (!calls.length && finishReason === 'length' && continueOnLength) {
+    // A length stop with no visible content is not a partial deliverable. It is
+    // the same unusable turn as any other reasoning-only/empty response and
+    // belongs in the bounded repair path below. Treating one reasoning token
+    // as a continuation made a provider's 1-token budget failure spin forever.
+    if (!calls.length && content && finishReason === 'length' && continueOnLength) {
+      const limit = Math.max(0, Math.floor(maxLengthContinuations));
+      if (lengthContinuations >= limit) {
+        content = [...continuedContent, content].join('');
+        await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
+        ctx.emit('step/end', ref, settled);
+        stopped = 'bound';
+        reason = `The provider length-truncated ${lengthContinuations + 1} responses in one block turn; the continuation limit is ${limit}.`;
+        break;
+      }
+      lengthContinuations += 1;
       if (content) continuedContent.push(content);
       await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
       ctx.emit('step/end', ref, settled);
@@ -499,7 +529,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       continue;
     }
 
-    const repair = structured === undefined && !calls.length && tools.length
+    const repair = structured === undefined && !calls.length
       ? diagnoseTurnRepair(content, schemas.map(schema => schema.name), answer.unparsedToolCall)
       : null;
     if (repair) {

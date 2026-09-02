@@ -401,7 +401,7 @@ test('a burst of provider chunks is persisted as one durable stream batch', asyn
   } finally { await boot.kernel.dispose(); fs.rmSync(boot.root, { recursive: true, force: true }); }
 });
 
-test('a query records its exact assembled request and carries structural call controls', async () => {
+test('a query records a compact canonical prompt reference and carries structural call controls', async () => {
   const boot = await bootFor([{ content: 'Done.' }]);
   await loopIn(boot, { maxTokens: 12_288, temperature: 0.1 });
   assert.equal(boot.llm.seen[0].maxTokens, 12_288);
@@ -409,9 +409,12 @@ test('a query records its exact assembled request and carries structural call co
   const events = [];
   for await (const event of boot.session.read()) events.push(event);
   const prompt = events.find(event => event.type === 'step.prompt');
-  assert.deepEqual(prompt.data.content.messages.map(message => [message.role, message.content]), [
+  assert.deepEqual(prompt.data.content, {
+    source: 'canonical-session', throughSeq: 4, messageCount: 2, tools: [],
+  });
+  assert.deepEqual(boot.llm.seen[0].messages.map(message => [message.role, message.content]), [
     ['system', 'You are a block.'], ['user', 'Do the thing.'],
-  ]);
+  ], 'the lossless messages still come from the canonical events');
   assert.equal(events.find(event => event.type === 'llm.request').data.maxTokens, 12_288);
   await boot.kernel.dispose();
 });
@@ -457,6 +460,43 @@ test('a token-truncated worker warns and continues in another query', async () =
   const events = [];
   for await (const event of boot.session.read()) events.push(event);
   assert.ok(events.some(event => event.type === 'block.warning' && event.data.code === 'soft_token_limit'));
+  await boot.kernel.dispose();
+});
+
+test('reasoning-only length stops use bounded turn repair instead of an unbounded continuation', async () => {
+  const boot = await bootFor([
+    { content: '', reasoning: 'thinking', finishReason: 'length' },
+  ], {
+    tools: [{
+      name: 'peek', description: 'Look.', parameters: { type: 'object' },
+      classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+      async execute() { return { content: 'unused' }; },
+    }],
+    ceiling: ['peek'],
+  });
+
+  const result = await loopIn(boot, { continueOnLength: true, maxTurnRepairs: 2 });
+  assert.equal(result.stopped, 'bound');
+  assert.equal(boot.llm.seen.length, 3, 'the initial turn plus two repairs is a hard bound');
+  const events = boot.session.readSync();
+  assert.equal(events.filter(event => event.type === 'block.warning'
+    && event.data.code === 'empty_turn_repair').length, 2);
+  assert.equal(events.filter(event => event.type === 'block.warning'
+    && event.data.code === 'soft_token_limit').length, 0,
+  'reasoning without visible output is not mislabeled as a partial deliverable');
+  await boot.kernel.dispose();
+});
+
+test('visible length continuations have an explicit hard bound', async () => {
+  const boot = await bootFor([{ content: 'part', finishReason: 'length' }]);
+  const result = await loopIn(boot, {
+    continueOnLength: true, maxLengthContinuations: 2,
+  });
+  assert.equal(result.stopped, 'bound');
+  assert.equal(result.steps, 3);
+  assert.equal(result.content, 'partpartpart', 'partial output is preserved when the safety bound stops the loop');
+  assert.match(result.reason, /continuation limit is 2/i);
+  assert.equal(boot.llm.seen.length, 3);
   await boot.kernel.dispose();
 });
 
