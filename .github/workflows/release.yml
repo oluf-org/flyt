@@ -56,9 +56,48 @@ jobs:
             exit 1
           }
       - name: Test, including the real platform sandbox
+        if: runner.os != 'Windows'
         run: npm test
         env:
           FLYT_RELEASE_SANDBOX_E2E: '1'
+      - name: Test full suite on Windows
+        if: runner.os == 'Windows'
+        run: npm test
+      - name: Test real Windows sandbox as a standard user
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $testUser = 'flytsandboxci'
+          $plainPassword = 'Flyt!Aa1' + [guid]::NewGuid().ToString('N')
+          $testRoot = Join-Path $env:SystemDrive 'flyt-sandbox-ci'
+          try {
+            net user $testUser $plainPassword /add /expires:never /passwordchg:no
+            if ($LASTEXITCODE -ne 0) { throw "Could not create the sandbox test user ($LASTEXITCODE)." }
+            New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
+            icacls.exe $testRoot /grant "${testUser}:(OI)(CI)M" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Could not grant the test temp directory ($LASTEXITCODE)." }
+            icacls.exe $pwd.Path /grant "${testUser}:(OI)(CI)RX" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Could not grant repository read access ($LASTEXITCODE)." }
+
+            $securePassword = ConvertTo-SecureString $plainPassword -AsPlainText -Force
+            $credential = [pscredential]::new(".\$testUser", $securePassword)
+            $stdoutPath = Join-Path $testRoot 'stdout.log'
+            $stderrPath = Join-Path $testRoot 'stderr.log'
+            $env:FLYT_RELEASE_SANDBOX_E2E = '1'
+            $env:TEMP = $testRoot
+            $env:TMP = $testRoot
+            $env:TMPDIR = $testRoot
+            $process = Start-Process -FilePath (Get-Command node).Source `
+              -ArgumentList @('--test', 'tests/executionWorldPlatform.test.js') `
+              -WorkingDirectory $pwd.Path -Credential $credential -Wait -PassThru `
+              -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+            Get-Content $stdoutPath
+            Get-Content $stderrPath
+            if ($process.ExitCode -ne 0) { throw "Windows sandbox tests failed ($($process.ExitCode))." }
+          }
+          finally {
+            net user $testUser /delete | Out-Null
+          }
       - run: npm run build
       - run: npm run lint
       # Unsigned builds only: never pick up a codesigning identity on macOS.
