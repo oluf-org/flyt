@@ -34,6 +34,8 @@ export interface RunMeta {
   /** Where the work happened: the project, or a worktree for unattended work. */
   workspace: string | null;
   approvalMode: string | null;
+  executionWorld: JsonValue;
+  sandbox: JsonValue;
   /** Set when this run is a Loop worker's attempt at a backlog task. */
   loopTaskId: string | null;
   conversationId: string | null;
@@ -95,6 +97,8 @@ export interface RunProjection {
   blocks: Record<string, string>;
   tools: ToolRecord[];
   calls: CallRecord[];
+  sandboxDecisions: JsonValue[];
+  sandboxFailures: JsonValue[];
   /** True when this came from a legacy run folder rather than a log. */
   legacy: boolean;
 }
@@ -116,6 +120,8 @@ function emptyMeta(runId: string): RunMeta {
     stackName: null,
     workspace: null,
     approvalMode: null,
+    executionWorld: null,
+    sandbox: null,
     loopTaskId: null,
     conversationId: null,
     parentRunId: null,
@@ -151,7 +157,7 @@ function emptyMeta(runId: string): RunMeta {
 export function projectRun(events: readonly SessionEvent[], runId: string): RunProjection {
   const meta = emptyMeta(runId);
   const projection: RunProjection = {
-    meta, stack: null, prompt: '', blocks: {}, tools: [], calls: [], legacy: false,
+    meta, stack: null, prompt: '', blocks: {}, tools: [], calls: [], sandboxDecisions: [], sandboxFailures: [], legacy: false,
   };
   /** callId -> the request half, waiting for its response. */
   const pending = new Map<string, Partial<CallRecord>>();
@@ -168,6 +174,8 @@ export function projectRun(events: readonly SessionEvent[], runId: string): RunP
         meta.stackName = data.stackName ? String(data.stackName) : meta.stackName;
         meta.workspace = data.workspace ? String(data.workspace) : meta.workspace;
         meta.approvalMode = data.approvalMode ? String(data.approvalMode) : meta.approvalMode;
+        if ('executionWorld' in data) meta.executionWorld = (data.executionWorld ?? null) as JsonValue;
+        if ('sandbox' in data) meta.sandbox = (data.sandbox ?? null) as JsonValue;
         meta.loopTaskId = data.loopTaskId ? String(data.loopTaskId) : meta.loopTaskId;
         meta.conversationId = data.conversationId ? String(data.conversationId) : meta.conversationId;
         meta.parentRunId = data.parentRunId ? String(data.parentRunId) : meta.parentRunId;
@@ -202,6 +210,16 @@ export function projectRun(events: readonly SessionEvent[], runId: string): RunP
         if ('blockFallbacks' in data) meta.blockFallbacks = (data.blockFallbacks ?? {}) as JsonValue;
         if ('tierWorkers' in data) meta.tierWorkers = (data.tierWorkers ?? {}) as JsonValue;
         if ('level' in data) meta.level = data.level == null ? null : String(data.level);
+        if ('sandbox' in data) meta.sandbox = (data.sandbox ?? null) as JsonValue;
+        break;
+
+      case 'sandbox.decision':
+      case 'sandbox.escalation':
+        projection.sandboxDecisions.push({ type: event.type, at: event.at, ...data } as JsonValue);
+        break;
+
+      case 'sandbox.failure':
+        projection.sandboxFailures.push({ at: event.at, ...data } as JsonValue);
         break;
 
       case 'stack.resolved':
@@ -529,7 +547,7 @@ export function materialiseChanged(
 export function readLegacyRun(dir: string): RunProjection {
   const runId = path.basename(dir);
   const projection: RunProjection = {
-    meta: emptyMeta(runId), stack: null, prompt: '', blocks: {}, tools: [], calls: [], legacy: true,
+    meta: emptyMeta(runId), stack: null, prompt: '', blocks: {}, tools: [], calls: [], sandboxDecisions: [], sandboxFailures: [], legacy: true,
   };
   const read = (rel: string) => {
     const file = path.join(dir, rel);

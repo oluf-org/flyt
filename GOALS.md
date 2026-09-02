@@ -26,7 +26,7 @@ Flyt makes structured AI work understandable and controllable. The ordinary path
 - Flyt is a local, single-machine application; distributed execution is not a current target.
 - The stack language is composition, not general-purpose visual programming. It supports six bounded containers and structured predicates over declared outputs, never arbitrary expressions or unbounded recursion.
 - Stack layout is derived from containment and is never durable state.
-- Production-grade process sandboxing is not claimed. File tools are workspace-confined; shell safety comes from approvals, screening, and Loop worktree isolation.
+- Local commands use functionally probed file-effect confinement: Bubblewrap on Linux, Seatbelt on macOS, and a partial write-restricted-token/ACL backend on Windows. Missing or weaker backends fail closed. Network, reads, IPC, syscalls, and kernel isolation are not claimed; see `SAFETY.md`.
 - General self-modification is not a product promise. Retrospectives and benchmarks provide evidence; deterministic code and explicit decisions decide what changes.
 - New dependencies need a concrete payoff. The stack parser and core command surface remain small and inspectable.
 

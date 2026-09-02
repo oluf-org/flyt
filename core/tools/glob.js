@@ -61,7 +61,7 @@ export default {
       }
     }
   },
-  run(args, ctx) {
+  async run(args, ctx) {
     const requestedDir = args.dir ? String(args.dir).replace(/\\/g, '/').replace(/\/+$/, '') : '';
     const reference = requestedDir.startsWith('reference:');
     let base;
@@ -76,6 +76,26 @@ export default {
       target = 'reference';
     } else {
       const host = fileHost(ctx);
+      if (host.seam) {
+        const basePrefix = requestedDir.replace(/^\.?\/*|\/*$/g, '');
+        const re = globToRegExp(String(args.pattern ?? ''));
+        const limit = Math.min(MAX_LIMIT, Math.max(1, Number(args.limit ?? DEFAULT_LIMIT)));
+        const includeDirs = args.includeDirs === true;
+        const entries = await host.seam.list(requestedDir || '.', host.execution?.signal);
+        const paths = [];
+        let scanned = 0;
+        let truncated = false;
+        for (const entry of entries) {
+          if (++scanned > MAX_ENTRIES_SCANNED) { truncated = true; break; }
+          if (entry.path.split('/').some(segment => SKIP_DIRS.has(segment))) continue;
+          const relative = basePrefix && entry.path.startsWith(`${basePrefix}/`) ? entry.path.slice(basePrefix.length + 1) : entry.path;
+          if ((entry.kind === 'file' || includeDirs) && re.test(relative)) paths.push(entry.kind === 'directory' ? `${entry.path}/` : entry.path);
+          if (paths.length >= limit) { truncated = true; break; }
+        }
+        paths.sort();
+        return { pattern: args.pattern, ...(args.dir ? { dir: args.dir } : {}), target: host.target,
+          count: paths.length, ...(truncated ? { truncated: true } : {}), paths };
+      }
       base = host.resolve(requestedDir || '.');
       prefix = requestedDir.replace(/^\.?\/*|\/*$/g, '');
       target = host.target;

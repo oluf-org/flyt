@@ -107,12 +107,15 @@ export default function Work({
   const latestRequest = detailedTrace.turns.flatMap(turn => turn.steps.map(step => step.request)).filter(Boolean).at(-1) ?? null;
   const latestAttempt = latestRequest?.attempts?.at(-1) ?? null;
   const summary = snapshot?.conversation?.filter(turn => turn.role === 'assistant').at(-1) ?? null;
+  const sandbox = snapshot?.meta?.sandbox ?? null;
   const runModel = { ...view, summary: summary?.text ?? null, input: snapshot?.meta?.userMessage ?? snapshot?.prompt ?? '' };
   if (!stack) return <div className="v2-work" data-v2>{composer}<p className="muted work-empty">Choose a workflow and send a message to start.</p></div>;
   return <div className="v2-work work-run-mode" data-v2><header className="work-run-head">
     <button type="button" className="work-new-chat" onClick={onNewChat}><span aria-hidden>＋</span> New chat</button>
     <div className="work-run-title"><span className="section-label">{view.running ? 'Block run' : 'Run'}</span><h1>{stack.name ?? stack.id}</h1></div>
     {runModels.length > 0 && <div className="work-run-models" title="Models actually requested by this run"><span>Models</span>{runModels.map(model => <code key={model}>{model}</code>)}</div>}
+    {sandbox && <div className="work-run-models" title="Local file-effect confinement; network access remains ambient"><span>Sandbox</span>
+      <code>{sandbox.effectiveMode ?? sandbox.requestedMode}</code><code>{sandbox.backend}</code><small>{sandbox.enforcement} · ambient network</small></div>}
     <span className={`work-stage stage-${view.stage}`}>{view.stage ?? 'starting'}</span>
     {(view.running || view.paused) && !view.stopping && <button type="button" className="work-pause"
       disabled={pauseBusy || resumeBusy || view.pausing}

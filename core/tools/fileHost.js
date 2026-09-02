@@ -14,13 +14,19 @@ export function fileHost(ctx) {
     return {
       target: 'workspace',
       resolve: rel => ws.resolve(rel),
-      rel: abs => path.relative(ws.root, abs).split(path.sep).join('/')
+      rel: abs => path.relative(ws.root, abs).split(path.sep).join('/'),
+      seam: ctx.fs ?? null,
+      execution: ctx.execution ?? null,
+      ensure: () => fs.mkdirSync(ws.root, { recursive: true }),
     };
   }
   return {
     target: 'run-workspace',
     resolve: rel => ctx.store.workspacePath(ctx.runId, rel),
-    rel: abs => path.relative(ctx.store.runDir(ctx.runId), abs).split(path.sep).join('/')
+    rel: abs => path.relative(ctx.store.runDir(ctx.runId), abs).split(path.sep).join('/'),
+    seam: ctx.fs ?? null,
+    execution: ctx.execution ?? null,
+    ensure: () => fs.mkdirSync(ctx.store.workspacePath(ctx.runId, '.'), { recursive: true }),
   };
 }
 
@@ -35,15 +41,25 @@ export function fileHost(ctx) {
  * front of the first character so no anchor on line 1 could match, and reading
  * a PNG as UTF-8 and writing it back destroyed it.
  */
-export function readShaped(host, relPath) {
+export async function readShaped(host, relPath) {
+  if (host.seam) {
+    try {
+      const text = await host.seam.read(relPath, host.execution?.signal);
+      return { text, shape: { binary: false, encoding: 'utf8', bom: false, eol: text.includes('\r\n') ? '\r\n' : '\n' }, bytes: Buffer.byteLength(text, 'utf8') };
+    } catch (error) {
+      if (/not a text file/i.test(String(error?.message ?? error))) return { text: '', shape: { binary: true }, bytes: 0 };
+      if (/not found/i.test(String(error?.message ?? error))) return null;
+      throw error;
+    }
+  }
   const p = host.resolve(relPath);
   return readFileShaped(p);
 }
 
 // Read a text file; null when it doesn't exist or isn't a regular file. A
 // binary file reads as null too: there is no text in it to hand back.
-export function readText(host, relPath) {
-  const read = readShaped(host, relPath);
+export async function readText(host, relPath) {
+  const read = await readShaped(host, relPath);
   if (!read || read.shape.binary) return null;
   return read.text;
 }
@@ -52,14 +68,19 @@ export function readText(host, relPath) {
 // backend's reporting root. With a `shape`, the bytes go back in the encoding
 // and byte-order mark they came in — a file does not change what it IS because
 // something edited a line in it.
-export function writeText(host, relPath, content, shape = null) {
+export async function writeText(host, relPath, content, shape = null) {
+  if (host.seam) {
+    await host.seam.write(relPath, String(content), { execution: host.execution });
+    return String(relPath).replace(/\\/g, '/').replace(/^\.\//, '');
+  }
   const p = host.resolve(relPath);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, shape ? encode(content, shape) : Buffer.from(String(content), 'utf8'));
   return host.rel(p);
 }
 
-export function fileExists(host, relPath) {
+export async function fileExists(host, relPath) {
+  if (host.seam) return host.seam.exists(relPath, host.execution?.signal);
   const p = host.resolve(relPath);
   return fs.existsSync(p) && fs.statSync(p).isFile();
 }

@@ -71,6 +71,8 @@ const SEARCH_PROVIDER_META = {
 export default function Settings({ onClose, onOpenProject = null, onOpenModels = null, projects = null, onColorChange = null }) {
   const [tab, setTab] = useState('providers');
   const [s, setS] = useState(null); // the public settings payload
+  const [sandboxDiagnostic, setSandboxDiagnostic] = useState(null);
+  const [sandboxDiagnosticBusy, setSandboxDiagnosticBusy] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => { window.flyt.getSettings().then(setS).catch(e => setError(String(e?.message ?? e))); }, []);
@@ -81,9 +83,28 @@ export default function Settings({ onClose, onOpenProject = null, onOpenModels =
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  const refreshSandboxDiagnostic = async (refresh = false) => {
+    setSandboxDiagnosticBusy(true);
+    try { setSandboxDiagnostic(await window.flyt.sandboxDiagnostics(refresh)); }
+    catch (err) {
+      const message = String(err?.message ?? err);
+      setError(message);
+      setSandboxDiagnostic({ backend: null, enforcement: null,
+        probe: { available: false, checkedAt: new Date().toISOString(), reason: message } });
+    }
+    finally { setSandboxDiagnosticBusy(false); }
+  };
+
+  useEffect(() => {
+    if (tab === 'safety' && s && !sandboxDiagnostic && !sandboxDiagnosticBusy) void refreshSandboxDiagnostic(false);
+  }, [tab, s, sandboxDiagnostic, sandboxDiagnosticBusy]);
+
   const save = async patch => {
     setError('');
-    try { setS(await window.flyt.setSettings(patch)); }
+    try {
+      setS(await window.flyt.setSettings(patch));
+      if (patch?.sandbox) setSandboxDiagnostic(null);
+    }
     catch (err) { setError(String(err?.message ?? err)); }
   };
 
@@ -116,7 +137,8 @@ export default function Settings({ onClose, onOpenProject = null, onOpenModels =
           {!s && !error && <div className="muted">Loading…</div>}
           {s && tab === 'providers' && <ProvidersTab s={s} save={save} onKeySaved={onOpenModels} />}
           {s && tab === 'repos' && <ReposPanel onOpenProject={onOpenProject} />}
-          {s && tab === 'safety' && <SafetyTab s={s} save={save} />}
+          {s && tab === 'safety' && <SafetyTab s={s} save={save} sandboxDiagnostic={sandboxDiagnostic}
+            sandboxDiagnosticBusy={sandboxDiagnosticBusy} refreshSandboxDiagnostic={refreshSandboxDiagnostic} />}
           {tab === 'project' && (
             <ProjectColorSettings projects={projects} onColorChange={onColorChange} />
           )}
@@ -457,8 +479,9 @@ function SubscriptionCard({ p, meta, sub, connected, save, test, t }) {
 // makes that judgement. The mode list is shared with the chatbox picker so the
 // two places can never drift into describing the same mode differently.
 
-function SafetyTab({ s, save }) {
+function SafetyTab({ s, save, sandboxDiagnostic, sandboxDiagnosticBusy, refreshSandboxDiagnostic }) {
   const mode = s.approvalMode ?? 'ask';
+  const sandbox = s.sandbox ?? { mode: 'workspace-write', minimumEnforcement: 'partial', network: 'ambient' };
   const candidates = s.safetyCandidates ?? [];
   const configured = s.safetyModel ?? 'auto';
   // A saved id that isn't one of the candidates is by definition a custom one,
@@ -506,6 +529,62 @@ function SafetyTab({ s, save }) {
             Keep a clean working tree, or a backup, while this is on.
           </p>
         )}
+      </section>
+
+      <section>
+        <div className="settings-section-head">
+          <span className="section-label">Command sandbox</span>
+          <span className={`status-pill ${sandboxDiagnostic?.probe?.available === false ? 'pill-err' : 'pill-neutral'} mono`}>
+            {sandboxDiagnosticBusy ? 'probing…' : sandboxDiagnostic?.backend ?? 'local backend'}
+            {sandboxDiagnostic?.enforcement ? ` · ${sandboxDiagnostic.enforcement}` : ` · minimum ${sandbox.minimumEnforcement}`}
+          </span>
+        </div>
+        <p className="settings-hint">
+          File tools and commands share this local execution world. Network access remains ambient in every mode.
+        </p>
+        <div className="approval-modes" role="radiogroup" aria-label="Default command sandbox mode">
+          {[
+            { id: 'read-only', label: 'Read only', detail: 'File tools and child processes cannot write project files.' },
+            { id: 'workspace-write', label: 'Workspace write', detail: 'Writes are limited to the project and a private per-call temp directory.' },
+            { id: 'danger-full-access', label: 'Danger: full access', detail: 'Commands can modify files anywhere your account can access.', danger: true },
+          ].map(o => (
+            <label key={o.id} className={'approval-mode-row' + (sandbox.mode === o.id ? ' active' : '') + (o.danger ? ' danger' : '')}>
+              <input type="radio" name="sandbox-mode" checked={sandbox.mode === o.id} onChange={() => {
+                if (o.danger && !window.confirm('Danger full access lets commands modify files outside the project. Use it for new runs?')) return;
+                save({ sandbox: { ...sandbox, mode: o.id } });
+              }} />
+              <span className="approval-mode-glyph" aria-hidden>{o.danger ? '!' : o.id === 'read-only' ? 'R' : 'W'}</span>
+              <span className="approval-mode-text">
+                <span className="approval-mode-label">{o.label}{o.danger && <span className="approval-danger-tag">dangerous</span>}</span>
+                <span className="approval-mode-detail">{o.detail}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <div className="settings-row">
+          <label htmlFor="sandbox-enforcement">Minimum enforcement</label>
+          <select id="sandbox-enforcement" value={sandbox.minimumEnforcement ?? 'partial'} onChange={e => save({ sandbox: { ...sandbox, minimumEnforcement: e.target.value } })}>
+            <option value="partial">Partial or stronger</option>
+            <option value="full">Full only</option>
+          </select>
+        </div>
+        <p className="settings-hint muted">
+          Flyt refuses confined commands when the platform backend cannot meet this minimum; it never silently continues unconfined.
+        </p>
+        <div className="settings-row">
+          <div>
+            <strong>Functional probe</strong>
+            <div className="settings-hint muted">
+              {sandbox.mode === 'danger-full-access'
+                ? 'Unconfined by explicit choice; managed process ownership and environment scrubbing still apply.'
+                : sandboxDiagnostic?.probe
+                  ? `${sandboxDiagnostic.probe.available ? 'Passed' : 'Failed'} at ${sandboxDiagnostic.probe.checkedAt}${sandboxDiagnostic.probe.reason ? ` — ${sandboxDiagnostic.probe.reason}` : ''}`
+                  : 'Waiting for the active project backend check.'}
+            </div>
+          </div>
+          <button type="button" className="ghost" disabled={sandboxDiagnosticBusy || sandbox.mode === 'danger-full-access'}
+            onClick={() => refreshSandboxDiagnostic(true)}>{sandboxDiagnosticBusy ? 'Checking…' : 'Refresh'}</button>
+        </div>
       </section>
 
       <section>

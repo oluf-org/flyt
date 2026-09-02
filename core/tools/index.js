@@ -178,6 +178,12 @@ export async function executeTool(name, args, ctx) {
       throw new Error(`Invalid arguments: ${errors.join('; ')}`);
     }
     record.schemaValid = true;
+    const hasPermission = args && Object.hasOwn(args, 'sandbox_permissions');
+    const hasJustification = args && Object.hasOwn(args, 'justification')
+      && typeof args.justification === 'string' && args.justification.trim().length > 0;
+    if (hasPermission !== hasJustification) {
+      throw new Error('sandbox_permissions and a non-empty justification must be supplied together.');
+    }
     record.result = await tool.run(args, ctx) ?? { ok: true };
     record.ok = true;
   } catch (err) {

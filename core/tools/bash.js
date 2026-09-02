@@ -1,24 +1,10 @@
-// bash: run a shell command with the run's bound workspace as the working
-// directory (the real target project), or the run sandbox when unbound. Output
-// (stdout/stderr/exit code) is captured into the tool result — which executeTool
-// records to log.jsonl — so every command the agent runs is auditable.
-//
-// Confinement here is cwd-based: the command starts in the workspace root. A
-// shell can still `cd ..`, so the stronger guard is the per-node approval gate
-// (V1 task 4). Output is capped and the command is time-bounded so a runaway
-// process can't hang the run or blow the model's context.
-import { spawn } from 'node:child_process';
-import fs from 'node:fs';
+// Model-facing shell execution delegates to the run's coherent execution
+// world. This module deliberately has no child_process escape hatch.
+import os from 'node:os';
 import { fileHost } from './fileHost.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
-// Per stream, characters. This used to be 100k and was the point where output
-// was DESTROYED. Since DESIGN-SPEC.md §5 the full result is archived to
-// runs/<id>/tools/<seq>-bash.json and the model sees a bounded preview, so the
-// cap here only has to stop a runaway process from exhausting memory — hence
-// 5 MB rather than a context-sized number.
-const MAX_OUTPUT = 5_000_000;
 
 export default {
   name: 'bash',
@@ -27,58 +13,65 @@ export default {
   risk: 'caution',
   keywords: ['shell', 'command', 'terminal', 'run', 'test', 'build', 'git', 'npm'],
   examples: ['run the test suite', 'check git status', 'build the project'],
-  // Command output is long and read end-first — the failure at the top, the
-  // verdict at the bottom — and the json preview keeps exitCode intact while
-  // cutting stdout/stderr head-and-tail. A bigger budget than the default,
-  // because a test run's output IS the deliverable.
   result: { preview: 'json', maxPreviewChars: 4000, artifact: true },
-  description: 'Run a shell command in the workspace (the bound target project) as the working directory — e.g. run tests, a build, or git. Returns { exitCode, stdout, stderr }. Non-zero exit codes are returned (not thrown) so you can read the error and react. Output is truncated if very long.',
+  description: 'Run a shell command in the bound workspace. The run execution world owns its sandbox policy, environment, output bounds, descendants, and teardown.',
   parameters: {
     type: 'object',
     required: ['command'],
     additionalProperties: false,
     properties: {
       command: { type: 'string', description: 'The shell command line to run, e.g. "npm test" or "git status".' },
-      timeoutMs: { type: 'number', description: `Optional wall-clock timeout in ms (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}).` }
+      timeoutMs: { type: 'number', description: `Optional wall-clock timeout in ms (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}).` },
+      sandbox_permissions: {
+        enum: ['workspace-write', 'danger-full-access'],
+        description: 'Optional one-call request for the narrowest strictly wider sandbox mode required.'
+      },
+      justification: { type: 'string', description: 'Why this exact call cannot complete under the current sandbox mode.' }
     }
   },
   async run(args, ctx) {
+    validateEscalationPair(args);
     const host = fileHost(ctx);
-    const cwd = host.resolve('.'); // workspace root (or the run's workspace sandbox)
-    fs.mkdirSync(cwd, { recursive: true }); // the sandbox dir may not exist yet
+    host.ensure?.();
     const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1, Number(args.timeoutMs) || DEFAULT_TIMEOUT_MS));
-    return await execShell(args.command, cwd, timeoutMs, host.target);
+    const fallback = !ctx?.shell;
+    const world = fallback ? await standaloneWorld(host.resolve('.'), ctx) : null;
+    try {
+      const execution = ctx?.execution ?? {
+        owner: { runId: String(ctx?.runId ?? 'standalone'), callId: `bash-${Date.now()}-${Math.random().toString(36).slice(2)}` },
+        tool: 'bash', attended: true,
+        ...(args.sandbox_permissions ? { requestedMode: args.sandbox_permissions } : {}),
+        ...(args.justification ? { justification: args.justification } : {}),
+        ...(ctx?.signal ? { signal: ctx.signal } : {}),
+      };
+      const result = await (ctx?.shell ?? world.shell).run(String(args.command), { execution, timeoutMs });
+      return {
+        command: args.command, target: host.target, exitCode: result.code,
+        ...(result.signal ? { signal: result.signal } : {}),
+        ...(result.timedOut ? { timedOut: true } : {}),
+        ...(result.errorCode ? { errorCode: result.errorCode } : {}),
+        ...(result.refused ? { refused: result.refused } : {}),
+        stdout: result.stdout, stderr: result.stderr, sandbox: result.sandbox,
+      };
+    } finally {
+      await world?.dispose();
+    }
   }
 };
 
-function execShell(command, cwd, timeoutMs, target) {
-  return new Promise((resolve, reject) => {
-    // shell:true runs through the platform shell (cmd.exe on Windows, /bin/sh
-    // elsewhere); the command inherits the app's environment (PATH etc.).
-    const child = spawn(command, { cwd, shell: true, windowsHide: true });
-    let stdout = '', stderr = '';
-    let outTrunc = false, errTrunc = false;
-    let timedOut = false;
-    const cap = (chunk, cur, setTrunc) => {
-      if (cur.length >= MAX_OUTPUT) { setTrunc(); return cur; }
-      const next = cur + chunk.toString('utf8');
-      if (next.length > MAX_OUTPUT) { setTrunc(); return next.slice(0, MAX_OUTPUT); }
-      return next;
-    };
-    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs);
-    child.stdout.on('data', d => { stdout = cap(d, stdout, () => { outTrunc = true; }); });
-    child.stderr.on('data', d => { stderr = cap(d, stderr, () => { errTrunc = true; }); });
-    child.on('error', err => { clearTimeout(timer); reject(new Error(`Failed to start command: ${err.message}`)); });
-    child.on('close', (code, signal) => {
-      clearTimeout(timer);
-      resolve({
-        command, target,
-        exitCode: code,
-        ...(signal ? { signal } : {}),
-        ...(timedOut ? { timedOut: true } : {}),
-        stdout: outTrunc ? stdout + '\n…[truncated]' : stdout,
-        stderr: errTrunc ? stderr + '\n…[truncated]' : stderr
-      });
-    });
+function validateEscalationPair(args) {
+  const permission = args?.sandbox_permissions != null;
+  const justification = typeof args?.justification === 'string' && args.justification.trim().length > 0;
+  if (permission !== justification) throw new Error('sandbox_permissions and a non-empty justification must be supplied together.');
+}
+
+async function standaloneWorld(workspaceRoot, ctx) {
+  const { createLocalExecutionWorld } = await import('#kernel');
+  return createLocalExecutionWorld({
+    workspaceRoot,
+    mode: 'danger-full-access',
+    minimumEnforcement: 'partial',
+    allowAttendedEscalation: false,
+    runsTempRoot: ctx?.store?.rootDir ?? os.tmpdir(),
   });
 }

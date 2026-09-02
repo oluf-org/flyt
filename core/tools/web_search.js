@@ -194,7 +194,8 @@ async function keylessDuckDuckGo(query, limit, ctx) {
   const pythonResult = await pythonBridge.runPythonScript(
     KEYLESS_DDG_SCRIPT,
     { url: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}` },
-    { bin, timeoutMs: 30_000, signal: ctx?.signal }
+    { bin, timeoutMs: 30_000, signal: ctx?.signal, subprocess: ctx?.subprocess, sandbox: ctx?.sandbox,
+      sandboxPolicy: ctx?.sandboxPolicy, execution: ctx?.execution }
   );
 
   if (!pythonResult.ok) {

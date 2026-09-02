@@ -233,7 +233,8 @@ export default {
     const py = pythonBridge.pythonFor(ctx);
     const res = await pythonBridge.runPythonScript(PY_SCRIPT,
       { url: parsed.href, mode, cssSelector, maxBytes },
-      { bin: py.bin, timeoutMs: TIMEOUT_MS });
+      { bin: py.bin, timeoutMs: TIMEOUT_MS, subprocess: ctx?.subprocess, sandbox: ctx?.sandbox,
+        sandboxPolicy: ctx?.sandboxPolicy, execution: ctx?.execution });
 
     // Environment failures are a verdict the model can act on, not a thrown
     // error to retry against: the interpreter is missing, the spawn failed, or

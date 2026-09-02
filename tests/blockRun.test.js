@@ -270,6 +270,26 @@ test('a narrated call to an offered tool is repaired into a native call, never e
   await boot.kernel.dispose();
 });
 
+test('a bounded tool preview and its complete durable result take separate paths', async () => {
+  const complete = { stdout: 'x'.repeat(20_000), exitCode: 0 };
+  const boot = await bootFor([
+    { content: '', toolCalls: [{ id: 'large', name: 'peek', args: {} }] },
+    { content: 'The preview was enough.' },
+  ], {
+    tools: [{
+      name: 'peek', description: 'Look.', parameters: { type: 'object' },
+      classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+      async execute() { return { content: '{"stdout":"preview"}', durableResult: complete }; },
+    }],
+    ceiling: ['peek'],
+  });
+  await loopIn(boot);
+  assert.equal(boot.llm.seen[1].messages.at(-1).content, '{"stdout":"preview"}');
+  const logged = boot.session.readSync().find(event => event.type === 'tool.result' && event.data.callId === 'large');
+  assert.deepEqual(logged.data.result, complete);
+  await boot.kernel.dispose();
+});
+
 test('all schema errors from one tool call reach the model in one logged result', async () => {
   let ran = 0;
   const boot = await bootFor([

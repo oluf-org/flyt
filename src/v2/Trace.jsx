@@ -219,6 +219,18 @@ function OtherEvents({ events }) {
 
 const TURN_PAGE = 50;
 
+function SandboxFacts({ trace }) {
+  const created = [...(trace?.others ?? [])].reverse().find(event => event?.type === 'run.created');
+  const reconfigured = [...(trace?.others ?? [])].reverse().find(event => event?.type === 'run.reconfigured' && event?.data?.sandbox);
+  const sandbox = reconfigured?.data?.sandbox ?? created?.data?.sandbox;
+  if (!sandbox) return null;
+  return <p className="tr-summary" title="Network access remains ambient in every local sandbox mode.">
+    Sandbox · <code>{sandbox.requestedMode ?? sandbox.effectiveMode}</code>
+    {sandbox.effectiveMode && sandbox.effectiveMode !== sandbox.requestedMode ? <> → <code>{sandbox.effectiveMode}</code></> : null}
+    {' · '}<code>{sandbox.backend}</code> · {sandbox.enforcement} enforcement · ambient network
+  </p>;
+}
+
 /**
  * @param trace — a folded trace from `src/traceModel.js`, live or finished.
  * @param runId — which run this is the record of.
@@ -230,6 +242,7 @@ export default function Trace({ trace = null, runId = null, uiExtensions = [] })
   if (!view.turns.length) {
     return (
       <div className="tr-empty" role="status">
+        <SandboxFacts trace={trace} />
         <p className="section-label">NOTHING RECORDED YET</p>
         <p>
           {runId
@@ -241,6 +254,7 @@ export default function Trace({ trace = null, runId = null, uiExtensions = [] })
   }
   return (
     <div className="trace" data-v2 data-run={runId ?? undefined}>
+      <SandboxFacts trace={trace} />
       <p className="tr-summary">
         {view.turns.length} turn(s)
         {view.costUsd != null ? ` · ${money(view.costUsd)}` : ''}

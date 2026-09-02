@@ -20,6 +20,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { decode, encode, readFileShaped, sniff, toEol } from './textFile.js';
 import type { TextShape } from './textFile.js';
+import type { CapabilityExecution, ExecutionWorldDescriptor } from './execution-world.js';
+import type { SandboxMode } from './sandbox.js';
 import {
   applyMutationBatch, contentHash, ABSENT_HASH,
   type DiagnoseBatch, type FilePatch, type MutationBatchResult,
@@ -33,20 +35,26 @@ export interface FsEntry {
   size?: number;
 }
 
+export interface FsMutationOptions {
+  execution: CapabilityExecution;
+  diagnose?: DiagnoseBatch;
+}
+
 /** The seam. Providers: `flyt-fs-workspace`, `flyt-fs-worktree`. */
 export interface FsSeam {
   /** The confinement boundary, for diagnostics. Not a licence to bypass the seam. */
   readonly root: string;
-  read(path: string): Promise<string>;
-  write(path: string, content: string): Promise<void>;
+  readonly world: ExecutionWorldDescriptor;
+  read(path: string, signal?: AbortSignal): Promise<string>;
+  write(path: string, content: string, options: FsMutationOptions): Promise<void>;
   /** Current optimistic-concurrency hash, or `absent`. */
-  hash(path: string): Promise<string>;
+  hash(path: string, signal?: AbortSignal): Promise<string>;
   /** Canonical worker mutation path: hash-checked, diagnosed, diffed and reversible. */
-  patch(patches: readonly FilePatch[], diagnose?: DiagnoseBatch): Promise<MutationBatchResult>;
+  patch(patches: readonly FilePatch[], options: FsMutationOptions): Promise<MutationBatchResult>;
   /** True when the path exists inside the root. False — never a throw — when it does not. */
-  exists(path: string): Promise<boolean>;
-  list(path?: string): Promise<FsEntry[]>;
-  remove(path: string): Promise<void>;
+  exists(path: string, signal?: AbortSignal): Promise<boolean>;
+  list(path?: string, signal?: AbortSignal): Promise<FsEntry[]>;
+  remove(path: string, options: FsMutationOptions): Promise<void>;
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -86,13 +94,42 @@ function resolveInside(root: string, relPath: string): string {
  * (never decoded to mojibake) so they cannot be read as text and
  * written back.
  */
-export function createFsSeam(root: string): FsSeam {
+export interface FsSeamOptions {
+  world?: ExecutionWorldDescriptor;
+  resolveMutation?: (execution: CapabilityExecution) => Promise<{ mode: SandboxMode; escalated?: boolean }>;
+  onDecision?: (execution: CapabilityExecution, mode: SandboxMode, escalated: boolean) => Promise<void> | void;
+  onFailure?: (execution: CapabilityExecution, code: 'SANDBOX_DENIED', mode: SandboxMode) => Promise<void> | void;
+}
+
+const legacyWorld = (root: string): ExecutionWorldDescriptor => Object.freeze({
+  id: `test-local:${root}`, provider: 'local' as const, workspaceId: 'unrestricted-test', hostRoot: root,
+  processRoot: root, platform: process.platform,
+  sandbox: Object.freeze({ standingMode: 'danger-full-access' as const, backend: 'unconfined' as const, enforcement: 'none' as const, network: 'ambient' as const }),
+});
+
+export function createFsSeam(root: string, options: FsSeamOptions = {}): FsSeam {
   const resolvedRoot = path.resolve(String(root ?? ''));
   if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) {
     throw new Error(`FsSeam root "${root}" is not an existing directory`);
   }
 
+  const world = options.world ?? legacyWorld(resolvedRoot);
+  const authorize = async (mutation: FsMutationOptions): Promise<SandboxMode> => {
+    // The bare factory is retained only for focused seam tests. Production
+    // composition always supplies resolveMutation and therefore an identity.
+    if (!mutation?.execution && !options.resolveMutation) return 'danger-full-access';
+    if (!mutation?.execution) throw new Error('Filesystem mutation requires explicit capability execution identity.');
+    const policy = await options.resolveMutation?.(mutation.execution) ?? { mode: 'danger-full-access' as const };
+    await options.onDecision?.(mutation.execution, policy.mode, Boolean(policy.escalated));
+    if (policy.mode === 'read-only') {
+      await options.onFailure?.(mutation.execution, 'SANDBOX_DENIED', policy.mode);
+      throw Object.assign(new Error('[sandbox: file access denied under read-only mode]'), { code: 'FS_SANDBOX_DENIED', mode: policy.mode });
+    }
+    return policy.mode;
+  };
+
   return {
+    world,
     get root() {
       return resolvedRoot;
     },
@@ -119,7 +156,8 @@ export function createFsSeam(root: string): FsSeam {
       return decode(buf).text;
     },
 
-    async write(relPath: string, content: string): Promise<void> {
+    async write(relPath: string, content: string, mutation: FsMutationOptions): Promise<void> {
+      await authorize(mutation);
       const abs = resolveInside(resolvedRoot, relPath);
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       // Preserve encoding/BOM/eol of an existing text file; new files are utf8/lf.
@@ -137,8 +175,10 @@ export function createFsSeam(root: string): FsSeam {
         ? contentHash(fs.readFileSync(abs)) : ABSENT_HASH;
     },
 
-    async patch(patches: readonly FilePatch[], diagnose?: DiagnoseBatch): Promise<MutationBatchResult> {
-      return applyMutationBatch(resolvedRoot, patches, diagnose);
+    async patch(patches: readonly FilePatch[], mutation: FsMutationOptions): Promise<MutationBatchResult> {
+      await authorize(mutation);
+      for (const patch of patches) resolveInside(resolvedRoot, patch.path);
+      return applyMutationBatch(resolvedRoot, patches, mutation.diagnose);
     },
 
     async exists(relPath: string): Promise<boolean> {
@@ -164,7 +204,11 @@ export function createFsSeam(root: string): FsSeam {
         for (const name of fs.readdirSync(dirAbs)) {
           const entryAbs = path.join(dirAbs, name);
           const entryRel = dirRel ? `${dirRel}/${name}` : name;
-          const stat = fs.statSync(entryAbs);
+          // Do not follow a directory symlink while recursively listing: the
+          // caller asked for entries in this world, not entries reachable by
+          // traversing a link into an ambient host directory.
+          const stat = fs.lstatSync(entryAbs);
+          if (stat.isSymbolicLink()) continue;
           if (stat.isDirectory()) {
             out.push({ path: entryRel, kind: 'directory' });
             walk(entryAbs, entryRel);
@@ -179,7 +223,8 @@ export function createFsSeam(root: string): FsSeam {
       return out;
     },
 
-    async remove(relPath: string): Promise<void> {
+    async remove(relPath: string, mutation: FsMutationOptions): Promise<void> {
+      await authorize(mutation);
       const abs = resolveInside(resolvedRoot, relPath);
       if (!fs.existsSync(abs)) return;
       const stat = fs.statSync(abs);

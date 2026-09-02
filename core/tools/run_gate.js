@@ -81,7 +81,11 @@ export default {
 
     const results = [];
     for (const command of list) {
-      const r = await runGate(command, { cwd, timeoutMs: ctx?.gateTimeoutMs ?? undefined });
+      const r = await runGate(command, {
+        cwd, timeoutMs: ctx?.gateTimeoutMs ?? undefined,
+        shell: ctx?.shell ?? null,
+        execution: ctx?.execution ? { ...ctx.execution, tool: 'project-gate' } : null,
+      });
       results.push({
         command: r.command,
         ok: r.status === 'pass',

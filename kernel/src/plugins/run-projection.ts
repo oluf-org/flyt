@@ -56,6 +56,9 @@ export const PROJECT_AFTER = new Set([
   'block.status',
   'block.output',
   'tool.result',
+  'sandbox.decision',
+  'sandbox.escalation',
+  'sandbox.failure',
   'turn.end',
 ]);
 
@@ -64,6 +67,7 @@ export const PROJECT_AFTER = new Set([
 export const PROJECT_EVENTS = new Set([
   'run.created', 'stack.resolved', 'run.stage', 'run.error',
   'block.status', 'block.output', 'llm.request', 'llm.response', 'tool.result',
+  'sandbox.decision', 'sandbox.escalation', 'sandbox.failure',
 ]);
 
 /**

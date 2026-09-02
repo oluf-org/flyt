@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { scrubbedParentEnv } from '#kernel';
 import { abortError } from './http.js';
 import { withFailureCode } from './failures.js';
 
@@ -176,7 +177,7 @@ export function preflightCli({ override = null, names, npmPkg = null, npmEntry =
 // line), stderr collected for error messages. Honors the runner's AbortSignal
 // (RUN-CONTROL stop()) and a hard timeout so a wedged CLI can't hang a node
 // forever. Resolves { code }; rejects with abortError() on stop.
-export function spawnCliCall({ command, args, stdinText = '', env = process.env, cwd, signal, timeoutMs = 600_000, onLine, onStderr }) {
+export function spawnCliCall({ command, args, stdinText = '', env = scrubbedParentEnv(), cwd, signal, timeoutMs = 600_000, onLine, onStderr }) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(abortError());
     const child = spawn(command, args, { cwd: cwd ?? neutralCwd(), env, windowsHide: true });
@@ -186,7 +187,7 @@ export function spawnCliCall({ command, args, stdinText = '', env = process.env,
 
     const killTree = () => {
       try {
-        if (isWin && child.pid) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+        if (isWin && child.pid) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, env: scrubbedParentEnv() });
         else child.kill('SIGKILL');
       } catch { /* already gone */ }
     };
@@ -250,7 +251,7 @@ export function spawnCliCall({ command, args, stdinText = '', env = process.env,
 //   - optionally repoint the home directory, which is how an account is
 //     selected (a credential store IS an account — guide Part 4 §4).
 export function cliEnv({ stripVars = [], stripPrefixes = [], home = null, homeVars = [] } = {}) {
-  const env = { ...process.env };
+  const env = scrubbedParentEnv();
   for (const v of Object.keys(env)) {
     if (stripVars.includes(v) || stripPrefixes.some(p => v.startsWith(p))) delete env[v];
   }

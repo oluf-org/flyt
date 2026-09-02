@@ -74,7 +74,7 @@ Grants are two-tier:
 - the runtime grant must be a subset of that ceiling; and
 - children inherit and may narrow a parent ceiling, never widen it.
 
-Tool effects, scope, risk, source, and trust drive gating. File paths resolve through the bound workspace. Shell commands are not a sandbox and may escape their working directory, so approval remains the stronger boundary.
+Tool effects, scope, risk, source, and trust drive gating. File tools and commands resolve one immutable local execution-world descriptor and one canonical workspace. Shell screening remains readable policy; OS-backed file-effect confinement enforces `read-only` or `workspace-write`, fails closed when unavailable, and reports backend/enforcement independently of approval.
 
 Approval modes are captured per run:
 
@@ -82,7 +82,7 @@ Approval modes are captured per run:
 - `smart` allows deterministic low-risk operations, blocks known-dangerous patterns, and uses a fail-closed model check for ambiguous calls; and
 - `always` runs unattended and is explicitly presented as dangerous.
 
-Loop work adds git-worktree isolation, declared gates, a reviewer model, a post-merge canary, and spend caps. These controls reduce risk; they do not turn arbitrary model-generated shell into a secure sandbox.
+Loop work adds git-worktree isolation, declared gates, a reviewer model, a post-merge canary, and spend caps. Commands also cross the same sandboxed subprocess provider as Desktop and CLI, but networking remains ambient and Windows enforcement is explicitly partial. These controls reduce risk; see `SAFETY.md` for the boundary and limits.
 
 ## 6. Models and provider authentication
 
@@ -179,7 +179,7 @@ Current architectural gaps worth preserving as explicit choices:
 
 - context can still balloon when no `contextSpec` is supplied;
 - synchronous filesystem access assumes modest run and graph sizes;
-- shell execution is controlled but not securely sandboxed;
+- local shell file effects are confined only when the platform's functional probe passes; network, read secrecy, IPC, syscalls, and kernel isolation remain gaps;
 - pending tool calls in older daily workflow runs cannot be reconstructed; canonical stack runs reconstruct an unreturned tool result from the session log;
 - MCP/HTTP-imported tools, a full Tools management page, and code mode are not implemented; the tool library is reachable from the CLI (`flyt tools`) but has no desktop surface;
 - a killed call's spend is estimated from what it streamed, so it is bounded
@@ -194,7 +194,7 @@ Phase 5 completed the cutover described by D52-D63. The Electron host explicitly
 
 **Daily entry point.** Work is the default, familiar front door: the persistent project tab strip, projectless first-prompt creation, recent runs, workflow/config choice, typed launch inputs, and the Enter-to-run composer. Build remains the only stack/block authoring surface. Library and Models are permanent peers: Library exposes the installed catalog and the plugin manager, and Models exposes catalog identity, routing availability, pin state, pricing, context, tool support, creator popularity, and provider counts. The old all-purpose renderer and its canvas/routes stay retired; a small host composes the surviving controls around v2 instead.
 
-**Kernel and seams.** `kernel/` is TypeScript compiled to `kernel/dist` and imported as `#kernel`. Third-party capability boundaries are typed services: sessions, tools, models, filesystem, shell, agents, commands, and sandbox. `ctx.skills` and `ctx.blocks` are registries rather than capability seams. Cordis profile composition narrows surfaces; a Loop worker may never gain a row the desktop profile lacks.
+**Kernel and seams.** `kernel/` is TypeScript compiled to `kernel/dist` and imported as `#kernel`. Third-party capability boundaries are typed services: sessions, tools, models, filesystem, shell, managed subprocess, agents, commands, and sandbox. A local execution-world plugin installs filesystem, subprocess, shell, policy, and sandbox atomically and rejects mixed descriptor identities. `ctx.skills` and `ctx.blocks` are registries rather than capability seams. Cordis profile composition narrows surfaces; a Loop worker may never gain a row the desktop profile lacks.
 
 **Canonical stack source.** `StackStore` reads `stacks/<id>.stack.yaml`. An older linear `flows/<id>.flow.yaml` is converted in memory when opened: its edges determine sequence order, supported structural Loop nodes map to the registered handoff block, and every generated use must resolve through the installed plugin registry before open or save. The source remains untouched until the first validated stack write. A branch, disconnected graph, unknown block, unsupported container, or authority grant that cannot be narrowed equivalently is refused with the legacy source intact rather than silently changing behavior. Layout sidecars are never migrated because `kernel/src/stack/layout.ts` derives geometry from containment.
 

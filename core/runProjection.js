@@ -50,6 +50,7 @@ export const SNAPSHOT_UPDATE_EVENTS = new Set([
   'run.created', 'run.named', 'run.reconfigured', 'stack.resolved', 'run.stage', 'run.error',
   'block.status', 'block.output', 'llm.response', 'tool.result', 'message.user',
   'supervisor.summary',
+  'sandbox.decision', 'sandbox.escalation', 'sandbox.failure',
 ]);
 
 const PROJECTION_EVENTS = new Set([...SNAPSHOT_UPDATE_EVENTS, 'llm.request']);

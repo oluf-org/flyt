@@ -10,12 +10,18 @@ import { StackStore } from './stackstore.js';
 import { Workspace } from './workspace.js';
 import { callModel } from './adapters/index.js';
 import { executeTool, getTools } from './tools/index.js';
+import { previewResult } from './tools/preview.js';
 import { loadSkills, skillsSection } from './skills.js';
 import { captureWorkspaceSignature } from './effect.js';
 import { snapshotStackRun } from './runProjection.js';
 
 const safeJson = value => {
   try { return JSON.stringify(value); } catch { return String(value ?? ''); }
+};
+
+const jsonValue = value => {
+  try { return JSON.parse(JSON.stringify(value)); }
+  catch { return String(value ?? ''); }
 };
 
 // Starting a workflow from the attended chat is an immediate action. Queue
@@ -102,6 +108,8 @@ export async function bootRunKernel({
   backlog = null, pool = null, references = null, settings = {},
   profile = 'flyt-loop-worker', ceiling = null, presetId = null, askHuman = null,
   requireLaunchable = false, askBlock = null,
+  sandboxMode = 'workspace-write', sandboxEnforcement = 'partial', forwardedEnv = [],
+  windowsSandboxRunner = null,
   load = null, call = callModel,
   onSessionEvent = null,
 } = {}) {
@@ -197,7 +205,24 @@ export async function bootRunKernel({
 
   await booted.install([
     { id: 'run-projection', name: kernel.BUILTIN.runProjection, config: { root: runsRoot } },
-    { id: 'workspace-fs', name: kernel.BUILTIN.fs, config: { root: workspace.root } },
+    { id: 'execution-world', name: kernel.BUILTIN.executionWorldLocal, config: {
+      workspaceRoot: workspace.root,
+      mode: sandboxMode,
+      minimumEnforcement: sandboxEnforcement,
+      allowAttendedEscalation: profile !== 'flyt-loop-worker' && typeof askHuman === 'function',
+      forwardedEnv,
+      runsTempRoot: runsRoot,
+      ...(windowsSandboxRunner ? { windowsRunnerPath: windowsSandboxRunner } : {}),
+      ...(typeof askHuman === 'function' ? { approveEscalation: async request => {
+        const allowed = await askHuman({
+          runId: request.runId, blockId: 'sandbox', step: 0,
+          call: { id: request.callId, name: request.tool, args: {
+            sandbox_permissions: request.to, justification: request.justification,
+          } }, ceiling: [request.tool],
+        }, `Allow this one call to widen its sandbox from ${request.from} to ${request.to}? ${request.justification}`);
+        return allowed ? 'allowed-once' : 'rejected';
+      } } : {}),
+    } },
     { id: 'llm-adapters', name: kernel.BUILTIN.adapters, config: { callModel: callThrough, resolve, capability } },
   ]);
   if (typeof onSessionEvent === 'function') {
@@ -229,6 +254,19 @@ export async function bootRunKernel({
           defaultWorker: worker, projectConfig: workspace.readConfig(), settings,
           gateTimeoutMs: runtimeConfig.gateTimeoutMs,
           config: runtimeConfig, signal: execution.signal,
+          fs: booted.ctx.fs,
+          shell: booted.ctx.shell,
+          subprocess: booted.ctx.subprocess,
+          sandbox: booted.ctx.sandbox,
+          sandboxPolicy: booted.ctx.sandboxPolicy,
+          execution: {
+            owner: { runId: execution.runId, callId: execution.call.id },
+            tool: tool.name,
+            attended: profile !== 'flyt-loop-worker' && typeof askHuman === 'function',
+            ...(args?.sandbox_permissions ? { requestedMode: args.sandbox_permissions } : {}),
+            ...(args?.justification ? { justification: args.justification } : {}),
+            ...(execution.signal ? { signal: execution.signal } : {}),
+          },
           canonicalSession: true,
           // Long tools use this between their durable call/result boundaries.
           // It deliberately reuses the host's coalesced session observer.
@@ -244,8 +282,11 @@ export async function bootRunKernel({
             data: { changed, kind: current.kind, tool: tool.name },
           });
         }
+        const complete = jsonValue(record.ok ? record.result : { error: record.error });
+        const preview = previewResult(complete, tool.result ?? {});
         return {
-          content: safeJson(record.ok ? record.result : { error: record.error }),
+          content: `${safeJson(preview.value)}${preview.truncated ? '\n[Preview truncated; the complete result is retained in the run trace.]' : ''}`,
+          durableResult: complete,
           ...(record.handle ? { handle: record.handle } : {}),
           ...(record.ok ? {} : { error: record.error ?? 'tool failed' }),
         };
@@ -290,6 +331,15 @@ export async function bootRunKernel({
     workspace: workspace.root,
     metadata: {
       workspace: workspace.root, approvalMode, loopTaskId, model,
+      executionWorld: {
+        id: booted.ctx.fs.world.id, provider: booted.ctx.fs.world.provider,
+        workspaceId: booted.ctx.fs.world.workspaceId, processRoot: booted.ctx.fs.world.processRoot,
+      },
+      sandbox: {
+        requestedMode: sandboxMode, effectiveMode: booted.ctx.fs.world.sandbox.standingMode,
+        backend: booted.ctx.fs.world.sandbox.backend, enforcement: booted.ctx.fs.world.sandbox.enforcement,
+        minimumEnforcement: sandboxEnforcement, network: 'ambient',
+      },
       ...(worker?.provider ? { provider: worker.provider } : {}),
       ...(worker?.routing ? { routing: worker.routing } : {}),
       blockWorkers,

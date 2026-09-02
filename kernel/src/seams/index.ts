@@ -1,5 +1,5 @@
 /**
- * The eight capability seams.
+ * The kernel capability seams.
  *
  * A seam is a service definition, a provider, and consumers that never know
  * which provider they got. That last part is the whole idea: it is why
@@ -19,6 +19,7 @@ import type { ShellSeam } from './shell.js';
 import type { AgentsSeam } from './agents.js';
 import type { CommandsSeam } from './commands.js';
 import type { SandboxSeam } from './sandbox.js';
+import type { SubprocessSeam } from './subprocess.js';
 
 export type * from './sessions.js';
 export type * from './tools.js';
@@ -28,6 +29,8 @@ export type * from './shell.js';
 export type * from './agents.js';
 export type * from './commands.js';
 export type * from './sandbox.js';
+export type * from './subprocess.js';
+export type * from './execution-world.js';
 // Typed host RPC declarations, not a ninth dsh capability seam.
 export * from './ui-extensions.js';
 
@@ -41,6 +44,7 @@ export interface Seams {
   agents: AgentsSeam;
   commands: CommandsSeam;
   sandbox: SandboxSeam;
+  subprocess: SubprocessSeam;
 }
 
 /**
@@ -59,9 +63,10 @@ export const SEAM_NAMES = [
   'agents',
   'commands',
   'sandbox',
+  'subprocess',
 ] as const satisfies readonly (keyof Seams)[];
 
-/** One of the eight. */
+/** One declared capability seam. */
 export type SeamName = (typeof SEAM_NAMES)[number];
 
 /**

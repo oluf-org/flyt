@@ -8,6 +8,9 @@
  * @module #kernel/seams/shell
  */
 
+import type { CapabilityExecution, ExecutionWorldDescriptor } from './execution-world.js';
+import type { SandboxBackend, SandboxEnforcement, SandboxMode } from './sandbox.js';
+
 /** What a command did. */
 export interface ShellResult {
   /** Null when the process was killed before exiting. */
@@ -18,20 +21,29 @@ export interface ShellResult {
   refused?: string;
   /** True when the command hit its timeout. */
   timedOut?: boolean;
+  signal?: string;
+  errorCode?: 'SANDBOX_UNAVAILABLE' | 'SANDBOX_DENIED' | 'SANDBOX_RUNNER_FAILED' | 'SPAWN_FAILED';
+  sandbox: {
+    mode: SandboxMode;
+    backend: SandboxBackend;
+    enforcement: SandboxEnforcement;
+    escalated: boolean;
+  };
 }
 
 /** How to run one. */
 export interface ShellOptions {
+  execution: CapabilityExecution;
   /** Relative to the seam's confinement root. */
   cwd?: string;
   timeoutMs?: number;
-  signal?: AbortSignal;
-  env?: Record<string, string>;
+  env?: Readonly<Record<string, string | undefined>>;
 }
 
 /** The seam. Provider: `flyt-shell-screened`. */
 export interface ShellSeam {
-  run(command: string, options?: ShellOptions): Promise<ShellResult>;
+  readonly world: ExecutionWorldDescriptor;
+  run(command: string, options: ShellOptions): Promise<ShellResult>;
   /**
    * What the screen would say, without running anything.
    *

@@ -6,6 +6,7 @@ const api = {
   reportRendererError: details => ipcRenderer.invoke('diagnostics:renderer', details),
   diagnosticsPath: () => ipcRenderer.invoke('diagnostics:path'),
   revealDiagnostics: () => ipcRenderer.invoke('diagnostics:reveal'),
+  sandboxDiagnostics: (refresh = false) => ipcRenderer.invoke('sandbox:diagnostics', refresh),
   historySummary: (filters = {}) => ipcRenderer.invoke('history:summary', filters),
   historyTrace: (runId) => ipcRenderer.invoke('history:trace', runId),
   exportHistory: (format = 'jsonl', filters = {}) => ipcRenderer.invoke('history:export', format, filters),

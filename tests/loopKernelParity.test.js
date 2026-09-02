@@ -46,6 +46,7 @@ async function hostFor({
 }) {
   return bootRunKernel({
     workspaceDir: workspace, runsRoot, store, stackRoot: definitionsRoot,
+    sandboxMode: 'danger-full-access',
     approvalMode, worker,
     level: 'high', loopTaskId: taskId, skills,
     runtimeConfig, settings: {},

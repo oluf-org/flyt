@@ -4,6 +4,9 @@
 // Cordis host reuse, AgentRun identity, leases, controls and teardown; it does
 // not choose workflows, models, approval policy, or Electron behaviour.
 import os from 'node:os';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   startStackRun, resumeStackRun, restartStackBlock,
   stopStackRun, pauseStackRun, continueStackRun,
@@ -94,10 +97,13 @@ export class RunController {
   }
 
   #hostKey(projectId, request) {
+    const workspace = request.workspace ? canonicalWorkspace(request.workspace) : null;
+    const forwardedEnvNameHash = crypto.createHash('sha256')
+      .update([...(request.forwardedEnv ?? [])].map(String).sort().join('\0')).digest('hex').slice(0, 16);
     const authority = {
       projectId,
       runsRoot: request.runsRoot,
-      workspace: request.workspace,
+      workspace,
       profile: request.profile,
       approvalMode: request.approvalMode,
       worker: request.worker,
@@ -112,6 +118,11 @@ export class RunController {
       requireLaunchable: Boolean(request.requireLaunchable),
       ceiling: request.ceiling ?? null,
       toolsContextIdentity: request.toolsContextIdentity ?? null,
+      executionWorldProvider: request.executionWorldProvider ?? 'local',
+      sandboxMode: request.sandboxMode ?? 'workspace-write',
+      sandboxEnforcement: request.sandboxEnforcement ?? 'partial',
+      allowAttendedEscalation: Boolean(request.allowAttendedEscalation),
+      forwardedEnvNameHash,
     };
     return JSON.stringify(stable(authority));
   }
@@ -176,6 +187,17 @@ export class RunController {
     this.#onActivity?.(projectId);
 
     record.settlement = Promise.resolve(run.settled()).then(async outcome => {
+      const cleanup = async (phase, action) => {
+        try { await action?.(); }
+        catch (error) { await this.#onSettled?.({ phase, error, record }); }
+      };
+      // Tree quiescence comes first; temp capabilities and their directories
+      // are revoked only after no owned process can still be using them.  Each
+      // cleanup is isolated so one failure cannot suppress the remaining work
+      // or rewrite the run's semantic outcome.
+      await cleanup('subprocess cleanup', () => record.host.ctx.subprocess?.terminateOwner(record.runId, 'run settled'));
+      await cleanup('sandbox cleanup', () => record.host.ctx.sandbox?.disposeOwner(record.runId));
+      await cleanup('sandbox policy cleanup', () => record.host.ctx.sandboxPolicy?.disposeOwner?.(record.runId));
       try { await afterSettled?.(outcome, record); }
       catch (error) { await this.#onSettled?.({ phase: 'afterSettled', error, record }); }
       try { await this.#snapshotLive(record.host.ctx, record.runId, record.host.kernelModule); }
@@ -267,6 +289,12 @@ export class RunController {
       profile: meta.profile ?? 'flyt-loop-worker',
       presetId: meta.presetId ?? null,
       requireLaunchable: Boolean(meta.requireLaunchable),
+      executionWorldProvider: meta.executionWorld?.provider ?? 'local',
+      sandboxMode: meta.sandbox?.effectiveMode ?? 'workspace-write',
+      sandboxEnforcement: meta.sandbox?.enforcement === 'full'
+        ? 'full' : meta.sandbox?.minimumEnforcement ?? 'partial',
+      allowAttendedEscalation: meta.profile !== 'flyt-loop-worker',
+      forwardedEnv: [],
     };
     const acquired = await this.#acquireHost(projectId, host);
     return { hostKey: acquired.hostKey, hostRecord: acquired.record, meta, desktopBlockOverride };
@@ -279,6 +307,15 @@ export class RunController {
     const { hostKey, hostRecord } = await this.#storedHost(projectId, runId, workerOverride, blockId);
     try {
       const { run } = await this.#resumeRun(hostRecord.host, runId);
+      const previous = meta.sandbox ?? null;
+      const current = hostRecord.host.metadata?.sandbox ?? null;
+      if (previous && current && (previous.backend !== current.backend || previous.enforcement !== current.enforcement)) {
+        const session = await hostRecord.host.ctx.sessions.open(runId);
+        await session.append({ type: 'run.reconfigured', data: {
+          sandbox: current,
+          executionWorld: hostRecord.host.metadata?.executionWorld ?? meta.executionWorld ?? null,
+        } });
+      }
       this.#register(projectId, hostKey, hostRecord, run);
       return { runId, run };
     } catch (error) {
@@ -342,6 +379,12 @@ export class RunController {
     await Promise.allSettled(records.map(record => record.settlement));
     return { stopped: records.length };
   }
+}
+
+function canonicalWorkspace(value) {
+  const resolved = path.resolve(String(value ?? ''));
+  try { return fs.realpathSync(resolved); }
+  catch { return resolved; }
 }
 
 export { runKey };

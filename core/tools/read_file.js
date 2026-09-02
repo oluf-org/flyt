@@ -54,7 +54,7 @@ export default {
       }
     }
   },
-  run(args, ctx) {
+  async run(args, ctx) {
     // The reference library (DESIGN-SPEC.md §8): a second, read-only root beside
     // the workspace. It is a separate path rather than a mounted directory
     // precisely so no write tool can reach it — none of them know the prefix,
@@ -100,7 +100,7 @@ export default {
         tool: 'read_file', path: args.path, read: 'workspace', expected: `reference:${ctx.subject.repo}`
       });
     }
-    const read = readShaped(host, args.path);
+    const read = await readShaped(host, args.path);
     if (read == null) throw new Error(`File "${args.path}" not found in the workspace.`);
     // A binary file is present and unreadable, which is not the same as absent.
     // Saying "not found" would send the caller looking for a path that is right

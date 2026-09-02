@@ -17,6 +17,7 @@ files:
   - core/**
   - src/**/*.js
   - config.json
+  - THIRD-PARTY-NOTICES.txt
   - package.json
   # Canonical stacks ship as first-run seeds. The package-integrity hook above
   # verifies these and the declarative plugin/tool catalogs in the completed
@@ -42,6 +43,9 @@ publish:
 # entries packaged builds ship the default Electron icon.
 win:
   icon: build/icon.ico
+  extraResources:
+    - from: kernel/native/windows/Flyt.Sandbox.Runner/bin/Release/net8.0-windows/win-x64/publish/flyt-sandbox-win.exe
+      to: flyt-sandbox-win.exe
   target:
     - nsis
 nsis:

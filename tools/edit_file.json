@@ -40,6 +40,17 @@
       "replaceAll": {
         "type": "boolean",
         "description": "Replace every occurrence instead of requiring exactly one. Default false."
+      },
+      "sandbox_permissions": {
+        "enum": [
+          "workspace-write",
+          "danger-full-access"
+        ],
+        "description": "Optional strictly wider sandbox mode for this call."
+      },
+      "justification": {
+        "type": "string",
+        "description": "Why this exact call needs the wider sandbox mode."
       }
     }
   },

@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { scrubbedParentEnv } from '#kernel';
 // The config directory is named in exactly one place (D29, tests/brand.test.js)
 // and resolved per project, so a workspace that predates the rename is still
 // found without this file knowing what it used to be called.
@@ -51,7 +52,7 @@ function gitFacts(root) {
   const git = (...args) => {
     try {
       return execFileSync('git', ['-C', root, ...args], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 4000
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 4000, env: scrubbedParentEnv(),
       }).trim();
     } catch { return ''; }
   };

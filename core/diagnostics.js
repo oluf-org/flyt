@@ -697,7 +697,7 @@ export function staleIndexLock(root, { now = Date.now(), staleMs = 5 * 60 * 1000
   };
 }
 
-export async function doctor(engine, { probe = false, models = [], project = null } = {}) {
+export async function doctor(engine, { probe = false, refresh = false, models = [], project = null } = {}) {
   const settings = engine.settings ?? {};
   const priority = settings.providerPriority ?? [];
 
@@ -716,6 +716,34 @@ export async function doctor(engine, { probe = false, models = [], project = nul
   });
 
   const findings = [];
+  const sandboxSettings = settings.sandbox ?? {};
+  const mode = ['read-only', 'workspace-write', 'danger-full-access'].includes(sandboxSettings.mode)
+    ? sandboxSettings.mode : 'workspace-write';
+  const minimumEnforcement = ['full', 'partial'].includes(sandboxSettings.minimumEnforcement)
+    ? sandboxSettings.minimumEnforcement : 'partial';
+  let executionWorld = {
+    provider: 'local', workspace: project?.folder ?? null, mode,
+    backend: mode === 'danger-full-access' ? 'unconfined' : process.platform === 'linux' ? 'bubblewrap' : process.platform === 'darwin' ? 'seatbelt' : 'windows-restricted-token',
+    enforcement: mode === 'danger-full-access' ? 'none' : process.platform === 'win32' ? 'partial' : 'full',
+    minimumEnforcement, network: 'ambient', probe: null,
+  };
+  if (mode !== 'danger-full-access' && project?.folder) {
+    try {
+      const { createLocalExecutionWorld } = await import('#kernel');
+      const owner = await createLocalExecutionWorld({
+        workspaceRoot: project.folder, mode, minimumEnforcement,
+        allowAttendedEscalation: false, forwardedEnv: sandboxSettings.forwardedEnv ?? [],
+        runsTempRoot: engine.dataRoot,
+      });
+      const checked = await owner.sandbox.probe(refresh);
+      executionWorld = { ...executionWorld, backend: checked.backend, enforcement: checked.enforcement, probe: checked };
+      await owner.dispose();
+    } catch (error) {
+      const checked = error?.probe ?? { available: false, checkedAt: new Date().toISOString(), reason: String(error?.message ?? error) };
+      executionWorld = { ...executionWorld, probe: checked };
+      findings.push({ level: 'error', message: `The requested ${mode} sandbox is unavailable: ${checked.reason}. Commands will be refused; Flyt will not continue unconfined.` });
+    }
+  }
   const selected = [...new Set([...(models ?? []), ...(settings.activeModels ?? []).filter(m => m?.enabled !== false).map(m => m.id)])]
     .filter(Boolean).map(model => {
       try {
@@ -910,6 +938,7 @@ export async function doctor(engine, { probe = false, models = [], project = nul
     v2: v2Flag({ settings: engine.settings ?? null }),
     ...(project ? { project } : {}),
     providers,
+    executionWorld,
     priority,
     // Provider connectivity and selected-model usability are different facts.
     // Return the structured states so every UI/CLI consumer can say which one

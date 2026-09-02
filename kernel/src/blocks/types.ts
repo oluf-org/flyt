@@ -12,8 +12,8 @@
  * describe the block without anybody writing a second description that goes
  * stale.
  *
- * **`ctx.blocks` is a Flyt service, not a ninth seam.** `SEAM_NAMES` is the
- * eight-name dsh capability contract and a test asserts it holds exactly those
+ * **`ctx.blocks` is a Flyt service, not a capability seam.** `SEAM_NAMES` is the
+ * explicit capability contract and a test asserts it holds exactly those
  * eight; a block is Flyt's own noun and adding it to that list would claim
  * compatibility we never promised.
  *

@@ -9,4 +9,11 @@ export default function buildBeforePack(context) {
     env: process.env,
     stdio: 'inherit',
   });
+  if (context.electronPlatformName === 'win32') {
+    execSync('npm run build:sandbox:win', {
+      cwd: context.packager.projectDir,
+      env: process.env,
+      stdio: 'inherit',
+    });
+  }
 }

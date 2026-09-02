@@ -17,16 +17,18 @@ export default {
     additionalProperties: false,
     properties: {
       path: { type: 'string', description: 'Relative path inside the workspace for the new file, e.g. "src/new.js".' },
-      content: { type: 'string', description: 'Full text content of the new file.' }
+      content: { type: 'string', description: 'Full text content of the new file.' },
+      sandbox_permissions: { enum: ['workspace-write', 'danger-full-access'], description: 'Optional strictly wider sandbox mode for this call.' },
+      justification: { type: 'string', description: 'Why this exact call needs the wider sandbox mode.' }
     }
   },
-  run(args, ctx) {
+  async run(args, ctx) {
     const host = fileHost(ctx);
-    if (fileExists(host, args.path)) {
+    if (await fileExists(host, args.path)) {
       throw new Error(`File "${args.path}" already exists; use write_file to overwrite it.`);
     }
     const conflict = noteWorkspaceWrite(ctx, args.path);
-    const created = writeText(host, args.path, args.content);
+    const created = await writeText(host, args.path, args.content);
     return {
       created, bytes: Buffer.byteLength(args.content, 'utf8'), target: host.target,
       ...(conflict ? { conflictWith: conflict } : {})

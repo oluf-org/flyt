@@ -1,4 +1,4 @@
-// The eight capability seams, and the property that makes them worth having:
+// The capability seams, and the property that makes them worth having:
 // a consumer resolves a seam through ctx and never learns which provider it
 // got. Everything here runs against #kernel only — the v1 app is untouched.
 import test from 'node:test';
@@ -28,9 +28,9 @@ function memoryFs(files) {
   };
 }
 
-test('the seam list is the eight the plan names, and nothing else', () => {
+test('the seam list includes managed subprocess as a first-class capability', () => {
   assert.deepEqual([...SEAM_NAMES], [
-    'sessions', 'tools', 'llm', 'fs', 'shell', 'agents', 'commands', 'sandbox',
+    'sessions', 'tools', 'llm', 'fs', 'shell', 'agents', 'commands', 'sandbox', 'subprocess',
   ]);
 });
 

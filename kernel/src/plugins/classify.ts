@@ -41,6 +41,7 @@ const SEAM_REACH: Partial<Record<SeamName, Partial<ToolClassification>>> = {
   fs: { effect: 'write' },
   shell: { effect: 'shell', destructive: true },
   sandbox: { effect: 'shell', destructive: true },
+  subprocess: { effect: 'shell', destructive: true },
   // A block this tool spawns can be handed any tool the ceiling allows, and its
   // output comes back as text this run will act on.
   agents: { effect: 'shell', destructive: true, untrustedInput: true },

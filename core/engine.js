@@ -440,6 +440,15 @@ export function createEngine({
     // 'ask' is the shipped default: an agent with a shell should not run
     // unattended because nobody got round to choosing.
     runtimeConfig.approvalMode = normalizeApprovalMode(settings.approvalMode ?? 'ask');
+    const launchSandboxMode = ['read-only', 'workspace-write', 'danger-full-access'].includes(process.env.FLYT_SANDBOX_MODE)
+      ? process.env.FLYT_SANDBOX_MODE : null;
+    runtimeConfig.sandbox = {
+      mode: ['read-only', 'workspace-write', 'danger-full-access'].includes(settings.sandbox?.mode)
+        ? settings.sandbox.mode : launchSandboxMode ?? 'workspace-write',
+      minimumEnforcement: ['full', 'partial'].includes(settings.sandbox?.minimumEnforcement)
+        ? settings.sandbox.minimumEnforcement : 'partial',
+      forwardedEnv: Array.isArray(settings.sandbox?.forwardedEnv) ? settings.sandbox.forwardedEnv.map(String) : [],
+    };
     // The v2 stack, off unless somebody said otherwise (D62). Resolved here so
     // there is one answer per process rather than one per call site — and it is
     // only ever an ANSWER: nothing in core/ imports the v2 tree, which is what
@@ -515,6 +524,7 @@ export function createEngine({
       },
       projectStorage: settings.projectStorage === 'appdata' ? 'appdata' : 'workspace',
       approvalMode: normalizeApprovalMode(settings.approvalMode ?? 'ask'),
+      sandbox: { ...runtimeConfig.sandbox, network: 'ambient' },
       v2: v2Flag({ settings }).enabled,
       safetyModel: settings.safetyModel ?? 'auto',
       resolvedSafetyModel: effectiveSafetyModel(),

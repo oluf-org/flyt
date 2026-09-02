@@ -27,6 +27,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { scrubbedParentEnv } from '#kernel';
 
 // Is this pid still running? `kill(pid, 0)` sends no signal and only asks — the
 // standard way, and the only one that needs no dependency. EPERM means the
@@ -95,7 +96,7 @@ export class GitError extends Error {
  */
 export function git(args, { cwd, timeoutMs = GIT_TIMEOUT_MS, env = process.env } = {}) {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { cwd, env, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 },
+    execFile('git', args, { cwd, env: scrubbedParentEnv(env), timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
           // ENOENT from execFile means "could not start", and on Windows a

@@ -46,7 +46,7 @@ const USAGE = `flyt — drive Flyt without the desktop app
                                       (waits for the run, and shows the next round)
   flyt why [<runId>]                  why a run failed or stalled (default: latest)
   flyt probe <model>...               call a model once and report what came back
-  flyt doctor [--flow <id>] [--probe] providers, priority, library — and the models a flow pins
+  flyt doctor [--flow <id>] [--probe] [--refresh] providers, execution world, priority, and models
   flyt task add "<title>" --goal "<what>"   queue a task for a later run
                   [--done "<criterion>"]... [--gates "npm test"] [--skill <name>]
                   [--blast <path,path>] [--references <ref,ref>] [--level <l>]
@@ -100,6 +100,8 @@ Options
   --json            machine-readable output on stdout
   --token <t>       bearer token for serve (default: generated and printed)
   --approval <m>    ask | smart | always   (default: the saved setting)
+  --sandbox <m>     read-only | workspace-write | danger-full-access
+  --sandbox-enforcement <m>  full | partial
   --gates approve   auto-approve node gates while waiting (unattended)
   --answer <text>   reply to a question the run asks; repeatable, one per round
   --timeout <sec>   how long to wait for a run to settle (default 1800)
@@ -151,7 +153,7 @@ const COMMAND_FLAGS = {
   archive: ['card', 'date', 'limit'],
   bench: ['keep', 'only', 'revision', 'suite'],
   call: ['arg', 'arg-json'],
-  doctor: ['flow', 'model', 'probe'],
+  doctor: ['flow', 'model', 'probe', 'refresh'],
   feedback: ['enqueue'],
   incident: ['all', 'by'],
   log: ['event', 'node', 'quiet', 'tail'],
@@ -161,7 +163,7 @@ const COMMAND_FLAGS = {
   probe: ['max-tokens', 'provider', 'stream'],
   python: ['packages', 'python'],
   ref: ['context', 'pattern', 'repo'],
-  run: ['answer', 'approval', 'gates', 'in', 'input', 'join', 'length', 'level', 'timeout'],
+  run: ['answer', 'approval', 'gates', 'in', 'input', 'join', 'length', 'level', 'timeout', 'sandbox', 'sandbox-enforcement', 'yes'],
   spend: ['by', 'limit', 'since', 'task'],
   task: ['all', 'blast', 'by', 'dependsOn', 'done', 'effort', 'force', 'gates', 'goal', 'incident', 'keep-work',
     'level', 'note', 'reason', 'references', 'skill', 'skills', 'status', 'title', 'value'],
@@ -1343,7 +1345,8 @@ async function main() {
         projectId: openProject(api, engine),
         probe: Boolean(flags.probe),
         flowId: typeof flags.flow === 'string' ? flags.flow : null,
-        models: [].concat(flags.model ?? []).filter(m => typeof m === 'string')
+        models: [].concat(flags.model ?? []).filter(m => typeof m === 'string'),
+        refresh: Boolean(flags.refresh),
       });
       if (asJson) return out(report);
       out(renderDoctor(report));
@@ -1361,6 +1364,17 @@ async function main() {
         runInputs[String(pair).slice(0, at).trim()] = String(pair).slice(at + 1);
       }
       const projectId = openProject(api, engine);
+      const sandboxMode = typeof flags.sandbox === 'string' ? flags.sandbox : null;
+      if (sandboxMode && !['read-only', 'workspace-write', 'danger-full-access'].includes(sandboxMode)) {
+        return die('--sandbox must be read-only, workspace-write, or danger-full-access');
+      }
+      const sandboxEnforcement = typeof flags['sandbox-enforcement'] === 'string' ? flags['sandbox-enforcement'] : null;
+      if (sandboxEnforcement && !['full', 'partial'].includes(sandboxEnforcement)) {
+        return die('--sandbox-enforcement must be full or partial');
+      }
+      if (sandboxMode === 'danger-full-access' && !flags.yes) {
+        return die('danger-full-access lets commands modify files outside the project; repeat with --yes to confirm this launch.');
+      }
       const typedInput = Object.keys(runInputs).length
         ? `${String(flags.input ?? positional.slice(2).join(' ') ?? '')}\n\nTYPED INPUTS:\n${Object.entries(runInputs).map(([name, value]) => `${name}: ${value}`).join('\n')}`
         : String(flags.input ?? positional.slice(2).join(' ') ?? '');
@@ -1370,6 +1384,8 @@ async function main() {
         input: typedInput,
         approvalMode: typeof flags.approval === 'string' ? flags.approval : null,
         level: typeof flags.level === 'string' ? flags.level : null,
+        sandboxMode,
+        sandboxEnforcement,
       });
       const runId = started.runId;
       say(`run ${runId} started`);
@@ -1529,6 +1545,17 @@ function renderDoctor(r) {
     L.push(`  ${p.connected ? '✓' : '·'} ${p.id} (${p.kind})`
       + (p.subscription?.detail ? ` — ${p.subscription.detail}` : '')
       + credit);
+  }
+  if (r.executionWorld) {
+    const w = r.executionWorld;
+    L.push('', 'execution world:');
+    L.push(`  provider:    ${w.provider}`);
+    if (w.workspace) L.push(`  workspace:   ${w.workspace}`);
+    L.push(`  sandbox:     ${w.mode}`);
+    L.push(`  backend:     ${w.backend ?? 'unavailable'}`);
+    L.push(`  enforcement: ${w.enforcement ?? 'unavailable'} (minimum ${w.minimumEnforcement})`);
+    L.push(`  network:     ${w.network} (not sandboxed)`);
+    if (w.probe) L.push(`  probe:       ${w.probe.available ? 'passed' : 'failed'} at ${w.probe.checkedAt}${w.probe.reason ? ` — ${w.probe.reason}` : ''}`);
   }
   // Where an unpinned node of each kind actually goes (WR-04). The whole point
   // is that this is computed by the same function the runner uses, so what is

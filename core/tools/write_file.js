@@ -18,20 +18,22 @@ export default {
     additionalProperties: false,
     properties: {
       path: { type: 'string', description: 'Relative path inside the workspace, e.g. "report.md" or "src/app.js".' },
-      content: { type: 'string', description: 'Full text content of the file.' }
+      content: { type: 'string', description: 'Full text content of the file.' },
+      sandbox_permissions: { enum: ['workspace-write', 'danger-full-access'], description: 'Optional strictly wider sandbox mode for this call.' },
+      justification: { type: 'string', description: 'Why this exact call needs the wider sandbox mode.' }
     }
   },
-  run(args, ctx) {
+  async run(args, ctx) {
     const host = fileHost(ctx);
     const conflict = noteWorkspaceWrite(ctx, args.path);
     // Replacing a file does not change its encoding, its byte-order mark or its
     // line endings. A model answers in plain newlines whatever the file used, so
     // without this a one-line correction to a CRLF file rewrites every line in
     // it — and a file with a BOM quietly loses it.
-    const existing = readShaped(host, args.path);
+    const existing = await readShaped(host, args.path);
     const shape = existing && !existing.shape.binary ? existing.shape : null;
     const content = shape ? toEol(args.content, shape.eol) : args.content;
-    const written = writeText(host, args.path, content, shape);
+    const written = await writeText(host, args.path, content, shape);
     return {
       written, bytes: Buffer.byteLength(content, 'utf8'), target: host.target,
       ...(conflict ? { conflictWith: conflict } : {})

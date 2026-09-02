@@ -884,6 +884,10 @@ export function installDevMock() {
     onTabsKey: () => () => {},
     getConfig: async () => ({ workers: structuredClone(mockSettings.workers) }),
     getSettings: async () => structuredClone(mockSettings),
+    sandboxDiagnostics: async () => ({ provider: 'local', workspace: 'D:\\demo\\habit-tracker',
+      mode: mockSettings.sandbox?.mode ?? 'workspace-write', backend: 'windows-restricted-token',
+      enforcement: 'partial', minimumEnforcement: 'partial', network: 'ambient',
+      probe: { available: true, checkedAt: '2026-09-02T10:00:00.000Z' } }),
 
     // What Build edits in the browser preview. Electron does not implement this
     // yet — a project has no `stacks/` until Phase 2 — so the desktop app shows

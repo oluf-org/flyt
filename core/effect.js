@@ -23,6 +23,7 @@
 // Pure except for the two signature functions, which only READ (never stage,
 // never mutate): capturing a baseline must not itself be a workspace change.
 import { execFileSync } from 'node:child_process';
+import { scrubbedParentEnv } from '#kernel';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -165,7 +166,7 @@ function gitOut(args, cwd, { trim = true } = {}) {
   // reader has no business taking a write lock.
   const out = String(execFileSync('git', ['--no-optional-locks', ...args], {
     cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024,
-    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: scrubbedParentEnv(),
   }) ?? '');
   return trim ? out.trim() : out;
 }

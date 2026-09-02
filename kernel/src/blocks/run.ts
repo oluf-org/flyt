@@ -600,6 +600,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
         data: {
           callId: call.id, blockId, name: call.name,
           content: result.content ?? '',
+          ...(result.durableResult !== undefined ? { result: result.durableResult } : {}),
           ...(result.handle ? { handle: result.handle } : {}),
           ...(result.error ? { error: result.error } : {}),
           durableProgress: !result.error && ctx.tools.get(call.name)?.classification?.effect !== 'read',

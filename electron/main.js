@@ -327,6 +327,10 @@ ipcMain.handle('diagnostics:renderer', (_event, details = null) => {
 });
 ipcMain.handle('diagnostics:path', () => diagnostics.file);
 ipcMain.handle('diagnostics:reveal', () => shell.showItemInFolder(diagnostics.file));
+ipcMain.handle('sandbox:diagnostics', async (_event, refresh = false) => {
+  const report = await api.invoke('diag:doctor', { projectId: registry.activeId, refresh: Boolean(refresh) });
+  return report.executionWorld ?? null;
+});
 ipcMain.handle('history:summary', (_event, filters = {}) => engine.telemetryQuery(filters ?? {}));
 ipcMain.handle('history:trace', (_event, runId) => engine.telemetryTrace(String(runId ?? '')));
 ipcMain.handle('history:export', async (_event, format = 'jsonl', filters = {}) => {
@@ -944,6 +948,16 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
   // can keep the per-node behavior, but it isn't offered in the UI.
   if (APPROVAL_MODES.includes(patch.approvalMode)) {
     settings.approvalMode = patch.approvalMode;
+  }
+  if (patch.sandbox && typeof patch.sandbox === 'object') {
+    const before = settings.sandbox ?? {};
+    const mode = ['read-only', 'workspace-write', 'danger-full-access'].includes(patch.sandbox.mode)
+      ? patch.sandbox.mode : before.mode;
+    const minimumEnforcement = ['full', 'partial'].includes(patch.sandbox.minimumEnforcement)
+      ? patch.sandbox.minimumEnforcement : before.minimumEnforcement;
+    const forwardedEnv = Array.isArray(patch.sandbox.forwardedEnv)
+      ? patch.sandbox.forwardedEnv.map(String).filter(Boolean) : (before.forwardedEnv ?? []);
+    settings.sandbox = { mode: mode ?? 'workspace-write', minimumEnforcement: minimumEnforcement ?? 'partial', forwardedEnv };
   }
   // 'auto' or an explicit model id. Not restricted to the candidate list: a
   // user who wants their own cheap model for this should be able to name it.

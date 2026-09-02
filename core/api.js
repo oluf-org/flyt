@@ -240,6 +240,10 @@ export function createApi(engine) {
       askHuman: request.askHuman ?? (request.profile === 'flyt-loop-worker' ? null : workflowAskHuman(entry)),
       askBlock: request.askBlock ?? (request.profile === 'flyt-loop-worker' ? null : workflowAskBlock(entry)),
       requireLaunchable: Boolean(request.requireLaunchable),
+      sandboxMode: request.sandboxMode ?? runtimeConfig.sandbox?.mode ?? 'workspace-write',
+      sandboxEnforcement: request.sandboxEnforcement ?? runtimeConfig.sandbox?.minimumEnforcement ?? 'partial',
+      forwardedEnv: request.forwardedEnv ?? runtimeConfig.sandbox?.forwardedEnv ?? [],
+      windowsSandboxRunner: request.windowsSandboxRunner ?? null,
       ceiling: request.ceiling ?? null,
       onSessionEvent: (runId, event) => {
         pushEvents(runId, event);
@@ -329,6 +333,7 @@ export function createApi(engine) {
     projectId, workflowId, input = '', approvalMode = null, presetId = null,
     conversationId = null, parentRunId = null, userMessage = null,
     modelSelection = null, profile = 'flyt-desktop', level = null,
+    sandboxMode = null, sandboxEnforcement = null,
   }) => {
     const entry = proj(projectId);
     presetId = await resolvePresetId(workflowId, presetId);
@@ -369,6 +374,10 @@ export function createApi(engine) {
         profile,
         presetId,
         requireLaunchable: true,
+        sandboxMode: sandboxMode ?? runtimeConfig.sandbox?.mode ?? 'workspace-write',
+        sandboxEnforcement: sandboxEnforcement ?? runtimeConfig.sandbox?.minimumEnforcement ?? 'partial',
+        forwardedEnv: runtimeConfig.sandbox?.forwardedEnv ?? [],
+        allowAttendedEscalation: true,
       },
       metadata: {
         conversationId: conversation, parentRunId, presetId,
@@ -1012,6 +1021,10 @@ export function createApi(engine) {
           approvalMode: APPROVAL_MODES.includes(approvalMode) ? approvalMode : 'always',
           worker, level, loopTaskId, skills,
           profile: 'flyt-loop-worker', requireLaunchable: false,
+          sandboxMode: runtimeConfig.sandbox?.mode ?? 'workspace-write',
+          sandboxEnforcement: runtimeConfig.sandbox?.minimumEnforcement ?? 'partial',
+          forwardedEnv: runtimeConfig.sandbox?.forwardedEnv ?? [],
+          allowAttendedEscalation: false,
         },
         metadata: { loopTaskId },
       });
@@ -2178,7 +2191,7 @@ export function createApi(engine) {
       return { refreshed: true };
     },
 
-    'diag:doctor': ({ projectId, probe = false, models = [], flowId = null }) => {
+    'diag:doctor': ({ projectId, probe = false, refresh = false, models = [], flowId = null }) => {
       // A flow id checks the models THAT flow pins, which is the set that will
       // actually be called — a curated list nobody's flow uses proves nothing.
       const list = flowId ? modelsInFlow(engine.flows.load(flowId)) : models;
@@ -2195,7 +2208,7 @@ export function createApi(engine) {
           stateRoot: engine.configDirOf(projectId) ?? null,
         };
       } catch { /* no project bound — the rest of the report still stands */ }
-      return doctor(engine, { probe, models: list, project });
+      return doctor(engine, { probe, refresh, models: list, project });
     },
 
     // --- The reference library (DESIGN-SPEC.md §8) ------------------------------

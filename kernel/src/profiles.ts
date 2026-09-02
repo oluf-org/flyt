@@ -38,6 +38,7 @@ export const BUILTIN = {
   blocksLoop: 'flyt:blocks-loop',
   runProjection: 'flyt:run-projection',
   fs: 'flyt:fs',
+  executionWorldLocal: 'flyt:execution-world-local',
   adapters: 'flyt:llm-adapters',
   stackRunner: 'flyt:stack-runner',
   workerProfiles: 'flyt:worker-profiles',
@@ -65,6 +66,7 @@ const BUILTIN_METADATA: Record<string, BuiltinMetadata> = {
   [BUILTIN.blocksLoop]: { name: 'Loop blocks', description: 'Loop handoff blocks.', contributes: ['blocks'] },
   [BUILTIN.runProjection]: { name: 'Run projection', description: 'Materialises durable session events into run artifacts.', contributes: ['runs'] },
   [BUILTIN.fs]: { name: 'Filesystem seam', description: 'Binds plugin file access to one workspace root.', contributes: ['filesystem'] },
+  [BUILTIN.executionWorldLocal]: { name: 'Local execution world', description: 'Coherent policy-bound filesystem, sandbox, shell, and subprocess providers.', contributes: ['filesystem', 'shell', 'subprocess', 'sandbox'] },
   [BUILTIN.adapters]: { name: 'LLM adapters', description: 'Routes kernel model requests to configured providers.', contributes: ['models'] },
   [BUILTIN.stackRunner]: { name: 'Stack runner', description: 'Executes registered blocks from canonical stacks.', contributes: ['runner'] },
   [BUILTIN.workerProfiles]: { name: 'Worker profiles', description: 'Reusable generated-worker configuration and policy.', contributes: ['workers'] },
@@ -100,6 +102,7 @@ export async function builtinImporter(name: string): Promise<unknown> {
     case BUILTIN.blocksLoop: return import('./plugins/blocks-loop.js');
     case BUILTIN.runProjection: return import('./plugins/run-projection.js');
     case BUILTIN.fs: return import('./plugins/fs.js');
+    case BUILTIN.executionWorldLocal: return import('./plugins/execution-world-local.js');
     case BUILTIN.adapters: return import('./plugins/llm-adapters.js');
     case BUILTIN.stackRunner: return import('./plugins/stack-runner.js');
     case BUILTIN.workerProfiles: return import('./plugins/worker-profiles.js');

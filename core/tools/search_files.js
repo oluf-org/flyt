@@ -91,8 +91,9 @@ export default {
       }
     }
   },
-  run(args, ctx) {
+  async run(args, ctx) {
     const host = fileHost(ctx);
+    if (host.seam) return searchSeam(host, args, ctx);
     const base = host.resolve(args.dir ? String(args.dir) : '.');
     if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) {
       throw new Error(`Directory "${args.dir ?? '.'}" does not exist in the workspace.`);
@@ -202,5 +203,52 @@ export default {
     };
   }
 };
+
+async function searchSeam(host, args, ctx) {
+  let re;
+  try { re = new RegExp(String(args.pattern ?? ''), args.caseSensitive === true ? '' : 'i'); }
+  catch (error) { throw new Error(`"${args.pattern}" is not a valid regular expression: ${error.message}`); }
+  const nameFilter = args.glob ? globToRegExp(String(args.glob)) : null;
+  const maxResults = Math.min(MAX_RESULTS, Math.max(1, Number(args.maxResults ?? DEFAULT_MAX_RESULTS)));
+  const maxPerFile = Math.max(1, Number(args.maxPerFile ?? DEFAULT_MAX_PER_FILE));
+  const contextLines = Math.max(0, Math.min(20, Number(args.context ?? 0)));
+  const prefix = args.dir ? String(args.dir).replace(/\\/g, '/').replace(/^\.?\/*|\/*$/g, '') : '';
+  const entries = await host.seam.list(args.dir ? String(args.dir) : '.', host.execution?.signal);
+  const results = [];
+  let filesScanned = 0;
+  const matched = new Set();
+  let truncated = false;
+  for (const entry of entries) {
+    if (entry.kind !== 'file') continue;
+    if (entry.path.split('/').some(segment => SKIP_DIRS.has(segment))) continue;
+    const rel = prefix && entry.path.startsWith(`${prefix}/`) ? entry.path.slice(prefix.length + 1) : entry.path;
+    if (nameFilter && !nameFilter.test(rel)) continue;
+    if (++filesScanned > MAX_FILES_SCANNED) { truncated = true; break; }
+    if ((entry.size ?? 0) > MAX_FILE_BYTES) continue;
+    let text;
+    try { text = await host.seam.read(entry.path, host.execution?.signal); } catch { continue; }
+    const lines = toEol(text, '\n').split('\n');
+    let hitsHere = 0;
+    for (let i = 0; i < lines.length; i++) {
+      re.lastIndex = 0;
+      if (!re.test(lines[i])) continue;
+      if (++hitsHere > maxPerFile) break;
+      matched.add(entry.path);
+      results.push({
+        path: entry.path, line: i + 1, text: clip(lines[i]),
+        ...(contextLines ? { before: lines.slice(Math.max(0, i - contextLines), i).map(clip), after: lines.slice(i + 1, i + 1 + contextLines).map(clip) } : {}),
+      });
+      if (results.length >= maxResults) { truncated = true; break; }
+    }
+    if (truncated) break;
+  }
+  ctx.store?.appendLog?.(ctx.runId, { event: 'workspace_search', node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
+    pattern: String(args.pattern ?? ''), ...(args.glob ? { glob: String(args.glob) } : {}), hits: results.length, files: matched.size });
+  return {
+    pattern: args.pattern, ...(args.glob ? { glob: args.glob } : {}), ...(args.dir ? { dir: args.dir } : {}),
+    target: host.target, hits: results.length, files: matched.size, ...(truncated ? { truncated: true } : {}), results,
+    ...(results.length ? {} : { note: `No line matched in ${filesScanned} file(s) under "${args.dir ?? '.'}"${args.glob ? ` matching "${args.glob}"` : ''}. Widen the pattern or drop the glob before concluding it is absent.` }),
+  };
+}
 
 const clip = line => (line.length > MAX_LINE_CHARS ? `${line.slice(0, MAX_LINE_CHARS)}…` : line);

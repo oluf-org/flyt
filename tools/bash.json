@@ -1,7 +1,7 @@
 {
   "id": "bash",
   "title": "Run a shell command",
-  "description": "Run a shell command in the workspace (the bound target project) as the working directory — e.g. run tests, a build, or git. Returns { exitCode, stdout, stderr }. Non-zero exit codes are returned (not thrown) so you can read the error and react. Output is truncated if very long.",
+  "description": "Run a shell command in the bound workspace. The run execution world owns its sandbox policy, environment, output bounds, descendants, and teardown.",
   "provider": "builtin",
   "enabled": true,
   "effects": [
@@ -30,6 +30,17 @@
       "timeoutMs": {
         "type": "number",
         "description": "Optional wall-clock timeout in ms (default 120000, max 600000)."
+      },
+      "sandbox_permissions": {
+        "enum": [
+          "workspace-write",
+          "danger-full-access"
+        ],
+        "description": "Optional one-call request for the narrowest strictly wider sandbox mode required."
+      },
+      "justification": {
+        "type": "string",
+        "description": "Why this exact call cannot complete under the current sandbox mode."
       }
     }
   },

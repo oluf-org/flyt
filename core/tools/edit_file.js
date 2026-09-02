@@ -17,7 +17,6 @@
 // see what it did has to re-read the file to find out — a call it usually skips.
 import { fileHost, readShaped, writeText } from './fileHost.js';
 import { toEol } from './textFile.js';
-import fs from 'node:fs';
 
 const CONTEXT_LINES = 3;
 // A non-unique anchor with two hundred matches is a bad anchor, not a report to
@@ -60,13 +59,15 @@ export default {
       replaceAll: {
         type: 'boolean',
         description: 'Replace every occurrence instead of requiring exactly one. Default false.'
-      }
+      },
+      sandbox_permissions: { enum: ['workspace-write', 'danger-full-access'], description: 'Optional strictly wider sandbox mode for this call.' },
+      justification: { type: 'string', description: 'Why this exact call needs the wider sandbox mode.' }
     }
   },
-  run(args, ctx) {
+  async run(args, ctx) {
     const host = fileHost(ctx);
     const relPath = String(args.path ?? '');
-    const read = readShaped(host, relPath);
+    const read = await readShaped(host, relPath);
     if (read == null) throw new Error(`File "${relPath}" not found in the workspace. Use create_file to make a new one.`);
     // Not text, so there is nothing to anchor into and nothing that could be
     // written back. Reading a binary file as UTF-8 and writing the result is
@@ -141,7 +142,7 @@ export default {
     // path confinement is enforced in exactly one place. Bytes, not text: the
     // file's own line endings and any trailing-newline convention survive,
     // because we only ever spliced a substring.
-    writeText(host, relPath, after, read.shape);
+    await writeText(host, relPath, after, read.shape);
     noteWrite(ctx, relPath);
 
     const firstLine = lineOf(before, hits[0]);

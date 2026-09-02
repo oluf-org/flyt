@@ -165,6 +165,8 @@ const COVERAGE = {
   shell: null,
   commands: null,
   sandbox: null,
+  subprocess: null,
+  sandboxPolicy: null,
 };
 
 test('every service the kernel declares is answered for', () => {

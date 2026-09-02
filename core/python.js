@@ -26,7 +26,9 @@
 //   interpreter as the desktop app, and no checkout ever contains one.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { capabilityRequest, layeredEnv, scrubbedParentEnv } from '#kernel';
 
 // Where the managed environment lives. Beside settings.json, i.e. outside every
 // checkout and every worktree.
@@ -146,107 +148,65 @@ const MAX_OUTPUT_BYTES = 8_000_000;
  * because the caller is usually a tool whose job is to hand a model something
  * it can read and correct.
  */
-export function runPythonScript(script, payload = {}, {
+export async function runPythonScript(script, payload = {}, {
   bin,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   cwd = undefined,
-  env = process.env,
-  signal = null
+  env = {},
+  signal = null,
+  subprocess = null,
+  sandbox = null,
+  sandboxPolicy = null,
+  execution = null,
 } = {}) {
-  return new Promise(resolve => {
-    if (!bin) {
-      resolve({ ok: false, code: null, error: 'no Python interpreter is configured', remedy: NO_PYTHON_REMEDY });
-      return;
+  if (!bin) return { ok: false, code: null, error: 'no Python interpreter is configured', remedy: NO_PYTHON_REMEDY };
+  let owned = null;
+  try {
+    if (!subprocess || !sandbox || !sandboxPolicy) {
+      const { createLocalExecutionWorld } = await import('#kernel');
+      owned = await createLocalExecutionWorld({ workspaceRoot: cwd ?? process.cwd(), mode: 'danger-full-access',
+        minimumEnforcement: 'partial', allowAttendedEscalation: false, runsTempRoot: os.tmpdir() });
+      ({ subprocess, sandbox, sandboxPolicy } = owned);
     }
-    let child;
-    try {
-      // `-I` is isolated mode: no user site-packages, no PYTHON* env
-      // influence, no cwd on sys.path. What runs is the interpreter that was
-      // resolved and the packages installed beside it — not whatever the
-      // working directory happens to contain, which for a Loop worker is a
-      // worktree full of a model's files.
-      child = spawn(bin, ['-I', '-c', `${UTF8_PREAMBLE}\n${script}`], {
-        cwd,
-        env: { ...env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' },
-        windowsHide: true
-      });
-    } catch (err) {
-      resolve({ ok: false, code: null, error: `could not start ${bin}: ${String(err?.message ?? err)}`, remedy: NO_PYTHON_REMEDY });
-      return;
-    }
-
-    const outChunks = [];
-    const errChunks = [];
-    let outBytes = 0;
-    let settled = false;
-    let timedOut = false;
-    let overflowed = false;
-
-    const done = value => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      signal?.removeEventListener?.('abort', onAbort);
-      resolve(value);
+    const call = execution ?? {
+      owner: { runId: 'python', callId: `python-${Date.now()}-${Math.random().toString(36).slice(2)}` },
+      tool: 'python-sidecar', attended: true, ...(signal ? { signal } : {}),
     };
-    const kill = () => { try { child.kill('SIGKILL'); } catch { /* already gone */ } };
-    const onAbort = () => kill();
-    const timer = setTimeout(() => { timedOut = true; kill(); }, Math.max(1000, timeoutMs));
-    signal?.addEventListener?.('abort', onAbort, { once: true });
-
-    child.stdout.on('data', d => {
-      outBytes += d.length;
-      // Cap what we keep, and stop the script rather than letting a runaway
-      // page fill this process's heap. The cap is generous: it exists to bound
-      // a pathological case, not to truncate a normal document.
-      if (outBytes > MAX_OUTPUT_BYTES) { overflowed = true; kill(); return; }
-      outChunks.push(d);
-    });
-    child.stderr.on('data', d => { if (errChunks.length < 200) errChunks.push(d); });
-
-    child.on('error', err => done({
-      ok: false, code: null, error: `could not start ${bin}: ${String(err?.message ?? err)}`, remedy: NO_PYTHON_REMEDY
-    }));
-
-    child.on('close', code => {
-      const stdout = Buffer.concat(outChunks).toString('utf8');
-      const stderr = Buffer.concat(errChunks).toString('utf8').trim();
-      if (timedOut) {
-        done({ ok: false, code, error: `the Python step timed out after ${Math.round(timeoutMs / 1000)}s`, stderr });
-        return;
-      }
-      if (overflowed) {
-        done({ ok: false, code, error: `the Python step produced more than ${MAX_OUTPUT_BYTES} bytes`, stderr });
-        return;
-      }
-      let value;
-      try { value = JSON.parse(stdout); }
-      catch {
-        done({
-          ok: false, code,
-          error: code === 0
-            ? 'the Python step did not return JSON'
-            : `the Python step exited ${code}`,
-          // stderr is the actual explanation for a traceback; stdout is the
-          // explanation when the script printed prose instead of JSON.
-          stderr: stderr || stdout.slice(0, 2000)
-        });
-        return;
-      }
-      // The script owns the verdict: it reports `{ ok: false, error }` for a
-      // failure it understood (a 403, a bad selector) and this layer only
-      // reports the ones it did not survive.
-      done({ code, ...(stderr ? { stderr } : {}), ...value, ok: value?.ok !== false && code === 0 });
-    });
-
-    try {
-      child.stdin.write(JSON.stringify(payload));
-      child.stdin.end();
-    } catch (err) {
-      done({ ok: false, code: null, error: `could not write to ${bin}: ${String(err?.message ?? err)}` });
+    const policy = await sandboxPolicy.resolve(capabilityRequest(call));
+    let argv = [await subprocess.resolveExecutable(bin), '-I', '-c', `${UTF8_PREAMBLE}\n${script}`];
+    let runnerFailure;
+    if (policy.mode !== 'danger-full-access') {
+      const confined = await sandbox.confine(argv, { ...policy, mode: policy.mode });
+      argv = [...confined.argv]; runnerFailure = confined.runnerFailure;
     }
-  });
+    const temp = policy.mode === 'workspace-write' ? { TMPDIR: policy.privateTemp, TEMP: policy.privateTemp, TMP: policy.privateTemp } : {};
+    const childEnv = layeredEnv(scrubbedParentEnv(), temp, nonSecretEnv(env), { PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' });
+    const handle = subprocess.spawn({
+      owner: policy.owner, argv, cwd: cwd ?? subprocess.world.processRoot, env: childEnv,
+      stdin: JSON.stringify(payload), stdout: { maxBytes: MAX_OUTPUT_BYTES }, stderr: { maxBytes: 1_000_000 },
+      timeoutMs: Math.max(1000, timeoutMs), graceMs: 500, ...(signal ? { signal } : {}),
+      ...(runnerFailure ? { runnerFailure } : {}),
+    });
+    const outcome = await handle.done;
+    const stdout = handle.stdout.text;
+    const stderr = handle.stderr.text.trim();
+    if (outcome.runnerFailed) return { ok: false, code: null, error: outcome.runnerFailed.detail, errorCode: 'SANDBOX_RUNNER_FAILED', stderr };
+    if (outcome.timedOut) return { ok: false, code: outcome.exitCode, error: `the Python step timed out after ${Math.round(timeoutMs / 1000)}s`, stderr };
+    if (handle.stdout.truncated) return { ok: false, code: outcome.exitCode, error: `the Python step produced more than ${MAX_OUTPUT_BYTES} bytes`, stderr };
+    let value;
+    try { value = JSON.parse(stdout); }
+    catch {
+      return { ok: false, code: outcome.exitCode,
+        error: outcome.exitCode === 0 ? 'the Python step did not return JSON' : `the Python step exited ${outcome.exitCode}`,
+        stderr: stderr || stdout.slice(0, 2000) };
+    }
+    return { code: outcome.exitCode, ...(stderr ? { stderr } : {}), ...value, ok: value?.ok !== false && outcome.exitCode === 0 };
+  } catch (error) {
+    return { ok: false, code: null, error: `could not start ${bin}: ${String(error?.message ?? error)}`, remedy: NO_PYTHON_REMEDY };
+  } finally { await owned?.dispose(); }
 }
+
+const nonSecretEnv = env => Object.fromEntries(Object.entries(env ?? {}).filter(([name]) => !/(KEY|PASSWORD|SECRET|TOKEN|CREDENTIAL)/i.test(name) && !/^FLYT_/i.test(name)));
 
 // --- the managed environment ------------------------------------------------
 
@@ -305,7 +265,7 @@ export async function pythonStatus({ userDataDir = null, settings = null, packag
 // take minutes and print as it goes.
 function spawnLogged(bin, args, { log, cwd, env }) {
   return new Promise(resolve => {
-    const child = spawn(bin, args, { cwd, env, windowsHide: true });
+    const child = spawn(bin, args, { cwd, env: scrubbedParentEnv(env), windowsHide: true });
     const line = buf => String(buf).split(/\r?\n/).filter(Boolean).forEach(l => log(l));
     child.stdout.on('data', line);
     child.stderr.on('data', line);

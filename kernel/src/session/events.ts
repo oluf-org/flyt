@@ -6,6 +6,7 @@
  * recovery share one contract instead of synchronising string literals.
  */
 import type { JsonValue, ToolCall, Usage } from '../types.js';
+import type { SandboxBackend, SandboxEnforcement, SandboxMode } from '../seams/sandbox.js';
 
 type Data = Record<string, JsonValue>;
 
@@ -17,6 +18,13 @@ export interface SessionEventMap {
     workspace?: string;
     approvalMode?: string;
     profile?: 'flyt-desktop' | 'flyt-cli' | 'flyt-loop-worker';
+    executionWorld?: {
+      id: string; provider: 'local'; workspaceId: string; processRoot: string;
+    };
+    sandbox?: {
+      requestedMode: SandboxMode; effectiveMode: SandboxMode; backend: SandboxBackend;
+      enforcement: SandboxEnforcement; minimumEnforcement: 'full' | 'partial'; network: 'ambient';
+    };
   };
   'run.named': { name: string | null };
   'run.reconfigured': Data;
@@ -50,7 +58,19 @@ export interface SessionEventMap {
   'tool.call': Data & { callId: string; name: string; args: JsonValue };
   'tool.state': Data & { callId: string; state: string };
   'permission.decision': Data;
-  'tool.result': Data & { callId: string; name: string; content: string };
+  'sandbox.decision': Data & {
+    callId: string; tool: string; standingMode: SandboxMode; requestedMode?: SandboxMode;
+    effectiveMode: SandboxMode; backend: SandboxBackend; enforcement: SandboxEnforcement; escalated: boolean;
+  };
+  'sandbox.escalation': Data & {
+    callId: string; tool: string; from: SandboxMode; to: SandboxMode;
+    outcome: 'allowed-once' | 'rejected' | 'cancelled' | 'invalid'; justification: string;
+  };
+  'sandbox.failure': Data & {
+    callId: string; tool: string; code: 'SANDBOX_UNAVAILABLE' | 'SANDBOX_DENIED' | 'SANDBOX_RUNNER_FAILED';
+    mode: SandboxMode; backend?: SandboxBackend; remedy?: string;
+  };
+  'tool.result': Data & { callId: string; name: string; content: string; result?: JsonValue };
   'tool.repetition': Data;
   'block.status': Data & { blockId: string; status: string };
   'block.warning': Data & { blockId: string };
@@ -65,7 +85,7 @@ export const SESSION_EVENTS = [
   'message.system', 'message.user', 'llm.request', 'llm.attempt', 'context.budget',
   'context.checkpoint', 'llm.telemetry', 'plugin.interception', 'llm.stream',
   'tool.input.start', 'tool.input.delta', 'tool.input.end', 'llm.response',
-  'tool.call', 'tool.state', 'permission.decision', 'tool.result', 'tool.repetition',
+  'tool.call', 'tool.state', 'permission.decision', 'sandbox.decision', 'sandbox.escalation', 'sandbox.failure', 'tool.result', 'tool.repetition',
   'block.status', 'block.warning', 'block.output', 'workspace.observed', 'supervisor.summary',
 ] as const satisfies readonly (keyof SessionEventMap)[];
 

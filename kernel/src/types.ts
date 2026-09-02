@@ -51,6 +51,8 @@ export interface ToolCall {
 export interface ToolResult {
   /** The bounded preview the model receives. */
   content: string;
+  /** Complete JSON-safe result persisted with the durable event, never sent to the model. */
+  durableResult?: JsonValue;
   /** The handle resolving to the complete stored result (`@tool:<seq>`). */
   handle?: string;
   /** Present when the call failed. */

@@ -30,6 +30,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { scrubbedParentEnv } from '#kernel';
 import { callModel, abortError, isAbortError } from './adapters/index.js';
 import { runAgent, callForAnswer, describeEmptyTurn, toolProtocol, supportsToolsFor } from './agent.js';
 import { recordAttempt, settleAttempt } from '../src/attempts.js';
@@ -676,7 +677,7 @@ export function renderOpenItems({ assumptions = [], unknowns = [], confidence = 
 function gitHead(root) {
   try {
     return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 4000 }).trim() || null;
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 4000, env: scrubbedParentEnv() }).trim() || null;
   } catch { return null; }
 }
 

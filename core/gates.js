@@ -9,12 +9,14 @@
 // So the gates are not something the agent runs and interprets. The supervisor
 // runs them, reads the exit code itself, and that is what closes a task. An
 // agent's claim is not evidence.
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const OUTPUT_LIMIT = 20_000; // bounded: it goes back to a model as guidance
+const launchSandboxMode = () => ['read-only', 'workspace-write', 'danger-full-access'].includes(process.env.FLYT_SANDBOX_MODE)
+  ? process.env.FLYT_SANDBOX_MODE : 'workspace-write';
 
 export const DEFAULT_GATES = ['npm test'];
 
@@ -25,32 +27,29 @@ export const DEFAULT_GATES = ['npm test'];
  * suite is red" and "the suite hung" call for different responses, and a
  * supervisor that cannot tell them apart will retry a hang forever.
  */
-export function runGate(command, { cwd, timeoutMs = DEFAULT_TIMEOUT_MS, env = process.env } = {}) {
-  return new Promise(resolve => {
-    const started = Date.now();
-    // Through the shell on purpose: a gate is a command line a human wrote in
-    // config ("npm test -- --reporter dot"), not an argv the app assembles.
-    // Nothing model-authored reaches here — gates come from the project's own
-    // .flyt/config.json and a task may only ADD to them (§7.3).
-    const child = execFile(command, {
-      cwd, env, shell: true, timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024,
-      killSignal: 'SIGKILL'
-    }, (err, stdout, stderr) => {
-      const ms = Date.now() - started;
-      const output = clip(`${stdout ?? ''}${stderr ?? ''}`);
-      // execFile reports a timeout as a killed child, not as a distinct error.
-      const timedOut = Boolean(err && (err.killed || err.signal === 'SIGKILL') && ms >= timeoutMs - 50);
-      const code = typeof err?.code === 'number' ? err.code : (err ? 1 : 0);
-      resolve({
-        command,
-        status: timedOut ? 'timeout' : (code === 0 ? 'pass' : 'fail'),
-        code: timedOut ? null : code,
-        ms,
-        output
-      });
+export async function runGate(command, {
+  cwd, timeoutMs = DEFAULT_TIMEOUT_MS, env = {}, shell = null, execution = null,
+  sandboxMode = launchSandboxMode(),
+} = {}) {
+  const started = Date.now();
+  const owned = shell ? null : await standaloneGateWorld(cwd, sandboxMode);
+  try {
+    const call = execution ?? {
+      owner: { runId: 'gate', callId: `gate-${Date.now()}-${Math.random().toString(36).slice(2)}` },
+      tool: 'project-gate', attended: true,
+    };
+    const result = await (shell ?? owned.shell).run(String(command), {
+      execution: call, timeoutMs, env: nonSecretEnv(env),
     });
-    child.on('error', () => { /* reported through the callback */ });
-  });
+    const ms = Date.now() - started;
+    const infrastructure = Boolean(result.errorCode);
+    const status = infrastructure ? 'infrastructure' : result.timedOut ? 'timeout' : result.code === 0 ? 'pass' : 'fail';
+    return {
+      command, status, code: result.timedOut || infrastructure ? null : result.code, ms,
+      output: clip(`${result.stdout ?? ''}${result.stderr ?? ''}`),
+      ...(result.errorCode ? { errorCode: result.errorCode, sandbox: result.sandbox } : {}),
+    };
+  } finally { await owned?.dispose(); }
 }
 
 // A line that says something FAILED, in the runners this repo actually uses.
@@ -128,10 +127,16 @@ function clip(text) {
  * ten-minute suite after the lint already failed buys nothing but a longer wait
  * and a bigger bill.
  */
-export async function runGates(gates, { cwd, timeoutMs, env, onResult = null } = {}) {
+export async function runGates(gates, {
+  cwd, timeoutMs, env, onResult = null, shell = null, execution = null,
+  sandboxMode = launchSandboxMode(),
+} = {}) {
   const results = [];
   for (const command of gates) {
-    const result = await runGate(command, { cwd, timeoutMs, env });
+    const result = await runGate(command, {
+      cwd, timeoutMs, env, shell, sandboxMode,
+      execution: execution ? { ...execution, owner: { ...execution.owner, callId: `${execution.owner.callId}-${results.length + 1}` } } : null,
+    });
     results.push(result);
     onResult?.(result);
     if (result.status !== 'pass') break;
@@ -144,6 +149,14 @@ export async function runGates(gates, { cwd, timeoutMs, env, onResult = null } =
     failure: results.find(r => r.status !== 'pass') ?? null
   };
 }
+
+async function standaloneGateWorld(cwd, mode) {
+  const { createLocalExecutionWorld } = await import('#kernel');
+  return createLocalExecutionWorld({ workspaceRoot: cwd, mode, minimumEnforcement: 'partial',
+    allowAttendedEscalation: false, runsTempRoot: os.tmpdir() });
+}
+
+const nonSecretEnv = env => Object.fromEntries(Object.entries(env ?? {}).filter(([name]) => !/(KEY|PASSWORD|SECRET|TOKEN|CREDENTIAL)/i.test(name) && !/^FLYT_/i.test(name)));
 
 /**
  * The gates for a project: its own configured list, plus whatever the task
