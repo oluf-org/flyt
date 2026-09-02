@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  createFsSeam, createLocalExecutionWorld, createSandboxPolicy, scrubbedParentEnv,
+  createFsSeam, createLocalExecutionWorld, createSandboxPolicy, macSeatbeltProfile, scrubbedParentEnv,
 } from '#kernel';
 
 const temp = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -65,6 +65,34 @@ test('a voluntary narrower mode is not recorded as an escalation', async () => {
     requestedMode: 'workspace-write', justification: 'use less authority', attended: true });
   assert.equal(resolved.mode, 'workspace-write');
   assert.equal(resolved.escalated, false);
+});
+
+test('the macOS profile denies writes only outside its explicit writable roots', () => {
+  const profile = macSeatbeltProfile({ mode: 'workspace-write', workspaceRoot: '/private/work', privateTemp: '/private/temp' });
+  assert.match(profile, /deny file-write\* \(require-not \(require-any/);
+  assert.match(profile, /\(subpath "\/private\/work"\)/);
+  assert.match(profile, /\(subpath "\/private\/temp"\)/);
+  assert.doesNotMatch(profile, /\(deny file-write\*\)\s/);
+});
+
+test('execution-world identity canonicalizes workspace and run-temp aliases', async t => {
+  const container = temp('flyt-world-alias-');
+  const workspace = path.join(container, 'workspace');
+  const runs = path.join(container, 'runs');
+  const workspaceAlias = path.join(container, 'workspace-alias');
+  const runsAlias = path.join(container, 'runs-alias');
+  fs.mkdirSync(workspace); fs.mkdirSync(runs);
+  try {
+    fs.symlinkSync(workspace, workspaceAlias, process.platform === 'win32' ? 'junction' : 'dir');
+    fs.symlinkSync(runs, runsAlias, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (error) { t.skip(`directory aliases unavailable: ${error.code ?? error.message}`); return; }
+  const owner = await createLocalExecutionWorld({ workspaceRoot: workspaceAlias, mode: 'danger-full-access',
+    minimumEnforcement: 'partial', allowAttendedEscalation: false, runsTempRoot: runsAlias });
+  try {
+    assert.equal(owner.world.hostRoot, fs.realpathSync(workspace));
+    const policy = await owner.sandboxPolicy.resolve({ runId: 'alias', callId: 'one', tool: 'test', attended: false });
+    assert.equal(policy.privateTemp.startsWith(fs.realpathSync(runs) + path.sep), true);
+  } finally { await owner.dispose(); }
 });
 
 test('filesystem modes deny read-only mutations and never widen past the seam root', async () => {

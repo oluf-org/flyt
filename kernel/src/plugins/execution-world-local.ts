@@ -39,7 +39,9 @@ export async function createLocalExecutionWorld(config: LocalExecutionWorldConfi
     provider: 'local', workspaceId, hostRoot, processRoot: hostRoot, platform: process.platform,
     sandbox: Object.freeze({ standingMode: config.mode, backend: facts.backend, enforcement: facts.enforcement, network: 'ambient' }),
   });
-  const providerTemp = path.join(config.runsTempRoot, `.execution-world-${workspaceId}`);
+  const requestedRunsTempRoot = path.resolve(config.runsTempRoot);
+  fs.mkdirSync(requestedRunsTempRoot, { recursive: true, mode: 0o700 });
+  const providerTemp = path.join(fs.realpathSync(requestedRunsTempRoot), `.execution-world-${workspaceId}`);
   fs.mkdirSync(providerTemp, { recursive: true, mode: 0o700 });
   const subprocess = createLocalSubprocess(world, path.join(providerTemp, 'processes'));
   const sandbox = createLocalSandbox(world, subprocess, path.join(providerTemp, 'probes'), config);

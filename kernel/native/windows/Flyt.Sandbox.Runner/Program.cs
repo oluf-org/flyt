@@ -36,10 +36,12 @@ internal static class Program
 
     private static int Run(string[] args)
     {
-        Stage = "parse"; Parse(args, out var mode, out var workspace, out var temp, out var command);
+        Stage = "parse"; Parse(args, out var mode, out var workspace, out var temp, out var command, out var allowElevatedParentForTest);
         if (!OperatingSystem.IsWindows()) throw new InvalidOperationException("the Windows runner was started on a non-Windows host");
+        if (allowElevatedParentForTest && !string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("the elevated-parent test option is available only on GitHub Actions");
         Stage = "identity"; using var identity = WindowsIdentity.GetCurrent();
-        if (new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
+        if (!allowElevatedParentForTest && new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
             throw new InvalidOperationException("confined execution is refused while Flyt is elevated");
         Stage = "filesystem"; if (!IsNtfs(workspace) || (mode == "workspace-write" && !IsNtfs(temp)))
             throw new InvalidOperationException("the workspace and private temp must be on NTFS");
@@ -94,14 +96,15 @@ internal static class Program
         }
     }
 
-    private static void Parse(string[] args, out string mode, out string workspace, out string temp, out string[] command)
+    private static void Parse(string[] args, out string mode, out string workspace, out string temp, out string[] command, out bool allowElevatedParentForTest)
     {
-        mode = ""; workspace = ""; temp = "";
+        mode = ""; workspace = ""; temp = ""; allowElevatedParentForTest = false;
         var separator = Array.IndexOf(args, "--");
         if (separator < 0 || separator == args.Length - 1) throw new ArgumentException("expected -- followed by exact command argv");
         for (var i = 0; i < separator; i++)
         {
-            if (args[i] == "--mode" && ++i < separator) mode = args[i];
+            if (args[i] == "--allow-elevated-parent-for-test") allowElevatedParentForTest = true;
+            else if (args[i] == "--mode" && ++i < separator) mode = args[i];
             else if (args[i] == "--workspace" && ++i < separator) workspace = Canonical(args[i]);
             else if (args[i] == "--temp" && ++i < separator) temp = Canonical(args[i]);
             else throw new ArgumentException($"unknown or incomplete runner option {args[i]}");

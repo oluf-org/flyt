@@ -37,7 +37,12 @@ jobs:
       - run: npm ci
       - name: Install Linux sandbox backend
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces through
+          # AppArmor. This runner is ephemeral; enable them for this boot so
+          # the release test exercises Bubblewrap instead of skipping it.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Build Windows sandbox backend
         if: runner.os == 'Windows'
         run: npm run build:sandbox:win

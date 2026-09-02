@@ -5,6 +5,8 @@
 // it the already battle-tested provider adapters and built-in tool bodies,
 // each wrapped behind the kernel seams. Every fact needed to reopen a run is
 // written in run.created before execution begins.
+import fs from 'node:fs';
+import path from 'node:path';
 import { bootKernel } from './v2.js';
 import { StackStore } from './stackstore.js';
 import { Workspace } from './workspace.js';
@@ -139,7 +141,10 @@ export async function bootRunKernel({
   // Boot is observation, not a workspace mutation. A fresh repository may
   // have no .flyt/config.json; creating one here puts a protected path in the
   // task diff before the model has made its first call.
-  const workspace = new Workspace(workspaceDir);
+  // macOS exposes temporary directories through both /var and /private/var.
+  // Compose every seam with one canonical identity so capability checks do
+  // not reject the same directory merely because it arrived through an alias.
+  const workspace = new Workspace(fs.realpathSync(path.resolve(workspaceDir)));
   const baselines = new Map();
   const skillLoad = loadSkills(workspace, skills);
   const skillText = skillsSection(skillLoad.found);

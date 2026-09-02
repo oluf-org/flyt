@@ -10,7 +10,11 @@ import {
 import type { SubprocessSeam } from '../seams/subprocess.js';
 import { layeredEnv, scrubbedParentEnv } from '../sandbox/environment.js';
 
-export interface LocalSandboxOptions { windowsRunnerPath?: string }
+export interface LocalSandboxOptions {
+  windowsRunnerPath?: string;
+  /** CI-only: exercise the restricted token when the hosted runner is elevated. */
+  allowElevatedWindowsRunnerForTest?: boolean;
+}
 
 const strength = (value: SandboxEnforcement | null): number => value === 'full' ? 2 : value === 'partial' ? 1 : 0;
 const successfulProbeCache = new Map<string, Promise<SandboxProbe>>();
@@ -57,15 +61,13 @@ export function createLocalSandbox(
         runnerFailure: { exitCodes: [1, 2, 125], stderrSignature: 'bwrap:' } };
     }
     if (process.platform === 'darwin') {
-      const allow = policy.mode === 'workspace-write'
-        ? `(allow file-write* (subpath ${sbpl(policy.workspaceRoot)}) (subpath ${sbpl(policy.privateTemp)}))`
-        : '(allow file-write* (literal "/dev/null"))';
-      const profile = `(version 1)\n(allow default)\n(deny file-write*)\n${allow}\n`;
-      return { argv: [executable, '-p', profile, ...argv], backend: selected.name, enforcement: selected.enforcement,
+      return { argv: [executable, '-p', macSeatbeltProfile(policy), ...argv], backend: selected.name, enforcement: selected.enforcement,
         runnerFailure: { exitCodes: [1, 64, 65, 69, 70], stderrSignature: 'sandbox-exec:' } };
     }
     return {
-      argv: [executable, '--mode', policy.mode, '--workspace', policy.workspaceRoot, '--temp', policy.privateTemp, '--', ...argv],
+      argv: [executable,
+        ...(options.allowElevatedWindowsRunnerForTest ? ['--allow-elevated-parent-for-test'] : []),
+        '--mode', policy.mode, '--workspace', policy.workspaceRoot, '--temp', policy.privateTemp, '--', ...argv],
       backend: selected.name, enforcement: selected.enforcement,
       runnerFailure: { exitCodes: [120, 121, 122], stderrSignature: 'FLYT_SANDBOX_RUNNER:' },
     };
@@ -142,6 +144,15 @@ export function createLocalSandbox(
 
 function sbpl(value: string): string {
   return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+export function macSeatbeltProfile(policy: Pick<SandboxPolicy, 'mode' | 'workspaceRoot' | 'privateTemp'>): string {
+  const writable = policy.mode === 'workspace-write'
+    ? `(require-any (subpath ${sbpl(policy.workspaceRoot)}) (subpath ${sbpl(policy.privateTemp)}))`
+    : `(literal "/dev/null")`;
+  // Seatbelt denies take precedence over allows. Express the boundary as one
+  // deny whose filter matches only paths outside the writable roots.
+  return `(version 1)\n(allow default)\n(deny file-write* (require-not ${writable}))\n`;
 }
 
 export const defaultSandboxFacts = (): { backend: SandboxBackend; enforcement: SandboxEnforcement } => {

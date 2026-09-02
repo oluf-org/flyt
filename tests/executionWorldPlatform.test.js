@@ -13,7 +13,13 @@ async function localWorld(t, mode = 'workspace-write') {
   const runs = temp('flyt-platform-runs-');
   try {
     return { root, runs, world: await createLocalExecutionWorld({ workspaceRoot: root, mode,
-      minimumEnforcement: 'partial', allowAttendedEscalation: false, runsTempRoot: runs }) };
+      minimumEnforcement: 'partial', allowAttendedEscalation: false, runsTempRoot: runs,
+      // GitHub's Windows hosted runner is elevated. Production launches still
+      // refuse that posture; this option exists only to exercise the restricted
+      // child token and ACL boundary on the ephemeral CI machine.
+      allowElevatedWindowsRunnerForTest: process.platform === 'win32'
+        && process.env.GITHUB_ACTIONS === 'true' && process.env.FLYT_RELEASE_SANDBOX_E2E === '1',
+    }) };
   } catch (error) {
     if (error?.code === 'SANDBOX_UNAVAILABLE' || /sandbox backend/i.test(String(error?.message))) {
       if (process.env.FLYT_RELEASE_SANDBOX_E2E === '1') throw error;
