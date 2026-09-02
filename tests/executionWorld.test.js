@@ -72,6 +72,7 @@ test('the macOS profile denies writes only outside its explicit writable roots',
   assert.match(profile, /deny file-write\* \(require-not \(require-any/);
   assert.match(profile, /\(subpath "\/private\/work"\)/);
   assert.match(profile, /\(subpath "\/private\/temp"\)/);
+  assert.match(profile, /\(literal "\/dev\/null"\)/, 'confined descendants may attach ignored stdio');
   assert.doesNotMatch(profile, /\(deny file-write\*\)\s/);
 });
 

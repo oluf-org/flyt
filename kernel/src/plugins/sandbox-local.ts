@@ -148,7 +148,7 @@ function sbpl(value: string): string {
 
 export function macSeatbeltProfile(policy: Pick<SandboxPolicy, 'mode' | 'workspaceRoot' | 'privateTemp'>): string {
   const writable = policy.mode === 'workspace-write'
-    ? `(require-any (subpath ${sbpl(policy.workspaceRoot)}) (subpath ${sbpl(policy.privateTemp)}))`
+    ? `(require-any (subpath ${sbpl(policy.workspaceRoot)}) (subpath ${sbpl(policy.privateTemp)}) (literal "/dev/null"))`
     : `(literal "/dev/null")`;
   // Seatbelt denies take precedence over allows. Express the boundary as one
   // deny whose filter matches only paths outside the writable roots.
