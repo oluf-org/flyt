@@ -68,7 +68,9 @@ jobs:
         shell: powershell
         run: |
           $testUser = 'flytsandboxci'
-          $plainPassword = 'Flyt!Aa1' + [guid]::NewGuid().ToString('N')
+          # Keep this at 14 characters so legacy `net user` never prompts.
+          # The account exists only for this ephemeral runner job.
+          $plainPassword = 'Flyt!Aa1b2C3d4'
           $testRoot = Join-Path $env:SystemDrive 'flyt-sandbox-ci'
           try {
             net user $testUser $plainPassword /add /expires:never /passwordchg:no
