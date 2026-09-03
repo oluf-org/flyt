@@ -82,6 +82,17 @@ export interface LoopResult {
   usage?: Usage;
   /** Schema-constrained provider result or synthetic submission payload. */
   structuredOutput?: JsonValue;
+  /**
+   * Set when the visible answer was produced AFTER every tool was withdrawn.
+   *
+   * The content is still the best available deliverable, but the block did not
+   * finish on its own terms: it stopped reading because the harness took its
+   * tools away. A caller that reports this as an ordinary success claims work
+   * that may never have been done.
+   */
+  toolsWithdrawn?: 'repeated_read' | 'step_bound';
+  /** Whether any non-read tool succeeded during this turn. */
+  durableWriteProduced: boolean;
   /** The message list as the log holds it, after the loop. */
   messages: Message[];
 }
@@ -891,6 +902,10 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     ...(reasoning ? { reasoning } : {}),
     ...(usage ? { usage } : {}),
     ...(structured !== undefined ? { structuredOutput: structured } : {}),
+    // An answer produced with the tools withdrawn is reported as exactly that,
+    // so the block above can keep the content without calling it a success.
+    ...(answerOnly && stopped === 'answered' ? { toolsWithdrawn: answerOnly.cause } : {}),
+    durableWriteProduced,
     messages,
   };
 }

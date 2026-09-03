@@ -12,7 +12,20 @@ import { fileURLToPath } from 'node:url';
 import { checkFlags, renderWhy } from '../bin/flyt.js';
 
 const cli = fileURLToPath(new URL('../bin/flyt.js', import.meta.url));
-const run = args => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+// The CLI resolves its profile from the environment, so a test that does not
+// redirect it writes to the developer's real one. This suite spawned the CLI
+// against %APPDATA%\flyt and replaced the desktop app's open project tabs
+// every time it ran.
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-cli-profile-'));
+const isolatedEnv = {
+  ...process.env,
+  APPDATA: profile,
+  XDG_CONFIG_HOME: profile,
+  HOME: profile,
+  USERPROFILE: profile,
+};
+const run = (args, env = isolatedEnv) =>
+  spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', env });
 
 test('a mistyped flag is refused, and told what it probably meant', () => {
   assert.match(checkFlags('task', { stauts: 'queued' }), /Unknown flag "--stauts"\. Did you mean "--status"\?/);
@@ -173,6 +186,32 @@ test('a repeated --goal never reaches the task file', () => {
   assert.equal(bad.status, 2);
   assert.match(bad.stderr + bad.stdout, /--goal was given more than once/);
   assert.ok(!/queued t-/.test(bad.stderr + bad.stdout), 'and no task was written');
+});
+
+// The desktop's open tabs survive a CLI call.
+//
+// Opening a project rebuilds `settings.projects` from the registry doing the
+// opening, and a CLI registry holds one folder. So `flyt runs` in any
+// directory replaced the app's whole tab list with that directory, and this
+// suite did the same to the developer's profile on every run.
+test('a CLI call opens its own project without rewriting the desktop tab session', () => {
+  const settingsPath = path.join(profile, 'flyt', 'settings.json');
+  const first = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-cli-tabs-a-'));
+  assert.equal(run(['task', 'list', '--project', first]).status, 0);
+
+  const desktop = {
+    open: ['D:\\work\\app-project'], active: 'D:\\work\\app-project',
+    recents: ['D:\\work\\app-project'], tabState: {}, names: {}, colors: {},
+  };
+  const seeded = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  fs.writeFileSync(settingsPath, JSON.stringify({ ...seeded, projects: desktop }, null, 2));
+
+  const second = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-cli-tabs-b-'));
+  const out = run(['task', 'list', '--project', second]);
+  assert.equal(out.status, 0, out.stderr);
+  const after = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  assert.deepEqual(after.projects, desktop,
+    'the CLI bound its own project for the call and left the app’s tabs untouched');
 });
 
 // A flag the CLI consumes itself must never arrive as an argument.

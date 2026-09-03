@@ -129,6 +129,8 @@ test('identical successful globs are cached and answer-only recovery tolerates u
       ceiling: ['glob'], maxSteps: 8,
     });
     assert.equal(result.stopped, 'answered');
+    assert.equal(result.toolsWithdrawn, 'repeated_read',
+      'the answer is reported as one produced without tools, not as an ordinary finish');
     assert.match(result.content, /Completed from the files already listed/);
     assert.equal(executions, 1, 'four byte-identical reads reuse the first result');
     assert.equal(requests[5].tools, undefined, 'the recovery request offers no tools');

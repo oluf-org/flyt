@@ -672,6 +672,9 @@ export default function DailyRoot() {
       />}
       {settingsOpen && <Settings
         onClose={() => setSettingsOpen(false)}
+        // Safety choices bind the NEXT run launched from here, so this state
+        // has to follow the panel rather than the mount-time snapshot.
+        onSaved={setSettings}
         onOpenModels={() => { setSettingsOpen(false); setLocation(current => ({ ...current, dest: MODELS })); }}
         projects={projects}
         onColorChange={async updated => {

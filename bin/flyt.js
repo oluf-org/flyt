@@ -281,7 +281,17 @@ function boot({ emit = () => {}, canEmit = () => false } = {}) {
 // the project, opened fresh.
 function openProject(api, engine) {
   const folder = path.resolve(String(flags.project ?? process.cwd()));
+  // The desktop's open tabs are the desktop's business. Opening a project
+  // rebuilds `settings.projects` from the registry doing the opening, and this
+  // registry holds exactly one folder — so a stateless CLI call was replacing
+  // the app's whole tab list with whatever directory it ran in. `npm test`
+  // did it too, through the CLI that tests/cliFlags.test.js spawns.
+  const tabs = engine.settings.projects;
   const { project } = engine.registry.open(folder);
+  if (engine.settings.projects !== tabs) {
+    engine.settings.projects = tabs;
+    engine.persistSettings();
+  }
   return project.id;
 }
 

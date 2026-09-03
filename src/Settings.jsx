@@ -68,7 +68,7 @@ const SEARCH_PROVIDER_META = {
   },
 };
 
-export default function Settings({ onClose, onOpenProject = null, onOpenModels = null, projects = null, onColorChange = null }) {
+export default function Settings({ onClose, onOpenProject = null, onOpenModels = null, projects = null, onColorChange = null, onSaved = null }) {
   const [tab, setTab] = useState('providers');
   const [s, setS] = useState(null); // the public settings payload
   const [sandboxDiagnostic, setSandboxDiagnostic] = useState(null);
@@ -102,7 +102,14 @@ export default function Settings({ onClose, onOpenProject = null, onOpenModels =
   const save = async patch => {
     setError('');
     try {
-      setS(await window.flyt.setSettings(patch));
+      // Every mutation in this panel funnels through here, so this is also the
+      // one place that can tell the host its copy is stale. Without it a host
+      // that read settings once at mount keeps launching work under the old
+      // approval and sandbox modes: choosing "Ask permission" here left runs
+      // going out as "Always approve" until the app was restarted.
+      const next = await window.flyt.setSettings(patch);
+      setS(next);
+      onSaved?.(next);
       if (patch?.sandbox) setSandboxDiagnostic(null);
     }
     catch (err) { setError(String(err?.message ?? err)); }

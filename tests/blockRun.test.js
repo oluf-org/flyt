@@ -586,6 +586,8 @@ test('a hard-bounded worker with boundedAnswer loses its tools at the bound and 
 
   const result = await loopIn(boot, { maxSteps: 2, boundedAnswer: true });
   assert.equal(result.stopped, 'answered', 'the deliverable is kept instead of discarded at the bound');
+  assert.equal(result.toolsWithdrawn, 'step_bound',
+    'and the caller is told the answer came after the tools were taken away');
   assert.equal(result.content, 'What I found so far, with the coverage limit stated.');
   assert.equal(result.steps, 4);
   assert.equal(peek.ran, 2, 'no tool runs after the bound');

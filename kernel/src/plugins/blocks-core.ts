@@ -243,7 +243,31 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
         model: str(run.config.model, 'openrouter/auto'), retryable: false,
         userInitiated: result.stopped === 'cancelled', visibleOutputProduced: Boolean(result.content),
         reasoningOutputProduced: Boolean(result.reasoning), toolCallProduced: false,
-        durableWriteProduced: false, detail: result.reason ?? result.stopped,
+        durableWriteProduced: result.durableWriteProduced, detail: result.reason ?? result.stopped,
+      },
+    };
+  }
+
+  // The model answered, but only because the harness had already taken its
+  // tools away. Keeping the write-up is the point of that recovery; calling it
+  // `done` is not. One installed run reported a green workflow whose only task
+  // never created the file it promised, because a repeated-read recovery ended
+  // in a tidy summary of the file it would have written.
+  if (result.toolsWithdrawn) {
+    const detail = result.toolsWithdrawn === 'step_bound'
+      ? 'The worker used its whole tool-round bound, continued with every tool withdrawn, and answered from the evidence it had already collected. Its report is partial and any promised change may be missing.'
+      : 'The worker repeated identical reads without making progress, continued with every tool withdrawn, and answered from the evidence it had already collected. Its report is partial and any promised change may be missing.';
+    return {
+      status: 'failed', output: result.content, error: detail,
+      failure: {
+        code: 'tools_withdrawn', source: 'scheduler',
+        model: str(run.config.model, 'openrouter/auto'),
+        // A worker that already stalled once stalls again on the same inputs;
+        // a person retries this from the failed block with what they now know.
+        retryable: false, userInitiated: false,
+        visibleOutputProduced: Boolean(result.content),
+        reasoningOutputProduced: Boolean(result.reasoning), toolCallProduced: true,
+        durableWriteProduced: result.durableWriteProduced, detail,
       },
     };
   }

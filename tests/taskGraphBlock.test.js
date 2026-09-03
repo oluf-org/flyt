@@ -521,7 +521,7 @@ function toolHungryLlm(plan, { toolName = 'peek', finalAnswer = 'Partial deliver
   };
 }
 
-test('a runaway generated worker is hard-bounded and still contributes what it learned', async () => {
+test('a runaway generated worker is hard-bounded, keeps what it learned, and is not called a success', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-task-graph-bound-'));
   const kernel = createKernel();
   const llm = toolHungryLlm(contract([task('inspect')]));
@@ -539,8 +539,12 @@ test('a runaway generated worker is hard-bounded and still contributes what it l
       ctx: kernel.ctx, runId: 'run-bound', blockId: 'dispatch', input: 'Inspect it.', ceiling: ['peek'],
       config: { model: 'fake', workerMaxSteps: 3 },
     });
-    assert.equal(outcome.status, 'done', outcome.error);
-    assert.match(outcome.output, /Partial deliverable/);
+    assert.equal(outcome.status, 'failed',
+      'a worker that answered only because its tools were taken away did not succeed');
+    assert.match(outcome.output, /Partial deliverable/,
+      'and its write-up survives, because throwing the evidence away helps nobody');
+    assert.match(outcome.error, /INSPECT/);
+    assert.match(outcome.error, /tool-round bound/);
     assert.equal(reads, 3, 'the worker read exactly as many rounds as its bound allows');
     assert.equal(llm.seen.length, 5, 'one planner turn, three bounded rounds, one answer-only turn');
     assert.deepEqual(llm.seen.at(-1).tools ?? [], [], 'the wrap-up turn offers no tools');
@@ -553,6 +557,17 @@ test('a runaway generated worker is hard-bounded and still contributes what it l
     assert.ok(hard, 'the bound is a durable, non-transient fact of the child session');
     assert.equal(hard.data.transient, false);
     assert.equal(hard.data.steps, 3);
+
+    const session = await kernel.ctx.sessions.read('run-bound');
+    const parent = [];
+    for await (const event of session.read()) parent.push(event);
+    const status = parent.filter(event => event.type === 'block.status' && event.data.taskId === 'inspect').at(-1);
+    assert.equal(status.data.status, 'failed');
+    assert.equal(status.data.failure.code, 'tools_withdrawn');
+    assert.equal(status.data.retryState, 'not_retryable',
+      'a worker that already stalled is not silently re-run at the same cost');
+    assert.ok(parent.some(event => event.type === 'block.output' && event.data.taskId === 'inspect'),
+      'the partial deliverable is still recorded against the task that produced it');
   } finally {
     await kernel.dispose();
   }
