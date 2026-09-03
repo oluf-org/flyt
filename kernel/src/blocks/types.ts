@@ -20,7 +20,7 @@
  * @module #kernel/blocks/types
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { JsonValue } from '../types.js';
+import type { FailureMetadata, JsonValue } from '../types.js';
 
 /**
  * Which shelf of the library a block sits on.
@@ -99,6 +99,8 @@ export interface BlockOutcome {
   structured?: JsonValue;
   /** Why it failed. Present exactly when `status` is `failed`. */
   error?: string;
+  /** Machine-readable cause and replay-safety facts. */
+  failure?: FailureMetadata;
 }
 
 /** A block, as a plugin contributes it. */

@@ -540,13 +540,13 @@ export default function DailyRoot() {
             setLocation(current => ({ ...current, dest: BUILD, run: current.run, workflow: stackId ?? build?.stack?.id ?? null }));
           } catch (err) { setError(cleanIpcError(err)); }
         }}
-        onRetryFailed={async blockId => {
+        onRetryFailed={async (blockId, guidance = '') => {
           const projectId = activeRef.current;
           const runId = watchingRef.current?.runId;
           if (!projectId || !runId || !blockId || retryBusy) return;
           setRetryBusy(true); setRetryError(''); setError('');
           try {
-            await window.flyt.restartBlock(projectId, runId, blockId, '');
+            await window.flyt.restartBlock(projectId, runId, blockId, guidance);
             await watchRun(projectId, runId);
             await refreshRuns(projectId);
           } catch (err) {
@@ -557,6 +557,11 @@ export default function DailyRoot() {
         }}
         retryBusy={retryBusy}
         retryError={retryError}
+        onDebugRun={async runId => {
+          const projectId = activeRef.current;
+          if (!projectId || !runId) throw new Error('Open a project run before starting the debugger.');
+          return window.flyt.debugRun(projectId, runId);
+        }}
         controlError={error}
         stopBusy={stopBusy}
         pauseBusy={pauseBusy}
@@ -605,7 +610,7 @@ export default function DailyRoot() {
           const runId = watchingRef.current?.runId;
           if (activeRef.current && runId) window.flyt.revealRunLog?.(activeRef.current, runId);
         }}
-        onRevealDiagnosticLog={() => window.flyt.revealDiagnosticLog?.()}
+        onRevealDiagnosticLog={() => window.flyt.revealDiagnostics?.()}
         workflowInteraction={workflowInteraction}
         onWorkflowDecide={async approved => {
           const at = workflowInteraction; if (!at) return;

@@ -174,7 +174,10 @@ export default {
     };
     walk(base);
 
-    ctx.store?.appendLog?.(ctx.runId, {
+    // Canonical sessions already receive authoritative tool.call/tool.result
+    // events from the kernel. Legacy side logging is both duplicate and, on a
+    // canonical RunStore, an intentionally rejected mutation.
+    if (!ctx.canonicalSession) ctx.store?.appendLog?.(ctx.runId, {
       event: 'workspace_search',
       node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
       pattern: String(args.pattern ?? ''),
@@ -242,7 +245,7 @@ async function searchSeam(host, args, ctx) {
     }
     if (truncated) break;
   }
-  ctx.store?.appendLog?.(ctx.runId, { event: 'workspace_search', node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
+  if (!ctx.canonicalSession) ctx.store?.appendLog?.(ctx.runId, { event: 'workspace_search', node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
     pattern: String(args.pattern ?? ''), ...(args.glob ? { glob: String(args.glob) } : {}), hits: results.length, files: matched.size });
   return {
     pattern: args.pattern, ...(args.glob ? { glob: args.glob } : {}), ...(args.dir ? { dir: args.dir } : {}),

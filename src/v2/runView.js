@@ -9,7 +9,7 @@
 // a second read of the log would be a second answer.
 
 /** A block's state, as the log tells it. */
-export const BLOCK_STATES = ['pending', 'active', 'done', 'failed', 'waiting', 'approval', 'input', 'skipped'];
+export const BLOCK_STATES = ['pending', 'active', 'done', 'failed', 'blocked', 'waiting', 'approval', 'input', 'skipped'];
 const TERMINAL_STAGES = new Set(['done', 'failed', 'stopped', 'interrupted', 'cancelled', 'rejected']);
 const ACTIVE_STAGES = new Set(['execution', 'resumed', 'pausing', 'paused', 'stopping']);
 
@@ -34,6 +34,12 @@ export function blockStates(trace) {
       at.status = data.status;
       at.at = event.at ?? at.at;
       if (data.error) at.error = String(data.error);
+      if (Number.isFinite(data.attempt)) at.attempt = data.attempt;
+      if (Number.isFinite(data.maxAttempts)) at.maxAttempts = data.maxAttempts;
+      if (data.retryState) at.retryState = String(data.retryState);
+      if (data.failure && typeof data.failure === 'object') at.failure = data.failure;
+      if (data.lastDurableProgress) at.lastDurableProgress = data.lastDurableProgress;
+      if (Array.isArray(data.blockedBy)) at.blockedBy = data.blockedBy.map(String);
       if (['done', 'failed', 'skipped'].includes(data.status) && at.warningTransient) {
         delete at.warning;
         delete at.warningTransient;

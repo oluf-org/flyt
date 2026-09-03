@@ -69,6 +69,7 @@ const api = {
   deleteRun: (pid, runId) => ipcRenderer.invoke('run:delete', pid, runId),
   getSnapshot: (pid, runId) => ipcRenderer.invoke('run:snapshot', pid, runId),
   readRunLog: (pid, runId) => ipcRenderer.invoke('run:log', pid, runId),
+  debugRun: (pid, runId) => ipcRenderer.invoke('run:debug', pid, runId),
   openRunFolder: (pid, runId) => ipcRenderer.invoke('run:openFolder', pid, runId),
   revealRunLog: (pid, runId) => ipcRenderer.invoke('run:revealLog', pid, runId),
   openRunArtifact: (pid, runId, relPath) => ipcRenderer.invoke('run:openArtifact', pid, runId, relPath),

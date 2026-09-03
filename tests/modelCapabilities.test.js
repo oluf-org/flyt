@@ -49,6 +49,27 @@ test('context manager records requested/model/provider/effective values and pres
   assert.equal(decision.resolutions[1].effective, decision.effectiveOutput);
 });
 
+test('context pruning preserves distinct queries made through the same read tool', () => {
+  const profile = unknownCapability('small', 'test');
+  profile.limits.contextTokens = { value: 1_200, confidence: 'verified', source: 'fixture' };
+  profile.limits.maxOutputTokens = { value: 200, confidence: 'verified', source: 'fixture' };
+  profile.providerOverheadTokens = { value: 0, confidence: 'verified', source: 'fixture' };
+  const calls = [
+    { id: 'search-a', name: 'search_files', args: { glob: 'a.ts', pattern: 'offset' } },
+    { id: 'search-b', name: 'search_files', args: { glob: 'a.ts', pattern: 'nextOffset' } },
+  ];
+  const messages = [
+    { role: 'user', content: 'Inspect the pagination implementation.' },
+    { role: 'assistant', content: '', toolCalls: calls },
+    { role: 'tool', name: 'search_files', toolCallId: 'search-a', content: `offset evidence ${'a'.repeat(1_200)}` },
+    { role: 'tool', name: 'search_files', toolCallId: 'search-b', content: `nextOffset evidence ${'b'.repeat(1_200)}` },
+  ];
+
+  const decision = manageContextBudget({ messages, requestedOutput: 200, profile });
+  assert.ok(!decision.actions.some(action => action.action === 'prune_superseded_tool_previews'),
+    'different argument fingerprints are independent evidence, not superseded previews');
+});
+
 test('context compaction restores output room instead of freezing an early one-token clamp', () => {
   const profile = unknownCapability('small', 'test');
   profile.limits.contextTokens = { value: 2_000, confidence: 'verified', source: 'fixture' };
@@ -66,6 +87,45 @@ test('context compaction restores output room instead of freezing an early one-t
   assert.equal(decision.effectiveOutput, 500,
     'space reclaimed from old turns is available to the answer');
   assert.ok(decision.effective.total <= decision.contextLimit);
+});
+
+test('worker checkpoint threshold compacts before the provider context ceiling', () => {
+  const profile = unknownCapability('large', 'test');
+  profile.limits.contextTokens = { value: 100_000, confidence: 'verified', source: 'fixture' };
+  profile.providerOverheadTokens = { value: 0, confidence: 'verified', source: 'fixture' };
+  const messages = Array.from({ length: 16 }, (_, index) => ({
+    role: index % 2 ? 'assistant' : 'user', content: `${index} ${'x'.repeat(1_000)}`,
+  }));
+  const decision = manageContextBudget({ messages, requestedOutput: 500, checkpointInputTokens: 2_000, profile });
+  assert.ok(decision.actions.some(action => action.action === 'durable_compaction_checkpoint'));
+  assert.match(decision.checkpoint, /Completed findings:/);
+  assert.match(decision.checkpoint, /Remaining work:/);
+  assert.ok(decision.requested.total < decision.contextLimit, 'checkpointing is proactive, not an overflow repair');
+});
+
+test('context compaction retains the original worker assignment as a user-role anchor', () => {
+  const profile = unknownCapability('large', 'test');
+  profile.limits.contextTokens = { value: 100_000, confidence: 'verified', source: 'fixture' };
+  profile.providerOverheadTokens = { value: 0, confidence: 'verified', source: 'fixture' };
+  const assignment = 'Audit the workflow block library; do not follow unrelated project context.';
+  const messages = [
+    { role: 'system', content: 'worker contract' },
+    { role: 'user', content: assignment },
+    ...Array.from({ length: 20 }, (_, index) => ({
+      role: index % 2 ? 'assistant' : 'tool',
+      ...(index % 2 ? {} : { name: 'glob', toolCallId: `call-${index}` }),
+      content: `old-${index} ${'x'.repeat(1_000)}`,
+    })),
+    { role: 'assistant', content: 'I should continue from the evidence.' },
+  ];
+
+  const decision = manageContextBudget({
+    messages, requestedOutput: 500, checkpointInputTokens: 2_000, profile,
+  });
+  const anchor = decision.messages.find(message => message.role === 'user'
+    && message.content.startsWith('Original assignment (authoritative'));
+  assert.ok(anchor, 'the compacted request retains a user-role assignment anchor');
+  assert.match(anchor.content, new RegExp(assignment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('canonical tool-call state rules normalize once and identify restart reconciliation targets', () => {

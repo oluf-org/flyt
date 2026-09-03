@@ -6,7 +6,7 @@
  *
  * @module #kernel/seams/llm
  */
-import type { Message, Usage } from '../types.js';
+import type { FailureMetadata, Message, Usage } from '../types.js';
 import type { JsonValue, ProviderReplay } from '../types.js';
 import type { LlmChunk, RouteRecord } from '../events.js';
 import type {
@@ -23,6 +23,7 @@ export interface LlmAttempt {
   error?: string;
   retryDelayMs?: number;
   reason?: string;
+  failure?: FailureMetadata;
 }
 
 export interface StructuredOutputRequest {
@@ -54,6 +55,10 @@ export interface LlmRequest {
   attachments?: readonly AttachmentBudget[];
   structuredOutput?: StructuredOutputRequest;
   reasoning?: ReasoningRequest;
+  /** Adapter retries for this request. Task schedulers may own this budget. */
+  retry?: { attempts?: number; baseMs?: number; maxMs?: number };
+  /** Compact model-visible history once estimated input reaches this threshold. */
+  checkpointInputTokens?: number;
   signal?: AbortSignal;
   /** Observability hook. The runner persists each callback before continuing. */
   onAttempt?: (attempt: LlmAttempt) => Promise<void> | void;

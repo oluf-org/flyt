@@ -82,6 +82,7 @@ export default function Shell({
   onRetryFailed = null, retryBusy = false, retryError = '', controlError = '', onRevealRunLog = null,
   onRevealDiagnosticLog = null, onStopRun = null, stopBusy = false,
   onPauseRun = null, pauseBusy = false, onResumeRun = null, resumeBusy = false,
+  onDebugRun = null,
   projects = { tabs: [], active: null },
 }) {
   const [focus, setFocus] = useState(location ?? INITIAL);
@@ -308,6 +309,7 @@ export default function Shell({
                   resumeBusy={resumeBusy}
                   onRevealRunLog={onRevealRunLog}
                   onRevealDiagnosticLog={onRevealDiagnosticLog}
+                  onDebugRun={onDebugRun}
                 />}
         </section>
       </div>

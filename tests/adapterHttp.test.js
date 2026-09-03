@@ -770,6 +770,38 @@ test('openrouter: a turn that is all reasoning and no content still reports itse
   assert.equal(r.reasoning.length, 400);
 });
 
+test('openrouter: a reasoning-only terminated stream is classified and safely retried', async () => {
+  stubFetch(({ n }) => n === 1 ? sseRes([
+    { choices: [{ delta: { reasoning: 'unfinished thought' } }] }
+  ]) : sseRes([
+    { choices: [{ delta: { content: 'Recovered.' }, finish_reason: 'stop' }] }, '[DONE]'
+  ]));
+  const retries = [];
+  const result = await callModel({
+    provider: 'openrouter', model: 'z-ai/glm-5.3-flash', prompt: 'p', apiKey: 'k',
+    onText: () => {}, retry: { attempts: 2, baseMs: 1 }, onRetry: record => retries.push(record),
+  });
+  assert.equal(result.text, 'Recovered.');
+  assert.equal(calls.length, 2);
+  assert.equal(retries[0].failure.code, 'stream_terminated');
+  assert.equal(retries[0].failure.reasoningOutputProduced, true);
+  assert.equal(retries[0].failure.visibleOutputProduced, false);
+});
+
+test('openrouter: a terminated stream with visible output is not replayed blindly', async () => {
+  stubFetch(() => sseRes([{ choices: [{ delta: { content: 'partial visible answer' } }] }]));
+  await assert.rejects(async () => {
+    try {
+      await callModel({ provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k', onText: () => {}, retry: { attempts: 2, baseMs: 1 } });
+    } catch (error) {
+      assert.equal(error.failure.code, 'stream_terminated');
+      assert.equal(error.failure.visibleOutputProduced, true);
+      throw error;
+    }
+  }, /stream terminated/);
+  assert.equal(calls.length, 1);
+});
+
 // --- the empty-turn recovery (D40) ----------------------------------------
 
 test('an empty turn is retried once, with the budget raised and the omission named', async () => {

@@ -41,6 +41,16 @@ test('it finds a symbol in a file nobody named, with the line to read next', asy
   assert.match(r.result.results[0].text, /run:explain/);
 });
 
+test('canonical search success never mutates the legacy run log', async () => {
+  const { ctx } = project({ 'a.js': 'const target = true;\n' });
+  ctx.canonicalSession = true;
+  ctx.runId = 'canonical-run';
+  ctx.store = { appendLog() { throw new Error('legacy mutation rejected'); } };
+  const result = await run(ctx, { pattern: 'target' });
+  assert.equal(result.ok, true);
+  assert.equal(result.result.hits, 1);
+});
+
 test('a glob narrows it to the files worth searching', async () => {
   const { ctx } = project({
     'src/a.jsx': 'const stage = "awaiting_input";\n',

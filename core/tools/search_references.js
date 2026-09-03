@@ -83,7 +83,7 @@ export default {
       maxPerFile: args.maxPerFile ?? 3,
       contextLines: args.context ?? 0
     });
-    ctx.store?.appendLog?.(ctx.runId, {
+    if (!ctx?.canonicalSession) ctx.store?.appendLog?.(ctx.runId, {
       event: 'reference_search',
       node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
       pattern: args.pattern,
@@ -98,7 +98,7 @@ export default {
     // model is told which repository it is actually standing in.
     const elsewhere = ctx.subject?.repo && scoped && scoped !== ctx.subject.repo;
     if (elsewhere) {
-      ctx.store?.appendLog?.(ctx.runId, {
+      if (!ctx?.canonicalSession) ctx.store?.appendLog?.(ctx.runId, {
         event: 'tool_target_unexpected',
         node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
         tool: 'search_references', repo: scoped, expected: ctx.subject.repo

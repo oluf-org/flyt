@@ -12,7 +12,7 @@ import { homeSeed, projectGates, SEED_BUDGET } from '../core/homeSeed.js';
 import { parseOrientation, stripJsonBlock } from '../core/planEval.js';
 import { Workspace } from '../core/workspace.js';
 import { ReferenceLibrary } from '../core/references.js';
-import { globToRegExp } from '../core/tools/glob.js';
+import globTool, { globToRegExp } from '../core/tools/glob.js';
 import { sharedPreamble } from '../core/nodes/fanout.js';
 import { executeTool } from '../core/tools/index.js';
 import { makeStore, setScript, roleOf, testConfig, waitFor, waitForStage, makeFlow, node, edge } from './helpers.js';
@@ -189,7 +189,8 @@ test('glob matches within a segment, across segments, and one character', () => 
 test('glob lists the project and skips what is not the project', async () => {
   const dir = tmpProject({
     'package.json': '{}', 'README.md': '#', 'src/a.js': '1', 'src/deep/b.js': '2',
-    'node_modules/pkg/index.js': '3', '.git/config': '4'
+    'node_modules/pkg/index.js': '3', '.git/config': '4',
+    '.flyt/context.md': '# Context', '.flyt/runs/old/huge.md': '# Runtime history',
   });
   const store = makeStore();
   const ctx = { workspace: new Workspace(dir), store, runId: store.createRun('glob project files') };
@@ -200,6 +201,56 @@ test('glob lists the project and skips what is not the project', async () => {
   assert.deepEqual(top.result.paths, ['README.md']);
   const scoped = await executeTool('glob', { pattern: '*.js', dir: 'src' }, ctx);
   assert.deepEqual(scoped.result.paths, ['src/a.js'], 'paths come back ready for read_file');
+  const markdown = await executeTool('glob', { pattern: '**/*.md' }, ctx);
+  assert.deepEqual(markdown.result.paths, ['.flyt/context.md', 'README.md'],
+    'authored Flyt context remains visible while volatile run history is skipped');
+});
+
+test('glob paginates a stable listing and does not claim an exact-size page is truncated', async () => {
+  const dir = tmpProject({
+    'blocks/a.json': '{}', 'blocks/b.json': '{}', 'blocks/c.json': '{}',
+    'blocks/d.json': '{}', 'blocks/e.json': '{}',
+  });
+  const store = makeStore();
+  const ctx = { workspace: new Workspace(dir), store, runId: store.createRun('paginated glob') };
+
+  const first = await executeTool('glob', { pattern: '**/*.json', limit: 2 }, ctx);
+  assert.deepEqual(first.result.paths, ['blocks/a.json', 'blocks/b.json']);
+  assert.equal(first.result.truncated, true);
+  assert.equal(first.result.nextOffset, 2);
+  assert.equal(first.result.totalMatches, 5);
+
+  const second = await executeTool('glob', {
+    pattern: '**/*.json', limit: 2, offset: first.result.nextOffset,
+  }, ctx);
+  assert.deepEqual(second.result.paths, ['blocks/c.json', 'blocks/d.json']);
+  assert.equal(second.result.nextOffset, 4);
+
+  const last = await executeTool('glob', {
+    pattern: '**/*.json', limit: 2, offset: second.result.nextOffset,
+  }, ctx);
+  assert.deepEqual(last.result.paths, ['blocks/e.json']);
+  assert.equal(last.result.truncated, undefined);
+  assert.equal(last.result.nextOffset, undefined);
+
+  const exact = await executeTool('glob', { pattern: '**/*.json', limit: 5 }, ctx);
+  assert.equal(exact.result.count, 5);
+  assert.equal(exact.result.truncated, undefined,
+    'returning exactly the limit is complete when no sixth match exists');
+});
+
+test('glob remote listings do not spend their scan budget on ignored dependency trees', async () => {
+  const ignored = Array.from({ length: 20_001 }, (_, index) => ({
+    path: `node_modules/pkg-${index}/index.js`, kind: 'file',
+  }));
+  const result = await globTool.run({ pattern: '**/blocks-*.ts' }, {
+    workspace: {},
+    fs: { list: async () => [...ignored, { path: 'kernel/src/plugins/blocks-task-graph.ts', kind: 'file' }] },
+  });
+
+  assert.deepEqual(result.paths, ['kernel/src/plugins/blocks-task-graph.ts']);
+  assert.equal(result.scanLimitReached, undefined);
+  assert.equal(result.truncated, undefined);
 });
 
 // --- addressing hygiene (P1) -------------------------------------------------

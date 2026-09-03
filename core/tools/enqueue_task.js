@@ -142,7 +142,7 @@ export default {
       // pathology the overseer watches for (§11.6).
       createdBy: ctx.nodeId ? `agent:${ctx.runId}:${ctx.nodeId}` : `agent:${ctx.runId}`
     });
-    ctx.store?.appendLog?.(ctx.runId, {
+    if (!ctx.canonicalSession) ctx.store?.appendLog?.(ctx.runId, {
       event: 'task_enqueued',
       node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
       task: task.id,

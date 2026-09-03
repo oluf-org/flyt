@@ -3,6 +3,7 @@ import BlockEditor from './BlockEditor.jsx';
 import { runView } from './runView.js';
 import { traceView, duration } from './traceView.js';
 import { groupRuns, runStatus, runTimeLabel, runTimeTitle } from '../runList.js';
+import DebugPanel from './DebugPanel.jsx';
 import './workStyles.css';
 
 function Interaction({ interaction, onDecide, onAnswer }) {
@@ -137,7 +138,7 @@ const STAGE_LABELS = {
   rejected: 'Rejected', interrupted: 'Interrupted', cancelled: 'Stopped',
 };
 
-function RunActions({ view, onPauseRun, onResumeRun, onStopRun, onOpenFlow, pauseBusy, resumeBusy, stopBusy }) {
+function RunActions({ view, onPauseRun, onResumeRun, onStopRun, onOpenFlow, onOpenDebug, pauseBusy, resumeBusy, stopBusy }) {
   const menu = useRef(null);
   const label = STAGE_LABELS[view.stage] ?? (view.stage ? view.stage.replaceAll('_', ' ') : 'Starting');
   useEffect(() => {
@@ -162,6 +163,7 @@ function RunActions({ view, onPauseRun, onResumeRun, onStopRun, onOpenFlow, paus
         <span aria-hidden="true">■</span>{stopBusy || view.stopping ? 'Stopping…' : 'Stop run'}
       </button>}
       <button type="button" onClick={act(onOpenFlow)}><span aria-hidden="true">↗</span>Open builder</button>
+      <button type="button" className="debug-menu-entry" onClick={act(onOpenDebug)}><span aria-hidden="true">⌁</span>Debug workflow</button>
       {(view.stage === 'stopped' || view.stage === 'interrupted') && <p>Resume continues from the last durable block.</p>}
     </div>
   </details>;
@@ -174,17 +176,36 @@ export default function Work({
   onRetryFailed = null, retryBusy = false, retryError = '', controlError = '', onRevealRunLog = null,
   onRevealDiagnosticLog = null, onStopRun = null, stopBusy = false,
   onPauseRun = null, pauseBusy = false, onResumeRun = null, resumeBusy = false,
+  onDebugRun = null,
 }) {
   const view = runView(trace);
   const detailedTrace = useMemo(() => traceView(trace), [trace]);
   const [reply, setReply] = useState('');
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugBusy, setDebugBusy] = useState(false);
+  const [debugReport, setDebugReport] = useState(null);
+  const [debugError, setDebugError] = useState('');
+  useEffect(() => {
+    setDebugOpen(false); setDebugBusy(false); setDebugReport(null); setDebugError('');
+  }, [runId]);
+  const analyze = async () => {
+    if (!runId || !onDebugRun || debugBusy) return;
+    setDebugBusy(true); setDebugError('');
+    try { setDebugReport(await onDebugRun(runId)); }
+    catch (error) { setDebugError(String(error?.message ?? error)); }
+    finally { setDebugBusy(false); }
+  };
+  const openDebug = () => {
+    setDebugOpen(true);
+    if (!debugReport && !debugBusy) analyze();
+  };
   const summary = snapshot?.conversation?.filter(turn => turn.role === 'assistant').at(-1) ?? null;
   const runModel = { ...view, summary: summary?.text ?? null, input: snapshot?.meta?.userMessage ?? snapshot?.prompt ?? '' };
   const history = <ChatHistory runs={runs} activeRunId={runId} onOpenRun={onOpenRun} onNewChat={onNewChat}/>;
   if (!stack) return <div className="v2-work" data-v2>{history}<section className="work-surface">{composer}<p className="muted work-empty">Choose a workflow and send a message to start.</p></section></div>;
   return <div className="v2-work work-run-mode" data-v2>{history}<section className="work-surface"><header className="work-run-head">
     <div className="work-run-title"><span className="section-label">{view.running ? 'Running workflow' : 'Workflow run'}</span><h1>{stack.name ?? stack.id}</h1></div>
-    <RunActions view={view} onPauseRun={onPauseRun} onResumeRun={onResumeRun} onStopRun={onStopRun} onOpenFlow={onOpenFlow}
+    <RunActions view={view} onPauseRun={onPauseRun} onResumeRun={onResumeRun} onStopRun={onStopRun} onOpenFlow={onOpenFlow} onOpenDebug={openDebug}
       pauseBusy={pauseBusy} resumeBusy={resumeBusy} stopBusy={stopBusy}/></header>
     {controlError && <p className="work-error" role="alert">{controlError}</p>}
     {view.error && <section className="work-failure" role="alert">
@@ -207,5 +228,8 @@ export default function Work({
         <textarea rows="2" value={reply} onChange={event => setReply(event.target.value)} placeholder="Continue this conversation…" />
         <button type="submit" disabled={replyBusy || !reply.trim()}>{replyBusy ? 'Starting…' : 'Send'}</button></form>}
     </main><DetailsRail traceDetails={detailedTrace} runId={runId} view={view} onOpenTrace={onOpenTrace}/></div>
+    {debugOpen && <DebugPanel runId={runId} trace={trace} view={view} report={debugReport} busy={debugBusy} error={debugError}
+      retryBusy={retryBusy} onAnalyze={analyze} onRetry={onRetryFailed} onClose={() => setDebugOpen(false)}
+      onOpenTrace={onOpenTrace} onRevealRunLog={onRevealRunLog}/>}
   </section></div>;
 }

@@ -715,6 +715,25 @@ export function installDevMock() {
     // recompute. Handing back the same reference made mutations (restartNode)
     // land in the data but never on screen — a preview-only ghost bug.
     getSnapshot: async (_pid, id) => (snapshots[id] ? { ...snapshots[id] } : null),
+    debugRun: async (_pid, id) => {
+      const snap = snapshots[id];
+      const statuses = snap?.meta?.nodeStatus ?? {};
+      const namedFailure = String(snap?.meta?.error ?? '').match(/\bNode\s+([^\s(]+)/i)?.[1] ?? null;
+      const suspectedBlockId = Object.keys(statuses).find(key => statuses[key] === 'failed')
+        ?? (namedFailure && Object.hasOwn(statuses, namedFailure) ? namedFailure : null)
+        ?? snap?.meta?.currentNodeId ?? Object.keys(statuses).at(-1) ?? null;
+      return {
+        summary: suspectedBlockId ? `The strongest failure signal points to “${suspectedBlockId}”.` : 'No single block can be blamed from the record.',
+        probableCause: snap?.meta?.error ?? 'The mock run completed technically; inspect output quality and acceptance criteria.',
+        confidence: snap?.meta?.error ? 'high' : 'low', suspectedBlockId,
+        evidence: snap?.meta?.error ? [snap.meta.error] : ['No terminal error was recorded.'],
+        suggestedAreas: [`Inspect the prompt, model response, tools, and output for ${suspectedBlockId ?? 'the last block'}.`],
+        suggestedPrompt: suspectedBlockId ? `Re-run ${suspectedBlockId} with explicit acceptance criteria and verify the result.` : '',
+        recommendedAction: 'Review the evidence and retry only the suspected block.',
+        model: 'mock/debug-agent', degraded: false, reason: null,
+        facts: { run: { id, workflow: snap?.meta?.flowName ?? 'Mock workflow', stage: snap?.meta?.stage ?? 'unknown', error: snap?.meta?.error ?? null }, blocks: Object.entries(statuses).map(([blockId, status]) => ({ id: blockId, status })) },
+      };
+    },
     // Synthesize a plausible in-order log from a finished mock run's flow, so the
     // replay scrubber can be previewed in the browser dev shell.
     readRunLog: async (_pid, id) => {

@@ -119,6 +119,62 @@ test('Fable materializes and completes its generated task blocks through the wor
   assert.match(snapshot.nodeOutputs.dispatch, /completed worker 2/);
 });
 
+test('Fable repairs a broad inventory bottleneck before dispatching any worker', async () => {
+  const broadPlan = JSON.stringify({
+    summary: 'Inventory everything, then assess it.',
+    tasks: [
+      {
+        id: 'inventory-workflow-blocks', title: 'Enumerate the complete workflow block library',
+        goal: 'Inventory every workflow block in the repository for downstream analysis.',
+        dependsOn: [], produces: ['block-inventory'], requires: [], optional: [], writeFiles: [],
+      },
+      {
+        id: 'assess-blocks', title: 'Assess blocks', goal: 'Assess every item from the inventory.',
+        dependsOn: ['inventory-workflow-blocks'], produces: ['assessment'], requires: ['block-inventory'], optional: [], writeFiles: [],
+      },
+      {
+        id: 'verify-blocks', title: 'Verify blocks', goal: 'Verify every item from the inventory.',
+        dependsOn: ['inventory-workflow-blocks'], produces: ['verification'], requires: ['block-inventory'], optional: [], writeFiles: [],
+      },
+    ],
+  });
+  const repairedPlan = JSON.stringify({
+    summary: 'Two bounded, independently verifiable assessments.',
+    tasks: [
+      { id: 'assess-core', title: 'Assess core blocks', goal: 'Assess the core block definitions.', dependsOn: [], produces: [], requires: [], optional: [], writeFiles: [] },
+      { id: 'assess-plugins', title: 'Assess plugin blocks', goal: 'Assess the plugin block definitions.', dependsOn: [], produces: [], requires: [], optional: [], writeFiles: [] },
+    ],
+  });
+  let call = 0;
+  const seen = [];
+  const { api, projectId } = await workflowHarness(async request => {
+    call += 1;
+    seen.push(request);
+    const text = call === 1 ? 'Audit workflow blocks without modifying files.'
+      : call === 2 ? broadPlan
+        : call === 3 ? repairedPlan : `bounded worker ${call - 3} complete`;
+    return { text, finishReason: 'stop', provider: 'script', model: request.model };
+  });
+
+  const started = await api.invoke('workflow:run', {
+    projectId, workflowId: 'fable-at-home', input: 'Audit every workflow block read-only.',
+    presetId: 'medium', approvalMode: 'always',
+  });
+  const snapshot = await waitForAsync(async () => {
+    const current = await api.invoke('run:snapshot', { projectId, runId: started.runId });
+    return current.meta.stage === 'done' ? current : null;
+  }, 'Fable repaired inventory graph');
+
+  assert.deepEqual(snapshot.stack.root.children.find(node => node.id === 'dispatch').generated
+    .map(node => node.id), ['dispatch.assess-core', 'dispatch.assess-plugins']);
+  assert.match(JSON.stringify(seen[2].messages), /broad inventory task feeding assess-blocks/);
+  const log = await api.invoke('run:log', { projectId, runId: started.runId });
+  assert.ok(log.some(event => event.type === 'block.warning' && event.data?.code === 'invalid_task_graph'));
+  assert.ok(log.some(event => event.type === 'block.warning' && event.data?.code === 'task_graph_repaired'));
+  assert.match(snapshot.nodeOutputs.dispatch, /bounded worker 1 complete/);
+  assert.match(snapshot.nodeOutputs.dispatch, /bounded worker 2 complete/);
+});
+
 test('a failed Fable planner can restart only dispatch and keep the completed refiner', async () => {
   let call = 0;
   const seen = [];

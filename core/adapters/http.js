@@ -46,7 +46,14 @@ export function apiError(provider, res, bodyText) {
 // `aborted` flag — so retry logic and run-control recognize it without
 // string matching.
 export function abortError(message = 'The model call was aborted') {
-  return Object.assign(new Error(message), { name: 'AbortError', aborted: true });
+  return Object.assign(new Error(message), {
+    name: 'AbortError', aborted: true, failureCode: 'cancelled',
+    failure: {
+      code: 'cancelled', source: 'user', retryable: false, userInitiated: true,
+      visibleOutputProduced: false, reasoningOutputProduced: false,
+      toolCallProduced: false, durableWriteProduced: false,
+    },
+  });
 }
 export function isAbortError(err) {
   return Boolean(err?.aborted || err?.name === 'AbortError');
@@ -162,6 +169,7 @@ export function openaiCompatible({
       // `openrouter/auto`, so without this every retrospective, log line and
       // ledger entry would say "auto" and nobody could tell what ran.
       let resolvedModel = null;
+      let sawDone = false;
       const replayItems = [];
       const frags = new Map(); // tool_call index -> the call being assembled
 
@@ -169,7 +177,7 @@ export function openaiCompatible({
         // A mid-stream stop: fetch's own abort also rejects this loop, but the
         // explicit check makes the exit deterministic on every runtime.
         if (signal?.aborted) throw abortError();
-        if (event === '[DONE]') break;
+        if (event === '[DONE]') { sawDone = true; break; }
         let chunk;
         try { chunk = JSON.parse(event); } catch { continue; }
         const choice = chunk.choices?.[0];
@@ -223,6 +231,8 @@ export function openaiCompatible({
         if (Array.isArray(choice?.delta?.reasoning_details)) replayItems.push(...choice.delta.reasoning_details);
 
         if (moved) onText(renderTurn(text, frags, reasoning), {
+          content: text,
+          reasoning,
           ...(toolInputEvents.length ? { toolInputEvents } : {}),
           telemetry: {
             contentChars: text.length,
@@ -239,6 +249,8 @@ export function openaiCompatible({
       // informative state (a tool call WITH its arguments) is what stands.
       onText(renderTurn(text, frags, reasoning), {
         final: true,
+        content: text,
+        reasoning,
         ...(frags.size ? { toolInputEvents: [...frags.entries()].sort((a, b) => a[0] - b[0]).map(([index, call]) => ({
           phase: 'end', index,
           ...(call.id ? { id: call.id } : {}),
@@ -263,10 +275,25 @@ export function openaiCompatible({
       // Returning { text: '' } looked like a successful empty answer. Fail
       // instead, marked transient so the retry budget gets a real attempt. A
       // turn that is ONLY tool calls is legitimate.
-      if (!text && !toolCalls.length && !reasoning && !finishReason) {
+      if (!finishReason) {
+        if (signal?.aborted) throw abortError();
         throw Object.assign(
-          new Error(`${provider} stream ended without any content or a finish reason (upstream cut the response)`),
-          { transient: true }
+          new Error(!text && !reasoning && !toolCalls.length
+            ? `${provider} stream ended without any content or a finish reason (upstream cut the response)`
+            : `${provider} stream terminated before a finish reason${sawDone ? ' (terminal marker had no completion state)' : ' (upstream cut the response)'}`),
+          {
+            transient: true,
+            failureCode: 'stream_terminated',
+            failure: {
+              code: 'stream_terminated', source: 'provider',
+              provider: provider.toLowerCase().replaceAll(' ', ''), model,
+              retryable: true, userInitiated: false,
+              visibleOutputProduced: Boolean(text),
+              reasoningOutputProduced: Boolean(reasoning),
+              toolCallProduced: Boolean(toolCalls.length),
+              durableWriteProduced: false,
+            },
+          }
         );
       }
       const replay = replayItems.length

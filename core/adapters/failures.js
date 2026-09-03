@@ -27,6 +27,7 @@ export const FAILURE_CODES = [
   'runtime-permission',  // the binary exists but will not launch (EPERM/EACCES)
   'protocol',            // the runtime ran but its output could not be read
   'timeout',             // no answer within the deadline
+  'stream_terminated',   // successful HTTP response whose stream ended without a terminal frame
   'cancelled',           // the user stopped it
   'unknown'
 ];
@@ -44,7 +45,7 @@ const INFRASTRUCTURE = new Set(['runtime-missing', 'runtime-permission']);
 // clears on its own and an empty account does not, and while the two shared one
 // code neither could be retried honestly: waiting on a 402 is a loop that never
 // ends, and refusing to wait on a 429 throws away a call that would have worked.
-const TRANSIENT = new Set(['network', 'timeout', 'quota']);
+const TRANSIENT = new Set(['network', 'timeout', 'quota', 'stream_terminated']);
 
 /**
  * Failures no amount of retrying, escalating or waiting will resolve.
@@ -116,6 +117,7 @@ const REMEDIES = {
   network: provider => `Could not reach ${provider}. Check the connection and try again.`,
   protocol: provider => `${provider} ran but its output could not be read. Update the CLI, or use the API provider instead.`,
   timeout: provider => `${provider} did not answer within the deadline. Raise the timeout or use a faster model.`,
+  stream_terminated: provider => `${provider} ended a successful HTTP stream before a terminal response. Retry the request or use a configured fallback.`,
   cancelled: () => 'The run was stopped.',
   unknown: provider => `${provider} failed for an unrecognized reason — see the run log.`
 };
@@ -187,6 +189,46 @@ export function classifyAdapterError(err, { provider = 'the provider', model = n
     retryable: isTransientFailure(code),
     infrastructure: isInfrastructureFailure(code)
   };
+}
+
+/**
+ * The portable failure envelope carried across adapters, the kernel and UI.
+ * Free text remains diagnostic detail; policy decisions use these fields.
+ */
+export function failureMetadata(err, context = {}) {
+  const inherited = err?.failure && typeof err.failure === 'object' ? err.failure : {};
+  const classified = classifyAdapterError(err, {
+    provider: context.provider ?? inherited.provider ?? 'the provider',
+    model: context.model ?? inherited.model ?? null,
+    executable: err?.executable,
+  });
+  const userInitiated = context.userInitiated ?? inherited.userInitiated
+    ?? classified.code === 'cancelled';
+  return {
+    code: inherited.code ?? classified.code,
+    source: inherited.source ?? context.source ?? 'provider',
+    provider: inherited.provider ?? context.provider ?? classified.provider ?? null,
+    model: inherited.model ?? context.model ?? classified.model ?? null,
+    callId: inherited.callId ?? context.callId ?? null,
+    step: inherited.step ?? context.step ?? null,
+    retryable: inherited.retryable ?? classified.retryable,
+    userInitiated: Boolean(userInitiated),
+    visibleOutputProduced: Boolean(context.visibleOutputProduced ?? inherited.visibleOutputProduced),
+    reasoningOutputProduced: Boolean(context.reasoningOutputProduced ?? inherited.reasoningOutputProduced),
+    toolCallProduced: Boolean(context.toolCallProduced ?? inherited.toolCallProduced),
+    durableWriteProduced: Boolean(context.durableWriteProduced ?? inherited.durableWriteProduced),
+    detail: inherited.detail ?? classified.detail,
+    remedy: inherited.remedy ?? classified.remedy,
+  };
+}
+
+/** Attach the portable envelope without replacing the original error/stack. */
+export function withFailureMetadata(err, context = {}) {
+  const target = err instanceof Error ? err : new Error(String(err ?? 'Unknown provider failure'));
+  target.failure = failureMetadata(target, context);
+  if (!target.failureCode) target.failureCode = target.failure.code;
+  if (target.failure.retryable) target.transient = true;
+  return target;
 }
 
 /** Attach a classification to an error so it survives being re-thrown. */

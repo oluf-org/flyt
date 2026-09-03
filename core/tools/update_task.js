@@ -78,7 +78,7 @@ export default {
     }
 
     const next = backlog.update(id, patch);
-    ctx?.store?.appendLog?.(ctx.runId, {
+    if (!ctx?.canonicalSession) ctx?.store?.appendLog?.(ctx.runId, {
       event: 'task_updated',
       node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
       task: id, fields: Object.keys(patch)

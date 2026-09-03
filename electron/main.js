@@ -459,6 +459,7 @@ bindIpc('workflow:answer', (projectId, runId, questionId, answer = '') =>
 bindIpc('run:list', projectId => ({ projectId }));
 bindIpc('run:log', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:snapshot', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:debug', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:resume', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:stop', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:pause', (projectId, runId) => ({ projectId, runId }));

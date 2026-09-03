@@ -258,7 +258,7 @@ function duckSnippet(snippet) {
 }
 
 function appendSearchLog(ctx, provider, query, count) {
-  ctx?.store?.appendLog?.(ctx.runId, {
+  if (!ctx?.canonicalSession) ctx?.store?.appendLog?.(ctx.runId, {
     event: 'web_search',
     node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
     provider, query, results: count

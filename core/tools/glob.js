@@ -18,6 +18,9 @@ const MAX_LIMIT = 1000;
 // listing when present. `.flyt` is NOT here: its config and context file are
 // exactly what a survey wants to find.
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'out', 'coverage', '.next', '.cache', '__pycache__', '.venv', 'venv', 'target', 'vendor']);
+// Keep Flyt's authored config, context, backlog and skills discoverable while
+// excluding high-volume runtime history that is not part of the source tree.
+const SKIP_PATHS = new Set(['.flyt/runs', '.flyt/archive', '.flyt/feedback', '.flyt/chats', '.flyt/ledger', '.flyt/loop', '.flyt/incidents', '.flyt/userdata']);
 const MAX_ENTRIES_SCANNED = 20_000;
 
 export default {
@@ -55,6 +58,10 @@ export default {
         type: 'integer', minimum: 1, maximum: MAX_LIMIT,
         description: `Cap on paths returned (default ${DEFAULT_LIMIT}).`
       },
+      offset: {
+        type: 'integer', minimum: 0,
+        description: 'Zero-based result offset for the next page. When truncated is true, repeat the call with nextOffset instead of repeating the same arguments.'
+      },
       includeDirs: {
         type: 'boolean',
         description: 'Match directories as well as files (default false).'
@@ -80,21 +87,28 @@ export default {
         const basePrefix = requestedDir.replace(/^\.?\/*|\/*$/g, '');
         const re = globToRegExp(String(args.pattern ?? ''));
         const limit = Math.min(MAX_LIMIT, Math.max(1, Number(args.limit ?? DEFAULT_LIMIT)));
+        const offset = Math.max(0, Math.floor(Number(args.offset ?? 0)));
         const includeDirs = args.includeDirs === true;
         const entries = await host.seam.list(requestedDir || '.', host.execution?.signal);
-        const paths = [];
+        const matches = [];
         let scanned = 0;
-        let truncated = false;
+        let scanTruncated = false;
         for (const entry of entries) {
-          if (++scanned > MAX_ENTRIES_SCANNED) { truncated = true; break; }
-          if (entry.path.split('/').some(segment => SKIP_DIRS.has(segment))) continue;
+          if (isSkipped(entry.path)) continue;
+          // Remote seams commonly return a flat workspace walk. Do not let a
+          // large ignored tree consume the scan budget before project files
+          // are considered.
+          if (++scanned > MAX_ENTRIES_SCANNED) { scanTruncated = true; break; }
           const relative = basePrefix && entry.path.startsWith(`${basePrefix}/`) ? entry.path.slice(basePrefix.length + 1) : entry.path;
-          if ((entry.kind === 'file' || includeDirs) && re.test(relative)) paths.push(entry.kind === 'directory' ? `${entry.path}/` : entry.path);
-          if (paths.length >= limit) { truncated = true; break; }
+          if ((entry.kind === 'file' || includeDirs) && re.test(relative)) matches.push(entry.kind === 'directory' ? `${entry.path}/` : entry.path);
         }
-        paths.sort();
+        matches.sort();
+        const paths = matches.slice(offset, offset + limit);
+        const truncated = scanTruncated || offset + paths.length < matches.length;
         return { pattern: args.pattern, ...(args.dir ? { dir: args.dir } : {}), target: host.target,
-          count: paths.length, ...(truncated ? { truncated: true } : {}), paths };
+          offset, count: paths.length, ...(!scanTruncated ? { totalMatches: matches.length } : {}),
+          ...(scanTruncated ? { scanLimitReached: true, hint: 'Narrow pattern or dir; repeating identical arguments cannot continue this scan.' } : {}),
+          ...(truncated ? { truncated: true, ...(paths.length ? { nextOffset: offset + paths.length } : {}) } : {}), paths };
       }
       base = host.resolve(requestedDir || '.');
       prefix = requestedDir.replace(/^\.?\/*|\/*$/g, '');
@@ -107,33 +121,38 @@ export default {
     }
     const re = globToRegExp(String(args.pattern ?? ''));
     const limit = Math.min(MAX_LIMIT, Math.max(1, Number(args.limit ?? DEFAULT_LIMIT)));
+    const offset = Math.max(0, Math.floor(Number(args.offset ?? 0)));
     const includeDirs = args.includeDirs === true;
 
     const matches = [];
     let scanned = 0;
-    let truncated = false;
+    let scanTruncated = false;
     const walk = dir => {
-      if (truncated) return;
+      if (scanTruncated) return;
       let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true })
+          .sort((a, b) => a.name.localeCompare(b.name));
+      }
       catch { return; }
       for (const entry of entries) {
-        if (++scanned > MAX_ENTRIES_SCANNED) { truncated = true; return; }
+        if (++scanned > MAX_ENTRIES_SCANNED) { scanTruncated = true; return; }
         const abs = path.join(dir, entry.name);
         const rel = path.relative(base, abs).split(path.sep).join('/');
         if (entry.isDirectory()) {
-          if (SKIP_DIRS.has(entry.name)) continue;
+          if (isSkipped(rel)) continue;
           if (includeDirs && re.test(rel)) matches.push(`${withPrefix(prefix, rel)}/`);
           walk(abs);
         } else if (entry.isFile() && re.test(rel)) {
           matches.push(withPrefix(prefix, rel));
         }
-        if (matches.length >= limit) { truncated = true; return; }
       }
     };
     walk(base);
 
     matches.sort();
+    const paths = matches.slice(offset, offset + limit);
+    const truncated = scanTruncated || offset + paths.length < matches.length;
     return {
       pattern: args.pattern,
       ...(args.dir ? { dir: args.dir } : {}),
@@ -141,14 +160,23 @@ export default {
       // it may also be holding (DECISIONS.md D38).
       target,
       ...(reference ? { readOnly: true } : {}),
-      count: matches.length,
-      ...(truncated ? { truncated: true } : {}),
-      paths: matches
+      offset,
+      count: paths.length,
+      ...(!scanTruncated ? { totalMatches: matches.length } : {}),
+      ...(scanTruncated ? { scanLimitReached: true, hint: 'Narrow pattern or dir; repeating identical arguments cannot continue this scan.' } : {}),
+      ...(truncated ? { truncated: true, ...(paths.length ? { nextOffset: offset + paths.length } : {}) } : {}),
+      paths
     };
   }
 };
 
 const withPrefix = (prefix, rel) => (prefix ? `${prefix}/${rel}` : rel);
+
+const isSkipped = relPath => {
+  const normalized = String(relPath).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  if (normalized.split('/').some(segment => SKIP_DIRS.has(segment))) return true;
+  return [...SKIP_PATHS].some(skipped => normalized === skipped || normalized.startsWith(`${skipped}/`));
+};
 
 // A small glob, deliberately: segment `*`, cross-segment `**`, single-char `?`.
 // No brace expansion and no character classes — those are a query language, and

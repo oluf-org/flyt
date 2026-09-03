@@ -23,7 +23,7 @@
  * @module #kernel/plugins/llm-adapters
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { JsonValue, ProviderReplay, Usage } from '../types.js';
+import type { FailureMetadata, JsonValue, ProviderReplay, Usage } from '../types.js';
 import type { LlmChunk, RouteRecord } from '../events.js';
 import type { LlmRequest, LlmResponse, LlmSeam, LlmStream, ModelInfo } from '../seams/llm.js';
 import { provideSeam } from '../seams/index.js';
@@ -60,6 +60,9 @@ export interface CallModel {
     contextLimit?: number;
     onText?: (text: string, options?: {
       final?: boolean;
+      content?: string;
+      reasoning?: string;
+      telemetry?: { contentChars?: number; reasoningChars?: number; toolInputChars?: number };
       toolInputEvents?: readonly {
         phase: 'start' | 'delta' | 'end';
         index: number;
@@ -203,6 +206,26 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
   if (typeof config?.resolve !== 'function') throw new Error('flyt-adapters needs a model resolver');
 
   type TextOptions = Parameters<NonNullable<Parameters<CallModel>[0]['onText']>>[1];
+  const failureOf = (error: unknown, source: ReturnType<ResolveSource>, request: LlmRequest, extra: Partial<FailureMetadata> = {}): FailureMetadata => {
+    const raw = error as { failure?: Partial<FailureMetadata>; message?: string; failureCode?: string };
+    const inherited = raw?.failure ?? {};
+    return {
+      code: String(inherited.code ?? raw?.failureCode ?? 'unknown'),
+      source: String(inherited.source ?? 'provider'),
+      provider: inherited.provider ?? source?.provider ?? null,
+      model: inherited.model ?? source?.model ?? request.model,
+      callId: inherited.callId ?? null,
+      step: inherited.step ?? null,
+      retryable: Boolean(inherited.retryable),
+      userInitiated: Boolean(inherited.userInitiated ?? request.signal?.aborted),
+      visibleOutputProduced: Boolean(extra.visibleOutputProduced ?? inherited.visibleOutputProduced),
+      reasoningOutputProduced: Boolean(extra.reasoningOutputProduced ?? inherited.reasoningOutputProduced),
+      toolCallProduced: Boolean(extra.toolCallProduced ?? inherited.toolCallProduced),
+      durableWriteProduced: Boolean(extra.durableWriteProduced ?? inherited.durableWriteProduced),
+      detail: inherited.detail ?? String(raw?.message ?? error).slice(0, 500),
+      remedy: inherited.remedy ?? null,
+    };
+  };
   const complete = async (
     request: LlmRequest,
     onText?: (text: string, options?: TextOptions) => void,
@@ -218,7 +241,9 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
     for (let index = 0; index < candidates.length; index++) {
       const candidate = candidates[index];
       source = null;
-      let emittedText = false;
+      let emittedVisible = false;
+      let emittedReasoning = false;
+      let emittedToolInput = false;
       const telemetryWrites: Promise<unknown>[] = [];
       try {
         source = config.resolve(candidate);
@@ -264,6 +289,7 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           attachments: request.attachments,
           requestedOutput: request.maxTokens,
           profile,
+          checkpointInputTokens: request.checkpointInputTokens,
         });
         if (structured) budget.resolutions.push({
           field: 'structured_output', requested: 'json_schema',
@@ -315,6 +341,7 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           contextTokens: budget.effective.total,
           contextLimit: budget.contextLimit,
           ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+          ...(request.retry ? { retry: request.retry } : {}),
           // An explicit fallback chain is already the retry budget at this
           // layer. Intermediate candidates get one provider attempt so a 429
           // becomes a visible fallback promptly; the final candidate retains
@@ -322,7 +349,11 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           ...(index < candidates.length - 1 ? { retry: { attempts: 1 } } : {}),
           ...(request.signal ? { signal: request.signal } : {}),
           ...(onText ? { onText: (text: string, options?: TextOptions) => {
-            if (text || options?.toolInputEvents?.length) emittedText = true;
+            const telemetry = options?.telemetry ?? {};
+            emittedVisible ||= Number(telemetry.contentChars ?? 0) > 0
+              || (options?.content === undefined && Boolean(text) && !String(text).startsWith('⟢ thinking…'));
+            emittedReasoning ||= Number(telemetry.reasoningChars ?? 0) > 0 || Boolean(options?.reasoning);
+            emittedToolInput ||= Number(telemetry.toolInputChars ?? 0) > 0 || Boolean(options?.toolInputEvents?.length);
             onText(text, options);
           } } : {}),
         });
@@ -341,15 +372,21 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
         lastFailure = error;
         const message = String((error as Error)?.message ?? error).replace(/\s+/g, ' ').slice(0, 500);
         failures.push(`${candidate} failed: ${message}`);
+        const failure = failureOf(error, source, request, {
+          visibleOutputProduced: emittedVisible,
+          reasoningOutputProduced: emittedReasoning,
+          toolCallProduced: emittedToolInput,
+        });
+        if (error && typeof error === 'object') (error as { failure?: FailureMetadata }).failure = failure;
         await request.onAttempt?.({
           index, model: candidate,
           ...(source?.provider ? { provider: source.provider } : {}),
           ...(source?.model ? { resolvedModel: source.model } : {}),
-          status: 'failed', error: message,
+          status: 'failed', error: message, failure,
         });
         // Never combine text from two models in one visible stream, and never
         // turn an explicit cancellation into another provider call.
-        if (emittedText || request.signal?.aborted || index === candidates.length - 1) throw error;
+        if (emittedVisible || emittedToolInput || request.signal?.aborted || index === candidates.length - 1) throw error;
       }
     }
     if (!answered || !source) throw lastFailure ?? new Error(`No connected provider can serve "${request.model}".`);
@@ -399,6 +436,8 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
       const queue: LlmChunk[] = [];
       let wake: (() => void) | null = null;
       let seen = '';
+      let seenContent = '';
+      let seenReasoning = '';
       let done = false;
       let failure: unknown = null;
       let nextInputId = 0;
@@ -427,6 +466,22 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
             ...(event.arguments !== undefined ? { arguments: event.arguments } : {}),
           } });
           if (event.phase === 'end') activeInputs.delete(event.index);
+        }
+        if (typeof options?.content === 'string' || typeof options?.reasoning === 'string') {
+          if (typeof options.reasoning === 'string') {
+            const delta = options.reasoning.startsWith(seenReasoning)
+              ? options.reasoning.slice(seenReasoning.length) : '';
+            seenReasoning = options.reasoning;
+            if (delta) push({ reasoning: delta });
+          }
+          if (typeof options.content === 'string') {
+            const delta = options.content.startsWith(seenContent)
+              ? options.content.slice(seenContent.length) : '';
+            seenContent = options.content;
+            if (delta) push({ text: delta });
+          }
+          seen = whole ?? '';
+          return;
         }
         if (typeof whole !== 'string' || !whole.startsWith(seen)) { seen = whole ?? ''; return; }
         const delta = whole.slice(seen.length);

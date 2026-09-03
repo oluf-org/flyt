@@ -181,7 +181,7 @@ export default {
       throw new Error(`Could not extract ${parsed.href}: ${res.error ?? 'the Python step failed'}${res.stderr ? ` — ${String(res.stderr).slice(0, 300)}` : ''}`);
     }
 
-    ctx?.store?.appendLog?.(ctx.runId, {
+    if (!ctx?.canonicalSession) ctx?.store?.appendLog?.(ctx.runId, {
       event: 'extract_page',
       node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
       url: parsed.href, format, bytes: res.bytes

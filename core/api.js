@@ -36,6 +36,7 @@ import { RunController } from './runController.js';
 import { repairInterruptedSessions } from '#kernel';
 import { StackStore } from './stackstore.js';
 import { summarizeWorkflowRun } from './conversationSupervisor.js';
+import { analyzeWorkflowRun } from './runDebugger.js';
 
 // Why a one-shot call to this tool needs the caller to say so. Reads off the
 // record rather than a name list, for the same reason isDestructive() does.
@@ -1088,6 +1089,30 @@ export function createApi(engine) {
         },
         rev,
       };
+    },
+
+    // Development debugger: a no-tool investigator reads the immutable run
+    // record and returns evidence plus a proposed retry instruction. It does
+    // not mutate the run; retries still use run:restartBlock below.
+    'run:debug': async ({ projectId, runId }) => {
+      const entry = proj(projectId);
+      if (!fs.existsSync(entry.store.runDir(runId))) {
+        throw new ApiError(`Run "${runId}" was not found in this project.`, {
+          status: 404, code: 'run_not_found',
+        });
+      }
+      const loadedSnapshot = isCanonicalRun(entry.store, runId)
+        ? await snapshotStoredStackRun(entry.store.rootDir, runId, null, { materialise: false })
+        : entry.store.snapshot(runId);
+      const snapshot = { ...loadedSnapshot, meta: { ...(loadedSnapshot?.meta ?? {}), runId } };
+      const events = isCanonicalRun(entry.store, runId)
+        ? storedSnapshots.events(entry.store.rootDir, runId)
+        : entry.store.readLog(runId);
+      return analyzeWorkflowRun({
+        snapshot, events, worker: supervisorWorker(), resolveModelSource: engine.resolveModelSource,
+        retry: runtimeConfig.retry, timeout: runtimeConfig.timeout,
+        readSession: async sessionId => storedSnapshots.events(entry.store.rootDir, sessionId),
+      });
     },
 
     'run:rename': async ({ projectId, runId, name }) => {

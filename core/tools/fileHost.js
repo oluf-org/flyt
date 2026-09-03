@@ -93,7 +93,7 @@ export async function fileExists(host, relPath) {
 export function noteWorkspaceWrite(ctx, relPath) {
   const conflict = ctx.ledger?.noteWrite(ctx.taskId, relPath) ?? null;
   if (conflict) {
-    ctx.store?.appendLog(ctx.runId, {
+    if (!ctx?.canonicalSession) ctx.store?.appendLog(ctx.runId, {
       event: 'workspace_write_conflict',
       node: ctx.taskId ? `executor:${ctx.taskId}` : undefined,
       path: relPath,

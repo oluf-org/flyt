@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   createKernel, flytTools, sessionJsonl, provideSeam,
-  executeTaskGraph, parseTaskGraphPlan, taskGraphRepairPrompt,
+  executeTaskGraph, parseTaskGraphPlan, taskGraphRepairPrompt, childSessionIdentity,
 } from '#kernel';
 import { stackWithGeneratedTasks } from '../core/runProjection.js';
 
@@ -39,6 +39,39 @@ test('invalid plans fail before materialization with actionable graph errors', (
   assert.equal(parsed.ok, false);
   assert.match(parsed.errors.join('\n'), /requires "missing-artifact", but no task produces it/);
   assert.match(parsed.errors.join('\n'), /dependency cycle: one -> two -> one/);
+});
+
+test('a broad inventory bottleneck feeding downstream tasks is rejected before dispatch', () => {
+  const parsed = parseTaskGraphPlan(contract([
+    task('inventory-workflow-blocks', {
+      title: 'Enumerate the complete workflow block library',
+      goal: 'Inventory every block in the repository for later assessment.',
+      produces: ['block-inventory'],
+    }),
+    task('assess-blocks', {
+      goal: 'Assess the inventory.', dependsOn: ['inventory-workflow-blocks'], requires: ['block-inventory'],
+    }),
+    task('verify-blocks', {
+      goal: 'Verify the inventory.', dependsOn: ['inventory-workflow-blocks'], requires: ['block-inventory'],
+    }),
+  ]));
+  assert.equal(parsed.ok, false);
+  assert.match(parsed.errors.join('\n'), /broad inventory task feeding assess-blocks, verify-blocks/);
+  assert.match(parsed.errors.join('\n'), /focused bounded tasks|targeted reads/);
+});
+
+test('a bounded inventory feeding one consolidation task is allowed', () => {
+  const parsed = parseTaskGraphPlan(contract([
+    task('sweep-half-a', {
+      title: 'Enumerate every block in the bounded half-A partition',
+      goal: 'Inventory all block files assigned to half A.',
+      produces: ['half-a-findings'],
+    }),
+    task('consolidate', {
+      goal: 'Merge the bounded findings.', dependsOn: ['sweep-half-a'], requires: ['half-a-findings'],
+    }),
+  ]));
+  assert.equal(parsed.ok, true, parsed.errors?.join('\n'));
 });
 
 test('planner repair feedback includes the rejected JSON and exact static diagnostics', () => {
@@ -121,8 +154,10 @@ test('Plan & dispatch runs independent generated children together and records t
     assert.ok(llm.seen.slice(1).every(request => request.maxTokens === 32_768),
       'generated workers get substantially more per-query output room');
     assert.equal(llm.peak, 2, 'both ready tasks ran in the same bounded wave');
-    assert.equal(llm.seen[0].messages.find(message => message.role === 'system')?.content,
-      'CUSTOM PLANNER FOR THIS WORKFLOW');
+    const plannerPrompt = llm.seen[0].messages.find(message => message.role === 'system')?.content;
+    assert.match(plannerPrompt, /ROLE: task-graph-planner/);
+    assert.match(plannerPrompt, /Do not create a broad repository-inventory/);
+    assert.match(plannerPrompt, /WORKFLOW-SPECIFIC PLANNING GUIDANCE:\nCUSTOM PLANNER FOR THIS WORKFLOW/);
     assert.ok(llm.seen.slice(1).every(request => request.messages.find(message => message.role === 'system')?.content
       .startsWith('CUSTOM GENERATED WORKER FOR THIS WORKFLOW')),
     'the workflow override replaces the standing worker prompt, while workerInstructions still append');
@@ -279,4 +314,166 @@ test('a reasoning-only planner uses all bounded repair attempts and fails with t
   } finally {
     await kernel.dispose();
   }
+});
+
+test('generated tasks retry twice, continue independent work, and block only dependants', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-task-graph-recovery-'));
+  const kernel = createKernel();
+  const plan = contract([
+    task('unstable'),
+    task('dependent', { dependsOn: ['unstable'] }),
+    task('independent'),
+  ]);
+  const taskCalls = new Map();
+  const seam = {
+    stream(request) {
+      const prompt = request.messages.map(message => message.content ?? '').join('\n');
+      const id = prompt.includes('# Task: UNSTABLE') ? 'unstable'
+        : prompt.includes('# Task: INDEPENDENT') ? 'independent'
+          : prompt.includes('# Task: DEPENDENT') ? 'dependent' : 'planner';
+      const count = (taskCalls.get(id) ?? 0) + 1;
+      taskCalls.set(id, count);
+      if (id === 'unstable') {
+        const error = Object.assign(new Error('provider stream terminated'), { failure: {
+          code: 'stream_terminated', source: 'provider', provider: 'openrouter', model: 'fake',
+          retryable: true, userInitiated: false, visibleOutputProduced: false,
+          reasoningOutputProduced: true, toolCallProduced: false, durableWriteProduced: false,
+        } });
+        return {
+          async *[Symbol.asyncIterator]() { yield { reasoning: 'thinking' }; throw error; },
+          async settled() { throw error; },
+        };
+      }
+      const content = id === 'planner' ? plan : `${id} completed`;
+      return {
+        async *[Symbol.asyncIterator]() { yield { text: content }; },
+        async settled() { return { content, finishReason: 'stop', route: { requested: 'fake', effective: 'fake', reason: '', degraded: false } }; },
+      };
+    },
+    async complete() { throw new Error('stream only'); }, async models() { return []; },
+  };
+  await kernel.ctx.plugin(flytTools);
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  await kernel.ctx.plugin({ name: 'recovery-llm', apply(ctx) { return provideSeam(ctx, 'llm', seam); } });
+  try {
+    const outcome = await executeTaskGraph({
+      ctx: kernel.ctx, runId: 'recovery-run', blockId: 'dispatch', input: 'Audit it.', ceiling: [],
+      config: { model: 'fake', maxParallel: 2, taskAttempts: 2 },
+    });
+    assert.equal(outcome.status, 'failed');
+    assert.equal(taskCalls.get('unstable'), 2, 'the scheduler owns exactly two total attempts');
+    assert.equal(taskCalls.get('independent'), 1, 'independent work continues despite the sibling failure');
+    assert.equal(taskCalls.has('dependent'), false, 'a failed dependency is never executed');
+    const events = (await kernel.ctx.sessions.read('recovery-run')).readSync();
+    const latest = id => events.filter(event => event.type === 'block.status' && event.data.taskId === id).at(-1)?.data;
+    assert.equal(latest('unstable').attempt, 2);
+    assert.equal(latest('unstable').failure.code, 'stream_terminated');
+    assert.equal(latest('dependent').status, 'blocked');
+    assert.deepEqual(latest('dependent').blockedBy, ['unstable']);
+    assert.equal(latest('independent').status, 'done');
+  } finally { await kernel.dispose(); }
+});
+
+test('a write task resumes from its durable checkpoint instead of replaying the task', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-task-graph-write-resume-'));
+  const kernel = createKernel();
+  const plan = contract([task('writer', { writeFiles: ['out.txt'] })]);
+  let modelCall = 0;
+  const prompts = [];
+  const seam = {
+    stream(request) {
+      modelCall += 1;
+      prompts.push(request.messages.map(message => message.content ?? '').join('\n'));
+      if (modelCall === 1) return {
+        async *[Symbol.asyncIterator]() { yield { text: plan }; },
+        async settled() { return { content: plan, finishReason: 'stop', route: { requested: 'fake', effective: 'fake', reason: '', degraded: false } }; },
+      };
+      if (modelCall === 2) return {
+        async *[Symbol.asyncIterator]() {},
+        async settled() { return {
+          content: '', finishReason: 'tool_calls',
+          toolCalls: [{ id: 'write-1', name: 'write_it', args: {} }],
+          route: { requested: 'fake', effective: 'fake', reason: '', degraded: false },
+        }; },
+      };
+      if (modelCall === 3) {
+        const error = Object.assign(new Error('stream ended'), { failure: {
+          code: 'stream_terminated', source: 'provider', provider: 'openrouter', model: 'fake',
+          retryable: true, userInitiated: false, visibleOutputProduced: false,
+          reasoningOutputProduced: true, toolCallProduced: false, durableWriteProduced: false,
+        } });
+        return { async *[Symbol.asyncIterator]() { yield { reasoning: 'thinking' }; throw error; }, async settled() { throw error; } };
+      }
+      return {
+        async *[Symbol.asyncIterator]() { yield { text: 'resumed and verified' }; },
+        async settled() { return { content: 'resumed and verified', finishReason: 'stop', route: { requested: 'fake', effective: 'fake', reason: '', degraded: false } }; },
+      };
+    },
+    async complete() { throw new Error('stream only'); }, async models() { return []; },
+  };
+  await kernel.ctx.plugin(flytTools);
+  kernel.ctx.tools.register({
+    name: 'write_it', description: 'Write once.', parameters: { type: 'object' },
+    classification: { effect: 'write', destructive: false, untrustedInput: false, source: 'confirmed' },
+    async execute() { return { content: 'wrote durable state' }; },
+  });
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  await kernel.ctx.plugin({ name: 'write-resume-llm', apply(ctx) { return provideSeam(ctx, 'llm', seam); } });
+  try {
+    const outcome = await executeTaskGraph({
+      ctx: kernel.ctx, runId: 'write-resume-run', blockId: 'dispatch', input: 'Build it.', ceiling: ['write_it'],
+      config: { model: 'fake', taskAttempts: 2 },
+    });
+    assert.equal(outcome.status, 'done', outcome.error);
+    assert.equal(modelCall, 4);
+    assert.match(prompts[3], /RESUME FROM CHECKPOINT/);
+    assert.match(prompts[3], /Do not replay completed writes/);
+    const childRef = (await kernel.ctx.sessions.read('write-resume-run')).readSync()
+      .find(event => event.type === 'child.session' && event.data.taskId === 'writer');
+    const childEvents = (await kernel.ctx.sessions.read(childRef.data.sessionId)).readSync();
+    assert.ok(childEvents.some(event => event.type === 'context.checkpoint' && event.data.durableWriteProduced === true));
+  } finally { await kernel.dispose(); }
+});
+
+test('application restart resumes an active write task from its recorded checkpoint', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-task-graph-restart-'));
+  const kernel = createKernel();
+  const plan = contract([task('writer', { writeFiles: ['out.txt'] })]);
+  const seen = [];
+  const seam = {
+    stream(request) {
+      seen.push(request.messages.map(message => message.content ?? '').join('\n'));
+      return {
+        async *[Symbol.asyncIterator]() { yield { text: 'continued after restart' }; },
+        async settled() { return { content: 'continued after restart', finishReason: 'stop', route: { requested: 'fake', effective: 'fake', reason: '', degraded: false } }; },
+      };
+    },
+    async complete() { throw new Error('stream only'); }, async models() { return []; },
+  };
+  await kernel.ctx.plugin(flytTools);
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  await kernel.ctx.plugin({ name: 'restart-llm', apply(ctx) { return provideSeam(ctx, 'llm', seam); } });
+  const parent = await kernel.ctx.sessions.open('restart-run');
+  await parent.append({ type: 'block.output', data: { blockId: 'dispatch', port: 'plan', content: plan } });
+  const identity = childSessionIdentity({ parentRunId: 'restart-run', parentBlockId: 'dispatch', taskId: 'writer', profileId: 'default-work', contextBoundary: 'isolated' });
+  await parent.append({ type: 'block.status', data: {
+    blockId: 'dispatch.writer', parentId: 'dispatch', taskId: 'writer', title: 'WRITER',
+    status: 'active', attempt: 1, maxAttempts: 2, sessionId: identity.sessionId,
+  } });
+  const child = await kernel.ctx.sessions.open(identity.sessionId);
+  await child.append({ type: 'context.checkpoint', data: {
+    blockId: 'worker', kind: 'durable-progress', durableWriteProduced: true,
+    content: 'Checkpoint: out.txt was already written; verification remains.',
+    lastDurableProgress: { tool: 'write_it', callId: 'write-1', atStep: 4 },
+  } });
+  try {
+    const outcome = await executeTaskGraph({
+      ctx: kernel.ctx, runId: 'restart-run', blockId: 'dispatch', input: 'Build it.', ceiling: [],
+      config: { model: 'fake', taskAttempts: 2 },
+    });
+    assert.equal(outcome.status, 'done', outcome.error);
+    assert.equal(seen.length, 1, 'the accepted plan and first attempt are not replayed');
+    assert.match(seen[0], /RESUME FROM CHECKPOINT/);
+    assert.match(seen[0], /verification remains/);
+  } finally { await kernel.dispose(); }
 });

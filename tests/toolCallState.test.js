@@ -84,3 +84,68 @@ test('restart reconciliation explicitly interrupts every nonterminal call', asyn
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('identical successful globs are cached and answer-only recovery tolerates unoffered tool calls', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-tool-repeat-'));
+  const kernel = createKernel();
+  await kernel.ctx.plugin(flytTools);
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  let executions = 0;
+  kernel.ctx.tools.register({
+    name: 'glob', description: 'List files',
+    parameters: {
+      type: 'object', additionalProperties: false, required: ['pattern'],
+      properties: { pattern: { type: 'string' } },
+    },
+    classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+    async execute() {
+      executions += 1;
+      return { content: JSON.stringify({ count: 2, truncated: true, nextOffset: 2, paths: ['a', 'b'] }) };
+    },
+  });
+  const requests = [];
+  let modelCall = 0;
+  const seam = {
+    stream(request) {
+      requests.push(request);
+      modelCall += 1;
+      if (modelCall <= 7) return streamOf({
+        content: '', finishReason: 'tool_calls', route: { requested: 'm', effective: 'm', reason: '', degraded: false },
+        toolCalls: [{ id: `glob-${modelCall}`, name: 'glob', args: { pattern: '**/*' } }],
+      });
+      return streamOf({
+        content: 'Completed from the files already listed; the listing was truncated.',
+        finishReason: 'stop', route: { requested: 'm', effective: 'm', reason: '', degraded: false },
+      });
+    },
+    async complete() { throw new Error('unused'); }, async models() { return []; },
+  };
+  await kernel.ctx.plugin({ name: 'repeat-llm', apply(ctx) { return provideSeam(ctx, 'llm', seam); } });
+  try {
+    const session = await kernel.ctx.sessions.open('run');
+    const result = await runAgentLoop({
+      ctx: kernel.ctx, session, runId: 'run', blockId: 'worker', turn: 1,
+      model: 'm', system: 'system', input: 'inventory', tools: [kernel.ctx.tools.get('glob')],
+      ceiling: ['glob'], maxSteps: 8,
+    });
+    assert.equal(result.stopped, 'answered');
+    assert.match(result.content, /Completed from the files already listed/);
+    assert.equal(executions, 1, 'four byte-identical reads reuse the first result');
+    assert.equal(requests[5].tools, undefined, 'the recovery request offers no tools');
+    assert.equal(requests[6].tools, undefined, 'a provider violation retries without restoring tools');
+    assert.equal(requests[7].tools, undefined, 'the eventual answer is still requested without tools');
+
+    const events = [];
+    for await (const event of session.read()) events.push(event);
+    assert.equal(events.filter(event => event.type === 'tool.result' && event.data.cached === true).length, 4);
+    assert.ok(events.some(event => event.type === 'block.warning' && event.data.code === 'repeated_read_recovery'));
+    assert.equal(events.filter(event => event.type === 'block.warning' && event.data.code === 'answer_only_tool_refused').length, 2);
+    assert.equal(events.filter(event => event.type === 'tool.result' && event.data.error?.includes('answer-only recovery')).length, 2,
+      'unoffered recovery calls are refused and protocol-balanced without execution');
+    assert.equal(events.some(event => event.type === 'permission.decision'), false,
+      'an unattended recovery is not misreported as a denied human decision');
+  } finally {
+    await kernel.dispose();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

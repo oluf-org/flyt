@@ -244,13 +244,32 @@ function breakdown(
   return { ...parts, total: Object.values(parts).reduce((sum, value) => sum + value, 0) };
 }
 
+function stableJson(value: JsonValue): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+
 function replaceToolPreviews(messages: readonly Message[]): { messages: Message[]; changed: number; handles: string[] } {
-  const lastByName = new Map<string, number>();
-  messages.forEach((message, index) => { if (message.role === 'tool' && message.name) lastByName.set(message.name, index); });
+  const callKeyById = new Map<string, string>();
+  for (const message of messages) if (message.role === 'assistant') {
+    for (const call of message.toolCalls ?? []) callKeyById.set(call.id, `${call.name}:${stableJson(call.args)}`);
+  }
+  const resultKey = (message: Message): string | null => {
+    if (message.role !== 'tool' || !message.name) return null;
+    // Legacy/provider messages without a correlatable call retain the prior
+    // conservative behavior. Canonical calls are only superseded by the same
+    // tool with the same normalized arguments; distinct searches are evidence,
+    // not duplicate previews.
+    return message.toolCallId ? callKeyById.get(message.toolCallId) ?? `name:${message.name}` : `name:${message.name}`;
+  };
+  const lastByQuery = new Map<string, number>();
+  messages.forEach((message, index) => { const key = resultKey(message); if (key) lastByQuery.set(key, index); });
   let changed = 0;
   const handles: string[] = [];
   const out = messages.map((message, index) => {
-    if (message.role !== 'tool' || !message.name || lastByName.get(message.name) === index || message.content.length < 256) return { ...message };
+    const key = resultKey(message);
+    if (!key || lastByQuery.get(key) === index || message.content.length < 256) return { ...message };
     const handle = message.handle ?? `tool-call:${message.toolCallId ?? index}`;
     handles.push(handle); changed += 1;
     return { ...message, content: `[Superseded tool preview pruned; load explicit artifact ${handle} if needed.]`, handle };
@@ -270,6 +289,7 @@ export function manageContextBudget(input: {
   profile: ModelCapabilityProfile;
   providerContextLimit?: number | null;
   providerOutputLimit?: number | null;
+  checkpointInputTokens?: number | null;
 }): ContextBudgetDecision {
   const tools = input.tools ?? [];
   const attachments = input.attachments ?? [];
@@ -301,7 +321,11 @@ export function manageContextBudget(input: {
   // output is the final elastic component, so it is clamped only after input
   // policy has done all the space-reclaiming it can do (below).
   let current = breakdown(messages, tools, attachments, effectiveOutput, overhead);
-  if (current.total > contextLimit) {
+  const checkpointInput = Number.isFinite(input.checkpointInputTokens) && Number(input.checkpointInputTokens) > 0
+    ? Math.floor(Number(input.checkpointInputTokens)) : null;
+  const overCheckpoint = (): boolean => checkpointInput != null
+    && current.total - current.reservedOutput - current.providerOverhead >= checkpointInput;
+  if (current.total > contextLimit || overCheckpoint()) {
     const pruned = replaceToolPreviews(messages);
     messages = pruned.messages;
     if (pruned.changed) actions.push({
@@ -311,22 +335,45 @@ export function manageContextBudget(input: {
     current = breakdown(messages, tools, attachments, effectiveOutput, overhead);
   }
 
-  if (current.total > contextLimit) {
+  if (current.total > contextLimit || overCheckpoint()) {
     const systems = messages.filter(message => message.role === 'system');
     const nonSystems = messages.filter(message => message.role !== 'system');
+    const originalAssignment = nonSystems.find(message => message.role === 'user');
+    // Preserve enough of a real worker envelope to retain its task and scope,
+    // while keeping the anchor proportional on genuinely small context models.
+    const assignmentCharLimit = Math.min(4_000, Math.max(400, Math.floor(contextLimit * 0.04)));
+    const assignmentAnchor = originalAssignment ? {
+      ...originalAssignment,
+      content: `Original assignment (authoritative; retained across context compaction):\n${originalAssignment.content.slice(0, assignmentCharLimit)}${originalAssignment.content.length > assignmentCharLimit ? `\n[Original assignment truncated to ${assignmentCharLimit.toLocaleString('en-US')} characters by context policy.]` : ''}`,
+    } : null;
     let start = Math.max(0, nonSystems.length - 8);
     while (start < nonSystems.length && nonSystems[start].role !== 'user') start += 1;
     if (start >= nonSystems.length) start = Math.max(0, nonSystems.length - 2);
     let kept = nonSystems.slice(start);
-    while (kept.length > 2 && breakdown([...systems, ...kept], tools, attachments, effectiveOutput, overhead).total > contextLimit) {
+    while (kept.length > 2) {
+      const retainedAssignment = assignmentAnchor && !kept.includes(originalAssignment!) ? [assignmentAnchor] : [];
+      const candidate = breakdown([...systems, ...retainedAssignment, ...kept], tools, attachments, effectiveOutput, overhead);
+      const candidateInput = candidate.total - candidate.reservedOutput - candidate.providerOverhead;
+      if (candidate.total <= contextLimit && (checkpointInput == null || candidateInput < checkpointInput)) break;
       const nextTurn = kept.findIndex((message, index) => index > 0 && message.role === 'user');
       kept = nextTurn > 0 ? kept.slice(nextTurn) : kept;
       if (nextTurn <= 0) break;
     }
     const removed = nonSystems.length - kept.length;
     if (removed > 0) {
-      const checkpoint = `Context checkpoint: ${removed} earlier model-visible messages remain in the immutable trace and were compacted for this request. Explicit tool artifacts remain addressable by handle.`;
-      messages = [...systems, { role: 'system', content: checkpoint }, ...kept];
+      const priorAssistant = nonSystems.slice(0, start).filter(message => message.role === 'assistant' && message.content.trim()).slice(-3);
+      const handles = nonSystems.slice(0, start).filter(message => message.role === 'tool' && message.handle).map(message => message.handle as string);
+      const remaining = [...kept].reverse().find(message => message.role === 'user')?.content ?? 'Continue the assigned task.';
+      const checkpoint = [
+        'Context checkpoint (authoritative resume state).',
+        `Compacted messages: ${removed}.`,
+        `Completed findings: ${priorAssistant.length ? priorAssistant.map(message => message.content.slice(0, 200)).join(' | ') : 'See durable tool results and artifacts.'}`,
+        `Remaining work: ${remaining.slice(0, 400)}`,
+        `Artifact handles: ${handles.length ? [...new Set(handles)].join(', ') : 'none'}.`,
+        'Do not replay completed work. Continue from this checkpoint; the immutable trace remains available for diagnostics.',
+      ].join('\n');
+      const retainedAssignment = assignmentAnchor && !kept.includes(originalAssignment!) ? [assignmentAnchor] : [];
+      messages = [...systems, ...retainedAssignment, { role: 'system', content: checkpoint }, ...kept];
       actions.push({
         action: 'retain_recent_turns', affectedMessages: removed, handles: [],
         reason: 'retained the most recent complete turns after lower-cost preview pruning was insufficient',
@@ -370,7 +417,7 @@ export function manageContextBudget(input: {
     ],
     actions,
     ...(actions.some(item => item.action === 'durable_compaction_checkpoint')
-      ? { checkpoint: messages.find(message => message.role === 'system' && message.content.startsWith('Context checkpoint:'))?.content }
+      ? { checkpoint: messages.find(message => message.role === 'system' && message.content.startsWith('Context checkpoint'))?.content }
       : {}),
   };
 }

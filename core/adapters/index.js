@@ -39,6 +39,7 @@ import { mockAdapter } from './mock.js';
 import { claudeCodeAdapter } from './claudeCode.js';
 import { codexAdapter } from './codexCli.js';
 import { abortError, isAbortError } from './http.js';
+import { withFailureMetadata } from './failures.js';
 
 // RUN-CONTROL: re-exported so callers (runner, tests) classify unwind errors
 // the same way the retry loop below does.
@@ -273,6 +274,7 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
     // never the sum of them: summing counts a 10k answer delivered in 200
     // emissions as a million characters, and this number prices a ledger line.
     let streamedChars = 0;
+    let visibleOutputProduced = false, reasoningOutputProduced = false, toolCallProduced = false;
     let firstByteMs = null, firstReasoningMs = null, firstVisibleMs = null, firstToolInputMs = null;
     let lastChunkMs = null, lastStreamAt = null;
     let tokensBeforeFirstVisible = null, tokensBeforeFirstTool = null;
@@ -289,6 +291,9 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
         const reasoningChars = Number(telemetry.reasoningChars) || (rendered.startsWith('⟢ thinking…') ? rendered.length : 0);
         const contentChars = Number(telemetry.contentChars) || ((!rendered.startsWith('⟢ thinking…') && !rendered.trimStart().startsWith('→')) ? rendered.length : 0);
         const toolInputChars = Number(telemetry.toolInputChars) || (rendered.includes('→ ') ? rendered.length : 0);
+        visibleOutputProduced ||= contentChars > 0;
+        reasoningOutputProduced ||= reasoningChars > 0;
+        toolCallProduced ||= toolInputChars > 0 || Boolean(opts?.toolInputEvents?.length);
         if (firstReasoningMs == null && reasoningChars > 0) firstReasoningMs = elapsed;
         if (firstVisibleMs == null && contentChars > 0) {
           firstVisibleMs = elapsed;
@@ -335,6 +340,7 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
       // a stop landing during a timeout is still a stop.
       const ctx = {
         provider, model, maxTokens, system, prompt, messages, tools, attempt, started, queuedAt, attemptStarted, transport, streamedChars,
+        visibleOutputProduced, reasoningOutputProduced, toolCallProduced,
         firstByteMs, firstReasoningMs, firstVisibleMs, firstToolInputMs, lastChunkMs,
         tokensBeforeFirstVisible, tokensBeforeFirstTool, streamIdleGaps, ...rest
       };
@@ -343,11 +349,18 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
         report(onCall, ctx, null, aborted);
         throw aborted;
       }
-      const failure = deadline.timedOut ? deadline.error : err;
+      const failure = withFailureMetadata(deadline.timedOut ? deadline.error : err, {
+        provider, model, source: 'provider',
+        userInitiated: false, visibleOutputProduced, reasoningOutputProduced, toolCallProduced,
+      });
       lastErr = failure;
       // An abort with nobody having asked for one: an adapter's own cancellation.
       if (isAbortError(failure)) { report(onCall, ctx, null, failure); throw failure; }
-      if (attempt === attempts - 1 || !isTransientError(failure)) {
+      // Replaying visible prose or a partially assembled tool call can duplicate
+      // side effects at a layer that cannot see the task checkpoint. Reasoning
+      // alone is explicitly safe to discard and retry.
+      if (attempt === attempts - 1 || !isTransientError(failure)
+        || visibleOutputProduced || toolCallProduced) {
         report(onCall, ctx, null, failure);
         throw failure;
       }
@@ -363,7 +376,8 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
         // A timeout is reported as one: "did it stall or did it 429?" is the
         // first question asked of a run that took all morning.
         ...(failure?.timedOut ? { timedOut: true, timeoutKind: failure.timeoutKind } : {}),
-        error: String(failure?.message ?? failure).slice(0, 300)
+        error: String(failure?.message ?? failure).slice(0, 300),
+        failure: failure.failure,
       });
       await sleepAbortable(delayMs, signal);
     } finally {
@@ -431,6 +445,7 @@ export function callRecord(ctx, result, error) {
       ? {
         ok: false,
         error: String(error?.message ?? error).slice(0, 400),
+        failure: error?.failure ?? null,
         // What it generated before it died, and the token estimate that follows
         // from it. Marked `estimated` at every step so nothing downstream can
         // mistake a guess for a measurement (core/ledger.js costOf) — but a

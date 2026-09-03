@@ -166,6 +166,9 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
     toolConcurrency: typeof run.config.toolConcurrency === 'number' ? run.config.toolConcurrency : 4,
     softMaxSteps: typeof run.config.maxSteps === 'number' ? run.config.maxSteps : MAX_STEPS,
     maxTokens: typeof run.config.maxTokens === 'number' ? run.config.maxTokens : DEFAULT_WORKER_MAX_TOKENS,
+    ...(typeof run.config.maxInputTokens === 'number' ? { checkpointInputTokens: run.config.maxInputTokens } : {}),
+    ...(typeof run.config.modelRetryAttempts === 'number'
+      ? { retry: { attempts: Math.max(1, Math.floor(run.config.modelRetryAttempts)) } } : {}),
     continueOnLength: true,
     isolated: run.config.isolated === true,
     ...(run.signal ? { signal: run.signal } : {}),
@@ -174,7 +177,17 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
   // A loop that ran out of steps did not finish, and saying `done` here is how
   // an attempt that stopped mid-thought reaches a reviewer looking complete.
   if (result.stopped !== 'answered') {
-    return { status: 'failed', output: result.content, error: result.reason ?? result.stopped };
+    return {
+      status: 'failed', output: result.content, error: result.reason ?? result.stopped,
+      failure: {
+        code: result.stopped === 'cancelled' ? 'cancelled' : 'worker_incomplete',
+        source: result.stopped === 'cancelled' ? 'user' : 'scheduler',
+        model: str(run.config.model, 'openrouter/auto'), retryable: false,
+        userInitiated: result.stopped === 'cancelled', visibleOutputProduced: Boolean(result.content),
+        reasoningOutputProduced: Boolean(result.reasoning), toolCallProduced: false,
+        durableWriteProduced: false, detail: result.reason ?? result.stopped,
+      },
+    };
   }
   if (run.config.effect === 'workspace-change') {
     let changed = false;

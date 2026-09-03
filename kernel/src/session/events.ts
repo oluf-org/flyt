@@ -55,6 +55,8 @@ export interface SessionEventMap {
     toolCalls?: ToolCall[];
     usage?: Usage;
   };
+  'llm.failure': Data & { callId: string; blockId: string; failure: JsonValue };
+  'task.retry': Data & { blockId: string; taskId: string; attempt: number; decision: string };
   'tool.call': Data & { callId: string; name: string; args: JsonValue };
   'tool.state': Data & { callId: string; state: string };
   'permission.decision': Data;
@@ -84,7 +86,7 @@ export const SESSION_EVENTS = [
   'child.session', 'turn.start', 'step.start', 'step.prompt', 'step.end', 'turn.end',
   'message.system', 'message.user', 'llm.request', 'llm.attempt', 'context.budget',
   'context.checkpoint', 'llm.telemetry', 'plugin.interception', 'llm.stream',
-  'tool.input.start', 'tool.input.delta', 'tool.input.end', 'llm.response',
+  'tool.input.start', 'tool.input.delta', 'tool.input.end', 'llm.response', 'llm.failure', 'task.retry',
   'tool.call', 'tool.state', 'permission.decision', 'sandbox.decision', 'sandbox.escalation', 'sandbox.failure', 'tool.result', 'tool.repetition',
   'block.status', 'block.warning', 'block.output', 'workspace.observed', 'supervisor.summary',
 ] as const satisfies readonly (keyof SessionEventMap)[];

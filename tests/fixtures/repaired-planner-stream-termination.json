@@ -1,0 +1,21 @@
+{
+  "plannerWarnings": [
+    { "code": "invalid_task_graph", "attempt": 1 },
+    { "code": "invalid_task_graph", "attempt": 2 }
+  ],
+  "acceptedPlan": true,
+  "childSessionId": "run-audit--child-worker",
+  "terminal": {
+    "code": "stream_terminated",
+    "source": "provider",
+    "provider": "openrouter",
+    "model": "z-ai/glm-5.3-flash",
+    "callId": "worker-38",
+    "step": 38,
+    "retryable": true,
+    "userInitiated": false,
+    "visibleOutputProduced": false,
+    "reasoningOutputProduced": true,
+    "durableWriteProduced": false
+  }
+}

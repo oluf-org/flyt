@@ -92,7 +92,7 @@ export default {
     const isHtml = /html/.test(contentType) || /^\s*<(!doctype|html)\b/i.test(raw.text);
     const reduced = isHtml ? htmlToText(raw.text) : { title: null, text: raw.text.trim(), truncated: false };
 
-    ctx?.store?.appendLog?.(ctx.runId, {
+    if (!ctx?.canonicalSession) ctx?.store?.appendLog?.(ctx.runId, {
       event: 'web_fetch',
       node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
       url: parsed.href, status: res.status, bytes: raw.bytes, contentType

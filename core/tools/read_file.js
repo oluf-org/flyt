@@ -72,7 +72,7 @@ export default {
       const repo = /^reference:([^/]+)/.exec(String(args.path))?.[1] ?? null;
       const elsewhere = ctx.subject?.repo && repo && repo !== ctx.subject.repo;
       if (elsewhere) {
-        ctx.store?.appendLog?.(ctx.runId, {
+        if (!ctx?.canonicalSession) ctx.store?.appendLog?.(ctx.runId, {
           event: 'tool_target_unexpected',
           node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
           tool: 'read_file', path: args.path, read: repo, expected: `reference:${ctx.subject.repo}`
@@ -95,7 +95,7 @@ export default {
     // one plausible tool call away from a confident finding about the wrong
     // repository, so it must not be invisible in the run log.
     if (ctx?.subject?.repo && ctx.subject.strict !== false) {
-      ctx.store?.appendLog?.(ctx.runId, {
+      if (!ctx?.canonicalSession) ctx.store?.appendLog?.(ctx.runId, {
         event: 'tool_target_unexpected', node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
         tool: 'read_file', path: args.path, read: 'workspace', expected: `reference:${ctx.subject.repo}`
       });

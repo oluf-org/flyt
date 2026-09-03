@@ -8,6 +8,7 @@
  * legitimately produce a different plan without rewriting Build behind the user.
  */
 import type { JsonValue } from '../types.js';
+import type { FailureMetadata } from '../types.js';
 import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js';
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
 import { DEFAULT_WORKER_MAX_TOKENS, executeWork, LOOP_CEILING } from './blocks-core.js';
@@ -31,6 +32,7 @@ const HARD_MAX_TASKS = 24;
 const PLANNER_MAX_TOKENS = 61_440;
 const PLANNER_REPAIR_MAX_TOKENS = 81_920;
 const PLANNER_REPAIR_ATTEMPTS = 3;
+const DEFAULT_TASK_ATTEMPTS = 2;
 const DEFAULT_WAVE: Record<ParallelismLevel, number> = { no: 1, low: 2, medium: 4, high: 8 };
 
 export interface GeneratedTask {
@@ -218,6 +220,26 @@ export function parseTaskGraphPlan(
     }
   }
 
+  // A repository-wide inventory fanned out to several downstream workers is an
+  // unbounded coordination bottleneck: the producer has to discover everything
+  // before any real assessment can begin. The standing planner contract already
+  // forbids this; validate the dangerous fan-out shape as well so an authored
+  // prompt or a weaker model cannot bypass that contract with schema-valid JSON.
+  // A single bounded sweep feeding a consolidation task remains valid; runtime
+  // read caching and loop recovery protect that worker independently.
+  const broadInventory = (task: GeneratedTask): boolean => {
+    const description = `${task.title}\n${task.goal}`;
+    return /\b(?:inventory|inventorise|inventorize|enumerat(?:e|ion)|catalog(?:ue)?|list|map)\b/i.test(description)
+      && /\b(?:all|complete|entire|every|whole|repository-wide|workspace-wide|codebase-wide)\b/i.test(description)
+      && /\b(?:repository|workspace|codebase|librar(?:y|ies)|blocks?|files?|components?|modules?)\b/i.test(description);
+  };
+  for (const task of tasks) {
+    const dependants = tasks.filter(candidate => candidate.id !== task.id && candidate.dependsOn.includes(task.id));
+    if (dependants.length >= 2 && broadInventory(task)) {
+      errors.push(`${task.id} is a broad inventory task feeding ${dependants.map(item => item.id).join(', ')}; split the evidence into focused bounded tasks or let each consumer perform targeted reads`);
+    }
+  }
+
   // Declared write collisions are always serial. The authored order is the
   // deterministic tie-breaker; this is the safety floor beneath every mode.
   const lastWriter = new Map<string, string>();
@@ -260,7 +282,8 @@ function plannerSystem(parallelism: ParallelismLevel, minTasks: number, maxTasks
     POLICY[parallelism],
     `Create between ${minTasks} and ${maxTasks} tasks through the configured structured response channel.`,
     'produces/requires/optional are named artifacts or facts, not filenames. writeFiles contains every file the task expects to modify.',
-    'Keep each task independently verifiable. Do not create coordination-only tasks. Do not put two tasks in parallel when one needs the other\'s result.',
+    'One task means one bounded unit of work, not merely one final artifact. A final report does not justify assigning inventory, evidence collection, classification, synthesis, and verification to one worker.',
+    'Split broad evidence gathering into bounded groups, then use dependent consolidation and verification tasks. Keep each task independently verifiable. Do not create empty coordination-only tasks.',
     'Every worker can inspect the bound workspace. Do not create a broad repository-inventory or exploration task for other workers; give each worker a focused deliverable and let it perform its own targeted reads.',
     'Do not embed JSON in prose. Submit the graph through the native schema response or submit_task_graph tool when offered.',
   ].join('\n');
@@ -433,7 +456,12 @@ function isPlannerBudgetExhaustion(result: Awaited<ReturnType<typeof runAgentLoo
   return result.stopped === 'bound' && result.finishReason === 'length' && !result.content.trim();
 }
 
-function taskInput(task: GeneratedTask, original: string, completed: ReadonlyMap<string, BlockOutcome>): string {
+function taskInput(
+  task: GeneratedTask,
+  original: string,
+  completed: ReadonlyMap<string, BlockOutcome>,
+  recovery?: { mode: 'restart' | 'resume'; checkpoint?: string | null },
+): string {
   const dependencies = task.dependsOn.map(id => {
     const output = completed.get(id)?.output ?? '(no output)';
     return `## ${id}\n${output}`;
@@ -444,7 +472,54 @@ function taskInput(task: GeneratedTask, original: string, completed: ReadonlyMap
     task.writeFiles.length ? `\nExpected write scope:\n${task.writeFiles.map(file => `- ${file}`).join('\n')}` : '',
     `\nOriginal request:\n${original}`,
     dependencies ? `\nCompleted dependency outputs:\n${dependencies}` : '',
+    recovery?.mode === 'resume'
+      ? `\nRecovery mode: RESUME FROM CHECKPOINT. Do not replay completed writes. Inspect the current workspace and continue only the remaining work.\n${recovery.checkpoint ?? 'The durable session records a completed write; use the current workspace as the checkpoint.'}`
+      : recovery?.mode === 'restart'
+        ? '\nRecovery mode: SAFE RESTART. The prior attempt produced no durable write; redo the bounded task from its original inputs.'
+        : '',
   ].filter(Boolean).join('\n');
+}
+
+function taskFailure(error: unknown, task: GeneratedTask, attempt: number, durableWriteProduced: boolean): FailureMetadata {
+  const raw = error as { failure?: Partial<FailureMetadata>; failureCode?: string; message?: string };
+  const inherited = raw?.failure ?? {};
+  return {
+    code: String(inherited.code ?? raw?.failureCode ?? 'unknown'),
+    source: String(inherited.source ?? 'scheduler'),
+    provider: inherited.provider ?? null,
+    model: inherited.model ?? null,
+    callId: inherited.callId ?? null,
+    step: inherited.step ?? null,
+    retryable: Boolean(inherited.retryable),
+    userInitiated: Boolean(inherited.userInitiated),
+    visibleOutputProduced: Boolean(inherited.visibleOutputProduced),
+    reasoningOutputProduced: Boolean(inherited.reasoningOutputProduced),
+    toolCallProduced: Boolean(inherited.toolCallProduced),
+    durableWriteProduced: Boolean(inherited.durableWriteProduced || durableWriteProduced),
+    detail: inherited.detail ?? String(raw?.message ?? error ?? `Generated task ${task.id} failed on attempt ${attempt}`).slice(0, 500),
+    remedy: inherited.remedy ?? null,
+  };
+}
+
+async function childProgress(session: Awaited<ReturnType<BlockRun['ctx']['sessions']['open']>>): Promise<{
+  durableWriteProduced: boolean; checkpoint: string | null; lastDurableProgress: JsonValue | null;
+}> {
+  let durableWriteProduced = false;
+  let checkpoint: string | null = null;
+  let lastDurableProgress: JsonValue | null = null;
+  for await (const event of session.read()) {
+    const data = event.data as Record<string, unknown>;
+    if (event.type === 'tool.result' && data.durableProgress === true) {
+      durableWriteProduced = true;
+      lastDurableProgress = { sessionId: null, seq: event.seq, at: event.at, tool: data.name ?? null, callId: data.callId ?? null } as JsonValue;
+    }
+    if (event.type === 'context.checkpoint') {
+      checkpoint = typeof data.content === 'string' ? data.content : checkpoint;
+      if (data.durableWriteProduced === true) durableWriteProduced = true;
+      if (data.lastDurableProgress) lastDurableProgress = data.lastDurableProgress as JsonValue;
+    }
+  }
+  return { durableWriteProduced, checkpoint, lastDurableProgress };
 }
 
 async function priorChildOutcomes(run: BlockRun, session: Awaited<ReturnType<BlockRun['ctx']['sessions']['open']>>): Promise<Map<string, BlockOutcome>> {
@@ -486,12 +561,16 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
   const maxTasks = integer(run.config.maxTasks, DEFAULT_MAX_TASKS, 1, HARD_MAX_TASKS);
   const minTasks = integer(run.config.minTasks, 1, 1, maxTasks);
   const maxParallel = integer(run.config.maxParallel, DEFAULT_WAVE[parallelism], 1, HARD_MAX_TASKS);
+  const maxTaskAttempts = integer(run.config.taskAttempts, DEFAULT_TASK_ATTEMPTS, 1, 5);
   const model = str(run.config.model, profile?.preferredModel ?? 'openrouter/auto');
   const fallbackModels = Array.isArray(run.config.modelFallbacks)
     ? run.config.modelFallbacks.filter((item): item is string => typeof item === 'string' && Boolean(item))
     : [...(profile?.fallbacks ?? [])];
   const authoredPlannerSystem = str(run.config.systemPrompt);
-  const system = authoredPlannerSystem || plannerSystem(parallelism, minTasks, maxTasks);
+  const system = [
+    plannerSystem(parallelism, minTasks, maxTasks),
+    authoredPlannerSystem ? `WORKFLOW-SPECIFIC PLANNING GUIDANCE:\n${authoredPlannerSystem}` : '',
+  ].filter(Boolean).join('\n\n');
   const readOnly = isReadOnlyBrief(run.input);
 
   // Reuse the accepted plan on resume. The plan artifact is written before any
@@ -580,47 +659,104 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
       parsed = { ok: true, plan: degraded.plan, errors: [] };
     }
     await session.append({ type: 'block.output', data: { blockId: run.blockId, port: 'plan', content: planText } });
+    await session.append({ type: 'block.warning', data: {
+      blockId: run.blockId, code: 'task_graph_repaired', resolves: 'invalid_task_graph', resolved: true, transient: false,
+      reason: 'The repaired task graph passed static validation and was accepted.',
+    } });
   }
   const plan = parsed.plan!;
   const completed = await priorChildOutcomes(run, session);
   const announced = new Set<string>();
+  const attemptsByTask = new Map<string, number>();
+  const priorStates = new Map<string, Record<string, unknown>>();
   for await (const event of session.read()) {
     const data = event.data as Record<string, unknown>;
-    if (event.type === 'block.status' && data.parentId === run.blockId && typeof data.taskId === 'string') announced.add(data.taskId);
+    if (event.type === 'block.status' && data.parentId === run.blockId && typeof data.taskId === 'string') {
+      announced.add(data.taskId);
+      priorStates.set(data.taskId, data);
+      if (typeof data.attempt === 'number') attemptsByTask.set(data.taskId, Math.max(attemptsByTask.get(data.taskId) ?? 0, data.attempt));
+    }
   }
   for (const task of plan.tasks) if (!announced.has(task.id)) {
     await session.append({ type: 'block.status', data: {
       blockId: `${run.blockId}.${task.id}`, parentId: run.blockId, taskId: task.id,
       title: task.title, use: 'flyt-blocks-core:work', status: 'pending', dependsOn: task.dependsOn,
+      attempt: 0, maxAttempts: maxTaskAttempts, retryState: 'not-started',
     } });
   }
 
-  while (completed.size < plan.tasks.length) {
-    if (run.signal?.aborted) return { status: 'failed', output: '', error: 'Stopped before the next task wave began.' };
-    const ready = plan.tasks.filter(task => !completed.has(task.id)
-      && task.dependsOn.every(dep => completed.has(dep))).slice(0, maxParallel);
-    if (!ready.length) return { status: 'failed', output: '', error: 'The generated task graph has no ready task; its dependencies cannot be satisfied.' };
-    const outcomes = await Promise.all(ready.map(async task => {
+  const failed = new Map<string, BlockOutcome>();
+  const blocked = new Map<string, string[]>();
+  for (const task of plan.tasks) {
+    const prior = priorStates.get(task.id);
+    if (prior?.status === 'failed' && (attemptsByTask.get(task.id) ?? 0) >= maxTaskAttempts) {
+      const failure = prior.failure && typeof prior.failure === 'object' ? prior.failure as unknown as FailureMetadata : undefined;
+      failed.set(task.id, { status: 'failed', output: '', error: String(prior.error ?? 'previous attempts exhausted'), ...(failure ? { failure } : {}) });
+    }
+    if (prior?.status === 'blocked') blocked.set(task.id, Array.isArray(prior.blockedBy) ? prior.blockedBy.map(String) : task.dependsOn);
+  }
+
+  const runTask = async (task: GeneratedTask): Promise<{ task: GeneratedTask; outcome: BlockOutcome }> => {
       const childId = `${run.blockId}.${task.id}`;
       const identity = childSessionIdentity({
         parentRunId: run.runId, parentBlockId: run.blockId, taskId: task.id,
         profileId, contextBoundary: profile?.context.mode ?? 'isolated',
       });
       const childSession = await run.ctx.sessions.open(identity.sessionId);
-      const startedAt = new Date().toISOString();
-      await session.append({ type: 'child.session', data: {
-        ...identity, stage: 'active', title: task.title, startedAt,
-      } });
-      await childSession.append({ type: 'child.session', data: {
-        ...identity, stage: 'active', title: task.title, startedAt,
-      } });
-      await session.append({ type: 'block.status', data: {
-        blockId: childId, parentId: run.blockId, taskId: task.id, title: task.title,
-        use: 'flyt-blocks-core:work', status: 'active', dependsOn: task.dependsOn,
-        sessionId: identity.sessionId, profileId,
-      } });
-      let outcome: BlockOutcome;
-      try {
+      let attempt = attemptsByTask.get(task.id) ?? 0;
+      let outcome: BlockOutcome = { status: 'failed', output: '', error: 'attempt budget exhausted' };
+      if (attempt >= maxTaskAttempts) {
+        const progress = await childProgress(childSession);
+        const detail = `The application restarted after attempt ${attempt}; this task's ${maxTaskAttempts}-attempt budget is exhausted.`;
+        const failure: FailureMetadata = {
+          code: 'attempts_exhausted', source: 'scheduler', retryable: false, userInitiated: false,
+          visibleOutputProduced: false, durableWriteProduced: progress.durableWriteProduced,
+          detail,
+        };
+        outcome = { status: 'failed', output: '', error: detail, failure };
+        const terminal = {
+          ...identity, stage: 'failed', title: task.title, attempt, maxAttempts: maxTaskAttempts,
+          finishedAt: new Date().toISOString(), retryDecision: 'attempts_exhausted',
+          metrics: { events: await childSession.head() }, error: detail,
+          failure: failure as unknown as JsonValue,
+          ...(progress.lastDurableProgress ? { lastDurableProgress: progress.lastDurableProgress } : {}),
+        };
+        await childSession.append({ type: 'child.session', data: terminal as unknown as JsonValue });
+        await session.append({ type: 'child.session', data: terminal as unknown as JsonValue });
+        await session.append({ type: 'block.status', data: {
+          blockId: childId, parentId: run.blockId, taskId: task.id, title: task.title,
+          use: 'flyt-blocks-core:work', status: 'failed', dependsOn: task.dependsOn,
+          sessionId: identity.sessionId, profileId, attempt, maxAttempts: maxTaskAttempts,
+          retryState: 'attempts_exhausted', error: detail,
+          failure: failure as unknown as JsonValue,
+          ...(progress.lastDurableProgress ? { lastDurableProgress: progress.lastDurableProgress } : {}),
+        } });
+        return { task, outcome };
+      }
+      while (attempt < maxTaskAttempts) {
+        attempt += 1;
+        attemptsByTask.set(task.id, attempt);
+        const before = await childProgress(childSession);
+        const recovery = attempt > 1
+          ? { mode: before.durableWriteProduced ? 'resume' as const : 'restart' as const, checkpoint: before.checkpoint }
+          : undefined;
+        const startedAt = new Date().toISOString();
+        await session.append({ type: 'child.session', data: {
+          ...identity, stage: 'active', title: task.title, startedAt, attempt, maxAttempts: maxTaskAttempts,
+          ...(recovery ? { recovery: recovery.mode } : {}),
+        } });
+        await childSession.append({ type: 'child.session', data: {
+          ...identity, stage: 'active', title: task.title, startedAt, attempt, maxAttempts: maxTaskAttempts,
+          ...(recovery ? { recovery: recovery.mode } : {}),
+        } });
+        await session.append({ type: 'block.status', data: {
+          blockId: childId, parentId: run.blockId, taskId: task.id, title: task.title,
+          use: 'flyt-blocks-core:work', status: 'active', dependsOn: task.dependsOn,
+          sessionId: identity.sessionId, profileId, attempt, maxAttempts: maxTaskAttempts,
+          retryState: recovery ? (recovery.mode === 'resume' ? 'resuming-checkpoint' : 'restarting') : 'running',
+          ...(before.lastDurableProgress ? { lastDurableProgress: before.lastDurableProgress } : {}),
+        } });
+        try {
         // A task that declares no writes is a read-only task, not merely a
         // writer that happens not to use its authority. Narrow its ceiling
         // before schemas reach the model, so it cannot churn through approval
@@ -631,7 +767,8 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
           ? profiledCeiling
           : profiledCeiling.filter(name => run.ctx.tools.get(name)?.classification?.effect === 'read');
         outcome = await executeWork({
-          ...run, runId: identity.sessionId, blockId: 'worker', input: taskInput(task, run.input, completed),
+          ...run, runId: identity.sessionId, blockId: attempt === 1 ? 'worker' : `worker-retry-${attempt}`,
+          input: taskInput(task, run.input, completed, recovery),
           ceiling: childCeiling,
           config: {
             model, ...(fallbackModels.length ? { modelFallbacks: fallbackModels } : {}),
@@ -640,39 +777,107 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
             permissionRules: (profile?.permissionRules ?? []) as unknown as JsonValue,
             maxSteps: integer(run.config.workerMaxSteps, profile?.warnings?.steps ?? MAX_STEPS, 1, 100_000),
             maxTokens: integer(run.config.workerMaxTokens, DEFAULT_WORKER_MAX_TOKENS, 1, 131_072),
+            maxInputTokens: integer(run.config.workerMaxInputTokens, profile?.context.maxInputTokens ?? 96_000, 1_024, 1_000_000),
+            modelRetryAttempts: 1,
             isolated: profile?.context.mode !== 'shared',
             instructions: `Work only on this generated task. Respect its expected write scope.\n${str(run.config.workerInstructions)}`.trim(),
           },
         });
-      } catch (error) {
-        outcome = { status: 'failed', output: '', error: String((error as Error)?.message ?? error) };
+        } catch (error) {
+          const progress = await childProgress(childSession);
+          const failure = taskFailure(error, task, attempt, progress.durableWriteProduced);
+          outcome = { status: 'failed', output: '', error: failure.detail ?? String((error as Error)?.message ?? error), failure };
+        }
+        const progress = await childProgress(childSession);
+        if (outcome.status === 'failed' && !outcome.failure) {
+          outcome.failure = taskFailure(new Error(outcome.error ?? 'generated task failed'), task, attempt, progress.durableWriteProduced);
+        }
+        const failure = outcome.failure;
+        const mayRetry = outcome.status === 'failed' && attempt < maxTaskAttempts
+          && failure?.retryable === true && failure.userInitiated !== true;
+        const retryDecision = mayRetry
+          ? (progress.durableWriteProduced ? 'resume_from_checkpoint' : 'restart')
+          : outcome.status === 'done' ? 'completed'
+            : failure?.userInitiated ? 'user_cancelled'
+              : attempt >= maxTaskAttempts ? 'attempts_exhausted' : 'not_retryable';
+        const finishedAt = new Date().toISOString();
+        const lifecycle = {
+          ...identity, stage: outcome.status, title: task.title, finishedAt, attempt, maxAttempts: maxTaskAttempts,
+          metrics: { events: await childSession.head() }, retryDecision,
+          ...(progress.lastDurableProgress ? { lastDurableProgress: progress.lastDurableProgress } : {}),
+          ...(outcome.error ? { error: outcome.error } : {}),
+          ...(failure ? { failure: failure as unknown as JsonValue } : {}),
+        };
+        await childSession.append({ type: 'child.session', data: lifecycle as unknown as JsonValue });
+        await session.append({ type: 'child.session', data: lifecycle as unknown as JsonValue });
+        if (outcome.output) await session.append({ type: 'block.output', data: {
+          blockId: childId, parentId: run.blockId, taskId: task.id, content: outcome.output, attempt,
+        } });
+        await session.append({ type: 'block.status', data: {
+          blockId: childId, parentId: run.blockId, taskId: task.id, title: task.title,
+          use: 'flyt-blocks-core:work', status: mayRetry ? 'pending' : outcome.status, dependsOn: task.dependsOn,
+          sessionId: identity.sessionId, profileId, attempt, maxAttempts: maxTaskAttempts,
+          retryState: retryDecision,
+          ...(progress.lastDurableProgress ? { lastDurableProgress: progress.lastDurableProgress } : {}),
+          ...(outcome.error ? { error: outcome.error } : {}),
+          ...(failure ? { failure: failure as unknown as JsonValue } : {}),
+        } });
+        if (outcome.status === 'done') break;
+        await session.append({ type: 'task.retry', data: {
+          blockId: childId, parentId: run.blockId, taskId: task.id, attempt,
+          decision: retryDecision, nextAttempt: mayRetry ? attempt + 1 : null,
+          failure: failure as unknown as JsonValue,
+        } });
+        if (!mayRetry) break;
       }
-      const finishedAt = new Date().toISOString();
-      const lifecycle = {
-        ...identity, stage: outcome.status, title: task.title, finishedAt,
-        metrics: { events: await childSession.head() },
-        ...(outcome.error ? { error: outcome.error } : {}),
-      };
-      await childSession.append({ type: 'child.session', data: lifecycle as unknown as JsonValue });
-      await session.append({ type: 'child.session', data: lifecycle as unknown as JsonValue });
-      if (outcome.output) await session.append({ type: 'block.output', data: {
-        blockId: childId, parentId: run.blockId, taskId: task.id, content: outcome.output,
-      } });
-      await session.append({ type: 'block.status', data: {
-        blockId: childId, parentId: run.blockId, taskId: task.id, title: task.title,
-        use: 'flyt-blocks-core:work', status: outcome.status, dependsOn: task.dependsOn,
-        sessionId: identity.sessionId, profileId,
-        ...(outcome.error ? { error: outcome.error } : {}),
-      } });
       return { task, outcome };
-    }));
-    const failed = outcomes.filter(item => item.outcome.status === 'failed');
-    for (const item of outcomes) if (item.outcome.status === 'done') completed.set(item.task.id, item.outcome);
-    if (failed.length) return {
-      status: 'failed', output: failed.map(item => item.outcome.output).filter(Boolean).join('\n\n'),
-      error: failed.length === 1
-        ? `Generated task "${failed[0].task.title}" failed: ${failed[0].outcome.error ?? 'unknown error'}`
-        : `${failed.length} generated tasks failed: ${failed.map(item => `"${item.task.title}": ${item.outcome.error ?? 'unknown error'}`).join('; ')}`,
+  };
+
+  while (completed.size + failed.size + blocked.size < plan.tasks.length) {
+    if (run.signal?.aborted) return {
+      status: 'failed', output: '', error: 'Stopped before the next task wave began.',
+      failure: { code: 'cancelled', source: 'user', retryable: false, userInitiated: true,
+        visibleOutputProduced: false, durableWriteProduced: false },
+    };
+    let newlyBlocked = 0;
+    for (const task of plan.tasks) {
+      if (completed.has(task.id) || failed.has(task.id) || blocked.has(task.id)) continue;
+      const blockedBy = task.dependsOn.filter(dep => failed.has(dep) || blocked.has(dep));
+      if (!blockedBy.length) continue;
+      blocked.set(task.id, blockedBy); newlyBlocked += 1;
+      await session.append({ type: 'block.status', data: {
+        blockId: `${run.blockId}.${task.id}`, parentId: run.blockId, taskId: task.id, title: task.title,
+        use: 'flyt-blocks-core:work', status: 'blocked', dependsOn: task.dependsOn, blockedBy,
+        attempt: attemptsByTask.get(task.id) ?? 0, maxAttempts: maxTaskAttempts,
+        retryState: 'blocked_by_dependency',
+        failure: { code: 'dependency_failed', source: 'scheduler', retryable: false, userInitiated: false,
+          visibleOutputProduced: false, durableWriteProduced: false } as unknown as JsonValue,
+      } });
+    }
+    const ready = plan.tasks.filter(task => !completed.has(task.id) && !failed.has(task.id) && !blocked.has(task.id)
+      && task.dependsOn.every(dep => completed.has(dep))).slice(0, maxParallel);
+    if (!ready.length) {
+      if (newlyBlocked) continue;
+      return { status: 'failed', output: '', error: 'The generated task graph has no ready task; its dependencies cannot be satisfied.' };
+    }
+    const outcomes = await Promise.all(ready.map(runTask));
+    for (const item of outcomes) {
+      if (item.outcome.status === 'done') completed.set(item.task.id, item.outcome);
+      else failed.set(item.task.id, item.outcome);
+    }
+  }
+
+  if (failed.size || blocked.size) {
+    const failedItems = plan.tasks.filter(task => failed.has(task.id));
+    const blockedItems = plan.tasks.filter(task => blocked.has(task.id));
+    return {
+      status: 'failed',
+      output: [...failed.values()].map(item => item.output).filter(Boolean).join('\n\n'),
+      error: [
+        failedItems.length ? `${failedItems.length} generated task${failedItems.length === 1 ? '' : 's'} failed: ${failedItems.map(task => `"${task.title}": ${failed.get(task.id)?.error ?? 'unknown error'}`).join('; ')}` : '',
+        blockedItems.length ? `${blockedItems.length} dependent task${blockedItems.length === 1 ? '' : 's'} blocked: ${blockedItems.map(task => `"${task.title}" by ${blocked.get(task.id)?.join(', ')}`).join('; ')}` : '',
+      ].filter(Boolean).join(' '),
+      failure: failedItems.length === 1 ? failed.get(failedItems[0].id)?.failure : undefined,
     };
   }
 
@@ -692,7 +897,7 @@ export const TASK_GRAPH_SETTINGS = {
     modelFallbacks: { type: 'array', items: { type: 'string' }, maxItems: 3 },
     systemPrompt: {
       title: 'Planner system prompt', type: 'string', format: 'multiline',
-      description: 'Replace the planning agent’s standing system prompt for this workflow instance.',
+      description: 'Append workflow-specific planning guidance after the task-graph block’s invariant safety contract.',
     },
     workerSystemPrompt: {
       title: 'Worker system prompt', type: 'string', format: 'multiline',
@@ -708,6 +913,8 @@ export const TASK_GRAPH_SETTINGS = {
     effort: { enum: ['low', 'medium', 'high'], description: 'How hard generated workers should think.' },
     workerMaxSteps: { title: 'Warn after worker tool rounds', type: 'integer', minimum: 1, maximum: 100_000, description: 'Soft threshold only. The worker warns and continues.' },
     workerMaxTokens: { title: 'Worker tokens per query', type: 'integer', minimum: 1, maximum: 131_072, description: 'A worker cut off here automatically continues in another query.' },
+    workerMaxInputTokens: { title: 'Checkpoint input tokens', type: 'integer', minimum: 1024, maximum: 1_000_000, description: 'Compact old raw results and write a resume checkpoint at this estimated input size.' },
+    taskAttempts: { title: 'Attempts per generated task', type: 'integer', minimum: 1, maximum: 5, description: 'Total scheduler-owned attempts. Defaults to two.' },
     workerInstructions: { title: 'Worker instructions', type: 'string', format: 'multiline' },
   },
 } as const;

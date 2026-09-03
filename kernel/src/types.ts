@@ -8,6 +8,24 @@
 /** Anything that survives a round trip through the session log. */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+/** Stable failure facts used for recovery and diagnostics; never parse `detail` for policy. */
+export interface FailureMetadata {
+  code: string;
+  source: 'provider' | 'user' | 'tool' | 'scheduler' | 'application' | string;
+  provider?: string | null;
+  model?: string | null;
+  callId?: string | null;
+  step?: number | null;
+  retryable: boolean;
+  userInitiated: boolean;
+  visibleOutputProduced: boolean;
+  reasoningOutputProduced?: boolean;
+  toolCallProduced?: boolean;
+  durableWriteProduced: boolean;
+  detail?: string | null;
+  remedy?: string | null;
+}
+
 /** Who produced a message. `tool` carries a tool result back to the model. */
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
 

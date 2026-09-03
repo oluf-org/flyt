@@ -94,7 +94,7 @@ export default {
         durationMs: r.ms,
         output: tail(r.output)
       });
-      ctx?.store?.appendLog?.(ctx.runId, {
+      if (!ctx?.canonicalSession) ctx?.store?.appendLog?.(ctx.runId, {
         event: 'gate_run',
         node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
         command: r.command, status: r.status, code: r.code, ms: r.ms

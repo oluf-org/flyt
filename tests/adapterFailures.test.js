@@ -13,7 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  classifyAdapterError, mayFallThrough, withFailureCode,
+  classifyAdapterError, failureMetadata, mayFallThrough, withFailureCode,
   isInfrastructureFailure, isTransientFailure, needsHuman, blamesTask,
   sanitizeFailureDetail, FAILURE_CODES
 } from '../core/adapters/failures.js';
@@ -173,6 +173,8 @@ test('a cancelled attempt is recorded as cancelled, never as a provider failure'
   assert.equal(current.code, undefined);
   // …and it is classified as a stop, not as something to retry elsewhere.
   assert.equal(classifyAdapterError(errWith('aborted', { aborted: true })).code, 'cancelled');
+  assert.deepEqual(failureMetadata(errWith('aborted', { aborted: true })).userInitiated, true);
+  assert.equal(failureMetadata(errWith('aborted', { aborted: true })).retryable, false);
   assert.equal(mayFallThrough('cancelled', 'auto'), false);
 });
 

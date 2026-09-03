@@ -111,6 +111,18 @@ function BlockMetrics({ metrics, status }) {
   </div>;
 }
 
+function RecoveryFacts({ state }) {
+  if (!state || (!state.attempt && !state.retryState && !state.failure && !state.lastDurableProgress && !state.blockedBy?.length)) return null;
+  const durable = state.lastDurableProgress;
+  return <div className="be-recovery-facts" aria-label="Task recovery state">
+    {state.maxAttempts > 0 && <span><small>Attempt</small><strong>{state.attempt ?? 0}/{state.maxAttempts}</strong></span>}
+    {state.retryState && <span><small>Recovery</small><strong>{String(state.retryState).replaceAll('_', ' ')}</strong></span>}
+    {state.failure?.code && <span><small>Failure</small><strong>{state.failure.code}</strong></span>}
+    {durable && <span title={JSON.stringify(durable)}><small>Last durable progress</small><strong>{durable.tool ?? `step ${durable.atStep ?? durable.seq ?? '?'}`}</strong></span>}
+    {state.blockedBy?.length > 0 && <span><small>Blocked by</small><strong>{state.blockedBy.join(', ')}</strong></span>}
+  </div>;
+}
+
 function parentSlot(root, nodeId) {
   for (const parent of workflowNodes(root, [])) {
     if (parent.kind === 'block') continue;
@@ -498,6 +510,7 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
     {run && <BlockStatus status={status} metrics={metrics} />}
     {editable && <button type="button" className="be-delete" aria-label={`Delete ${titleOf(node, blocks)}`} onClick={event => { event.stopPropagation(); onDelete(node); }}><Icon name="trash"/></button>}
     {run && <BlockMetrics metrics={metrics} status={status} />}
+    {run && node.generated === true && <RecoveryFacts state={blockRun} />}
     {output && <details className="be-inline-output" open={status === 'active'}><summary>Output</summary><pre>{output}</pre></details>}
     </article>;
     if (!generated.length) return card;

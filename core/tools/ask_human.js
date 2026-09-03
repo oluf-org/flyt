@@ -79,7 +79,7 @@ export default {
     ].filter(Boolean).join('\n');
 
     ctx.backlog.update(taskId, { status: 'parked', blockedReason });
-    ctx.store?.appendLog?.(ctx.runId, {
+    if (!ctx.canonicalSession) ctx.store?.appendLog?.(ctx.runId, {
       event: 'question_asked',
       node: ctx.nodeId ?? (ctx.taskId ? `executor:${ctx.taskId}` : null),
       task: taskId, question

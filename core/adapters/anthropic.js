@@ -57,7 +57,7 @@ export async function anthropicAdapter({ model, system, prompt, messages, tools,
       try { msg = JSON.parse(event); } catch { continue; }
       if (msg.type === 'content_block_delta' && msg.delta?.type === 'text_delta') {
         text += msg.delta.text;
-        onText(text, { telemetry: { contentChars: text.length, reasoningChars: reasoningText.length } });
+        onText(text, { content: text, reasoning: reasoningText, telemetry: { contentChars: text.length, reasoningChars: reasoningText.length } });
       }
       if (msg.type === 'content_block_start') blocks.set(msg.index ?? 0, structuredClone(msg.content_block ?? {}));
       if (msg.type === 'content_block_delta' && msg.delta?.type === 'thinking_delta') {
@@ -65,7 +65,7 @@ export async function anthropicAdapter({ model, system, prompt, messages, tools,
         const block = blocks.get(msg.index ?? 0) ?? { type: 'thinking', thinking: '' };
         block.thinking = String(block.thinking ?? '') + String(msg.delta.thinking ?? '');
         blocks.set(msg.index ?? 0, block);
-        onText(text || `⟢ thinking…\n\n${reasoningText}`, { telemetry: { contentChars: text.length, reasoningChars: reasoningText.length } });
+        onText(text || `⟢ thinking…\n\n${reasoningText}`, { content: text, reasoning: reasoningText, telemetry: { contentChars: text.length, reasoningChars: reasoningText.length } });
       }
       if (msg.type === 'content_block_delta' && msg.delta?.type === 'signature_delta') {
         const block = blocks.get(msg.index ?? 0) ?? { type: 'thinking', thinking: reasoningText };
@@ -84,7 +84,8 @@ export async function anthropicAdapter({ model, system, prompt, messages, tools,
       }
       if (msg.type === 'error') throw new Error(`Anthropic API stream error: ${JSON.stringify(msg.error).slice(0, 500)}`);
     }
-    onText(text, { final: true }); // the consumer must not throttle the last state away
+    onText(text, { final: true, content: text, reasoning: reasoningText,
+      telemetry: { contentChars: text.length, reasoningChars: reasoningText.length } }); // the consumer must not throttle the last state away
     const content = [...blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, block]) => {
       if (block.type === 'tool_use' && block.input_json !== undefined) {
         try { return { ...block, input: JSON.parse(block.input_json || '{}') }; }
