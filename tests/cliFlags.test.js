@@ -10,6 +10,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { checkFlags, renderWhy } from '../bin/flyt.js';
+import { defaultUserDataDir } from '../core/brand.js';
 
 const cli = fileURLToPath(new URL('../bin/flyt.js', import.meta.url));
 // The CLI resolves its profile from the environment, so a test that does not
@@ -195,7 +196,9 @@ test('a repeated --goal never reaches the task file', () => {
 // directory replaced the app's whole tab list with that directory, and this
 // suite did the same to the developer's profile on every run.
 test('a CLI call opens its own project without rewriting the desktop tab session', () => {
-  const settingsPath = path.join(profile, 'flyt', 'settings.json');
+  // Ask for the profile the way the CLI resolves it: macOS puts it under
+  // Library/Application Support, so the Windows layout is not portable.
+  const settingsPath = path.join(defaultUserDataDir({ env: isolatedEnv }), 'settings.json');
   const first = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-cli-tabs-a-'));
   assert.equal(run(['task', 'list', '--project', first]).status, 0);
 
