@@ -33,7 +33,7 @@ import {
   appendStoredRunEvent, storedSnapshots, SNAPSHOT_UPDATE_EVENTS,
 } from './runProjection.js';
 import { RunController } from './runController.js';
-import { repairInterruptedSessions } from '#kernel';
+import { parentRunIdOf, repairInterruptedSessions } from '#kernel';
 import { StackStore } from './stackstore.js';
 import { summarizeWorkflowRun } from './conversationSupervisor.js';
 import { analyzeWorkflowRun } from './runDebugger.js';
@@ -183,11 +183,17 @@ export function createApi(engine) {
     };
   };
 
+  // A Plan & dispatch child asks under the run the person launched. The
+  // renderer watches that run and drops events for any other id, so an
+  // approval keyed by the child session was never shown and the child waited
+  // forever (the installed run 2026-09-03T13-57-11 sat 2h20m on one escalation).
   const workflowAskHuman = entry => async (exec, reason) => {
     const callId = String(exec?.call?.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
-    const key = `${entry.id}\n${exec.runId}\n${callId}`;
+    const runId = parentRunIdOf(exec.runId);
+    const key = `${entry.id}\n${runId}\n${callId}`;
     const interaction = {
-      kind: 'approval', projectId: entry.id, runId: exec.runId, blockId: exec.blockId,
+      kind: 'approval', projectId: entry.id, runId, blockId: exec.blockId,
+      ...(runId !== exec.runId ? { sessionId: exec.runId } : {}),
       callId, tool: exec.call?.name ?? 'tool', args: exec.call?.args ?? null, reason,
     };
     return new Promise(resolve => {
@@ -198,9 +204,11 @@ export function createApi(engine) {
 
   const workflowAskBlock = entry => async question => {
     const questionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const key = `${entry.id}\n${question.runId}\n${questionId}`;
+    const runId = parentRunIdOf(question.runId);
+    const key = `${entry.id}\n${runId}\n${questionId}`;
     const interaction = {
-      kind: 'question', projectId: entry.id, questionId, ...question,
+      kind: 'question', projectId: entry.id, questionId, ...question, runId,
+      ...(runId !== question.runId ? { sessionId: question.runId } : {}),
     };
     return new Promise(resolve => {
       workflowQuestions.set(key, { resolve, interaction });

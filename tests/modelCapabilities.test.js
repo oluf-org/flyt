@@ -142,3 +142,30 @@ test('canonical tool-call state rules normalize once and identify restart reconc
   ]);
   assert.deepEqual(rows, [{ callId: 'a', state: 'running' }, { callId: 'b', state: 'completed' }]);
 });
+
+test('a compaction checkpoint names the calls whose results were compacted', async () => {
+  const { describeInspectedCalls } = await import('#kernel');
+  const profile = unknownCapability('large', 'test');
+  profile.limits.contextTokens = { value: 100_000, confidence: 'verified', source: 'fixture' };
+  profile.providerOverheadTokens = { value: 0, confidence: 'verified', source: 'fixture' };
+  const turn = (index, call) => [
+    { role: 'assistant', content: `finding ${index}`, toolCalls: [call] },
+    { role: 'tool', name: call.name, toolCallId: call.id, content: `${index} ${'x'.repeat(3_000)}` },
+    { role: 'user', content: `next ${index}` },
+  ];
+  const messages = [
+    { role: 'user', content: 'Trace the submit path.' },
+    ...turn(1, { id: 'a', name: 'read_file', args: { path: 'src/Lander.jsx' } }),
+    ...turn(2, { id: 'b', name: 'glob', args: { pattern: 'src/**/*.jsx' } }),
+    ...turn(3, { id: 'c', name: 'read_file', args: { path: 'src/Lander.jsx' } }),
+    ...turn(4, { id: 'd', name: 'read_file', args: { path: 'src/v2/DailyRoot.jsx', offset: 300 } }),
+    ...Array.from({ length: 6 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `tail ${index}` })),
+  ];
+  const decision = manageContextBudget({ messages, requestedOutput: 500, checkpointInputTokens: 1_500, profile });
+  assert.ok(decision.actions.some(action => action.action === 'durable_compaction_checkpoint'));
+  assert.match(decision.checkpoint, /Already inspected .*read_file\(src\/Lander\.jsx\), glob\(src\/\*\*\/\*\.jsx\), read_file\(src\/v2\/DailyRoot\.jsx@300\)/,
+    'compacted reads are listed once each, in order, with their page offset');
+  assert.deepEqual(describeInspectedCalls([
+    { role: 'assistant', content: '', toolCalls: Array.from({ length: 50 }, (_, index) => ({ id: String(index), name: 'read_file', args: { path: `f${index}` } })) },
+  ]).slice(0, 2), ['+2 earlier', 'read_file(f2)'], 'a long list keeps the most recent calls and counts the rest');
+});

@@ -477,3 +477,138 @@ test('application restart resumes an active write task from its recorded checkpo
     assert.match(seen[0], /verification remains/);
   } finally { await kernel.dispose(); }
 });
+
+test('child session ids resolve to the launched run for anything a person answers', async () => {
+  const { parentRunIdOf, isChildSessionId } = await import('#kernel');
+  const child = childSessionIdentity({ parentRunId: 'run-9', parentBlockId: 'dispatch', taskId: 'alpha', profileId: 'default-work' });
+  assert.equal(isChildSessionId(child.sessionId), true);
+  assert.equal(parentRunIdOf(child.sessionId), 'run-9');
+  assert.equal(isChildSessionId('run-9'), false);
+  assert.equal(parentRunIdOf('run-9'), 'run-9');
+  assert.equal(parentRunIdOf('2026-09-03T16-24-32-616Z-hq7k--child-0248a7bfe0d0e908'), '2026-09-03T16-24-32-616Z-hq7k');
+});
+
+/** A planner that answers once, then workers that call a tool for as long as it is offered. */
+function toolHungryLlm(plan, { toolName = 'peek', finalAnswer = 'Partial deliverable with coverage limits.' } = {}) {
+  const seen = [];
+  let calls = 0;
+  return {
+    seen,
+    seam: {
+      stream(request) {
+        seen.push(request);
+        const index = calls++;
+        const offered = (request.tools ?? []).map(tool => tool.name);
+        const answer = index === 0
+          ? { content: plan }
+          : offered.includes(toolName)
+            ? { content: '', toolCalls: [{ id: `call-${index}`, name: toolName, args: { at: index } }] }
+            : { content: finalAnswer };
+        return {
+          async *[Symbol.asyncIterator]() { if (answer.content) yield { text: answer.content }; },
+          async settled() {
+            return {
+              content: answer.content, ...(answer.toolCalls ? { toolCalls: answer.toolCalls } : {}),
+              finishReason: answer.toolCalls ? 'tool_calls' : 'stop',
+              route: { requested: 'fake', effective: 'fake', reason: '', degraded: false },
+            };
+          },
+        };
+      },
+      async complete() { throw new Error('stream only'); },
+      async models() { return []; },
+    },
+  };
+}
+
+test('a runaway generated worker is hard-bounded and still contributes what it learned', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-task-graph-bound-'));
+  const kernel = createKernel();
+  const llm = toolHungryLlm(contract([task('inspect')]));
+  let reads = 0;
+  await kernel.ctx.plugin(flytTools);
+  kernel.ctx.tools.register({
+    name: 'peek', description: 'Read.', parameters: { type: 'object' },
+    classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+    async execute() { reads += 1; return { content: 'read' }; },
+  });
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  await kernel.ctx.plugin({ name: 'fake-llm', apply(ctx) { return provideSeam(ctx, 'llm', llm.seam); } });
+  try {
+    const outcome = await executeTaskGraph({
+      ctx: kernel.ctx, runId: 'run-bound', blockId: 'dispatch', input: 'Inspect it.', ceiling: ['peek'],
+      config: { model: 'fake', workerMaxSteps: 3 },
+    });
+    assert.equal(outcome.status, 'done', outcome.error);
+    assert.match(outcome.output, /Partial deliverable/);
+    assert.equal(reads, 3, 'the worker read exactly as many rounds as its bound allows');
+    assert.equal(llm.seen.length, 5, 'one planner turn, three bounded rounds, one answer-only turn');
+    assert.deepEqual(llm.seen.at(-1).tools ?? [], [], 'the wrap-up turn offers no tools');
+
+    const identity = childSessionIdentity({ parentRunId: 'run-bound', parentBlockId: 'dispatch', taskId: 'inspect', profileId: 'default-work' });
+    const child = await kernel.ctx.sessions.read(identity.sessionId);
+    const events = [];
+    for await (const event of child.read()) events.push(event);
+    const hard = events.find(event => event.type === 'block.warning' && event.data.code === 'hard_step_limit');
+    assert.ok(hard, 'the bound is a durable, non-transient fact of the child session');
+    assert.equal(hard.data.transient, false);
+    assert.equal(hard.data.steps, 3);
+  } finally {
+    await kernel.dispose();
+  }
+});
+
+test('shell tools are withheld from generated workers when confined commands are unavailable', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-task-graph-noshell-'));
+  const kernel = createKernel();
+  const llm = toolHungryLlm(contract([task('change', { writeFiles: ['out.txt'] })]), { toolName: 'bash' });
+  let shells = 0;
+  await kernel.ctx.plugin(flytTools);
+  kernel.ctx.tools.register({
+    name: 'peek', description: 'Read.', parameters: { type: 'object' },
+    classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+    async execute() { return { content: 'read' }; },
+  });
+  kernel.ctx.tools.register({
+    name: 'bash', description: 'Run.', parameters: { type: 'object' },
+    classification: { effect: 'shell', destructive: false, untrustedInput: false, source: 'confirmed' },
+    async execute() { shells += 1; return { content: 'ran' }; },
+  });
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  await kernel.ctx.plugin({ name: 'fake-llm', apply(ctx) { return provideSeam(ctx, 'llm', llm.seam); } });
+  await kernel.ctx.plugin({ name: 'fake-sandbox', apply(ctx) {
+    return provideSeam(ctx, 'sandbox', {
+      world: { id: 'test' },
+      async probe() {
+        return { platform: process.platform, backend: 'windows-restricted-token', available: false, enforcement: null,
+          checkedAt: new Date().toISOString(), reason: 'Confined command tools are unavailable for this sign-in.' };
+      },
+      async confine() { throw new Error('must not be reached'); },
+      async disposeOwner() {},
+    });
+  } });
+  try {
+    const outcome = await executeTaskGraph({
+      ctx: kernel.ctx, runId: 'run-noshell', blockId: 'dispatch', input: 'Change it.', ceiling: ['peek', 'bash'],
+      config: { model: 'fake', workerMaxSteps: 3 },
+    });
+    assert.equal(outcome.status, 'done', outcome.error);
+    assert.equal(shells, 0);
+    assert.deepEqual(llm.seen[1].tools.map(tool => tool.name), ['peek'],
+      'a write task keeps its readers and loses only the shell it cannot use');
+    assert.equal(llm.seen.length, 2, 'the worker answered at once because nothing invited a doomed command');
+    const system = llm.seen[1].messages.find(message => message.role === 'system').content;
+    assert.match(system, /Shell commands are unavailable in this run/);
+
+    const identity = childSessionIdentity({ parentRunId: 'run-noshell', parentBlockId: 'dispatch', taskId: 'change', profileId: 'default-work' });
+    const child = await kernel.ctx.sessions.read(identity.sessionId);
+    const events = [];
+    for await (const event of child.read()) events.push(event);
+    const warning = events.find(event => event.type === 'block.warning' && event.data.code === 'commands_unavailable');
+    assert.ok(warning, 'withholding a tool is an explicit fact of the session');
+    assert.deepEqual(warning.data.withheld, ['bash']);
+    assert.match(warning.data.reason, /unavailable for this sign-in/);
+  } finally {
+    await kernel.dispose();
+  }
+});

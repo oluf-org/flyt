@@ -67,7 +67,7 @@ export {
 } from './plugins/blocks-core.js';
 export { routeOf } from './plugins/llm-adapters.js';
 export {
-  ModelCapabilityRegistry, defaultModelCapabilityRegistry, unknownCapability, manageContextBudget,
+  ModelCapabilityRegistry, defaultModelCapabilityRegistry, unknownCapability, manageContextBudget, describeInspectedCalls,
 } from './models/capabilities.js';
 export { TOOL_CALL_STATES, assertToolTransition, normalizeToolCall, reconcileToolCallStates, terminalToolState } from './tool-call-state.js';
 export type {

@@ -11,7 +11,7 @@ import { bootKernel } from './v2.js';
 import { StackStore } from './stackstore.js';
 import { Workspace } from './workspace.js';
 import { callModel } from './adapters/index.js';
-import { executeTool, getTools } from './tools/index.js';
+import { executeTool, getTools, refusedResult } from './tools/index.js';
 import { previewResult } from './tools/preview.js';
 import { loadSkills, skillsSection } from './skills.js';
 import { captureWorkspaceSignature } from './effect.js';
@@ -289,11 +289,14 @@ export async function bootRunKernel({
         }
         const complete = jsonValue(record.ok ? record.result : { error: record.error });
         const preview = previewResult(complete, tool.result ?? {});
+        // The structured preview stays what the model reads; the error flag is
+        // what the loop's progress accounting reads.
+        const refused = record.ok ? refusedResult(record.result) : null;
         return {
           content: `${safeJson(preview.value)}${preview.truncated ? '\n[Preview truncated; the complete result is retained in the run trace.]' : ''}`,
           durableResult: complete,
           ...(record.handle ? { handle: record.handle } : {}),
-          ...(record.ok ? {} : { error: record.error ?? 'tool failed' }),
+          ...(record.ok ? (refused ? { error: refused } : {}) : { error: record.error ?? 'tool failed' }),
         };
       },
     });

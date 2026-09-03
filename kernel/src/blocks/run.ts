@@ -142,7 +142,21 @@ export interface LoopOptions {
   toolGuard?: (call: ToolCall) => string | null | undefined;
   /** Read only this block's tagged conversation from the canonical run log. */
   isolated?: boolean;
+  /**
+   * At the hard step bound, withdraw every tool and give the model a few
+   * answer-only turns to deliver from the evidence it already holds, instead
+   * of discarding hours of reading as an empty failure. Generated workers use
+   * this; small control turns keep the plain bound.
+   */
+  boundedAnswer?: boolean;
   signal?: AbortSignal;
+}
+
+/** Why a turn runs with every tool withdrawn. */
+interface AnswerOnlyMode {
+  cause: 'repeated_read' | 'step_bound';
+  /** The result every requested tool receives while the mode is active. */
+  refusal: string;
 }
 
 /** The tool schemas a model request carries, from the definitions. */
@@ -236,7 +250,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     structuredOutput, reasoning: reasoningRequest, retry, checkpointInputTokens,
     continueOnLength = false, maxTurnRepairs = 2,
     maxLengthContinuations = MAX_LENGTH_CONTINUATIONS,
-    toolLimits = {}, toolGuard, isolated = false, signal,
+    toolLimits = {}, toolGuard, isolated = false, boundedAnswer = false, signal,
   } = options;
 
   // A process restart never leaves a call looking live. Reconciliation is an
@@ -282,7 +296,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   // again, while still recording the call as repetition evidence.
   const readResultCache = new Map<string, ToolResult>();
   const cachedReadCallIds = new Set<string>();
-  let answerOnlyAfterRepeatedRead: RepetitionEvidence | null = null;
+  let answerOnly: AnswerOnlyMode | null = null;
   let answerOnlyRecoveryAttempts = 0;
   let turnRepairs = 0;
   let lengthContinuations = 0;
@@ -299,7 +313,25 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   let routeModels = [model, ...fallbackModels];
 
   for (step = 1; ; step++) {
-    if (maxSteps != null && step > maxSteps) break;
+    if (maxSteps != null && step > maxSteps && !answerOnly) {
+      // A worker that has read for hours and is cut off with nothing is the
+      // worst outcome for everyone downstream. With tools withdrawn it can
+      // still deliver what it learned; the bound below on answer-only turns
+      // keeps this from becoming a second unbounded loop.
+      if (!boundedAnswer || !schemas.length) break;
+      answerOnly = {
+        cause: 'step_bound',
+        refusal: `Tool unavailable: this block used all ${maxSteps} of its tool rounds. Finish from evidence already present.`,
+      };
+      await session.append({ type: 'block.warning', data: {
+        blockId, code: 'hard_step_limit', transient: false, steps: maxSteps,
+        reason: `The block used all ${maxSteps.toLocaleString('en-US')} of its hard-bounded tool rounds without finishing. Tools are withdrawn; the remaining turns must deliver from the evidence already collected.`,
+      } });
+      await session.append({ type: 'message.system', data: {
+        blockId,
+        content: `STOP. You have used all ${maxSteps.toLocaleString('en-US')} tool rounds for this task and every tool is now withdrawn. Write the best complete deliverable now from the evidence already in this conversation. State plainly any coverage limit, unverified assumption, or check you could not run.`,
+      } });
+    }
     const ref: StepRef = { runId, blockId, step };
 
     if (signal?.aborted) {
@@ -327,7 +359,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     let messages = await session.deriveMessages(undefined, isolated ? blockId : undefined);
     const callId = `${blockId}-${step}`;
     let [requestModel, ...requestFallbacks] = routeModels;
-    let requestSchemas = answerOnlyAfterRepeatedRead ? [] : schemas;
+    let requestSchemas = answerOnly ? [] : schemas;
     const interceptions = (ctx as typeof ctx & { interceptions?: InterceptionRegistry }).interceptions;
     const traceInterception = async (trace: readonly { point: string; plugin: string; order: number; mutated: boolean; beforeHash: string; afterHash: string }[]) => {
       for (const item of trace) await session.append({ type: 'plugin.interception', data: {
@@ -636,10 +668,10 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     // schemas; record explicit refusals so the protocol remains balanced and
     // give the model another chance to produce the answer. No requested tool
     // is executed during these attempts.
-    if (answerOnlyAfterRepeatedRead) {
+    if (answerOnly) {
       answerOnlyRecoveryAttempts += 1;
       for (const call of calls) {
-        const refusal = 'Tool unavailable: repeated reads triggered answer-only recovery. Finish from evidence already present.';
+        const refusal = answerOnly.refusal;
         await session.append({ type: 'tool.state', data: { callId: call.id, blockId, state: 'received' } });
         await session.append({ type: 'tool.state', data: {
           callId: call.id, blockId, state: 'normalized', name: call.name, args: call.args,
@@ -654,7 +686,9 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       ctx.emit('step/end', ref, settled);
       if (answerOnlyRecoveryAttempts >= MAX_ANSWER_ONLY_RECOVERY_ATTEMPTS) {
         stopped = 'bound';
-        reason = `The model requested tools in all ${MAX_ANSWER_ONLY_RECOVERY_ATTEMPTS} answer-only recovery attempts after a repeated-read loop. No additional tool call was executed.`;
+        reason = answerOnly.cause === 'step_bound'
+          ? `The model requested tools in all ${MAX_ANSWER_ONLY_RECOVERY_ATTEMPTS} answer-only turns after using its ${maxSteps}-round hard bound. No additional tool call was executed.`
+          : `The model requested tools in all ${MAX_ANSWER_ONLY_RECOVERY_ATTEMPTS} answer-only recovery attempts after a repeated-read loop. No additional tool call was executed.`;
         break;
       }
       await session.append({ type: 'block.warning', data: {
@@ -803,7 +837,10 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
           break;
         }
       } else if (ctx.tools.get(clearLoop.call.name)?.classification?.effect === 'read') {
-        answerOnlyAfterRepeatedRead = clearLoop;
+        answerOnly = {
+          cause: 'repeated_read',
+          refusal: 'Tool unavailable: repeated reads triggered answer-only recovery. Finish from evidence already present.',
+        };
         const wasCached = CACHEABLE_REPEAT_READS.has(clearLoop.call.name);
         await session.append({ type: 'block.warning', data: {
           blockId, code: 'repeated_read_recovery', transient: true,

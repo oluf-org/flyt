@@ -33,6 +33,12 @@ const PLANNER_MAX_TOKENS = 61_440;
 const PLANNER_REPAIR_MAX_TOKENS = 81_920;
 const PLANNER_REPAIR_ATTEMPTS = 3;
 const DEFAULT_TASK_ATTEMPTS = 2;
+// A generated worker runs unattended beside its siblings, so its step limit
+// is a real bound, not the soft warning a watched Work block gets. The
+// installed run 2026-09-03T16-24-32 read for 298 rounds and 107 minutes under
+// a soft limit before a person stopped it; at this bound the worker loses its
+// tools and must write up what it found.
+const DEFAULT_WORKER_HARD_STEPS = 200;
 const DEFAULT_WAVE: Record<ParallelismLevel, number> = { no: 1, low: 2, medium: 4, high: 8 };
 
 export interface GeneratedTask {
@@ -282,8 +288,9 @@ function plannerSystem(parallelism: ParallelismLevel, minTasks: number, maxTasks
     POLICY[parallelism],
     `Create between ${minTasks} and ${maxTasks} tasks through the configured structured response channel.`,
     'produces/requires/optional are named artifacts or facts, not filenames. writeFiles contains every file the task expects to modify.',
-    'One task means one bounded unit of work, not merely one final artifact. A final report does not justify assigning inventory, evidence collection, classification, synthesis, and verification to one worker.',
-    'Split broad evidence gathering into bounded groups, then use dependent consolidation and verification tasks. Keep each task independently verifiable. Do not create empty coordination-only tasks.',
+    'Use the fewest tasks that keep each worker\'s job bounded. One worker can read, decide and produce one deliverable in a single sitting; a request one worker can finish is one task.',
+    'Every dependent task costs a full additional agent run and loses the context its predecessor built, so do not split one deliverable into inventory, classification, synthesis and verification stages. Split only where parts are genuinely independent and can run at the same time, or where a consolidation step truly needs several finished inputs.',
+    'Keep each task independently verifiable. Do not create empty coordination-only tasks or separate verification tasks for work a worker can check itself.',
     'Every worker can inspect the bound workspace. Do not create a broad repository-inventory or exploration task for other workers; give each worker a focused deliverable and let it perform its own targeted reads.',
     'Do not embed JSON in prose. Submit the graph through the native schema response or submit_task_graph tool when offered.',
   ].join('\n');
@@ -775,7 +782,8 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
             systemPrompt: str(run.config.workerSystemPrompt, profile?.systemPrompt),
             effort: run.config.effort ?? profile?.reasoning ?? 'medium',
             permissionRules: (profile?.permissionRules ?? []) as unknown as JsonValue,
-            maxSteps: integer(run.config.workerMaxSteps, profile?.warnings?.steps ?? MAX_STEPS, 1, 100_000),
+            maxSteps: profile?.warnings?.steps ?? MAX_STEPS,
+            hardMaxSteps: integer(run.config.workerMaxSteps, DEFAULT_WORKER_HARD_STEPS, 1, 100_000),
             maxTokens: integer(run.config.workerMaxTokens, DEFAULT_WORKER_MAX_TOKENS, 1, 131_072),
             maxInputTokens: integer(run.config.workerMaxInputTokens, profile?.context.maxInputTokens ?? 96_000, 1_024, 1_000_000),
             modelRetryAttempts: 1,
@@ -911,7 +919,7 @@ export const TASK_GRAPH_SETTINGS = {
     maxTasks: { title: 'Maximum tasks', type: 'integer', minimum: 1, maximum: HARD_MAX_TASKS },
     maxParallel: { title: 'Maximum simultaneous tasks', type: 'integer', minimum: 1, maximum: HARD_MAX_TASKS },
     effort: { enum: ['low', 'medium', 'high'], description: 'How hard generated workers should think.' },
-    workerMaxSteps: { title: 'Warn after worker tool rounds', type: 'integer', minimum: 1, maximum: 100_000, description: 'Soft threshold only. The worker warns and continues.' },
+    workerMaxSteps: { title: 'Worker tool rounds', type: 'integer', minimum: 1, maximum: 100_000, description: 'Hard bound per generated task (default 200). At the bound the worker loses its tools and must deliver from the evidence it already holds; the profile still warns earlier.' },
     workerMaxTokens: { title: 'Worker tokens per query', type: 'integer', minimum: 1, maximum: 131_072, description: 'A worker cut off here automatically continues in another query.' },
     workerMaxInputTokens: { title: 'Checkpoint input tokens', type: 'integer', minimum: 1024, maximum: 1_000_000, description: 'Compact old raw results and write a resume checkpoint at this estimated input size.' },
     taskAttempts: { title: 'Attempts per generated task', type: 'integer', minimum: 1, maximum: 5, description: 'Total scheduler-owned attempts. Defaults to two.' },

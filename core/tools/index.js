@@ -145,6 +145,25 @@ export const toolNames = () => [...registry.keys()];
 // truncation, and the model gets something it can ask more about. Without a
 // store (a unit test, the planned Tools-page test-run) there is nowhere to
 // put an artifact, so the full result stays inline exactly as before.
+/**
+ * A tool can complete without throwing and still have done nothing. The
+ * screened shell answers a refused, unconfinable or escalation-denied command
+ * with a structured result so the model can read why. For progress accounting
+ * that is a failure: the agent loop must not treat it as a durable write,
+ * reset its loop detection, or record a checkpoint after it.
+ *
+ * @returns the reason the call did not run, or null for a call that ran.
+ */
+export function refusedResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+  if (typeof result.refused === 'string' && result.refused.trim()) return result.refused.trim();
+  if (typeof result.errorCode === 'string' && result.errorCode) {
+    const detail = typeof result.stderr === 'string' ? result.stderr.trim() : '';
+    return (detail ? `${result.errorCode}: ${detail}` : result.errorCode).slice(0, 500);
+  }
+  return null;
+}
+
 export async function executeTool(name, args, ctx) {
   const started = Date.now();
   const record = { tool: name, args, ok: false, schemaValid: null, validationDiagnostics: [] };

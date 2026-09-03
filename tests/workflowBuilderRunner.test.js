@@ -595,3 +595,48 @@ test('supervisor context keeps whole outputs and falls back when no cheap model 
   assert.match(summary.text, /Failed: two/);
   assert.match(summary.text, /kept in full/);
 });
+
+test('a generated worker asks for approval under the run the person launched', async () => {
+  const plan = JSON.stringify({
+    summary: 'One writing task.',
+    tasks: [{ id: 'write', title: 'Write', goal: 'Create made.txt.', dependsOn: [], produces: [], requires: [], optional: [], writeFiles: ['made.txt'] }],
+  });
+  let asked = false;
+  const { api, events, projectId, workspace } = await workflowHarness(async request => {
+    const offered = (request.tools ?? []).map(tool => tool?.function?.name ?? tool?.name);
+    if (JSON.stringify(request.messages).includes('ROLE: task-graph-planner')) {
+      return { text: plan, finishReason: 'stop', provider: 'script', model: request.model };
+    }
+    if (offered.includes('create_file') && !asked) {
+      asked = true;
+      return {
+        text: 'I need to write the file.', finishReason: 'tool_calls', provider: 'script', model: request.model,
+        message: { tool_calls: [{
+          id: 'child-write', function: { name: 'create_file', arguments: JSON.stringify({ path: 'made.txt', content: 'made\n' }) },
+        }] },
+      };
+    }
+    return { text: 'Refined brief. Wrote nothing after the refusal.', finishReason: 'stop', provider: 'script', model: request.model };
+  });
+  const started = await api.invoke('workflow:run', {
+    projectId, workflowId: 'fable-at-home', input: 'Create the file.', presetId: 'low', approvalMode: 'ask',
+  });
+  const pending = await waitForAsync(async () => {
+    const rows = await api.invoke('workflow:pending', { projectId, runId: started.runId });
+    return rows.find(row => row.kind === 'approval') ?? null;
+  }, 'child approval under the parent run');
+  assert.equal(pending.tool, 'create_file');
+  assert.equal(pending.runId, started.runId, 'the approval is addressed to the run the renderer is watching');
+  assert.match(pending.sessionId, /--child-[0-9a-f]{16}$/, 'while the child session stays attributable');
+  const emitted = events.find(event => event.type === 'workflow:event' && event.payload.kind === 'approval');
+  assert.equal(emitted?.payload.runId, started.runId);
+
+  await api.invoke('workflow:decide', { projectId, runId: started.runId, callId: pending.callId, approved: false });
+  const snapshot = await waitForAsync(async () => {
+    const current = await api.invoke('run:snapshot', { projectId, runId: started.runId });
+    return current.meta.stage === 'done' || current.meta.stage === 'failed' ? current : null;
+  }, 'workflow after the child approval decision');
+  assert.equal(snapshot.meta.stage, 'done', snapshot.meta.error);
+  assert.equal(fs.existsSync(path.join(workspace, 'made.txt')), false);
+  assert.equal((await api.invoke('workflow:pending', { projectId, runId: started.runId })).length, 0);
+});

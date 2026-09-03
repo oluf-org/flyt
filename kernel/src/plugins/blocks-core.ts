@@ -53,6 +53,44 @@ export const LOOP_CEILING = [
   'ask_human', 'bash', 'run_gate',
 ] as const;
 
+/**
+ * The tools that only mean something when the run can confine a command.
+ *
+ * Offering them without a usable sandbox is worse than withholding them: every
+ * call fails the same way, the model escalates or retries, and the failures
+ * look like activity. One installed run spent 31 of its 708 tool calls that
+ * way. Withholding narrows authority, which convenience may always do.
+ */
+export const SHELL_TOOLS = ['bash', 'run_gate'] as const;
+
+const enforcementStrength = (value: string | null | undefined): number =>
+  value === 'full' ? 2 : value === 'partial' ? 1 : 0;
+
+/**
+ * Why confined commands cannot run in this context, or null when they can.
+ * Absent seams (a unit test, a tools-only host) are not a refusal.
+ */
+export async function commandsUnavailable(ctx: Context): Promise<string | null> {
+  let sandbox: Context['sandbox'] | undefined;
+  try { sandbox = ctx.sandbox; } catch { return null; }
+  if (!sandbox || typeof sandbox.probe !== 'function') return null;
+  // The world descriptor on the seam is the standing fact; an explicitly
+  // unconfined world runs commands without a probe and must not be narrowed.
+  const standing = sandbox.world?.sandbox;
+  if (standing?.standingMode === 'danger-full-access' || standing?.backend === 'unconfined') return null;
+  try {
+    const probe = await sandbox.probe();
+    if (!probe.available) return probe.reason ?? 'No usable command sandbox is available.';
+    const minimum = standing?.enforcement ?? 'partial';
+    if (enforcementStrength(probe.enforcement) < enforcementStrength(minimum)) {
+      return `Sandbox enforcement ${probe.enforcement ?? 'none'} is weaker than the required ${minimum}.`;
+    }
+    return null;
+  } catch (error) {
+    return String((error as Error)?.message ?? error);
+  }
+}
+
 /** Untrusted network text may sit beside readers, never writers or shell. */
 export const RESEARCH_CEILING = [
   'web_search', 'web_fetch', 'scrape_page', 'extract_page',
@@ -106,6 +144,7 @@ export const WORK_SETTINGS = {
     },
     instructions: { type: 'string', description: 'Appended to the standing instructions above.' },
     maxSteps: { type: 'integer', minimum: 1, description: 'Soft tool-round threshold: warn here, then continue working.' },
+    hardMaxSteps: { type: 'integer', minimum: 1, description: 'Hard bound on tool rounds. At the bound every tool is withdrawn and the block must deliver from the evidence it already holds.' },
     maxTokens: { type: 'integer', minimum: 1, maximum: 131_072, description: 'Per-query output ceiling. A truncated worker automatically continues in another query.' },
     effort: {
       enum: ['low', 'medium', 'high'],
@@ -131,7 +170,22 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
   const session = await run.ctx.sessions.open(run.runId);
   const instructions = str(run.config.instructions);
   const systemPrompt = str(run.config.systemPrompt, standingSystem);
-  const tools = run.ctx.tools.list().filter(t => run.ceiling.includes(t.name));
+  const wantsShell = run.ceiling.some(name => (SHELL_TOOLS as readonly string[]).includes(name));
+  const noCommands = wantsShell ? await commandsUnavailable(run.ctx) : null;
+  const ceiling = noCommands
+    ? run.ceiling.filter(name => !(SHELL_TOOLS as readonly string[]).includes(name))
+    : run.ceiling;
+  if (noCommands) {
+    await session.append({ type: 'block.warning', data: {
+      blockId: run.blockId, code: 'commands_unavailable', transient: false,
+      withheld: run.ceiling.filter(name => (SHELL_TOOLS as readonly string[]).includes(name)),
+      reason: `Shell tools were withheld from this block because confined commands cannot run here: ${noCommands}`,
+    } });
+  }
+  const shellNote = noCommands
+    ? 'Shell commands are unavailable in this run: bash and run_gate are not offered and cannot be requested or escalated. Inspect the workspace with read_file, glob and search_files, and state plainly which verification you could not run.'
+    : '';
+  const tools = run.ctx.tools.list().filter(t => ceiling.includes(t.name));
   const permissionRules = Array.isArray(run.config.permissionRules)
     ? run.config.permissionRules as unknown as PermissionRule[] : [];
   const savedApprovals = Array.isArray(run.config.savedApprovals)
@@ -158,13 +212,17 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
     fallbackModels: Array.isArray(run.config.modelFallbacks)
       ? run.config.modelFallbacks.filter((model): model is string => typeof model === 'string' && Boolean(model))
       : [],
-    system: instructions ? `${systemPrompt}\n\n${instructions}` : systemPrompt,
+    system: [systemPrompt, instructions, shellNote].filter(Boolean).join('\n\n'),
     input: run.input,
     tools,
-    ceiling: run.ceiling,
+    ceiling,
     ...(permissionPolicy ? { permissionPolicy } : {}),
     toolConcurrency: typeof run.config.toolConcurrency === 'number' ? run.config.toolConcurrency : 4,
     softMaxSteps: typeof run.config.maxSteps === 'number' ? run.config.maxSteps : MAX_STEPS,
+    // The soft threshold warns; this one ends the reading. A generated worker
+    // that hits it still gets answer-only turns to deliver what it learned.
+    ...(typeof run.config.hardMaxSteps === 'number'
+      ? { maxSteps: Math.max(1, Math.floor(run.config.hardMaxSteps)), boundedAnswer: true } : {}),
     maxTokens: typeof run.config.maxTokens === 'number' ? run.config.maxTokens : DEFAULT_WORKER_MAX_TOKENS,
     ...(typeof run.config.maxInputTokens === 'number' ? { checkpointInputTokens: run.config.maxInputTokens } : {}),
     ...(typeof run.config.modelRetryAttempts === 'number'

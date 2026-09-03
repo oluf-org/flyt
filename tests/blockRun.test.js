@@ -561,3 +561,70 @@ test('every type the loop writes is in the log’s declared vocabulary', async (
     'a type the writer invents is a type the projection and Trace will not fold');
   await boot.kernel.dispose();
 });
+
+const peekTool = () => {
+  let ran = 0;
+  return {
+    get ran() { return ran; },
+    definition: {
+      name: 'peek', description: 'Look.', parameters: { type: 'object' },
+      classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+      async execute() { ran += 1; return { content: 'useful context' }; },
+    },
+  };
+};
+
+test('a hard-bounded worker with boundedAnswer loses its tools at the bound and still delivers', async () => {
+  const peek = peekTool();
+  const boot = await bootFor([
+    { content: '', toolCalls: [{ id: 'c1', name: 'peek', args: { at: 1 } }] },
+    { content: '', toolCalls: [{ id: 'c2', name: 'peek', args: { at: 2 } }] },
+    // The bound has passed: this call is refused, not executed.
+    { content: '', toolCalls: [{ id: 'c3', name: 'peek', args: { at: 3 } }] },
+    { content: 'What I found so far, with the coverage limit stated.' },
+  ], { tools: [peek.definition], ceiling: ['peek'] });
+
+  const result = await loopIn(boot, { maxSteps: 2, boundedAnswer: true });
+  assert.equal(result.stopped, 'answered', 'the deliverable is kept instead of discarded at the bound');
+  assert.equal(result.content, 'What I found so far, with the coverage limit stated.');
+  assert.equal(result.steps, 4);
+  assert.equal(peek.ran, 2, 'no tool runs after the bound');
+  assert.deepEqual(boot.llm.seen.map(request => request.tools), [['peek'], ['peek'], [], []],
+    'every turn after the bound offers no tools');
+  const events = [];
+  for await (const event of boot.session.read()) events.push(event);
+  const hard = events.filter(event => event.type === 'block.warning' && event.data.code === 'hard_step_limit');
+  assert.equal(hard.length, 1);
+  assert.equal(hard[0].data.transient, false);
+  assert.match(hard[0].data.reason, /all 2 of its hard-bounded tool rounds/);
+  const refused = events.find(event => event.type === 'tool.result' && event.data.callId === 'c3');
+  assert.match(refused.data.error, /used all 2 of its tool rounds/);
+  assert.equal(refused.data.durableProgress, false);
+  assert.equal(events.at(-1).type, 'turn.end');
+  await boot.kernel.dispose();
+});
+
+test('a worker that keeps requesting tools through every answer-only turn ends bound, not forever', async () => {
+  const peek = peekTool();
+  const boot = await bootFor([
+    { content: '', toolCalls: [{ id: 'c1', name: 'peek', args: {} }] },
+  ], { tools: [peek.definition], ceiling: ['peek'] });
+
+  const result = await loopIn(boot, { maxSteps: 2, boundedAnswer: true });
+  assert.equal(result.stopped, 'bound');
+  assert.match(result.reason, /all 3 answer-only turns after using its 2-round hard bound/);
+  assert.equal(boot.llm.seen.length, 5, 'two bounded rounds plus three answer-only turns');
+  assert.equal(peek.ran, 2);
+  await boot.kernel.dispose();
+});
+
+test('without boundedAnswer the hard bound still stops the loop outright', async () => {
+  const peek = peekTool();
+  const boot = await bootFor([
+    { content: '', toolCalls: [{ id: 'c1', name: 'peek', args: {} }] },
+  ], { tools: [peek.definition], ceiling: ['peek'] });
+  const result = await loopIn(boot, { maxSteps: 2 });
+  assert.equal(result.stopped, 'bound');
+  assert.equal(boot.llm.seen.length, 2);
+  await boot.kernel.dispose();
+});

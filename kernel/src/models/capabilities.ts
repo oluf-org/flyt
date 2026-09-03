@@ -277,6 +277,42 @@ function replaceToolPreviews(messages: readonly Message[]): { messages: Message[
   return { messages: out, changed, handles };
 }
 
+const INSPECTED_CALL_LIMIT = 48;
+const PRIMARY_ARGUMENT_KEYS = ['path', 'pattern', 'query', 'command', 'glob', 'name', 'id'] as const;
+
+/**
+ * `name(primary argument)` for every tool call in the given turns, deduplicated
+ * in order. The most recent calls survive a long list; an earlier remainder is
+ * counted rather than dropped silently.
+ *
+ * @param maxChars — optional budget for the joined list, applied after the
+ *   entry cap so the most recent calls still win.
+ */
+export function describeInspectedCalls(messages: readonly Message[], maxChars = Infinity): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    for (const call of message.toolCalls ?? []) {
+      const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
+        ? call.args as Record<string, unknown> : {};
+      const primary = PRIMARY_ARGUMENT_KEYS.map(key => args[key])
+        .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+      const offset = typeof args.offset === 'number' && args.offset > 0 ? `@${args.offset}` : '';
+      const label = `${call.name}(${primary ? primary.trim().slice(0, 80) : ''}${offset})`;
+      if (seen.has(label)) continue;
+      seen.add(label);
+      out.push(label);
+    }
+  }
+  let kept = out.length <= INSPECTED_CALL_LIMIT ? out : out.slice(-INSPECTED_CALL_LIMIT);
+  const fits = (items: string[]): boolean => items.join(', ').length <= maxChars;
+  while (kept.length > 1 && !fits(kept)) kept = kept.slice(1);
+  if (!fits(kept)) return [];
+  const hidden = out.length - kept.length;
+  return hidden > 0 ? [`+${hidden} earlier`, ...kept] : kept;
+}
+
 /**
  * Fit a request without mutating or deleting its canonical trace.  The return
  * value is the exact effective request plus a durable-action record.
@@ -364,10 +400,22 @@ export function manageContextBudget(input: {
       const priorAssistant = nonSystems.slice(0, start).filter(message => message.role === 'assistant' && message.content.trim()).slice(-3);
       const handles = nonSystems.slice(0, start).filter(message => message.role === 'tool' && message.handle).map(message => message.handle as string);
       const remaining = [...kept].reverse().find(message => message.role === 'user')?.content ?? 'Continue the assigned task.';
+      // What the compacted turns already inspected. Without this list the
+      // model's only memory of a read is whatever finding it wrote about it,
+      // so a worker re-read the same files after every checkpoint until a
+      // person stopped it. Naming the calls lets it cite what it learned, or
+      // read a narrower range, instead of opening the whole file again.
+      // The checkpoint itself lives in the window, so it scales with the
+      // window: a small-context model keeps the terse form, a worker-sized
+      // one can afford real findings and the inspected list.
+      const findingChars = Math.min(500, Math.max(200, Math.floor(contextLimit * 0.005)));
+      const inspectedChars = Math.min(2_400, Math.floor(contextLimit * 0.012));
+      const inspected = inspectedChars >= 120 ? describeInspectedCalls(nonSystems.slice(0, start), inspectedChars) : [];
       const checkpoint = [
         'Context checkpoint (authoritative resume state).',
         `Compacted messages: ${removed}.`,
-        `Completed findings: ${priorAssistant.length ? priorAssistant.map(message => message.content.slice(0, 200)).join(' | ') : 'See durable tool results and artifacts.'}`,
+        `Completed findings: ${priorAssistant.length ? priorAssistant.map(message => message.content.slice(0, findingChars)).join(' | ') : 'See durable tool results and artifacts.'}`,
+        ...(inspected.length ? [`Already inspected (compacted; do not repeat these calls, cite the findings above or read a narrower range): ${inspected.join(', ')}`] : []),
         `Remaining work: ${remaining.slice(0, 400)}`,
         `Artifact handles: ${handles.length ? [...new Set(handles)].join(', ') : 'none'}.`,
         'Do not replay completed work. Continue from this checkpoint; the immutable trace remains available for diagnostics.',
