@@ -157,7 +157,9 @@ export function feed(trace, events) {
           id: typeof data.turn === 'number' ? data.turn : trace.turns.length + 1,
           runId: data.runId ?? null,
           startedAt: event.at ?? null,
+          startedSeq: typeof event.seq === 'number' ? event.seq : null,
           endedAt: null,
+          endedSeq: null,
           finished: false,
           steps: [],
         });
@@ -169,6 +171,7 @@ export function feed(trace, events) {
         if (turn) {
           turn.finished = true;
           turn.endedAt = event.at ?? turn.endedAt;
+          turn.endedSeq = typeof event.seq === 'number' ? event.seq : turn.endedSeq;
         }
         break;
       }
@@ -180,7 +183,9 @@ export function feed(trace, events) {
             id: trace.turns.length + 1,
             runId: data.runId ?? null,
             startedAt: event.at ?? null,
+            startedSeq: typeof event.seq === 'number' ? event.seq : null,
             endedAt: null,
+            endedSeq: null,
             finished: false,
             steps: [],
           };
@@ -193,9 +198,12 @@ export function feed(trace, events) {
           blockId: data.blockId ?? null,
           step: stepNumber,
           startedAt: event.at ?? null,
+          startedSeq: typeof event.seq === 'number' ? event.seq : null,
           endedAt: null,
+          endedSeq: null,
           finished: false,
           prompt: null,
+          promptSeq: null,
           request: null,
           toolInputs: [],
           toolCalls: [],
@@ -209,6 +217,7 @@ export function feed(trace, events) {
         if (!step) break;
         step.finished = true;
         step.endedAt = event.at ?? step.endedAt;
+        step.endedSeq = typeof event.seq === 'number' ? event.seq : step.endedSeq;
         const settled = asRecord(data.settled);
         if (step.request && settled) {
           if (settled.finishReason != null && step.request.finishReason == null) {
@@ -222,7 +231,10 @@ export function feed(trace, events) {
 
       case STEP_PROMPT: {
         const step = openStep(trace) ?? openTurn(trace)?.steps.at(-1) ?? null;
-        if (step) step.prompt = data.content ?? data.prompt ?? null;
+        if (step) {
+          step.prompt = data.content ?? data.prompt ?? null;
+          step.promptSeq = typeof event.seq === 'number' ? event.seq : step.promptSeq;
+        }
         break;
       }
 
@@ -237,13 +249,17 @@ export function feed(trace, events) {
           maxTokens: Number.isFinite(data.maxTokens) ? data.maxTokens : null,
           prompt: data.prompt ?? null,
           requestedAt: event.at ?? null,
+          requestedSeq: typeof event.seq === 'number' ? event.seq : null,
           respondedAt: null,
+          respondedSeq: null,
           settled: false,
           finishReason: null,
           usage: null,
           route: null,
           content: null,
+          contentSeq: null,
           reasoning: null,
+          reasoningSeq: null,
           firstTokenAt: null,
           lastTokenAt: null,
           attempts: [],
@@ -280,11 +296,18 @@ export function feed(trace, events) {
         if (request) {
           request.settled = true;
           request.respondedAt = event.at ?? request.respondedAt;
+          request.respondedSeq = typeof event.seq === 'number' ? event.seq : request.respondedSeq;
           if (data.finishReason != null) request.finishReason = data.finishReason;
           if (data.usage != null) request.usage = data.usage;
           if (data.route != null) request.route = data.route;
-          if (data.content != null) request.content = data.content;
-          if (data.reasoning != null) request.reasoning = data.reasoning;
+          if (data.content != null) {
+            request.content = data.content;
+            if (String(data.content).length) request.contentSeq ??= request.respondedSeq;
+          }
+          if (data.reasoning != null) {
+            request.reasoning = data.reasoning;
+            if (String(data.reasoning).length) request.reasoningSeq ??= request.respondedSeq;
+          }
           // Non-streaming adapters deliver their first and last visible token
           // with the response envelope. Keep the timestamp on the request so
           // Work can use the same canonical trace for its live-idle clock.
@@ -314,7 +337,11 @@ export function feed(trace, events) {
               callId: String(id),
               name: record.name ?? null,
               args: record.args ?? null,
+              calledAt: event.at ?? null,
+              calledSeq: typeof event.seq === 'number' ? event.seq : null,
               result: null,
+              resultAt: null,
+              resultSeq: null,
               hasResult: false,
               error: null,
             });
@@ -326,8 +353,14 @@ export function feed(trace, events) {
       case LLM_STREAM: {
         const request = openStep(trace)?.request ?? null;
         if (!request) break;
-        if (data.text != null) request.content = `${request.content ?? ''}${String(data.text)}`;
-        if (data.reasoning != null) request.reasoning = `${request.reasoning ?? ''}${String(data.reasoning)}`;
+        if (data.text != null) {
+          request.content = `${request.content ?? ''}${String(data.text)}`;
+          if (String(data.text).length) request.contentSeq ??= typeof event.seq === 'number' ? event.seq : null;
+        }
+        if (data.reasoning != null) {
+          request.reasoning = `${request.reasoning ?? ''}${String(data.reasoning)}`;
+          if (String(data.reasoning).length) request.reasoningSeq ??= typeof event.seq === 'number' ? event.seq : null;
+        }
         if ((String(data.text ?? '').length > 0 || String(data.reasoning ?? '').length > 0) && event.at != null) {
           request.firstTokenAt ??= event.at;
           request.lastTokenAt = event.at;
@@ -382,7 +415,11 @@ export function feed(trace, events) {
           callId: data.callId ?? null,
           name: data.name ?? null,
           args: data.args ?? null,
+          calledAt: event.at ?? null,
+          calledSeq: typeof event.seq === 'number' ? event.seq : null,
           result: null,
+          resultAt: null,
+          resultSeq: null,
           hasResult: false,
           error: null,
         });
@@ -394,6 +431,8 @@ export function feed(trace, events) {
         if (call) {
           call.result = data.result ?? data.content ?? null;
           call.error = data.error ?? null;
+          call.resultAt = event.at ?? null;
+          call.resultSeq = typeof event.seq === 'number' ? event.seq : null;
           call.hasResult = true;
         }
         break;

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { foldTrace, feed, emptyTrace } from '../src/traceModel.js';
-import { runView, blockStates, blockMetrics, liveOutput, runStage } from '../src/v2/runView.js';
+import { runView, blockStates, blockMetrics, blockActivity, liveOutput, runStage, visibleBlockId } from '../src/v2/runView.js';
 import { traceView } from '../src/v2/traceView.js';
 
 const src = p => fs.readFileSync(fileURLToPath(new URL(`../src/${p}`, import.meta.url)), 'utf8');
@@ -75,8 +75,42 @@ test('block metrics aggregate model spend, tokens, tools, and requests per block
     model: 'gpt-5.4', costUsd: 0.004, tokensIn: 120, tokensOut: 30,
     reasoningTokens: null, cachedTokens: 20, requestCount: 1, toolCount: 1,
     startedAt: '2026-01-01T00:00:01.000Z', endedAt: '2026-01-01T00:00:06.000Z',
-    lastTokenAt: '2026-01-01T00:00:04.000Z', waitingForToken: false, estimatedTokensOut: null,
+    lastTokenAt: '2026-01-01T00:00:04.000Z', waitingForToken: false,
+    estimatedTokensIn: null, estimatedTokensOut: null,
   });
+});
+
+test('Plan & dispatch owns its planner metrics and keeps validation in chronological activity', () => {
+  const trace = foldTrace([
+    { seq: 1, at: '2026-01-01T00:00:00.000Z', type: 'block.status', data: { blockId: 'dispatch', status: 'active' } },
+    { seq: 2, at: '2026-01-01T00:00:01.000Z', type: 'turn.start', data: { runId: 'r', turn: 1 } },
+    { seq: 3, at: '2026-01-01T00:00:01.000Z', type: 'step.start', data: { runId: 'r', blockId: 'dispatch.planner', step: 1 } },
+    { seq: 4, at: '2026-01-01T00:00:02.000Z', type: 'step.prompt', data: { blockId: 'dispatch.planner', content: { source: 'canonical-session' } } },
+    { seq: 5, at: '2026-01-01T00:00:02.000Z', type: 'llm.request', data: { callId: 'planner-1', model: 'planning/model' } },
+    { seq: 6, at: '2026-01-01T00:00:03.000Z', type: 'context.budget', data: { callId: 'planner-1', blockId: 'dispatch.planner', effective: { total: 4416, reservedOutput: 4096 }, effectiveOutput: 4096 } },
+    { seq: 7, at: '2026-01-01T00:00:04.000Z', type: 'llm.response', data: { callId: 'planner-1', reasoning: 'check graph', content: 'invalid', finishReason: 'stop' } },
+    { seq: 8, at: '2026-01-01T00:00:05.000Z', type: 'step.end', data: { blockId: 'dispatch.planner', step: 1 } },
+    { seq: 9, at: '2026-01-01T00:00:06.000Z', type: 'turn.end', data: { runId: 'r', turn: 1 } },
+    { seq: 10, at: '2026-01-01T00:00:07.000Z', type: 'block.warning', data: { blockId: 'dispatch', code: 'invalid_task_graph', attempt: 1, maxAttempts: 2, diagnostics: ['task build has a missing dependency'], reason: 'Planner graph failed one check.' } },
+    { seq: 11, at: '2026-01-01T00:00:08.000Z', type: 'turn.start', data: { runId: 'r', turn: 2 } },
+    { seq: 12, at: '2026-01-01T00:00:08.000Z', type: 'step.start', data: { runId: 'r', blockId: 'dispatch.planner-repair-1', step: 1 } },
+    { seq: 13, at: '2026-01-01T00:00:09.000Z', type: 'llm.request', data: { callId: 'repair-1', model: 'planning/model' } },
+    { seq: 14, at: '2026-01-01T00:00:10.000Z', type: 'context.budget', data: { callId: 'repair-1', blockId: 'dispatch.planner-repair-1', effective: { total: 8500, reservedOutput: 8192 }, effectiveOutput: 8192 } },
+    { seq: 15, at: '2026-01-01T00:00:11.000Z', type: 'llm.stream', data: { callId: 'repair-1', reasoning: 'repairing' } },
+  ]);
+  const view = runView(trace);
+  assert.equal(visibleBlockId('dispatch.planner-repair-1'), 'dispatch');
+  assert.equal(view.blocks.dispatch.metrics.model, 'planning/model');
+  assert.equal(view.blocks.dispatch.metrics.startedAt, '2026-01-01T00:00:00.000Z');
+  assert.equal(view.blocks.dispatch.metrics.estimatedTokensIn, 628);
+  assert.equal(view.blocks.dispatch.metrics.estimatedTokensOut, 3);
+  const items = blockActivity(trace).dispatch;
+  assert.deepEqual(items.map(item => item.title), [
+    'Request sent', 'Internal reasoning', 'Visible response', 'Static validation failed',
+    'Request sent', 'Internal reasoning', 'Visible response',
+  ]);
+  assert.deepEqual(items.find(item => item.title === 'Static validation failed').diagnostics,
+    ['task build has a missing dependency']);
 });
 
 test('parallel lanes are active together, and Work says so in the plural', () => {
@@ -192,15 +226,21 @@ test('pause and stop transitions are explicit control states', () => {
 
 test('Work draws the stack through the editor rather than drawing it again', () => {
   const work = src('v2/Work.jsx');
+  const editor = src('v2/BlockEditor.jsx');
+  const model = src('v2/runView.js');
   assert.match(work, /import BlockEditor from '\.\/BlockEditor\.jsx'/,
     'two renderings of one stack are two renderings that drift');
   assert.doesNotMatch(work, /editorGeometry|layout\(/,
     'and the geometry is not recomputed here, which is how the drift would start');
   assert.match(work, /Retry \$\{view\.errorBlockId\}/, 'a failed workflow offers the failed block as an obvious retry');
   assert.match(work, /Inspect queries/);
-  assert.match(work, /Request sent/);
-  assert.match(work, /Internal reasoning/);
-  assert.match(work, /Visible response/);
+  assert.match(model, /Request sent/);
+  assert.match(model, /Internal reasoning/);
+  assert.match(model, /Visible response/);
+  assert.match(editor, /className="be-block-activity" open=\{open\}/,
+    'the block-owned step stream is expanded by default and remains user-collapsible');
+  assert.doesNotMatch(work, /DetailsRail|work-details/,
+    'queries and results are no longer duplicated in a detached right rail');
   assert.match(work, /Stop run/, 'a soft-unbounded worker remains manually stoppable');
 });
 
@@ -210,8 +250,8 @@ test('Work keeps navigation persistent and moves noisy run metadata out of the h
   assert.match(work, /aria-label="Chat history"/);
   assert.match(work, /flyt\.workHistoryCollapsed/,
     'the chat-history width preference survives moving between runs');
-  assert.match(work, /\['log', 'result'\]/,
-    'run navigation lives in chat history instead of being duplicated in details');
+  assert.doesNotMatch(work, /\['log', 'result'\]/,
+    'the detached log/result rail has been replaced by block-owned steps and output');
   assert.doesNotMatch(work, /work-run-models|work-run-id|work-run-rail/,
     'models, sandbox, raw run ids, and duplicate progress rails do not compete in the header');
   assert.match(work, /Resume continues from the last durable block/,

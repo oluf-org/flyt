@@ -94,14 +94,17 @@ function BlockMetrics({ metrics, status }) {
   const settledElapsed = !active && metrics?.startedAt && metrics?.endedAt
     ? Date.parse(metrics.endedAt) - Date.parse(metrics.startedAt)
     : elapsed;
-  const out = metrics?.tokensOut != null
-    ? compactNumber(metrics.tokensOut)
-    : metrics?.estimatedTokensOut != null ? `~${compactNumber(metrics.estimatedTokensOut)}` : '\u2014';
+  const withEstimate = (exact, estimated) => {
+    if (estimated != null) return `~${compactNumber((exact ?? 0) + estimated)}`;
+    return compactNumber(exact);
+  };
+  const input = withEstimate(metrics?.tokensIn, metrics?.estimatedTokensIn);
+  const out = withEstimate(metrics?.tokensOut, metrics?.estimatedTokensOut);
   const timestamp = metrics?.startedAt ?? null;
   return <div className="be-block-metrics" aria-label="Block statistics">
     <span title="Total model cost for this block"><small>Price</small><strong>{price(metrics?.costUsd)}</strong></span>
-    <span title="Prompt and cached input tokens"><small>Tokens in</small><strong>{compactNumber(metrics?.tokensIn)}</strong></span>
-    <span title={metrics?.tokensOut == null && metrics?.estimatedTokensOut != null ? 'Approximate while streaming' : 'Completion tokens'}><small>Tokens out</small><strong>{out}</strong></span>
+    <span title={metrics?.estimatedTokensIn != null ? 'Estimated effective input; provider usage replaces it when settled' : 'Provider-reported prompt and cached input tokens'}><small>Tokens in</small><strong>{input}</strong></span>
+    <span title={metrics?.estimatedTokensOut != null ? 'Approximate while streaming' : 'Completion tokens'}><small>Tokens out</small><strong>{out}</strong></span>
     <span title="Elapsed block time"><small>Time</small><strong>{elapsedLabel(settledElapsed)}</strong></span>
     <span title={clockTitle(timestamp)}><small>Started</small><time dateTime={timestamp ?? undefined}>{clockLabel(timestamp)}</time></span>
     {metrics?.requestCount > 1 && <span title="Model requests made by this block"><small>Calls</small><strong>{metrics.requestCount}</strong></span>}
@@ -109,6 +112,61 @@ function BlockMetrics({ metrics, status }) {
     {metrics?.cachedTokens > 0 && <span title="Cached input tokens"><small>Cached</small><strong>{compactNumber(metrics.cachedTokens)}</strong></span>}
     {metrics?.reasoningTokens > 0 && <span title="Reasoning tokens"><small>Reasoning</small><strong>{compactNumber(metrics.reasoningTokens)}</strong></span>}
   </div>;
+}
+
+function activityValue(value) {
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value, null, 2);
+}
+
+function activityClock(value) {
+  const date = new Date(value ?? '');
+  if (!Number.isFinite(date.getTime())) return null;
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function ActivityItem({ item }) {
+  const live = item.status === 'running' || item.status === 'waiting';
+  const facts = [
+    item.model,
+    item.maxTokens != null ? `${compactNumber(item.maxTokens)} token ceiling` : null,
+    item.chars != null ? `${compactNumber(item.chars)} chars` : null,
+    item.attempt != null ? `attempt ${item.attempt}${item.maxAttempts ? `/${item.maxAttempts}` : ''}` : null,
+  ].filter(Boolean);
+  const hasBody = item.kind === 'tool'
+    || Boolean(item.content) || item.diagnostics?.length > 0 || item.transformations?.length > 0
+    || (item.kind === 'chat' && item.status === 'empty');
+  const body = <div className="be-activity-body">
+    {item.content && <pre>{activityValue(item.content)}</pre>}
+    {item.kind === 'chat' && !item.content && <p>{item.status === 'waiting'
+      ? 'Waiting for visible output.'
+      : `No visible response. Finish reason: ${item.finishReason ?? 'unknown'}.`}</p>}
+    {item.kind === 'tool' && <>
+      <label>Arguments</label><pre>{activityValue(item.args ?? {})}</pre>
+      {item.status !== 'running' && <><label>{item.error ? 'Error' : 'Result'}</label><pre>{activityValue(item.error ?? item.result ?? '')}</pre></>}
+    </>}
+    {item.diagnostics?.length > 0 && <><label>Validation errors</label><pre>{item.diagnostics.join('\n')}</pre></>}
+    {item.transformations?.length > 0 && <><label>Safe transformations</label><pre>{activityValue(item.transformations)}</pre></>}
+  </div>;
+  const summary = <summary>
+    <span className="be-activity-type">{item.title}</span>
+    {facts.length > 0 && <small>{facts.join(' · ')}</small>}
+    <span className={`be-activity-state state-${item.status}`}>{item.status}</span>
+    {activityClock(item.at) && <time dateTime={item.at}>{activityClock(item.at)}</time>}
+  </summary>;
+  return <details className={`be-activity-item kind-${item.kind}${hasBody ? '' : ' no-body'}`} defaultOpen={live}>
+    {summary}{hasBody && body}
+  </details>;
+}
+
+function BlockActivity({ items }) {
+  const [open, setOpen] = useState(true);
+  if (!items?.length) return null;
+  const running = items.filter(item => item.status === 'running' || item.status === 'waiting').length;
+  return <details className="be-block-activity" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary><span>Steps</span><small>{items.length} event{items.length === 1 ? '' : 's'}{running ? ` · ${running} live` : ''}</small></summary>
+    <div className="be-activity-list">{items.map(item => <ActivityItem item={item} key={item.id}/>)}</div>
+  </details>;
 }
 
 function RecoveryFacts({ state }) {
@@ -511,6 +569,7 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
     {editable && <button type="button" className="be-delete" aria-label={`Delete ${titleOf(node, blocks)}`} onClick={event => { event.stopPropagation(); onDelete(node); }}><Icon name="trash"/></button>}
     {run && <BlockMetrics metrics={metrics} status={status} />}
     {run && node.generated === true && <RecoveryFacts state={blockRun} />}
+    {run && <BlockActivity items={blockRun?.activity} />}
     {output && <details className="be-inline-output" open={status === 'active'}><summary>Output</summary><pre>{output}</pre></details>}
     </article>;
     if (!generated.length) return card;

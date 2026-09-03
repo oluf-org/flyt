@@ -1,7 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import BlockEditor from './BlockEditor.jsx';
 import { runView } from './runView.js';
-import { traceView, duration } from './traceView.js';
 import { groupRuns, runStatus, runTimeLabel, runTimeTitle } from '../runList.js';
 import DebugPanel from './DebugPanel.jsx';
 import './workStyles.css';
@@ -70,67 +69,6 @@ function ChatHistory({ runs, activeRunId, onOpenRun, onNewChat }) {
   </aside>;
 }
 
-function QueryPre({ value }) {
-  return <pre className="work-query-pre">{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre>;
-}
-
-function QueryEntry({ entry, isLatest = false }) {
-  const [open, setOpen] = useState(isLatest);
-  useEffect(() => { if (!isLatest) setOpen(false); }, [isLatest]);
-  return <details className="work-query" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary><code>{entry.blockId}</code><span>{entry.request?.model}</span></summary>
-    {open && <div className="work-query-body">
-    {entry.request?.attempts?.map(attempt => <div className={`work-attempt state-${attempt.status}`} key={attempt.index}>
-      <strong>{attempt.status === 'started' ? 'Waiting for' : attempt.status === 'failed' ? 'Failed' : 'Answered by'} {attempt.effective}</strong>
-      {attempt.ms != null && <span>{duration(attempt.ms)}</span>}{attempt.error && <small>{attempt.error}</small>}
-    </div>)}
-    {(entry.request?.tokens || entry.request?.costUsd != null || entry.request?.tokensPerSecond != null) && <p className="work-metrics">
-      {[entry.request.tokens, entry.request.tokensPerSecond != null ? `${entry.request.tokensPerSecond.toFixed(1)} tokens/s` : null,
-        entry.request.costUsd != null ? `$${entry.request.costUsd.toFixed(4)}` : null].filter(Boolean).join(' · ')}
-    </p>}
-    <dl className="work-query-facts">
-      <dt>Finish</dt><dd>{entry.request?.settled ? entry.request.finishReason : 'waiting'}</dd>
-      {entry.request?.maxTokens != null && <><dt>Token ceiling</dt><dd>{entry.request.maxTokens.toLocaleString()}</dd></>}
-      {entry.request?.route?.line && <><dt>Route</dt><dd>{entry.request.route.line}</dd></>}
-    </dl>
-    <details><summary>Request sent</summary><QueryPre value={entry.prompt ?? 'This older run did not record the assembled request. Its system and user messages remain in the full Trace log.'} /></details>
-    {entry.request?.reasoning && <details><summary>Internal reasoning ({entry.request.reasoning.length.toLocaleString()} chars)</summary><QueryPre value={entry.request.reasoning} /></details>}
-    <details open={!entry.request?.content}><summary>Visible response</summary>
-      <QueryPre value={entry.request?.content || `No visible response. Finish reason: ${entry.request?.finishReason ?? 'unknown'}.`} />
-    </details>
-    {entry.calls.map(call => <div className="work-tool" key={call.callId}><strong>{call.name}</strong><span>{call.unfinished ? 'running' : call.error ? 'error' : 'done'}</span></div>)}</div>}
-  </details>;
-}
-
-const LOG_PAGE = 40;
-
-function DetailsRail({ traceDetails, runId, view, onOpenTrace }) {
-  const [tab, setTab] = useState('log');
-  const [visibleLog, setVisibleLog] = useState(LOG_PAGE);
-  useEffect(() => setVisibleLog(LOG_PAGE), [runId]);
-  const log = useMemo(() => (traceDetails?.turns ?? []).flatMap(turn => turn.steps.map(step => ({
-    blockId: step.blockId, step: step.step, prompt: step.prompt, request: step.request, calls: step.tools ?? [],
-  }))), [traceDetails]);
-  const shownLog = log.slice(-visibleLog);
-  const results = Object.entries(view.blocks).filter(([, block]) => block.showing);
-  return <aside className="work-details"><div className="work-details-tabs">{['log', 'result'].map(name => <button key={name}
-    className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>{name}</button>)}</div>
-    {tab === 'log' && <div className="work-log">
-      {log.length > 0 && <button type="button" className="work-open-trace" onClick={onOpenTrace}>Open full Trace</button>}
-      {log.length ? <>
-        {shownLog.length < log.length && <button type="button" className="work-show-earlier" onClick={() => setVisibleLog(count => count + LOG_PAGE)}>
-          Show {Math.min(LOG_PAGE, log.length - shownLog.length)} earlier queries
-        </button>}
-        {shownLog.map((entry, index) => <QueryEntry entry={entry}
-          key={`${entry.blockId}:${entry.step}:${log.length - shownLog.length + index}`}
-          isLatest={index === shownLog.length - 1} />)}
-      </>
-      : <p className="muted">Waiting for the first model event…</p>}</div>}
-    {tab === 'result' && <div className="work-results">{results.length ? results.map(([id, block]) => <article key={id}><code>{id}</code><pre>{block.showing}</pre></article>)
-      : <p className="muted">No output yet.</p>}</div>}
-  </aside>;
-}
-
 const STAGE_LABELS = {
   prompt: 'Queued', planning: 'Planning', routing: 'Routing', execution: 'Running', resumed: 'Running',
   awaiting_approval: 'Needs approval', awaiting_input: 'Needs an answer', pausing: 'Pausing', paused: 'Paused',
@@ -179,7 +117,6 @@ export default function Work({
   onDebugRun = null,
 }) {
   const view = runView(trace);
-  const detailedTrace = useMemo(() => traceView(trace), [trace]);
   const [reply, setReply] = useState('');
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugBusy, setDebugBusy] = useState(false);
@@ -217,9 +154,6 @@ export default function Work({
         <button type="button" onClick={onRevealDiagnosticLog}>Show app log</button>
       </div>{retryError && <small>{retryError}</small>}
     </section>}
-    {view.warnings?.map(warning => <p className="work-warning" role="status" key={warning.blockId}>
-      <strong>{warning.blockId} degraded:</strong> {warning.message}
-    </p>)}
     {summary?.degraded && <p className="work-warning" role="status"><strong>Post-run conversation summary degraded.</strong> This happened after the workflow settled and did not cause its failure{summary.reason ? `: ${summary.reason}` : '.'}</p>}
     <div className="work-run-grid"><main className="work-run-main">
       <BlockEditor stack={stack} blocks={blocks} mode="run" run={runModel}/>
@@ -227,7 +161,7 @@ export default function Work({
       {!view.running && !view.resumable && !view.stopping && !interaction && <form className="work-reply" onSubmit={event => { event.preventDefault(); if (!reply.trim()) return; onReply?.(reply); setReply(''); }}>
         <textarea rows="2" value={reply} onChange={event => setReply(event.target.value)} placeholder="Continue this conversation…" />
         <button type="submit" disabled={replyBusy || !reply.trim()}>{replyBusy ? 'Starting…' : 'Send'}</button></form>}
-    </main><DetailsRail traceDetails={detailedTrace} runId={runId} view={view} onOpenTrace={onOpenTrace}/></div>
+    </main></div>
     {debugOpen && <DebugPanel runId={runId} trace={trace} view={view} report={debugReport} busy={debugBusy} error={debugError}
       retryBusy={retryBusy} onAnalyze={analyze} onRetry={onRetryFailed} onClose={() => setDebugOpen(false)}
       onOpenTrace={onOpenTrace} onRevealRunLog={onRevealRunLog}/>}
