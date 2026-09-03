@@ -4,11 +4,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BlockConfigurationView } from './PluginContributionView.jsx';
 import { WORKFLOW_MODEL_TIERS } from '../modelTiers.js';
 import { defaultModeId, workflowModes } from './workflowUx.js';
-import { generatedChildren, workflowNodes } from './workflowTree.js';
+import { generatedChildren, generatedTaskWaves, workflowNodes } from './workflowTree.js';
 import './blockEditorStyles.css';
 
 const TOUCH_MS = 600;
 const CONTROL_KINDS = ['sequence', 'parallel', 'repeat', 'foreach', 'until', 'if'];
+const MAX_VISIBLE_GENERATED_LANES = 3;
 
 function Icon({ name, size = 16 }) {
   const paths = {
@@ -32,6 +33,83 @@ function Icon({ name, size = 16 }) {
 const titleOf = (node, blocks) => node.title || blocks?.resolve?.(node.use)?.title || node.use || node.id;
 const definitionOf = (node, blocks) => node?.kind === 'block' ? blocks?.resolve?.(node.use) ?? null : null;
 const statusOf = (run, id) => run?.blocks?.[id]?.status ?? 'pending';
+
+const compactNumber = value => Number.isFinite(value)
+  ? new Intl.NumberFormat('en', { notation: value >= 10_000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value)
+  : '\u2014';
+
+const price = value => Number.isFinite(value)
+  ? `$${value < 0.01 ? value.toFixed(4) : value.toFixed(2)}`
+  : '\u2014';
+
+function elapsedLabel(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '\u2014';
+  if (ms < 1000) return '<1s';
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  return `${minutes}m ${Math.floor((ms % 60_000) / 1000)}s`;
+}
+
+function clockLabel(value) {
+  const date = new Date(value ?? '');
+  if (!Number.isFinite(date.getTime())) return '\u2014';
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function clockTitle(value) {
+  const date = new Date(value ?? '');
+  return Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'short' }) : 'Not started';
+}
+
+function BlockStatus({ status, metrics }) {
+  const live = status === 'active';
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!live) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [live]);
+  const lastAt = metrics?.lastTokenAt ?? metrics?.startedAt;
+  const quietMs = lastAt ? now - Date.parse(lastAt) : null;
+  const showQuiet = live && metrics?.waitingForToken && Number.isFinite(quietMs) && quietMs >= 5000;
+  const label = status === 'done' ? '\u2713 Done' : status === 'active' ? 'Running' : status;
+  return <span className={`be-status status-${status}`}>
+    {live && <span className="be-running-motion" aria-hidden="true"><i/><i/><i/></span>}
+    <span>{label}</span>
+    {showQuiet && <small>{metrics?.lastTokenAt ? `${elapsedLabel(quietMs)} since token` : `${elapsedLabel(quietMs)} to first token`}</small>}
+  </span>;
+}
+
+function BlockMetrics({ metrics, status }) {
+  const active = status === 'active';
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  const elapsed = metrics?.startedAt && (active || metrics?.endedAt)
+    ? now - Date.parse(metrics.startedAt)
+    : null;
+  const settledElapsed = !active && metrics?.startedAt && metrics?.endedAt
+    ? Date.parse(metrics.endedAt) - Date.parse(metrics.startedAt)
+    : elapsed;
+  const out = metrics?.tokensOut != null
+    ? compactNumber(metrics.tokensOut)
+    : metrics?.estimatedTokensOut != null ? `~${compactNumber(metrics.estimatedTokensOut)}` : '\u2014';
+  const timestamp = metrics?.startedAt ?? null;
+  return <div className="be-block-metrics" aria-label="Block statistics">
+    <span title="Total model cost for this block"><small>Price</small><strong>{price(metrics?.costUsd)}</strong></span>
+    <span title="Prompt and cached input tokens"><small>Tokens in</small><strong>{compactNumber(metrics?.tokensIn)}</strong></span>
+    <span title={metrics?.tokensOut == null && metrics?.estimatedTokensOut != null ? 'Approximate while streaming' : 'Completion tokens'}><small>Tokens out</small><strong>{out}</strong></span>
+    <span title="Elapsed block time"><small>Time</small><strong>{elapsedLabel(settledElapsed)}</strong></span>
+    <span title={clockTitle(timestamp)}><small>Started</small><time dateTime={timestamp ?? undefined}>{clockLabel(timestamp)}</time></span>
+    {metrics?.requestCount > 1 && <span title="Model requests made by this block"><small>Calls</small><strong>{metrics.requestCount}</strong></span>}
+    {metrics?.toolCount > 0 && <span title="Tool calls made by this block"><small>Tools</small><strong>{metrics.toolCount}</strong></span>}
+    {metrics?.cachedTokens > 0 && <span title="Cached input tokens"><small>Cached</small><strong>{compactNumber(metrics.cachedTokens)}</strong></span>}
+    {metrics?.reasoningTokens > 0 && <span title="Reasoning tokens"><small>Reasoning</small><strong>{compactNumber(metrics.reasoningTokens)}</strong></span>}
+  </div>;
+}
 
 function parentSlot(root, nodeId) {
   for (const parent of workflowNodes(root, [])) {
@@ -340,13 +418,50 @@ function ChildrenList({ parent, branch = null, root, blocks, commands, selected,
   </div>;
 }
 
+function GeneratedTaskWave({ tasks, index, root, blocks, selected, setSelected, touched, dragging, setDragging,
+  dropTarget, setDropTarget, run, preview, onDelete, onError }) {
+  const [expanded, setExpanded] = useState(false);
+  const abbreviated = tasks.length > MAX_VISIBLE_GENERATED_LANES;
+  const visible = abbreviated ? tasks.slice(0, MAX_VISIBLE_GENERATED_LANES - 1) : tasks;
+  const hidden = abbreviated ? tasks.slice(MAX_VISIBLE_GENERATED_LANES - 1) : [];
+  const statuses = new Map();
+  for (const task of hidden) {
+    const status = statusOf(run, task.id);
+    statuses.set(status, (statuses.get(status) ?? 0) + 1);
+  }
+  const statusSummary = [...statuses].map(([status, count]) => `${count} ${status === 'active' ? 'running' : status}`).join(' · ');
+  const child = task => <NodeView key={task.id} node={task} root={root} blocks={blocks} commands={null}
+    selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
+    dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} preview={preview} onDelete={onDelete} onError={onError} />;
+  const laneCount = visible.length + (abbreviated ? 1 : 0);
+
+  return <section className="be-generated-wave" data-wave={index + 1}>
+    <header><span>Wave {index + 1}</span><small>{tasks.length === 1 ? '1 task' : `${tasks.length} tasks in parallel`}</small></header>
+    <div className="be-generated-wave-row" style={{ '--generated-lanes': laneCount }}>
+      {visible.map(child)}
+      {abbreviated && <button type="button" className="be-generated-overflow" aria-expanded={expanded}
+        onClick={() => setExpanded(value => !value)}>
+        <strong>{expanded ? 'Hide' : `+${hidden.length} more`}</strong>
+        <span>Same parallel wave</span>
+        {statusSummary && <small>{statusSummary}</small>}
+      </button>}
+    </div>
+    {abbreviated && expanded && <div className="be-generated-wave-overflow" style={{ '--generated-lanes': Math.min(hidden.length, MAX_VISIBLE_GENERATED_LANES) }}>
+      {hidden.map(child)}
+    </div>}
+  </section>;
+}
+
 function NodeView({ node, root, blocks, commands, selected, setSelected, touched, dragging, setDragging, dropTarget, setDropTarget, run, preview = null, onDelete, onError }) {
   const editable = Boolean(commands?.invoke);
   const status = statusOf(run, node.id);
   const missing = node.kind === 'block' && !definitionOf(node, blocks);
   const definition = definitionOf(node, blocks);
   const modelBacked = Boolean(definition?.settings?.properties?.model || node.config?.modelTier);
-  const output = run?.blocks?.[node.id]?.showing ?? '';
+  const blockRun = run?.blocks?.[node.id] ?? null;
+  const output = blockRun?.showing ?? '';
+  const metrics = blockRun?.metrics ?? null;
+  const showsModel = modelBacked || Boolean(metrics?.model);
   const slot = parentSlot(root, node.id);
   const move = async delta => {
     if (!slot) return;
@@ -370,28 +485,32 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
   if (node.kind === 'block') {
     const generated = generatedChildren(node);
     const card = <article {...common} className={`be-block${selected === node.id ? ' selected' : ''}${missing ? ' missing' : ''}${touched?.nodeId === node.id ? ` touched by-${touched.caller}` : ''}${dragging === node.id ? ' dragging' : ''}${override ? ' overridden' : ''}${node.generated === true ? ' generated' : ''}`}>
-    <span className="be-grip"><Icon name="grip"/></span><span className="be-block-glyph"><Icon name="blocks"/></span>
+    {editable && <span className="be-grip"><Icon name="grip"/></span>}<span className="be-block-glyph"><Icon name="blocks"/></span>
     <span className="be-block-copy"><strong>{titleOf(node, blocks)}</strong><small>{missing ? `Missing · ${node.use}` : node.use}</small>
       {override && <span className="be-mode-override" title={`${preview.name} runs this block with ${overrideLine(override)}`}>
         {preview.name} · {overrideLine(override)}</span>}</span>
-    {modelBacked && <span className={`be-tier-badge tier-${node.config?.modelTier ?? 'default'}`}>{node.config?.modelTier ?? 'default'}</span>}
+    {showsModel && (run
+      ? <span className="be-model-badge" title="Model used by this block">{metrics?.model ?? node.config?.model ?? 'Model pending'}</span>
+      : <span className={`be-tier-badge tier-${node.config?.modelTier ?? 'default'}`}>{node.config?.modelTier ?? 'default'}</span>)}
     {node.use === 'flyt-blocks-judgement:human-checkpoint' && <span className={`be-checkpoint-badge${node.config?.enabled === false ? ' off' : ''}`}>
       {node.config?.enabled === false ? 'checkpoint off' : 'human approval'}
     </span>}
-    {run && <span className={`be-status status-${status}`}>{status === 'active' ? 'running' : status}</span>}
+    {run && <BlockStatus status={status} metrics={metrics} />}
     {editable && <button type="button" className="be-delete" aria-label={`Delete ${titleOf(node, blocks)}`} onClick={event => { event.stopPropagation(); onDelete(node); }}><Icon name="trash"/></button>}
+    {run && <BlockMetrics metrics={metrics} status={status} />}
     {output && <details className="be-inline-output" open={status === 'active'}><summary>Output</summary><pre>{output}</pre></details>}
     </article>;
     if (!generated.length) return card;
+    const waves = generatedTaskWaves(generated, node.config ?? {});
     return <section className="be-generated-group" data-parent-id={node.id}>{card}<header><span>Generated tasks</span><small>{generated.length} blocks · created for this run</small></header>
-      <div className="be-generated-children">{generated.map(child => <NodeView key={child.id} node={child} root={root} blocks={blocks}
-        commands={null} selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
+      <div className="be-generated-children">{waves.map((tasks, index) => <GeneratedTaskWave key={`${node.id}:wave:${index}`} tasks={tasks} index={index}
+        root={root} blocks={blocks} selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
         dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} preview={preview} onDelete={onDelete} onError={onError} />)}</div></section>;
   }
 
   return <section {...common} className={`be-container kind-${node.kind}${selected === node.id ? ' selected' : ''}${touched?.nodeId === node.id ? ` touched by-${touched.caller}` : ''}`}>
-    <header><span className="be-grip"><Icon name="grip"/></span><strong>{controlLabel(node)}</strong><code>{node.id}</code>
-      {run && <span className={`be-status status-${status}`}>{status}</span>}{editable && <button type="button" className="be-delete"
+    <header>{editable && <span className="be-grip"><Icon name="grip"/></span>}<strong>{controlLabel(node)}</strong><code>{node.id}</code>
+      {run && <BlockStatus status={status} metrics={null} />}{editable && <button type="button" className="be-delete"
         onClick={event => { event.stopPropagation(); onDelete(node); }} aria-label={`Delete ${node.id}`}><Icon name="trash"/></button>}</header>
     <div className="be-container-well"><ChildrenList parent={node} root={root} blocks={blocks} commands={commands}
       selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}

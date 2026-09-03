@@ -186,7 +186,7 @@ export default function Shell({
               aria-expanded={showTrace}
               title="Open this run's record over whatever you are looking at"
             >
-              Trace · <span className="mono">{trace.run}</span>
+              Trace
             </button>
           )}
         </div>

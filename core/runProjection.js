@@ -25,7 +25,7 @@ export function stackWithGeneratedTasks(stack, events) {
     const rows = byParent.get(String(data.parentId)) ?? new Map();
     if (!rows.has(String(data.taskId))) rows.set(String(data.taskId), {
       kind: 'block', id: String(data.blockId), use: String(data.use ?? 'flyt-blocks-core:work'),
-      title: String(data.title ?? data.taskId), config: {}, generated: true,
+      title: String(data.title ?? data.taskId), config: {}, generated: true, taskId: String(data.taskId),
       dependsOn: Array.isArray(data.dependsOn) ? data.dependsOn.map(String) : [],
     });
     byParent.set(String(data.parentId), rows);

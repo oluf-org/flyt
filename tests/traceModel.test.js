@@ -187,6 +187,20 @@ test('an unknown event type is kept, not discarded', () => {
   assert.equal(trace.others[0].type, 'plugin/thing');
   assert.equal(trace.others[0].data.custom, 42);
 });
+
+test('stream timestamps track actual token progress and ignore empty keepalives', () => {
+  const trace = foldTrace([
+    { seq: 1, at: '2026-01-01T00:00:00.000Z', type: 'turn.start', data: { runId: 'r', turn: 1 } },
+    { seq: 2, at: '2026-01-01T00:00:01.000Z', type: 'step.start', data: { runId: 'r', blockId: 'work', step: 1 } },
+    { seq: 3, at: '2026-01-01T00:00:02.000Z', type: 'llm.request', data: { callId: 'q', model: 'm' } },
+    { seq: 4, at: '2026-01-01T00:00:03.000Z', type: 'llm.stream', data: { callId: 'q', text: 'One' } },
+    { seq: 5, at: '2026-01-01T00:00:04.000Z', type: 'llm.stream', data: { callId: 'q', text: '' } },
+    { seq: 6, at: '2026-01-01T00:00:05.000Z', type: 'llm.stream', data: { callId: 'q', text: ' two' } },
+  ]);
+  const request = trace.turns[0].steps[0].request;
+  assert.equal(request.firstTokenAt, '2026-01-01T00:00:03.000Z');
+  assert.equal(request.lastTokenAt, '2026-01-01T00:00:05.000Z');
+});
 test('the fold speaks the log’s vocabulary, not the kernel’s event names', async () => {
   // It did not, once. This file matched `turn/start` and `step/start` —
   // the SLASH names from `kernel/src/events.ts`, which are cordis events

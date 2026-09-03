@@ -149,6 +149,7 @@ test('Plan & dispatch runs independent generated children together and records t
     ] }, events);
     assert.deepEqual(displayed.children[0].generated.map(child => child.id), ['dispatch.alpha', 'dispatch.beta']);
     assert.equal(displayed.children[0].generated[0].generated, true);
+    assert.equal(displayed.children[0].generated[0].taskId, 'alpha');
   } finally {
     await kernel.dispose();
   }

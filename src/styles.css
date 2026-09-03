@@ -5380,7 +5380,6 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
   color: var(--chip-tx);
   font-size: 12px;
 }
-.v2-trace-chip .mono { font-family: var(--mono, ui-monospace, monospace); color: var(--faint); }
 
 .v2-panel { padding: 28px 32px; overflow: auto; flex: 1; min-width: 0; }
 .v2-panel h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }

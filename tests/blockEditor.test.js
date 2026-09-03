@@ -219,3 +219,17 @@ test('scale is a renderer choice, not a second layout', () => {
   assert.deepEqual(renderBox(at.boxes.gather), renderBox(at.boxes.gather, 1));
   assert.deepEqual(renderBox(at.boxes.gather, 2), view.boxes.gather.box);
 });
+
+test('Build and Run share connected blocks while drag handles stay in Build', () => {
+  const dir = fileURLToPath(new URL('../src/v2/', import.meta.url));
+  const component = fs.readFileSync(`${dir}BlockEditor.jsx`, 'utf8');
+  const styles = fs.readFileSync(`${dir}blockEditorStyles.css`, 'utf8');
+  assert.match(styles, /\.mode-build \.be-stack, \.mode-run \.be-stack \{ width: 100%; gap: 0; \}/,
+    'both surfaces use the same connected stack geometry');
+  assert.match(styles, /\.mode-build \.be-children:not\(\.parallel\) > \.be-block::before/,
+    'Build blocks have the same notches as Run blocks');
+  assert.match(styles, /data-status="active"[^}]+var\(--accent\)/,
+    'the active outline follows the project accent rather than the old fixed green');
+  assert.equal((component.match(/editable && <span className="be-grip">/g) ?? []).length, 2,
+    'leaf and container drag handles are both gated by editability');
+});

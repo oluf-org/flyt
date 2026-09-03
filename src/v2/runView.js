@@ -69,6 +69,70 @@ export function liveOutput(trace, blockId) {
   return null;
 }
 
+const finite = value => Number.isFinite(value) ? value : null;
+const earlier = (a, b) => !a || (Date.parse(b ?? '') < Date.parse(a ?? '')) ? b : a;
+const later = (a, b) => !a || (Date.parse(b ?? '') > Date.parse(a ?? '')) ? b : a;
+
+/**
+ * Operational facts shown directly on each block.
+ *
+ * These are deliberately folded from model requests instead of copied from a
+ * separate ledger. A live block, its output, and its spend therefore advance
+ * from one source and cannot momentarily disagree while a run is streaming.
+ */
+export function blockMetrics(trace) {
+  const metrics = {};
+  for (const turn of trace?.turns ?? []) {
+    for (const step of turn.steps ?? []) {
+      const blockId = typeof step?.blockId === 'string' ? step.blockId : null;
+      if (!blockId) continue;
+      const at = metrics[blockId] ?? {
+        model: null, costUsd: null, tokensIn: null, tokensOut: null,
+        reasoningTokens: null, cachedTokens: null, requestCount: 0,
+        toolCount: 0, startedAt: null, endedAt: null, lastTokenAt: null,
+        waitingForToken: false, estimatedTokensOut: null,
+      };
+      at.startedAt = earlier(at.startedAt, step.startedAt ?? step.request?.requestedAt ?? null);
+      at.endedAt = later(at.endedAt, step.endedAt ?? step.request?.respondedAt ?? null);
+      at.toolCount += (step.toolCalls ?? []).length;
+
+      const request = step.request;
+      if (request) {
+        at.requestCount += 1;
+        const attempts = request.attempts ?? [];
+        const answered = [...attempts].reverse().find(item => item.status === 'succeeded');
+        const latest = attempts.at(-1);
+        at.model = answered?.resolvedModel ?? answered?.model
+          ?? request.route?.effective ?? latest?.resolvedModel ?? latest?.model
+          ?? request.model ?? request.configuredModel ?? at.model;
+        at.lastTokenAt = later(at.lastTokenAt, request.lastTokenAt);
+        at.waitingForToken = request.settled !== true;
+
+        const usage = request.usage ?? null;
+        for (const [target, source] of [
+          ['tokensIn', 'promptTokens'], ['tokensOut', 'completionTokens'],
+          ['reasoningTokens', 'reasoningTokens'], ['cachedTokens', 'cachedTokens'],
+        ]) {
+          const value = finite(usage?.[source]);
+          if (value != null) at[target] = (at[target] ?? 0) + value;
+        }
+        const cost = finite(usage?.costUsd);
+        if (cost != null) at.costUsd = (at.costUsd ?? 0) + cost;
+
+        // Providers usually report authoritative usage only in the final
+        // envelope. While streaming, give the reader a visibly approximate
+        // output count instead of freezing the block at zero.
+        if (request.settled !== true && at.tokensOut == null) {
+          const streamedChars = String(request.content ?? '').length + String(request.reasoning ?? '').length;
+          at.estimatedTokensOut = streamedChars ? Math.max(1, Math.ceil(streamedChars / 4)) : null;
+        }
+      }
+      metrics[blockId] = at;
+    }
+  }
+  return metrics;
+}
+
 /** The run's own stage, from the log rather than from a caller's memory. */
 export function runStage(trace) {
   let stage = null;
@@ -100,6 +164,7 @@ export function runStage(trace) {
  */
 export function runView(trace) {
   const states = blockStates(trace);
+  const metrics = blockMetrics(trace);
   const { stage, error, errorBlockId, reason } = runStage(trace);
   // A terminal run cannot have live blocks, even if the process died or the
   // scheduler failed between the active and terminal block events. Preserve
@@ -113,6 +178,7 @@ export function runView(trace) {
   for (const [blockId, at] of Object.entries(states)) {
     blocks[blockId] = {
       ...at,
+      metrics: metrics[blockId] ?? null,
       // An active block shows what it is saying; a finished one shows what it
       // produced. Never both, and never the streaming text after the
       // deliverable exists — that would replace an answer with a draft of it.

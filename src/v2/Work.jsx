@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import BlockEditor from './BlockEditor.jsx';
 import { runView } from './runView.js';
 import { traceView, duration } from './traceView.js';
-import { workflowBlockNodes } from './workflowTree.js';
+import { groupRuns, runStatus, runTimeLabel, runTimeTitle } from '../runList.js';
 import './workStyles.css';
 
 function Interaction({ interaction, onDecide, onAnswer }) {
@@ -20,10 +20,52 @@ function Interaction({ interaction, onDecide, onAnswer }) {
     <button className="work-allow" disabled={!answer.trim()} onClick={() => onAnswer?.(answer)}>Send answer to block</button></section>;
 }
 
-function RunRail({ stack, view }) {
-  return <aside className="work-run-rail" aria-label="Run progress"><span className="section-label">Run</span>
-    {workflowBlockNodes(stack.root).map((node, index) => { const status = view.blocks[node.id]?.status ?? 'pending'; return <div key={node.id} className={`work-rail-step state-${status}`}>
-      <span className="work-rail-index">{status === 'done' ? '✓' : status === 'failed' ? '!' : index + 1}</span><span><strong>{node.title ?? node.id}</strong><small>{status}</small></span></div>; })}
+function HistoryIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.5h14M5 12h14M5 17.5h9"/></svg>;
+}
+
+function ChevronIcon({ left = false }) {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={left ? 'm14 7-5 5 5 5' : 'm10 7 5 5-5 5'}/></svg>;
+}
+
+function ChatHistory({ runs, activeRunId, onOpenRun, onNewChat }) {
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try { return window.localStorage.getItem('flyt.workHistoryCollapsed') === 'true'; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem('flyt.workHistoryCollapsed', String(collapsed)); }
+    catch { /* A private or locked-down renderer may not expose storage. */ }
+  }, [collapsed]);
+  const groups = groupRuns(runs ?? []);
+  return <aside className={`work-history${collapsed ? ' collapsed' : ''}`} aria-label="Chat history">
+    <div className="work-history-head">
+      <button type="button" className="work-history-new" onClick={onNewChat} title="New chat">
+        <span aria-hidden="true">＋</span><span className="work-history-copy">New chat</span>
+      </button>
+      <button type="button" className="work-history-toggle" onClick={() => setCollapsed(value => !value)}
+        aria-label={collapsed ? 'Expand chat history' : 'Minimize chat history'} aria-expanded={!collapsed}>
+        <ChevronIcon left={!collapsed}/>
+      </button>
+    </div>
+    <div className="work-history-list">
+      {!groups.length && <p className="work-history-empty"><HistoryIcon/><span className="work-history-copy">Your chats will appear here.</span></p>}
+      {groups.map(group => <section className="work-history-group" key={group.key}>
+        <span className="section-label work-history-copy">{group.label}</span>
+        {group.runs.map(run => {
+          const id = run.id ?? run.runId;
+          const status = runStatus(run);
+          return <button type="button" className={`work-history-item${id === activeRunId ? ' active' : ''}`}
+            key={id} onClick={() => onOpenRun?.(id)} aria-current={id === activeRunId ? 'page' : undefined}
+            title={`${run.name ?? run.flowName ?? id}\n${runTimeTitle(run)} · ${status.label}`}>
+            <span className={`work-history-state ${status.kind}`} aria-hidden="true"/>
+            <span className="work-history-copy"><strong>{run.name ?? run.flowName ?? 'Untitled chat'}</strong>
+              <small><time>{runTimeLabel(run)}</time>{status.kind !== 'done' && <span>{status.label}</span>}</small></span>
+          </button>;
+        })}
+      </section>)}
+    </div>
   </aside>;
 }
 
@@ -61,7 +103,7 @@ function QueryEntry({ entry, isLatest = false }) {
 
 const LOG_PAGE = 40;
 
-function DetailsRail({ traceDetails, runId, view, runs, onOpenRun, onOpenTrace }) {
+function DetailsRail({ traceDetails, runId, view, onOpenTrace }) {
   const [tab, setTab] = useState('log');
   const [visibleLog, setVisibleLog] = useState(LOG_PAGE);
   useEffect(() => setVisibleLog(LOG_PAGE), [runId]);
@@ -70,7 +112,7 @@ function DetailsRail({ traceDetails, runId, view, runs, onOpenRun, onOpenTrace }
   }))), [traceDetails]);
   const shownLog = log.slice(-visibleLog);
   const results = Object.entries(view.blocks).filter(([, block]) => block.showing);
-  return <aside className="work-details"><div className="work-details-tabs">{['log', 'result', 'runs'].map(name => <button key={name}
+  return <aside className="work-details"><div className="work-details-tabs">{['log', 'result'].map(name => <button key={name}
     className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>{name}</button>)}</div>
     {tab === 'log' && <div className="work-log">
       {log.length > 0 && <button type="button" className="work-open-trace" onClick={onOpenTrace}>Open full Trace</button>}
@@ -85,9 +127,44 @@ function DetailsRail({ traceDetails, runId, view, runs, onOpenRun, onOpenTrace }
       : <p className="muted">Waiting for the first model event…</p>}</div>}
     {tab === 'result' && <div className="work-results">{results.length ? results.map(([id, block]) => <article key={id}><code>{id}</code><pre>{block.showing}</pre></article>)
       : <p className="muted">No output yet.</p>}</div>}
-    {tab === 'runs' && <div className="work-runs">{(runs ?? []).map(run => <button key={run.id ?? run.runId} onClick={() => onOpenRun?.(run.id ?? run.runId)}>
-      <strong>{run.name ?? run.flowName ?? run.id ?? run.runId}</strong><small>{run.stage ?? run.status}</small></button>)}</div>}
   </aside>;
+}
+
+const STAGE_LABELS = {
+  prompt: 'Queued', planning: 'Planning', routing: 'Routing', execution: 'Running', resumed: 'Running',
+  awaiting_approval: 'Needs approval', awaiting_input: 'Needs an answer', pausing: 'Pausing', paused: 'Paused',
+  stopping: 'Stopping', stopped: 'Stopped', verification: 'Verifying', done: 'Done', failed: 'Failed',
+  rejected: 'Rejected', interrupted: 'Interrupted', cancelled: 'Stopped',
+};
+
+function RunActions({ view, onPauseRun, onResumeRun, onStopRun, onOpenFlow, pauseBusy, resumeBusy, stopBusy }) {
+  const menu = useRef(null);
+  const label = STAGE_LABELS[view.stage] ?? (view.stage ? view.stage.replaceAll('_', ' ') : 'Starting');
+  useEffect(() => {
+    const close = event => {
+      if (event.key === 'Escape' || (menu.current?.open && !menu.current.contains(event.target))) menu.current?.removeAttribute('open');
+    };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('keydown', close);
+    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', close); };
+  }, []);
+  const act = callback => event => { event.currentTarget.closest('details')?.removeAttribute('open'); callback?.(); };
+  return <details className="work-run-actions" ref={menu}>
+    <summary className={`work-stage stage-${view.stage}`} aria-label={`${label} — run actions`}><span>{label}</span><ChevronIcon/></summary>
+    <div className="work-run-menu">
+      {view.resumable && <button type="button" disabled={resumeBusy} onClick={act(onResumeRun)}>
+        <span aria-hidden="true">▶</span>{resumeBusy ? 'Resuming…' : 'Resume run'}
+      </button>}
+      {view.running && !view.paused && !view.stopping && <button type="button" disabled={pauseBusy || view.pausing} onClick={act(onPauseRun)}>
+        <span aria-hidden="true">Ⅱ</span>{pauseBusy || view.pausing ? 'Pausing…' : 'Pause run'}
+      </button>}
+      {(view.running || view.paused) && <button type="button" className="danger" disabled={stopBusy || view.stopping} onClick={act(onStopRun)}>
+        <span aria-hidden="true">■</span>{stopBusy || view.stopping ? 'Stopping…' : 'Stop run'}
+      </button>}
+      <button type="button" onClick={act(onOpenFlow)}><span aria-hidden="true">↗</span>Open builder</button>
+      {(view.stage === 'stopped' || view.stage === 'interrupted') && <p>Resume continues from the last durable block.</p>}
+    </div>
+  </details>;
 }
 
 export default function Work({
@@ -101,39 +178,15 @@ export default function Work({
   const view = runView(trace);
   const detailedTrace = useMemo(() => traceView(trace), [trace]);
   const [reply, setReply] = useState('');
-  const runModels = useMemo(() => [...new Set((trace?.turns ?? []).flatMap(turn => (
-    (turn.steps ?? []).map(step => step.request?.model).filter(Boolean)
-  )))], [trace]);
-  const latestRequest = detailedTrace.turns.flatMap(turn => turn.steps.map(step => step.request)).filter(Boolean).at(-1) ?? null;
-  const latestAttempt = latestRequest?.attempts?.at(-1) ?? null;
   const summary = snapshot?.conversation?.filter(turn => turn.role === 'assistant').at(-1) ?? null;
-  const sandbox = snapshot?.meta?.sandbox ?? null;
   const runModel = { ...view, summary: summary?.text ?? null, input: snapshot?.meta?.userMessage ?? snapshot?.prompt ?? '' };
-  if (!stack) return <div className="v2-work" data-v2>{composer}<p className="muted work-empty">Choose a workflow and send a message to start.</p></div>;
-  return <div className="v2-work work-run-mode" data-v2><header className="work-run-head">
-    <button type="button" className="work-new-chat" onClick={onNewChat}><span aria-hidden>＋</span> New chat</button>
-    <div className="work-run-title"><span className="section-label">{view.running ? 'Block run' : 'Run'}</span><h1>{stack.name ?? stack.id}</h1></div>
-    {runModels.length > 0 && <div className="work-run-models" title="Models actually requested by this run"><span>Models</span>{runModels.map(model => <code key={model}>{model}</code>)}</div>}
-    {sandbox && <div className="work-run-models" title="Local file-effect confinement; network access remains ambient"><span>Sandbox</span>
-      <code>{sandbox.effectiveMode ?? sandbox.requestedMode}</code><code>{sandbox.backend}</code><small>{sandbox.enforcement} · ambient network</small></div>}
-    <span className={`work-stage stage-${view.stage}`}>{view.stage ?? 'starting'}</span>
-    {(view.running || view.paused) && !view.stopping && <button type="button" className="work-pause"
-      disabled={pauseBusy || resumeBusy || view.pausing}
-      onClick={view.paused ? onResumeRun : onPauseRun}>
-      {view.paused ? (resumeBusy ? 'Resuming…' : 'Resume run') : (pauseBusy || view.pausing ? 'Pausing…' : 'Pause run')}
-    </button>}
-    {(view.running || view.paused) && <button type="button" className="work-stop" disabled={stopBusy || view.stopping} onClick={onStopRun}>
-      {stopBusy || view.stopping ? 'Stopping…' : 'Stop run'}
-    </button>}
-    {!view.running && !view.paused && view.resumable && <button type="button" className="work-resume"
-      disabled={resumeBusy} onClick={onResumeRun}>{resumeBusy ? 'Resuming…' : 'Resume run'}</button>}
-    <button type="button" className="work-open-flow" onClick={onOpenFlow} title="Open this workflow in Build; Work returns to this same run">Open flow</button>
-    <code className="work-run-id">{runId}</code></header>
+  const history = <ChatHistory runs={runs} activeRunId={runId} onOpenRun={onOpenRun} onNewChat={onNewChat}/>;
+  if (!stack) return <div className="v2-work" data-v2>{history}<section className="work-surface">{composer}<p className="muted work-empty">Choose a workflow and send a message to start.</p></section></div>;
+  return <div className="v2-work work-run-mode" data-v2>{history}<section className="work-surface"><header className="work-run-head">
+    <div className="work-run-title"><span className="section-label">{view.running ? 'Running workflow' : 'Workflow run'}</span><h1>{stack.name ?? stack.id}</h1></div>
+    <RunActions view={view} onPauseRun={onPauseRun} onResumeRun={onResumeRun} onStopRun={onStopRun} onOpenFlow={onOpenFlow}
+      pauseBusy={pauseBusy} resumeBusy={resumeBusy} stopBusy={stopBusy}/></header>
     {controlError && <p className="work-error" role="alert">{controlError}</p>}
-    {(view.stage === 'stopped' || view.stage === 'interrupted') && <p className="work-lifecycle" role="status">
-      <strong>{view.stage === 'interrupted' ? 'This run was interrupted.' : 'This run was stopped.'}</strong>
-      {view.reason ? ` ${view.reason}` : ''} Resume continues from the last durable block.
-    </p>}
     {view.error && <section className="work-failure" role="alert">
       <strong>{view.error}</strong><div className="work-failure-actions">
         {view.errorBlockId && <button type="button" className="work-retry" disabled={retryBusy}
@@ -146,20 +199,13 @@ export default function Work({
     {view.warnings?.map(warning => <p className="work-warning" role="status" key={warning.blockId}>
       <strong>{warning.blockId} degraded:</strong> {warning.message}
     </p>)}
-    {latestAttempt && <p className={`work-model-status state-${latestAttempt.status}`} role="status">
-      <strong>{latestAttempt.status === 'started' ? 'Waiting for' : latestAttempt.status === 'failed' ? 'Model failed' : 'Response from'}</strong>
-      <code>{latestAttempt.effective}</code>
-      {latestAttempt.error && <span>{latestAttempt.error}</span>}
-      {latestRequest.tokensPerSecond != null && <span>{latestRequest.tokensPerSecond.toFixed(1)} tokens/s</span>}
-      {latestRequest.costUsd != null && <span>${latestRequest.costUsd.toFixed(4)}</span>}
-    </p>}
     {summary?.degraded && <p className="work-warning" role="status"><strong>Post-run conversation summary degraded.</strong> This happened after the workflow settled and did not cause its failure{summary.reason ? `: ${summary.reason}` : '.'}</p>}
-    <div className="work-run-grid"><RunRail stack={stack} view={view}/><main className="work-run-main">
+    <div className="work-run-grid"><main className="work-run-main">
       <BlockEditor stack={stack} blocks={blocks} mode="run" run={runModel}/>
       <Interaction interaction={interaction} onDecide={onDecide} onAnswer={onAnswer}/>
       {!view.running && !view.resumable && !view.stopping && !interaction && <form className="work-reply" onSubmit={event => { event.preventDefault(); if (!reply.trim()) return; onReply?.(reply); setReply(''); }}>
         <textarea rows="2" value={reply} onChange={event => setReply(event.target.value)} placeholder="Continue this conversation…" />
         <button type="submit" disabled={replyBusy || !reply.trim()}>{replyBusy ? 'Starting…' : 'Send'}</button></form>}
-    </main><DetailsRail traceDetails={detailedTrace} runId={runId} view={view} runs={runs} onOpenRun={onOpenRun} onOpenTrace={onOpenTrace}/></div>
-  </div>;
+    </main><DetailsRail traceDetails={detailedTrace} runId={runId} view={view} onOpenTrace={onOpenTrace}/></div>
+  </section></div>;
 }

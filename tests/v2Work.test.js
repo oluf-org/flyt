@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { foldTrace, feed, emptyTrace } from '../src/traceModel.js';
-import { runView, blockStates, liveOutput, runStage } from '../src/v2/runView.js';
+import { runView, blockStates, blockMetrics, liveOutput, runStage } from '../src/v2/runView.js';
 import { traceView } from '../src/v2/traceView.js';
 
 const src = p => fs.readFileSync(fileURLToPath(new URL(`../src/${p}`, import.meta.url)), 'utf8');
@@ -56,7 +56,27 @@ test('durable stream chunks survive a renderer reconnect before the response set
   ];
   const reopened = runView(foldTrace(partial));
   assert.equal(reopened.blocks.plan.showing, 'Half a thought');
+  assert.equal(reopened.blocks.plan.metrics.lastTokenAt, 't2');
+  assert.equal(reopened.blocks.plan.metrics.estimatedTokensOut, 4);
   assert.equal(reopened.running, true);
+});
+
+test('block metrics aggregate model spend, tokens, tools, and requests per block', () => {
+  const trace = foldTrace([
+    { seq: 1, at: '2026-01-01T00:00:00.000Z', type: 'turn.start', data: { runId: 'r', turn: 1 } },
+    { seq: 2, at: '2026-01-01T00:00:01.000Z', type: 'step.start', data: { runId: 'r', blockId: 'work', step: 1 } },
+    { seq: 3, at: '2026-01-01T00:00:02.000Z', type: 'llm.request', data: { callId: 'q1', model: 'requested' } },
+    { seq: 4, at: '2026-01-01T00:00:03.000Z', type: 'llm.attempt', data: { callId: 'q1', index: 0, model: 'requested', resolvedModel: 'gpt-5.4', status: 'succeeded' } },
+    { seq: 5, at: '2026-01-01T00:00:04.000Z', type: 'llm.response', data: { callId: 'q1', content: 'done', usage: { promptTokens: 120, completionTokens: 30, cachedTokens: 20, costUsd: 0.004 } } },
+    { seq: 6, at: '2026-01-01T00:00:05.000Z', type: 'tool.call', data: { callId: 'tool-1', name: 'read_file' } },
+    { seq: 7, at: '2026-01-01T00:00:06.000Z', type: 'step.end', data: { blockId: 'work', step: 1 } },
+  ]);
+  assert.deepEqual(blockMetrics(trace).work, {
+    model: 'gpt-5.4', costUsd: 0.004, tokensIn: 120, tokensOut: 30,
+    reasoningTokens: null, cachedTokens: 20, requestCount: 1, toolCount: 1,
+    startedAt: '2026-01-01T00:00:01.000Z', endedAt: '2026-01-01T00:00:06.000Z',
+    lastTokenAt: '2026-01-01T00:00:04.000Z', waitingForToken: false, estimatedTokensOut: null,
+  });
 });
 
 test('parallel lanes are active together, and Work says so in the plural', () => {
@@ -182,4 +202,21 @@ test('Work draws the stack through the editor rather than drawing it again', () 
   assert.match(work, /Internal reasoning/);
   assert.match(work, /Visible response/);
   assert.match(work, /Stop run/, 'a soft-unbounded worker remains manually stoppable');
+});
+
+test('Work keeps navigation persistent and moves noisy run metadata out of the header', () => {
+  const work = src('v2/Work.jsx');
+  const editor = src('v2/BlockEditor.jsx');
+  assert.match(work, /aria-label="Chat history"/);
+  assert.match(work, /flyt\.workHistoryCollapsed/,
+    'the chat-history width preference survives moving between runs');
+  assert.match(work, /\['log', 'result'\]/,
+    'run navigation lives in chat history instead of being duplicated in details');
+  assert.doesNotMatch(work, /work-run-models|work-run-id|work-run-rail/,
+    'models, sandbox, raw run ids, and duplicate progress rails do not compete in the header');
+  assert.match(work, /Resume continues from the last durable block/,
+    'recovery guidance remains available inside the status menu');
+  assert.match(editor, /<small>Started<\/small><time/);
+  assert.match(editor, /date\.toLocaleString\(undefined, \{ dateStyle: 'full', timeStyle: 'short' \}\)/,
+    'the date is retained for hover while the visible timestamp stays compact');
 });

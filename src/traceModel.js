@@ -244,6 +244,8 @@ export function feed(trace, events) {
           route: null,
           content: null,
           reasoning: null,
+          firstTokenAt: null,
+          lastTokenAt: null,
           attempts: [],
         };
         break;
@@ -283,6 +285,13 @@ export function feed(trace, events) {
           if (data.route != null) request.route = data.route;
           if (data.content != null) request.content = data.content;
           if (data.reasoning != null) request.reasoning = data.reasoning;
+          // Non-streaming adapters deliver their first and last visible token
+          // with the response envelope. Keep the timestamp on the request so
+          // Work can use the same canonical trace for its live-idle clock.
+          if ((String(data.content ?? '').length > 0 || String(data.reasoning ?? '').length > 0) && event.at != null) {
+            request.firstTokenAt ??= event.at;
+            request.lastTokenAt = event.at;
+          }
         }
         // The response may carry the tool calls the model asked for; they are
         // part of this step's record too, attached by id.
@@ -319,6 +328,10 @@ export function feed(trace, events) {
         if (!request) break;
         if (data.text != null) request.content = `${request.content ?? ''}${String(data.text)}`;
         if (data.reasoning != null) request.reasoning = `${request.reasoning ?? ''}${String(data.reasoning)}`;
+        if ((String(data.text ?? '').length > 0 || String(data.reasoning ?? '').length > 0) && event.at != null) {
+          request.firstTokenAt ??= event.at;
+          request.lastTokenAt = event.at;
+        }
         break;
       }
 

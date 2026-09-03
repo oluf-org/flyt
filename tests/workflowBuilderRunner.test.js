@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createEngine } from '../core/engine.js';
 import { createApi } from '../core/api.js';
 import { boundedSemanticContext, summarizeWorkflowRun } from '../core/conversationSupervisor.js';
+import { parseStack } from '#kernel';
 
 const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -73,9 +74,18 @@ test('the Workflow picker exposes launchable stacks and their named modes', asyn
   const fable = workflows.find(item => item.id === 'fable-at-home');
   assert.deepEqual(fable.presets.map(item => item.id), ['no', 'low', 'medium', 'high']);
   assert.deepEqual(fable.steps.map(step => step.id), ['prompt-refiner', 'dispatch']);
-  assert.equal(fable.steps.find(step => step.id === 'dispatch').use, 'flyt-blocks-core:task-graph');
+  const fableDispatch = fable.steps.find(step => step.id === 'dispatch');
+  assert.equal(fableDispatch.use, 'flyt-blocks-core:task-graph');
   assert.equal(fable.presets.find(item => item.id === 'high').overrides.dispatch.parallelism, 'high');
   assert.equal(workflows.some(item => item.id === 'loop-task'), false, 'system Loop stack is not launchable chat UI');
+});
+
+test('Fable gives its planner and generated workers standing system prompts', () => {
+  const source = fs.readFileSync(path.join(projectRoot, 'stacks', 'fable-at-home.stack.yaml'), 'utf8');
+  const stack = parseStack(source, 'fable-at-home');
+  const dispatch = stack.root.children.find(node => node.id === 'dispatch');
+  assert.match(dispatch.config.systemPrompt, /dependency graph of tasks/);
+  assert.match(dispatch.config.workerSystemPrompt, /Complete the assigned task/);
 });
 
 test('Fable materializes and completes its generated task blocks through the workflow API', async () => {

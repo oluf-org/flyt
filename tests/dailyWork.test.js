@@ -115,6 +115,23 @@ test('the rendered shell keeps the composer and tabs on Work and opens Models in
     assert.match(models, /data-model-catalog="true"/);
     assert.doesNotMatch(models, /data-daily-composer="true"/);
 
+    const interruptedWatching = watchingFromRun('r-interrupted', {
+      ...snapshot, meta: { ...snapshot.meta, stage: 'interrupted' },
+    }, []);
+    const interrupted = renderToStaticMarkup(React.createElement(Shell, {
+      ...props,
+      location: { dest: 'work', run: 'r-interrupted' },
+      watching: interruptedWatching,
+      runs: [{ id: 'r-interrupted', name: 'Interrupted chat', createdAt: snapshot.meta.createdAt, stage: 'interrupted' }],
+    }));
+    assert.match(interrupted, /aria-label="Chat history"/);
+    assert.match(interrupted, /aria-label="Interrupted — run actions"/);
+    assert.match(interrupted, /Resume run<\/button>/);
+    assert.match(interrupted, /Open builder<\/button>/);
+    assert.doesNotMatch(interrupted, /work-run-models|work-run-id|work-run-rail/);
+    assert.doesNotMatch(interrupted, /Trace ·/,
+      'the window bar does not expose a timestamp-shaped run id');
+
     // The Library is a destination of its own now, not a drawer inside Build.
     const library = renderToStaticMarkup(React.createElement(Shell, {
       ...props, location: { dest: 'library', run: null },
