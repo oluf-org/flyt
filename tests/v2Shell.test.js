@@ -7,18 +7,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  WORK, BUILD, LIBRARY, MODELS, HISTORY, DESTINATIONS, INITIAL, navigate, heading, hint, traceOf, state,
+  WORK, BUILD, GOALS, LIBRARY, MODELS, HISTORY, DESTINATIONS, INITIAL, navigate, heading, hint, traceOf, state,
   adjacent,
 } from '../src/v2/shellRouting.js';
 
-test('Work, Build, Library, Models and History are permanent destinations', () => {
-  assert.deepEqual(DESTINATIONS, [WORK, BUILD, LIBRARY, MODELS, HISTORY]);
+test('Work, Build, Goals, Library, Models and History are permanent destinations', () => {
+  assert.deepEqual(DESTINATIONS, [WORK, BUILD, GOALS, LIBRARY, MODELS, HISTORY]);
   // Trace is not a peer: it is reached by a run address, never by picking it.
   assert.ok(!DESTINATIONS.includes('trace'));
   // The order is the rail's order, and the rail's sliding pill is positioned
   // from the index — so reordering this list moves the highlight off the
   // button it is meant to be under.
-  assert.equal(DESTINATIONS.indexOf(LIBRARY), 2);
+  assert.equal(DESTINATIONS.indexOf(LIBRARY), 3);
 });
 
 test('the shell starts on Work, no run addressed', () => {
@@ -42,9 +42,9 @@ test('headings name every permanent surface, and only those', () => {
 });
 
 test('every destination is reachable from every other in one hop', () => {
-  assert.deepEqual(adjacent({ dest: WORK, run: null }), [BUILD, LIBRARY, MODELS, HISTORY]);
-  assert.deepEqual(adjacent({ dest: BUILD, run: null }), [WORK, LIBRARY, MODELS, HISTORY]);
-  assert.deepEqual(adjacent({ dest: LIBRARY, run: null }), [WORK, BUILD, MODELS, HISTORY]);
+  assert.deepEqual(adjacent({ dest: WORK, run: null }), [BUILD, GOALS, LIBRARY, MODELS, HISTORY]);
+  assert.deepEqual(adjacent({ dest: BUILD, run: null }), [WORK, GOALS, LIBRARY, MODELS, HISTORY]);
+  assert.deepEqual(adjacent({ dest: LIBRARY, run: null }), [WORK, BUILD, GOALS, MODELS, HISTORY]);
   // A run address is carried across either hop — that is the whole point of
   // it being a property of the location rather than of a destination.
   const watched = { dest: WORK, run: 'run-42' };

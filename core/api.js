@@ -33,6 +33,7 @@ import {
   appendStoredRunEvent, storedSnapshots, SNAPSHOT_UPDATE_EVENTS,
 } from './runProjection.js';
 import { RunController } from './runController.js';
+import { GoalController } from './goalController.js';
 import { parentRunIdOf, repairInterruptedSessions } from '#kernel';
 import { StackStore } from './stackstore.js';
 import { summarizeWorkflowRun } from './conversationSupervisor.js';
@@ -254,6 +255,8 @@ export function createApi(engine) {
       forwardedEnv: request.forwardedEnv ?? runtimeConfig.sandbox?.forwardedEnv ?? [],
       windowsSandboxRunner: request.windowsSandboxRunner ?? null,
       ceiling: request.ceiling ?? null,
+      stackSource: request.stackSource ?? null,
+      goalGuard: request.goalGuard ?? null,
       onSessionEvent: (runId, event) => {
         pushEvents(runId, event);
         if (!event?.type || SNAPSHOT_UPDATE_EVENTS.has(event.type)) pushUpdate(runId);
@@ -287,6 +290,12 @@ export function createApi(engine) {
       }).sort((a, b) => a.price - b.price);
     return active[0] ?? null;
   };
+
+  const goals = new GoalController({
+    runs: runController, project: proj, worker: supervisorWorker,
+    sandbox: runtimeConfig.sandbox ?? {},
+    emit: (projectId, goalId) => engine.emitWorkflow?.(projectId, { kind: 'goal', goalId }),
+  });
 
   const appendWorkflowSummary = async (entry, host, runId) => {
     if (runtimeConfig.supervisor?.terminalSummary === false) return null;
@@ -1011,6 +1020,25 @@ export function createApi(engine) {
     },
 
     // Supervisor launch: a narrower profile, through the same controller.
+    'goal:list': ({ projectId }) => goals.list(projectId),
+    'goal:draft': args => goals.draft(args),
+    'goal:get': ({ projectId, goalId }) => goals.get(projectId, goalId),
+    'goal:create': args => goals.create(args),
+    'goal:start': args => goals.start(args),
+    'goal:control': args => goals.control(args),
+    'goal:revise': args => goals.editSource({ ...args, author: 'human' }),
+    'goal:history': args => goals.history(args),
+    'goal:inspect': args => goals.inspect(args),
+    'goal:restore': async ({ projectId, goalId, revision, baseRevision }) => {
+      const recipe = goals.inspect({ projectId, goalId, record: `recipe-${Number(revision)}` });
+      return goals.editSource({ projectId, goalId, baseRevision, source: recipe.source, rationale: `Restore recipe ${revision}` });
+    },
+    'goal:clone': ({ projectId, goalId }) => {
+      const state = goals.get(projectId, goalId);
+      return goals.create({ projectId, definition: { ...state.contract, ...state.definition, name: state.name,
+        recipe: goals.inspect({ projectId, goalId, record: `recipe-${state.pendingRevision ?? state.activeRevision}` }).source } });
+    },
+
     'stack:run': async ({
       projectId, stackId, input = '', workspaceDir = null,
       approvalMode = 'always', runId = null, worker = null, level = null,
@@ -1159,6 +1187,8 @@ export function createApi(engine) {
     // --- Canonical run control --------------------------------------------
     'run:resume': async ({ projectId, runId }) => {
       const entry = proj(projectId);
+      const goalId = storedStackRunMetadata(entry.store.rootDir, runId)?.goalId;
+      if (goalId) { await goals.start({ projectId, goalId }); return { ok: true, runId, goalId }; }
       const legacy = legacyControl(entry, runId);
       if (legacy) return legacy;
       await runController.resume({ projectId, runId });
@@ -1166,6 +1196,8 @@ export function createApi(engine) {
     },
     'run:stop': async ({ projectId, runId, reason = 'stopped by request' }) => {
       const entry = proj(projectId);
+      const goalId = storedStackRunMetadata(entry.store.rootDir, runId)?.goalId;
+      if (goalId) { await goals.control({ projectId, goalId, action: 'stop' }); return { ok: true, state: 'stopping', goalId }; }
       const legacy = legacyControl(entry, runId);
       if (legacy) return legacy;
       settleWorkflowInteractions(projectId, runId);
@@ -1173,12 +1205,15 @@ export function createApi(engine) {
     },
     'run:pause': async ({ projectId, runId }) => {
       const entry = proj(projectId);
+      const goalId = storedStackRunMetadata(entry.store.rootDir, runId)?.goalId;
+      if (goalId) { await goals.control({ projectId, goalId, action: 'pause' }); return { ok: true, state: 'pausing', goalId }; }
       return legacyControl(entry, runId) ?? runController.pause(projectId, runId);
     },
     // `worker` re-pins the node's model for this attempt only (D39) — the way
     // back from "the step failed because of the model it was pointed at".
     'run:restartBlock': async ({ projectId, runId, blockId, guidance = '', worker = null }) => {
       const entry = proj(projectId);
+      if (storedStackRunMetadata(entry.store.rootDir, runId)?.goalId) throw new Error('Resume the owning Goal or create a new Goal instance; child runs cannot bypass its contract and budget.');
       const legacy = legacyControl(entry, runId);
       if (legacy) return legacy;
       await runController.restartBlock({
@@ -2315,6 +2350,7 @@ export function createApi(engine) {
    * request, including aborting active provider and CLI calls.
    */
   async function shutdown(reason = 'application closing') {
+    await goals.shutdown();
     for (const supervisor of supervisors.values()) {
       try { if (supervisor?.running) supervisor.stop(reason); } catch { /* continue with owned runs */ }
     }

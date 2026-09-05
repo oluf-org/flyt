@@ -118,6 +118,8 @@ export class RunController {
       requireLaunchable: Boolean(request.requireLaunchable),
       ceiling: request.ceiling ?? null,
       toolsContextIdentity: request.toolsContextIdentity ?? null,
+      stackSource: request.stackSource ?? null,
+      goalId: request.goalId ?? null,
       executionWorldProvider: request.executionWorldProvider ?? 'local',
       sandboxMode: request.sandboxMode ?? 'workspace-write',
       sandboxEnforcement: request.sandboxEnforcement ?? 'partial',
@@ -249,7 +251,7 @@ export class RunController {
     catch (error) { return error?.code === 'EPERM'; }
   }
 
-  async #storedHost(projectId, runId, workerOverride = null, blockId = null) {
+  async #storedHost(projectId, runId, workerOverride = null, blockId = null, hostOverrides = null) {
     const live = this.get(projectId, runId);
     if (live && !workerOverride) return { live, hostKey: live.hostKey, hostRecord: this.#hosts.get(live.hostKey) };
     if (live) throw coded(`Run "${runId}" is already live; stop it before changing its worker.`, 'run_already_live');
@@ -295,16 +297,18 @@ export class RunController {
         ? 'full' : meta.sandbox?.minimumEnforcement ?? 'partial',
       allowAttendedEscalation: meta.profile !== 'flyt-loop-worker',
       forwardedEnv: [],
+      ceiling: meta.ceiling ?? null,
+      ...(hostOverrides ?? {}),
     };
     const acquired = await this.#acquireHost(projectId, host);
     return { hostKey: acquired.hostKey, hostRecord: acquired.record, meta, desktopBlockOverride };
   }
 
-  async resume({ projectId, runId, workerOverride = null, blockId = null }) {
+  async resume({ projectId, runId, workerOverride = null, blockId = null, hostOverrides = null }) {
     await this.#repair(projectId);
     const existing = this.get(projectId, runId);
     if (existing && !workerOverride) return { runId, run: existing.run, control: await this.continue(projectId, runId) };
-    const { hostKey, hostRecord } = await this.#storedHost(projectId, runId, workerOverride, blockId);
+    const { hostKey, hostRecord, meta } = await this.#storedHost(projectId, runId, workerOverride, blockId, hostOverrides);
     try {
       const { run } = await this.#resumeRun(hostRecord.host, runId);
       const previous = meta.sandbox ?? null;

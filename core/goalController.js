@@ -1,0 +1,480 @@
+// Durable orchestration above RunController. Every setup, recipe and candidate
+// execution is an ordinary canonical workflow; no block scheduler lives here.
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import os from 'node:os';
+import Ajv from 'ajv';
+import { bootKernel } from './v2.js';
+import { serializeStack } from './stackstore.js';
+
+const clone = value => structuredClone(value);
+const id = () => crypto.randomUUID();
+const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+const safe = value => {
+  if (!/^[\w-]+$/.test(String(value))) throw new Error('Invalid goal or record ID');
+  return String(value);
+};
+const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+function write(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${id()}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(value, null, 2));
+  fs.renameSync(temporary, file);
+}
+function immutable(file, value, exclusive = false) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${id()}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(value, null, 2), { flag: 'wx' });
+  try {
+    // Linking a fully written sibling is atomic and refuses replacement, even
+    // when two independent callers passed the same revision check.
+    fs.linkSync(temporary, file);
+    return value;
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    if (exclusive) throw new Error('Stale recipe revision: another edit already committed this version');
+    return read(file);
+  } finally { fs.unlinkSync(temporary); }
+}
+const terminal = new Set(['achieved', 'limit_reached', 'plateau', 'needs_input', 'failed', 'stopped']);
+export function parseGoalReply(output) {
+  try { return JSON.parse(output.trim()); } catch { /* tolerate one explicitly delimited JSON artifact */ }
+  const fences = [...output.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)];
+  if (fences.length !== 1 || /[{}\[\]]/.test(output.replace(fences[0][0], ''))) return null;
+  try { return JSON.parse(fences[0][1].trim()); } catch { return null; }
+}
+const bounded = (value, max, label) => {
+  if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`${label} must contain 1–${max} characters`);
+  return value;
+};
+function within(root, relative) {
+  if (path.isAbsolute(relative)) throw new Error('Paths must be relative to the goal workspace');
+  const target = path.resolve(root, relative);
+  const rel = path.relative(root, target);
+  if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) throw new Error('Path escapes goal workspace');
+  let existing = target;
+  while (!fs.existsSync(existing) && path.dirname(existing) !== existing) existing = path.dirname(existing);
+  if (fs.existsSync(existing)) {
+    const real = fs.realpathSync(existing);
+    const actual = path.relative(root, real);
+    if (actual === '..' || actual.startsWith(`..${path.sep}`) || path.isAbsolute(actual)) throw new Error('Link escapes goal workspace');
+  }
+  return target;
+}
+function identity(folder) {
+  const stat = fs.statSync(folder);
+  if (!stat.isDirectory()) throw new Error('Goal workspace must be a directory');
+  return { path: fs.realpathSync(folder), dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs };
+}
+
+export class GoalController {
+  constructor({ runs, project, worker, sandbox = {}, emit = () => {} }) {
+    this.runs = runs; this.project = project; this.worker = worker; this.sandbox = sandbox; this.emit = emit;
+    this.live = new Map(); this.registry = null;
+  }
+  root(projectId) { return path.join(this.project(projectId).store.rootDir, 'goals'); }
+  file(projectId, goalId) { return path.join(this.root(projectId), safe(goalId), 'state.json'); }
+  get(projectId, goalId) {
+    const state = read(this.file(projectId, goalId));
+    const live = this.live.get(goalId);
+    return { ...state, live: Boolean(live), recoverable: state.status === 'running' && !live,
+      elapsedMs: state.elapsedMs + (live ? Date.now() - live.began : 0) };
+  }
+  list(projectId) {
+    const root = this.root(projectId);
+    if (!fs.existsSync(root)) return [];
+    return fs.readdirSync(root).filter(name => fs.existsSync(path.join(root, name, 'state.json')))
+      .map(name => this.get(projectId, name)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  save(state) { state.updatedAt = new Date().toISOString(); write(this.file(state.projectId, state.id), state); this.emit(state.projectId, state.id); }
+  recordPath(state, name) { return path.join(path.dirname(this.file(state.projectId, state.id)), `${safe(name)}.json`); }
+  async blocks() {
+    this.registry ??= (async () => {
+      const kernel = await import('#kernel');
+      const host = await bootKernel({ call: true, profile: 'flyt-loop-worker', runsRoot: path.join(os.tmpdir(), 'flyt-goal-validation') });
+      try { return { kernel, definitions: host.ctx.blocks.list() }; }
+      finally { await host.dispose(); }
+    })();
+    return this.registry;
+  }
+  async validateSource(source, contract) {
+    bounded(source, 64000, 'Workflow source');
+    const { kernel, definitions } = await this.blocks();
+    const stack = kernel.parseStack(source);
+    const bounds = kernel.boundStack(stack.root);
+    if (bounds.expansion > 100 || bounds.blocks > 50) throw new Error('Goal workflows are limited to 50 authored and 100 expanded blocks');
+    const ajv = new Ajv({ strict: false, validateFormats: false });
+    const visit = node => {
+      if (node.kind === 'block') {
+        const definition = definitions.find(block => block.use === node.use);
+        if (!definition) throw new Error(`Unavailable block: ${node.use}`);
+        if (node.use === 'flyt-blocks-loop:loop-handoff') throw new Error('Legacy backlog handoff cannot run in a Goal');
+        if (definition.settings && !ajv.validate(definition.settings, node.config ?? {})) throw new Error(`Invalid settings for ${node.id}: ${ajv.errorsText()}`);
+        if (node.config?.model || node.config?.modelFallbacks) throw new Error('Goal model selection belongs to the fixed contract');
+      } else {
+        if (node.kind === 'parallel' && (node.maxParallel ?? node.children.length) > contract.maxParallel) throw new Error('Recipe exceeds fixed parallelism limit');
+        node.children.forEach(visit); node.else?.forEach(visit);
+      }
+    };
+    visit(stack.root);
+    return stack;
+  }
+  contract(input, projectId) {
+    if (input.folderMode === 'strict') throw new Error('Strict folder isolation is unavailable: this machine has no provider with a restricted filesystem view. Choose Folder focus explicitly.');
+    if (input.folderMode && input.folderMode !== 'focus') throw new Error('Unknown folder policy');
+    const entry = this.project(projectId);
+    const folder = fs.realpathSync(input.folder || entry.folder || entry.workspaceRoot);
+    const criteria = input.criteria;
+    if (!Array.isArray(criteria) || !criteria.length || criteria.length > 30) throw new Error('Define 1–30 fixed acceptance checks');
+    for (const criterion of criteria) {
+      if (!['output_contains', 'file_contains'].includes(criterion.type)) throw new Error('Checks support output_contains and file_contains');
+      bounded(criterion.value, 2000, 'Expected content');
+      if (criterion.type === 'file_contains') within(folder, bounded(criterion.path, 500, 'Artifact path'));
+    }
+    const limits = { iterations: 10, calls: 100, minutes: 30, usd: null, ...input.limits };
+    for (const [key, max] of [['iterations', 1000], ['calls', 10000], ['minutes', 1440]]) {
+      if (!Number.isInteger(limits[key]) || limits[key] < 1 || limits[key] > max) throw new Error(`Invalid ${key} limit (1–${max})`);
+    }
+    if (limits.usd !== null && (!Number.isFinite(limits.usd) || limits.usd <= 0)) throw new Error('Dollar limit must be positive or unset');
+    const tests = input.tests ?? [];
+    if (!Array.isArray(tests) || tests.length > 20) throw new Error('At most 20 fixed candidate tests');
+    for (const test of tests) { bounded(test.input, 8000, 'Test input'); bounded(test.contains, 2000, 'Test expected content'); }
+    const maxParallel = input.maxParallel ?? 1;
+    if (!Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > 4) throw new Error('Parallelism must be 1–4');
+    const plateau = input.plateau ?? 3;
+    if (!Number.isInteger(plateau) || plateau < 1 || plateau > 1000) throw new Error('Plateau must be 1–1000');
+    if (!Array.isArray(input.tools ?? []) || (input.tools ?? []).some(tool => typeof tool !== 'string')) throw new Error('Tools must be a list');
+    // Queue operations and other-run readers are outside this goal ownership.
+    const forbidden = /task|reference|run_log|read_run|other_run|agent|workflow|goal/i;
+    if ((input.tools ?? []).some(tool => forbidden.test(tool))) throw new Error('Goal tools cannot enqueue work or read unrelated runs/references');
+    return {
+      version: 1, objective: bounded(input.objective, 8000, 'Objective'),
+      constraints: String(input.constraints ?? '').slice(0, 8000), criteria: clone(criteria), tests: clone(tests),
+      folder, folderIdentity: identity(folder), folderMode: 'focus', createFolder: Boolean(input.createFolder), limits, maxParallel, plateau,
+      selfRedesign: Boolean(input.selfRedesign), tools: [...new Set(input.tools ?? [])],
+      worker: clone(input.worker?.model ? input.worker : this.worker()),
+    };
+  }
+  async create({ projectId, definition }) {
+    projectId = this.project(projectId).id;
+    const contract = this.contract(definition, projectId);
+    if (!contract.worker?.model) throw new Error('Select a connected model before starting a Goal');
+    await this.validateSource(definition.recipe, contract);
+    if (definition.setup) await this.validateSource(definition.setup, contract);
+    const state = {
+      id: id(), projectId, name: String(definition.name || 'New goal').slice(0, 120),
+      createdAt: new Date().toISOString(), contract, status: 'ready', reason: 'Ready to start',
+      definition: { setup: definition.setup || null, recipe: definition.recipe },
+      activeRevision: 1, pendingRevision: null, revisionCount: 1, iteration: 0,
+      setupDone: !definition.setup, workspace: null, activeChild: null,
+      calls: 0, knownUsd: 0, unknownCostCalls: 0, elapsedMs: 0, plateauCount: 0,
+      best: null, current: null, memory: [], history: [],
+    };
+    immutable(this.recordPath(state, 'recipe-1'), { version: 1, source: definition.recipe, baseRevision: null, author: 'human', rationale: 'Initial recipe' });
+    this.save(state); return state;
+  }
+  async editSource({ projectId, goalId, baseRevision, source, commands, rationale = 'Human edit', author = 'human' }) {
+    projectId = this.project(projectId).id;
+    let state = this.live.get(goalId)?.state ?? read(this.file(projectId, goalId));
+    if (state.projectId !== projectId) throw new Error('Goal belongs to another project');
+    if (author === 'model' && !state.contract.selfRedesign) throw new Error('Self redesign is disabled');
+    if (baseRevision !== (state.pendingRevision ?? state.activeRevision)) throw new Error('Stale recipe revision. Reload before editing.');
+    const previous = read(this.recordPath(state, `recipe-${baseRevision}`));
+    if (commands) {
+      if (!Array.isArray(commands) || commands.length > 30) throw new Error('At most 30 recipe commands per proposal');
+      const { kernel } = await this.blocks();
+      let stack = kernel.parseStack(previous.source);
+      const handlers = new Map();
+      kernel.registerStackCommands({ commands: { register: command => { handlers.set(command.name, command); return () => {}; } } }, {
+        get: () => stack.root, set: root => { stack = { ...stack, root }; },
+      });
+      for (const command of commands) {
+        const handler = handlers.get(command.name);
+        if (!handler) throw new Error(`Unsupported recipe command: ${command.name}`);
+        await handler.handler(command.args);
+      }
+      source = serializeStack(stack);
+    }
+    await this.validateSource(source, state.contract);
+    // Validation awaits: recheck the compare-and-swap against concurrent edits.
+    const latest = read(this.file(projectId, goalId));
+    if (baseRevision !== (latest.pendingRevision ?? latest.activeRevision)) throw new Error('Stale recipe revision. Reload before editing.');
+    if (!this.live.has(goalId) && fs.existsSync(this.recordPath(state, 'owner'))) throw new Error('Edit through the controller that currently owns this Goal');
+    state = this.live.get(goalId)?.state ?? latest;
+    const version = state.revisionCount + 1;
+    immutable(this.recordPath(state, `recipe-${version}`), {
+      version, source, baseRevision, author, rationale: bounded(rationale, 2000, 'Revision rationale'), commands: commands ?? [],
+    }, true);
+    state.revisionCount = version; state.pendingRevision = version;
+    if (author === 'model') state.pendingProposal = null;
+    this.save(state); return clone(state);
+  }
+  async draft({ source, commands = [] }) {
+    const { kernel, definitions } = await this.blocks();
+    let stack = kernel.parseStack(source);
+    const handlers = new Map();
+    kernel.registerStackCommands({ commands: { register: command => { handlers.set(command.name, command); return () => {}; } } }, {
+      get: () => stack.root, set: root => { stack = { ...stack, root }; },
+    });
+    if (!Array.isArray(commands) || commands.length > 30) throw new Error('Too many edit commands');
+    for (const command of commands) {
+      if (!handlers.has(command.name)) throw new Error('Unknown workflow edit command');
+      await handlers.get(command.name).handler(command.args);
+    }
+    const next = serializeStack(stack);
+    await this.validateSource(next, { maxParallel: 4 });
+    return { source: next, stack: kernel.parseStack(next), blocks: definitions.map(({ execute, ...definition }) => definition) };
+  }
+  history({ projectId, goalId, query = '', offset = 0, limit = 10 }) {
+    const state = this.get(projectId, goalId);
+    return state.history.filter(item => JSON.stringify(item).toLowerCase().includes(String(query).toLowerCase()))
+      .slice(Math.max(0, Number(offset) || 0), Math.max(0, Number(offset) || 0) + Math.min(20, Math.max(1, Number(limit) || 10)));
+  }
+  inspect({ projectId, goalId, record }) {
+    const state = this.get(projectId, goalId);
+    const value = read(this.recordPath(state, record));
+    if (JSON.stringify(value).length > 128000) throw new Error('Record exceeds the inspection bound');
+    return value;
+  }
+  acquire(state) {
+    const file = this.recordPath(state, 'owner');
+    if (fs.existsSync(file)) {
+      const previous = read(file);
+      let alive = true;
+      try { process.kill(previous.pid, 0); } catch (error) { alive = error.code === 'EPERM'; }
+      if (alive) throw new Error('Goal is owned by another active controller');
+      fs.unlinkSync(file);
+    }
+    fs.writeFileSync(file, JSON.stringify({ pid: process.pid }), { flag: 'wx' });
+    return () => fs.unlinkSync(file);
+  }
+  async start({ projectId, goalId }) {
+    projectId = this.project(projectId).id;
+    if (this.live.has(goalId)) return this.get(projectId, goalId);
+    const state = read(this.file(projectId, goalId));
+    if (state.controlIntent === 'stop' || state.controlIntent === 'limit') {
+      state.status = state.controlIntent === 'stop' ? 'stopped' : 'limit_reached';
+      state.reason = `Recovered recorded ${state.controlIntent} request`; this.save(state);
+    }
+    if (state.status === 'failed' && state.pendingRevision) {
+      state.repairs ??= [];
+      state.repairs.push({ child: state.activeChild?.runId ?? (state.iterationIntent ? `goal-${state.id}-${state.iterationIntent.phase}` : null), reason: state.reason, revision: state.activeRevision, at: new Date().toISOString() });
+      state.repairAttempt = (state.repairAttempt ?? 0) + 1;
+      state.status = 'ready'; state.activeChild = null; state.iterationIntent = null;
+    }
+    if (terminal.has(state.status)) throw new Error('This Goal is terminal. Start a new instance from its saved definition.');
+    const release = this.acquire(state);
+    if (state.activeSince) state.elapsedMs += Math.max(0, Date.now() - state.activeSince);
+    const record = { state, release, task: null, requested: null, began: Date.now(), timer: null };
+    this.live.set(goalId, record);
+    state.activeSince = record.began; state.status = 'running'; state.reason = 'Running'; this.save(state);
+    record.timer = setTimeout(() => { void this.control({ projectId, goalId, action: 'limit' }); }, Math.max(1, state.contract.limits.minutes * 60000 - state.elapsedMs));
+    record.task = this.drive(record).catch(error => {
+      state.status = record.requested === 'limit' || error.code === 'goal_limit' ? 'limit_reached' : record.requested === 'pause' ? 'paused' : record.requested === 'stop' ? 'stopped' : 'failed';
+      state.reason = String(error.message ?? error); this.save(state);
+    }).finally(() => {
+      clearTimeout(record.timer); state.elapsedMs += Date.now() - record.began; state.activeSince = null;
+      this.save(state); this.live.delete(goalId); release();
+    });
+    return clone(state);
+  }
+  async control({ projectId, goalId, action }) {
+    projectId = this.project(projectId).id;
+    const record = this.live.get(goalId);
+    if (!record) {
+      const state = read(this.file(projectId, goalId));
+      if (['ready', 'paused', 'running'].includes(state.status) && action === 'stop') { state.status = 'stopped'; state.reason = 'Stopped by user'; this.save(state); }
+      return state;
+    }
+    if (!['pause', 'stop', 'limit'].includes(action)) throw new Error('Unknown goal control');
+    if (record.state.projectId !== projectId) throw new Error('Goal belongs to another project');
+    record.requested = action;
+    record.state.controlIntent = action; this.save(record.state);
+    if (record.state.activeChild) await this.runs.stop(projectId, record.state.activeChild.runId, `Goal ${action}`);
+    return clone(record.state);
+  }
+  async shutdown() {
+    const records = [...this.live.values()];
+    await Promise.allSettled(records.map(record => this.control({ projectId: record.state.projectId, goalId: record.state.id, action: 'pause' })));
+    await Promise.allSettled(records.map(record => record.task));
+  }
+  check(record) {
+    const state = record.state;
+    const limits = state.contract.limits;
+    if (record.requested) throw Object.assign(new Error(`Goal ${record.requested}`), { code: record.requested === 'limit' ? 'goal_limit' : 'goal_control' });
+    if (state.calls >= limits.calls || state.elapsedMs + Date.now() - record.began >= limits.minutes * 60000
+      || (limits.usd !== null && state.knownUsd >= limits.usd)) {
+      record.budgetHit = true;
+      throw Object.assign(new Error('Goal budget reached'), { code: 'goal_limit' });
+    }
+  }
+  packet(state) {
+    return {
+      goalId: state.id, objective: state.contract.objective, constraints: state.contract.constraints,
+      criteria: state.contract.criteria, tests: state.contract.tests, iteration: state.iteration + 1,
+      recipeRevision: state.activeRevision, folder: state.workspace.path, folderMode: 'focus',
+      remaining: { calls: state.contract.limits.calls - state.calls, iterations: state.contract.limits.iterations - state.iteration },
+      best: state.best, current: state.current, findings: state.memory,
+      recipe: state.contract.selfRedesign ? read(this.recordPath(state, `recipe-${state.activeRevision}`)).source : undefined,
+      outputContract: 'Return JSON {"candidate":{"text":"your result"},"findings":["short uncertain or observed finding"],"proposal":{"baseRevision":number,"rationale":"why","commands":[{"name":"stack:configure-block","args":{"nodeId":"id","config":{}}}]}}. proposal is optional; it edits only the recipe at the next boundary. For workflow optimization, candidate.source is canonical version 2 workflow YAML; fixed tests run through the ordinary engine. Do not claim verification: runtime checks decide success.',
+    };
+  }
+  async child(record, phase, source, input, workspace = null) {
+    const state = record.state;
+    this.check(record);
+    const parsed = await this.validateSource(source, state.contract);
+    const candidateTest = phase.startsWith('candidate-');
+    // Test workers see their input and inherited policy, never expected answers
+    // or the optimizer's memory. This keeps evaluation separate from building.
+    const goalContext = candidateTest ? {
+      goalId: state.id, role: 'candidate-test', folderMode: 'focus',
+      instruction: 'Execute this workflow against the STEP INPUT. Return its ordinary result.',
+    } : this.packet(state);
+    if (JSON.stringify(goalContext).length > 28000) throw new Error('Goal context exceeds 28,000 characters; reduce the contract, recipe or test set');
+    if (!state.activeChild) {
+      state.activeChild = { runId: `goal-${state.id}-${phase}`, phase, source, input, workspace: workspace || state.workspace.path };
+      this.save(state); // intent and stable child identity precede dispatch
+    }
+    const pending = state.activeChild;
+    if (pending.phase !== phase) throw new Error('Recovery phase does not match pending child');
+    const guard = {
+      beforeCall: async request => {
+        this.check(record);
+        if (JSON.stringify(request.messages ?? []).length > 96000) throw new Error('Goal model request exceeds 96,000 characters; chunk the inputs or retrieve less history');
+        if (request.model !== state.contract.worker.model) throw new Error('A descendant cannot change the Goal model contract');
+        state.calls++; state.unknownCostCalls++; this.save(state);
+      },
+      afterCall: async result => {
+        const cost = result.usage?.cost;
+        if (Number.isFinite(cost) && cost >= 0) { state.knownUsd += cost; state.unknownCostCalls--; }
+        this.save(state);
+      },
+    };
+    if (!candidateTest && state.iteration > 0) guard.history = async args => {
+      if (args.iteration != null) {
+        if (!Number.isInteger(args.iteration) || args.iteration < 1 || args.iteration > state.iteration) throw new Error('Only completed iterations in this Goal can be retrieved');
+        const result = this.inspect({ projectId: state.projectId, goalId: state.id, record: `iteration-${args.iteration}` });
+        const view = { iteration: result.number, score: result.score, candidate: result.candidate, findings: result.findings,
+          checks: result.checks.map(({ content, ...check }) => check), tests: result.tests.map(({ output, ...test }) => test) };
+        if (JSON.stringify(view).length > 16000) throw new Error('Iteration exceeds the retrieval bound; use a history search for its compact result');
+        return view;
+      }
+      return this.history({ ...args, projectId: state.projectId, goalId: state.id, limit: Math.min(10, args.limit ?? 5) });
+    };
+    const host = {
+      workspace: pending.workspace, stackSource: pending.source, goalId: state.id, goalGuard: guard,
+      worker: state.contract.worker, profile: 'flyt-loop-worker', approvalMode: 'always',
+      ceiling: [...state.contract.tools, ...(!candidateTest ? ['goal_history'] : [])], sandboxMode: this.sandbox.mode ?? 'workspace-write',
+      sandboxEnforcement: this.sandbox.minimumEnforcement ?? 'partial',
+    };
+    const runDir = this.project(state.projectId).store.runDir(pending.runId);
+    const exists = fs.existsSync(path.join(runDir, 'session.jsonl'));
+    const launched = exists
+      ? await this.runs.resume({ projectId: state.projectId, runId: pending.runId, hostOverrides: host })
+      : await this.runs.start({
+        projectId: state.projectId, runId: pending.runId, stackId: parsed.id, input: pending.input, host,
+        metadata: { goalId: state.id, parentGoalId: state.id, parentRunId: candidateTest ? `goal-${state.id}-${state.iterationIntent?.phase ?? `iteration-${state.iteration + 1}`}` : null,
+          iteration: state.iteration + 1, recipeRevision: state.activeRevision, goalContext, ceiling: host.ceiling },
+      });
+    if (record.requested) await this.runs.stop(state.projectId, pending.runId, `Goal ${record.requested}`);
+    const outcome = await launched.run.settled();
+    await this.runs.get(state.projectId, pending.runId)?.settlement;
+    if (record.requested) this.check(record);
+    const events = fs.readFileSync(path.join(runDir, 'session.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+    const output = events.filter(event => event.type === 'block.output' && !event.data.port).at(-1)?.data.content ?? '';
+    if (outcome.status !== 'done') throw Object.assign(new Error(`Child ${phase} ${outcome.status}: ${outcome.error || 'interrupted'}`), { code: record.budgetHit ? 'goal_limit' : 'goal_child_failed' });
+    const result = { runId: pending.runId, output: String(output) };
+    immutable(this.recordPath(state, `child-${phase}`), result);
+    state.activeChild = null; this.save(state);
+    return result;
+  }
+  async once(record, phase, source, input, workspace) {
+    const file = this.recordPath(record.state, `child-${phase}`);
+    if (fs.existsSync(file)) { record.state.activeChild = null; return read(file); }
+    return this.child(record, phase, source, input, workspace);
+  }
+  async drive(record) {
+    const state = record.state;
+    state.controlIntent = null;
+    if (!state.workspace) {
+      if (JSON.stringify(identity(state.contract.folder)) !== JSON.stringify(state.contract.folderIdentity)) throw new Error('The selected parent folder identity changed');
+      const target = state.contract.createFolder ? path.join(state.contract.folder, `goal-${state.id}`) : state.contract.folder;
+      fs.mkdirSync(target, { recursive: true });
+      state.workspace = identity(target); this.save(state);
+    } else if (JSON.stringify(identity(state.workspace.path)) !== JSON.stringify(state.workspace)) throw new Error('Goal workspace identity changed; inspect before restarting');
+    if (!state.setupDone) {
+      const setup = await this.once(record, 'setup', state.definition.setup, state.contract.objective);
+      state.setupDone = true; state.setupResult = { runId: setup.runId, summary: setup.output.slice(0, 2000) }; this.save(state);
+    }
+    while (state.iteration < state.contract.limits.iterations) {
+      this.check(record);
+      if (state.pendingProposal) {
+        try { await this.editSource({ ...state.pendingProposal, projectId: state.projectId, goalId: state.id, author: 'model' }); }
+        catch (error) { state.lastRevisionError = String(error.message); state.pendingProposal = null; this.save(state); }
+      }
+      if (state.pendingRevision && !state.activeChild && !state.iterationIntent) {
+        state.activeRevision = state.pendingRevision; state.pendingRevision = null;
+        this.save(state); // activation is durable before the next child starts
+      }
+      const number = state.iteration + 1;
+      state.iterationIntent ??= { number, revision: state.activeRevision, phase: `iteration-${number}${state.repairAttempt ? `-repair-${state.repairAttempt}` : ''}` }; this.save(state);
+      const recipe = read(this.recordPath(state, `recipe-${state.iterationIntent.revision}`));
+      let committed;
+      if (fs.existsSync(this.recordPath(state, `iteration-${number}`))) {
+        committed = read(this.recordPath(state, `iteration-${number}`));
+        state.activeChild = null;
+      } else {
+      const result = await this.once(record, state.iterationIntent.phase, recipe.source, state.setupResult?.summary || state.contract.objective);
+      if (result.output.length > 64000) throw new Error('Candidate output exceeds 64,000 characters; return a smaller artifact');
+      const envelope = parseGoalReply(result.output);
+      if (!envelope?.candidate || typeof envelope.candidate.text !== 'string') throw new Error('Recipe must return JSON with candidate.text; malformed results cannot satisfy a Goal');
+      const candidate = { text: envelope.candidate.text, source: envelope.candidate.source ?? null };
+      const tests = [];
+      if (state.contract.tests.length) {
+        await this.validateSource(candidate.source, state.contract);
+        for (const [index, test] of state.contract.tests.entries()) {
+          const folder = within(state.workspace.path, `.goal-tests/${state.id}/${number}-${index}-${state.repairAttempt ?? 0}`);
+          fs.mkdirSync(folder, { recursive: true });
+          const child = await this.once(record, `candidate-${number}-${index}${state.repairAttempt ? `-repair-${state.repairAttempt}` : ''}`, candidate.source, test.input, folder);
+          tests.push({ input: test.input, expected: test.contains, passed: child.output.includes(test.contains), runId: child.runId, output: child.output.slice(0, 8000) });
+        }
+      }
+      const checks = state.contract.criteria.map((criterion, index) => {
+        let content = candidate.text;
+        if (criterion.type === 'file_contains') {
+          const file = within(state.workspace.path, criterion.path);
+          if (!fs.existsSync(file)) return { index, passed: false, reason: 'Artifact missing' };
+          if (fs.statSync(file).size > 64000) return { index, passed: false, reason: 'Artifact exceeds verification bound' };
+          content = fs.readFileSync(file, 'utf8');
+        }
+        return { index, passed: content.includes(criterion.value), digest: hash(content), ...(criterion.path ? { path: criterion.path, content } : {}) };
+      });
+      const score = [...checks, ...tests].filter(check => check.passed).length / (checks.length + tests.length);
+      const learned = Array.isArray(envelope.findings) ? envelope.findings.filter(finding => typeof finding === 'string').slice(0, 4).map(text => ({ text: text.slice(0, 500), iteration: number, source: result.runId, status: 'hypothesis' })) : [];
+      committed = immutable(this.recordPath(state, `iteration-${number}`), {
+        number, revision: state.iterationIntent.revision, runId: result.runId, candidate, checks, tests, score,
+        achieved: score === 1, findings: learned, proposal: envelope.proposal ?? null, knownUsd: state.knownUsd, calls: state.calls,
+        needsInput: typeof envelope.needsInput === 'string' ? envelope.needsInput.slice(0, 2000) : null,
+      });
+      }
+      // A replay uses the same immutable record and updates all projections in
+      // one atomic state replacement. It cannot increment the iteration twice.
+      const improved = !state.best || committed.score > state.best.score;
+      const summary = { iteration: number, revision: committed.revision, score: committed.score, runId: committed.runId,
+        artifact: `iteration-${number}`, preview: committed.candidate.text.slice(0, 500), verified: committed.achieved,
+        findings: committed.findings.map(finding => finding.text).slice(0, 2) };
+      state.current = summary;
+      if (improved) { state.best = summary; state.plateauCount = 0; } else state.plateauCount++;
+      state.memory = [...state.memory, ...committed.findings].filter((item, index, all) => all.findIndex(other => other.text === item.text) === index).slice(-10);
+      state.history.push(summary); state.iteration = number; state.iterationIntent = null;
+      state.pendingProposal = committed.proposal;
+      if (committed.achieved) { state.status = 'achieved'; state.reason = 'All fixed acceptance checks passed'; }
+      else if (committed.needsInput) { state.status = 'needs_input'; state.reason = committed.needsInput; }
+      else if (state.plateauCount >= state.contract.plateau) { state.status = 'plateau'; state.reason = 'No improvement across the configured comparable iterations'; }
+      this.save(state);
+      if (terminal.has(state.status)) return;
+    }
+    state.status = 'limit_reached'; state.reason = 'Iteration limit reached; best artifact retained'; this.save(state);
+  }
+}

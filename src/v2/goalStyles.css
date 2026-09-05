@@ -1,0 +1,33 @@
+/* Goals surface. Tokens come from src/styles.css (Slate & Sage): a Goal page
+   is an ordinary app surface, so it borrows the card/border/text scale rather
+   than inventing one. The best-attempt panel is set apart by a tinted surface
+   and a full hairline, not a colored edge. */
+.goal-page { padding: 28px; overflow: auto; height: 100%; color: var(--tx); }
+.goal-header { display:flex; justify-content:space-between; align-items:center; gap:20px; margin-bottom:20px; }
+.goal-header h1,.goal-header h2 { margin:0 0 8px; }
+.goal-header p { margin:0; color:var(--dim); max-width:800px; }
+.goal-layout { display:grid; grid-template-columns:220px minmax(0,1fr); gap:28px; }
+.goal-layout aside { display:flex; flex-direction:column; gap:8px; }
+.goal-page button { padding:8px 12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; }
+.goal-page button:disabled { opacity:.5; cursor:default; }
+.goal-layout aside button { text-align:left; display:grid; gap:6px; }
+.goal-layout aside button[aria-pressed=true] { border-color:var(--accent); background:var(--accent-soft); }
+.goal-layout aside span { font-size:12px; color:var(--dim); }
+.goal-fields { display:grid; gap:14px; max-width:860px; }
+.goal-fields label { display:grid; gap:6px; font-size:13px; }
+.goal-fields input,.goal-fields textarea,.goal-fields select { padding:9px; width:100%; border:1px solid var(--border); border-radius:5px; color:inherit; background:var(--card); }
+.goal-fields .goal-check { display:flex; align-items:center; }
+.goal-fields .goal-check input { width:auto; }
+.goal-fields p { font-size:13px; color:var(--dim); margin:0; }
+.goal-limits { display:flex; gap:16px; }
+.goal-limits label { flex:1; }
+.goal-recipe { margin:28px 0; border-top:1px solid var(--border); padding-top:12px; }
+.goal-recipe .block-editor { min-height:380px; }
+.goal-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.goal-stats { display:flex; flex-wrap:wrap; gap:32px; padding:18px 0; }
+.goal-stats dt { font-size:12px; color:var(--dim); }.goal-stats dd { font-size:19px; margin:6px 0 0; }
+.goal-best { border:1px solid color-mix(in srgb, var(--accent) 34%, var(--border)); border-radius:8px; padding:14px 18px 18px; background:var(--accent-soft); }
+.goal-page table { width:100%; border-collapse:collapse; margin:16px 0; }.goal-page th,.goal-page td { text-align:left; padding:10px; border-bottom:1px solid var(--border); }
+.goal-inspection { padding:20px; margin:20px 0; border:1px solid var(--border); border-radius:8px; background:var(--card); }.goal-inspection pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:600px; overflow:auto; }
+.goal-error { color:var(--err); }
+@media(max-width:850px) { .goal-layout { grid-template-columns:1fr; }.goal-layout aside { flex-direction:row; flex-wrap:wrap; } }

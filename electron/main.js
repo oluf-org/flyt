@@ -447,6 +447,9 @@ bindIpc('config:get');
 bindIpc('flow:run', (projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) =>
   ({ projectId, flowId, userInput, workspaceDir, approvalMode, launch }));
 bindIpc('workflow:list');
+for (const action of ['list', 'get', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft']) {
+  bindIpc(`goal:${action}`, args => args);
+}
 bindIpc('workflow:run', (projectId, workflowId, input = '', approvalMode = null, presetId = null, modelSelection = null) =>
   ({ projectId, workflowId, input, approvalMode, presetId, modelSelection }));
 bindIpc('workflow:pending', (projectId, runId) => ({ projectId, runId }));

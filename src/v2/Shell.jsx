@@ -18,17 +18,18 @@
 // modal that only exists on one surface leaves that installation parked with
 // nothing on screen asking about it.
 //
-// The shell is also the project theme's host: the active project's color is
-// applied as CSS custom properties on the document root
+// The shell is also the project identity host: the active project's color is
+// exposed as CSS custom properties on the document root
 // (src/lib/applyProjectTheme.js, consumed by src/styles/project-theme.css),
-// re-applied on every active-project/color change so a recolor lands without
-// a reload, and removed when the last project closes.
+// re-applied on every active-project/color change so tabs and the two lander
+// accents update without a reload, and removed when the last project closes.
 import React, { useEffect, useState } from 'react';
 import {
-  BUILD, HISTORY, INITIAL, LIBRARY, MODELS, builderView, closeWorkflow, heading, navigate, openWorkflow,
+  BUILD, GOALS, HISTORY, INITIAL, LIBRARY, MODELS, builderView, closeWorkflow, heading, navigate, openWorkflow,
   resolveLocation, state, traceOf,
 } from './shellRouting.js';
 import BlockEditor from './BlockEditor.jsx';
+import GoalPage from './GoalPage.jsx';
 import WorkflowGallery from './WorkflowGallery.jsx';
 import LibraryPage from './LibraryPage.jsx';
 import ShellRail from './ShellRail.jsx';
@@ -111,11 +112,9 @@ export default function Shell({
   const [makingWorkflow, setMakingWorkflow] = useState(false);
   const [workflowError, setWorkflowError] = useState('');
 
-  // The active project's color becomes CSS custom properties on the document
-  // root (src/styles/project-theme.css consumes them). Re-derived whenever
-  // the active tab or its color changes, so a color change lands without a
-  // reload; closing the last tab unthemes the window. Records without a
-  // color fall back to a default preset until persistence lands.
+  // The active project's color becomes identity-only CSS custom properties on
+  // the document root. Re-derived whenever the active tab or its color changes;
+  // closing the last tab clears them. Records without a color use a preset.
   const activeProject = activeProjectRecord(projects);
   const activeProjectId = activeProject?.id ?? null;
   const activeProjectColor = activeProject?.colorHex ?? activeProject?.color ?? null;
@@ -126,8 +125,10 @@ export default function Shell({
       window.flyt?.setTitleBarTheme?.(mode, null)?.catch?.(() => {});
       return undefined;
     }
-    const vars = applyProjectTheme(activeProject);
-    window.flyt?.setTitleBarTheme?.(mode, vars['--project-color'])?.catch?.(() => {});
+    applyProjectTheme(activeProject);
+    // Native window controls stay in the app's sage chrome. Project identity
+    // belongs to the tab strip and the two lander accents, not the whole frame.
+    window.flyt?.setTitleBarTheme?.(mode, null)?.catch?.(() => {});
     return undefined;
     // The color is a dependency so a re-colored project rethemes immediately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -207,6 +208,8 @@ export default function Shell({
           {showTrace && <h1>Trace</h1>}
           {showTrace
             ? <Trace trace={watching?.trace ?? null} runId={trace.run} uiExtensions={build?.uiExtensions ?? []} />
+            : loc.dest === GOALS
+              ? <GoalPage key={activeProjectId} projectId={activeProjectId} onOpenRun={onOpenRun} />
             : loc.dest === HISTORY
               ? history
             : loc.dest === MODELS

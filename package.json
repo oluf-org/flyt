@@ -22,6 +22,8 @@
     "start": "npm run build && electron .",
     "test": "cross-env FLYT_SANDBOX_MODE=danger-full-access FLYT_TEST_MOCK_PROVIDER=1 node --test \"tests/**/*.test.js\"",
     "verify:workflow": "cross-env FLYT_SANDBOX_MODE=danger-full-access FLYT_TEST_MOCK_PROVIDER=1 node --test tests/workflowReliability.test.js",
+    "verify:goal": "npm run build:kernel && cross-env FLYT_SANDBOX_MODE=danger-full-access FLYT_TEST_MOCK_PROVIDER=1 node --test tests/goalController.test.js tests/goalFoundation.test.js",
+    "verify:goal:app": "npm run build && node scripts/verify-goal-app.mjs",
     "verify:impeccable": "node plugins/impeccable-flyt-plugin/verify-provenance.mjs",
     "stack": "npm run build:kernel --silent && node core/stacklint.js",
     "workflow": "node core/stacklang/cli.js",

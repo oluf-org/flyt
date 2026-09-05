@@ -14,8 +14,9 @@ export const BUILD = 'build';
 export const LIBRARY = 'library';
 export const MODELS = 'models';
 export const HISTORY = 'history';
+export const GOALS = 'goals';
 
-export const DESTINATIONS = Object.freeze([WORK, BUILD, LIBRARY, MODELS, HISTORY]);
+export const DESTINATIONS = Object.freeze([WORK, BUILD, GOALS, LIBRARY, MODELS, HISTORY]);
 
 /**
  * A location in the shell: a destination, an optional addressed run, and an
@@ -65,6 +66,7 @@ export const adjacent = from => DESTINATIONS.filter(d => d !== from.dest);
 
 /** Heading copy for a destination. */
 export function heading(dest) {
+  if (dest === GOALS) return 'Goals';
   if (dest === BUILD) return 'Build';
   if (dest === LIBRARY) return 'Library';
   if (dest === MODELS) return 'Models';
@@ -81,6 +83,7 @@ export function heading(dest) {
  * read, and the labels alone cannot say what Build is FOR.
  */
 export function hint(dest) {
+  if (dest === GOALS) return 'Goals — repeat a workflow toward fixed acceptance criteria';
   if (dest === WORK) return 'Work — run a workflow and watch it';
   if (dest === BUILD) return 'Build — every workflow in this project, and the one you are editing';
   if (dest === LIBRARY) return 'Library — everything installed, and the plugins that install it';

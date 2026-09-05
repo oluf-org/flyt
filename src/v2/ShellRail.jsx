@@ -14,6 +14,7 @@ import React from 'react';
 import { DESTINATIONS, heading, hint } from './shellRouting.js';
 
 const ICON = {
+  goals: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><path d="M12 2v4M22 12h-4"/></svg>,
   // Work — a single node radiating short rays: the sigil burst as a glyph.
   work: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -97,7 +98,7 @@ export default function ShellRail({ active = null, onGo = null, onOpenSettings =
       </div>
       <div className="activity-spacer" />
       {onOpenSettings && (
-        <button type="button" className="activity-btn utility" title="Settings — providers, keys and approval"
+        <button type="button" className="activity-btn utility" title="Settings — repositories, safety and project defaults"
           onClick={onOpenSettings}>
           <span className="activity-glyph">{ICON.settings}</span>
           <span className="activity-label">Settings</span>

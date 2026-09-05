@@ -3,6 +3,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Run-scoped calls take the projectId of the tab they act for (D22 T7); flows,
 // templates and settings are global (T2) and stay unscoped.
 const api = {
+  goal: (action, args = {}) => {
+    if (!['list', 'get', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft'].includes(action)) throw new Error('Unknown Goal action');
+    return ipcRenderer.invoke(`goal:${action}`, args);
+  },
   reportRendererError: details => ipcRenderer.invoke('diagnostics:renderer', details),
   diagnosticsPath: () => ipcRenderer.invoke('diagnostics:path'),
   revealDiagnostics: () => ipcRenderer.invoke('diagnostics:reveal'),

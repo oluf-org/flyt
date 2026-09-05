@@ -112,7 +112,7 @@ export async function bootRunKernel({
   requireLaunchable = false, askBlock = null,
   sandboxMode = 'workspace-write', sandboxEnforcement = 'partial', forwardedEnv = [],
   windowsSandboxRunner = null,
-  load = null, call = callModel,
+  load = null, call = callModel, stackSource = null, goalGuard = null,
   onSessionEvent = null,
 } = {}) {
   let kernelModule = null;
@@ -195,10 +195,16 @@ export async function bootRunKernel({
     };
     return profile;
   };
-  const callThrough = request => call({
+  const callThrough = async request => {
+    await goalGuard?.beforeCall(request);
+    try {
+      const result = await call({
     ...(runtimeConfig.retry ? { retry: runtimeConfig.retry } : {}),
     ...(runtimeConfig.timeout ? { timeout: runtimeConfig.timeout } : {}),
     ...request,
+    // Goal accounting reserves each adapter invocation; do not hide retries
+    // inside that boundary. Any retry must be a new, charged invocation.
+    ...(goalGuard ? { retry: { attempts: 1 } } : {}),
     // OpenRouter's Auto Router band is part of the worker selection, not the
     // model id. Dropping it makes low/high/max all send the same request while
     // the Supervisor and ledger claim they ran different rungs.
@@ -206,7 +212,11 @@ export async function bootRunKernel({
       ?? (request.model === model ? worker?.routing : null)) ? {
       routing: workerByModel.get(request.model)?.routing ?? worker.routing,
     } : {}),
-  });
+      });
+      await goalGuard?.afterCall(result);
+      return result;
+    } catch (error) { await goalGuard?.callFailed(error); throw error; }
+  };
 
   await booted.install([
     { id: 'run-projection', name: kernel.BUILTIN.runProjection, config: { root: runsRoot } },
@@ -302,18 +312,26 @@ export async function bootRunKernel({
     });
   }
 
+  if (goalGuard?.history) booted.ctx.tools.register({
+    name: 'goal_history', description: 'Retrieve bounded evidence from this Goal only. Search earlier attempts or request one iteration by number.',
+    parameters: { type: 'object', properties: { query: { type: 'string' }, iteration: { type: 'integer', minimum: 1 }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 10 } }, additionalProperties: false },
+    classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+    async execute(args) { return { content: safeJson(await goalGuard.history(args)) }; },
+  });
+
   const stacks = new StackStore(stackRoot, {
     parseStack: kernel.parseStack,
     resolveBlock: use => booted.ctx.blocks.resolve(use),
   });
   await booted.install([{ id: 'stack-runner', name: kernel.BUILTIN.stackRunner, config: {
+    contextTools: goalGuard?.history ? ['goal_history'] : [],
     stacks: {
       resolve(id) {
         // Preserve parser/resolution diagnostics. Returning null here would
         // collapse a malformed stack, a missing block plugin, and a missing
         // file into the same "There is no stack" message precisely where the
         // unattended harness most needs a repairable cause.
-        const stack = stacks.load(id);
+        const stack = stackSource ? kernel.parseStack(stackSource) : stacks.load(id);
         if (requireLaunchable && !stack.launchable) {
           throw new Error(`Workflow "${id}" is internal and cannot be launched from chat.`);
         }
