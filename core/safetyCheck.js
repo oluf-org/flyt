@@ -196,8 +196,7 @@ export const SAFETY_MODEL_CANDIDATES = [
   { id: 'gpt-5.6-luna', provider: 'openai', label: 'GPT-5.6 Luna' },
   { id: 'kimi-k2.6', provider: 'kimi', label: 'Kimi K2.6' },
   { id: 'moonshotai/kimi-k2.6', provider: 'openrouter', label: 'Kimi K2.6 (OpenRouter)' },
-  { id: 'anthropic/claude-haiku-4.5', provider: 'openrouter', label: 'Claude Haiku 4.5 (OpenRouter)' },
-  { id: 'mock-small', provider: 'mock', label: 'Mock (dry runs only)' }
+  { id: 'anthropic/claude-haiku-4.5', provider: 'openrouter', label: 'Claude Haiku 4.5 (OpenRouter)' }
 ];
 
 // The id 'auto' resolves to the first candidate whose provider is connected.

@@ -1802,7 +1802,7 @@ export function createApi(engine) {
         : null;
       if (useLevels && !engine.hasKey('openrouter')) {
         throw new ApiError(
-          'Effort levels route through OpenRouter, and no OpenRouter key is set. Add one in Settings, pick a model for the loop, or set loop.levels to false to run on the configured workers instead.',
+          'Effort levels route through OpenRouter, and no OpenRouter key is set. Add one in Models → Add provider, pick a model for the loop, or set loop.levels to false to run on the configured workers instead.',
           { status: 400, code: 'no_openrouter_key' });
       }
       // A pinned model whose provider is not connected fails the same way for
@@ -1810,12 +1810,12 @@ export function createApi(engine) {
       // identical provider errors spread across a night.
       if (pinned && pinned.provider !== 'mock' && !engine.hasKey(pinned.provider)) {
         throw new ApiError(
-          `The loop is set to run on "${pinned.model}", but its provider (${pinned.provider}) is not connected. Add a key in Settings, or choose another model.`,
+          `The loop is set to run on "${pinned.model}", but its provider (${pinned.provider}) is not connected. Add a key in Models → Add provider, or choose another model.`,
           { status: 400, code: 'no_provider_key' });
       }
       if (defaultWorker && defaultWorker.provider !== 'mock' && !engine.hasKey(defaultWorker.provider)) {
         throw new ApiError(
-          `The loop's default worker is "${defaultWorker.model}", but its provider (${defaultWorker.provider}) is not connected. Add a key in Settings, or choose another model.`,
+          `The loop's default worker is "${defaultWorker.model}", but its provider (${defaultWorker.provider}) is not connected. Add a key in Models → Add provider, or choose another model.`,
           { status: 400, code: 'no_provider_key' });
       }
       // A connected subscription account can still reject a catalog id. When

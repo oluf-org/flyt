@@ -233,23 +233,22 @@ const mockSettings = {
     },
     openai: { hasKey: false },
     codex: {
-      hasKey: false,
+      hasKey: true,
       subscription: {
-        enabled: false, signedIn: false,
+        enabled: true, signedIn: true,
         credentialPath: 'C:\\Users\\dev\\.codex\\auth.json',
         cliFound: true, cliCommand: 'codex.exe', home: '', cliPath: ''
       }
     },
     kimi: { hasKey: false, keyKind: 'platform' },
-    openrouter: { hasKey: false },
-    mock: { hasKey: true }
+    openrouter: { hasKey: true }
   },
   searchProviders: {
     brave: { hasKey: false },
     tavily: { hasKey: false },
   },
   claudeSubscriptionActive: false,
-  providerPriority: ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'],
+  providerPriority: ['openrouter', 'anthropic', 'claude-code', 'openai', 'codex', 'kimi'],
   // Enough of a registry that every picker in the app previews with something
   // in it. An empty list is a legitimate first-run state, but it is not the
   // state anyone is iterating on the design of.
@@ -257,13 +256,15 @@ const mockSettings = {
     { id: 'deepseek/deepseek-v4-pro', source: 'openrouter', enabled: true, pinned: true },
     { id: 'anthropic/claude-sonnet-5', source: 'openrouter', enabled: true, pinned: true },
     { id: 'moonshotai/kimi-k3', source: 'openrouter', enabled: true, pinned: true },
-    { id: 'openai/gpt-5.2', source: 'openrouter', enabled: true, pinned: true }
+    { id: 'openai/gpt-5.2', source: 'openrouter', enabled: true, pinned: true },
+    { id: 'gpt-5.2-codex', source: 'codex', enabled: true, pinned: true }
   ],
   modelFacts: {
     'deepseek/deepseek-v4-pro': { name: 'DeepSeek V4 Pro', contextLength: 1048576, supportsTools: true, inUsdPerM: 1.168, outUsdPerM: 2.336 },
     'anthropic/claude-sonnet-5': { name: 'Claude Sonnet 5', contextLength: 200000, supportsTools: true, inUsdPerM: 3, outUsdPerM: 15 },
     'moonshotai/kimi-k3': { name: 'Kimi K3', contextLength: 262144, supportsTools: true, inUsdPerM: 0.6, outUsdPerM: 2.5 },
-    'openai/gpt-5.2': { name: 'GPT-5.2', contextLength: 400000, supportsTools: true, inUsdPerM: 1.25, outUsdPerM: 10 }
+    'openai/gpt-5.2': { name: 'GPT-5.2', contextLength: 400000, supportsTools: true, inUsdPerM: 1.25, outUsdPerM: 10 },
+    'gpt-5.2-codex': { name: 'GPT-5.2 Codex', contextLength: 400000, supportsTools: true }
   },
   modelPopularity: {
     creators: [
@@ -277,16 +278,16 @@ const mockSettings = {
   },
   modelSets: {},
   workflowModelTiers: {
-    free: [{ provider: 'mock', model: 'mock-small' }],
-    economy: { provider: 'mock', model: 'mock-small' },
-    standard: { provider: 'mock', model: 'mock-large' },
-    frontier: { provider: 'mock', model: 'mock-large' },
+    free: [{ provider: 'openrouter', model: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free' }],
+    economy: { provider: 'openrouter', model: 'deepseek/deepseek-v4-pro' },
+    standard: { provider: 'openrouter', model: 'moonshotai/kimi-k3' },
+    frontier: { provider: 'codex', model: 'gpt-5.2-codex' },
   },
   // The loop's band→model map (DESIGN-SPEC.md §8), empty by default: the shipped
   // state is "ask for an effort band", and naming models is the deliberate act.
   loopModels: {},
   workers: {
-    executor: { provider: 'mock', model: 'mock-large' },
+    executor: { provider: 'auto', model: 'deepseek/deepseek-v4-pro' },
     // The loop's two (DESIGN-SPEC.md §8), unset: no pin means effort bands,
     // no reviewer means nothing lands.
     loop: { provider: null, model: null },
@@ -296,14 +297,13 @@ const mockSettings = {
   projectStorage: 'workspace',
   approvalMode: 'ask',
   safetyModel: 'auto',
-  resolvedSafetyModel: 'mock-small',
+  resolvedSafetyModel: 'gpt-5.6-luna',
   safetyCandidates: [
     { id: 'claude-haiku-4-5', provider: 'anthropic', label: 'Claude Haiku 4.5', connected: false },
     { id: 'gpt-5.6-luna', provider: 'openai', label: 'GPT-5.6 Luna', connected: false },
     { id: 'kimi-k2.6', provider: 'kimi', label: 'Kimi K2.6', connected: false },
     { id: 'moonshotai/kimi-k2.6', provider: 'openrouter', label: 'Kimi K2.6 (OpenRouter)', connected: false },
-    { id: 'anthropic/claude-haiku-4.5', provider: 'openrouter', label: 'Claude Haiku 4.5 (OpenRouter)', connected: false },
-    { id: 'mock-small', provider: 'mock', label: 'Mock (dry runs only)', connected: true }
+    { id: 'anthropic/claude-haiku-4.5', provider: 'openrouter', label: 'Claude Haiku 4.5 (OpenRouter)', connected: true }
   ]
 };
 // --- The loop (DESIGN-SPEC.md §8) ----------------------------------------------
@@ -631,7 +631,7 @@ const mockHistorySummary = {
   planner: { acceptedPlans: 34, rejectedPlans: 7, diagnosticEvents: 12, repairsPerAcceptedPlan: 0.18 },
   efficiency: { tokensPerAcceptedPlan: 23119, costPerAcceptedPlanUsd: 0.2476, tokensPerSuccessfulToolEffect: 9982, costPerSuccessfulToolEffectUsd: 0.1066, tokensPerVerifiedCompletion: 26482, costPerVerifiedCompletionUsd: 0.2831, verifiedCompletions: 30 },
   models: [
-    { model: 'gpt-5.4', calls: 42, successRate: 0.929, reasoningTokenShare: 0.374, noVisibleOutputRate: 0, medianLatencyMs: 7640, p95LatencyMs: 14920, promptTokens: 302100, completionTokens: 89540, costUsd: 4.421 },
+    { model: 'gpt-5.2-codex', calls: 42, successRate: 0.929, reasoningTokenShare: 0.374, noVisibleOutputRate: 0, medianLatencyMs: 7640, p95LatencyMs: 14920, promptTokens: 302100, completionTokens: 89540, costUsd: 4.421 },
     { model: 'claude-sonnet-4-5', calls: 31, successRate: 0.903, reasoningTokenShare: 0.291, noVisibleOutputRate: 0.032, medianLatencyMs: 6820, p95LatencyMs: 12830, promptTokens: 204820, completionTokens: 62210, costUsd: 3.112 },
     { model: 'gemini-2.5-pro', calls: 18, successRate: 0.833, reasoningTokenShare: 0.441, noVisibleOutputRate: 0.056, medianLatencyMs: 8290, p95LatencyMs: 16110, promptTokens: 94320, completionTokens: 33070, costUsd: 0.8863 },
   ],
@@ -641,7 +641,7 @@ const mockHistorySummary = {
     { workflow: 'implementation', workflowVersion: 'v2', preset: 'deep', taskClass: 'debugging', model: 'gemini-2.5-pro', outcome: 'failed', calls: 3, reasoningTokenShare: 0.492, medianLatencyMs: 11840, promptTokens: 18220, completionTokens: 7930, costUsd: 0.241 },
   ],
   runs: mockHistoryRuns,
-  facets: { models: ['gpt-5.4', 'claude-sonnet-4-5', 'gemini-2.5-pro'], projects: ['appdata:fix-auth-flow', 'workspace:current-project'] },
+  facets: { models: ['gpt-5.2-codex', 'claude-sonnet-4-5', 'gemini-2.5-pro'], projects: ['appdata:fix-auth-flow', 'workspace:current-project'] },
 };
 
 export function installDevMock() {
@@ -1183,7 +1183,7 @@ export function installDevMock() {
     },
     listModels: async (provider = 'openrouter') => {
       if (provider === 'openrouter') {
-        if (!mockSettings.providers.openrouter.hasKey) throw new Error('No OpenRouter API key saved. Add one in Settings first.');
+        if (!mockSettings.providers.openrouter.hasKey) throw new Error('No OpenRouter API key saved. Add one in Models → Add provider.');
         // The real handler stows the catalog facts in settings on the way past
         // (D36 P0.2); mirror that so pickers show prices in the dev harness.
         mockSettings.modelFacts = factsFromCatalog(mockModels, mockSettings.modelFacts);

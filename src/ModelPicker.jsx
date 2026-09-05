@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { canServe, routeFor, MOCK_MODELS, PROVIDER_ORDER } from './providerMirror.js';
+import { canServe, routeFor, PROVIDER_ORDER } from './providerMirror.js';
 import { groupModels, presentModel } from './modelPresentation.js';
 
 // One model picker, used everywhere a model is chosen (D36 P0.4 / B14):
@@ -81,7 +81,6 @@ export function FactChips({ facts, className = '' }) {
 
 // --- Worker value helpers ---------------------------------------------------
 
-const isMock = w => w?.provider === 'mock';
 export const workerModelId = w => (w?.model ? w.model : null);
 
 // What the control shows when closed. `placeholder` is what UNSET means at
@@ -90,7 +89,6 @@ export const workerModelId = w => (w?.model ? w.model : null);
 // reviewer means nothing lands. Same control, different absences.
 export function workerLabel(worker, placeholder = 'default worker') {
   if (!worker?.model) return placeholder;
-  if (isMock(worker)) return worker.model;
   return presentModel(worker.model).modelPart;
 }
 
@@ -144,14 +142,13 @@ function ModelMenu({ worker, activeModels, onChange, onClose, idPrefix }) {
   }, [actives.length, catalog, q]);
   const fallbackGroups = useMemo(() => groupModels(fallback), [fallback]);
 
-  const mocks = MOCK_MODELS.filter(id => !q || id.includes(q));
   const current = workerModelId(worker);
 
   const pick = (provider, model) => { onChange({ provider, model }); onClose?.(); };
   const pickCustom = () => {
     const id = custom.trim();
     if (!id) return;
-    pick(id.startsWith('mock-') ? 'mock' : 'auto', id);
+    pick('auto', id);
   };
 
   return (
@@ -205,7 +202,7 @@ function ModelMenu({ worker, activeModels, onChange, onClose, idPrefix }) {
                 <button
                   key={m.id}
                   type="button"
-                  className={'model-option' + (current === m.id && !isMock(worker) ? ' on' : '')}
+                  className={'model-option' + (current === m.id ? ' on' : '')}
                   onClick={() => pick('auto', m.id)}
                   title={m.id}
                 >
@@ -213,7 +210,7 @@ function ModelMenu({ worker, activeModels, onChange, onClose, idPrefix }) {
                   <FactChips facts={modelFacts[m.id]} />
                   {r
                     ? <span className="model-option-route" title={`Served by ${r}`}>{r}</span>
-                    : <span className="status-pill pill-err" title="No connected provider can serve this model — add a key in Settings → Providers">unrouted</span>}
+                    : <span className="status-pill pill-err" title="No connected provider can serve this model — use Models → Add provider">unrouted</span>}
                 </button>
               );
             })}
@@ -232,22 +229,6 @@ function ModelMenu({ worker, activeModels, onChange, onClose, idPrefix }) {
                   </button>
                 ))}
               </React.Fragment>
-            ))}
-          </>
-        )}
-        {mocks.length > 0 && (
-          <>
-            <div className="model-menu-head">Dry run</div>
-            {mocks.map(id => (
-              <button
-                key={id}
-                type="button"
-                className={'model-option' + (current === id && isMock(worker) ? ' on' : '')}
-                onClick={() => pick('mock', id)}
-              >
-                <span className="model-option-id mono">{id}</span>
-                <span className="model-option-route">mock</span>
-              </button>
             ))}
           </>
         )}
@@ -271,7 +252,7 @@ function ModelMenu({ worker, activeModels, onChange, onClose, idPrefix }) {
       {custom.trim() && !route(custom.trim(), 'auto') && (
         <div className="model-menu-warn">
           No connected provider can serve <code className="mono">{custom.trim()}</code>. It will fail at run time
-          unless you add a key in Settings → Providers.
+          unless you connect one in Models → Add provider.
         </div>
       )}
     </div>
@@ -329,7 +310,7 @@ export function ModelPicker({ worker, activeModels, onChange, idPrefix, classNam
   const btnRef = useRef(null);
 
   const id = workerModelId(worker);
-  const source = (activeModels ?? []).find(m => m.id === id)?.source ?? (isMock(worker) ? 'mock' : 'auto');
+  const source = (activeModels ?? []).find(m => m.id === id)?.source ?? 'auto';
   const r = id ? routeFor(id, { providers, providerPriority, source }) : null;
   const unrouted = Boolean(id) && !r;
 
@@ -376,8 +357,8 @@ export function ModelBadge({ worker, activeModels, onChange, title }) {
 
   const id = workerModelId(worker);
   const facts = id ? modelFacts[id] : null;
-  const source = (activeModels ?? []).find(m => m.id === id)?.source ?? (isMock(worker) ? 'mock' : 'auto');
-  const unrouted = Boolean(id) && !isMock(worker) && !routeFor(id, { providers, providerPriority, source });
+  const source = (activeModels ?? []).find(m => m.id === id)?.source ?? 'auto';
+  const unrouted = Boolean(id) && !routeFor(id, { providers, providerPriority, source });
   const price = formatUsdPerM(facts?.inUsdPerM);
 
   return (

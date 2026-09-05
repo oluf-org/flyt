@@ -106,7 +106,7 @@ test('WR-07/1: an auto route survives a CLI spawn failure by falling through', a
 
   const fell = logOf(store, runId).find(e => e.event === 'route_fallback');
   assert.equal(fell.code, 'runtime-permission');
-  assert.match(fell.remedy, /Settings → Providers/);
+  assert.match(fell.remedy, /Models → Model providers/);
 });
 
 // --- INVARIANT: a plan must be useful, not merely well-formed ----------------

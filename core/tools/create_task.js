@@ -24,7 +24,7 @@ export default {
         required: ['provider', 'model'],
         additionalProperties: false,
         properties: {
-          provider: { type: 'string', description: 'Provider name, e.g. "openrouter" or "mock".' },
+          provider: { type: 'string', description: 'Authenticated provider name, e.g. "openrouter" or "codex".' },
           model: { type: 'string', description: 'Model id for that provider.' }
         },
         description: 'Worker to run the task; omit to use the default executor worker.'

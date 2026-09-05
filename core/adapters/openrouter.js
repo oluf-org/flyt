@@ -17,7 +17,7 @@ export const openrouterAdapter = openaiCompatible({
     'HTTP-Referer': 'https://github.com/olaaxe/flyt',
     'X-Title': APP_NAME
   },
-  keyHelp: 'Add it in Settings, or switch the worker to the "mock" provider.',
+  keyHelp: 'Connect OpenRouter from Models → Add provider, or choose another authenticated model.',
   extractReplay: openRouterReplay,
   // The Auto Router (DESIGN-SPEC.md §8): `openrouter/auto` with a cost band, so a
   // task asks for a LEVEL and OpenRouter picks a capable model inside it. That

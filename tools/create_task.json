@@ -56,7 +56,7 @@
         "properties": {
           "provider": {
             "type": "string",
-            "description": "Provider name, e.g. \"openrouter\" or \"mock\"."
+            "description": "Authenticated provider name, e.g. \"openrouter\" or \"codex\"."
           },
           "model": {
             "type": "string",

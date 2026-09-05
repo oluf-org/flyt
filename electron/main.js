@@ -899,7 +899,7 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
   }
   if (Array.isArray(patch.activeModels)) {
     settings.activeModels = patch.activeModels
-      .filter(m => m && typeof m.id === 'string' && m.id.trim())
+      .filter(m => m && typeof m.id === 'string' && m.id.trim() && !m.id.trim().startsWith('mock-'))
       .map(m => ({
         id: m.id.trim(),
         source: PROVIDER_IDS.includes(m.source) ? m.source : 'auto',
@@ -922,7 +922,9 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
     settings.workers = { ...settings.workers };
     for (const [name, w] of Object.entries(patch.workers)) {
       if (!baseConfig.workers[name]) continue;
-      if (w?.provider && w?.model) settings.workers[name] = { provider: w.provider, model: w.model };
+      if (PROVIDER_IDS.includes(w?.provider) && w?.model && !String(w.model).startsWith('mock-')) {
+        settings.workers[name] = { provider: w.provider, model: w.model };
+      }
       // An explicit null CLEARS the override back to config.json's default.
       // Without a way to un-set one, the loop's model pin would be a one-way
       // door: you could choose a model but never go back to effort bands.
@@ -986,7 +988,7 @@ ipcMain.handle('models:list', async (_e, provider = 'openrouter') => {
     if (!CURATED_MODELS[provider]) throw new Error(`No model catalog for provider "${provider}".`);
     return CURATED_MODELS[provider].map(m => ({ ...m, contextLength: null }));
   }
-  if (!settings.providers?.openrouter?.apiKey) throw new Error('No OpenRouter API key saved. Add one in Settings first.');
+  if (!settings.providers?.openrouter?.apiKey) throw new Error('No OpenRouter API key saved. Add one in Models → Add provider.');
   const res = await fetch('https://openrouter.ai/api/v1/models', {
     headers: { 'Authorization': `Bearer ${settings.providers.openrouter.apiKey}` }
   });
@@ -1022,7 +1024,7 @@ ipcMain.handle('models:rankings', async (_e, force = false) => {
   }
   if (!settings.providers?.openrouter?.apiKey) {
     if (cached) return { ...cached, stale: true, warning: 'Connect OpenRouter to refresh popularity.' };
-    throw new Error('No OpenRouter API key saved. Add one in Settings to load popularity data.');
+    throw new Error('No OpenRouter API key saved. Add one in Models → Add provider to load popularity data.');
   }
   try {
     const res = await fetch('https://openrouter.ai/api/v1/datasets/rankings-daily?period=day', {
@@ -1049,7 +1051,6 @@ ipcMain.handle('models:rankings', async (_e, force = false) => {
 // The Settings "Test" button (DESIGN-SPEC.md §6): one tiny call through the
 // adapter, so a bad key is caught here rather than three nodes into a run.
 ipcMain.handle('provider:test', async (_e, provider) => {
-  if (provider === 'mock') return { ok: true };
   if (!PROVIDER_IDS.includes(provider)) return { ok: false, error: `Unknown provider "${provider}".` };
   try {
     if (!hasKey(provider)) {

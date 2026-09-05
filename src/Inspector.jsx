@@ -193,7 +193,7 @@ export default function Inspector({ snapshot, selectedNode, onOpenArtifact = nul
 // `models` (the fetched openrouter catalog) now reaches the menu through
 // ModelMetaProvider, which is why it is no longer read here.
 export function WorkerPicker({ worker, models, activeModels, onChange, idPrefix }) {
-  const w = worker?.provider ? worker : { provider: 'mock', model: 'mock-large' };
+  const w = worker?.provider ? worker : { provider: 'auto', model: null };
   return <ModelPicker worker={w} activeModels={activeModels} onChange={onChange} idPrefix={idPrefix} />;
 }
 
@@ -253,7 +253,7 @@ function FanoutEditor({ node, d, set, models, activeModels }) {
         <div className="settings-hint">
           {sets.length
             ? 'The ten-second path to “five models on one question”. Members that are no longer active are skipped.'
-            : 'No model sets yet — create one in Settings → Models.'}
+            : 'No model sets yet — create one in Models.'}
         </div>
       </section>
 
@@ -969,7 +969,7 @@ function InstanceInspector({ node, parent, template, models, activeModels, onCha
           {ov.worker != null
             ? <WorkerPicker worker={ov.worker} models={models} activeModels={activeModels} idPrefix={`w-${node.id}`} onChange={worker => set({ worker })} />
             : <button type="button" className="ghost mini"
-                onClick={() => set({ worker: template?.worker ?? { provider: 'mock', model: 'mock-large' } })}>
+                onClick={() => set({ worker: template?.worker ?? { provider: 'auto', model: null } })}>
                 Override worker for this workflow
               </button>}
         </section>
@@ -1146,7 +1146,7 @@ function ConfigNodeEditor({ node, mode, template, models, activeModels, onChange
                 {ov.worker != null
                   ? <WorkerPicker worker={ov.worker} models={models} activeModels={activeModels} idPrefix={`c-${node.id}`} onChange={worker => set({ worker })} />
                   : <button type="button" className="ghost mini"
-                      onClick={() => set({ worker: eff.worker ?? { provider: 'mock', model: 'mock-large' } })}>
+                      onClick={() => set({ worker: eff.worker ?? { provider: 'auto', model: null } })}>
                       Set a worker for this config
                     </button>}
               </section>

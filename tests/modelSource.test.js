@@ -3,6 +3,7 @@
 // skip, and the no-match error — plus the new adapters' request shapes.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   migrateSettings, createResolver, resolveCallTarget,
   DEFAULT_PRIORITY, DEFAULT_PINNED_MODELS, CURATED_MODELS,
@@ -318,19 +319,40 @@ test('a pinned source wins over the priority list', () => {
   assert.deepEqual(resolve('gpt-5.2', 'openai'), { provider: 'openai', model: 'gpt-5.2' });
 });
 
-test('a pinned source without a key fails fast and points at Settings', () => {
+test('a pinned source without a key fails fast and points at Models', () => {
   const resolve = resolverWith(['openai'], DEFAULT_PRIORITY);
-  assert.throws(() => resolve('claude-sonnet-5', 'anthropic'), /pinned to anthropic.*no API key.*Settings/);
+  assert.throws(() => resolve('claude-sonnet-5', 'anthropic'), /pinned to anthropic.*no API key.*Models/);
 });
 
-test('no match fails with a settings-pointing error', () => {
+test('no match fails with a Models-pointing error', () => {
   const resolve = resolverWith([], DEFAULT_PRIORITY);
-  assert.throws(() => resolve('gpt-5.2'), /No connected provider can serve "gpt-5\.2".*Settings/);
+  assert.throws(() => resolve('gpt-5.2'), /No connected provider can serve "gpt-5\.2".*Models/);
 });
 
-test('mock serves its own ids without a key', () => {
-  const resolve = resolverWith([], DEFAULT_PRIORITY);
-  assert.deepEqual(resolve('mock-large'), { provider: 'mock', model: 'mock-large' });
+test('mock is available only to suites that inject it explicitly', () => {
+  assert.throws(() => resolverWith([], DEFAULT_PRIORITY)('mock-large'), /No connected provider/);
+  assert.deepEqual(resolverWith([], ['mock'])('mock-large'), { provider: 'mock', model: 'mock-large' });
+});
+
+test('a production process cannot reach the mock adapter', () => {
+  const env = { ...process.env };
+  delete env.FLYT_TEST_MOCK_PROVIDER;
+  const moduleUrl = new URL('../core/adapters/index.js', import.meta.url).href;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e',
+    `import { canServe } from ${JSON.stringify(moduleUrl)}; process.exit(canServe('mock', 'mock-large') ? 1 : 0);`],
+  { env, encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+});
+
+test('migration removes legacy mock routes from product settings', () => {
+  const s = migrateSettings({
+    providerPriority: ['mock', 'openrouter'],
+    activeModels: [{ id: 'mock-large', source: 'mock' }, { id: 'x/model', source: 'openrouter' }],
+    workers: { executor: { provider: 'mock', model: 'mock-large' } }
+  });
+  assert.equal(s.providerPriority.includes('mock'), false);
+  assert.deepEqual(s.activeModels, [{ id: 'x/model', source: 'openrouter', enabled: true, pinned: true }]);
+  assert.deepEqual(s.workers, {});
 });
 
 // --- bounded subscription capability checks --------------------------------

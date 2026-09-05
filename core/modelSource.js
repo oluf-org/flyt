@@ -6,7 +6,7 @@
 // settings.json shape (userData, never the repo):
 //   providers:       { anthropic: { apiKey }, openai: { apiKey },
 //                      kimi: { apiKey, keyKind }, openrouter: { apiKey } }
-//   providerPriority: ['anthropic', 'openai', 'kimi', 'openrouter', 'mock']
+//   providerPriority: ['anthropic', 'openai', 'kimi', 'openrouter']
 //   activeModels:    [{ id, source: 'auto' | providerId, enabled: bool, pinned: bool }]
 //   workers:         { executor: { provider, model } }   (unchanged)
 
@@ -16,12 +16,12 @@
 // sibling in the default priority: a saved key wins, the subscription is the
 // fallback — reorderable like any provider.
 export const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'];
-export const PROVIDER_IDS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'];
-export const KEYED_PROVIDERS = PROVIDER_IDS.filter(p => p !== 'mock' && !SUBSCRIPTION_PROVIDERS.includes(p));
+export const PROVIDER_IDS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter'];
+export const KEYED_PROVIDERS = PROVIDER_IDS.filter(p => !SUBSCRIPTION_PROVIDERS.includes(p));
 // OpenRouter is first because the app's value-first defaults live there: it is
 // the only connected source that can serve the free and low-cost shortlist.
 // Users can still reorder this in Settings, and an existing saved order wins.
-export const DEFAULT_PRIORITY = ['openrouter', 'anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'mock'];
+export const DEFAULT_PRIORITY = ['openrouter', 'anthropic', 'claude-code', 'openai', 'codex', 'kimi'];
 
 // The compact pickers should be useful before somebody curates a personal
 // list. Keep the value-first OpenRouter roster visible by default: free models
@@ -112,13 +112,18 @@ export function migrateSettings(raw) {
   // them as pinned preserves the choices those users already made.
   const rawModels = Array.isArray(s.activeModels) ? s.activeModels : DEFAULT_PINNED_MODELS;
   s.activeModels = rawModels
-    .filter(m => m && typeof m.id === 'string' && m.id.trim())
+    .filter(m => m && typeof m.id === 'string' && m.id.trim() && !m.id.trim().startsWith('mock-'))
     .map(m => ({
       id: m.id.trim(),
       source: PROVIDER_IDS.includes(m.source) ? m.source : 'auto',
       enabled: m.enabled !== false,
       pinned: m.pinned !== false
     }));
+
+  // Mock remains an injectable adapter for automated suites, but legacy user
+  // profiles must not carry it back into the shipped runtime.
+  s.workers = Object.fromEntries(Object.entries(s.workers ?? {})
+    .filter(([, worker]) => worker?.provider !== 'mock' && !String(worker?.model ?? '').startsWith('mock-')));
 
   if (s.providers.kimi && s.providers.kimi.keyKind !== 'code') {
     s.providers.kimi = { ...s.providers.kimi, keyKind: 'platform' };
@@ -442,7 +447,7 @@ export function createResolver({ hasKey, canServe, priority }) {
       if (hasKey(pinned)) return { provider: pinned, model: modelId };
       throw new Error(
         `Model "${modelId}" is pinned to ${pinned}, but that provider has no API key or sign-in. ` +
-        `Add one in Settings → Providers, or switch the model's source to Auto.`
+        `Add one in Models → Add provider, or switch the model's source to Auto.`
       );
     }
     const order = (typeof priority === 'function' ? priority() : priority) ?? DEFAULT_PRIORITY;
@@ -453,7 +458,7 @@ export function createResolver({ hasKey, canServe, priority }) {
     }
     throw new Error(
       `No connected provider can serve "${modelId}". ` +
-      `Add a key in Settings → Providers, or pick a model your connected providers can serve.`
+      `Add a key in Models → Add provider, or pick a model your connected providers can serve.`
     );
   };
 }

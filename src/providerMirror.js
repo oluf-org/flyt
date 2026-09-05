@@ -7,7 +7,7 @@
 // Settings.jsx owned a private copy of this; the model pickers need the same
 // answer, and two copies of a rule that must agree is one too many.
 
-export const PROVIDER_ORDER = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter', 'mock'];
+export const PROVIDER_ORDER = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi', 'openrouter'];
 
 // Providers whose "connection" is the vendor CLI's own sign-in, not a key.
 export const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'];
@@ -18,19 +18,16 @@ const SERVE = {
   openai: id => /^(gpt-|o\d)/.test(id),
   codex: id => /^(gpt-|o\d|codex)/.test(id),
   kimi: id => /^(kimi-|moonshot-)/.test(id),
-  openrouter: id => id.includes('/'),
-  mock: id => id.startsWith('mock-')
+  openrouter: id => id.includes('/')
 };
 
 export const canServe = (provider, id) => SERVE[provider]?.(String(id ?? '')) ?? false;
-
-export const MOCK_MODELS = ['mock-large', 'mock-small'];
 
 // Which connected provider would serve this id right now: a pinned source when
 // it holds, otherwise the priority walk. null means nothing would — the
 // `unrouted` state.
 export function routeFor(id, { providers = {}, providerPriority = PROVIDER_ORDER, source = 'auto' } = {}) {
-  const connected = p => Boolean(providers?.[p]?.hasKey) || p === 'mock';
+  const connected = p => Boolean(providers?.[p]?.hasKey);
   if (source && source !== 'auto') {
     return connected(source) && canServe(source, id) ? source : null;
   }

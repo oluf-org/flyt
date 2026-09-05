@@ -11,7 +11,7 @@
 //
 // Usage caution: calls made here consume the user's Claude Pro/Max plan
 // limits. The main process gates this provider behind an explicit opt-in with
-// a warning (Settings → Providers → Claude subscription).
+// a warning (Models → Model providers → Claude subscription).
 import {
   resolveCli, spawnCliCall, cliEnv, neutralCwd, claudeCredentialStatus, preflightCli
 } from './cliDelegate.js';
@@ -98,7 +98,7 @@ export function claudeStreamReducer() {
 export async function claudeCodeAdapter({ model, system, prompt, onText, signal, cliHome = null, cliPath = null, timeoutMs }) {
   const cli = resolveClaudeCli(cliPath);
   if (!cli) {
-    throw new Error('Claude Code CLI not found. Install it (e.g. `winget install Anthropic.ClaudeCode` or `npm i -g @anthropic-ai/claude-code`), or set its path in Settings → Providers → Claude subscription.');
+    throw new Error('Claude Code CLI not found. Install it (e.g. `winget install Anthropic.ClaudeCode` or `npm i -g @anthropic-ai/claude-code`), or set its path in Models → Model providers → Claude subscription.');
   }
   const home = cliHome || null;
   if (!claudeCredentialStatus(home).signedIn) {

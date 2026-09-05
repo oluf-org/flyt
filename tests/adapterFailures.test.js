@@ -33,7 +33,7 @@ test('spawn EPERM is a runtime-permission failure with a remedy naming the setti
   });
   assert.equal(r.code, 'runtime-permission');
   assert.equal(r.infrastructure, true);
-  assert.match(r.remedy, /Settings → Providers → codex/);
+  assert.match(r.remedy, /Models → Model providers → codex/);
   assert.match(r.remedy, /\/usr\/local\/bin\/codex/);
 });
 
@@ -225,7 +225,7 @@ test('an auto route falls through to the next provider when the runtime cannot s
   const fell = (store.readLog(runId) ?? []).find(e => e.event === 'route_fallback');
   assert.ok(fell, 'route_fallback was logged');
   assert.equal(fell.code, 'runtime-permission');
-  assert.match(fell.remedy, /Settings → Providers/);
+  assert.match(fell.remedy, /Models → Model providers/);
 });
 
 test('a PINNED source that cannot start fails instead of spending elsewhere', async () => {

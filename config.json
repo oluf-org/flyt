@@ -1,10 +1,10 @@
 {
-  "comment": "Committed defaults for worker assignment; settings.json in the app's userData folder overrides these workers (edit via the in-app Settings panel, or the Loop view for the two the loop uses). Providers: 'mock' (no API key needed), 'anthropic', 'openai', 'kimi' (platform or Kimi-Code key), 'openrouter' — keys saved via Settings → Providers; anthropic/openai also accept ANTHROPIC_API_KEY / OPENAI_API_KEY from the shell. A worker may also be { provider: 'auto', model }, resolved at call time through Settings' provider priority. The executor worker is the app-wide default, used when a node template sets no worker of its own.",
+  "comment": "Committed defaults for worker assignment; settings.json in the app's userData folder overrides these workers (edit via Models, or the Loop view for the two the loop uses). Providers are authenticated API or vendor-CLI routes saved via Models → Add provider; anthropic/openai also accept ANTHROPIC_API_KEY / OPENAI_API_KEY from the shell. A worker may be { provider: 'auto', model }, resolved at call time through the internal provider policy. The executor worker is the app-wide default, used when a node template sets no worker of its own.",
   "workersLoopComment": "The loop's two workers are DECLARED here with no model, so that they are settable from the UI while their unset state stays the fail-closed one. `loop` is the model every unpinned node runs on while the loop is working a task; null means effort bands instead (DESIGN-SPEC.md §8 — a level, not a model). `reviewer` reads the diff before anything merges; null means nothing lands unattended, which is the correct default for a repo nobody has configured.",
   "workers": {
     "executor": {
-      "provider": "mock",
-      "model": "mock-large"
+      "provider": null,
+      "model": null
     },
     "loop": {
       "provider": null,
@@ -79,7 +79,7 @@
       "model": "claude-sonnet-5"
     }
   },
-  "categoryWorkersComment": "Optional per-category model routing: a node declaring a category resolves here before falling back to workers.executor (BLOCKS.md). EMPTY on purpose. This map is read from this file only and is NOT overridable from Settings, so whatever it names is pinned: it shipped mapping every category to 'mock', which silently forced each categorised work node onto the mock provider no matter what key the user saved — a real run just produced '(mock output)'. Empty means categories follow the executor worker, so one Settings change points the whole app at a real model. See categoryWorkersExample to pin one deliberately.",
+  "categoryWorkersComment": "Optional per-category model routing: a node declaring a category resolves here before falling back to workers.executor (BLOCKS.md). EMPTY on purpose. This map is read from this file only and is NOT overridable from Settings, so whatever it names is pinned. Empty means categories follow the executor worker, so one Models-page choice points the whole app at an authenticated model. See categoryWorkersExample to pin one deliberately.",
   "categoryWorkers": {},
   "categoryWorkersExample": {
     "documentation": {

@@ -709,7 +709,7 @@ export async function doctor(engine, { probe = false, refresh = false, models = 
       // A signed-in CLI is only a runtime connection; its model catalog may be
       // stale. Keep those facts separate so doctor never advertises a model as
       // usable merely because auth.json exists.
-      kind: SUBSCRIPTION_PROVIDERS.includes(id) ? 'subscription' : (id === 'mock' ? 'built-in' : 'api-key'),
+      kind: SUBSCRIPTION_PROVIDERS.includes(id) ? 'subscription' : 'api-key',
       ...(sub ? { subscription: sub } : {})
     };
   });
@@ -786,8 +786,8 @@ export async function doctor(engine, { probe = false, refresh = false, models = 
   if (incident) findings.push({ level: 'error', message: incident });
   const lock = staleIndexLock(project?.folder ?? null);
   if (lock) findings.push(lock);
-  if (!providers.some(p => p.connected && p.id !== 'mock')) {
-    findings.push({ level: 'error', message: 'No real provider is connected — every run will fall back to the mock adapter.' });
+  if (!providers.some(p => p.connected)) {
+    findings.push({ level: 'error', message: 'No model provider is connected — connect one on Models before starting a run.' });
   }
   // The failure this exists to catch: a provider sitting ABOVE the working one
   // in the priority list, taking every `provider: auto` call and failing it.

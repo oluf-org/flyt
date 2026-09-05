@@ -8,7 +8,7 @@ import { applyOpenAIRequest, openAIReplay, replayOpenAIMessage } from './transfo
 export const openaiAdapter = openaiCompatible({
   provider: 'OpenAI',
   baseUrl: 'https://api.openai.com/v1/chat/completions',
-  keyHelp: 'Add it in Settings → Providers, or set OPENAI_API_KEY.',
+  keyHelp: 'Add it in Models → Add provider, or set OPENAI_API_KEY.',
   envKey: 'OPENAI_API_KEY',
   extractReplay: openAIReplay,
   extendBody(body, options) {

@@ -51,9 +51,12 @@ const providers = {
   openrouter: openrouterAdapter,
   openai: openaiAdapter,
   codex: codexAdapter,
-  kimi: kimiAdapter,
-  mock: mockAdapter
+  kimi: kimiAdapter
 };
+
+// The mock adapter is a deterministic test fixture, never a product route.
+// Tests opt in at process start; authored production flows cannot reach it.
+if (process.env.FLYT_TEST_MOCK_PROVIDER === '1') providers.mock = mockAdapter;
 
 export function registerProvider(name, adapter) {
   providers[name] = adapter;

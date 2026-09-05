@@ -13,8 +13,7 @@ const CREATOR_NAMES = {
   mistral: 'Mistral',
   qwen: 'Qwen',
   cohere: 'Cohere',
-  perplexity: 'Perplexity',
-  mock: 'Dry run'
+  perplexity: 'Perplexity'
 };
 
 const DIRECT_CREATORS = {
@@ -22,8 +21,7 @@ const DIRECT_CREATORS = {
   'claude-code': 'anthropic',
   openai: 'openai',
   codex: 'openai',
-  kimi: 'kimi',
-  mock: 'mock'
+  kimi: 'kimi'
 };
 
 const CREATOR_ALIASES = {
@@ -37,7 +35,6 @@ function inferDirectCreator(id) {
   if (id.startsWith('claude-')) return 'anthropic';
   if (/^(gpt-|o\d|codex)/.test(id)) return 'openai';
   if (/^(kimi-|moonshot-)/.test(id)) return 'kimi';
-  if (id.startsWith('mock-')) return 'mock';
   return 'other';
 }
 

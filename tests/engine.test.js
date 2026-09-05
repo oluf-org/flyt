@@ -45,8 +45,9 @@ test('the engine assembles from paths alone', () => {
   assert.ok(engine.toolLibrary.list().length > 0, 'tools seeded');
   // Settings were created and sealed under the given userData dir, not the repo.
   assert.ok(fs.existsSync(path.join(dataRoot, 'settings.json')));
-  // A worker is resolved and ready to call.
-  assert.ok(engine.runtimeConfig.workers.executor.provider);
+  // Fresh installs fail closed until an authenticated model is chosen; the
+  // test-only mock adapter is never a shipped default worker.
+  assert.deepEqual(engine.runtimeConfig.workers.executor, { provider: null, model: null });
 });
 
 test('settings changes rebuild the runtime config in place', () => {

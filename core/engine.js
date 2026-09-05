@@ -300,7 +300,7 @@ export function createEngine({
   // anthropic/openai, when the shell environment provides one (the adapters
   // accept that fallback for CLI use). The mock provider is always connected.
   function hasKey(provider) {
-    if (provider === 'mock') return true;
+    if (provider === 'mock') return process.env.FLYT_TEST_MOCK_PROVIDER === '1';
     // Subscription providers connect via the vendor CLI's own sign-in, but only
     // once the user has explicitly opted in (the Settings card carries the
     // usage warning — Claude plan limits and Anthropic's OAuth terms).

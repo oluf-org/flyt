@@ -502,12 +502,12 @@ export default function Lander({
         )}
 
         {/* First-ever-launch (no key): a single quiet line under the composer,
-            not a wall (§3). The run path still works for mock/no-file flows, so
+            not a wall (§3). The run path still works for no-file flows, so
             this informs rather than blocks. */}
         {!queued && !hasKey && (
           <div className="lander-hint">
             Add an OpenRouter key in{' '}
-            <button type="button" className="link" onClick={onOpenSettings}>Settings</button>
+            <button type="button" className="link" onClick={onOpenSettings}>Models</button>
             {' '}to run.
           </div>
         )}
@@ -517,7 +517,7 @@ export default function Lander({
         {!queued && claudeSubActive && (
           <div className="lander-hint lander-hint-warn">
             <span aria-hidden>⚠</span> Runs may use your Claude subscription (via Claude Code) — plan limits apply.{' '}
-            <button type="button" className="link" onClick={onOpenSettings}>Manage</button>
+            <button type="button" className="link" onClick={onOpenSettings}>Manage in Models</button>
           </div>
         )}
 

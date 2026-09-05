@@ -18,7 +18,7 @@ import { applyKimiRequest, kimiReplay } from './transforms/kimi.js';
 const platform = openaiCompatible({
   provider: 'Kimi',
   baseUrl: 'https://api.moonshot.ai/v1/chat/completions',
-  keyHelp: 'Add it in Settings → Providers (platform key from platform.moonshot.ai).',
+  keyHelp: 'Add it in Models → Add provider (platform key from platform.moonshot.ai).',
   extendBody: applyKimiRequest,
   extractReplay: kimiReplay,
 });
@@ -27,7 +27,7 @@ const code = openaiCompatible({
   provider: 'Kimi',
   baseUrl: 'https://api.kimi.com/coding/v1/chat/completions',
   headers: { 'User-Agent': 'claude-code/0.1.0' }, // required by the Kimi Code endpoint
-  keyHelp: 'Add it in Settings → Providers (Kimi Code key from your Kimi membership).',
+  keyHelp: 'Add it in Models → Add provider (Kimi Code key from your Kimi membership).',
   extendBody: applyKimiRequest,
   extractReplay: kimiReplay,
 });

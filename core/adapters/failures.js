@@ -109,7 +109,7 @@ export function sanitizeFailureDetail(value, max = 240) {
 }
 
 const REMEDIES = {
-  auth: provider => `Sign in again for ${provider} (Settings → Providers), or add an API key.`,
+  auth: provider => `Sign in again for ${provider} in Models → Model providers, or add an API key there.`,
   capability: (provider, model) => `${provider} cannot serve "${model}". Pick a model it supports, or change the model's source.`,
   credit: provider => `${provider} will not serve this request because the account cannot pay for it. `
     + 'Add credit, lower the token budget, or move to a model that costs nothing. Waiting will not clear it.',
@@ -124,10 +124,10 @@ const REMEDIES = {
 // The dashed codes are assigned by key: a hyphen cannot appear in an object
 // literal's bare identifier position.
 REMEDIES['runtime-missing'] = (provider, _model, exe) =>
-  `The ${provider} CLI could not be found${exe ? ` ("${exe}")` : ''}. Install it, or set its path in Settings → Providers → ${provider}.`;
+  `The ${provider} CLI could not be found${exe ? ` ("${exe}")` : ''}. Install it, or set its path in Models → Model providers → ${provider}.`;
 REMEDIES['runtime-permission'] = (provider, _model, exe) =>
   `The ${provider} CLI exists but would not launch${exe ? ` ("${exe}")` : ''} — a permission or blocked-executable problem. `
-  + `Check that the file is executable and not blocked by policy, or set a different path in Settings → Providers → ${provider}.`;
+  + `Check that the file is executable and not blocked by policy, or set a different path in Models → Model providers → ${provider}.`;
 
 /**
  * Classify one adapter error into a stable code plus an actionable remedy.
