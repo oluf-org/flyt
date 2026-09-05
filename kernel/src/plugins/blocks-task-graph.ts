@@ -11,6 +11,7 @@ import type { JsonValue } from '../types.js';
 import type { FailureMetadata } from '../types.js';
 import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js';
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
+import { outputWordLimit } from '../blocks/output-contract.js';
 import { DEFAULT_WORKER_MAX_TOKENS, executeWork, LOOP_CEILING } from './blocks-core.js';
 import { childSessionIdentity } from '../session/children.js';
 import type { WorkerProfileRegistry } from '../workers/profiles.js';
@@ -467,11 +468,12 @@ function taskInput(
   task: GeneratedTask,
   original: string,
   completed: ReadonlyMap<string, BlockOutcome>,
-  recovery?: { mode: 'restart' | 'resume'; checkpoint?: string | null },
+  recovery?: { mode: 'restart' | 'resume' | 'continue'; checkpoint?: string | null },
 ): string {
   const dependencies = task.dependsOn.map(id => {
     const output = completed.get(id)?.output ?? '(no output)';
-    return `## ${id}\n${output}`;
+    const execution = completed.get(id)?.structured;
+    return `## ${id}\n${output}\nRecorded execution facts: ${execution ? JSON.stringify(execution) : 'unavailable; constraint compliance is unverified'}`;
   }).join('\n\n');
   return [
     `# Task: ${task.title}`,
@@ -509,13 +511,15 @@ function taskFailure(error: unknown, task: GeneratedTask, attempt: number, durab
 }
 
 async function childProgress(session: Awaited<ReturnType<BlockRun['ctx']['sessions']['open']>>): Promise<{
-  durableWriteProduced: boolean; checkpoint: string | null; lastDurableProgress: JsonValue | null;
+  durableWriteProduced: boolean; checkpoint: string | null; lastDurableProgress: JsonValue | null; transcriptBlockId?: string;
 }> {
   let durableWriteProduced = false;
   let checkpoint: string | null = null;
   let lastDurableProgress: JsonValue | null = null;
+  let transcriptBlockId: string | undefined;
   for await (const event of session.read()) {
     const data = event.data as Record<string, unknown>;
+    if (event.type === 'tool.result' && !data.error && typeof data.blockId === 'string') transcriptBlockId = data.blockId;
     if (event.type === 'tool.result' && data.durableProgress === true) {
       durableWriteProduced = true;
       lastDurableProgress = { sessionId: null, seq: event.seq, at: event.at, tool: data.name ?? null, callId: data.callId ?? null } as JsonValue;
@@ -526,22 +530,24 @@ async function childProgress(session: Awaited<ReturnType<BlockRun['ctx']['sessio
       if (data.lastDurableProgress) lastDurableProgress = data.lastDurableProgress as JsonValue;
     }
   }
-  return { durableWriteProduced, checkpoint, lastDurableProgress };
+  return { durableWriteProduced, checkpoint, lastDurableProgress, transcriptBlockId };
 }
 
 async function priorChildOutcomes(run: BlockRun, session: Awaited<ReturnType<BlockRun['ctx']['sessions']['open']>>): Promise<Map<string, BlockOutcome>> {
   const outputs = new Map<string, string>();
-  const states = new Map<string, { status: string; error?: string }>();
-  for await (const event of session.read()) {
+  const states = new Map<string, { status: string; error?: string; structured?: JsonValue }>();
+  for await (const event of session.read(run.context?.after)) {
     const data = event.data as Record<string, unknown>;
     if (data?.parentId !== run.blockId || typeof data.taskId !== 'string') continue;
     if (event.type === 'block.output') outputs.set(data.taskId, String(data.content ?? ''));
     if (event.type === 'block.status') states.set(data.taskId, {
       status: String(data.status ?? ''), ...(data.error ? { error: String(data.error) } : {}),
+      ...(data.execution ? { structured: data.execution as JsonValue } : {}),
     });
   }
   return new Map([...states].filter(([, state]) => state.status === 'done').map(([id, state]) => [id, {
     status: 'done' as const, output: outputs.get(id) ?? '', ...(state.error ? { error: state.error } : {}),
+    ...(state.structured ? { structured: state.structured } : {}),
   }]));
 }
 
@@ -583,7 +589,7 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
   // Reuse the accepted plan on resume. The plan artifact is written before any
   // child is announced, so a crash cannot leave unexplainable generated work.
   let planText = '';
-  for await (const event of session.read()) {
+  for await (const event of session.read(run.context?.after)) {
     const data = event.data as Record<string, unknown>;
     if (event.type === 'block.output' && data.blockId === run.blockId && data.port === 'plan') planText = String(data.content ?? '');
   }
@@ -591,6 +597,7 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
   if (!parsed?.ok) {
     const planned = await runAgentLoop({
       ctx: run.ctx, session, runId: run.runId, blockId: `${run.blockId}.planner`, turn: 1,
+      context: run.context,
       model, fallbackModels, system, input: run.input,
       tools: [], ceiling: [], maxSteps: 1, maxTokens: PLANNER_MAX_TOKENS,
       structuredOutput: TASK_GRAPH_OUTPUT,
@@ -609,7 +616,9 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
     parsed = parseTaskGraphPlan(planText, { minTasks, maxTasks, parallelism, readOnly });
     let lastPlanner = planned;
     let lastPlannerBudget = PLANNER_MAX_TOKENS;
+    let repairedPlan = false;
     for (let attempt = 1; !parsed.ok && attempt <= PLANNER_REPAIR_ATTEMPTS; attempt++) {
+      repairedPlan = true;
       const invalidPlan = planText;
       const diagnostics = [...parsed.errors];
       await session.append({ type: 'block.warning', data: {
@@ -621,6 +630,7 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
       } });
       const repaired = await runAgentLoop({
         ctx: run.ctx, session, runId: run.runId, blockId: `${run.blockId}.planner-repair-${attempt}`, turn: attempt + 1,
+        context: run.context,
         model, fallbackModels, system,
         input: taskGraphRepairPrompt(invalidPlan, diagnostics, run.input, attempt),
         tools: [], ceiling: [], maxSteps: 1, maxTokens: PLANNER_REPAIR_MAX_TOKENS,
@@ -664,9 +674,10 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
       };
       planText = JSON.stringify(degraded.plan, null, 2);
       parsed = { ok: true, plan: degraded.plan, errors: [] };
+      repairedPlan = false;
     }
     await session.append({ type: 'block.output', data: { blockId: run.blockId, port: 'plan', content: planText } });
-    await session.append({ type: 'block.warning', data: {
+    if (repairedPlan) await session.append({ type: 'block.warning', data: {
       blockId: run.blockId, code: 'task_graph_repaired', resolves: 'invalid_task_graph', resolved: true, transient: false,
       reason: 'The repaired task graph passed static validation and was accepted.',
     } });
@@ -676,7 +687,7 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
   const announced = new Set<string>();
   const attemptsByTask = new Map<string, number>();
   const priorStates = new Map<string, Record<string, unknown>>();
-  for await (const event of session.read()) {
+  for await (const event of session.read(run.context?.after)) {
     const data = event.data as Record<string, unknown>;
     if (event.type === 'block.status' && data.parentId === run.blockId && typeof data.taskId === 'string') {
       announced.add(data.taskId);
@@ -707,6 +718,8 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
       const childId = `${run.blockId}.${task.id}`;
       const identity = childSessionIdentity({
         parentRunId: run.runId, parentBlockId: run.blockId, taskId: task.id,
+        ...(run.context?.executionId ? { parentExecutionId: run.context.executionId } : {}),
+        ...(run.context ? { parentContextAfter: run.context.after } : {}),
         profileId, contextBoundary: profile?.context.mode ?? 'isolated',
       });
       const childSession = await run.ctx.sessions.open(identity.sessionId);
@@ -745,7 +758,7 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
         attemptsByTask.set(task.id, attempt);
         const before = await childProgress(childSession);
         const recovery = attempt > 1
-          ? { mode: before.durableWriteProduced ? 'resume' as const : 'restart' as const, checkpoint: before.checkpoint }
+          ? { mode: before.durableWriteProduced ? 'resume' as const : before.transcriptBlockId ? 'continue' as const : 'restart' as const, checkpoint: before.checkpoint }
           : undefined;
         const startedAt = new Date().toISOString();
         await session.append({ type: 'child.session', data: {
@@ -760,7 +773,7 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
           blockId: childId, parentId: run.blockId, taskId: task.id, title: task.title,
           use: 'flyt-blocks-core:work', status: 'active', dependsOn: task.dependsOn,
           sessionId: identity.sessionId, profileId, attempt, maxAttempts: maxTaskAttempts,
-          retryState: recovery ? (recovery.mode === 'resume' ? 'resuming-checkpoint' : 'restarting') : 'running',
+          retryState: recovery ? (recovery.mode === 'resume' ? 'resuming-checkpoint' : recovery.mode === 'continue' ? 'continuing-evidence' : 'restarting') : 'running',
           ...(before.lastDurableProgress ? { lastDurableProgress: before.lastDurableProgress } : {}),
         } });
         try {
@@ -774,8 +787,11 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
           ? profiledCeiling
           : profiledCeiling.filter(name => run.ctx.tools.get(name)?.classification?.effect === 'read');
         outcome = await executeWork({
-          ...run, runId: identity.sessionId, blockId: attempt === 1 ? 'worker' : `worker-retry-${attempt}`,
-          input: taskInput(task, run.input, completed, recovery),
+          ...run, runId: identity.sessionId, blockId: before.transcriptBlockId ?? (attempt === 1 ? 'worker' : `worker-retry-${attempt}`),
+          // This child has its own log; a parent cursor has no meaning here.
+          context: { mode: 'block-input', after: 0 },
+          input: taskInput(task, run.input, completed, before.transcriptBlockId && !before.durableWriteProduced ? undefined : recovery)
+            + (before.transcriptBlockId && !before.durableWriteProduced ? '\nRecovery: CONTINUE FROM COMPLETED READS in this task transcript. The previous model response was interrupted. Reuse the recorded tool results; do not repeat completed reads unless the evidence is stale or incomplete.' : ''),
           ceiling: childCeiling,
           config: {
             model, ...(fallbackModels.length ? { modelFallbacks: fallbackModels } : {}),
@@ -785,6 +801,8 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
             maxSteps: profile?.warnings?.steps ?? MAX_STEPS,
             hardMaxSteps: integer(run.config.workerMaxSteps, DEFAULT_WORKER_HARD_STEPS, 1, 100_000),
             maxTokens: integer(run.config.workerMaxTokens, DEFAULT_WORKER_MAX_TOKENS, 1, 131_072),
+            ...(outputWordLimit(run.config.workerMaxOutputWords, run.input) !== undefined
+              ? { maxOutputWords: outputWordLimit(run.config.workerMaxOutputWords, run.input)! } : {}),
             maxInputTokens: integer(run.config.workerMaxInputTokens, profile?.context.maxInputTokens ?? 96_000, 1_024, 1_000_000),
             modelRetryAttempts: 1,
             isolated: profile?.context.mode !== 'shared',
@@ -804,11 +822,24 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
         const mayRetry = outcome.status === 'failed' && attempt < maxTaskAttempts
           && failure?.retryable === true && failure.userInitiated !== true;
         const retryDecision = mayRetry
-          ? (progress.durableWriteProduced ? 'resume_from_checkpoint' : 'restart')
+          ? (progress.durableWriteProduced ? 'resume_from_checkpoint' : progress.transcriptBlockId ? 'continue_from_evidence' : 'restart')
           : outcome.status === 'done' ? 'completed'
             : failure?.userInitiated ? 'user_cancelled'
               : attempt >= maxTaskAttempts ? 'attempts_exhausted' : 'not_retryable';
         const finishedAt = new Date().toISOString();
+        const toolCalls: Record<string, number> = {};
+        for await (const event of childSession.read()) {
+          const data = event.data as Record<string, unknown>;
+          if (event.type === 'tool.result' && typeof data.name === 'string' && !data.cached) {
+            toolCalls[data.name] = (toolCalls[data.name] ?? 0) + 1;
+          }
+        }
+        const words = outcome.output.trim() ? outcome.output.trim().split(/\s+/u).length : 0;
+        const wordLimit = outputWordLimit(run.config.workerMaxOutputWords, run.input);
+        const execution = { attempts: attempt, toolResults: toolCalls, words,
+          ...(wordLimit !== undefined ? { maxOutputWords: wordLimit, outputWordLimitPassed: words <= wordLimit } : {}),
+          otherConstraints: 'unverified' };
+        outcome = { ...outcome, structured: execution };
         const lifecycle = {
           ...identity, stage: outcome.status, title: task.title, finishedAt, attempt, maxAttempts: maxTaskAttempts,
           metrics: { events: await childSession.head() }, retryDecision,
@@ -826,6 +857,7 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
           use: 'flyt-blocks-core:work', status: mayRetry ? 'pending' : outcome.status, dependsOn: task.dependsOn,
           sessionId: identity.sessionId, profileId, attempt, maxAttempts: maxTaskAttempts,
           retryState: retryDecision,
+          execution,
           ...(progress.lastDurableProgress ? { lastDurableProgress: progress.lastDurableProgress } : {}),
           ...(outcome.error ? { error: outcome.error } : {}),
           ...(failure ? { failure: failure as unknown as JsonValue } : {}),
@@ -921,6 +953,7 @@ export const TASK_GRAPH_SETTINGS = {
     effort: { enum: ['low', 'medium', 'high'], description: 'How hard generated workers should think.' },
     workerMaxSteps: { title: 'Worker tool rounds', type: 'integer', minimum: 1, maximum: 100_000, description: 'Hard bound per generated task (default 200). At the bound the worker loses its tools and must deliver from the evidence it already holds; the profile still warns earlier.' },
     workerMaxTokens: { title: 'Worker tokens per query', type: 'integer', minimum: 1, maximum: 131_072, description: 'A worker cut off here automatically continues in another query.' },
+    workerMaxOutputWords: { title: 'Worker answer words', type: 'integer', minimum: 1, description: 'Enforced for every generated answer. Explicit numeric word ceilings in the original request also apply.' },
     workerMaxInputTokens: { title: 'Checkpoint input tokens', type: 'integer', minimum: 1024, maximum: 1_000_000, description: 'Compact old raw results and write a resume checkpoint at this estimated input size.' },
     taskAttempts: { title: 'Attempts per generated task', type: 'integer', minimum: 1, maximum: 5, description: 'Total scheduler-owned attempts. Defaults to two.' },
     workerInstructions: { title: 'Worker instructions', type: 'string', format: 'multiline' },

@@ -23,6 +23,37 @@ export function previewResult(result, { preview = 'json', maxPreviewChars = DEFA
   if (preview === 'none') return { value: null, truncated: result !== undefined };
   if (result === undefined || result === null) return { value: result ?? null, truncated: false };
 
+  // Source reads must be contiguous: a head/tail preview silently removes the
+  // middle and makes both pagination and line citations unreliable.
+  if (preview === 'file' && typeof result.content === 'string') {
+    const makePage = length => {
+      const content = result.content.slice(0, length);
+      const cut = length < result.content.length;
+      const lines = content.split('\n');
+      const { content: _raw, ...metadata } = result;
+      return {
+        ...metadata,
+        content: Number.isInteger(result.startLine)
+          ? lines.map((line, index) => `${result.startLine + index}: ${line}`).join('\n') : content,
+        ...(Number.isInteger(result.startLine) ? { lineNumbered: true } : {}),
+        ...(cut ? { truncated: true, nextOffset: (result.offset ?? 0) + length } : {}),
+      };
+    };
+    let low = 0;
+    let high = result.content.length;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (JSON.stringify(makePage(mid)).length <= maxPreviewChars) low = mid;
+      else high = mid - 1;
+    }
+    // Prefer a complete line, but still make progress through very long lines.
+    if (low < result.content.length) {
+      const newline = result.content.lastIndexOf('\n', low - 1);
+      if (newline >= 0) low = newline + 1;
+    }
+    return { value: makePage(low), truncated: low < result.content.length };
+  }
+
   if (preview === 'text') {
     const text = typeof result === 'string' ? result : JSON.stringify(result);
     return text.length <= maxPreviewChars

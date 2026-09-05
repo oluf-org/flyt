@@ -60,9 +60,9 @@ async function askRefinerQuestion(run: BlockRun, question: string): Promise<stri
 async function deterministicRefinerFallback(run: BlockRun, reason: string): Promise<BlockOutcome> {
   const session = await run.ctx.sessions.open(run.runId);
   let answer = '';
-  for await (const event of session.read()) {
+  for await (const event of session.read(run.context?.after)) {
     const data = event.data as Record<string, unknown>;
-    if (event.type !== 'tool.result' || data.name !== 'ask_human' || !data.content) continue;
+    if (event.type !== 'tool.result' || data.blockId !== run.blockId || data.name !== 'ask_human' || !data.content) continue;
     try { answer = String((JSON.parse(String(data.content)) as { answer?: unknown }).answer ?? answer); }
     catch { /* the original request remains a valid brief */ }
   }

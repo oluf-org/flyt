@@ -18,6 +18,7 @@
  * @module #kernel/blocks/run
  */
 import type { Context } from '@deepseek-ai/cordis';
+import type { BlockContext } from './types.js';
 import type { FailureMetadata, JsonValue, Message, ToolCall, ToolResult, Usage } from '../types.js';
 import type { SessionHandle } from '../seams/sessions.js';
 import type { LlmChunk, LlmSettled, StepRef } from '../events.js';
@@ -131,6 +132,8 @@ export interface LoopOptions {
   /** Whole-completion ceiling. Reasoning models need headroom beyond the
    * visible answer budget because providers count both against max_tokens. */
   maxTokens?: number;
+  /** Hard visible-output contract, counted as whitespace-delimited words. */
+  maxOutputWords?: number;
   /** Sampling temperature for bounded structural turns such as planning. */
   temperature?: number;
   structuredOutput?: StructuredOutputRequest;
@@ -151,7 +154,9 @@ export interface LoopOptions {
   toolLimits?: Readonly<Record<string, number>>;
   /** Role-specific semantic refusal before a call reaches the shared gate. */
   toolGuard?: (call: ToolCall) => string | null | undefined;
-  /** Read only this block's tagged conversation from the canonical run log. */
+  /** Scheduler-owned scope; cannot be widened by the legacy isolated option. */
+  context?: BlockContext;
+  /** Defaults to block isolation. False explicitly shares a non-workflow session. */
   isolated?: boolean;
   /**
    * At the hard step bound, withdraw every tool and give the model a few
@@ -257,17 +262,20 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   const {
     ctx, session, runId, blockId, turn, model, fallbackModels = [], system, input,
     tools = [], ceiling = [], permissionPolicy, toolConcurrency = 4, approveRepeatedLoop,
-    maxSteps, softMaxSteps = MAX_STEPS, maxTokens, temperature,
+    maxSteps, softMaxSteps = MAX_STEPS, maxTokens, maxOutputWords, temperature,
     structuredOutput, reasoning: reasoningRequest, retry, checkpointInputTokens,
     continueOnLength = false, maxTurnRepairs = 2,
     maxLengthContinuations = MAX_LENGTH_CONTINUATIONS,
-    toolLimits = {}, toolGuard, isolated = false, boundedAnswer = false, signal,
+    toolLimits = {}, toolGuard, context, isolated = true, boundedAnswer = false, signal,
   } = options;
+  const contextBlockId = context || isolated ? blockId : undefined;
+  const contextAfter = context?.after ?? 0;
+  const wordLimit = Number.isInteger(maxOutputWords) && maxOutputWords! > 0 ? maxOutputWords : undefined;
 
   // A process restart never leaves a call looking live. Reconciliation is an
   // explicit durable transition; the original call id is settled in place.
   const priorEvents = [];
-  for await (const event of session.read()) priorEvents.push(event);
+  for await (const event of session.read(contextAfter)) priorEvents.push(event);
   for (const call of reconcileToolCallStates(priorEvents, blockId)) {
     if (terminalToolState(call.state)) continue;
     await session.append({ type: 'tool.state', data: {
@@ -276,14 +284,19 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     } });
   }
 
-  await session.append({ type: 'turn.start', data: { runId, turn, blockId } });
+  const turnStart = await session.append({ type: 'turn.start', data: {
+    runId, turn, blockId,
+    context: { mode: contextBlockId ? 'block-input' : 'session', after: contextAfter },
+  } });
   ctx.emit('turn/start', { runId, turn });
 
   // The system and user messages reach the log BEFORE the request that carries
   // them. That ordering is the whole of D55: a crash between the append and the
   // call leaves a log that over-reports what the model saw, which is safe; the
   // other order leaves one that under-reports it, which is not.
-  await session.append({ type: 'message.system', data: { blockId, content: system } });
+  await session.append({ type: 'message.system', data: { blockId,
+    content: wordLimit === undefined ? system : `${system}\n\nFinal answer limit: at most ${wordLimit} whitespace-delimited words. This limit is checked before the block can succeed.`,
+  } });
   await session.append({ type: 'message.user', data: { blockId, content: input } });
 
   const schemas = schemasFor(tools);
@@ -309,6 +322,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   const cachedReadCallIds = new Set<string>();
   let answerOnly: AnswerOnlyMode | null = null;
   let answerOnlyRecoveryAttempts = 0;
+  let outputRepair = false;
   let turnRepairs = 0;
   let lengthContinuations = 0;
   let toolValidationFailures = 0;
@@ -324,7 +338,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   let routeModels = [model, ...fallbackModels];
 
   for (step = 1; ; step++) {
-    if (maxSteps != null && step > maxSteps && !answerOnly) {
+    if (maxSteps != null && step > maxSteps && !answerOnly && !outputRepair) {
       // A worker that has read for hours and is cut off with nothing is the
       // worst outcome for everyone downstream. With tools withdrawn it can
       // still deliver what it learned; the bound below on answer-only turns
@@ -367,10 +381,11 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     // "model-visible means logged" a property of the code rather than a rule
     // somebody has to keep: a message that is not in the log is not in the
     // request, because the request is the log.
-    let messages = await session.deriveMessages(undefined, isolated ? blockId : undefined);
-    const callId = `${blockId}-${step}`;
+    let messages = await session.deriveMessages(undefined, contextBlockId, contextAfter);
+    const canonicalMessages = JSON.stringify(messages);
+    const callId = `${blockId}-${step}-${turnStart.seq}`;
     let [requestModel, ...requestFallbacks] = routeModels;
-    let requestSchemas = answerOnly ? [] : schemas;
+    let requestSchemas = answerOnly || outputRepair ? [] : schemas;
     const interceptions = (ctx as typeof ctx & { interceptions?: InterceptionRegistry }).interceptions;
     const traceInterception = async (trace: readonly { point: string; plugin: string; order: number; mutated: boolean; beforeHash: string; afterHash: string }[]) => {
       for (const item of trace) await session.append({ type: 'plugin.interception', data: {
@@ -396,6 +411,9 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       await traceInterception(assembled.trace);
       const value = assembled.payload as { messages?: unknown; tools?: unknown };
       if (Array.isArray(value.messages)) messages = value.messages as Message[];
+      if (contextBlockId && JSON.stringify(messages) !== canonicalMessages) {
+        throw new Error('context.assembled cannot replace a scoped transcript; append authorized block context before assembling the request.');
+      }
       if (Array.isArray(value.tools)) requestSchemas = value.tools as typeof schemas;
 
       const prepared = await interceptions.apply('model.request.prepared', {
@@ -408,8 +426,12 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       if (typeof request.model === 'string' && request.model) requestModel = request.model;
       if (Array.isArray(request.fallbackModels)) requestFallbacks = request.fallbackModels.filter((item): item is string => typeof item === 'string');
       if (Array.isArray(request.messages)) messages = request.messages as Message[];
+      if (contextBlockId && JSON.stringify(messages) !== canonicalMessages) {
+        throw new Error('model.request.prepared cannot replace a scoped transcript; append authorized block context before assembling the request.');
+      }
       if (Array.isArray(request.tools)) requestSchemas = request.tools as typeof schemas;
     }
+    if (answerOnly || outputRepair) requestSchemas = [];
     await session.append({
       type: 'step.prompt',
       data: {
@@ -422,7 +444,10 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
         // the preceding message events remain the lossless source.
         content: {
           source: 'canonical-session',
+          ...(JSON.stringify(messages) !== canonicalMessages ? { source: 'effective-messages', messages } : {}),
           throughSeq: await session.head(),
+          afterSeq: contextAfter,
+          ...(contextBlockId ? { blockId: contextBlockId } : {}),
           messageCount: messages.length,
           tools: requestSchemas.map(schema => schema.name),
         } as unknown as JsonValue,
@@ -607,6 +632,14 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       ...(answer.route ? { route: answer.route } : {}),
     };
 
+    if (outputRepair && (finishReason === 'length' || (!calls.length && !content.trim()))) {
+      await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
+      ctx.emit('step/end', ref, settled);
+      stopped = 'bound';
+      reason = 'Output contract failed: the correction was empty or truncated.';
+      break;
+    }
+
     // A length stop with no visible content is not a partial deliverable. It is
     // the same unusable turn as any other reasoning-only/empty response and
     // belongs in the bounded repair path below. Treating one reasoning token
@@ -669,8 +702,42 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       if (continuedContent.length) content = [...continuedContent, content].join('');
       await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
       ctx.emit('step/end', ref, settled);
+      if (wordLimit !== undefined) {
+        const words = content.trim() ? content.trim().split(/\s+/u).length : 0;
+        await session.append({ type: 'block.output.validation', data: {
+          blockId, step, words, maxOutputWords: wordLimit, valid: words <= wordLimit,
+        } });
+        if (words > wordLimit) {
+          if (outputRepair) {
+            stopped = 'bound';
+            reason = `Output contract failed: ${words} words exceeds the ${wordLimit}-word limit after one correction.`;
+            break;
+          }
+          outputRepair = true;
+          continuedContent.length = 0;
+          await session.append({ type: 'message.user', data: {
+            blockId, content: `Rewrite the final deliverable in at most ${wordLimit} whitespace-delimited words. The previous answer contained ${words}. Preserve the supported findings and limitations. Return only the replacement answer. Tools are withdrawn.`,
+          } });
+          continue;
+        }
+      }
       stopped = 'answered';
       reason = undefined;
+      break;
+    }
+
+    if (outputRepair) {
+      for (const call of calls) {
+        await session.append({ type: 'tool.call', data: { blockId, callId: call.id, name: call.name, args: call.args } });
+        await session.append({ type: 'tool.state', data: { blockId, callId: call.id, state: 'failed', reason: 'Output correction only.' } });
+        await session.append({ type: 'tool.result', data: {
+          blockId, callId: call.id, name: call.name, error: 'Output correction must answer without tools.', content: 'Tool refused: output correction only.',
+        } });
+      }
+      await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
+      ctx.emit('step/end', ref, settled);
+      stopped = 'bound';
+      reason = 'Output contract failed: the correction requested tools instead of returning a bounded answer.';
       break;
     }
 
@@ -886,7 +953,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
     }
   }
 
-  const messages = await session.deriveMessages(undefined, isolated ? blockId : undefined);
+  const messages = await session.deriveMessages(undefined, contextBlockId, contextAfter);
   await session.append({
     type: 'turn.end',
     data: { runId, turn, blockId, stopped, ...(reason ? { reason } : {}) },

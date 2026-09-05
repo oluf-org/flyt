@@ -295,7 +295,7 @@ export class ReferenceLibrary {
   // the reading's load-bearing question open — not because the answer was hard
   // but because the tail was unreachable. The truncation marker now says where
   // to resume, so the next call is obvious rather than inventable.
-  read(ref, { maxChars = 60_000, offset = 0 } = {}) {
+  read(ref, { maxChars = 60_000, offset = 0, structured = false } = {}) {
     const abs = this.resolve(ref);
     try {
       if (!fs.statSync(abs).isFile()) return null;
@@ -303,6 +303,12 @@ export class ReferenceLibrary {
       const from = Math.max(0, Math.min(Math.floor(Number(offset) || 0), text.length));
       const window = text.slice(from, from + maxChars);
       const end = from + window.length;
+      if (structured) return {
+        content: window, offset: from,
+        startLine: text.slice(0, from).split('\n').length,
+        startColumn: from - text.lastIndexOf('\n', from - 1),
+        ...(end < text.length ? { truncated: true, nextOffset: end } : {}),
+      };
       const head = from > 0 ? `…[resumed at character ${from} of ${text.length}]\n` : '';
       const tail = end < text.length
         ? `\n…[truncated at character ${end} of ${text.length} — read the rest with offset: ${end}]`

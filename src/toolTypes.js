@@ -17,7 +17,7 @@ export const TOOL_EFFECTS = ['read', 'write', 'network', 'shell', 'destructive']
 export const RISK_LEVELS = ['safe', 'caution', 'danger'];
 export const TRUST_TIERS = ['trusted', 'review', 'untrusted'];
 export const TOOL_PROVIDERS = ['builtin', 'http', 'mcp', 'flow'];
-export const PREVIEW_KINDS = ['json', 'text', 'image', 'none'];
+export const PREVIEW_KINDS = ['json', 'text', 'image', 'file', 'none'];
 
 // How far a call reaches. `run` = the run's own directory and nothing else
 // (create_task, write_task_md — the same category as log.jsonl); `workspace` =

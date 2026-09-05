@@ -46,8 +46,10 @@ export interface SessionHandle {
    * A tool call with no result — the process died mid-tool — reconstructs with
    * a synthetic never-returned result rather than being dropped, because a
    * dropped call is how a resumed conversation silently changes shape.
+   * `blockId` selects the owning transcript; `after` is an exclusive execution
+   * boundary. Omit both only for an explicit full-session view.
    */
-  deriveMessages(upTo?: number, blockId?: string): Promise<Message[]>;
+  deriveMessages(upTo?: number, blockId?: string, after?: number): Promise<Message[]>;
   /** The highest seq written. 0 for an empty log. */
   head(): Promise<number>;
 }

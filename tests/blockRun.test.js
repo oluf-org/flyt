@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { InterceptionRegistry } from '../kernel/dist/plugins/interceptions.js';
 import {
   createKernel, flytTools, flytApprovals, sessionJsonl, runAgentLoop, provideSeam, KERNEL_EVENTS,
 } from '#kernel';
@@ -108,6 +109,65 @@ const typesIn = async session => {
   for await (const e of session.read()) out.push(e.type);
   return out;
 };
+
+test('a word ceiling allows exactly one tool-free correction, including at the step bound', async t => {
+  const boot = await bootFor([{ content: 'one two three four' }, { content: 'one two' }]);
+  t.after(() => boot.kernel.dispose());
+  const result = await loopIn(boot, { maxSteps: 1, maxOutputWords: 2 });
+  assert.equal(result.stopped, 'answered');
+  assert.equal(result.content, 'one two');
+  assert.equal(boot.llm.seen.length, 2);
+  assert.deepEqual(boot.llm.seen[1].tools, []);
+  const checks = boot.session.readSync().filter(e => e.type === 'block.output.validation');
+  assert.deepEqual(checks.map(e => e.data.valid), [false, true]);
+});
+
+for (const correction of [{ content: 'still too many words' }, { content: 'partial', finishReason: 'length' }, { content: '' },
+  { content: '', toolCalls: [{ id: 'forbidden', name: 'never_execute', args: {} }] }]) {
+  test(`word contract fails visibly after unusable correction: ${JSON.stringify(correction)}`, async t => {
+    const boot = await bootFor([{ content: 'one two three' }, correction]);
+    t.after(() => boot.kernel.dispose());
+    const result = await loopIn(boot, { maxOutputWords: 2, continueOnLength: true });
+    assert.equal(result.stopped, 'bound');
+    assert.match(result.reason, /Output contract failed/);
+    assert.equal(boot.llm.seen.length, 2);
+    assert.deepEqual(boot.llm.seen[1].tools, []);
+    if (correction.toolCalls) assert.ok(boot.session.readSync().some(e => e.type === 'tool.state' && e.data.callId === 'forbidden' && e.data.state === 'failed'));
+  });
+}
+
+for (const point of ['context.assembled', 'model.request.prepared']) {
+  test(`${point} cannot inject another transcript into a scoped request`, async t => {
+    const boot = await bootFor([{ content: 'never sent' }]);
+    t.after(() => boot.kernel.dispose());
+    const registry = new InterceptionRegistry(boot.kernel.ctx, () => true);
+    registry.register({ plugin: 'test', point, order: 0, mutates: true,
+      run: value => ({ ...value, messages: [...value.messages, { role: 'system', content: 'sibling secret' }] }) });
+    await assert.rejects(loopIn(boot, { context: { mode: 'block-input', after: 0 } }), /cannot replace a scoped transcript/);
+    assert.equal(boot.llm.seen.length, 0);
+    assert.ok(boot.session.readSync().some(e => e.type === 'plugin.interception' && e.data.mutated));
+  });
+}
+
+test('an explicitly shared request logs the exact messages produced by a mutating plugin', async t => {
+  const boot = await bootFor([{ content: 'done' }]);
+  t.after(() => boot.kernel.dispose());
+  const registry = new InterceptionRegistry(boot.kernel.ctx, () => true);
+  registry.register({ plugin: 'test', point: 'model.request.prepared', order: 0, mutates: true,
+    run: value => ({ ...value, messages: [{ role: 'user', content: 'replacement' }] }) });
+  assert.equal((await loopIn(boot, { isolated: false })).stopped, 'answered');
+  const prompt = boot.session.readSync().find(e => e.type === 'step.prompt').data.content;
+  assert.equal(prompt.source, 'effective-messages');
+  assert.deepEqual(prompt.messages, boot.llm.seen[0].messages);
+});
+
+test('fresh scoped requests do not adopt untagged global history as legacy block context', async t => {
+  const boot = await bootFor([{ content: 'done' }]);
+  t.after(() => boot.kernel.dispose());
+  await boot.session.append({ type: 'message.system', data: { content: 'UNRELATED_GLOBAL_HISTORY' } });
+  await loopIn(boot, { context: { mode: 'block-input', after: 0 } });
+  assert.doesNotMatch(JSON.stringify(boot.llm.seen[0].messages), /UNRELATED_GLOBAL_HISTORY/);
+});
 
 test('a block with no tool calls runs, and its events fire in the documented order', async () => {
   const boot = await bootFor([{ content: 'Done.' }]);
@@ -410,7 +470,7 @@ test('a query records a compact canonical prompt reference and carries structura
   for await (const event of boot.session.read()) events.push(event);
   const prompt = events.find(event => event.type === 'step.prompt');
   assert.deepEqual(prompt.data.content, {
-    source: 'canonical-session', throughSeq: 4, messageCount: 2, tools: [],
+    source: 'canonical-session', throughSeq: 4, afterSeq: 0, blockId: 'work', messageCount: 2, tools: [],
   });
   assert.deepEqual(boot.llm.seen[0].messages.map(message => [message.role, message.content]), [
     ['system', 'You are a block.'], ['user', 'Do the thing.'],

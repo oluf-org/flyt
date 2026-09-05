@@ -357,8 +357,8 @@ export class JsonlSession implements SessionHandle {
     return after > 0 ? this.#events.filter(event => event.seq > after) : this.#events.slice();
   }
 
-  async deriveMessages(upTo?: number, blockId?: string): Promise<Message[]> {
-    return deriveMessages(this.readSync(), upTo, blockId);
+  async deriveMessages(upTo?: number, blockId?: string, after?: number): Promise<Message[]> {
+    return deriveMessages(this.readSync(), upTo, blockId, after);
   }
 }
 
@@ -375,15 +375,29 @@ export class JsonlSession implements SessionHandle {
  * @param upTo — fold only events up to this seq, for replay to a point.
  * @returns the messages a model would see next.
  */
-export function deriveMessages(events: readonly SessionEvent[], upTo?: number, blockId?: string): Message[] {
+export function deriveMessages(events: readonly SessionEvent[], upTo?: number, blockId?: string, after = 0): Message[] {
   const messages: Message[] = [];
   /** callId -> index of the assistant message that requested it. */
   const requested = new Map<string, { name: string; answered: boolean }>();
+  // Very old single-block logs omitted owner tags. Only adopt their untagged
+  // events when the bounded log has exactly one possible owner; ambiguous
+  // multi-block history must never become shared context during migration.
+  const owners = new Set(events.filter(e => (upTo === undefined || e.seq <= upTo) && e.seq > after)
+    .map(e => asRecord(e.data).blockId).filter(id => typeof id === 'string'));
+  const onlyOwner = owners.size === 1 ? [...owners][0] : undefined;
+  const legacyOwner = onlyOwner !== undefined && events.some(event => {
+    const data = asRecord(event.data);
+    return event.seq > after && (upTo === undefined || event.seq <= upTo)
+      && event.type === 'block.status' && data.status === 'active'
+      && data.blockId === onlyOwner && !data.context && !data.executionId;
+  }) ? onlyOwner : undefined;
 
   for (const event of events) {
     if (upTo !== undefined && event.seq > upTo) break;
+    if (event.seq <= after) continue;
     const data = asRecord(event.data);
-    if (blockId !== undefined && data.blockId !== blockId) continue;
+    if (blockId !== undefined && (data.blockId ?? legacyOwner) !== blockId) continue;
+    if (data.modelVisible === false) continue;
 
     switch (event.type) {
       case 'message.system':

@@ -77,6 +77,7 @@ export interface SessionEventMap {
   'block.status': Data & { blockId: string; status: string };
   'block.warning': Data & { blockId: string };
   'block.output': Data & { blockId: string; content: string };
+  'block.output.validation': Data & { blockId: string; words: number; maxOutputWords: number; valid: boolean };
   'workspace.observed': Data & { changed: boolean; kind: string; tool: string };
   'supervisor.summary': Data & { content: string };
 }
@@ -88,7 +89,7 @@ export const SESSION_EVENTS = [
   'context.checkpoint', 'llm.telemetry', 'plugin.interception', 'llm.stream',
   'tool.input.start', 'tool.input.delta', 'tool.input.end', 'llm.response', 'llm.failure', 'task.retry',
   'tool.call', 'tool.state', 'permission.decision', 'sandbox.decision', 'sandbox.escalation', 'sandbox.failure', 'tool.result', 'tool.repetition',
-  'block.status', 'block.warning', 'block.output', 'workspace.observed', 'supervisor.summary',
+  'block.status', 'block.warning', 'block.output', 'block.output.validation', 'workspace.observed', 'supervisor.summary',
 ] as const satisfies readonly (keyof SessionEventMap)[];
 
 export type SessionEventType = keyof SessionEventMap;

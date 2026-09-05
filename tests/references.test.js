@@ -238,12 +238,20 @@ test('the tail of a long reference file is reachable', async () => {
 
   const first = await executeTool('read_file', { path: 'reference:prime-agent/huge.ts' }, ctx);
   assert.ok(!first.result.content.includes('THE-PART-NOBODY-COULD-REACH'), 'still capped');
-  const at = /offset: (\d+)/.exec(first.result.content)?.[1];
-  assert.ok(at, 'and the marker says where to resume, so the next call is obvious');
-
-  const rest = await executeTool('read_file', { path: 'reference:prime-agent/huge.ts', offset: Number(at) }, ctx);
-  assert.match(rest.result.content, /THE-PART-NOBODY-COULD-REACH/);
-  assert.match(rest.result.content, /resumed at character 60000/);
+  const at = first.result.nextOffset;
+  assert.ok(at > 0 && at < 60000, 'the cursor reflects the actual model preview, not the larger raw read');
+  let page = first.result;
+  let whole = page.content.replace(/^\d+: /gm, '');
+  while (page.truncated) {
+    const next = page.nextOffset;
+    const rest = await executeTool('read_file', { path: 'reference:prime-agent/huge.ts', offset: next }, ctx);
+    page = rest.result;
+    assert.equal(page.offset, next);
+    assert.equal(page.startLine, 1);
+    assert.equal(page.startColumn, next + 1);
+    whole += page.content.replace(/^\d+: /gm, '');
+  }
+  assert.equal(whole, long);
 });
 
 test('no write tool can reach the library, because none of them know the prefix', async () => {

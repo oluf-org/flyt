@@ -14,7 +14,7 @@ export default {
     'truncated — the result says where it stopped, and `offset` reads on from there). A path',
     'beginning "reference:" reads from the READ-ONLY reference library instead,',
     'e.g. "reference:opencode/packages/opencode/src/server/server.ts" — use search_references to',
-    'find one.'
+    'find one. Model previews contain numbered, contiguous source lines. Cite only these supplied line numbers, never estimate them. Use nextOffset to continue a truncated preview.'
   ].join(' '),
   effects: ['read'],
   risk: 'safe',
@@ -32,7 +32,7 @@ export default {
   // The preview bound is also the injection bound (core/tools/preview.js), and
   // that is why this is raised rather than removed — but what it bounds here is
   // a file out of the user's own checkout, not a page off the internet.
-  result: { preview: 'json', maxPreviewChars: 24_000, artifact: true },
+  result: { preview: 'file', maxPreviewChars: 24_000, artifact: true },
   keywords: ['read', 'file', 'open', 'source', 'contents'],
   examples: ['read src/app.js', 'show me what is in the config file'],
   parameters: {
@@ -62,8 +62,9 @@ export default {
     const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
     if (String(args.path ?? '').startsWith('reference:')) {
       if (!ctx?.references) throw new Error('No reference library is available in this run.');
-      const content = ctx.references.read(args.path, { offset });
-      if (content == null) throw new Error(`Reference "${args.path}" not found. Use search_references to find a path.`);
+      const page = ctx.references.read(args.path, { offset, structured: true });
+      if (page == null) throw new Error(`Reference "${args.path}" not found. Use search_references to find a path.`);
+      const content = typeof page === 'string' ? page : page.content;
       // Which reference this actually is. The workspace read below has been
       // audited against the run's subject since DECISIONS.md D38; reading a
       // DIFFERENT reference was not, and the library holds other people's
@@ -85,6 +86,7 @@ export default {
         target: 'reference',
         readOnly: true,
         ...(offset ? { offset } : {}),
+        ...(typeof page === 'object' ? page : {}),
         ...(elsewhere ? { note: `This file is in "${repo}", NOT the repository you were asked to read ("${ctx.subject.repo}").` } : {})
       };
     }
@@ -115,15 +117,18 @@ export default {
     }
     const whole = read.text;
     const bytes = Buffer.byteLength(whole, 'utf8');
+    const from = Math.min(offset, whole.length);
+    const startLine = whole.slice(0, from).split('\n').length;
+    const startColumn = from - whole.lastIndexOf('\n', from - 1);
     const content = offset ? whole.slice(Math.min(offset, whole.length)) : whole;
     if (content.length > MAX_CHARS) {
       const end = offset + MAX_CHARS;
       return {
-        path: args.path, content: content.slice(0, MAX_CHARS), truncated: true, bytes, target: host.target,
+        path: args.path, content: content.slice(0, MAX_CHARS), startLine, startColumn, truncated: true, bytes, target: host.target,
         // Where it stopped, so reading on is a call rather than a guess.
         ...(offset ? { offset } : {}), nextOffset: end, chars: whole.length
       };
     }
-    return { path: args.path, content, bytes, target: host.target, ...(offset ? { offset } : {}) };
+    return { path: args.path, content, startLine, startColumn, bytes, target: host.target, ...(offset ? { offset: from } : {}) };
   }
 };

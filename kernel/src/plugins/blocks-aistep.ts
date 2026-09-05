@@ -19,6 +19,7 @@
  * @module #kernel/plugins/blocks-aistep
  */
 import type { JsonValue } from '../types.js';
+import { outputWordLimit } from '../blocks/output-contract.js';
 import type { BlockOutcome, BlockRun } from '../blocks/types.js';
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
 
@@ -47,6 +48,7 @@ export const AI_STEP_SETTINGS = {
       type: 'string', format: 'multiline',
       description: 'Replace this block’s standing system prompt for this workflow instance.',
     },
+    maxOutputWords: { type: 'integer', minimum: 1, description: 'Hard final-answer word limit, with one tool-free correction before failure.' },
     instructions: { type: 'string', description: 'Appended to the block’s standing brief.' },
     effort: {
       enum: ['low', 'medium', 'high'],
@@ -103,6 +105,7 @@ export async function executeAiStep(
     session,
     runId: run.runId,
     blockId: run.blockId,
+    context: run.context,
     turn: options.turn ?? 1,
     model: str(run.config.model, 'openrouter/auto'),
     fallbackModels: Array.isArray(run.config.modelFallbacks)
@@ -110,6 +113,7 @@ export async function executeAiStep(
       : [],
     system,
     input: run.input,
+    maxOutputWords: outputWordLimit(run.config.maxOutputWords),
     tools,
     ceiling: run.ceiling,
     ...(options.maxSteps != null ? { maxSteps: options.maxSteps } : {}),

@@ -10,8 +10,9 @@
  *
  * Lane isolation (D37) is the clearest case. The containment says a parallel's
  * lanes are siblings; the scheduler gives each lane the input the PARALLEL
- * received rather than whatever a sibling last produced, so a lane cannot see
- * another lane's work. A repeat is the other clear case: it is a sequence of
+ * received rather than whatever a sibling last produced. The block-input
+ * contract also scopes model transcripts; a shared audit log grants no extra
+ * context. A repeat is the other clear case: it is a sequence of
  * `count` runs of the same body, and the carry is exactly the thread a
  * sequence already knows how to pass.
  *
@@ -31,7 +32,7 @@ import {
   type BlockNode, type ForEachNode, type IfNode, type UntilNode, type IfOperator, type IfPredicate, type IfPredicateTerm,
   type ParallelNode, type RepeatNode, type SequenceNode, type StackNode,
 } from '../stack/types.js';
-import type { BlockDefinition, BlockOutcome } from '../blocks/types.js';
+import type { BlockContext, BlockDefinition, BlockOutcome } from '../blocks/types.js';
 import { missingBlocks } from './blocks.js';
 
 /** Cordis plugin name. */
@@ -62,7 +63,8 @@ interface BlockStep {
 
 function blockIds(node: StackNode): Set<string> {
   if (node.kind === 'block') return new Set([node.id]);
-  return new Set(node.children.flatMap(child => [...blockIds(child)]));
+  const children = node.kind === 'if' ? [...node.children, ...(node.else ?? [])] : node.children;
+  return new Set(children.flatMap(child => [...blockIds(child)]));
 }
 
 function parallelCarry(node: ParallelNode, steps: readonly BlockStep[]): string | null {
@@ -91,7 +93,7 @@ class Run implements AgentRun {
   private pauseGate: Promise<void> | null = null;
   private releasePause: (() => void) | null = null;
 
-  constructor(runId: string, walk: (run: Run) => Promise<RunOutcome>) {
+  constructor(runId: string, walk: (run: Run) => Promise<RunOutcome>, readonly replay = new Map<string, BlockOutcome>()) {
     this.runId = runId;
     this.settledPromise = walk(this);
   }
@@ -286,21 +288,29 @@ export class StackRunner extends Service implements AgentsSeam {
     // What already finished, and what it produced. Both from the log.
     const done = new Map<string, BlockOutcome>();
     const outputs = new Map<string, string>();
+    const owners = new Map<string, string>();
     for (const event of events) {
-      const data = event.data as { blockId?: unknown; status?: unknown; content?: unknown; error?: unknown };
+      const data = event.data as { blockId?: unknown; executionId?: string; status?: unknown; content?: unknown; error?: unknown; port?: unknown };
+      const key = data.executionId ?? String(data.blockId ?? '');
+      if (typeof data.blockId === 'string') owners.set(key, data.blockId);
       if (event.type === 'block.output' && typeof data.blockId === 'string') {
-        outputs.set(data.blockId, String(data.content ?? ''));
+        if (!data.port) outputs.set(key, String(data.content ?? ''));
       }
       if (event.type !== 'block.status' || typeof data.blockId !== 'string') continue;
       if (data.status === 'pending') {
-        done.delete(data.blockId);
-        outputs.delete(data.blockId);
+        // A supervisor restart names the authored block, so invalidate every
+        // iteration of that block; interruption records name one execution.
+        if (!data.executionId) for (const [execution, owner] of owners) {
+          if (owner === data.blockId) { done.delete(execution); outputs.delete(execution); }
+        }
+        done.delete(key);
+        outputs.delete(key);
         continue;
       }
       if (data.status === 'done' || data.status === 'failed') {
-        done.set(data.blockId, {
+        done.set(key, {
           status: data.status,
-          output: outputs.get(data.blockId) ?? '',
+          output: outputs.get(key) ?? '',
           ...(data.error ? { error: String(data.error) } : {}),
           // The structured fields go back too, or a resumed run reads every
           // predicate against nothing and quietly takes the other branch —
@@ -316,7 +326,7 @@ export class StackRunner extends Service implements AgentsSeam {
     const session = await this.ctx.sessions.open(runId);
     await session.append({ type: 'run.stage', data: { stage: 'resumed', from: events.at(-1)?.seq ?? 0, replayed: done.size } });
 
-    const run = new Run(runId, r => this.walkRun(r, root, input, session, done));
+    const run = new Run(runId, r => this.walkRun(r, root, input, session), done);
     this.runs.set(runId, run);
     void run.settled().finally(() => {
       if (this.runs.get(runId) === run) this.runs.delete(runId);
@@ -414,23 +424,23 @@ export class StackRunner extends Service implements AgentsSeam {
    */
   private async walk(
     run: Run, node: StackNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>,
+    done: Map<string, BlockOutcome>, scope = '',
   ): Promise<BlockStep[]> {
     await run.waitIfPaused(session);
     if (run.stopReason) return [];
-    if (node.kind === 'block') return [await this.runBlock(run, node, input, session, done)];
-    if (node.kind === 'parallel') return this.runParallel(run, node, input, session, done);
-    if (node.kind === 'repeat') return this.runRepeat(run, node, input, session, done);
-    if (node.kind === 'if') return this.runIf(run, node, input, session, done);
-    if (node.kind === 'foreach') return this.runForEach(run, node, input, session, done);
-    if (node.kind === 'until') return this.runUntil(run, node, input, session, done);
-    return this.runSequence(run, node, input, session, done);
+    if (node.kind === 'block') return [await this.runBlock(run, node, input, session, done, scope)];
+    if (node.kind === 'parallel') return this.runParallel(run, node, input, session, done, scope);
+    if (node.kind === 'repeat') return this.runRepeat(run, node, input, session, done, scope);
+    if (node.kind === 'if') return this.runIf(run, node, input, session, done, scope);
+    if (node.kind === 'foreach') return this.runForEach(run, node, input, session, done, scope);
+    if (node.kind === 'until') return this.runUntil(run, node, input, session, done, scope);
+    return this.runSequence(run, node, input, session, done, scope);
   }
 
   /** Children, top to bottom, each fed what the one before produced. */
   private async runSequence(
     run: Run, node: SequenceNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>,
+    done: Map<string, BlockOutcome>, scope = '',
   ): Promise<BlockStep[]> {
     const steps: BlockStep[] = [];
     let carried = input;
@@ -438,7 +448,7 @@ export class StackRunner extends Service implements AgentsSeam {
       // The durable boundary. A stop lands BETWEEN children, after the event
       // that recorded the last one, and never inside a block.
       if (run.stopReason) break;
-      const ran = await this.walk(run, child, carried, session, done);
+      const ran = await this.walk(run, child, carried, session, done, scope);
       steps.push(...ran);
       const last = ran.at(-1);
       if (last?.outcome.status === 'failed') break;
@@ -452,16 +462,21 @@ export class StackRunner extends Service implements AgentsSeam {
    * Lanes, together, under the bound.
    *
    * Every lane receives what entered the PARALLEL. That single choice is lane
-   * isolation (D37): a lane cannot see what a sibling produced because it was
-   * never handed it, and there is no shared carry for one to leak through.
+   * input isolation (D37). runBlock's context contract independently prevents
+   * sibling transcripts from entering model requests through the shared log.
    */
   private async runParallel(
     run: Run, node: ParallelNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>,
+    done: Map<string, BlockOutcome>, scope = '',
   ): Promise<BlockStep[]> {
     const lanes = node.children;
     const bound = Math.max(1, node.maxParallel ?? lanes.length);
     const steps: BlockStep[] = [];
+    // Freeze before any wave starts. On resume, done also contains completed
+    // siblings: those belong only to their own lane until this container joins.
+    const entry = new Map(done);
+    const upstream = new Map(done);
+    for (const lane of lanes) for (const id of blockIds(lane)) upstream.delete(id);
     for (let i = 0; i < lanes.length; i += bound) {
       if (run.stopReason) break;
       const wave = lanes.slice(i, i + bound);
@@ -471,10 +486,19 @@ export class StackRunner extends Service implements AgentsSeam {
       // because an `If` predicate in one lane could name a block in another and
       // read its structured output. A lane still sees everything that settled
       // before the parallel, which is genuinely upstream of it.
-      const ran = await Promise.all(wave.map(lane => this.walk(run, lane, input, session, new Map(done))));
+      const ran = await Promise.all(wave.map(lane => {
+        const laneDone = new Map(upstream);
+        for (const id of blockIds(lane)) {
+          const prior = entry.get(id);
+          if (prior) laneDone.set(id, prior);
+        }
+        return this.walk(run, lane, input, session, laneDone, scope);
+      }));
       for (const laneSteps of ran) steps.push(...laneSteps);
       if (steps.some(s => s.outcome.status === 'failed')) break;
     }
+    // The container boundary is the explicit join for structured artifacts.
+    for (const step of steps) done.set(step.node.id, step.outcome);
     return steps;
   }
 
@@ -485,18 +509,21 @@ export class StackRunner extends Service implements AgentsSeam {
    */
   private async runRepeat(
     run: Run, node: RepeatNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>,
+    done: Map<string, BlockOutcome>, scope = '',
   ): Promise<BlockStep[]> {
     const body: SequenceNode = { kind: 'sequence', id: node.id, children: node.children, position: node.position };
     const steps: BlockStep[] = [];
     let carried = input;
     for (let i = 0; i < node.count; i++) {
       if (run.stopReason) break;
-      const walked = await this.runSequence(run, body, carried, session, done);
+      const attempt = new Map(done);
+      for (const id of blockIds(body)) attempt.delete(id);
+      const walked = await this.runSequence(run, body, carried, session, attempt, `${scope}/${node.id}[${i}]`);
       steps.push(...walked);
       const last = walked.at(-1);
       if (last?.outcome.status === 'failed') break;
       if (last) carried = last.outcome.output;
+      for (const step of walked) done.set(step.node.id, step.outcome);
     }
     return steps;
   }
@@ -542,7 +569,7 @@ export class StackRunner extends Service implements AgentsSeam {
    */
   private async runUntil(
     run: Run, node: UntilNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>,
+    done: Map<string, BlockOutcome>, scope = '',
   ): Promise<BlockStep[]> {
     const steps: BlockStep[] = [];
     let carried = input;
@@ -550,7 +577,8 @@ export class StackRunner extends Service implements AgentsSeam {
       if (run.stopReason) break;
       const attempt = new Map(done);
       const body: SequenceNode = { kind: 'sequence', id: node.id, children: node.children, position: node.position };
-      const ran = await this.runSequence(run, body, carried, session, attempt);
+      for (const id of blockIds(body)) attempt.delete(id);
+      const ran = await this.runSequence(run, body, carried, session, attempt, `${scope}/${node.id}[${pass - 1}]`);
       steps.push(...ran);
       const last = ran.at(-1);
       if (last?.outcome.status === 'failed') return steps;
@@ -566,6 +594,7 @@ export class StackRunner extends Service implements AgentsSeam {
         return steps;
       }
     }
+    if (run.stopReason) return steps;
     const error = `"${node.id}" ran its body ${node.max} time(s) and its condition never held`;
     await session.append({
       type: 'block.status',
@@ -580,7 +609,7 @@ export class StackRunner extends Service implements AgentsSeam {
 
   private async runForEach(
     run: Run, node: ForEachNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>,
+    done: Map<string, BlockOutcome>, scope = '',
   ): Promise<BlockStep[]> {
     const dot = node.roster.indexOf('.');
     const record = done.get(node.roster.slice(0, dot))?.structured as Record<string, unknown> | undefined;
@@ -596,28 +625,33 @@ export class StackRunner extends Service implements AgentsSeam {
       },
     });
     const steps: BlockStep[] = [];
-    for (const item of items) {
+    const upstream = new Map(done);
+    for (const [index, item] of items.entries()) {
       if (run.stopReason) break;
       const body: SequenceNode = { kind: 'sequence', id: node.id, children: node.children, position: node.position };
       // Each element is its own pass: it gets the element, not the carry from
       // the pass before, or the second element would be reading the first one's
       // work instead of its own.
-      const ran = await this.runSequence(run, body, String(item ?? ''), session, new Map(done));
+      const attempt = new Map(upstream);
+      for (const id of blockIds(body)) attempt.delete(id);
+      const ran = await this.runSequence(run, body, String(item ?? ''), session, attempt, `${scope}/${node.id}[${index}]`);
       steps.push(...ran);
       if (ran.at(-1)?.outcome.status === 'failed') break;
+      // Downstream structured consumers see the last completed element.
+      for (const step of ran) done.set(step.node.id, step.outcome);
     }
     return steps;
   }
 
   private async runIf(
     run: Run, node: IfNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>,
+    done: Map<string, BlockOutcome>, scope = '',
   ): Promise<BlockStep[]> {
     const held = this.holds(node.predicate, done);
     const chosen = held ? node.children : (node.else ?? []);
     if (!chosen.length) return [];
     const body: SequenceNode = { kind: 'sequence', id: node.id, children: chosen, position: node.position };
-    return this.runSequence(run, body, input, session, done);
+    return this.runSequence(run, body, input, session, done, scope);
   }
 
   private holds(predicate: IfPredicate, done: ReadonlyMap<string, BlockOutcome>): boolean {
@@ -652,13 +686,18 @@ export class StackRunner extends Service implements AgentsSeam {
   /** One block, through the registry and the other seams. */
   private async runBlock(
     run: Run, node: BlockNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome> = new Map(),
+    done: Map<string, BlockOutcome> = new Map(), scope = '',
   ): Promise<BlockStep> {
     // Already settled, according to the log. Not run again, and not
     // re-logged: replaying a block that finished is how a resume charges
     // twice for the same work and writes a second copy of its output.
-    const already = done.get(node.id);
+    const executionId = scope ? `${scope}/${node.id}` : node.id;
+    // Old logs lack iteration ids. Their one recorded outcome can only be
+    // reused for the first element/pass, never for every remaining element.
+    const legacyFirst = scope && !/\[[1-9]\d*\]/.test(scope);
+    const already = run.replay.get(executionId) ?? (legacyFirst ? run.replay.get(node.id) : undefined);
     if (already) {
+      done.set(node.id, already);
       run.lastBlockId = node.id;
       return { node, outcome: already };
     }
@@ -668,7 +707,36 @@ export class StackRunner extends Service implements AgentsSeam {
       ? definition.ceiling.filter(t => this.ceiling.includes(t))
       : this.ceiling;
 
-    await session.append({ type: 'block.status', data: { blockId: node.id, status: 'active', use: node.use } });
+    // A fresh invocation starts with explicit input only. An interrupted one
+    // keeps its cursor so its own tool history survives resume. Parent ordering
+    // stays authoritative; context isolation does not require moving the trace.
+    let context: BlockContext | undefined;
+    let restartGuidance = '';
+    let legacyAfter = 0;
+    for await (const event of session.read()) {
+      const data = event.data as Record<string, unknown>;
+      if (event.type !== 'block.status' || data.blockId !== node.id) continue;
+      if (!data.executionId && data.status === 'pending' && data.reason === 'restarted by supervisor') {
+        context = undefined;
+        restartGuidance = String(data.guidance ?? '');
+        legacyAfter = event.seq;
+        continue;
+      }
+      if ((data.executionId ?? node.id) !== executionId && !(legacyFirst && !data.executionId)) continue;
+      if (data.status === 'active') {
+        context = (data.context as unknown as BlockContext | undefined)
+          ?? { mode: 'block-input', after: legacyAfter };
+      } else if (data.status !== 'pending' || data.reason !== 'interrupted before this block settled') {
+        context = undefined;
+        legacyAfter = event.seq;
+      }
+    }
+    context ??= { mode: 'block-input', after: await session.head() };
+    context = { ...context, executionId };
+    await session.append({ type: 'block.status', data: {
+      blockId: node.id, executionId, status: 'active', use: node.use,
+      context: { ...context },
+    } });
     let outcome: BlockOutcome;
     try {
       outcome = await definition.execute({
@@ -676,7 +744,8 @@ export class StackRunner extends Service implements AgentsSeam {
         runId: run.runId,
         blockId: node.id,
         config: node.config,
-        input,
+        input: restartGuidance ? `${input}\n\nSupervisor restart guidance:\n${restartGuidance}` : input,
+        context,
         ceiling,
         signal: run.signal,
       });
@@ -687,12 +756,13 @@ export class StackRunner extends Service implements AgentsSeam {
     }
 
     if (outcome.output) {
-      await session.append({ type: 'block.output', data: { blockId: node.id, content: outcome.output } });
+      await session.append({ type: 'block.output', data: { blockId: node.id, executionId, content: outcome.output } });
     }
     await session.append({
       type: 'block.status',
       data: {
-        blockId: node.id, status: outcome.status,
+        blockId: node.id, executionId, status: run.stopReason && outcome.status === 'failed' ? 'pending' : outcome.status,
+        ...(run.stopReason && outcome.status === 'failed' ? { reason: 'interrupted before this block settled' } : {}),
         ...(outcome.error ? { error: outcome.error } : {}),
         ...(outcome.structured !== undefined ? { structured: outcome.structured as JsonValue } : {}),
       },

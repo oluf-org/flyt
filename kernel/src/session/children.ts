@@ -7,6 +7,8 @@ export interface ChildSessionIdentity {
   sessionId: string;
   parentRunId: string;
   parentBlockId: string;
+  parentExecutionId?: string;
+  parentContextAfter?: number;
   taskId: string;
   profileId: string;
   contextBoundary: 'isolated' | 'parent-summary' | 'shared';
@@ -16,7 +18,8 @@ const CHILD_SUFFIX = /--child-[0-9a-f]{16}$/;
 
 export function childSessionIdentity(input: Omit<ChildSessionIdentity, 'sessionId'>): ChildSessionIdentity {
   const hash = createHash('sha256')
-    .update([input.parentRunId, input.parentBlockId, input.taskId, input.profileId].join('\0'))
+    .update([input.parentRunId, input.parentExecutionId ?? input.parentBlockId, input.taskId, input.profileId,
+      ...(input.parentContextAfter !== undefined ? [String(input.parentContextAfter)] : [])].join('\0'))
     .digest('hex').slice(0, 16);
   return { ...input, sessionId: `${input.parentRunId}--child-${hash}` };
 }

@@ -429,10 +429,11 @@ export async function restartStackBlock(host, id, blockId, guidance = '', reconf
   }
   await session.append({
     type: 'block.status',
-    data: { blockId, status: 'pending', reason: 'restarted by supervisor' },
+    data: { blockId, status: 'pending', reason: 'restarted by supervisor',
+      ...(String(guidance ?? '').trim() ? { guidance: String(guidance) } : {}) },
   });
   if (String(guidance ?? '').trim()) {
-    await session.append({ type: 'message.user', data: { content: String(guidance) } });
+    await session.append({ type: 'message.user', data: { blockId, content: String(guidance), modelVisible: false } });
   }
   return resumeStackRun(host, id);
 }

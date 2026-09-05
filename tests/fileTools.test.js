@@ -34,7 +34,8 @@ test('read_file: reads an existing repo file from the bound workspace', async ()
   ctx.notify = () => { notifications += 1; };
   const rec = await executeTool('read_file', { path: 'existing.txt' }, ctx);
   assert.equal(rec.ok, true);
-  assert.equal(rec.result.content, 'original contents\n');
+  assert.equal(rec.result.content, '1: original contents\n2: ');
+  assert.equal(rec.result.lineNumbered, true);
   assert.equal(rec.result.target, 'workspace');
   const edge = ctx.store.readMeta(ctx.runId).toolActivity['executor-task-1'];
   assert.equal(edge.tool, 'read_file');

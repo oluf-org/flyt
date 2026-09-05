@@ -275,9 +275,11 @@ function archiveResult(record, tool, ctx) {
   if (!record.ok) return;
 
   const { value, truncated } = previewResult(record.result, shape);
-  if (!truncated) return;
-  record.bytes = Buffer.byteLength(JSON.stringify(record.result) ?? '', 'utf8');
+  const fullBytes = Buffer.byteLength(JSON.stringify(record.result) ?? '', 'utf8');
+  // Some previews transform without truncating (numbered source lines).
   record.result = value;
+  if (!truncated) return;
+  record.bytes = fullBytes;
   record.truncated = true;
   record.note = handleNote({ handle: written.handle, path: written.path, bytes: record.bytes });
 }

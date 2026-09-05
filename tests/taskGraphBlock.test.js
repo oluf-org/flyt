@@ -14,6 +14,92 @@ const task = (id, over = {}) => ({
   id, title: id.toUpperCase(), goal: `Finish ${id}.`, dependsOn: [], produces: [], requires: [], optional: [], writeFiles: [], ...over,
 });
 
+test('read-only stream recovery reuses completed reads and passes verified attempt counts at the join', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-read-recovery-'));
+  const kernel = createKernel();
+  t.after(async () => { await kernel.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  const plan = contract([task('read'), task('join', { dependsOn: ['read'] })]);
+  let reads = 0;
+  let call = 0;
+  const seen = [];
+  const answers = [
+    { content: plan },
+    { content: '', toolCalls: [{ id: 'read-once', name: 'peek', args: {} }] },
+    null,
+    { content: 'evidence retained' },
+    { content: 'this synthesis is too long for the configured limit' },
+    { content: 'bounded synthesis' },
+  ];
+  await kernel.ctx.plugin(flytTools);
+  kernel.ctx.tools.register({ name: 'peek', description: 'Read', parameters: { type: 'object' },
+    classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
+    async execute() { reads++; return { content: 'UNIQUE_READ_EVIDENCE' }; } });
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  await kernel.ctx.plugin({ name: 'read-recovery-model', apply(ctx) { return provideSeam(ctx, 'llm', {
+    stream(request) {
+      seen.push(structuredClone(request.messages));
+      const answer = answers[call++];
+      if (!answer) {
+        const error = Object.assign(new Error('truncated provider stream'), { failure: {
+          code: 'stream_terminated', source: 'provider', retryable: true, userInitiated: false,
+          visibleOutputProduced: false, durableWriteProduced: false,
+        } });
+        return { async *[Symbol.asyncIterator]() { throw error; }, async settled() { throw error; } };
+      }
+      return { async *[Symbol.asyncIterator]() {}, async settled() { return {
+        ...answer, finishReason: answer.toolCalls ? 'tool_calls' : 'stop',
+      }; } };
+    }, async models() { return []; },
+  }); } });
+  const result = await executeTaskGraph({ ctx: kernel.ctx, runId: 'run', blockId: 'graph', input: 'Read only. Keep each answer below 4 words.',
+    ceiling: ['peek'], config: { model: 'fake', taskAttempts: 2 } });
+  assert.equal(result.status, 'done', result.error);
+  assert.equal(reads, 1);
+  assert.equal(call, 6);
+  assert.ok(seen[3].some(m => m.role === 'tool' && m.content === 'UNIQUE_READ_EVIDENCE'));
+  assert.match(JSON.stringify(seen[3]), /CONTINUE FROM COMPLETED READS/);
+  assert.doesNotMatch(JSON.stringify(seen[4]), /UNIQUE_READ_EVIDENCE/);
+  assert.match(JSON.stringify(seen[4]), /Recorded execution facts/);
+  const joinInput = seen[4].find(m => m.role === 'user').content;
+  assert.ok(joinInput.includes('"attempts":2'));
+  assert.ok(joinInput.includes('"toolResults":{"peek":1}'));
+  assert.ok(joinInput.includes('"otherConstraints":"unverified"'));
+  const session = await kernel.ctx.sessions.read('run');
+  const before = call;
+  await executeTaskGraph({ ctx: kernel.ctx, runId: 'run', blockId: 'graph', input: 'same', ceiling: ['peek'], config: { model: 'fake' } });
+  assert.equal(call, before, 'resume reuses completed graph outputs');
+  const done = session.readSync().find(e => e.type === 'block.status' && e.data.taskId === 'join' && e.data.status === 'done');
+  assert.equal(done.data.execution.outputWordLimitPassed, true);
+});
+
+test('repeated task graphs plan again and use fresh linked child transcripts', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-graph-iteration-'));
+  const kernel = createKernel();
+  t.after(async () => { await kernel.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  const seen = [];
+  await kernel.ctx.plugin(flytTools);
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  await kernel.ctx.plugin({ name: 'iteration-model', apply(ctx) { return provideSeam(ctx, 'llm', {
+    stream(request) {
+      const index = seen.length;
+      seen.push(structuredClone(request.messages));
+      const content = index % 2 === 0 ? contract([task('same-id')]) : `artifact-${index}`;
+      return { async *[Symbol.asyncIterator]() {}, async settled() { return { content, finishReason: 'stop' }; } };
+    }, async models() { return []; },
+  }); } });
+  const session = await kernel.ctx.sessions.open('run');
+  for (let i = 0; i < 2; i++) {
+    const result = await executeTaskGraph({ ctx: kernel.ctx, runId: 'run', blockId: 'graph', input: `INPUT_${i}`, ceiling: [],
+      context: { mode: 'block-input', after: await session.head(), executionId: `/repeat[${i}]/graph` }, config: { model: 'fake' } });
+    assert.equal(result.status, 'done', result.error);
+  }
+  assert.equal(seen.length, 4);
+  assert.doesNotMatch(JSON.stringify(seen[2]), /INPUT_0|artifact-1/);
+  assert.doesNotMatch(JSON.stringify(seen[3]), /INPUT_0|artifact-1/);
+  const childIds = new Set(session.readSync().filter(e => e.type === 'child.session').map(e => e.data.sessionId));
+  assert.equal(childIds.size, 2);
+});
+
 test('task graph validation infers data edges and serializes declared write conflicts', () => {
   const parsed = parseTaskGraphPlan(contract([
     task('schema', { produces: ['schema-shape'], writeFiles: ['src/shared.js'] }),
@@ -174,6 +260,7 @@ test('Plan & dispatch runs independent generated children together and records t
     const session = await kernel.ctx.sessions.read('run-1');
     const events = [];
     for await (const event of session.read()) events.push(event);
+    assert.ok(!events.some(event => event.data.code === 'task_graph_repaired'), 'a valid first plan was never repaired');
     const pending = events.filter(event => event.type === 'block.status' && event.data.status === 'pending');
     assert.deepEqual(pending.map(event => event.data.blockId), ['dispatch.alpha', 'dispatch.beta']);
     assert.ok(events.some(event => event.type === 'block.output' && event.data.blockId === 'dispatch' && event.data.port === 'plan'));

@@ -56,6 +56,15 @@ export interface BlockOutput {
 /** The id a stack names in `use`: `plugin:block`, or a bare name for a built-in. */
 export const USE_PATTERN = /^[a-z0-9][a-z0-9-]*(?::[a-z0-9][a-z0-9-]*)?$/;
 
+/** Workflow requests consume explicit input and only this execution's transcript. */
+export interface BlockContext {
+  mode: 'block-input';
+  /** Exclusive cursor in the canonical session; retained when resuming. */
+  after: number;
+  /** Stable identity of this block invocation, including enclosing iterations. */
+  executionId?: string;
+}
+
 /** Everything one execution of a block is given. */
 export interface BlockRun {
   /**
@@ -71,6 +80,8 @@ export interface BlockRun {
   config: Record<string, JsonValue>;
   /** What entered this block: the previous block's output, or the run's input. */
   input: string;
+  /** Scheduler-owned context boundary, independent of block configuration. */
+  context?: BlockContext;
   /**
    * The tools this execution may reach.
    *

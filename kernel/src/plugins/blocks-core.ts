@@ -21,6 +21,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { JsonValue } from '../types.js';
+import { EVIDENCE_INSTRUCTIONS, outputWordLimit } from '../blocks/output-contract.js';
 import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js';
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
 import { AI_STEP_OUTPUT, AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
@@ -146,6 +147,7 @@ export const WORK_SETTINGS = {
     maxSteps: { type: 'integer', minimum: 1, description: 'Soft tool-round threshold: warn here, then continue working.' },
     hardMaxSteps: { type: 'integer', minimum: 1, description: 'Hard bound on tool rounds. At the bound every tool is withdrawn and the block must deliver from the evidence it already holds.' },
     maxTokens: { type: 'integer', minimum: 1, maximum: 131_072, description: 'Per-query output ceiling. A truncated worker automatically continues in another query.' },
+    maxOutputWords: { type: 'integer', minimum: 1, description: 'Hard final-answer word limit, with one tool-free correction before failure.' },
     effort: {
       enum: ['low', 'medium', 'high'],
       description: 'How hard to think. A hint, not a route — the pipeline effort dial writes here.',
@@ -205,6 +207,7 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
     session,
     runId: run.runId,
     blockId: run.blockId,
+    context: run.context,
     // One turn per block for now. A block that needs several is a container,
     // and containers are Phase 3.
     turn: 1,
@@ -212,7 +215,7 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
     fallbackModels: Array.isArray(run.config.modelFallbacks)
       ? run.config.modelFallbacks.filter((model): model is string => typeof model === 'string' && Boolean(model))
       : [],
-    system: [systemPrompt, instructions, shellNote].filter(Boolean).join('\n\n'),
+    system: [systemPrompt, instructions, shellNote, EVIDENCE_INSTRUCTIONS].filter(Boolean).join('\n\n'),
     input: run.input,
     tools,
     ceiling,
@@ -224,11 +227,12 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
     ...(typeof run.config.hardMaxSteps === 'number'
       ? { maxSteps: Math.max(1, Math.floor(run.config.hardMaxSteps)), boundedAnswer: true } : {}),
     maxTokens: typeof run.config.maxTokens === 'number' ? run.config.maxTokens : DEFAULT_WORKER_MAX_TOKENS,
+    maxOutputWords: outputWordLimit(run.config.maxOutputWords),
     ...(typeof run.config.maxInputTokens === 'number' ? { checkpointInputTokens: run.config.maxInputTokens } : {}),
     ...(typeof run.config.modelRetryAttempts === 'number'
       ? { retry: { attempts: Math.max(1, Math.floor(run.config.modelRetryAttempts)) } } : {}),
     continueOnLength: true,
-    isolated: run.config.isolated === true,
+    isolated: run.config.isolated !== false,
     ...(run.signal ? { signal: run.signal } : {}),
   });
 
