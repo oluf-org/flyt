@@ -162,7 +162,7 @@ test('every shipped block declares exactly the structured fields its role produc
       'flyt-blocks-core:combine': { combined: 'string' },
       'flyt-blocks-core:split': { parts: 'list' },
       'flyt-blocks-core:plan-start': { tasks: 'list' },
-      'flyt-blocks-judgement:evaluation': { verdict: 'string' },
+      'flyt-blocks-judgement:evaluation': { verdict: 'string', success: 'boolean', score: 'number', explanation: 'string' },
       'flyt-blocks-judgement:compare': { comparison: 'string' },
       'flyt-blocks-judgement:prompt-refiner': { brief: 'string' },
       'flyt-blocks-judgement:human-checkpoint': { approved: 'boolean' },

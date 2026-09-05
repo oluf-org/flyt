@@ -46,15 +46,14 @@ export const backlogPlanBlock: BlockDefinition = {
  */
 export const loopHandoffBlock: BlockDefinition = {
   use: 'flyt-blocks-loop:loop-handoff',
-  title: 'Loop handoff',
-  description: 'Hand the planned tasks to the queue the supervisor claims from.',
+  title: 'Backlog handoff (unavailable)',
+  description: 'Legacy handoff is unavailable. Use the explicit Backlog automation queue command.',
   category: 'loop',
   settings: AI_STEP_SETTINGS as unknown as JsonValue,
   ceiling: [],
   outputs: [{ name: 'queued', type: 'list' }],
-  execute: (run: BlockRun) => executeAiStep(run,
-    'Hand the planned tasks to the loop queue: emit them as the queue accepts them, and say what was queued. Nothing else is this block’s to do.',
-    { name: 'queued', type: 'list' }),
+  execute: async () => ({ status: 'failed', output: '', structured: { queued: [] },
+    error: 'Backlog handoff is unavailable in canonical workflows. No tasks were queued. Use the explicit backlog queue command.' }),
 };
 
 /** Contribute the loop blocks. */

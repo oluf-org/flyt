@@ -159,6 +159,28 @@ export const promptRefinerBlock = judge(
   { name: 'brief' },
   ['ask_human'],
 );
+evaluationBlock.outputs = [
+  { name: 'verdict', type: 'string' }, { name: 'success', type: 'boolean' },
+  { name: 'score', type: 'number' }, { name: 'explanation', type: 'string' },
+];
+evaluationBlock.execute = async run => {
+  const result = await executeAiStep(run,
+    'Evaluate against the fixed brief and evidence. Return ONLY JSON: {"verdict":"pass"|"retry"|"escalate","success":boolean,"score":number from 0 to 1,"explanation":string}. Success must equal (verdict === "pass"). Unsupported claims are retry, never pass.',
+    { name: 'evaluation' });
+  if (result.status !== 'done') return result;
+  try {
+    const value = JSON.parse(result.output.replace(/^```(?:json)?\s*|\s*```$/g, '').trim());
+    if (!value || !['pass', 'retry', 'escalate'].includes(value.verdict)
+      || typeof value.success !== 'boolean' || value.success !== (value.verdict === 'pass')
+      || typeof value.score !== 'number' || !Number.isFinite(value.score) || value.score < 0 || value.score > 1
+      || typeof value.explanation !== 'string' || !value.explanation.trim()) throw new Error('invalid fields');
+    return { status: 'done', output: result.output, structured: {
+      verdict: value.verdict, success: value.success, score: value.score, explanation: value.explanation,
+    } };
+  } catch {
+    return { status: 'failed', output: result.output, error: 'Evaluation must return valid JSON with verdict, consistent success, score (0–1), and explanation.' };
+  }
+};
 
 // The generic judgement constructor is intentionally simple. Refinement adds
 // the human-interaction guard above so a prose question cannot become a brief.

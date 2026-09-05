@@ -53,6 +53,8 @@ export interface StackRunnerConfig {
   stacks?: StackSource;
   /** The run-wide ceiling. A block narrows it and never widens it (D57). */
   ceiling?: readonly string[];
+  /** Host-owned, scoped context readers; still bounded by the run ceiling. */
+  contextTools?: readonly string[];
 }
 
 /** What a block was given and what it returned, as the walk records it. */
@@ -162,11 +164,13 @@ export class StackRunner extends Service implements AgentsSeam {
   private runs = new Map<string, Run>();
   private stacks: StackSource | null;
   private ceiling: readonly string[];
+  private contextTools: readonly string[];
 
   constructor(ctx: Context, config: StackRunnerConfig = {}) {
     super(ctx, 'agents');
     this.stacks = config.stacks ?? null;
     this.ceiling = config.ceiling ?? [];
+    this.contextTools = config.contextTools ?? [];
   }
 
   /**
@@ -178,7 +182,8 @@ export class StackRunner extends Service implements AgentsSeam {
    * await rather than the thing you got.
    */
   async start(stack: StackRef, input: string): Promise<AgentRun> {
-    const root = this.stacks?.resolve(stack.id) ?? null;
+    const resolved = this.stacks?.resolve(stack.id) ?? null;
+    const root = resolved ? structuredClone(resolved) : null;
     if (!root) {
       throw new Error(this.stacks
         ? `There is no stack "${stack.id}".`
@@ -282,8 +287,22 @@ export class StackRunner extends Service implements AgentsSeam {
       };
     }
 
-    const root = this.stacks?.resolve(stackId) ?? null;
+    // Recovery executes the recorded definition, even if its library file was
+    // edited or removed. Old logs without a snapshot keep the legacy fallback.
+    const saved = events.find(e => e.type === 'stack.resolved')?.data as { stack?: SequenceNode } | undefined;
+    const root = saved?.stack ? structuredClone(saved.stack) : this.stacks?.resolve(stackId) ?? null;
     if (!root) throw new Error(`Run "${runId}" is a run of stack "${stackId}", which this runner cannot resolve.`);
+    // Explicit worker changes are separate from changing the authored tree.
+    for (const event of events.filter(e => e.type === 'run.reconfigured')) {
+      const change = event.data as Record<string, any>;
+      const visit = (node: StackNode): void => {
+        if (node.kind === 'block') {
+          const model = change.blockWorkers?.[node.id]?.model ?? change.model;
+          if (model) node.config = { ...node.config, model, modelFallbacks: [] };
+        } else { node.children.forEach(visit); if (node.kind === 'if') node.else?.forEach(visit); }
+      };
+      visit(root);
+    }
 
     // What already finished, and what it produced. Both from the log.
     const done = new Map<string, BlockOutcome>();
@@ -703,9 +722,10 @@ export class StackRunner extends Service implements AgentsSeam {
     }
     const definition: BlockDefinition = this.ctx.blocks.require(node.use, `block "${node.id}"`);
     // The block's own ceiling narrows the run's; it never widens it (D57).
-    const ceiling = definition.ceiling
+    const blockCeiling = definition.ceiling
       ? definition.ceiling.filter(t => this.ceiling.includes(t))
       : this.ceiling;
+    const ceiling = [...new Set([...blockCeiling, ...this.contextTools.filter(tool => this.ceiling.includes(tool))])];
 
     // A fresh invocation starts with explicit input only. An interrupted one
     // keeps its cursor so its own tool history survives resume. Parent ordering
@@ -739,12 +759,21 @@ export class StackRunner extends Service implements AgentsSeam {
     } });
     let outcome: BlockOutcome;
     try {
+      let goalContext = '';
+      for await (const event of session.read()) {
+        if (event.type === 'run.created') {
+          const packet = (event.data as Record<string, JsonValue>).goalContext;
+          if (packet) goalContext = `GOAL CONTRACT AND MEMORY:\n${JSON.stringify(packet)}\n\nSTEP INPUT:\n`;
+          break;
+        }
+      }
+      if (goalContext && input.length > 32000) throw new Error('Goal step input exceeds 32,000 characters; chunk the artifact before continuing.');
       outcome = await definition.execute({
         ctx: this.ctx,
         runId: run.runId,
         blockId: node.id,
         config: node.config,
-        input: restartGuidance ? `${input}\n\nSupervisor restart guidance:\n${restartGuidance}` : input,
+        input: goalContext + (restartGuidance ? `${input}\n\nSupervisor restart guidance:\n${restartGuidance}` : input),
         context,
         ceiling,
         signal: run.signal,
