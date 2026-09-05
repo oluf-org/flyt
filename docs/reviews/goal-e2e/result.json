@@ -1,0 +1,173 @@
+{
+  "goal": {
+    "id": "043b9677-f382-4dd9-b362-4c17d85bd04e",
+    "projectId": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-goal-live-GGuSJM",
+    "name": "Live Goal acceptance 1788615936579",
+    "createdAt": "2026-09-05T13:45:38.274Z",
+    "contract": {
+      "version": 1,
+      "objective": "Exercise the Goal loop with a staged text artifact. Read the CURRENT iteration number in the Goal context. If it is 1, return {\"candidate\":{\"text\":\"ALPHA\"}}. If it is 2 or later, return {\"candidate\":{\"text\":\"ALPHA BETA\"}}. Return exactly ONE JSON object for the current iteration only. Do not show both objects or simulate future iterations. This staged fixture intentionally needs two iterations.",
+      "constraints": "Do not use tools. Do not change the checks. Preserve the original objective across steps.",
+      "criteria": [
+        {
+          "type": "output_contains",
+          "value": "ALPHA"
+        },
+        {
+          "type": "output_contains",
+          "value": "BETA"
+        }
+      ],
+      "tests": [],
+      "folder": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-goal-live-GGuSJM",
+      "folderIdentity": {
+        "path": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-goal-live-GGuSJM",
+        "dev": 3664952411,
+        "ino": 33776997205708550,
+        "birthtimeMs": 1788615936579.8733
+      },
+      "folderMode": "focus",
+      "createFolder": true,
+      "limits": {
+        "iterations": 3,
+        "calls": 6,
+        "minutes": 3,
+        "usd": null
+      },
+      "maxParallel": 1,
+      "plateau": 3,
+      "selfRedesign": true,
+      "tools": [],
+      "worker": {
+        "provider": "auto",
+        "model": "openai/gpt-3.5-turbo"
+      }
+    },
+    "status": "achieved",
+    "reason": "All fixed acceptance checks passed",
+    "definition": {
+      "setup": "version: 2\nid: goal-setup\nname: Establish baseline\nblocks:\n  - id: baseline\n    use: flyt-blocks-core:general-analysis\n    title: Record baseline and plan\n    config:\n      systemPrompt: \"Establish a concise baseline and approach for the Goal. Return a short setup note, at most 150 words.\"\n      instructions: \"Record a concise baseline, fixed requirements and approach for this Goal.\"\n",
+      "recipe": "version: 2\nid: goal-recipe\nname: Improve a candidate\nblocks:\n  - id: improve\n    use: flyt-blocks-core:general-analysis\n    title: Build / improve candidate\n    config:\n      systemPrompt: \"You build the next candidate for a persistent Goal. Follow its fixed contract and CURRENT iteration number. Return exactly ONE JSON object with candidate.text and optional findings/proposal for this iteration only. Never emit multiple objects or simulate future iterations. Execute the requested task; do not summarize the Goal packet or continue the preceding prose.\"\n      instructions: \"Work toward the fixed Goal criteria. Read the Goal memory and improve the best candidate. Return the JSON output contract from the Goal context, with candidate.text containing the complete result.\"\n"
+    },
+    "activeRevision": 1,
+    "pendingRevision": null,
+    "revisionCount": 1,
+    "iteration": 2,
+    "setupDone": true,
+    "workspace": {
+      "path": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-goal-live-GGuSJM\\goal-043b9677-f382-4dd9-b362-4c17d85bd04e",
+      "dev": 3664952411,
+      "ino": 4503599631919032,
+      "birthtimeMs": 1788615938433.591
+    },
+    "activeChild": null,
+    "calls": 5,
+    "knownUsd": 0.0027755,
+    "unknownCostCalls": 0,
+    "elapsedMs": 6033,
+    "plateauCount": 0,
+    "best": {
+      "iteration": 2,
+      "revision": 1,
+      "score": 1,
+      "runId": "goal-043b9677-f382-4dd9-b362-4c17d85bd04e-iteration-2",
+      "artifact": "iteration-2",
+      "preview": "ALPHA BETA",
+      "verified": true,
+      "findings": [
+        "No new findings for this iteration"
+      ]
+    },
+    "current": {
+      "iteration": 2,
+      "revision": 1,
+      "score": 1,
+      "runId": "goal-043b9677-f382-4dd9-b362-4c17d85bd04e-iteration-2",
+      "artifact": "iteration-2",
+      "preview": "ALPHA BETA",
+      "verified": true,
+      "findings": [
+        "No new findings for this iteration"
+      ]
+    },
+    "memory": [
+      {
+        "text": "No new findings for this iteration",
+        "iteration": 2,
+        "source": "goal-043b9677-f382-4dd9-b362-4c17d85bd04e-iteration-2",
+        "status": "hypothesis"
+      }
+    ],
+    "history": [
+      {
+        "iteration": 1,
+        "revision": 1,
+        "score": 0.5,
+        "runId": "goal-043b9677-f382-4dd9-b362-4c17d85bd04e-iteration-1",
+        "artifact": "iteration-1",
+        "preview": "ALPHA",
+        "verified": false,
+        "findings": []
+      },
+      {
+        "iteration": 2,
+        "revision": 1,
+        "score": 1,
+        "runId": "goal-043b9677-f382-4dd9-b362-4c17d85bd04e-iteration-2",
+        "artifact": "iteration-2",
+        "preview": "ALPHA BETA",
+        "verified": true,
+        "findings": [
+          "No new findings for this iteration"
+        ]
+      }
+    ],
+    "updatedAt": "2026-09-05T13:45:44.464Z",
+    "activeSince": null,
+    "controlIntent": null,
+    "setupResult": {
+      "runId": "goal-043b9677-f382-4dd9-b362-4c17d85bd04e-setup",
+      "summary": "Baseline:\nThe goal is to exercise the Goal loop with a staged text artifact. Depending on the current iteration number (1 or 2+), return a specific JSON object: {\"candidate\":{\"text\":\"ALPHA\"}} for iteration 1 and {\"candidate\":{\"text\":\"ALPHA BETA\"}} for iteration 2 or later.\n\nFixed Requirements:\n- Do not use tools or change the checks.\n- Preserve the original objective across steps.\n- Return exactly one JSON object for the current iteration only.\n\nApproach:\n1. Read the current iteration number in the Goal context.\n2. If the iteration is 1, return {\"candidate\":{\"text\":\"ALPHA\"}}.\n3. If the iteration is 2 or later, return {\"candidate\":{\"text\":\"ALPHA BETA\"}}.\n4. Ensure that only one JSON object is returned for the current iteration, following the specified conditions."
+    },
+    "iterationIntent": null,
+    "pendingProposal": null,
+    "live": false,
+    "recoverable": false
+  },
+  "best": {
+    "number": 2,
+    "revision": 1,
+    "runId": "goal-043b9677-f382-4dd9-b362-4c17d85bd04e-iteration-2",
+    "candidate": {
+      "text": "ALPHA BETA",
+      "source": null
+    },
+    "checks": [
+      {
+        "index": 0,
+        "passed": true,
+        "digest": "7a7205f31a1571be03581d685c97c092b2d932d32f477a90a4058a8530b47c96"
+      },
+      {
+        "index": 1,
+        "passed": true,
+        "digest": "7a7205f31a1571be03581d685c97c092b2d932d32f477a90a4058a8530b47c96"
+      }
+    ],
+    "tests": [],
+    "score": 1,
+    "achieved": true,
+    "findings": [
+      {
+        "text": "No new findings for this iteration",
+        "iteration": 2,
+        "source": "goal-043b9677-f382-4dd9-b362-4c17d85bd04e-iteration-2",
+        "status": "hypothesis"
+      }
+    ],
+    "proposal": null,
+    "knownUsd": 0.0027755,
+    "calls": 5,
+    "needsInput": null
+  }
+}

@@ -1,0 +1,906 @@
+TAP version 13
+# Subtest: every command is reachable by name, and a typo says so
+ok 1 - every command is reachable by name, and a typo says so
+  ---
+  duration_ms: 151.6077
+  ...
+# Subtest: an unopened project is a caller error, not a crash
+ok 2 - an unopened project is a caller error, not a crash
+  ---
+  duration_ms: 96.1751
+  ...
+# Subtest: an explicit Loop model clears the saved band map before any task is claimed
+ok 3 - an explicit Loop model clears the saved band map before any task is claimed
+  ---
+  duration_ms: 1.2364
+  ...
+# Subtest: landing escalation compares this session worker, not a different saved model
+ok 4 - landing escalation compares this session worker, not a different saved model
+  ---
+  duration_ms: 0.5356
+  ...
+# Subtest: a sandboxed delegated agent is refused as a Loop worker before it can claim work
+ok 5 - a sandboxed delegated agent is refused as a Loop worker before it can claim work
+  ---
+  duration_ms: 0.7218
+  ...
+# Subtest: Loop preflights a subscription reviewer before claiming and accepts a supported override
+ok 6 - Loop preflights a subscription reviewer before claiming and accepts a supported override
+  ---
+  duration_ms: 123.9613
+  ...
+# Subtest: Loop preflights the effective default worker and a manual override bypasses it
+ok 7 - Loop preflights the effective default worker and a manual override bypasses it
+  ---
+  duration_ms: 131.0727
+  ...
+# Subtest: doctor returns connected and usable states through the capability probe
+ok 8 - doctor returns connected and usable states through the capability probe
+  ---
+  duration_ms: 141.964
+  ...
+# Subtest: doctor bounds subscription capability calls and marks the remainder unknown
+ok 9 - doctor bounds subscription capability calls and marks the remainder unknown
+  ---
+  duration_ms: 123.4376
+  ...
+# Subtest: a loop running in another process is visible here — and a dead one is not believed
+ok 10 - a loop running in another process is visible here — and a dead one is not believed
+  ---
+  duration_ms: 113.0191
+  ...
+# Subtest: a canonical workflow can be started and observed entirely through the map
+ok 11 - a canonical workflow can be started and observed entirely through the map
+  ---
+  duration_ms: 2351.1107
+  ...
+# Subtest: health is open; everything else needs the token
+ok 12 - health is open; everything else needs the token
+  ---
+  duration_ms: 149.9661
+  ...
+# Subtest: a command error crosses HTTP with its status, not as a 500
+ok 13 - a command error crosses HTTP with its status, not as a 500
+  ---
+  duration_ms: 97.5134
+  ...
+# Subtest: the event stream carries engine events to an attached client
+ok 14 - the event stream carries engine events to an attached client
+  ---
+  duration_ms: 678.3006
+  ...
+# Subtest: the score and the archive are reachable from the same map
+ok 15 - the score and the archive are reachable from the same map
+  ---
+  duration_ms: 630.8999
+  ...
+# Subtest: work:start mints an attempt, and a stale discard cannot delete the next one
+ok 16 - work:start mints an attempt, and a stale discard cannot delete the next one
+  ---
+  duration_ms: 1118.6413
+  ...
+# Subtest: work:start refuses to start over a live attempt and says who holds it
+ok 17 - work:start refuses to start over a live attempt and says who holds it
+  ---
+  duration_ms: 710.9156
+  ...
+# Subtest: work:release keeps forensic files but makes a cancelled attempt reclaimable
+ok 18 - work:release keeps forensic files but makes a cancelled attempt reclaimable
+  ---
+  duration_ms: 1158.4762
+  ...
+# Subtest: a worktree whose owning process is gone reads differently from one with no owner
+ok 19 - a worktree whose owning process is gone reads differently from one with no owner
+  ---
+  duration_ms: 706.2193
+  ...
+# Subtest: a heartbeat that is merely stale is not the same news as a process that is gone
+ok 20 - a heartbeat that is merely stale is not the same news as a process that is gone
+  ---
+  duration_ms: 685.3586
+  ...
+# Subtest: a worktree holding work is kept; an empty one is not
+ok 21 - a worktree holding work is kept; an empty one is not
+  ---
+  duration_ms: 782.6198
+  ...
+# Subtest: the next loop releases what a dead one was holding, and keeps its work
+ok 22 - the next loop releases what a dead one was holding, and keeps its work
+  ---
+  duration_ms: 741.0663
+  ...
+# Subtest: a dead owner whose worktree is empty has it discarded
+ok 23 - a dead owner whose worktree is empty has it discarded
+  ---
+  duration_ms: 854.8956
+  ...
+# Subtest: a stale heartbeat from another machine is reported, never acted on
+ok 24 - a stale heartbeat from another machine is reported, never acted on
+  ---
+  duration_ms: 633.8281
+  ...
+# Subtest: work:touch keeps an attempt live, and work:reconcile reports orphans
+ok 25 - work:touch keeps an attempt live, and work:reconcile reports orphans
+  ---
+  duration_ms: 610.3112
+  ...
+# Subtest: geometry comes from the derived layout and nothing is stored
+ok 26 - geometry comes from the derived layout and nothing is stored
+  ---
+  duration_ms: 5.1636
+  ...
+# Subtest: every node has a rendered box, containers included
+ok 27 - every node has a rendered box, containers included
+  ---
+  duration_ms: 1.0125
+  ...
+# Subtest: containment renders as containment, with no edges anywhere
+ok 28 - containment renders as containment, with no edges anywhere
+  ---
+  duration_ms: 0.6372
+  ...
+# Subtest: nesting reads as nesting at every depth the parser allows
+ok 29 - nesting reads as nesting at every depth the parser allows
+  ---
+  duration_ms: 1.1235
+  ...
+# Subtest: a block naming an uninstalled type draws as missing, naming what is missing
+ok 30 - a block naming an uninstalled type draws as missing, naming what is missing
+  ---
+  duration_ms: 1.0519
+  ...
+# Subtest: an empty stack draws as an empty stack rather than as nothing
+ok 31 - an empty stack draws as an empty stack rather than as nothing
+  ---
+  duration_ms: 1.3314
+  ...
+# Subtest: nothing about position is stored or read
+ok 32 - nothing about position is stored or read
+  ---
+  duration_ms: 1.6929
+  ...
+# Subtest: the editor draws the root as the container the parser made it
+ok 33 - the editor draws the root as the container the parser made it
+  ---
+  duration_ms: 0.4156
+  ...
+# Subtest: scale is a renderer choice, not a second layout
+ok 34 - scale is a renderer choice, not a second layout
+  ---
+  duration_ms: 0.5845
+  ...
+# Subtest: Build and Run share connected blocks while drag handles stay in Build
+ok 35 - Build and Run share connected blocks while drag handles stay in Build
+  ---
+  duration_ms: 2.1913
+  ...
+# Subtest: generated tasks hang off a dispatch rail while activity steps keep compact top notches
+ok 36 - generated tasks hang off a dispatch rail while activity steps keep compact top notches
+  ---
+  duration_ms: 1.7688
+  ...
+# Subtest: a running or waiting activity step renders open without an unknown React prop
+ok 37 - a running or waiting activity step renders open without an unknown React prop
+  ---
+  duration_ms: 10667.0113
+  ...
+# Subtest: a plugin contributes a block, and a stack’s use resolves to it
+ok 38 - a plugin contributes a block, and a stack’s use resolves to it
+  ---
+  duration_ms: 19.579
+  ...
+# Subtest: a block goes when the plugin that contributed it unloads
+ok 39 - a block goes when the plugin that contributed it unloads
+  ---
+  duration_ms: 5.2206
+  ...
+# Subtest: the installed set announces that it changed
+ok 40 - the installed set announces that it changed
+  ---
+  duration_ms: 4.5925
+  ...
+# Subtest: a use nobody installed resolves to nothing, and require names what there is
+ok 41 - a use nobody installed resolves to nothing, and require names what there is
+  ---
+  duration_ms: 4.8285
+  ...
+# Subtest: with nothing installed, the refusal says so rather than listing an empty set
+ok 42 - with nothing installed, the refusal says so rather than listing an empty set
+  ---
+  duration_ms: 3.2054
+  ...
+# Subtest: a block without an id, an execute or a category is refused at registration
+ok 43 - a block without an id, an execute or a category is refused at registration
+  ---
+  duration_ms: 4.5896
+  ...
+# Subtest: a declared output is a name plus one type from a closed set, and an unknown type is refused
+ok 44 - a declared output is a name plus one type from a closed set, and an unknown type is refused
+  ---
+  duration_ms: 6.0973
+  ...
+# Subtest: a block that declares no outputs stays legal and offers no field to name
+ok 45 - a block that declares no outputs stays legal and offers no field to name
+  ---
+  duration_ms: 2.2879
+  ...
+# Subtest: the human checkpoint can be disabled without asking a question or changing the artifact
+ok 46 - the human checkpoint can be disabled without asking a question or changing the artifact
+  ---
+  duration_ms: 0.9438
+  ...
+# Subtest: a declared output agrees with what execute returns in `structured`
+ok 47 - a declared output agrees with what execute returns in `structured`
+  ---
+  duration_ms: 3.134
+  ...
+# Subtest: every shipped block declares exactly the structured fields its role produces
+ok 48 - every shipped block declares exactly the structured fields its role produces
+  ---
+  duration_ms: 8.4007
+  ...
+# Subtest: two plugins claiming one id is named, never silently resolved
+ok 49 - two plugins claiming one id is named, never silently resolved
+  ---
+  duration_ms: 5.6915
+  ...
+# Subtest: a stack still parses when it names a block nobody installed
+ok 50 - a stack still parses when it names a block nobody installed
+  ---
+  duration_ms: 7.6363
+  ...
+# Subtest: missing blocks are found at every depth, in tree order
+ok 51 - missing blocks are found at every depth, in tree order
+  ---
+  duration_ms: 3.8292
+  ...
+# Subtest: a word ceiling allows exactly one tool-free correction, including at the step bound
+ok 52 - a word ceiling allows exactly one tool-free correction, including at the step bound
+  ---
+  duration_ms: 49.728
+  ...
+# Subtest: word contract fails visibly after unusable correction: {"content":"still too many words"}
+ok 53 - word contract fails visibly after unusable correction: {"content":"still too many words"}
+  ---
+  duration_ms: 25.6189
+  ...
+# Subtest: word contract fails visibly after unusable correction: {"content":"partial","finishReason":"length"}
+ok 54 - word contract fails visibly after unusable correction: {"content":"partial","finishReason":"length"}
+  ---
+  duration_ms: 26.8261
+  ...
+# Subtest: word contract fails visibly after unusable correction: {"content":""}
+ok 55 - word contract fails visibly after unusable correction: {"content":""}
+  ---
+  duration_ms: 25.5293
+  ...
+# Subtest: word contract fails visibly after unusable correction: {"content":"","toolCalls":[{"id":"forbidden","name":"never_execute","args":{}}]}
+ok 56 - word contract fails visibly after unusable correction: {"content":"","toolCalls":[{"id":"forbidden","name":"never_execute","args":{}}]}
+  ---
+  duration_ms: 27.7649
+  ...
+# Subtest: context.assembled cannot inject another transcript into a scoped request
+ok 57 - context.assembled cannot inject another transcript into a scoped request
+  ---
+  duration_ms: 15.6998
+  ...
+# Subtest: model.request.prepared cannot inject another transcript into a scoped request
+ok 58 - model.request.prepared cannot inject another transcript into a scoped request
+  ---
+  duration_ms: 17.1322
+  ...
+# Subtest: an explicitly shared request logs the exact messages produced by a mutating plugin
+ok 59 - an explicitly shared request logs the exact messages produced by a mutating plugin
+  ---
+  duration_ms: 18.1342
+  ...
+# Subtest: fresh scoped requests do not adopt untagged global history as legacy block context
+ok 60 - fresh scoped requests do not adopt untagged global history as legacy block context
+  ---
+  duration_ms: 19.6195
+  ...
+# Subtest: a block with no tool calls runs, and its events fire in the documented order
+ok 61 - a block with no tool calls runs, and its events fire in the documented order
+  ---
+  duration_ms: 18.4987
+  ...
+# Subtest: the message list rebuilt from the log alone is what was sent to the model
+ok 62 - the message list rebuilt from the log alone is what was sent to the model
+  ---
+  duration_ms: 112.2228
+  ...
+# Subtest: a tool call reaches the gate before the tool runs, once per call
+ok 63 - a tool call reaches the gate before the tool runs, once per call
+  ---
+  duration_ms: 62.8501
+  ...
+# Subtest: a denied tool call becomes a result the model can read, not a thrown error
+ok 64 - a denied tool call becomes a result the model can read, not a thrown error
+  ---
+  duration_ms: 49.7765
+  ...
+# Subtest: the loop is bounded, and hitting the bound says so rather than looking finished
+ok 65 - the loop is bounded, and hitting the bound says so rather than looking finished
+  ---
+  duration_ms: 87.4484
+  ...
+# Subtest: a narrated call to an offered tool is repaired into a native call, never executed from prose
+ok 66 - a narrated call to an offered tool is repaired into a native call, never executed from prose
+  ---
+  duration_ms: 62.8098
+  ...
+# Subtest: a bounded tool preview and its complete durable result take separate paths
+ok 67 - a bounded tool preview and its complete durable result take separate paths
+  ---
+  duration_ms: 48.3488
+  ...
+# Subtest: all schema errors from one tool call reach the model in one logged result
+ok 68 - all schema errors from one tool call reach the model in one logged result
+  ---
+  duration_ms: 79.7799
+  ...
+# Subtest: tool input start/delta/end fragments are durable before the settled response
+ok 69 - tool input start/delta/end fragments are durable before the settled response
+  ---
+  duration_ms: 63.8042
+  ...
+# Subtest: a reasoning-only worker turn is retained and prompted for an actionable next turn
+ok 70 - a reasoning-only worker turn is retained and prompted for an actionable next turn
+  ---
+  duration_ms: 44.046
+  ...
+# Subtest: a burst of provider chunks is persisted as one durable stream batch
+ok 71 - a burst of provider chunks is persisted as one durable stream batch
+  ---
+  duration_ms: 36.0116
+  ...
+# Subtest: a query records a compact canonical prompt reference and carries structural call controls
+ok 72 - a query records a compact canonical prompt reference and carries structural call controls
+  ---
+  duration_ms: 14.2737
+  ...
+# Subtest: a working agent warns at its soft step threshold and keeps going
+ok 73 - a working agent warns at its soft step threshold and keeps going
+  ---
+  duration_ms: 78.5324
+  ...
+# Subtest: a token-truncated worker warns and continues in another query
+ok 74 - a token-truncated worker warns and continues in another query
+  ---
+  duration_ms: 19.4588
+  ...
+# Subtest: reasoning-only length stops use bounded turn repair instead of an unbounded continuation
+ok 75 - reasoning-only length stops use bounded turn repair instead of an unbounded continuation
+  ---
+  duration_ms: 47.2894
+  ...
+# Subtest: visible length continuations have an explicit hard bound
+ok 76 - visible length continuations have an explicit hard bound
+  ---
+  duration_ms: 26.52
+  ...
+# Subtest: a fallback that answered is preferred for the remaining tool steps
+ok 77 - a fallback that answered is preferred for the remaining tool steps
+  ---
+  duration_ms: 43.1316
+  ...
+# Subtest: a listener may veto a step, and the log says the turn was vetoed
+ok 78 - a listener may veto a step, and the log says the turn was vetoed
+  ---
+  duration_ms: 9.5904
+  ...
+# Subtest: every type the loop writes is in the log’s declared vocabulary
+ok 79 - every type the loop writes is in the log’s declared vocabulary
+  ---
+  duration_ms: 37.7893
+  ...
+# Subtest: a hard-bounded worker with boundedAnswer loses its tools at the bound and still delivers
+ok 80 - a hard-bounded worker with boundedAnswer loses its tools at the bound and still delivers
+  ---
+  duration_ms: 59.9322
+  ...
+# Subtest: a worker that keeps requesting tools through every answer-only turn ends bound, not forever
+ok 81 - a worker that keeps requesting tools through every answer-only turn ends bound, not forever
+  ---
+  duration_ms: 67.7605
+  ...
+# Subtest: without boundedAnswer the hard bound still stops the loop outright
+ok 82 - without boundedAnswer the hard bound still stops the loop outright
+  ---
+  duration_ms: 45.6983
+  ...
+# Subtest: a single delimited JSON artifact is valid; ambiguous multiple objects and prose are not
+ok 83 - a single delimited JSON artifact is valid; ambiguous multiple objects and prose are not
+  ---
+  duration_ms: 1.9146
+  ...
+# Subtest: canonical Goal runs setup once, improves across two iterations and preserves verified best
+ok 84 - canonical Goal runs setup once, improves across two iterations and preserves verified best
+  ---
+  duration_ms: 2132.7049
+  ...
+# Subtest: self proposed shared editor command activates only at the next iteration boundary
+ok 85 - self proposed shared editor command activates only at the next iteration boundary
+  ---
+  duration_ms: 1097.877
+  ...
+# Subtest: fixed candidate tests use owned canonical child runs and share model call budget
+ok 86 - fixed candidate tests use owned canonical child runs and share model call budget
+  ---
+  duration_ms: 1162.956
+  ...
+# Subtest: limit reached retains a partial best and never says achieved
+ok 87 - limit reached retains a partial best and never says achieved
+  ---
+  duration_ms: 1179.9395
+  ...
+# Subtest: malformed output cannot pass acceptance even when prose contains every keyword
+ok 88 - malformed output cannot pass acceptance even when prose contains every keyword
+  ---
+  duration_ms: 622.6997
+  ...
+# Subtest: strict isolation refuses launch without writing a goal; unavailable block and path escape fail
+ok 89 - strict isolation refuses launch without writing a goal; unavailable block and path escape fail
+  ---
+  duration_ms: 118.3333
+  ...
+# Subtest: active model call ceiling stops before another iteration
+ok 90 - active model call ceiling stops before another iteration
+  ---
+  duration_ms: 646.9075
+  ...
+# Subtest: a model can retrieve one earlier result through the scoped history tool
+ok 91 - a model can retrieve one earlier result through the scoped history tool
+  ---
+  duration_ms: 1170.9359
+  ...
+# Subtest: a failed recipe trial can restore an earlier version without losing best evidence or resetting budget
+ok 92 - a failed recipe trial can restore an earlier version without losing best evidence or resetting budget
+  ---
+  duration_ms: 1700.5072
+  ...
+# Subtest: parallel blocks reserve the shared call budget before invoking a provider
+ok 93 - parallel blocks reserve the shared call budget before invoking a provider
+  ---
+  duration_ms: 656.8045
+  ...
+# Subtest: folder checks reject an escaping junction even when its final target does not exist
+ok 94 - folder checks reject an escaping junction even when its final target does not exist
+  ---
+  duration_ms: 97.1077
+  ...
+# Subtest: fifty iterations keep bounded memory and searchable earlier evidence
+ok 95 - fifty iterations keep bounded memory and searchable earlier evidence
+  ---
+  duration_ms: 23083.1318
+  ...
+# Subtest: pause/resume preserves completed setup and pins the interrupted iteration ahead of a pending edit
+ok 96 - pause/resume preserves completed setup and pins the interrupted iteration ahead of a pending edit
+  ---
+  duration_ms: 1113.6506
+  ...
+# Subtest: simultaneous human edits use compare-and-swap even before a goal starts
+ok 97 - simultaneous human edits use compare-and-swap even before a goal starts
+  ---
+  duration_ms: 112.6354
+  ...
+# Subtest: a proposal cannot change the fixed contract or bypass evaluation
+ok 98 - a proposal cannot change the fixed contract or bypass evaluation
+  ---
+  duration_ms: 767.944
+  ...
+# Subtest: typed JSON evaluation satisfies exact Until equality in one pass
+ok 99 - typed JSON evaluation satisfies exact Until equality in one pass
+  ---
+  duration_ms: 55.2772
+  ...
+# Subtest: prose and contradictory structured evaluations fail closed
+    # Subtest: pass — all checks succeeded
+    ok 1 - pass — all checks succeeded
+      ---
+      duration_ms: 30.5103
+      ...
+    # Subtest: {"verdict":"pass","success":false,"score":1,"explanation":"oops"}
+    ok 2 - {"verdict":"pass","success":false,"score":1,"explanation":"oops"}
+      ---
+      duration_ms: 35.8789
+      ...
+    # Subtest: {"verdict":"pass","success":true,"score":"1","explanation":"oops"}
+    ok 3 - {"verdict":"pass","success":true,"score":"1","explanation":"oops"}
+      ---
+      duration_ms: 32.8794
+      ...
+    1..3
+ok 100 - prose and contradictory structured evaluations fail closed
+  ---
+  duration_ms: 101.1428
+  ...
+# Subtest: legacy handoff fails explicitly without a model call or a false queue receipt
+ok 101 - legacy handoff fails explicitly without a model call or a false queue receipt
+  ---
+  duration_ms: 19.2181
+  ...
+# Subtest: resume runs the recorded tree even when the library source is replaced or removed
+ok 102 - resume runs the recorded tree even when the library source is replaced or removed
+  ---
+  duration_ms: 25.3348
+  ...
+# Subtest: a tool-free workflow runs when the Windows command sandbox is unavailable
+ok 103 - a tool-free workflow runs when the Windows command sandbox is unavailable
+  ---
+  duration_ms: 912.4821
+  ...
+# Subtest: production Loop host edits only its worktree and exposes durable status and spend
+ok 104 - production Loop host edits only its worktree and exposes durable status and spend
+  ---
+  duration_ms: 635.1243
+  ...
+# Subtest: the selected Loop band keeps its routing, retry and timeout policy at the adapter boundary
+ok 105 - the selected Loop band keeps its routing, retry and timeout policy at the adapter boundary
+  ---
+  duration_ms: 376.9826
+  ...
+# Subtest: workspace-change is enforced inside the kernel block, before landing
+ok 106 - workspace-change is enforced inside the kernel block, before landing
+  ---
+  duration_ms: 352.7019
+  ...
+# Subtest: kernel approval refusal reaches the model and cannot mutate the worktree
+ok 107 - kernel approval refusal reaches the model and cannot mutate the worktree
+  ---
+  duration_ms: 397.7913
+  ...
+# Subtest: a malformed canonical stack keeps its parser diagnostic
+ok 108 - a malformed canonical stack keeps its parser diagnostic
+  ---
+  duration_ms: 408.4992
+  ...
+# Subtest: an interrupted session resumes from its log and explains the missing tool result
+ok 109 - an interrupted session resumes from its log and explains the missing tool result
+  ---
+  duration_ms: 884.6682
+  ...
+# Subtest: stop reaches a live kernel run, settles cooperatively, and then fails honestly
+ok 110 - stop reaches a live kernel run, settles cooperatively, and then fails honestly
+  ---
+  duration_ms: 445.5646
+  ...
+# Subtest: kernel session activity uses the existing live and incremental run channels
+ok 111 - kernel session activity uses the existing live and incremental run channels
+  ---
+  duration_ms: 1363.7084
+  ...
+# Subtest: run:restartBlock durably re-pins a failed kernel block and starts it on the new route
+ok 112 - run:restartBlock durably re-pins a failed kernel block and starts it on the new route
+  ---
+  duration_ms: 1801.0535
+  ...
+# Subtest: Supervisor has no compatibility fallback for unattended execution
+ok 113 - Supervisor has no compatibility fallback for unattended execution
+  ---
+  duration_ms: 1.316
+  ...
+# Subtest: a fresh Supervisor claim reaches kernel, gates, review, merge and canary
+ok 114 - a fresh Supervisor claim reaches kernel, gates, review, merge and canary
+  ---
+  duration_ms: 9114.8426
+  ...
+# Subtest: run keys keep project and run identity unambiguous
+ok 115 - run keys keep project and run identity unambiguous
+  ---
+  duration_ms: 2.0624
+  ...
+# Subtest: equivalent launches share one host and dispose it only after the last owner settles
+ok 116 - equivalent launches share one host and dispose it only after the last owner settles
+  ---
+  duration_ms: 16.5506
+  ...
+# Subtest: different composition authority never shares a host
+ok 117 - different composition authority never shares a host
+  ---
+  duration_ms: 2.3591
+  ...
+# Subtest: controls return explicit negative results and resume does not invent success
+ok 118 - controls return explicit negative results and resume does not invent success
+  ---
+  duration_ms: 1.9504
+  ...
+# Subtest: shutdown stops and awaits every owned run before returning
+ok 119 - shutdown stops and awaits every owned run before returning
+  ---
+  duration_ms: 2.0412
+  ...
+# Subtest: a run killed between blocks resumes and finishes what it had not reached
+ok 120 - a run killed between blocks resumes and finishes what it had not reached
+  ---
+  duration_ms: 52.4805
+  ...
+# Subtest: what a resumed block is fed is what the finished one produced
+ok 121 - what a resumed block is fed is what the finished one produced
+  ---
+  duration_ms: 36.2045
+  ...
+# Subtest: a tool call that never returned is reconstructed, not dropped
+ok 122 - a tool call that never returned is reconstructed, not dropped
+  ---
+  duration_ms: 8.8556
+  ...
+# Subtest: resuming a settled run returns its outcome rather than running it again
+ok 123 - resuming a settled run returns its outcome rather than running it again
+  ---
+  duration_ms: 29.3261
+  ...
+# Subtest: resuming a failed run reports the failure it already had
+ok 124 - resuming a failed run reports the failure it already had
+  ---
+  duration_ms: 22.6208
+  ...
+# Subtest: a resume is announced in the log, saying how much it replayed
+ok 125 - a resume is announced in the log, saying how much it replayed
+  ---
+  duration_ms: 38.058
+  ...
+# Subtest: resuming a run with no log refuses, naming the run
+ok 126 - resuming a run with no log refuses, naming the run
+  ---
+  duration_ms: 6.4162
+  ...
+# Subtest: a stop between blocks ends the run as stopped, with the reason it was given
+ok 127 - a stop between blocks ends the run as stopped, with the reason it was given
+  ---
+  duration_ms: 33.1292
+  ...
+# Subtest: a block already running is allowed to finish, and its result is in the log
+ok 128 - a block already running is allowed to finish, and its result is in the log
+  ---
+  duration_ms: 35.0706
+  ...
+# Subtest: stop aborts the signal held by an in-flight block
+ok 129 - stop aborts the signal held by an in-flight block
+  ---
+  duration_ms: 17.5
+  ...
+# Subtest: the log names where it stopped
+ok 130 - the log names where it stopped
+  ---
+  duration_ms: 22.2411
+  ...
+# Subtest: stopping a run that already settled is not an error
+ok 131 - stopping a run that already settled is not an error
+  ---
+  duration_ms: 21.1343
+  ...
+# Subtest: a stop inside a parallel lets the wave finish and stops before the next one
+ok 132 - a stop inside a parallel lets the wave finish and stops before the next one
+  ---
+  duration_ms: 17.9439
+  ...
+# Subtest: pause is visible immediately, lands between blocks, and resumes the same run
+ok 133 - pause is visible immediately, lands between blocks, and resumes the same run
+  ---
+  duration_ms: 43.9595
+  ...
+# Subtest: a two-block sequence runs in order, each fed what the one before produced
+ok 134 - a two-block sequence runs in order, each fed what the one before produced
+  ---
+  duration_ms: 40.9958
+  ...
+# Subtest: start returns before the walk finishes, and settled is what you await
+ok 135 - start returns before the walk finishes, and settled is what you await
+  ---
+  duration_ms: 23.5752
+  ...
+# Subtest: a parallel runs its lanes together and never more than maxParallel at once
+ok 136 - a parallel runs its lanes together and never more than maxParallel at once
+  ---
+  duration_ms: 106.8106
+  ...
+# Subtest: a lane cannot see what a sibling lane produced
+ok 137 - a lane cannot see what a sibling lane produced
+  ---
+  duration_ms: 25.463
+  ...
+# Subtest: the block after a parallel receives every lane result, labeled, not only the last lane
+ok 138 - the block after a parallel receives every lane result, labeled, not only the last lane
+  ---
+  duration_ms: 26.5515
+  ...
+# Subtest: a block that fails ends the run as failed, naming the block
+ok 139 - a block that fails ends the run as failed, naming the block
+  ---
+  duration_ms: 14.4205
+  ...
+# Subtest: a block that throws is a failed block, not a crashed run
+ok 140 - a block that throws is a failed block, not a crashed run
+  ---
+  duration_ms: 15.3048
+  ...
+# Subtest: a block narrows the run’s ceiling and cannot widen it
+ok 141 - a block narrows the run’s ceiling and cannot widen it
+  ---
+  duration_ms: 14.9552
+  ...
+# Subtest: a stack naming a block nobody installed fails before anything is spent
+ok 142 - a stack naming a block nobody installed fails before anything is spent
+  ---
+  duration_ms: 6.1779
+  ...
+# Subtest: starting a stack that does not exist says so
+ok 143 - starting a stack that does not exist says so
+  ---
+  duration_ms: 5.8758
+  ...
+# Subtest: an if whose predicate holds runs the body, and never the else
+ok 144 - an if whose predicate holds runs the body, and never the else
+  ---
+  duration_ms: 18.7477
+  ...
+# Subtest: an if whose predicate does not hold runs the else, and never the body
+ok 145 - an if whose predicate does not hold runs the else, and never the body
+  ---
+  duration_ms: 18.5425
+  ...
+# Subtest: an if with no else and a predicate that fails passes its input through unchanged
+ok 146 - an if with no else and a predicate that fails passes its input through unchanged
+  ---
+  duration_ms: 15.0201
+  ...
+# Subtest: a field the block never set is empty rather than an error at run time
+ok 147 - a field the block never set is empty rather than an error at run time
+  ---
+  duration_ms: 14.6879
+  ...
+# Subtest: a lane cannot read what a sibling lane produced, even through a predicate
+ok 148 - a lane cannot read what a sibling lane produced, even through a predicate
+  ---
+  duration_ms: 15.0827
+  ...
+# Subtest: a for-each runs its body once per roster element, each fed its own element
+ok 149 - a for-each runs its body once per roster element, each fed its own element
+  ---
+  duration_ms: 26.1698
+  ...
+# Subtest: a roster longer than the authored max is cut, and the log says by how much
+ok 150 - a roster longer than the authored max is cut, and the log says by how much
+  ---
+  duration_ms: 36.527
+  ...
+# Subtest: a block that declared a list and returned a string iterates nothing
+ok 151 - a block that declared a list and returned a string iterates nothing
+  ---
+  duration_ms: 15.7185
+  ...
+# Subtest: an empty roster runs the body no times and does not fail the run
+ok 152 - an empty roster runs the body no times and does not fail the run
+  ---
+  duration_ms: 18.1022
+  ...
+# Subtest: an until stops the first time its condition holds
+ok 153 - an until stops the first time its condition holds
+  ---
+  duration_ms: 19.7094
+  ...
+# Subtest: an until goes round again while the condition does not hold
+ok 154 - an until goes round again while the condition does not hold
+  ---
+  duration_ms: 33.2481
+  ...
+# Subtest: an until that runs out of passes fails the run rather than carrying on
+ok 155 - an until that runs out of passes fails the run rather than carrying on
+  ---
+  duration_ms: 30.4491
+  ...
+# Subtest: what follows an until reads the pass that was accepted
+ok 156 - what follows an until reads the pass that was accepted
+  ---
+  duration_ms: 23.9229
+  ...
+# Subtest: Work, Build, Goals, Library, Models and History are permanent destinations
+ok 157 - Work, Build, Goals, Library, Models and History are permanent destinations
+  ---
+  duration_ms: 2.9827
+  ...
+# Subtest: the shell starts on Work, no run addressed
+ok 158 - the shell starts on Work, no run addressed
+  ---
+  duration_ms: 0.2355
+  ...
+# Subtest: headings name every permanent surface, and only those
+ok 159 - headings name every permanent surface, and only those
+  ---
+  duration_ms: 0.4895
+  ...
+# Subtest: every destination is reachable from every other in one hop
+ok 160 - every destination is reachable from every other in one hop
+  ---
+  duration_ms: 0.4517
+  ...
+# Subtest: a run addressed once stays addressed across navigation
+ok 161 - a run addressed once stays addressed across navigation
+  ---
+  duration_ms: 0.6134
+  ...
+# Subtest: state is a judgement-proof view of the location
+ok 162 - state is a judgement-proof view of the location
+  ---
+  duration_ms: 0.5266
+  ...
+# Subtest: the window mounts the cutover Root and no renderer reads the retired flag
+ok 163 - the window mounts the cutover Root and no renderer reads the retired flag
+  ---
+  duration_ms: 15.3327
+  ...
+# Subtest: the shipping shell keeps a lazy startup boundary
+ok 164 - the shipping shell keeps a lazy startup boundary
+  ---
+  duration_ms: 16.4786
+  ...
+# Subtest: an uncontrolled shell renders its own state, not the prop default
+ok 165 - an uncontrolled shell renders its own state, not the prop default
+  ---
+  duration_ms: 1.177
+  ...
+# Subtest: the host re-reads the stack when a command settles, so an edit redraws
+ok 166 - the host re-reads the stack when a command settles, so an edit redraws
+  ---
+  duration_ms: 0.9755
+  ...
+# Subtest: the daily host wires the surviving entry controls into the v2 shell
+ok 167 - the daily host wires the surviving entry controls into the v2 shell
+  ---
+  duration_ms: 1.0324
+  ...
+# Subtest: Build exposes organized library groups, resize separators, and explicit drop slots
+ok 168 - Build exposes organized library groups, resize separators, and explicit drop slots
+  ---
+  duration_ms: 1.2608
+  ...
+# Subtest: Work receives the manual stop path required by soft worker limits
+ok 169 - Work receives the manual stop path required by soft worker limits
+  ---
+  duration_ms: 0.9587
+  ...
+# Subtest: model requests isolate lanes with maxParallel=1, retaining only own tool rounds
+ok 170 - model requests isolate lanes with maxParallel=1, retaining only own tool rounds
+  ---
+  duration_ms: 269.6264
+  ...
+# Subtest: model requests isolate lanes with maxParallel=2, retaining only own tool rounds
+ok 171 - model requests isolate lanes with maxParallel=2, retaining only own tool rounds
+  ---
+  duration_ms: 187.583
+  ...
+# Subtest: nested joins expose only the selected inner artifacts to the outer join
+ok 172 - nested joins expose only the selected inner artifacts to the outer join
+  ---
+  duration_ms: 116.2464
+  ...
+# Subtest: resume retains unfinished own tool history but excludes completed siblings and older invocations
+ok 173 - resume retains unfinished own tool history but excludes completed siblings and older invocations
+  ---
+  duration_ms: 66.1592
+  ...
+# Subtest: each foreach item gets a fresh transcript even when the block id is reused
+ok 174 - each foreach item gets a fresh transcript even when the block id is reused
+  ---
+  duration_ms: 87.2427
+  ...
+# Subtest: resumed sibling structured outputs are hidden until the explicit join
+ok 175 - resumed sibling structured outputs are hidden until the explicit join
+  ---
+  duration_ms: 67.3546
+  ...
+# Subtest: a degraded refiner carries only its own clarification from the current execution
+ok 176 - a degraded refiner carries only its own clarification from the current execution
+  ---
+  duration_ms: 44.4941
+  ...
+1..176
+# tests 179
+# suites 0
+# pass 179
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 36470.3741
