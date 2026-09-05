@@ -58,6 +58,45 @@ export function composeCodexPrompt(system, prompt) {
   return `SYSTEM INSTRUCTIONS (follow these strictly for the task below):\n${s}\n\n---\n\nTASK:\n${p}`;
 }
 
+const CODEX_HARNESS_HOME_PREFIX = 'flyt-codex-home-';
+
+/**
+ * Give delegated calls a deliberately small Codex home: the official CLI's
+ * sign-in, and no user config. Flyt selects the model and safety boundary for
+ * these calls itself; inheriting config.toml can both change that contract and
+ * make an older installed CLI fail on a newer desktop-only setting.
+ *
+ * A hard link keeps credential refreshes owned by the CLI and avoids reading
+ * auth.json into this process. Cross-volume custom homes fall back to an
+ * opaque filesystem copy; the contents are never parsed or logged.
+ */
+export function createCodexHarnessHome(home = null) {
+  const credential = codexCredentialStatus(home);
+  if (!credential.signedIn) throw new Error('Codex is not signed in.');
+  const harnessHome = fs.mkdtempSync(path.join(os.tmpdir(), CODEX_HARNESS_HOME_PREFIX));
+  const harnessAuth = path.join(harnessHome, 'auth.json');
+  try {
+    try {
+      fs.linkSync(credential.detail, harnessAuth);
+    } catch {
+      fs.copyFileSync(credential.detail, harnessAuth);
+      try { fs.chmodSync(harnessAuth, 0o600); } catch { /* best effort on Windows */ }
+    }
+    return harnessHome;
+  } catch (error) {
+    removeCodexHarnessHome(harnessHome);
+    throw error;
+  }
+}
+
+export function removeCodexHarnessHome(harnessHome) {
+  const resolved = path.resolve(String(harnessHome ?? ''));
+  const tempRoot = path.resolve(os.tmpdir());
+  if (path.dirname(resolved) !== tempRoot || !path.basename(resolved).startsWith(CODEX_HARNESS_HOME_PREFIX)) return false;
+  fs.rmSync(resolved, { recursive: true, force: true });
+  return true;
+}
+
 // Reduce `codex exec --json` JSONL to { text, usage }. Pure — exported for the
 // unit tests. Handles the current event shapes and the older msg envelope:
 //   item.updated / item.completed with item.type 'agent_message' — text
@@ -132,12 +171,14 @@ export function codexStreamReducer() {
 export async function codexAdapter({ model, system, prompt, onText, signal, cliHome = null, cliPath = null, timeoutMs }) {
   const cli = resolveCodexCli(cliPath);
   if (!cli) {
-    throw new Error('Codex CLI not found. Install it (`npm i -g @openai/codex`), or set its path in Settings → Providers → ChatGPT subscription.');
+    throw new Error('Codex CLI not found. Install it (`npm i -g @openai/codex`), or set its path in Models → Model providers → ChatGPT subscription.');
   }
   const home = cliHome || null;
   if (!codexCredentialStatus(home).signedIn) {
     throw new Error('Codex is not signed in. Run `codex login` in a terminal with your ChatGPT account, then try again.');
   }
+
+  const harnessHome = createCodexHarnessHome(home);
 
   // The most robust "final answer" channel exec offers: it writes the last
   // agent message to a file. The JSONL stream feeds onText along the way.
@@ -147,7 +188,7 @@ export async function codexAdapter({ model, system, prompt, onText, signal, cliH
     // Same reasoning as the Claude adapter: an exported platform key or
     // base-URL override must not displace the subscription sign-in.
     stripVars: ['OPENAI_API_KEY', 'OPENAI_BASE_URL'],
-    home,
+    home: harnessHome,
     homeVars: ['CODEX_HOME']
   });
   if (cli.viaNode) env.ELECTRON_RUN_AS_NODE = '1';
@@ -184,6 +225,7 @@ export async function codexAdapter({ model, system, prompt, onText, signal, cliH
     return { text, usage: st.usage ?? null };
   } finally {
     try { fs.unlinkSync(lastMsgFile); } catch { /* never written */ }
+    removeCodexHarnessHome(harnessHome);
   }
 }
 

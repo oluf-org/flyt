@@ -15,7 +15,8 @@ import {
 } from '../core/adapters/cliDelegate.js';
 import { buildClaudeArgs, claudeStreamReducer } from '../core/adapters/claudeCode.js';
 import {
-  buildCodexArgs, composeCodexPrompt, codexFailureError, codexStreamReducer
+  buildCodexArgs, composeCodexPrompt, codexFailureError, codexStreamReducer,
+  createCodexHarnessHome, removeCodexHarnessHome
 } from '../core/adapters/codexCli.js';
 import { canServe } from '../core/adapters/index.js';
 import { probeSubscriptionCapability } from '../core/engine.js';
@@ -232,6 +233,23 @@ test('codexCredentialStatus: auth.json under the (overridable) codex home', () =
   assert.equal(codexCredentialStatus(home).signedIn, false);
   fs.writeFileSync(path.join(home, 'auth.json'), '{}');
   assert.equal(codexCredentialStatus(home).signedIn, true);
+});
+
+test('Codex harness home reuses CLI auth without inheriting incompatible user config', () => {
+  const home = tmp();
+  fs.writeFileSync(path.join(home, 'auth.json'), 'test-auth');
+  fs.writeFileSync(path.join(home, 'config.toml'), 'service_tier = "default"\n');
+
+  const harnessHome = createCodexHarnessHome(home);
+  try {
+    assert.equal(fs.readFileSync(path.join(harnessHome, 'auth.json'), 'utf8'), 'test-auth');
+    assert.equal(fs.existsSync(path.join(harnessHome, 'config.toml')), false);
+    assert.equal(codexCredentialStatus(harnessHome).signedIn, true);
+  } finally {
+    assert.equal(removeCodexHarnessHome(harnessHome), true);
+  }
+  assert.equal(fs.existsSync(harnessHome), false);
+  assert.equal(fs.existsSync(path.join(home, 'auth.json')), true, 'cleaning the harness home cannot remove the real sign-in');
 });
 
 // --- executable resolution ---------------------------------------------------
