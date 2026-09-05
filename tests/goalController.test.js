@@ -53,6 +53,12 @@ async function fixture(t, call) {
   t.after(async () => {
     for (const goal of await invoke('list')) if (goal.live) await invoke('control', { goalId: goal.id, action: 'stop' });
     await waitFor(async () => (await invoke('list')).every(goal => !goal.live));
+    // Close what the engine opened before deleting its userData. Windows
+    // refuses to unlink an open file, so a live SQLite telemetry index fails
+    // this hook — and only where node:sqlite exists, which is why a Node
+    // without it (< 22.13) reports a green suite for the same leak.
+    await api.shutdown('test teardown');
+    engine.telemetry.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
   return { invoke, definition, seen, engine, workspace, root, projectId: project.id };
