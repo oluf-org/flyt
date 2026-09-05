@@ -10,6 +10,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createServer as createViteServer } from 'vite';
 import { parseStack, layout, walk, isContainer, MAX_DEPTH, METRICS } from '#kernel';
 import {
   LAYOUT_SCALE, renderBox, editorGeometry, blockLabel, blockView,
@@ -232,4 +235,43 @@ test('Build and Run share connected blocks while drag handles stay in Build', ()
     'the active outline follows the project accent rather than the old fixed green');
   assert.equal((component.match(/editable && <span className="be-grip">/g) ?? []).length, 2,
     'leaf and container drag handles are both gated by editability');
+});
+
+// A live step has to expand itself, and it has to do so through an attribute the
+// DOM actually honours. `defaultOpen` is React-only vocabulary for form fields;
+// on <details> it is an unknown prop that React warns about and the browser
+// ignores, so the step stayed shut for exactly the statuses it was meant to open
+// for. `open` is the real initial attribute.
+test('a running or waiting activity step renders open without an unknown React prop', async () => {
+  const dir = fileURLToPath(new URL('../src/v2/', import.meta.url));
+  const component = fs.readFileSync(`${dir}BlockEditor.jsx`, 'utf8');
+  assert.doesNotMatch(component, /defaultOpen/, 'details takes open, not the React-only defaultOpen');
+
+  const activity = [
+    { id: 'a1', kind: 'chat', title: 'Model call', status: 'running', content: 'thinking' },
+    { id: 'a2', kind: 'chat', title: 'Model call', status: 'waiting' },
+    { id: 'a3', kind: 'chat', title: 'Model call', status: 'done', content: 'answered' },
+  ];
+  const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'silent' });
+  const warnings = [];
+  const error = console.error;
+  console.error = (...args) => warnings.push(String(args[0]));
+  let html = '';
+  try {
+    const { default: BlockEditor } = await vite.ssrLoadModule('/src/v2/BlockEditor.jsx');
+    html = renderToStaticMarkup(React.createElement(BlockEditor, {
+      stack: SIMPLE, blocks: registry(['work', 'evaluation']), mode: 'run',
+      run: { blocks: { gather: { status: 'active', activity } } },
+    }));
+  } finally {
+    console.error = error;
+    await vite.close();
+  }
+  assert.deepEqual(warnings, [], 'no unknown-prop warning is logged for the activity step');
+
+  const steps = html.match(/<details class="be-activity-item[^"]*"[^>]*>/g) ?? [];
+  assert.equal(steps.length, 3, 'every activity step draws');
+  assert.ok(steps[0].includes('open'), 'a running step is open on first paint');
+  assert.ok(steps[1].includes('open'), 'a waiting step is open on first paint');
+  assert.ok(!steps[2].includes('open'), 'a settled step stays collapsed');
 });

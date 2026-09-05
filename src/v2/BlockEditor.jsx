@@ -127,6 +127,17 @@ function activityClock(value) {
 
 function ActivityItem({ item }) {
   const live = item.status === 'running' || item.status === 'waiting';
+  // The step is uncontrolled: `open` is an initial attribute captured once, so a
+  // collapse the reader performs is never undone by a re-render and a step that
+  // finishes does not snap shut on the result it just produced. A step that only
+  // becomes live after mount is opened imperatively on that edge.
+  const ref = useRef(null);
+  const openedAtMount = useRef(live).current;
+  const wasLive = useRef(live);
+  useEffect(() => {
+    if (live && !wasLive.current && ref.current) ref.current.open = true;
+    wasLive.current = live;
+  }, [live]);
   const facts = [
     item.model,
     item.maxTokens != null ? `${compactNumber(item.maxTokens)} token ceiling` : null,
@@ -154,7 +165,7 @@ function ActivityItem({ item }) {
     <span className={`be-activity-state state-${item.status}`}>{item.status}</span>
     {activityClock(item.at) && <time dateTime={item.at}>{activityClock(item.at)}</time>}
   </summary>;
-  return <details className={`be-activity-item kind-${item.kind}${hasBody ? '' : ' no-body'}`} defaultOpen={live}>
+  return <details ref={ref} className={`be-activity-item kind-${item.kind}${hasBody ? '' : ' no-body'}`} open={openedAtMount}>
     {summary}{hasBody && body}
   </details>;
 }
