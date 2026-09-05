@@ -1,24 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { APPROVAL_MODE_OPTIONS } from './ApprovalModePicker.jsx';
 import { APP_NAME, CONFIG_DIR } from '../core/brand.js';
-import { canServe, MOCK_MODELS, PROVIDER_ORDER } from './providerMirror.js';
+import { canServe, PROVIDER_ORDER, routeFor } from './providerMirror.js';
 import { FactChips } from './ModelPicker.jsx';
 import { proposeStarterSet, modelSetId, MODEL_SET_MAX } from '../core/modelSource.js';
 import ReposPanel from './ReposPanel.jsx';
 import ProjectColorSettings from './components/settings/ProjectColorSettings.tsx';
 
-// Settings page (DESIGN-SPEC.md §6): tabs behind a slim rail.
-//   Providers — five compact cards (keys, test, Kimi key-kind), overview-first:
-//               a collapsed card is one line — name, status pill, model count.
-//   Models    — provider-priority chips, the curated active-models list with
-//               per-model source pins, add-a-model search, default worker.
-//   Project   — the active project's theme color (per-project theming):
-//               9 preset swatches + a custom picker, persisted immediately.
+// Settings is for app/project behavior. Model credentials live on Models and
+// web-search credentials live with Plugins, where those capabilities are used.
 // The renderer never sees a stored key — only per-provider hasKey flags come
 // back over IPC, and saving sends a key one way into the main process.
 
-// Providers whose "connection" is the vendor CLI's own sign-in, not a key.
-const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'];
 const PROVIDER_META = {
   anthropic: {
     name: 'Anthropic', blurb: 'Claude models — key from console.anthropic.com',
@@ -49,14 +42,9 @@ const PROVIDER_META = {
   openrouter: {
     name: 'OpenRouter', blurb: 'One key, many providers — openrouter.ai',
     placeholder: 'sk-or-…'
-  },
-  mock: { name: 'Mock', blurb: 'Built-in fake provider for dry runs — no key, no cost' }
+  }
 };
 
-// canServe / PROVIDER_ORDER / MOCK_MODELS now live in providerMirror.js — the
-// model pickers need the same answers, and two copies of a rule that must
-// agree is one too many.
-const CATALOG_PROVIDERS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi']; // curated lists; openrouter fetches live
 const SEARCH_PROVIDER_META = {
   brave: {
     name: 'Brave Search', placeholder: 'BSA…',
@@ -67,9 +55,10 @@ const SEARCH_PROVIDER_META = {
     blurb: 'Used when Brave is not configured. Create a key in the Tavily dashboard.',
   },
 };
+const CATALOG_PROVIDERS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi'];
 
 export default function Settings({ onClose, onOpenProject = null, onOpenModels = null, projects = null, onColorChange = null, onSaved = null }) {
-  const [tab, setTab] = useState('providers');
+  const [tab, setTab] = useState('repos');
   const [s, setS] = useState(null); // the public settings payload
   const [sandboxDiagnostic, setSandboxDiagnostic] = useState(null);
   const [sandboxDiagnosticBusy, setSandboxDiagnosticBusy] = useState(false);
@@ -123,7 +112,7 @@ export default function Settings({ onClose, onOpenProject = null, onOpenModels =
           <div className="inspector-title">
             <h2>Settings</h2>
             <div className="node-sub">
-              {s ? `${s.summary.connected} provider${s.summary.connected === 1 ? '' : 's'} connected · ${s.summary.activeModelCount} pinned model${s.summary.activeModelCount === 1 ? '' : 's'}` : 'providers, repositories & safety'}
+              {s ? 'Repositories, safety and project defaults' : 'repositories, safety & project'}
             </div>
           </div>
           {onOpenModels && <button className="ghost" onClick={onOpenModels}>Models</button>}
@@ -131,7 +120,7 @@ export default function Settings({ onClose, onOpenProject = null, onOpenModels =
         </div>
 
         <div className="settings-tabs" role="tablist" aria-label="Settings sections">
-          {[['providers', 'Providers'], ['repos', 'Repositories'], ['safety', 'Safety'], ['project', 'Project']].map(([id, label]) => (
+          {[['repos', 'Repositories'], ['safety', 'Safety'], ['project', 'Project']].map(([id, label]) => (
             <button
               key={id} role="tab" aria-selected={tab === id}
               className={'settings-tab' + (tab === id ? ' active' : '')}
@@ -142,13 +131,16 @@ export default function Settings({ onClose, onOpenProject = null, onOpenModels =
 
         <div className="settings-body">
           {!s && !error && <div className="muted">Loading…</div>}
-          {s && tab === 'providers' && <ProvidersTab s={s} save={save} onKeySaved={onOpenModels} />}
           {s && tab === 'repos' && <ReposPanel onOpenProject={onOpenProject} />}
           {s && tab === 'safety' && <SafetyTab s={s} save={save} sandboxDiagnostic={sandboxDiagnostic}
             sandboxDiagnosticBusy={sandboxDiagnosticBusy} refreshSandboxDiagnostic={refreshSandboxDiagnostic} />}
           {tab === 'project' && (
             <ProjectColorSettings projects={projects} onColorChange={onColorChange} />
           )}
+          {s && tab === 'project' && <>
+            <ProjectStorageSection s={s} save={save} />
+            <FlowFilesSection />
+          </>}
           {error && <div className="settings-error mono">{error}</div>}
         </div>
       </div>
@@ -156,7 +148,7 @@ export default function Settings({ onClose, onOpenProject = null, onOpenModels =
   );
 }
 
-// --- Providers tab ----------------------------------------------------------
+// --- Provider controls shared by the Models page ----------------------------
 
 // Where the flow files live, with a Reveal button. In a packaged build this is
 // userData/flows (D28) — not a path anyone would guess, and the folder you copy
@@ -184,13 +176,19 @@ function FlowFilesSection() {
   );
 }
 
-function ProvidersTab({ s, save, onKeySaved }) {
+export function ModelProvidersSection({ s, save, onChanged = null, usage = null }) {
   const [expanded, setExpanded] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [minimized, setMinimized] = useState(false);
   const [keyInputs, setKeyInputs] = useState({});
   const [savedTick, setSavedTick] = useState(null);
   const [tests, setTests] = useState({}); // provider -> { state: 'running'|'ok'|'err', error? }
 
-  const activeCount = p => (s.activeModels ?? []).filter(m => m.enabled !== false && m.pinned !== false && canServe(p, m.id)).length;
+  const activeCount = p => (s.activeModels ?? []).filter(m => m.enabled !== false && m.pinned !== false && routeFor(m.id, {
+    providers: s.providers,
+    providerPriority: s.providerPriority,
+    source: m.source ?? 'auto'
+  }) === p).length;
 
   const saveKey = async p => {
     const key = (keyInputs[p] ?? '').trim();
@@ -199,9 +197,9 @@ function ProvidersTab({ s, save, onKeySaved }) {
     setKeyInputs(k => ({ ...k, [p]: '' }));
     setSavedTick(p);
     setTimeout(() => setSavedTick(t => (t === p ? null : t)), 2000);
-    // P0.1: the first key is the moment the app can start being useful. Don't
-    // make the user find the Models tab and a Fetch button to discover that.
-    if ((s.activeModels ?? []).length === 0) onKeySaved?.(p);
+    // The first key is the moment the app can start being useful; let Models
+    // refresh immediately rather than waiting for a remount.
+    onChanged?.();
   };
 
   const test = async p => {
@@ -210,128 +208,144 @@ function ProvidersTab({ s, save, onKeySaved }) {
     setTests(t => ({ ...t, [p]: r.ok ? { state: 'ok' } : { state: 'err', error: r.error } }));
   };
 
-  return (
-    <>
-      <section>
-        <div className="settings-section-head">
-          <span className="section-label">Providers</span>
-        </div>
-        <p className="settings-hint">
-          Keys are stored locally in the app&rsquo;s user-data folder — never in the project, never shown again.
-        </p>
-        <div className="provider-cards">
-          {PROVIDER_ORDER.map(p => {
-            const meta = PROVIDER_META[p];
-            const connected = s.providers[p]?.hasKey;
-            const sub = s.providers[p]?.subscription;
-            const open = expanded === p;
-            const t = tests[p];
-            return (
-              <div className={'provider-card' + (open ? ' open' : '')} key={p}>
-                <button
-                  className="provider-card-head"
-                  onClick={() => setExpanded(open ? null : p)}
-                  aria-expanded={open}
-                >
-                  <span className="provider-name">{meta.name}</span>
-                  {p === 'mock'
-                    ? <span className="status-pill pill-neutral">built in</span>
-                    : meta.subscription
-                      ? (connected
-                        ? <span className="status-pill">connected</span>
-                        : sub?.enabled
-                          ? <span className="status-pill pill-err">not signed in</span>
-                          : sub?.signedIn
-                            ? <span className="status-pill pill-neutral">signed in · off</span>
-                            : <span className="status-pill pill-neutral">off</span>)
-                      : connected
-                        ? <span className="status-pill">connected</span>
-                        : <span className="status-pill pill-err">no key</span>}
-                  <span className="provider-count muted">{activeCount(p)} model{activeCount(p) === 1 ? '' : 's'}</span>
-                  <span className="provider-caret">{open ? '▾' : '▸'}</span>
-                </button>
-                {open && (
-                  <div className="provider-card-body">
-                    <p className="settings-hint">{meta.blurb}</p>
-                    {meta.note && <p className="settings-hint provider-note">{meta.note}</p>}
-                    {meta.subscription && (
-                      <SubscriptionCard
-                        p={p} meta={meta} sub={sub} connected={connected} save={save}
-                        test={test} t={t}
-                      />
-                    )}
-                    {p === 'kimi' && (
-                      <div className="keykind-row" role="radiogroup" aria-label="Kimi key kind">
-                        {[['platform', 'Platform key — pay per token'], ['code', 'Kimi Code key — uses your Kimi membership']].map(([kind, label]) => (
-                          <label key={kind} className="keykind-option">
-                            <input
-                              type="radio"
-                              name="kimi-keykind"
-                              checked={(s.providers.kimi?.keyKind ?? 'platform') === kind}
-                              onChange={() => save({ kimiKeyKind: kind })}
-                            />
-                            {label}
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                    {p !== 'mock' && !meta.subscription && (
-                      <>
-                        <div className="settings-row">
-                          <input
-                            type="password"
-                            placeholder={connected ? 'Enter a new key to replace the saved one' : meta.placeholder}
-                            value={keyInputs[p] ?? ''}
-                            onChange={e => setKeyInputs(k => ({ ...k, [p]: e.target.value }))}
-                            onKeyDown={e => { if (e.key === 'Enter') saveKey(p); }}
-                            aria-label={`${meta.name} API key`}
-                          />
-                          <button className="primary" onClick={() => saveKey(p)} disabled={!(keyInputs[p] ?? '').trim()}>
-                            {savedTick === p ? 'Saved ✓' : 'Save key'}
-                          </button>
-                        </div>
-                        <div className="settings-row provider-test-row">
-                          <button onClick={() => test(p)} disabled={!connected || t?.state === 'running'}>
-                            {t?.state === 'running' ? 'Testing…' : 'Test connection'}
-                          </button>
-                          {t?.state === 'ok' && <span className="status-pill">ok</span>}
-                          {t?.state === 'err' && <span className="provider-test-err mono" title={t.error}>{t.error}</span>}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
+  const isConnected = p => Boolean(s.providers[p]?.hasKey);
+  const connectedProviders = PROVIDER_ORDER.filter(isConnected);
+  const availableProviders = PROVIDER_ORDER.filter(p => !isConnected(p));
+
+  const renderProvider = p => {
+    const meta = PROVIDER_META[p];
+    const connected = s.providers[p]?.hasKey;
+    const sub = s.providers[p]?.subscription;
+    const open = expanded === p;
+    const t = tests[p];
+    const harness = meta.subscription;
+    const observed = usage?.byProvider?.[p] ?? null;
+    const hasObservedActivity = Number(observed?.calls ?? 0) > 0;
+    const observedDetail = hasObservedActivity
+      ? [
+          `${Number(observed.tokens ?? 0).toLocaleString()} tokens`,
+          observed.successRate == null ? null : `${Math.round(observed.successRate * 100)}% success`,
+          `$${Number(observed.costUsd ?? 0).toFixed(Number(observed.costUsd ?? 0) < 1 ? 4 : 2)}`
+        ].filter(Boolean).join(' · ')
+      : null;
+    return (
+      <div className={'provider-card' + (open ? ' open' : '') + (harness ? ' provider-harness' : '')}
+        data-provider={p} key={p}>
+        <button className="provider-card-head" onClick={() => setExpanded(open ? null : p)} aria-expanded={open}>
+          <span className="provider-card-title">
+            <span className="provider-name">{meta.name}</span>
+            <span className="provider-caret" aria-hidden="true">{open ? '−' : '+'}</span>
+          </span>
+          <span className="provider-card-status">
+            {harness && <span className="provider-kind">CLI harness</span>}
+            {meta.subscription
+              ? (connected
+                ? <span className="status-pill">connected</span>
+                : sub?.enabled
+                  ? <span className="status-pill pill-err">not signed in</span>
+                  : sub?.signedIn
+                    ? <span className="status-pill pill-neutral">signed in · off</span>
+                    : <span className="status-pill pill-neutral">off</span>)
+              : connected
+                ? <span className="status-pill">connected</span>
+                : <span className="status-pill pill-err">no key</span>}
+          </span>
+          <span className="provider-card-metrics">
+            <span className="provider-model-count"><strong>{activeCount(p)}</strong><small>pinned model{activeCount(p) === 1 ? '' : 's'}</small></span>
+            {hasObservedActivity && <span className="provider-observed"><strong>{observed.calls}</strong><small>30d calls</small></span>}
+          </span>
+          {observedDetail && <span className="provider-card-detail" title="Recorded locally by Flyt over the last 30 days">{observedDetail}</span>}
+        </button>
+        {open && (
+          <div className="provider-card-body">
+            <p className="settings-hint">{meta.blurb}</p>
+            {meta.note && <p className="settings-hint provider-note">{meta.note}</p>}
+            {meta.subscription && (
+              <SubscriptionCard p={p} meta={meta} sub={sub} connected={connected} save={save} test={test} t={t} />
+            )}
+            {p === 'kimi' && (
+              <div className="keykind-row" role="radiogroup" aria-label="Kimi key kind">
+                {[['platform', 'Platform key — pay per token'], ['code', 'Kimi Code key — uses your Kimi membership']].map(([kind, label]) => (
+                  <label key={kind} className="keykind-option">
+                    <input type="radio" name="kimi-keykind" checked={(s.providers.kimi?.keyKind ?? 'platform') === kind}
+                      onChange={() => save({ kimiKeyKind: kind })} />
+                    {label}
+                  </label>
+                ))}
               </div>
-            );
-          })}
+            )}
+            {!meta.subscription && <>
+              <div className="settings-row">
+                <input type="password" placeholder={connected ? 'Enter a new key to replace the saved one' : meta.placeholder}
+                  value={keyInputs[p] ?? ''} onChange={e => setKeyInputs(k => ({ ...k, [p]: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') saveKey(p); }} aria-label={`${meta.name} API key`} />
+                <button className="primary" onClick={() => saveKey(p)} disabled={!(keyInputs[p] ?? '').trim()}>
+                  {savedTick === p ? 'Saved ✓' : 'Save key'}
+                </button>
+              </div>
+              <div className="settings-row provider-test-row">
+                <button onClick={() => test(p)} disabled={!connected || t?.state === 'running'}>
+                  {t?.state === 'running' ? 'Testing…' : 'Test connection'}
+                </button>
+                {t?.state === 'ok' && <span className="status-pill">ok</span>}
+                {t?.state === 'err' && <span className="provider-test-err mono" title={t.error}>{t.error}</span>}
+              </div>
+            </>}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+      <section className="models-providers" aria-labelledby="model-providers-title">
+        <div className="models-section-heading">
+          <div>
+            <p className="models-eyebrow">Connections</p>
+            <h2 id="model-providers-title">Model providers</h2>
+          </div>
+          <div className="models-section-actions">
+            <button type="button" className="ghost mini" onClick={() => setMinimized(value => !value)} aria-expanded={!minimized}>
+              {minimized ? 'Show' : 'Minimize'}
+            </button>
+            <button type="button" className="primary" onClick={() => {
+              setMinimized(false);
+              setAdding(open => !open);
+            }} aria-expanded={adding}>
+              {adding ? 'Close' : '+ Add provider'}
+            </button>
+          </div>
         </div>
+        {!minimized && <>
+          <p className="settings-hint">
+            Only authenticated routes appear here and in the model catalog. API keys stay local and are never shown again.
+            Subscription routes run through the vendor&rsquo;s signed-in CLI and are marked as their own harness.
+          </p>
+          {connectedProviders.length
+            ? <div className="provider-cards provider-connected-cards">{connectedProviders.map(renderProvider)}</div>
+            : <p className="models-empty provider-empty">No providers connected yet. Add one to populate the model catalog.</p>}
+          {adding && <div className="provider-add-panel">
+            <div className="settings-section-head"><span className="section-label">Available providers</span></div>
+            {availableProviders.length
+              ? <div className="provider-cards provider-available-cards">{availableProviders.map(renderProvider)}</div>
+              : <p className="settings-hint">Every available provider is connected.</p>}
+          </div>}
+        </>}
       </section>
-
-      <SearchProvidersSection searchProviders={s.searchProviders} save={save} />
-
-      <section>
-        <div className="settings-section-head">
-          <span className="section-label">Project storage</span>
-        </div>
-        <p className="settings-hint">
-          Where a project tab&rsquo;s files (runs, artifacts) are written. Read when a project is
-          opened — already-open tabs keep their current location.
-        </p>
-        <div className="settings-row">
-          <select
-            value={s.projectStorage}
-            onChange={e => save({ projectStorage: e.target.value })}
-            aria-label="Project storage location"
-          >
-            <option value="workspace">Inside the project — {CONFIG_DIR}/ in the folder, gitignored</option>
-            <option value="appdata">App data — keyed by project path, repo untouched</option>
-          </select>
-        </div>
-      </section>
-
-      <FlowFilesSection />
-    </>
   );
+}
+
+function ProjectStorageSection({ s, save }) {
+  return <section>
+    <div className="settings-section-head"><span className="section-label">Project storage</span></div>
+    <p className="settings-hint">Where a project tab&rsquo;s runs and artifacts are written. Already-open tabs keep their current location.</p>
+    <div className="settings-row">
+      <select value={s.projectStorage} onChange={e => save({ projectStorage: e.target.value })} aria-label="Project storage location">
+        <option value="workspace">Inside the project — {CONFIG_DIR}/ in the folder, gitignored</option>
+        <option value="appdata">App data — keyed by project path, repo untouched</option>
+      </select>
+    </div>
+  </section>;
 }
 
 export function searchProviderKeyPatch(provider, raw) {
@@ -620,7 +634,7 @@ function SafetyTab({ s, save, sandboxDiagnostic, sandboxDiagnosticBusy, refreshS
             <option value="auto">
               Auto — cheapest connected{s.resolvedSafetyModel ? ` (${s.resolvedSafetyModel})` : ''}
             </option>
-            {candidates.filter(c => c.provider !== 'mock').map(c => (
+            {candidates.map(c => (
               <option key={c.id} value={c.id} disabled={!c.connected}>
                 {c.label}{c.connected ? '' : ' — no key'}
               </option>
@@ -736,15 +750,6 @@ function ModelsTab({ s, save }) {
     save({ activeModels: active.map(m => (m.id === id ? { ...m, ...patch } : m)) });
   const removeModel = id => save({ activeModels: active.filter(m => m.id !== id) });
 
-  const move = (p, dir) => {
-    const order = [...priority];
-    const i = order.indexOf(p);
-    const j = i + dir;
-    if (i < 0 || j < 0 || j >= order.length) return;
-    [order[i], order[j]] = [order[j], order[i]];
-    save({ providerPriority: order });
-  };
-
   // The provider that would serve a model right now (pin wins, else the
   // priority walk) — shown as the resolved source, and as the warning pill
   // when there is none.
@@ -756,12 +761,8 @@ function ModelsTab({ s, save }) {
   };
 
   const workers = s.workers;
-  const workerValue = workers?.executor
-    ? (workers.executor.provider === 'mock' ? `mock:${workers.executor.model}` : `active:${workers.executor.model}`)
-    : null;
-  const workerMatchesOption = workerValue && (
-    MOCK_MODELS.some(m => workerValue === `mock:${m}`) || active.some(m => m.enabled !== false && workerValue === `active:${m.id}`)
-  );
+  const workerValue = workers?.executor?.model ? `active:${workers.executor.model}` : null;
+  const workerMatchesOption = workerValue && active.some(m => m.enabled !== false && workerValue === `active:${m.id}`);
 
   return (
     <>
@@ -769,7 +770,7 @@ function ModelsTab({ s, save }) {
         catalog={catalog}
         active={active}
         fetching={fetching}
-        anyProvider={PROVIDER_ORDER.some(p => p !== 'mock' && connected(p))}
+        anyProvider={PROVIDER_ORDER.some(connected)}
         onActivate={ids => save({
           activeModels: [
             ...active,
@@ -777,24 +778,6 @@ function ModelsTab({ s, save }) {
           ]
         })}
       />
-
-      <section>
-        <div className="settings-section-head">
-          <span className="section-label">Provider priority</span>
-        </div>
-        <p className="settings-hint">
-          When a model is available from several sources, the first connected one wins.
-        </p>
-        <div className="priority-chips">
-          {priority.map((p, i) => (
-            <span className={'priority-chip' + (connected(p) ? '' : ' off')} key={p}>
-                              <span className="priority-chip-label">{PROVIDER_META[p]?.name ?? p}</span>
-              <button aria-label={`Move ${p} earlier`} disabled={i === 0} onClick={() => move(p, -1)}>◀</button>
-              <button aria-label={`Move ${p} later`} disabled={i === priority.length - 1} onClick={() => move(p, 1)}>▶</button>
-            </span>
-          ))}
-        </div>
-      </section>
 
       <section>
         <div className="settings-section-head">
@@ -829,7 +812,7 @@ function ModelsTab({ s, save }) {
                 aria-label={`Source for ${m.id}`}
               >
                 <option value="auto">{r && (m.source === 'auto' || !m.source) ? `Auto (${r})` : 'Auto (priority)'}</option>
-                {PROVIDER_ORDER.filter(p => p !== 'mock' && canServe(p, m.id)).map(p => (
+                {PROVIDER_ORDER.filter(p => canServe(p, m.id)).map(p => (
                   <option key={p} value={p} disabled={!connected(p)}>
                     {PROVIDER_META[p]?.name ?? p}{connected(p) ? '' : ' — no key'}
                   </option>
@@ -906,8 +889,7 @@ function ModelsTab({ s, save }) {
               value={workerMatchesOption ? workerValue : 'legacy'}
               onChange={e => {
                 const v = e.target.value;
-                if (v.startsWith('mock:')) save({ workers: { executor: { provider: 'mock', model: v.slice(5) } } });
-                else if (v.startsWith('active:')) save({ workers: { executor: { provider: 'auto', model: v.slice(7) } } });
+                if (v.startsWith('active:')) save({ workers: { executor: { provider: 'auto', model: v.slice(7) } } });
               }}
               aria-label="Default worker model"
             >
@@ -917,7 +899,6 @@ function ModelsTab({ s, save }) {
               {active.filter(m => m.enabled !== false).map(m => (
                 <option key={m.id} value={`active:${m.id}`}>{m.id}</option>
               ))}
-              {MOCK_MODELS.map(m => <option key={m} value={`mock:${m}`}>{m} (mock)</option>)}
             </select>
           </div>
         )}

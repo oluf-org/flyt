@@ -56,6 +56,14 @@
   flex: 1; min-height: 0; display: flex;
 }
 
+.library-plugins-view { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.library-plugins-view > .pm { flex: 1 0 min(520px, 70vh); min-height: 420px; }
+.library-web-search { flex: none; padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: var(--shadow-rest); }
+.library-web-search .settings-section-head { margin-bottom: 6px; }
+.library-web-search .provider-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.library-web-search .provider-card { background: var(--side); }
+.library-web-search .provider-card-head { cursor: default; }
+
 /* The catalog inside the page is the same component the Build drawer uses; the
    page gives it a card to sit in rather than a second set of rules. */
 .library-page-body > .library {
@@ -70,4 +78,5 @@
   .library-page-head { flex-direction: column; align-items: flex-start; gap: 14px; }
   .library-views { align-self: stretch; }
   .library-view { flex: 1; justify-content: center; }
+  .library-web-search .provider-cards { grid-template-columns: 1fr; }
 }

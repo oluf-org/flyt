@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FactChips, formatContext, formatUsdPerM } from './ModelPicker.jsx';
 import { routeFor } from './providerMirror.js';
 import { groupModels, popularGroupKeys, presentModel } from './modelPresentation.js';
+import { ModelProvidersSection } from './Settings.jsx';
+import { connectedModelCatalog, providerUsageSummary } from './connectedModelCatalog.js';
 
 const CURATED_PROVIDERS = ['anthropic', 'claude-code', 'openai', 'codex', 'kimi'];
 
@@ -86,23 +88,44 @@ function PinButton({ pinned, onClick, label, disabled = false }) {
   );
 }
 
-function ModelRow({ model, pinned, routedBy, onPin, saving }) {
+const HARNESS_META = {
+  'claude-code': { label: 'Claude Code harness' },
+  codex: { label: 'Codex harness' },
+};
+
+function usageText(usage) {
+  if (!usage) return null;
+  const tokens = Number(usage.promptTokens ?? 0) + Number(usage.completionTokens ?? 0);
+  const success = usage.successRate == null ? null : `${Math.round(usage.successRate * 100)}% success`;
+  const cost = usage.costUsd == null ? null : `$${Number(usage.costUsd).toFixed(usage.costUsd < 1 ? 4 : 2)}`;
+  return [`${usage.calls ?? 0} calls`, success, tokens ? `${tokens.toLocaleString()} tokens` : null, cost].filter(Boolean).join(' · ');
+}
+
+const compactNumber = value => Number(value ?? 0).toLocaleString(undefined, { notation: 'compact', maximumFractionDigits: 1 });
+const compactCost = value => `$${Number(value ?? 0).toFixed(Number(value ?? 0) < 1 ? 4 : 2)}`;
+
+function ModelRow({ model, pinned, routedBy, onPin, saving, usage = null }) {
   const p = model.presentation ?? presentModel(model, model.provider);
   const price = priceText(model);
   const context = formatContext(model.contextLength);
+  const harness = HARNESS_META[routedBy];
   return (
-    <article className={'models-row' + (pinned ? ' is-pinned' : '')} data-model-id={model.id}>
+    <article className={'models-row' + (pinned ? ' is-pinned' : '') + (harness ? ' is-harness' : '')}
+      data-model-id={model.id} data-route={routedBy ?? undefined}>
       <div className="models-row-main">
         <div className="models-row-title">
           <h3>{p.name}</h3>
           <code className="model-version" title={model.id}>{p.modelPart}</code>
         </div>
         <div className="models-row-sub">
-          {routedBy
+          {harness
+            ? <span className="model-harness-badge">{harness.label}</span>
+            : routedBy
             ? <span className="model-route-ok">Available via {routedBy}</span>
             : <span className="model-route-off">No connected route</span>}
           {model.supportsTools === false && <span>Text tool fallback</span>}
         </div>
+        {usage && <div className="models-row-usage" title="Observed across the last 30 days">30d · {usageText(usage)}</div>}
       </div>
       <dl className="models-row-facts">
         <div>
@@ -124,7 +147,19 @@ function ModelRow({ model, pinned, routedBy, onPin, saving }) {
   );
 }
 
-export default function ModelsPage({ onOpenSettings, onChanged }) {
+function PinnedModelButton({ model, routedBy, onClick }) {
+  const harness = HARNESS_META[routedBy];
+  return <button type="button" className={harness ? 'is-harness' : ''} data-route={routedBy ?? undefined}
+    onClick={onClick} title={`Unpin ${model.presentation.name}`}>
+    <span className="models-pinned-creator">{model.presentation.creatorName}</span>
+    <strong>{model.presentation.name}</strong>
+    <span>{priceText(model) ?? 'Price not listed'}</span>
+    {harness && <span className="models-pinned-route">{harness.label}</span>}
+    <span className="models-pinned-star" aria-hidden="true">★</span>
+  </button>;
+}
+
+export default function ModelsPage({ onChanged }) {
   const [settings, setSettings] = useState(null);
   const [catalog, setCatalog] = useState([]);
   const [query, setQuery] = useState('');
@@ -135,6 +170,8 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
   const [error, setError] = useState('');
   const [popularity, setPopularity] = useState(null);
   const [popularityError, setPopularityError] = useState('');
+  const [usage, setUsage] = useState(null);
+  const [pinnedMinimized, setPinnedMinimized] = useState(false);
   const loadedOpenRouter = useRef(false);
   const loadedRankings = useRef(false);
 
@@ -147,17 +184,31 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
         if (value.modelPopularity) setPopularity(value.modelPopularity);
       })
       .catch(err => { if (alive) setError(String(err?.message ?? err)); });
-    Promise.all(CURATED_PROVIDERS.map(provider =>
-      window.flyt.listModels(provider)
-        .then(list => list.map(model => ({ ...model, provider })))
-        .catch(() => [])
-    )).then(lists => {
-      if (!alive) return;
-      const seen = new Set();
-      setCatalog(lists.flat().filter(model => !seen.has(model.id) && seen.add(model.id)));
-    });
+    const from = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    window.flyt.historySummary?.({ from })
+      .then(value => { if (alive) setUsage(value); })
+      .catch(() => {});
     return () => { alive = false; };
   }, []);
+
+  // Catalogs are capabilities, not advertising: only ask providers that are
+  // authenticated. This also removes stale models from a disconnected route
+  // immediately instead of leaving cards that fail only when selected.
+  useEffect(() => {
+    if (!settings) return;
+    let alive = true;
+    const providers = CURATED_PROVIDERS.filter(provider => settings.providers?.[provider]?.hasKey);
+    Promise.all(providers.map(provider => window.flyt.listModels(provider)
+      .then(list => list.map(model => ({ ...model, provider })))
+      .catch(() => [])))
+      .then(lists => {
+        if (!alive) return;
+        const seen = new Set();
+        const curated = lists.flat().filter(model => !seen.has(model.id) && seen.add(model.id));
+        setCatalog(current => [...curated, ...current.filter(model => model.provider === 'openrouter')]);
+      });
+    return () => { alive = false; };
+  }, [settings && CURATED_PROVIDERS.map(provider => Boolean(settings.providers?.[provider]?.hasKey)).join(':')]);
 
   const fetchPopularity = async (force = false) => {
     setPopularityError('');
@@ -207,15 +258,24 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
   const pinnedIds = useMemo(() => new Set(active
     .filter(model => model.enabled !== false && model.pinned !== false)
     .map(model => model.id)), [active]);
-  const models = useMemo(
+  const allModels = useMemo(
     () => mergeCatalog(catalog, active, settings?.modelFacts),
     [catalog, active, settings?.modelFacts]
   );
-  const routes = useMemo(() => new Map(models.map(model => [model.id, routeFor(model.id, {
-    providers: settings?.providers,
-    providerPriority: settings?.providerPriority,
-    source: active.find(entry => entry.id === model.id)?.source ?? 'auto'
-  })])), [models, active, settings?.providers, settings?.providerPriority]);
+  const connectedCatalog = useMemo(
+    () => connectedModelCatalog(allModels, active, settings),
+    [allModels, active, settings?.providers, settings?.providerPriority]
+  );
+  const models = connectedCatalog.models;
+  const routes = connectedCatalog.routes;
+  const providerUsage = useMemo(
+    () => providerUsageSummary(usage?.models, active, settings),
+    [usage?.models, active, settings?.providers, settings?.providerPriority]
+  );
+  const usageByModel = useMemo(
+    () => new Map((usage?.models ?? []).map(row => [row.model, row])),
+    [usage?.models]
+  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -266,6 +326,10 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
   const addCustom = async () => {
     const id = custom.trim();
     if (!id) return;
+    if (!routeFor(id, { providers: settings?.providers, providerPriority: settings?.providerPriority })) {
+      setError('That model ID has no authenticated provider route. Connect its provider first.');
+      return;
+    }
     const found = models.find(model => model.id === id) ?? { id, provider: null };
     await togglePin(found);
     setCustom('');
@@ -299,6 +363,7 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
                 model={model}
                 pinned={pinnedIds.has(model.id)}
                 routedBy={routes.get(model.id)}
+                usage={(usage?.models ?? []).find(row => row.model === model.id)}
                 saving={savingId === model.id}
                 onPin={() => togglePin(model)}
               />
@@ -314,7 +379,10 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
   }
 
   const priced = models.filter(model => Number.isFinite(model.inUsdPerM) || Number.isFinite(model.outUsdPerM)).length;
-  const connected = Object.entries(settings.providers ?? {}).filter(([id, value]) => id !== 'mock' && value?.hasKey).length;
+  const connectedIds = Object.entries(settings.providers ?? {}).filter(([, value]) => value?.hasKey).map(([id]) => id);
+  const harnesses = connectedIds.filter(id => HARNESS_META[id]).length;
+  const nativeTools = models.filter(model => model.supportsTools === true).length;
+  const usageTotals = usage?.totals ?? {};
 
   return (
     <main className="models-page" aria-labelledby="models-title">
@@ -330,7 +398,6 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
               {fetching ? 'Refreshing…' : 'Refresh catalog'}
             </button>
           )}
-          <button type="button" className="ghost" onClick={onOpenSettings}>Provider settings</button>
         </div>
       </header>
 
@@ -339,8 +406,30 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
         <Stat value={groups.length} label="creators" />
         <Stat value={pinnedModels.length} label="pinned" />
         <Stat value={priced} label="with pricing" />
-        <Stat value={connected} label="providers connected" />
+        <Stat value={nativeTools} label="native tools" />
+        <Stat value={connectedIds.length} label="providers" />
+        <Stat value={harnesses} label="CLI harnesses" />
+        <Stat value={usage ? compactNumber(usageTotals.modelCalls) : '—'} label="30d calls" />
+        <Stat value={usage ? compactNumber(Number(usageTotals.promptTokens ?? 0) + Number(usageTotals.completionTokens ?? 0)) : '—'} label="30d tokens" />
+        <Stat value={usage ? compactCost(usageTotals.costUsd) : '—'} label="30d recorded cost" />
       </section>
+
+      <ModelProvidersSection
+        s={settings}
+        usage={providerUsage}
+        save={async patch => {
+          setError('');
+          try {
+            const next = await window.flyt.setSettings(patch);
+            setSettings(next);
+            onChanged?.();
+            return next;
+          } catch (err) {
+            setError(String(err?.message ?? err));
+            throw err;
+          }
+        }}
+      />
 
       <section className="models-pinned" aria-labelledby="pinned-title">
         <div className="models-section-heading">
@@ -348,20 +437,20 @@ export default function ModelsPage({ onOpenSettings, onChanged }) {
             <p className="models-eyebrow">Available in pickers</p>
             <h2 id="pinned-title">Pinned alternatives</h2>
           </div>
-          <span>{pinnedModels.length} model{pinnedModels.length === 1 ? '' : 's'}</span>
-        </div>
-        {pinnedModels.length ? (
-          <div className="models-pinned-grid">
-            {pinnedModels.map(model => (
-              <button key={model.id} type="button" onClick={() => togglePin(model)} title={`Unpin ${model.presentation.name}`}>
-                <span className="models-pinned-creator">{model.presentation.creatorName}</span>
-                <strong>{model.presentation.name}</strong>
-                <span>{priceText(model) ?? 'Price not listed'}</span>
-                <span className="models-pinned-star" aria-hidden="true">★</span>
-              </button>
-            ))}
+          <div className="models-section-actions">
+            <span>{pinnedModels.length} model{pinnedModels.length === 1 ? '' : 's'}</span>
+            <button type="button" className="ghost mini" onClick={() => setPinnedMinimized(value => !value)} aria-expanded={!pinnedMinimized}>
+              {pinnedMinimized ? 'Show' : 'Minimize'}
+            </button>
           </div>
-        ) : <p className="models-empty">Nothing pinned. Pin a model below and it will appear in model pickers throughout the app.</p>}
+        </div>
+        {!pinnedMinimized && (pinnedModels.length ? (
+          <div className="models-pinned-grid">
+            {pinnedModels.map(model => <PinnedModelButton key={model.id} model={model}
+              routedBy={routes.get(model.id)}
+              onClick={() => togglePin(model)} />)}
+          </div>
+        ) : <p className="models-empty">Nothing pinned. Pin a model below and it will appear in model pickers throughout the app.</p>)}
       </section>
 
       <section className="models-catalog" aria-labelledby="catalog-title">

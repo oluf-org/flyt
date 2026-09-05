@@ -455,7 +455,7 @@ export default function DailyRoot() {
         activeModels={settings?.activeModels ?? []}
         hasKey={settings?.hasKey ?? true}
         claudeSubActive={settings?.claudeSubscriptionActive ?? false}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => setLocation(current => ({ ...current, dest: MODELS }))}
         busy={busy}
         onSubmit={submitKind === 'loop' ? enqueue : launch}
         submitKind={submitKind}
@@ -645,7 +645,6 @@ export default function DailyRoot() {
         projectTabs={projectTabs}
         models={<ModelsPage
           onChanged={() => window.flyt.getSettings().then(setSettings)}
-          onOpenSettings={() => setSettingsOpen(true)}
         />}
         history={<HistoryPage />}
       />

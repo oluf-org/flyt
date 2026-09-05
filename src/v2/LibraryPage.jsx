@@ -9,9 +9,10 @@
 // two depths: pressing Manage on a plugin in the catalog moves to the manager
 // with that plugin already open, and that continuity is the reason the plugin
 // manager lives here at all instead of behind a fifth rail icon.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Library from './Library.jsx';
 import PluginManager from './PluginManager.jsx';
+import { SearchProvidersSection } from '../Settings.jsx';
 import './libraryPageStyles.css';
 
 const VIEWS = [
@@ -21,10 +22,21 @@ const VIEWS = [
 
 export default function LibraryPage({
   sources = {}, plugins = [], pluginApi = null, uiExtensions = [], onAct = null,
-  onRefreshPlugins = null, initialView = 'catalog',
+  onRefreshPlugins = null, initialView = 'catalog', initialSettings = null,
 }) {
   const [view, setView] = useState(initialView);
   const [selectedPlugin, setSelectedPlugin] = useState(null);
+  const [settings, setSettings] = useState(initialSettings);
+  const [settingsError, setSettingsError] = useState('');
+
+  useEffect(() => {
+    if (view !== 'plugins' || settings) return;
+    let live = true;
+    window.flyt.getSettings()
+      .then(value => { if (live) setSettings(value); })
+      .catch(error => { if (live) setSettingsError(String(error?.message ?? error)); });
+    return () => { live = false; };
+  }, [view, settings]);
 
   const rows = plugins.length ? plugins : (sources.plugins ?? []);
   const failing = rows.filter(row => row.state === 'failed').length;
@@ -89,14 +101,25 @@ export default function LibraryPage({
       <div className="library-page-body">
         {view === 'catalog'
           ? <Library sources={sources} onAct={act} uiExtensions={uiExtensions} />
-          : <PluginManager
-              plugins={rows}
-              api={pluginApi}
-              uiExtensions={uiExtensions}
-              selectedId={selectedPlugin}
-              onSelect={setSelectedPlugin}
-              onRefresh={onRefreshPlugins}
-            />}
+          : <div className="library-plugins-view">
+              <div className="library-web-search">
+                {settings
+                  ? <SearchProvidersSection searchProviders={settings.searchProviders} save={async patch => {
+                      const next = await window.flyt.setSettings(patch);
+                      setSettings(next);
+                      return next;
+                    }} />
+                  : <p className="muted">{settingsError || 'Loading web-search providers…'}</p>}
+              </div>
+              <PluginManager
+                plugins={rows}
+                api={pluginApi}
+                uiExtensions={uiExtensions}
+                selectedId={selectedPlugin}
+                onSelect={setSelectedPlugin}
+                onRefresh={onRefreshPlugins}
+              />
+            </div>}
       </div>
     </div>
   );
