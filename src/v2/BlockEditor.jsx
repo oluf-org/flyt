@@ -9,7 +9,7 @@ import './blockEditorStyles.css';
 
 const TOUCH_MS = 600;
 const CONTROL_KINDS = ['sequence', 'parallel', 'repeat', 'foreach', 'until', 'if'];
-const MAX_VISIBLE_GENERATED_LANES = 3;
+const MAX_VISIBLE_GENERATED_TASKS = 6;
 
 function Icon({ name, size = 16 }) {
   const paths = {
@@ -101,12 +101,17 @@ function BlockMetrics({ metrics, status }) {
   const input = withEstimate(metrics?.tokensIn, metrics?.estimatedTokensIn);
   const out = withEstimate(metrics?.tokensOut, metrics?.estimatedTokensOut);
   const timestamp = metrics?.startedAt ?? null;
+  // A block that has not run has no facts, and a row of em dashes is not a
+  // fact. Report a number only where the run actually produced one, so a
+  // queued task stays a title and a status rather than five empty columns.
+  const known = value => value !== '—';
+  if (!timestamp && !known(input) && !known(out) && !Number.isFinite(metrics?.costUsd)) return null;
   return <div className="be-block-metrics" aria-label="Block statistics">
-    <span title="Total model cost for this block"><small>Price</small><strong>{price(metrics?.costUsd)}</strong></span>
-    <span title={metrics?.estimatedTokensIn != null ? 'Estimated effective input; provider usage replaces it when settled' : 'Provider-reported prompt and cached input tokens'}><small>Tokens in</small><strong>{input}</strong></span>
-    <span title={metrics?.estimatedTokensOut != null ? 'Approximate while streaming' : 'Completion tokens'}><small>Tokens out</small><strong>{out}</strong></span>
-    <span title="Elapsed block time"><small>Time</small><strong>{elapsedLabel(settledElapsed)}</strong></span>
-    <span title={clockTitle(timestamp)}><small>Started</small><time dateTime={timestamp ?? undefined}>{clockLabel(timestamp)}</time></span>
+    {Number.isFinite(metrics?.costUsd) && <span title="Total model cost for this block"><small>Price</small><strong>{price(metrics.costUsd)}</strong></span>}
+    {known(input) && <span title={metrics?.estimatedTokensIn != null ? 'Estimated effective input; provider usage replaces it when settled' : 'Provider-reported prompt and cached input tokens'}><small>Tokens in</small><strong>{input}</strong></span>}
+    {known(out) && <span title={metrics?.estimatedTokensOut != null ? 'Approximate while streaming' : 'Completion tokens'}><small>Tokens out</small><strong>{out}</strong></span>}
+    {known(elapsedLabel(settledElapsed)) && <span title="Elapsed block time"><small>Time</small><strong>{elapsedLabel(settledElapsed)}</strong></span>}
+    {timestamp && <span title={clockTitle(timestamp)}><small>Started</small><time dateTime={timestamp}>{clockLabel(timestamp)}</time></span>}
     {metrics?.requestCount > 1 && <span title="Model requests made by this block"><small>Calls</small><strong>{metrics.requestCount}</strong></span>}
     {metrics?.toolCount > 0 && <span title="Tool calls made by this block"><small>Tools</small><strong>{metrics.toolCount}</strong></span>}
     {metrics?.cachedTokens > 0 && <span title="Cached input tokens"><small>Cached</small><strong>{compactNumber(metrics.cachedTokens)}</strong></span>}
@@ -180,12 +185,17 @@ function BlockActivity({ items }) {
   </details>;
 }
 
-function RecoveryFacts({ state }) {
+function RecoveryFacts({ state, status = null }) {
   if (!state || (!state.attempt && !state.retryState && !state.failure && !state.lastDurableProgress && !state.blockedBy?.length)) return null;
   const durable = state.lastDurableProgress;
+  // Attempts and recovery describe work in flight. On a task that has not
+  // started they read as a failure that never happened, so a queued task
+  // reports only what is holding it: what it waits for, or how it ended.
+  const started = status !== 'pending';
+  if (!started && !state.failure?.code && !state.blockedBy?.length) return null;
   return <div className="be-recovery-facts" aria-label="Task recovery state">
-    {state.maxAttempts > 0 && <span><small>Attempt</small><strong>{state.attempt ?? 0}/{state.maxAttempts}</strong></span>}
-    {state.retryState && <span><small>Recovery</small><strong>{String(state.retryState).replaceAll('_', ' ')}</strong></span>}
+    {started && state.maxAttempts > 0 && <span><small>Attempt</small><strong>{state.attempt ?? 0}/{state.maxAttempts}</strong></span>}
+    {started && state.retryState && <span><small>Recovery</small><strong>{String(state.retryState).replaceAll('_', ' ')}</strong></span>}
     {state.failure?.code && <span><small>Failure</small><strong>{state.failure.code}</strong></span>}
     {durable && <span title={JSON.stringify(durable)}><small>Last durable progress</small><strong>{durable.tool ?? `step ${durable.atStep ?? durable.seq ?? '?'}`}</strong></span>}
     {state.blockedBy?.length > 0 && <span><small>Blocked by</small><strong>{state.blockedBy.join(', ')}</strong></span>}
@@ -499,38 +509,66 @@ function ChildrenList({ parent, branch = null, root, blocks, commands, selected,
   </div>;
 }
 
+/**
+ * A wave summary reads worst-first: what needs attention, then what is moving,
+ * then what has settled. Pending sorts last because a queue is the one thing
+ * nobody has to act on.
+ */
+const TASK_STATUS_ORDER = ['failed', 'blocked', 'waiting', 'approval', 'input', 'active', 'done', 'pending'];
+const taskStatusLabel = status => (status === 'active' ? 'running' : status);
+
+function taskTally(run, tasks) {
+  const counts = new Map();
+  for (const task of tasks) {
+    const status = statusOf(run, task.id);
+    counts.set(status, (counts.get(status) ?? 0) + 1);
+  }
+  return [...counts].sort(([left], [right]) => TASK_STATUS_ORDER.indexOf(left) - TASK_STATUS_ORDER.indexOf(right));
+}
+
+/** The same counts twice: a dot per status for scanning, the words for reading. */
+function TaskTally({ tally, className }) {
+  if (!tally.length) return null;
+  return <span className={className}>{tally.map(([status, count]) =>
+    <span key={status} className={`be-tally-item is-${status}`}><i aria-hidden="true"/>{count} {taskStatusLabel(status)}</span>)}</span>;
+}
+
+/**
+ * One wave of dispatched work. The rail and its numbered pip carry the shape —
+ * these tasks start together, and the next wave waits on this one — so the row
+ * itself needs no box: cards wrap to the width they are given rather than
+ * being squeezed into a lane each.
+ */
 function GeneratedTaskWave({ tasks, index, root, blocks, selected, setSelected, touched, dragging, setDragging,
   dropTarget, setDropTarget, run, preview, onDelete, onError }) {
   const [expanded, setExpanded] = useState(false);
-  const abbreviated = tasks.length > MAX_VISIBLE_GENERATED_LANES;
-  const visible = abbreviated ? tasks.slice(0, MAX_VISIBLE_GENERATED_LANES - 1) : tasks;
-  const hidden = abbreviated ? tasks.slice(MAX_VISIBLE_GENERATED_LANES - 1) : [];
-  const statuses = new Map();
-  for (const task of hidden) {
-    const status = statusOf(run, task.id);
-    statuses.set(status, (statuses.get(status) ?? 0) + 1);
-  }
-  const statusSummary = [...statuses].map(([status, count]) => `${count} ${status === 'active' ? 'running' : status}`).join(' · ');
+  const abbreviated = tasks.length > MAX_VISIBLE_GENERATED_TASKS;
+  const visible = abbreviated ? tasks.slice(0, MAX_VISIBLE_GENERATED_TASKS - 1) : tasks;
+  const hidden = abbreviated ? tasks.slice(MAX_VISIBLE_GENERATED_TASKS - 1) : [];
   const child = task => <NodeView key={task.id} node={task} root={root} blocks={blocks} commands={null}
     selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
     dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} preview={preview} onDelete={onDelete} onError={onError} />;
-  const laneCount = visible.length + (abbreviated ? 1 : 0);
 
-  return <section className="be-generated-wave" data-wave={index + 1}>
-    <header><span>Wave {index + 1}</span><small>{tasks.length === 1 ? '1 task' : `${tasks.length} tasks in parallel`}</small></header>
-    <div className="be-generated-wave-row" style={{ '--generated-lanes': laneCount }}>
+  return <li className="be-wave" data-wave={index + 1}>
+    <header className="be-wave-head">
+      <span className="be-wave-pip" aria-hidden="true">{index + 1}</span>
+      <strong>Wave {index + 1}</strong>
+      <small>{tasks.length === 1 ? 'runs alone' : `${tasks.length} in parallel`}</small>
+      {run && <TaskTally tally={taskTally(run, tasks)} className="be-wave-tally" />}
+    </header>
+    <div className="be-wave-tasks">
       {visible.map(child)}
-      {abbreviated && <button type="button" className="be-generated-overflow" aria-expanded={expanded}
-        onClick={() => setExpanded(value => !value)}>
-        <strong>{expanded ? 'Hide' : `+${hidden.length} more`}</strong>
-        <span>Same parallel wave</span>
-        {statusSummary && <small>{statusSummary}</small>}
+      {abbreviated && !expanded && <button type="button" className="be-wave-more" aria-expanded={false}
+        onClick={() => setExpanded(true)}>
+        <strong>+{hidden.length} more</strong>
+        <span>Same wave, same start</span>
+        {run && <TaskTally tally={taskTally(run, hidden)} className="be-wave-more-tally" />}
       </button>}
+      {abbreviated && expanded && hidden.map(child)}
     </div>
-    {abbreviated && expanded && <div className="be-generated-wave-overflow" style={{ '--generated-lanes': Math.min(hidden.length, MAX_VISIBLE_GENERATED_LANES) }}>
-      {hidden.map(child)}
-    </div>}
-  </section>;
+    {abbreviated && expanded && <button type="button" className="be-wave-less" onClick={() => setExpanded(false)}>
+      Show fewer</button>}
+  </li>;
 }
 
 function NodeView({ node, root, blocks, commands, selected, setSelected, touched, dragging, setDragging, dropTarget, setDropTarget, run, preview = null, onDelete, onError }) {
@@ -543,6 +581,7 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
   const output = blockRun?.showing ?? '';
   const metrics = blockRun?.metrics ?? null;
   const showsModel = modelBacked || Boolean(metrics?.model);
+  const modelName = metrics?.model ?? node.config?.model ?? null;
   const slot = parentSlot(root, node.id);
   const move = async delta => {
     if (!slot) return;
@@ -570,8 +609,11 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
     <span className="be-block-copy"><strong>{titleOf(node, blocks)}</strong><small>{missing ? `Missing · ${node.use}` : node.use}</small>
       {override && <span className="be-mode-override" title={`${preview.name} runs this block with ${overrideLine(override)}`}>
         {preview.name} · {overrideLine(override)}</span>}</span>
+    {/* A generated task that has not been dispatched has no model to name, and
+        a wave of "Model pending" badges says only that the wave has not started. */}
     {showsModel && (run
-      ? <span className="be-model-badge" title="Model used by this block">{metrics?.model ?? node.config?.model ?? 'Model pending'}</span>
+      ? (modelName || node.generated !== true) &&
+        <span className="be-model-badge" title={modelName ? `Model used by this block: ${modelName}` : 'This block has not picked a model yet'}>{modelName ?? 'Model pending'}</span>
       : <span className={`be-tier-badge tier-${node.config?.modelTier ?? 'default'}`}>{node.config?.modelTier ?? 'default'}</span>)}
     {node.use === 'flyt-blocks-judgement:human-checkpoint' && <span className={`be-checkpoint-badge${node.config?.enabled === false ? ' off' : ''}`}>
       {node.config?.enabled === false ? 'checkpoint off' : 'human approval'}
@@ -579,16 +621,28 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
     {run && <BlockStatus status={status} metrics={metrics} />}
     {editable && <button type="button" className="be-delete" aria-label={`Delete ${titleOf(node, blocks)}`} onClick={event => { event.stopPropagation(); onDelete(node); }}><Icon name="trash"/></button>}
     {run && <BlockMetrics metrics={metrics} status={status} />}
-    {run && node.generated === true && <RecoveryFacts state={blockRun} />}
+    {run && node.generated === true && <RecoveryFacts state={blockRun} status={status} />}
     {run && <BlockActivity items={blockRun?.activity} />}
     {output && <details className="be-inline-output" open={status === 'active'}><summary>Output</summary><pre>{output}</pre></details>}
     </article>;
     if (!generated.length) return card;
     const waves = generatedTaskWaves(generated, node.config ?? {});
-    return <section className="be-generated-group" data-parent-id={node.id}>{card}<header><span>Generated tasks</span><small>{generated.length} blocks · created for this run</small></header>
-      <div className="be-generated-children">{waves.map((tasks, index) => <GeneratedTaskWave key={`${node.id}:wave:${index}`} tasks={tasks} index={index}
-        root={root} blocks={blocks} selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
-        dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} preview={preview} onDelete={onDelete} onError={onError} />)}</div></section>;
+    const tally = taskTally(run, generated);
+    const settled = tally.find(([state]) => state === 'done')?.[1] ?? 0;
+    return <section className="be-dispatch" data-parent-id={node.id}>{card}
+      <div className="be-dispatch-panel">
+        <header className="be-dispatch-head">
+          <span className="be-dispatch-label">Generated tasks</span>
+          <span className="be-dispatch-meta">{generated.length === 1 ? '1 task' : `${generated.length} tasks`} · {waves.length === 1 ? '1 wave' : `${waves.length} waves`} · created for this run</span>
+          {run && <span className="be-dispatch-progress" title={tally.map(([state, count]) => `${count} ${taskStatusLabel(state)}`).join(' · ')}>
+            <span className="be-dispatch-meter" aria-hidden="true">{tally.map(([state, count]) =>
+              <i key={state} className={`is-${state}`} style={{ flexGrow: count }}/>)}</span>
+            <small>{settled} of {generated.length} done</small></span>}
+        </header>
+        <ol className="be-waves">{waves.map((tasks, index) => <GeneratedTaskWave key={`${node.id}:wave:${index}`} tasks={tasks} index={index}
+          root={root} blocks={blocks} selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
+          dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} preview={preview} onDelete={onDelete} onError={onError} />)}</ol>
+      </div></section>;
   }
 
   return <section {...common} className={`be-container kind-${node.kind}${selected === node.id ? ' selected' : ''}${touched?.nodeId === node.id ? ` touched by-${touched.caller}` : ''}`}>

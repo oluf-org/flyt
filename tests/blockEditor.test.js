@@ -231,10 +231,34 @@ test('Build and Run share connected blocks while drag handles stay in Build', ()
     'both surfaces use the same connected stack geometry');
   assert.match(styles, /\.mode-build \.be-children:not\(\.parallel\) > \.be-block::before/,
     'Build blocks have the same notches as Run blocks');
-  assert.match(styles, /data-status="active"[^}]+var\(--accent\)/,
-    'the active outline follows the project accent rather than the old fixed green');
+  assert.match(styles, /\.be-block\.selected \{ --be-block-border: var\(--accent\); \}/,
+    'the selected outline and its notch share one stronger border token');
+  assert.match(styles, /data-status="active"[^}]+--be-block-border: var\(--accent\)/,
+    'the active outline and its notch share the project accent');
   assert.equal((component.match(/editable && <span className="be-grip">/g) ?? []).length, 2,
     'leaf and container drag handles are both gated by editability');
+});
+
+test('generated tasks hang off a dispatch rail while activity steps keep compact top notches', () => {
+  const dir = fileURLToPath(new URL('../src/v2/', import.meta.url));
+  const component = fs.readFileSync(`${dir}BlockEditor.jsx`, 'utf8');
+  const styles = fs.readFileSync(`${dir}blockEditorStyles.css`, 'utf8');
+  assert.match(component, /<span className="be-wave-pip" aria-hidden="true">\{index \+ 1\}<\/span>/,
+    'every wave is marked by its number on the dispatch rail');
+  assert.match(styles, /\.be-dispatch-panel::before \{[^}]+linear-gradient\(var\(--be-rail\)/,
+    'the rail leaves the dispatch card and fades out rather than framing the fan-out');
+  assert.match(styles, /\.be-wave-pip \{[^}]+position: absolute[^}]+border: 1\.5px solid var\(--be-rail\)/,
+    'the pip sits on the rail, which is what lets waves drop their dividers');
+  assert.match(styles, /\.be-wave-tasks \{[^}]+grid-template-columns: repeat\(auto-fill, minmax\(/,
+    'a wave fills the width it is given instead of one lane per task');
+  assert.match(component, /if \(!started && !state\.failure\?\.code && !state\.blockedBy\?\.length\) return null;/,
+    'a queued task reports what blocks it, never an attempt counter for work that has not run');
+  assert.match(styles, /\.be-activity-list \{[^}]+gap: 0/,
+    'activity steps have no whitespace between them');
+  assert.match(styles, /\.be-activity-item \+ \.be-activity-item::after/,
+    'only activity steps after the first receive a top socket');
+  assert.match(styles, /\.be-activity-state \{[^}]+grid-column: 3[^}]+width: max-content/,
+    'waiting and warning badges stay content-sized even when activity facts are absent');
 });
 
 // A live step has to expand itself, and it has to do so through an attribute the
