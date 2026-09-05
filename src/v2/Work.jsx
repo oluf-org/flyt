@@ -39,14 +39,17 @@ function ChatHistory({ runs, activeRunId, onOpenRun, onNewChat }) {
     catch { /* A private or locked-down renderer may not expose storage. */ }
   }, [collapsed]);
   const groups = groupRuns(runs ?? []);
-  return <aside className={`work-history${collapsed ? ' collapsed' : ''}`} aria-label="Chat history">
+  if (collapsed) return <button type="button" className="work-history-reopen"
+    onClick={() => setCollapsed(false)} aria-label="Show chat history" aria-expanded="false"
+    title="Show chat history"><ChevronIcon/></button>;
+  return <aside className="work-history" aria-label="Chat history">
     <div className="work-history-head">
       <button type="button" className="work-history-new" onClick={onNewChat} title="New chat">
         <span aria-hidden="true">＋</span><span className="work-history-copy">New chat</span>
       </button>
-      <button type="button" className="work-history-toggle" onClick={() => setCollapsed(value => !value)}
-        aria-label={collapsed ? 'Expand chat history' : 'Minimize chat history'} aria-expanded={!collapsed}>
-        <ChevronIcon left={!collapsed}/>
+      <button type="button" className="work-history-toggle" onClick={() => setCollapsed(true)}
+        aria-label="Hide chat history" aria-expanded="true">
+        <ChevronIcon left/>
       </button>
     </div>
     <div className="work-history-list">
