@@ -1,12 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { showPersistentActivity } from './activityStatus.js';
 import { normalizeHexColor } from './lib/projectTheme.js';
+import { DEFAULT_PROJECT_COLOR_HEX, readableOnFillColor } from './lib/applyProjectTheme.js';
+import { LogoMark } from './Logo.jsx';
 
 // The project tab strip (D22, tabs demo A): one tab per open project, living
 // in the custom titlebar between the brand and the document name. Anatomy per
-// the riding defaults (T10–T12): folder-name label, unsaved dot from
-// saveState, live-run micro-indicator, hover ×, middle-click close, drag
-// reorder, ＋ → the recents/folder-picker page (T15). Overflow is
+// the riding defaults (T10–T12): the shared Flyt mark in the project's color,
+// folder-name label, unsaved dot from saveState, live-run micro-indicator,
+// hover ×, middle-click close, drag reorder, ＋ → the recents/folder-picker
+// page (T15). Overflow is
 // Chrome-style: tabs shrink to a floor, then the strip scrolls (CSS).
 export default function TabStrip({ tabs, activeId, live, activity = {}, saveState, onSelect, onClose, onReorder, onNewTab, onRename, onAdopt, onReveal }) {
   const dragId = useRef(null);
@@ -73,6 +76,7 @@ export default function TabStrip({ tabs, activeId, live, activity = {}, saveStat
     <div className="tab-strip" role="tablist" aria-label="Projects">
       {tabs.map(t => {
         const active = t.id === activeId;
+        const projectColor = normalizeHexColor(t.colorHex ?? t.color) ?? DEFAULT_PROJECT_COLOR_HEX;
         const liveN = live[t.id] ?? 0;
         const status = activity[t.id] ?? null;
         // Activity is intentionally not tied to the selected document. The
@@ -88,7 +92,10 @@ export default function TabStrip({ tabs, activeId, live, activity = {}, saveStat
             tabIndex={0}
             aria-selected={active}
             className={'tab' + (active ? ' active' : '') + (editing ? ' editing' : '')}
-            style={{ '--tab-project-color': normalizeHexColor(t.colorHex ?? t.color) ?? 'transparent' }}
+            style={{
+              '--tab-project-color': projectColor,
+              '--tab-on-project-color': readableOnFillColor(projectColor),
+            }}
             title={editing ? undefined : (t.folder ?? `${t.name} — an app-managed project (double-click to rename)`)}
             draggable={!editing}
             onDragStart={e => { dragId.current = t.id; e.dataTransfer.effectAllowed = 'move'; }}
@@ -107,6 +114,9 @@ export default function TabStrip({ tabs, activeId, live, activity = {}, saveStat
             onMouseDown={e => { if (e.button === 1) e.preventDefault(); }}
             onAuxClick={e => { if (e.button === 1) onClose(t.id); }}
           >
+            <span className="tab-project-mark" aria-hidden="true">
+              <LogoMark size={14} />
+            </span>
             {showActivity && (
               <span
                 className="tab-live"

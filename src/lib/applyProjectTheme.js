@@ -4,9 +4,9 @@
  * The bridge between the project record and the pure color math in
  * `projectTheme.js`: read the color off the active project, derive the theme,
  * and write the `PROJECT_THEME_CSS_VARS` contract onto the document root.
- * `src/styles/project-theme.css` consumes the variables — top bar, sidebar,
- * buttons, links, and the tinted page background — so a change takes effect
- * live, with no reload.
+ * `src/styles/project-theme.css` consumes the variables only for project
+ * identity — the active-tab edge and the lander's mark/name — so a change
+ * takes effect live without recoloring the application's page palette.
  *
  * Persistence of the color field is a separate concern (settings UI, project
  * creation). Until a record carries one, the DEFAULT_PROJECT_COLOR_HEX preset
@@ -53,10 +53,10 @@ export const DEFAULT_PROJECT_COLOR_HEX =
  */
 export const PROJECT_THEME_ACTIVE_ATTR = 'data-project-theme';
 
-/** The text/icon color ON a project fill (active tab, primary buttons, rail badge). */
+/** The text/icon color ON a project fill (the active project tab). */
 export const PROJECT_ON_ACCENT_VAR = '--project-on-accent';
 
-/** The accent color for TEXT set in the project family (links, rail, chips). */
+/** The readable project-family color used by the lander's identity accents. */
 export const PROJECT_ACCENT_VAR = '--project-accent';
 
 /* Ink and white, the two candidates for text on a project fill. Ink is the

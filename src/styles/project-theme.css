@@ -1,217 +1,29 @@
 /* =========================================================================
-   Project theming — the active project's color, over the Slate & Sage base.
+   Project identity over the Slate & Sage application palette.
 
-   The variables are written by src/lib/applyProjectTheme.js onto the document
-   root, from the active project record (`--project-color`, shades 1–3 and
-   `--project-bg-tint` per the contract in src/lib/projectTheme.js; plus
-   `--project-on-accent`, the readable text/icon color on a project fill, and
-   `--project-accent-light`/`-dark`, the readable project-family TEXT accent
-   per color-scheme half — see readableProjectAccent in the applier).
-
-   Everything in this sheet is gated on `[data-project-theme]`, which the
-   applier sets only while a project is active: close the last project and
-   every rule here goes inert, leaving the stock palette untouched —
-   non-project surfaces cannot regress. The variables live on :root and every
-   window has its own document, so each window themes its own active project.
-
-   Color doctrine: this sheet introduces no second design language. It
-   re-derives the EXISTING tokens (--canvas, --app, --rail) inside the project
-   scope and adds one project family, so every surface that already paints a
-   token tints with the project — including the page background — without a
-   new background color anywhere.
-
-   Without the variables (attributes set but the applier never ran), every
-   var() carries the stock token as its fallback and the sheet degrades to
-   the base theme rather than to nothing.
+   The active project's derived variables are written by
+   src/lib/applyProjectTheme.js. They deliberately do not replace the app's
+   design-system tokens: pages, navigation, controls, links, focus rings, and
+   surfaces remain on the stock green palette. Project color is reserved for
+   the few places that answer "which workspace am I in?": every project tab,
+   the active-tab edge across the window, and the lander's mark and name.
    ========================================================================= */
 
-:root[data-project-theme] {
-  /* Written by the applier, listed here as the contract this sheet consumes:
-     --project-color            the base accent (buttons, markers, hairlines)
-     --project-color-shade-1..3 progressively darker accents (links, hovers)
-     --project-bg-tint          translucent veil of the project color
-     --project-on-accent        text/icon ON a project fill — ink on the
-                                mid-lightness presets, white on dark customs,
-                                computed by the applier (WCAG AA against the
-                                fill it pairs with) */
-
-  /* Fallback for the pairing, used only if the applier never wrote: ink on
-     the mid-lightness presets is the common case. */
-  --project-on-accent: #0b140f;
-
-  /* The neutral surfaces the project color composites onto — the compiled
-     palette's literal halves from styles.css. The tokens being redefined in
-     this scope cannot also be their own input (that would be a cyclic
-     var()), so the bases are copied here. */
-  --pt-canvas-base: light-dark(#fafafa, #111111);
-  --pt-app-base:    light-dark(#242424, #141414);
-  --pt-rail-base:   light-dark(#f0f0f0, #171717);
-  --pt-side-base:   light-dark(#f5f5f5, #1a1a1a);
-  --pt-card-base:   light-dark(#ffffff, #202020);
-  --pt-border-base: light-dark(#dedede, #343434);
-  --pt-divider-base: light-dark(#d1d1d1, #404040);
-
-  /* The page background: a subtle veil of the project color over the canvas.
-     --canvas is THE plane color — body, the shell, and the work/build/
-     library/loop pages all paint it — so re-deriving it here tints the whole
-     page with no per-surface rule and no second background color. */
-  --canvas: color-mix(in srgb, var(--project-bg-tint), var(--pt-canvas-base));
-
-  /* Top chrome and the activity rail take a whisper of the project color, so
-     the frame reads as "in" the project while staying neutral chrome. */
-  --app:  color-mix(in srgb, var(--project-color) 10%, var(--pt-app-base));
-  --rail: color-mix(in srgb, var(--project-color) 6%, var(--pt-rail-base));
-
-  /* Remove the stock palette's sage cast while a project is active. Project
-     color now supplies the hue; text stays clean black/white and neutral
-     surfaces only borrow enough of the project to feel related. */
-  --side:    color-mix(in srgb, var(--project-color) 2%, var(--pt-side-base));
-  --card:    color-mix(in srgb, var(--project-color) 2%, var(--pt-card-base));
-  --border:  color-mix(in srgb, var(--project-color) 10%, var(--pt-border-base));
-  --divider: color-mix(in srgb, var(--project-color) 14%, var(--pt-divider-base));
-  --dot:     color-mix(in srgb, var(--project-color) 7%, var(--pt-border-base));
-  --chip:    color-mix(in srgb, var(--project-color) 6%, var(--pt-rail-base));
-  --chip-tx: light-dark(#606060, #b4b4b4);
-  --tx:      light-dark(#202020, #f0f0f0);
-  --dim:     light-dark(#6c6c6c, #ababab);
-  --faint:   light-dark(#9a9a9a, #737373);
-  --app-tx:  #f3f3f3;
-  --app-dim: #aaaaaa;
-
-  /* Fallbacks for the text accent, used only if the applier never wrote:
-     shade-1 on light (where a bright base needs its darker family member),
-     the raw base on dark (where the shades are too dark to hold contrast). */
-  --project-accent-light: var(--project-color-shade-1, #5b8c6e);
-  --project-accent-dark: var(--project-color, #7cba95);
-
-  /* The text accent (links, rail, chips), chosen per color AND per theme
-     half by the applier (readableProjectAccent: the lightest family member —
-     base plus its three shades — that still clears 3:1 against the tinted
-     canvas, else the highest-contrast one). A static mix cannot do this: a
-     bright custom on light needs a darker family member while a dark custom
-     on dark needs the base itself, and which one wins flips with the OS
-     theme. Consumed through light-dark() so the switch is a browser mechanic. */
-  --project-accent: light-dark(
-                      var(--project-accent-light, #5b8c6e),
-                      var(--project-accent-dark, #7cba95));
-
-  /* The soft wash for chip/link-chip fills, per theme half to match the
-     stock palette's wash doctrine: a near-white veil on light chrome (the
-     stock light --accent-soft is #e6efe9), a whisper over the dark app base
-     on dark. (Mixing toward the dark app base in light theme produced dark
-     chips where the stock palette has light ones.) */
-  --project-accent-soft: light-dark(
-                           color-mix(in srgb, var(--project-color, var(--accent)) 13%, var(--pt-card-base)),
-                           color-mix(in srgb, var(--project-color, var(--accent)) 13%, var(--pt-app-base)));
-
-  /* Route the legacy design-system accent through the active project. This is
-     the broad coverage layer: every existing icon, selection, focus ring,
-     chip and border that consumed the original sage now follows the project.
-     Exact-color fills stay separate so readable text can use a darker family
-     member without quietly changing the color the user picked. */
-  --accent: var(--project-accent);
-  --accent-soft: var(--project-accent-soft);
-  --accent-fill: var(--project-color);
-  --accent-tx: var(--project-on-accent);
-  --on-accent: var(--project-on-accent);
-
-  /* Success and live work keep their meaning independent of project identity. */
-  --ok: var(--running);
-  --ok-soft: var(--running-soft);
-}
-
-/* ---- top bar ----
-   The bar itself tints via --app above; what is added here is the accent
-   hairline under it and the project's own tab. The main process mirrors this
-   mix into the native min/max/close overlay (src/lib/projectChrome.js). */
-
+/* The line completes the selected tab across the full window width, making
+   the title bar and the active workspace read as one connected surface. */
 :root[data-project-theme] .v2-shell-nav {
-  border-bottom-color: color-mix(in srgb, var(--project-color, var(--accent)) 38%, transparent);
+  border-bottom-color: var(--project-color, var(--accent));
 }
 
-/* The active project's tab: the base fill with the computed on-fill text —
-   the loudest "you are in this project" on screen. */
-:root[data-project-theme] .tab.active {
-  background: var(--project-color, var(--accent));
-  color: var(--project-on-accent, var(--accent-tx));
-}
-:root[data-project-theme] .tab.active .tab-close:hover {
-  background: color-mix(in srgb, var(--project-color-shade-1, var(--accent)) 35%, transparent);
-}
-:root[data-project-theme] .tab-strip .tab-new:hover {
-  background: var(--project-accent-soft, var(--accent-soft));
-  color: var(--project-accent, var(--accent));
-  box-shadow: none;
+/* The greeting already supplies two compact identity anchors. Keep the Flyt
+   wordmark neutral; only its mark and the workspace name carry project color. */
+:root[data-project-theme] .lander-greeting .logo-mark-wrap,
+:root[data-project-theme] .lander-title .mono {
+  color: var(--project-accent, var(--project-color, var(--accent)));
 }
 
-:root[data-project-theme] .v2-trace-chip.active {
-  background: var(--project-accent-soft, var(--accent-soft));
-  color: var(--project-accent, var(--accent));
-}
-
-/* ---- sidebar (the activity rail) ----
-   The rail surface tints via --rail above; the sliding pill, its edge strip,
-   and the active destination carry the project family. */
-
-:root[data-project-theme] .v2-shell-body > .activity-bar .activity-indicator {
-  background: var(--project-accent-soft, var(--accent-soft));
-}
-:root[data-project-theme] .v2-shell-body > .activity-bar .activity-indicator::before {
-  background: var(--project-color, var(--accent));
-}
-:root[data-project-theme] .v2-shell-body > .activity-bar .activity-btn.active {
-  color: var(--project-accent, var(--accent));
-}
-:root[data-project-theme] .v2-shell-body > .activity-bar .activity-btn.active:focus-visible {
-  outline-color: var(--project-color, var(--accent));
-}
-/* A count on the rail becomes a project-colored interruption… */
-:root[data-project-theme] .v2-shell-body > .activity-bar .activity-badge {
-  background: var(--project-color, var(--accent));
-  color: var(--project-on-accent, var(--accent-tx));
-}
-/* …but an error badge stays error: status color is not the project's to
-   spend, and "a plugin failed" must survive any project color. */
+/* Status remains semantic even beside project-colored identity chrome. */
 :root[data-project-theme] .v2-shell-body > .activity-bar .activity-badge.tone-err {
   background: var(--err);
   color: #fff;
-}
-
-/* ---- buttons ----
-   Primary buttons take the base fill with the computed on-fill text; hover
-   darkens to shade-1 — the derived ladder at work. Focus rings follow the
-   project color. */
-
-:root[data-project-theme] button.primary {
-  background: var(--project-color, var(--accent));
-  border-color: var(--project-color, var(--accent));
-  color: var(--project-on-accent, var(--accent-tx));
-}
-:root[data-project-theme] button.primary:hover:not(:disabled) {
-  background: var(--project-color-shade-1, var(--accent));
-  border-color: var(--project-color-shade-1, var(--accent));
-}
-:root[data-project-theme] button:focus-visible,
-:root[data-project-theme] .theme-toggle:focus-visible {
-  outline-color: var(--project-color, var(--accent));
-}
-
-/* ---- links ----
-   Text links read in the project accent; the input-gate option chips are
-   links in chip form and follow. */
-
-:root[data-project-theme] .md-body a {
-  color: var(--project-accent, var(--accent));
-}
-:root[data-project-theme] .input-gate-option {
-  color: var(--project-accent, var(--accent));
-  background: var(--project-accent-soft, var(--accent-soft));
-  border-color: color-mix(in srgb, var(--project-color, var(--accent)) 30%, transparent);
-}
-:root[data-project-theme] .input-gate-option:hover {
-  background: color-mix(in srgb, var(--project-color, var(--accent)) 18%, var(--pt-card-base, var(--card)));
-  border-color: color-mix(in srgb, var(--project-color, var(--accent)) 55%, transparent);
-}
-:root[data-project-theme] .input-gate-option:focus-visible {
-  outline-color: var(--project-color, var(--accent));
 }
