@@ -1,0 +1,14 @@
+{
+  "rowsVerifiedAgainstSource": 18,
+  "ownersVerified": 18,
+  "actionsVerified": 18,
+  "computedSum": 171,
+  "topThree": [
+    "service-18",
+    "service-17",
+    "service-16"
+  ],
+  "limitations": [
+    "Suggested recovery-time target is not actually specified in the source records."
+  ]
+}

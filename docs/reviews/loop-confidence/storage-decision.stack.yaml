@@ -1,0 +1,40 @@
+version: 2
+id: storage-decision
+name: "storage-decision"
+blocks:
+  - id: clarify
+    use: flyt-blocks-judgement:prompt-refiner
+    title: "clarify"
+    config:
+      instructions: "The requirements are complete. Produce a concise decision brief without questions or new requirements."
+      maxTokens: 6000
+  - id: options
+    kind: parallel
+    maxParallel: 2
+    lanes:
+      - id: json-option
+        use: flyt-blocks-core:general-analysis
+        title: "json option"
+        config:
+          instructions: "Assess JSON file storage: whole-file rewrites, hand-built atomic replacement and recovery, simple exports. Address all requirements; return an evidence-based case under 350 words."
+          maxTokens: 6000
+      - id: sqlite-option
+        use: flyt-blocks-core:general-analysis
+        title: "sqlite option"
+        config:
+          instructions: "Assess SQLite: built-in transactions, indexes and migrations, local file, no backend. Address requirements and maintenance costs; under 350 words."
+          maxTokens: 6000
+  - id: compare
+    use: flyt-blocks-judgement:compare
+    title: "compare"
+    config:
+      instructions: "Compare both supplied options on transactional correctness, 50000-entry performance and maintenance. Make one explicit recommendation with tradeoffs and a migration/rollback outline."
+      maxTokens: 6000
+  - id: publish
+    use: flyt-blocks-core:work
+    title: "publish"
+    config:
+      instructions: " Write the complete useful deliverable to storage-decision.md. Use file tools, not shell. Return only the Goal JSON envelope with candidate.text summarizing the actual result and naming storage-decision.md; findings may hold short lessons."
+      maxTokens: 6000
+      effect: "artifact"
+      systemPrompt: "Produce the requested document from the supplied evidence. Preserve facts, cite source files when applicable, and write only the requested output file. Do not build or execute project code."

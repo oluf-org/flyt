@@ -1,0 +1,30 @@
+version: 2
+id: support-faq
+name: "support-faq"
+blocks:
+  - id: orient
+    use: flyt-blocks-inquiry:orient
+    title: "orient"
+    config:
+      instructions: "Read only support-policy.md; list the five customer questions and all policy facts. Do not broaden scope."
+      maxTokens: 6000
+  - id: analyze
+    use: flyt-blocks-core:general-analysis
+    title: "analyze"
+    config:
+      instructions: "Draft accurate answers to all five questions from the supplied policy. Carry all facts and answers downstream; identify dangerous recovery promises."
+      maxTokens: 6000
+  - id: combine
+    use: flyt-blocks-core:combine
+    title: "combine"
+    config:
+      instructions: "Turn the supplied facts and answers into one concise FAQ. Preserve all five answers, especially data-loss limitations."
+      maxTokens: 6000
+  - id: publish
+    use: flyt-blocks-core:work
+    title: "publish"
+    config:
+      instructions: " Write the complete useful deliverable to faq.md. Use file tools, not shell. Return only the Goal JSON envelope with candidate.text summarizing the actual result and naming faq.md; findings may hold short lessons."
+      maxTokens: 6000
+      effect: "artifact"
+      systemPrompt: "Produce the requested document from the supplied evidence. Preserve facts, cite source files when applicable, and write only the requested output file. Do not build or execute project code."

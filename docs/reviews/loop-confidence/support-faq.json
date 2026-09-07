@@ -1,0 +1,151 @@
+{
+  "id": "support-faq",
+  "projectId": "D:\\electron\\llm-flow\\.flyt\\confidence-live\\workspaces\\support-faq",
+  "goalId": "fa361911-70e5-4706-ad1d-018d4c9ced7f",
+  "draftId": "4fc45a68-f7f4-4d4c-9bae-a18644cc4651",
+  "output": "faq.md",
+  "status": "achieved",
+  "reason": "All fixed acceptance checks passed",
+  "iterations": 1,
+  "calls": 9,
+  "knownUsd": 0.0064915500000000004,
+  "unknownCostCalls": 0,
+  "elapsedMs": 471729,
+  "history": [
+    {
+      "iteration": 1,
+      "revision": 1,
+      "score": 1,
+      "runId": "goal-fa361911-70e5-4706-ad1d-018d4c9ced7f-iteration-1",
+      "artifact": "iteration-1",
+      "preview": "Wrote faq.md (2,367 bytes) — the complete five-question customer FAQ built from support-policy.md. Q1 migration: three-step manual move via Export to JSON backup, user-side file transfer (framed as not an app feature), then Import, with a cross-reference warning that import replaces on confirmation. Q2 uninstall data loss: recovery only from a pre-uninstall export; no server backup, and an explicit refusal to promise recovery, matching the policy line. Q3 offline use: yes by design (device-store",
+      "verified": true,
+      "findings": [
+        "support-policy.md is the workspace's only Markdown file; its line-2 policy facts and lines 5–9 tickets match the FAQ's five questions exactly, so no invented source facts were needed.",
+        "Source does not state where exports are saved, supported platforms, or how files travel between phones; the FAQ hedges these (generic user-side transfer, explicitly not an app feature) instead of guessing."
+      ]
+    }
+  ],
+  "outputRecovery": null,
+  "runs": [
+    {
+      "runId": "goal-fa361911-70e5-4706-ad1d-018d4c9ced7f-iteration-1",
+      "startedAt": "2026-09-07T17:00:38.796Z",
+      "endedAt": "2026-09-07T17:08:29.395Z",
+      "blocks": [
+        {
+          "blockId": "orient",
+          "executionId": "orient",
+          "status": "active",
+          "use": "flyt-blocks-inquiry:orient"
+        },
+        {
+          "blockId": "orient",
+          "executionId": "orient",
+          "status": "done"
+        },
+        {
+          "blockId": "analyze",
+          "executionId": "analyze",
+          "status": "active",
+          "use": "flyt-blocks-core:general-analysis"
+        },
+        {
+          "blockId": "analyze",
+          "executionId": "analyze",
+          "status": "done"
+        },
+        {
+          "blockId": "combine",
+          "executionId": "combine",
+          "status": "active",
+          "use": "flyt-blocks-core:combine"
+        },
+        {
+          "blockId": "combine",
+          "executionId": "combine",
+          "status": "done"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "active",
+          "use": "flyt-blocks-core:work"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "done"
+        }
+      ],
+      "checkpoints": 3,
+      "toolCalls": 6
+    }
+  ],
+  "checkpoints": 3,
+  "result": {
+    "number": 1,
+    "revision": 1,
+    "runId": "goal-fa361911-70e5-4706-ad1d-018d4c9ced7f-iteration-1",
+    "candidate": {
+      "text": "Wrote faq.md (2,367 bytes) — the complete five-question customer FAQ built from support-policy.md. Q1 migration: three-step manual move via Export to JSON backup, user-side file transfer (framed as not an app feature), then Import, with a cross-reference warning that import replaces on confirmation. Q2 uninstall data loss: recovery only from a pre-uninstall export; no server backup, and an explicit refusal to promise recovery, matching the policy line. Q3 offline use: yes by design (device-stored, no account/sync), with the honest limitation that un-exported notes exist only on one device. Q4 no sync: stated plainly as absent, not a fault, with export/import as the workaround and no automatic backup. Q5 replacement on import: import replaces rather than merges after confirmation, advised to export first. All facts trace to support-policy.md line 2; the five questions match the ticket list at lines 5–9. Criteria terms offline, export, and import all appear in the file; runtime checks decide pass/fail. The source is silent on export file location, supported platforms, and transfer mechanics, so the FAQ omits or honestly hedges those rather than inventing them.",
+      "source": null
+    },
+    "checks": [
+      {
+        "index": 0,
+        "passed": true,
+        "digest": "ab04074554e2762e8be8214dec808f639c00116736a359507a36250dfdab7ebb",
+        "path": "faq.md",
+        "content": "# Support FAQ — Offline Notes App\n\nYour notes are stored on your device. This app works offline: there is no account and no cloud sync. Every answer below follows from that design.\n\n## 1. How do I move my notes to a new phone?\n\nThe app does not sync between devices, so moving notes is a manual three-step process:\n\n1. On your old phone, use **Export** to create a JSON backup of your notes.\n2. Transfer that backup file to your new phone using whatever file-transfer method you have available — the app itself does not send files between devices.\n3. On your new phone, use **Import** and choose that backup file.\n\nPlease read question 5 first: importing **replaces** the notes already on the new phone once you confirm.\n\n## 2. I uninstalled the app and lost my notes. Can I get them back?\n\nOnly if you exported them beforehand. Uninstalling deletes the notes stored on the device, and because there is no account and no cloud sync, no other copy exists to restore from.\n\n- If you have a JSON export made before you uninstalled: install the app again and import that file.\n- If you do not have an export: the notes cannot be recovered. There is no backup on any server for us to restore from, and we will not promise recovery without an export.\n\n## 3. Can I use the app offline?\n\nYes — offline use is the whole design. Notes are stored on your device and there is no account and no cloud sync, so you can read and write your notes without an internet connection. The flip side: anything you have not exported exists only on that one device, so export regularly if the notes matter to you.\n\n## 4. Why are my notes not syncing?\n\nBecause the app has no sync. There is no account and no cloud sync; notes are stored only on the device you made them on. Nothing is wrong with your device or settings — there is simply no sync feature to turn on. To get notes onto another device, export a JSON backup on this one and import it there. To protect against loss, export regularly; there is no automatic backup.\n\n## 5. Does import merge notes?\n\nNo. Import **replaces** the notes already on the device after you confirm — it does not merge or add to them. If the device currently holds notes you want to keep, export them first so you have a JSON backup before importing. Once an import replaces them, the previous notes are gone unless they were exported beforehand.\n"
+      },
+      {
+        "index": 1,
+        "passed": true,
+        "digest": "ab04074554e2762e8be8214dec808f639c00116736a359507a36250dfdab7ebb",
+        "path": "faq.md",
+        "content": "# Support FAQ — Offline Notes App\n\nYour notes are stored on your device. This app works offline: there is no account and no cloud sync. Every answer below follows from that design.\n\n## 1. How do I move my notes to a new phone?\n\nThe app does not sync between devices, so moving notes is a manual three-step process:\n\n1. On your old phone, use **Export** to create a JSON backup of your notes.\n2. Transfer that backup file to your new phone using whatever file-transfer method you have available — the app itself does not send files between devices.\n3. On your new phone, use **Import** and choose that backup file.\n\nPlease read question 5 first: importing **replaces** the notes already on the new phone once you confirm.\n\n## 2. I uninstalled the app and lost my notes. Can I get them back?\n\nOnly if you exported them beforehand. Uninstalling deletes the notes stored on the device, and because there is no account and no cloud sync, no other copy exists to restore from.\n\n- If you have a JSON export made before you uninstalled: install the app again and import that file.\n- If you do not have an export: the notes cannot be recovered. There is no backup on any server for us to restore from, and we will not promise recovery without an export.\n\n## 3. Can I use the app offline?\n\nYes — offline use is the whole design. Notes are stored on your device and there is no account and no cloud sync, so you can read and write your notes without an internet connection. The flip side: anything you have not exported exists only on that one device, so export regularly if the notes matter to you.\n\n## 4. Why are my notes not syncing?\n\nBecause the app has no sync. There is no account and no cloud sync; notes are stored only on the device you made them on. Nothing is wrong with your device or settings — there is simply no sync feature to turn on. To get notes onto another device, export a JSON backup on this one and import it there. To protect against loss, export regularly; there is no automatic backup.\n\n## 5. Does import merge notes?\n\nNo. Import **replaces** the notes already on the device after you confirm — it does not merge or add to them. If the device currently holds notes you want to keep, export them first so you have a JSON backup before importing. Once an import replaces them, the previous notes are gone unless they were exported beforehand.\n"
+      },
+      {
+        "index": 2,
+        "passed": true,
+        "digest": "ab04074554e2762e8be8214dec808f639c00116736a359507a36250dfdab7ebb",
+        "path": "faq.md",
+        "content": "# Support FAQ — Offline Notes App\n\nYour notes are stored on your device. This app works offline: there is no account and no cloud sync. Every answer below follows from that design.\n\n## 1. How do I move my notes to a new phone?\n\nThe app does not sync between devices, so moving notes is a manual three-step process:\n\n1. On your old phone, use **Export** to create a JSON backup of your notes.\n2. Transfer that backup file to your new phone using whatever file-transfer method you have available — the app itself does not send files between devices.\n3. On your new phone, use **Import** and choose that backup file.\n\nPlease read question 5 first: importing **replaces** the notes already on the new phone once you confirm.\n\n## 2. I uninstalled the app and lost my notes. Can I get them back?\n\nOnly if you exported them beforehand. Uninstalling deletes the notes stored on the device, and because there is no account and no cloud sync, no other copy exists to restore from.\n\n- If you have a JSON export made before you uninstalled: install the app again and import that file.\n- If you do not have an export: the notes cannot be recovered. There is no backup on any server for us to restore from, and we will not promise recovery without an export.\n\n## 3. Can I use the app offline?\n\nYes — offline use is the whole design. Notes are stored on your device and there is no account and no cloud sync, so you can read and write your notes without an internet connection. The flip side: anything you have not exported exists only on that one device, so export regularly if the notes matter to you.\n\n## 4. Why are my notes not syncing?\n\nBecause the app has no sync. There is no account and no cloud sync; notes are stored only on the device you made them on. Nothing is wrong with your device or settings — there is simply no sync feature to turn on. To get notes onto another device, export a JSON backup on this one and import it there. To protect against loss, export regularly; there is no automatic backup.\n\n## 5. Does import merge notes?\n\nNo. Import **replaces** the notes already on the device after you confirm — it does not merge or add to them. If the device currently holds notes you want to keep, export them first so you have a JSON backup before importing. Once an import replaces them, the previous notes are gone unless they were exported beforehand.\n"
+      }
+    ],
+    "tests": [],
+    "score": 1,
+    "achieved": true,
+    "findings": [
+      {
+        "text": "support-policy.md is the workspace's only Markdown file; its line-2 policy facts and lines 5–9 tickets match the FAQ's five questions exactly, so no invented source facts were needed.",
+        "iteration": 1,
+        "source": "goal-fa361911-70e5-4706-ad1d-018d4c9ced7f-iteration-1",
+        "status": "hypothesis"
+      },
+      {
+        "text": "Source does not state where exports are saved, supported platforms, or how files travel between phones; the FAQ hedges these (generic user-side transfer, explicitly not an app feature) instead of guessing.",
+        "iteration": 1,
+        "source": "goal-fa361911-70e5-4706-ad1d-018d4c9ced7f-iteration-1",
+        "status": "hypothesis"
+      },
+      {
+        "text": "Recovery is promised only via a pre-uninstall export; the FAQ explicitly disclaims server-side recovery per the never-promise-recovery policy line.",
+        "iteration": 1,
+        "source": "goal-fa361911-70e5-4706-ad1d-018d4c9ced7f-iteration-1",
+        "status": "hypothesis"
+      },
+      {
+        "text": "Criteria terms offline/export/import are present in the written faq.md content, but actual criterion verification is left to the runtime check.",
+        "iteration": 1,
+        "source": "goal-fa361911-70e5-4706-ad1d-018d4c9ced7f-iteration-1",
+        "status": "hypothesis"
+      }
+    ],
+    "proposal": null,
+    "knownUsd": 0.0064915500000000004,
+    "calls": 9,
+    "needsInput": null
+  }
+}

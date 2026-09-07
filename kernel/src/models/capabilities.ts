@@ -6,6 +6,7 @@
  * a local probe, and a conservative harness default.
  */
 import type { JsonValue, Message } from '../types.js';
+import { mergeReasoningDetails } from './replay.js';
 
 export type FactConfidence = 'verified' | 'reported' | 'inferred' | 'unknown';
 
@@ -210,6 +211,7 @@ export interface ContextBudgetBreakdown {
 
 export type ContextPolicyAction =
   | 'none'
+  | 'assemble_reasoning_replay'
   | 'prune_superseded_tool_previews'
   | 'retain_recent_turns'
   | 'bound_tool_previews'
@@ -344,8 +346,12 @@ export function manageContextBudget(input: {
   const overhead = Math.max(0, input.profile.providerOverheadTokens.value);
   const original = input.messages.map(message => ({ ...message }));
   const requested = breakdown(original, tools, attachments, requestedOutput, overhead);
-  let messages = original;
+  let messages = original.map(message => message.replay?.provider === 'openrouter'
+    ? { ...message, replay: { ...message.replay, items: mergeReasoningDetails(message.replay.items) } } : message);
   const actions: ContextBudgetDecision['actions'] = [];
+  const assembled = messages.filter((message, index) => message.replay && message.replay.items.length < (original[index].replay?.items.length ?? 0)).length;
+  if (assembled) actions.push({ action: 'assemble_reasoning_replay', affectedMessages: assembled, handles: [],
+    reason: 'reassembled streamed reasoning text fragments without dropping their content or changing opaque items' });
   if (attachments.length) actions.push({
     action: 'load_explicit_artifacts_by_handle', affectedMessages: 0,
     handles: attachments.map(item => item.handle),

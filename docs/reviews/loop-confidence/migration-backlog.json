@@ -1,0 +1,74 @@
+{
+  "id": "migration-backlog",
+  "projectId": "D:\\electron\\llm-flow\\.flyt\\confidence-live\\workspaces\\migration-backlog",
+  "goalId": "98375f81-ee65-4767-949d-e96c2c58c0a0",
+  "draftId": "6c0ca3bd-20b0-42fd-821c-dbbdab3dccf9",
+  "output": "migration-tasks.md",
+  "status": "failed",
+  "reason": "Child iteration-1 failed: Block \"publish\" failed: The model repeatedly returned no visible answer or native tool call.",
+  "iterations": 0,
+  "calls": 11,
+  "knownUsd": 0.0221214,
+  "unknownCostCalls": 0,
+  "elapsedMs": 874592,
+  "history": [],
+  "outputRecovery": null,
+  "runs": [
+    {
+      "runId": "goal-98375f81-ee65-4767-949d-e96c2c58c0a0-iteration-1",
+      "startedAt": "2026-09-07T17:21:58.579Z",
+      "endedAt": "2026-09-07T17:36:32.061Z",
+      "blocks": [
+        {
+          "blockId": "research",
+          "executionId": "research",
+          "status": "active",
+          "use": "flyt-blocks-core:research"
+        },
+        {
+          "blockId": "research",
+          "executionId": "research",
+          "status": "done"
+        },
+        {
+          "blockId": "backlog",
+          "executionId": "backlog",
+          "status": "active",
+          "use": "flyt-blocks-loop:backlog-plan"
+        },
+        {
+          "blockId": "backlog",
+          "executionId": "backlog",
+          "status": "done"
+        },
+        {
+          "blockId": "split",
+          "executionId": "split",
+          "status": "active",
+          "use": "flyt-blocks-core:split"
+        },
+        {
+          "blockId": "split",
+          "executionId": "split",
+          "status": "done"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "active",
+          "use": "flyt-blocks-core:work"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "failed",
+          "error": "The model repeatedly returned no visible answer or native tool call."
+        }
+      ],
+      "checkpoints": 2,
+      "toolCalls": 6
+    }
+  ],
+  "checkpoints": 2,
+  "result": null
+}

@@ -1,0 +1,215 @@
+{
+  "id": "runbook-completion",
+  "projectId": "D:\\electron\\llm-flow\\.flyt\\confidence-live\\workspaces\\runbook-completion",
+  "goalId": "2851ffca-15e5-4238-8dc9-a7c1f32348e2",
+  "draftId": "f94f1e2d-6b76-4a0a-a83a-dd248a7501a0",
+  "output": "runbook.md",
+  "status": "achieved",
+  "reason": "All fixed acceptance checks passed",
+  "iterations": 2,
+  "calls": 21,
+  "knownUsd": 0.03425987375,
+  "unknownCostCalls": 0,
+  "elapsedMs": 1310335,
+  "history": [
+    {
+      "iteration": 1,
+      "revision": 1,
+      "score": 0.6666666666666666,
+      "runId": "goal-2851ffca-15e5-4238-8dc9-a7c1f32348e2-iteration-1",
+      "artifact": "iteration-1",
+      "preview": "Iteration 1 (DRAFT) complete: wrote runbook.md (~340 words, 2395 bytes). It is labelled 'STATUS: DRAFT (iteration 1) — NOT fact-checked' and deliberately omits the string 'Ready for review' (verified by case-insensitive workspace search; matches exist only in .flyt run metadata, not the deliverable). The runbook covers: safety rules (preserve user data, never uninstall/clear storage, work offline, no destructive fixes), 9 numbered steps from confirming the interrupted-import report through evide",
+      "verified": false,
+      "findings": [
+        "incident.md's incident narrative is entirely on line 2, so all incident facts cite incident.md:2; procedural details (backup verification, restore procedure) are not sourced and are left as placeholders rather than invented.",
+        "Unverified: word count (~340) and the absence of 'Ready for review' in runbook.md were checked, but the final criteria (including 'Ready for review') are iteration-2 work and not yet satisfied."
+      ]
+    },
+    {
+      "iteration": 2,
+      "revision": 1,
+      "score": 1,
+      "runId": "goal-2851ffca-15e5-4238-8dc9-a7c1f32348e2-iteration-2",
+      "artifact": "iteration-2",
+      "preview": "Iteration 2 (review/revise) complete. Read runbook.md and incident.md in full, fact-checked every statement against the sole source (incident.md:2), then applied 7 targeted edits to runbook.md (now 37 lines, 2806 bytes): replaced the DRAFT status line with the heading '## Ready for review' (runbook.md:3), added a source-and-placeholders preamble (line 7), added a safety-rules 'never uninstall/clear storage' line (line 12), hardened step 4 to treat uncertain backup existence as unverified (line 2",
+      "verified": true,
+      "findings": []
+    }
+  ],
+  "outputRecovery": {
+    "originalRunId": "goal-2851ffca-15e5-4238-8dc9-a7c1f32348e2-iteration-2",
+    "phase": "iteration-2-format-1",
+    "attempt": 1,
+    "textDigest": "07e446e381a2c4a7771ba69a5b5288f7812b80c38e17f9b1438eef15362cdee7",
+    "exhausted": false,
+    "repairedRunId": "goal-2851ffca-15e5-4238-8dc9-a7c1f32348e2-iteration-2-format-1",
+    "recovered": true
+  },
+  "runs": [
+    {
+      "runId": "goal-2851ffca-15e5-4238-8dc9-a7c1f32348e2-iteration-1",
+      "startedAt": "2026-09-07T17:42:58.649Z",
+      "endedAt": "2026-09-07T17:54:45.892Z",
+      "blocks": [
+        {
+          "blockId": "draft-review",
+          "executionId": "draft-review",
+          "status": "active",
+          "use": "flyt-blocks-core:general-analysis"
+        },
+        {
+          "blockId": "draft-review",
+          "executionId": "draft-review",
+          "status": "done"
+        },
+        {
+          "blockId": "critique",
+          "executionId": "critique",
+          "status": "active",
+          "use": "flyt-blocks-judgement:compare"
+        },
+        {
+          "blockId": "critique",
+          "executionId": "critique",
+          "status": "done"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "active",
+          "use": "flyt-blocks-core:work"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "done"
+        }
+      ],
+      "checkpoints": 5,
+      "toolCalls": 7
+    },
+    {
+      "runId": "goal-2851ffca-15e5-4238-8dc9-a7c1f32348e2-iteration-2",
+      "startedAt": "2026-09-07T17:54:46.594Z",
+      "endedAt": "2026-09-07T18:04:18.329Z",
+      "blocks": [
+        {
+          "blockId": "draft-review",
+          "executionId": "draft-review",
+          "status": "active",
+          "use": "flyt-blocks-core:general-analysis"
+        },
+        {
+          "blockId": "draft-review",
+          "executionId": "draft-review",
+          "status": "done"
+        },
+        {
+          "blockId": "critique",
+          "executionId": "critique",
+          "status": "active",
+          "use": "flyt-blocks-judgement:compare"
+        },
+        {
+          "blockId": "critique",
+          "executionId": "critique",
+          "status": "done"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "active",
+          "use": "flyt-blocks-core:work"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "done"
+        }
+      ],
+      "checkpoints": 10,
+      "toolCalls": 17
+    },
+    {
+      "runId": "goal-2851ffca-15e5-4238-8dc9-a7c1f32348e2-iteration-2-format-1",
+      "startedAt": "2026-09-07T18:04:18.954Z",
+      "endedAt": "2026-09-07T18:04:30.398Z",
+      "blocks": [
+        {
+          "blockId": "format-result",
+          "executionId": "format-result",
+          "status": "active",
+          "use": "flyt-blocks-core:general-analysis"
+        },
+        {
+          "blockId": "format-result",
+          "executionId": "format-result",
+          "status": "done"
+        }
+      ],
+      "checkpoints": 0,
+      "toolCalls": 0
+    },
+    {
+      "runId": "goal-2851ffca-15e5-4238-8dc9-a7c1f32348e2-setup",
+      "startedAt": "2026-09-07T17:42:41.260Z",
+      "endedAt": "2026-09-07T17:42:57.983Z",
+      "blocks": [
+        {
+          "blockId": "read-incident",
+          "executionId": "read-incident",
+          "status": "active",
+          "use": "flyt-blocks-core:general-analysis"
+        },
+        {
+          "blockId": "read-incident",
+          "executionId": "read-incident",
+          "status": "done"
+        }
+      ],
+      "checkpoints": 0,
+      "toolCalls": 2
+    }
+  ],
+  "checkpoints": 15,
+  "result": {
+    "number": 2,
+    "revision": 1,
+    "runId": "goal-2851ffca-15e5-4238-8dc9-a7c1f32348e2-iteration-2",
+    "candidate": {
+      "text": "Iteration 2 (review/revise) complete. Read runbook.md and incident.md in full, fact-checked every statement against the sole source (incident.md:2), then applied 7 targeted edits to runbook.md (now 37 lines, 2806 bytes): replaced the DRAFT status line with the heading '## Ready for review' (runbook.md:3), added a source-and-placeholders preamble (line 7), added a safety-rules 'never uninstall/clear storage' line (line 12), hardened step 4 to treat uncertain backup existence as unverified (line 21), hardened step 6 to require explicit user confirmation before restore (line 23), split Escalation into sourced vs. unsourced triggers (line 30), and added Fact-check notes (lines 32-36). Criterion strings verified present by exact search: 'Ready for review' (line 3), 'backup' (lines 20-24, 30), 'confirmation' (lines 23, 30). No draft leftovers remain. All incident facts cite incident.md:2; unsupplied procedure details stay marked [PLACEHOLDER], nothing invented; no destructive fixes anywhere. Deliverable: runbook.md. Length ~370-400 words, under the 450-word cap (estimate, not an exact count).",
+      "source": null
+    },
+    "checks": [
+      {
+        "index": 0,
+        "passed": true,
+        "digest": "7beb2e3f0376ec3f37dd62e84a5e9e793c842a908b5969bb983e581b345307ab",
+        "path": "runbook.md",
+        "content": "# Runbook — Interrupted Import, Missing Notes\n\n## Ready for review\n\nIteration 2 revision. Every statement was re-checked against the supplied source; incident.md line 2 is the only fact source. Items marked [PLACEHOLDER] are unsupplied — get real values before executing; nothing was invented.\n\n**Source:** incident.md, line 2 (incident narrative). Every sourced step cites it. Anything incident.md does not specify is a [PLACEHOLDER] — do not improvise or invent values.\n\n## Safety rules (apply before any other action)\n\n- Preserve user data: copy current app data and diagnostic logs first; never modify the originals.\n- Never uninstall the app and never clear storage.\n- Work offline.\n- No destructive fixes of any kind.\n\n## Steps\n\n1. **Confirm the report:** the import was interrupted and notes appear missing. (incident.md:2)\n2. **Preserve evidence:** copy current app data and diagnostic logs to [PLACEHOLDER: evidence copy location] before anything else. If the copy fails, stop and escalate. (incident.md:2)\n3. **Ask about a backup:** ask whether an exported JSON backup exists; record the answer in [PLACEHOLDER: ticket location]. (incident.md:2)\n4. **Decision point:** if no verified backup exists, stop and escalate to engineering. Treat \"existence uncertain\" as \"not verified\". (incident.md:2)\n5. **Verify the backup:** confirm it is complete and valid before use: [PLACEHOLDER: verification method]. An unverifiable backup counts as no verified backup. (procedure detail not in incident.md — unsupplied; fill before use)\n6. **Get user confirmation:** restore only after explicit user confirmation, because import replaces notes. Without it, stop. (incident.md:2)\n7. **Restore:** from the verified backup, using [PLACEHOLDER: restore procedure]. (procedure detail not in incident.md — unsupplied; fill before use)\n8. **Verify the result:** verify the record count and two sample notes. (incident.md:2)\n9. **Report honestly:** report only verified results; never claim a successful restore without verification. (incident.md:2)\n\n## Escalation\n\nEngineering contact/channel: [PLACEHOLDER]. Sourced trigger: no verified backup exists (incident.md:2). Procedural triggers (unsourced): evidence copy fails, user declines confirmation, or post-restore verification fails. In every stop case, leave all data untouched; no destructive fixes.\n\n## Fact-check notes (iteration 2)\n\n- All nine steps and the safety rules trace to incident.md:2, the source's only narrative line; additions beyond it are conservative procedural rules.\n- Placeholders (steps 2, 3, 5, 7; engineering contact) are unsupplied; fill with user-provided values before use.\n- Step 3's \"JSON\" and step 8's \"two sample notes\" are quoted from incident.md:2, so both stay. Draft status replaced by the Ready for review heading.\n"
+      },
+      {
+        "index": 1,
+        "passed": true,
+        "digest": "7beb2e3f0376ec3f37dd62e84a5e9e793c842a908b5969bb983e581b345307ab",
+        "path": "runbook.md",
+        "content": "# Runbook — Interrupted Import, Missing Notes\n\n## Ready for review\n\nIteration 2 revision. Every statement was re-checked against the supplied source; incident.md line 2 is the only fact source. Items marked [PLACEHOLDER] are unsupplied — get real values before executing; nothing was invented.\n\n**Source:** incident.md, line 2 (incident narrative). Every sourced step cites it. Anything incident.md does not specify is a [PLACEHOLDER] — do not improvise or invent values.\n\n## Safety rules (apply before any other action)\n\n- Preserve user data: copy current app data and diagnostic logs first; never modify the originals.\n- Never uninstall the app and never clear storage.\n- Work offline.\n- No destructive fixes of any kind.\n\n## Steps\n\n1. **Confirm the report:** the import was interrupted and notes appear missing. (incident.md:2)\n2. **Preserve evidence:** copy current app data and diagnostic logs to [PLACEHOLDER: evidence copy location] before anything else. If the copy fails, stop and escalate. (incident.md:2)\n3. **Ask about a backup:** ask whether an exported JSON backup exists; record the answer in [PLACEHOLDER: ticket location]. (incident.md:2)\n4. **Decision point:** if no verified backup exists, stop and escalate to engineering. Treat \"existence uncertain\" as \"not verified\". (incident.md:2)\n5. **Verify the backup:** confirm it is complete and valid before use: [PLACEHOLDER: verification method]. An unverifiable backup counts as no verified backup. (procedure detail not in incident.md — unsupplied; fill before use)\n6. **Get user confirmation:** restore only after explicit user confirmation, because import replaces notes. Without it, stop. (incident.md:2)\n7. **Restore:** from the verified backup, using [PLACEHOLDER: restore procedure]. (procedure detail not in incident.md — unsupplied; fill before use)\n8. **Verify the result:** verify the record count and two sample notes. (incident.md:2)\n9. **Report honestly:** report only verified results; never claim a successful restore without verification. (incident.md:2)\n\n## Escalation\n\nEngineering contact/channel: [PLACEHOLDER]. Sourced trigger: no verified backup exists (incident.md:2). Procedural triggers (unsourced): evidence copy fails, user declines confirmation, or post-restore verification fails. In every stop case, leave all data untouched; no destructive fixes.\n\n## Fact-check notes (iteration 2)\n\n- All nine steps and the safety rules trace to incident.md:2, the source's only narrative line; additions beyond it are conservative procedural rules.\n- Placeholders (steps 2, 3, 5, 7; engineering contact) are unsupplied; fill with user-provided values before use.\n- Step 3's \"JSON\" and step 8's \"two sample notes\" are quoted from incident.md:2, so both stay. Draft status replaced by the Ready for review heading.\n"
+      },
+      {
+        "index": 2,
+        "passed": true,
+        "digest": "7beb2e3f0376ec3f37dd62e84a5e9e793c842a908b5969bb983e581b345307ab",
+        "path": "runbook.md",
+        "content": "# Runbook — Interrupted Import, Missing Notes\n\n## Ready for review\n\nIteration 2 revision. Every statement was re-checked against the supplied source; incident.md line 2 is the only fact source. Items marked [PLACEHOLDER] are unsupplied — get real values before executing; nothing was invented.\n\n**Source:** incident.md, line 2 (incident narrative). Every sourced step cites it. Anything incident.md does not specify is a [PLACEHOLDER] — do not improvise or invent values.\n\n## Safety rules (apply before any other action)\n\n- Preserve user data: copy current app data and diagnostic logs first; never modify the originals.\n- Never uninstall the app and never clear storage.\n- Work offline.\n- No destructive fixes of any kind.\n\n## Steps\n\n1. **Confirm the report:** the import was interrupted and notes appear missing. (incident.md:2)\n2. **Preserve evidence:** copy current app data and diagnostic logs to [PLACEHOLDER: evidence copy location] before anything else. If the copy fails, stop and escalate. (incident.md:2)\n3. **Ask about a backup:** ask whether an exported JSON backup exists; record the answer in [PLACEHOLDER: ticket location]. (incident.md:2)\n4. **Decision point:** if no verified backup exists, stop and escalate to engineering. Treat \"existence uncertain\" as \"not verified\". (incident.md:2)\n5. **Verify the backup:** confirm it is complete and valid before use: [PLACEHOLDER: verification method]. An unverifiable backup counts as no verified backup. (procedure detail not in incident.md — unsupplied; fill before use)\n6. **Get user confirmation:** restore only after explicit user confirmation, because import replaces notes. Without it, stop. (incident.md:2)\n7. **Restore:** from the verified backup, using [PLACEHOLDER: restore procedure]. (procedure detail not in incident.md — unsupplied; fill before use)\n8. **Verify the result:** verify the record count and two sample notes. (incident.md:2)\n9. **Report honestly:** report only verified results; never claim a successful restore without verification. (incident.md:2)\n\n## Escalation\n\nEngineering contact/channel: [PLACEHOLDER]. Sourced trigger: no verified backup exists (incident.md:2). Procedural triggers (unsourced): evidence copy fails, user declines confirmation, or post-restore verification fails. In every stop case, leave all data untouched; no destructive fixes.\n\n## Fact-check notes (iteration 2)\n\n- All nine steps and the safety rules trace to incident.md:2, the source's only narrative line; additions beyond it are conservative procedural rules.\n- Placeholders (steps 2, 3, 5, 7; engineering contact) are unsupplied; fill with user-provided values before use.\n- Step 3's \"JSON\" and step 8's \"two sample notes\" are quoted from incident.md:2, so both stay. Draft status replaced by the Ready for review heading.\n"
+      }
+    ],
+    "tests": [],
+    "score": 1,
+    "achieved": true,
+    "findings": [],
+    "proposal": null,
+    "knownUsd": 0.03425987375,
+    "calls": 21,
+    "needsInput": null
+  }
+}

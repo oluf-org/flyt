@@ -673,13 +673,19 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
       ? diagnoseTurnRepair(content, schemas.map(schema => schema.name), answer.unparsedToolCall)
       : null;
     if (repair) {
+      const reasoningExhausted = finishReason === 'length' && !content.trim() && Boolean(reasoning);
+      const repairInstruction = reasoningExhausted
+        ? `The previous response exhausted its ${maxTokens?.toLocaleString('en-US') ?? 'configured'}-token completion allowance on internal reasoning without an answer. That allowance includes reasoning and visible output. Use the evidence and reasoning already recorded; do not restart the analysis. Produce the needed native tool call or a concise final answer now. Preserve the required output schema.`
+        : turnRepairInstruction(repair);
       await session.append({ type: 'step.end', data: { runId, blockId, step, finishReason } });
       ctx.emit('step/end', ref, settled);
       if (turnRepairs >= Math.max(0, Math.floor(maxTurnRepairs))) {
         stopped = 'bound';
         reason = repair.kind === 'unparsed_tool_call'
           ? `The model repeatedly emitted a non-native tool call (${repair.detail ?? 'unknown syntax'}); no tool ran.`
-          : 'The model repeatedly returned no visible answer or native tool call.';
+          : reasoningExhausted
+            ? `The model repeatedly exhausted its ${maxTokens?.toLocaleString('en-US') ?? 'configured'}-token completion allowance on reasoning without an answer. Increase this block's maxTokens or reduce its scope, then retry the failed block; completed predecessors are retained.`
+            : 'The model repeatedly returned no visible answer or native tool call.';
         break;
       }
       turnRepairs += 1;
@@ -690,10 +696,10 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
         attempt: turnRepairs,
         maxAttempts: Math.max(0, Math.floor(maxTurnRepairs)),
         ...(repair.detail ? { detail: repair.detail } : {}),
-        reason: turnRepairInstruction(repair),
+        reason: repairInstruction,
       } });
       await session.append({ type: 'message.user', data: {
-        blockId, content: turnRepairInstruction(repair),
+        blockId, content: repairInstruction,
       } });
       continue;
     }

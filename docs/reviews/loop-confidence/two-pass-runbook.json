@@ -1,0 +1,160 @@
+{
+  "id": "two-pass-runbook",
+  "projectId": "D:\\electron\\llm-flow\\.flyt\\confidence-live\\workspaces\\two-pass-runbook",
+  "goalId": "254c277d-b8d0-469a-9339-56c394167553",
+  "draftId": "d1d5d1a0-b863-4293-aa55-11d9123f4278",
+  "output": "runbook.md",
+  "status": "achieved",
+  "reason": "All fixed acceptance checks passed",
+  "iterations": 1,
+  "calls": 18,
+  "knownUsd": 0.014528001000000002,
+  "unknownCostCalls": 0,
+  "elapsedMs": 633074,
+  "history": [
+    {
+      "iteration": 1,
+      "revision": 1,
+      "score": 1,
+      "runId": "goal-254c277d-b8d0-469a-9339-56c394167553-iteration-1",
+      "artifact": "iteration-1",
+      "preview": "Task complete over two iterations. Iteration 1 wrote runbook.md as a labelled draft from incident.md only (preserved user data, no code execution, no destructive actions). Iteration 2 re-read the draft, re-checked every step against incident.md, and revised it: (1) replaced the DRAFT banner with '## Ready for review — iteration 2 of 2' and a READY-FOR-REVIEW status line stating the fact-check pass was done; (2) resolved the step-1 ordering ambiguity by re-reading incident.md — the ask (read-only",
+      "verified": true,
+      "findings": [
+        "runbook.md now contains all three required strings ('Ready for review', 'backup', 'confirmation') — confirmed by recorded search hits, not assumed.",
+        "incident.md's ordering of the backup question vs the preserve-copies step is genuinely ambiguous; the runbook resolves it as ask-first with preserve-state as the first physical action, and says so explicitly."
+      ]
+    }
+  ],
+  "outputRecovery": null,
+  "runs": [
+    {
+      "runId": "goal-254c277d-b8d0-469a-9339-56c394167553-iteration-1",
+      "startedAt": "2026-09-07T17:12:03.643Z",
+      "endedAt": "2026-09-07T17:21:55.614Z",
+      "blocks": [
+        {
+          "blockId": "draft-review",
+          "executionId": "draft-review",
+          "status": "active",
+          "use": "flyt-blocks-core:general-analysis"
+        },
+        {
+          "blockId": "draft-review",
+          "executionId": "draft-review",
+          "status": "done"
+        },
+        {
+          "blockId": "critique",
+          "executionId": "critique",
+          "status": "active",
+          "use": "flyt-blocks-judgement:compare"
+        },
+        {
+          "blockId": "critique",
+          "executionId": "critique",
+          "status": "done"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "active",
+          "use": "flyt-blocks-core:work"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "done"
+        }
+      ],
+      "checkpoints": 15,
+      "toolCalls": 19
+    },
+    {
+      "runId": "goal-254c277d-b8d0-469a-9339-56c394167553-setup",
+      "startedAt": "2026-09-07T17:11:23.916Z",
+      "endedAt": "2026-09-07T17:12:03.113Z",
+      "blocks": [
+        {
+          "blockId": "read-incident",
+          "executionId": "read-incident",
+          "status": "active",
+          "use": "flyt-blocks-core:general-analysis"
+        },
+        {
+          "blockId": "read-incident",
+          "executionId": "read-incident",
+          "status": "done"
+        }
+      ],
+      "checkpoints": 0,
+      "toolCalls": 2
+    }
+  ],
+  "checkpoints": 15,
+  "result": {
+    "number": 1,
+    "revision": 1,
+    "runId": "goal-254c277d-b8d0-469a-9339-56c394167553-iteration-1",
+    "candidate": {
+      "text": "Task complete over two iterations. Iteration 1 wrote runbook.md as a labelled draft from incident.md only (preserved user data, no code execution, no destructive actions). Iteration 2 re-read the draft, re-checked every step against incident.md, and revised it: (1) replaced the DRAFT banner with '## Ready for review — iteration 2 of 2' and a READY-FOR-REVIEW status line stating the fact-check pass was done; (2) resolved the step-1 ordering ambiguity by re-reading incident.md — the ask (read-only question about an exported JSON backup) and the preserve-copies step are both non-destructive and both precede any restore, so the runbook now keeps the ask first as step 1 with preserve-state as step 2 and labels the ordering as safe either way; (3) sharpened the step-3 'verified backup' gap: incident.md does not define verification (record-count vs sample-note vs other), so the runbook now instructs confirming the method with engineering and treating every backup as unverified until then; (4) updated the step-2 gap status and the scope note to reflect the iteration-2 pass, keeping incident.md line citations (lines 1-2) on each sourced fact. Final criteria check via workspace search confirmed runbook.md contains 'Ready for review' (line 3), 'backup' (lines 23, 34-37, 40), and 'confirmation' (lines 39-40). Coverage gaps remain labelled and open, not invented: no exact copy commands or storage paths in incident.md, and no defined backup-verification method. Unverified: no runtime or engine checks were run; facts rest solely on the recorded incident.md reads and the workspace search.",
+      "source": null
+    },
+    "checks": [
+      {
+        "index": 0,
+        "passed": true,
+        "digest": "39199d1029e545df74c3fb2fea3b8694621ac525f88d8f2b0b2bed0e970ec4ec",
+        "path": "runbook.md",
+        "content": "# Incident runbook: interrupted import / missing notes\n\n## Ready for review — iteration 2 of 2\n\n> **STATUS: READY FOR REVIEW (revision after fact-check).**\n> Iteration 2 outcome: every line was re-read and checked against `incident.md` (single content line: line 2). Facts are cited to that line; anything not stated there is explicitly labeled as a gap, extension, or assumption. No fact was added from outside the source. Prime directives unchanged: preserve user data at every step, no destructive fixes.\n\n## Scope\n- Situation: an import was interrupted; notes appear missing. (`incident.md`, line 2)\n- Actors: support handles the incident; engineering is the escalation path. (`incident.md`, line 2)\n- Source of truth: `incident.md` only. No fact below comes from code, memory, or outside knowledge.\n- Prime directive: preserve user data at every step; no destructive fixes.\n\n## Safety rules (apply to every step)\n1. Work offline. (`incident.md`, line 2)\n2. Never uninstall the app. (`incident.md`, line 2)\n3. Never clear storage. (`incident.md`, line 2)\n4. Preserve user data at every step; no destructive fixes. (Directive; consistent with `incident.md`, line 2.)\n5. Do not claim a successful restore without verification. (`incident.md`, line 2)\n\n## Steps\n\n1. **Ask whether an exported JSON backup exists.**\n   - Support must ask whether an exported JSON backup exists; record the answer before any recovery action. (`incident.md`, line 2)\n   - This step is a question only — it must not touch app data or storage.\n   - Ordering (resolved in iteration 2): `incident.md` states the ask first, then says \"First preserve a copy of current app data and diagnostic logs\". Sentence order and the word \"First\" attach to different things — the ask (read-only) comes first, and the copy is the first physical action. Both are non-destructive and both precede any restore, so the practical order is: ask → copy → escalate/restore. No conflict.\n\n2. **Preserve current state first — before any recovery action.**\n   - Take a copy of the current app data. (`incident.md`, line 2)\n   - Take a copy of the diagnostic logs. (`incident.md`, line 2)\n   - While doing this: work offline, never uninstall the app, never clear storage. (`incident.md`, line 2)\n   - Gap (labeled): `incident.md` gives no exact commands or storage paths for the copies. Do not guess them; obtain the copy method from the user or engineering. Still a gap after the iteration 2 fact-check.\n\n3. **Escalate if no verified backup exists.**\n   - Escalate to engineering if no verified backup exists. (`incident.md`, line 2)\n   - A backup counts as verified only once it is confirmed usable. Gap (labeled, still open): `incident.md` requires a \"verified backup\" but does not define the verification method — it does not say whether verification means a record-count check, a sample-note check, or something else. Confirm the method with engineering before relying on any backup, and treat a backup as unverified until then.\n   - **STOP / escalate:** if no backup exists, or the backup cannot be verified, escalate to engineering and stop recovery actions. Do not improvise a restore.\n\n4. **Restore only with explicit user confirmation — and only from the backup.**\n   - Restore only after explicit user confirmation, because import replaces notes. (`incident.md`, line 2)\n   - Restore from the verified backup only. Never hand-craft, edit, or partially apply data; no destructive fixes. (Safety restatement; the \"import replaces notes\" rationale is from `incident.md`, line 2.)\n\n5. **Verify after restore.**\n   - Verify the record count and two sample notes. (`incident.md`, line 2)\n   - Do not claim a successful restore without verification. (`incident.md`, line 2)\n   - If verification fails, stop and escalate; do not claim success.\n\n## Open gaps (status after the iteration 2 fact-check)\n- Exact backup/copy commands and storage paths — still open; not stated in `incident.md`.\n- Definition of a \"verified\" backup and its verification method — still open; not stated in `incident.md` (see step 3).\n- Ordering of the ask (read-only) vs. the preserve-copy (first physical action) — resolved in iteration 2: no conflict; see step 1.\n- Restore mechanics (how the restore is performed) — still open; not stated in `incident.md`.\n\n---\n**Assumption (labeled):** `incident.md` is the only factual source; the truncated remainder of the original assignment did not introduce additional source facts. All content above is restricted to facts stated there, with gaps explicitly labeled rather than invented. Every incident fact cited above lives on line 2 of `incident.md` (the sole content line of that file).\n"
+      },
+      {
+        "index": 1,
+        "passed": true,
+        "digest": "39199d1029e545df74c3fb2fea3b8694621ac525f88d8f2b0b2bed0e970ec4ec",
+        "path": "runbook.md",
+        "content": "# Incident runbook: interrupted import / missing notes\n\n## Ready for review — iteration 2 of 2\n\n> **STATUS: READY FOR REVIEW (revision after fact-check).**\n> Iteration 2 outcome: every line was re-read and checked against `incident.md` (single content line: line 2). Facts are cited to that line; anything not stated there is explicitly labeled as a gap, extension, or assumption. No fact was added from outside the source. Prime directives unchanged: preserve user data at every step, no destructive fixes.\n\n## Scope\n- Situation: an import was interrupted; notes appear missing. (`incident.md`, line 2)\n- Actors: support handles the incident; engineering is the escalation path. (`incident.md`, line 2)\n- Source of truth: `incident.md` only. No fact below comes from code, memory, or outside knowledge.\n- Prime directive: preserve user data at every step; no destructive fixes.\n\n## Safety rules (apply to every step)\n1. Work offline. (`incident.md`, line 2)\n2. Never uninstall the app. (`incident.md`, line 2)\n3. Never clear storage. (`incident.md`, line 2)\n4. Preserve user data at every step; no destructive fixes. (Directive; consistent with `incident.md`, line 2.)\n5. Do not claim a successful restore without verification. (`incident.md`, line 2)\n\n## Steps\n\n1. **Ask whether an exported JSON backup exists.**\n   - Support must ask whether an exported JSON backup exists; record the answer before any recovery action. (`incident.md`, line 2)\n   - This step is a question only — it must not touch app data or storage.\n   - Ordering (resolved in iteration 2): `incident.md` states the ask first, then says \"First preserve a copy of current app data and diagnostic logs\". Sentence order and the word \"First\" attach to different things — the ask (read-only) comes first, and the copy is the first physical action. Both are non-destructive and both precede any restore, so the practical order is: ask → copy → escalate/restore. No conflict.\n\n2. **Preserve current state first — before any recovery action.**\n   - Take a copy of the current app data. (`incident.md`, line 2)\n   - Take a copy of the diagnostic logs. (`incident.md`, line 2)\n   - While doing this: work offline, never uninstall the app, never clear storage. (`incident.md`, line 2)\n   - Gap (labeled): `incident.md` gives no exact commands or storage paths for the copies. Do not guess them; obtain the copy method from the user or engineering. Still a gap after the iteration 2 fact-check.\n\n3. **Escalate if no verified backup exists.**\n   - Escalate to engineering if no verified backup exists. (`incident.md`, line 2)\n   - A backup counts as verified only once it is confirmed usable. Gap (labeled, still open): `incident.md` requires a \"verified backup\" but does not define the verification method — it does not say whether verification means a record-count check, a sample-note check, or something else. Confirm the method with engineering before relying on any backup, and treat a backup as unverified until then.\n   - **STOP / escalate:** if no backup exists, or the backup cannot be verified, escalate to engineering and stop recovery actions. Do not improvise a restore.\n\n4. **Restore only with explicit user confirmation — and only from the backup.**\n   - Restore only after explicit user confirmation, because import replaces notes. (`incident.md`, line 2)\n   - Restore from the verified backup only. Never hand-craft, edit, or partially apply data; no destructive fixes. (Safety restatement; the \"import replaces notes\" rationale is from `incident.md`, line 2.)\n\n5. **Verify after restore.**\n   - Verify the record count and two sample notes. (`incident.md`, line 2)\n   - Do not claim a successful restore without verification. (`incident.md`, line 2)\n   - If verification fails, stop and escalate; do not claim success.\n\n## Open gaps (status after the iteration 2 fact-check)\n- Exact backup/copy commands and storage paths — still open; not stated in `incident.md`.\n- Definition of a \"verified\" backup and its verification method — still open; not stated in `incident.md` (see step 3).\n- Ordering of the ask (read-only) vs. the preserve-copy (first physical action) — resolved in iteration 2: no conflict; see step 1.\n- Restore mechanics (how the restore is performed) — still open; not stated in `incident.md`.\n\n---\n**Assumption (labeled):** `incident.md` is the only factual source; the truncated remainder of the original assignment did not introduce additional source facts. All content above is restricted to facts stated there, with gaps explicitly labeled rather than invented. Every incident fact cited above lives on line 2 of `incident.md` (the sole content line of that file).\n"
+      },
+      {
+        "index": 2,
+        "passed": true,
+        "digest": "39199d1029e545df74c3fb2fea3b8694621ac525f88d8f2b0b2bed0e970ec4ec",
+        "path": "runbook.md",
+        "content": "# Incident runbook: interrupted import / missing notes\n\n## Ready for review — iteration 2 of 2\n\n> **STATUS: READY FOR REVIEW (revision after fact-check).**\n> Iteration 2 outcome: every line was re-read and checked against `incident.md` (single content line: line 2). Facts are cited to that line; anything not stated there is explicitly labeled as a gap, extension, or assumption. No fact was added from outside the source. Prime directives unchanged: preserve user data at every step, no destructive fixes.\n\n## Scope\n- Situation: an import was interrupted; notes appear missing. (`incident.md`, line 2)\n- Actors: support handles the incident; engineering is the escalation path. (`incident.md`, line 2)\n- Source of truth: `incident.md` only. No fact below comes from code, memory, or outside knowledge.\n- Prime directive: preserve user data at every step; no destructive fixes.\n\n## Safety rules (apply to every step)\n1. Work offline. (`incident.md`, line 2)\n2. Never uninstall the app. (`incident.md`, line 2)\n3. Never clear storage. (`incident.md`, line 2)\n4. Preserve user data at every step; no destructive fixes. (Directive; consistent with `incident.md`, line 2.)\n5. Do not claim a successful restore without verification. (`incident.md`, line 2)\n\n## Steps\n\n1. **Ask whether an exported JSON backup exists.**\n   - Support must ask whether an exported JSON backup exists; record the answer before any recovery action. (`incident.md`, line 2)\n   - This step is a question only — it must not touch app data or storage.\n   - Ordering (resolved in iteration 2): `incident.md` states the ask first, then says \"First preserve a copy of current app data and diagnostic logs\". Sentence order and the word \"First\" attach to different things — the ask (read-only) comes first, and the copy is the first physical action. Both are non-destructive and both precede any restore, so the practical order is: ask → copy → escalate/restore. No conflict.\n\n2. **Preserve current state first — before any recovery action.**\n   - Take a copy of the current app data. (`incident.md`, line 2)\n   - Take a copy of the diagnostic logs. (`incident.md`, line 2)\n   - While doing this: work offline, never uninstall the app, never clear storage. (`incident.md`, line 2)\n   - Gap (labeled): `incident.md` gives no exact commands or storage paths for the copies. Do not guess them; obtain the copy method from the user or engineering. Still a gap after the iteration 2 fact-check.\n\n3. **Escalate if no verified backup exists.**\n   - Escalate to engineering if no verified backup exists. (`incident.md`, line 2)\n   - A backup counts as verified only once it is confirmed usable. Gap (labeled, still open): `incident.md` requires a \"verified backup\" but does not define the verification method — it does not say whether verification means a record-count check, a sample-note check, or something else. Confirm the method with engineering before relying on any backup, and treat a backup as unverified until then.\n   - **STOP / escalate:** if no backup exists, or the backup cannot be verified, escalate to engineering and stop recovery actions. Do not improvise a restore.\n\n4. **Restore only with explicit user confirmation — and only from the backup.**\n   - Restore only after explicit user confirmation, because import replaces notes. (`incident.md`, line 2)\n   - Restore from the verified backup only. Never hand-craft, edit, or partially apply data; no destructive fixes. (Safety restatement; the \"import replaces notes\" rationale is from `incident.md`, line 2.)\n\n5. **Verify after restore.**\n   - Verify the record count and two sample notes. (`incident.md`, line 2)\n   - Do not claim a successful restore without verification. (`incident.md`, line 2)\n   - If verification fails, stop and escalate; do not claim success.\n\n## Open gaps (status after the iteration 2 fact-check)\n- Exact backup/copy commands and storage paths — still open; not stated in `incident.md`.\n- Definition of a \"verified\" backup and its verification method — still open; not stated in `incident.md` (see step 3).\n- Ordering of the ask (read-only) vs. the preserve-copy (first physical action) — resolved in iteration 2: no conflict; see step 1.\n- Restore mechanics (how the restore is performed) — still open; not stated in `incident.md`.\n\n---\n**Assumption (labeled):** `incident.md` is the only factual source; the truncated remainder of the original assignment did not introduce additional source facts. All content above is restricted to facts stated there, with gaps explicitly labeled rather than invented. Every incident fact cited above lives on line 2 of `incident.md` (the sole content line of that file).\n"
+      }
+    ],
+    "tests": [],
+    "score": 1,
+    "achieved": true,
+    "findings": [
+      {
+        "text": "runbook.md now contains all three required strings ('Ready for review', 'backup', 'confirmation') — confirmed by recorded search hits, not assumed.",
+        "iteration": 1,
+        "source": "goal-254c277d-b8d0-469a-9339-56c394167553-iteration-1",
+        "status": "hypothesis"
+      },
+      {
+        "text": "incident.md's ordering of the backup question vs the preserve-copies step is genuinely ambiguous; the runbook resolves it as ask-first with preserve-state as the first physical action, and says so explicitly.",
+        "iteration": 1,
+        "source": "goal-254c277d-b8d0-469a-9339-56c394167553-iteration-1",
+        "status": "hypothesis"
+      },
+      {
+        "text": "'Verified backup' is required by incident.md but never defined; the runbook marks this gap still open and defaults to treating backups as unverified.",
+        "iteration": 1,
+        "source": "goal-254c277d-b8d0-469a-9339-56c394167553-iteration-1",
+        "status": "hypothesis"
+      },
+      {
+        "text": "No destructive fix, uninstall, storage clear, or unverified restore is permitted anywhere in the runbook; data preservation is the stated prime directive.",
+        "iteration": 1,
+        "source": "goal-254c277d-b8d0-469a-9339-56c394167553-iteration-1",
+        "status": "hypothesis"
+      }
+    ],
+    "proposal": null,
+    "knownUsd": 0.014528001000000002,
+    "calls": 18,
+    "needsInput": null
+  }
+}

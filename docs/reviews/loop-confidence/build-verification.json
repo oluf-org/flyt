@@ -1,0 +1,91 @@
+{
+  "installer": "release/loop-confidence-local/Flyt-2.1.4-win-x64.exe",
+  "sha256": "22bea9675500757ccaae212048427d59b6f060da780828e587a518dc2222326e",
+  "packagedFilesMatchWorkspace": [
+    {
+      "file": "core/goalController.js",
+      "sha256": "2146e753487cbde0e43040bf175127381df89f0a0ab4fae4b6cfcee0d49cdaa5"
+    },
+    {
+      "file": "core/adapters/http.js",
+      "sha256": "33e9a1da1cc6d73195ca677cc616cc99c11ef7f20e124f3448d35a5b67f3cb0b"
+    },
+    {
+      "file": "src/v2/runView.js",
+      "sha256": "2cfde4e5920930e3584abfd2b600f86105db9e7553cba92292f9cfd7e613b9ab"
+    },
+    {
+      "file": "kernel/dist/index.js",
+      "sha256": "30b86d9c14d30c2c389088bce689627734e50e9d9edcb8f9fa76154e71185766"
+    },
+    {
+      "file": "kernel/dist/blocks/run.js",
+      "sha256": "489e7da2ce9b7e1296945e3e7838c1065c4dc8585b54d1c01cb43b23cf0de5fd"
+    },
+    {
+      "file": "kernel/dist/models/replay.js",
+      "sha256": "67ff393c097adcd438fc0a56749795c7cc2a9e5d939b981b106fe41d1aebe32b"
+    },
+    {
+      "file": "kernel/dist/models/capabilities.js",
+      "sha256": "d33e06ee6e315ea8f45115b3cb833aa24885816cd95d535f89897585bbf3676b"
+    },
+    {
+      "file": "dist/assets/buildSurface-gvr6SQbZ.js",
+      "sha256": "94d5eef56940d0ca5339403a945a332e22ab8bee6add635673cbfebc926973ce"
+    },
+    {
+      "file": "dist/assets/DailyRoot-B3TxVk-x.js",
+      "sha256": "0dae0ca772538e034e686dd08342e93df0c355380f40b3819732aa3ae8569ab4"
+    },
+    {
+      "file": "dist/assets/devMock-WmcKqETf.js",
+      "sha256": "e52435f3a54967af8d9cd0f4e6179d29e85f1992876a3f95cbfe7b2aa6969e0a"
+    },
+    {
+      "file": "dist/assets/edit-Dhl8CJ5I.js",
+      "sha256": "44c8de7898bde65f97279b9e21ec5dd7744993fbbdbe9e8112bb1976d45b58ae"
+    },
+    {
+      "file": "dist/assets/index-D9-q5Bf9.js",
+      "sha256": "39b9acaeb227446f34e2503e1c9b9c1ffe99763f71644e6396123cf14f44d726"
+    },
+    {
+      "file": "dist/assets/parse-B-Nol5oS.js",
+      "sha256": "e6c7b876d8672082203d7e9cc71dc55a8ef5547b7f50fdb078e3177ce48ffd2d"
+    },
+    {
+      "file": "dist/assets/projectTheme-CAb2Pqbi.js",
+      "sha256": "6bd488ab54b9d1d87200a16d6f0bec5725313472a3c2267ee36dc372d67b28f3"
+    },
+    {
+      "file": "dist/assets/traceModel-BQCMbRkx.js",
+      "sha256": "5af9a2a0d49d7f1819de479ce39c38e7ea8b592e8121425a84adffdedaa65123"
+    },
+    {
+      "file": "dist/assets/types-DZY6LdwR.js",
+      "sha256": "2d71a098675a951d033c17d424def29ad2805bd80379a29d78ff71e32de21d69"
+    }
+  ],
+  "validation": {
+    "fullSuite": {
+      "tests": 2565,
+      "passed": 2561,
+      "skipped": 4,
+      "failed": 0
+    },
+    "additionalTimeLimitRegression": {
+      "passed": 1,
+      "failed": 0
+    },
+    "stackLint": {
+      "passed": 6
+    },
+    "packageIntegrity": {
+      "requiredEntries": 15,
+      "nativeSandboxRunner": true
+    }
+  },
+  "published": false,
+  "installed": false
+}

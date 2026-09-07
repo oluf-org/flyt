@@ -12,6 +12,21 @@ const assertFact = fact => {
   assert.ok(fact.source.length > 0);
 };
 
+test('historical streamed reasoning is reassembled before enforcing the application ceiling', () => {
+  const pieces = Array.from({ length: 2200 }, () => ({ type: 'reasoning.text', text: 'word ', format: 'unknown', index: 0 }));
+  const messages = [
+    { role: 'system', content: 'Preserve the audit assignment.' },
+    { role: 'user', content: 'Continue auditing the local files.' },
+    { role: 'assistant', content: 'Continue.', replay: { provider: 'openrouter', items: pieces, required: true, protection: 'provider-dependent' } },
+  ];
+  assert(JSON.stringify(messages).length > 96000);
+  const decision = manageContextBudget({ messages, profile: unknownCapability('large', 'test'), requestedOutput: 4096, maxMessageChars: 96000 });
+  assert(JSON.stringify(decision.messages).length < 96000);
+  assert.equal(decision.messages.at(-1).replay.items[0].text, 'word '.repeat(2200));
+  assert.equal(messages.at(-1).replay.items.length, 2200, 'the durable source remains untouched');
+  assert(decision.actions.some(action => action.action === 'assemble_reasoning_replay'));
+});
+
 test('application context limit compacts parallel tool batches without orphaned results', () => {
   const messages = [{ role: 'system', content: 'Fixed audit constraints' }, { role: 'user', content: 'Audit the local app' }];
   for (let round = 0; round < 12; round++) {

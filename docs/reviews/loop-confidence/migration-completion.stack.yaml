@@ -1,0 +1,30 @@
+version: 2
+id: migration-completion
+name: "migration-completion"
+blocks:
+  - id: research
+    use: flyt-blocks-core:research
+    title: "research"
+    config:
+      instructions: "Read only migration.md. Produce an accurate fact sheet of the data contract, conversion formula, examples and failure modes. This task needs no web research. Keep the complete result under 700 words. Do not repeat the original analysis; preserve the supplied facts and finish this block's handoff."
+      maxTokens: 16384
+  - id: backlog
+    use: flyt-blocks-loop:backlog-plan
+    title: "backlog"
+    config:
+      instructions: "Propose exactly three self-contained tasks covering conversion, atomic backup/rollback, and regression tests. Preserve the formula and examples. No queue side effects or invented task IDs; blastRadius may name future implementation/test files. Keep the complete result under 700 words. Do not repeat the original analysis; preserve the supplied facts and finish this block's handoff."
+      maxTokens: 16384
+  - id: split
+    use: flyt-blocks-core:split
+    title: "split"
+    config:
+      instructions: "Return the same three supplied tasks as three complete list items, keeping every important requirement. Do not fragment acceptance criteria into separate tasks. Keep the complete result under 700 words. Do not repeat the original analysis; preserve the supplied facts and finish this block's handoff."
+      maxTokens: 16384
+  - id: publish
+    use: flyt-blocks-core:work
+    title: "publish"
+    config:
+      instructions: "Present exactly three work-ready task cards with acceptance tests. Clearly label proposed paths as proposed, not existing. Write the complete useful deliverable to migration-tasks.md. Use file tools, not shell. Return only the Goal JSON envelope with candidate.text summarizing the actual result and naming migration-tasks.md; findings may hold short lessons. Keep the complete result under 700 words. Do not repeat the original analysis; preserve the supplied facts and finish this block's handoff."
+      maxTokens: 16384
+      effect: "artifact"
+      systemPrompt: "Produce the requested document from the supplied evidence. Preserve facts, cite source files when applicable, and write only the requested output file. Do not build or execute project code."

@@ -19,6 +19,19 @@ const safe = value => {
   return String(value);
 };
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+// Recover only one complete, JSON-escaped candidate string. Arbitrary prose,
+// ambiguous candidates and workflow source are never guessed into a result.
+function repairableCandidateText(output) {
+  const matches = [...String(output).matchAll(/"candidate"\s*:\s*\{\s*"text"\s*:\s*("(?:[^"\\]|\\.)*")/g)];
+  if (matches.length !== 1) return null;
+  try { const text = JSON.parse(matches[0][1]); return text.length <= 24000 ? text : null; } catch { return null; }
+}
+const FORMAT_RECIPE = serializeStack({ id: 'goal-result-format', name: 'Repair result formatting', root: {
+  kind: 'sequence', id: 'root', children: [{ kind: 'block', id: 'format-result', use: 'flyt-blocks-core:general-analysis',
+    config: { inputOnly: true, maxTokens: 16384,
+      systemPrompt: 'You repair JSON formatting only. STEP INPUT contains an already completed candidate as one JSON string. Return exactly {"candidate":{"text":<that exact string>}}. Preserve every character of the decoded string. Do not do the original task, add facts, satisfy checks, propose changes, or use tools. No prose or code fences.' },
+  }],
+} });
 function write(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${id()}.tmp`;
@@ -278,7 +291,11 @@ export class GoalController {
     if (retry && state.pendingRevision) throw new Error('Resume the Goal to apply the published repair before retrying a node');
     if (terminal.has(state.status) && !['failed', 'stopped'].includes(state.status)) throw new Error('This Goal is terminal. Start a new instance from its saved definition.');
     const release = this.acquire(state);
-    if ((state.status === 'failed' || state.failureReason) && (state.pendingRevision || !state.activeChild)) {
+    const completedChild = state.iterationIntent && this.recordPath(state, `child-${state.iterationIntent.phase}`);
+    const resumeFormatting = !state.pendingRevision && !state.outputRecovery?.exhausted && !state.contract.tests.length
+      && completedChild && fs.existsSync(completedChild)
+      && !parseGoalReply(read(completedChild).output) && repairableCandidateText(read(completedChild).output) !== null;
+    if ((state.status === 'failed' || state.failureReason) && (state.pendingRevision || (!state.activeChild && !resumeFormatting))) {
       state.repairs ??= [];
       state.repairs.push({ child: state.activeChild?.runId ?? (state.iterationIntent ? `goal-${state.id}-${state.iterationIntent.phase}` : null), reason: state.reason, revision: state.activeRevision, at: new Date().toISOString() });
       state.repairAttempt = (state.repairAttempt ?? 0) + 1;
@@ -311,7 +328,7 @@ export class GoalController {
       if (record.requested) this.check(record);
     }).catch(error => {
       state.status = record.requested === 'limit' || error.code === 'goal_limit' ? 'limit_reached' : record.requested === 'pause' ? 'paused' : record.requested === 'stop' ? 'stopped' : error.code === 'goal_cleanup_pending' ? 'cleanup_failed' : 'failed';
-      state.reason = String(error.message ?? error);
+      state.reason = state.status === 'limit_reached' ? this.limitReason(record) : String(error.message ?? error);
       if (state.status === 'failed') state.failureReason = state.reason;
       this.save(state);
     }).finally(() => {
@@ -387,6 +404,14 @@ export class GoalController {
     }
     this.save(state); return state;
   }
+  limitReason(record) {
+    const { state } = record, limits = state.contract.limits;
+    const reached = [];
+    if (state.calls >= limits.calls) reached.push(`${limits.calls}-call limit`);
+    if (state.elapsedMs + Date.now() - record.began >= limits.minutes * 60000) reached.push(`${limits.minutes}-minute time limit`);
+    if (limits.usd !== null && state.knownUsd >= limits.usd) reached.push(`$${limits.usd} spend limit`);
+    return `Goal budget reached${reached.length ? `: ${reached.join(', ')}` : ''}; saved progress retained`;
+  }
   check(record) {
     const state = record.state;
     const limits = state.contract.limits;
@@ -401,12 +426,13 @@ export class GoalController {
     return {
       goalId: state.id, objective: state.contract.objective, constraints: state.contract.constraints,
       criteria: state.contract.criteria, tests: state.contract.tests, iteration: state.iteration + 1,
+      iterationBoundary: `The controller is executing iteration ${state.iteration + 1}. Complete only this iteration's assigned work and return. Only the controller can verify it and begin iteration ${state.iteration + 2}; do not simulate future iterations inside a block or change the iteration number yourself.`,
       recipeRevision: state.activeRevision, folder: state.workspace.path, folderMode: 'focus',
       projectRequirements: goalRequirements(state.contract, this.project(state.projectId), { workspace: state.workspace.path }),
       remaining: { calls: state.contract.limits.calls - state.calls, iterations: state.contract.limits.iterations - state.iteration },
       best: state.best, current: state.current, findings: state.memory,
       recipe: state.contract.selfRedesign ? read(this.recordPath(state, `recipe-${state.activeRevision}`)).source : undefined,
-      outputContract: 'Return JSON {"candidate":{"text":"your result"},"findings":["short uncertain or observed finding"],"proposal":{"baseRevision":number,"rationale":"why","commands":[{"name":"stack:configure-block","args":{"nodeId":"id","config":{}}}]}}. proposal is optional; it edits only the recipe at the next boundary. For workflow optimization, candidate.source is canonical version 2 workflow YAML; fixed tests run through the ordinary engine. Do not claim verification: runtime checks decide success.',
+      outputContract: 'The FINAL recipe step returns JSON {"candidate":{"text":"your result"},"findings":["short uncertain or observed finding"],"proposal":{"baseRevision":number,"rationale":"why","commands":[{"name":"stack:configure-block","args":{"nodeId":"id","config":{}}}]}}. Intermediate steps and setup return their ordinary block output, following their own schema (for example a task list or an Evaluation verdict); do not wrap those outputs in the Goal envelope. proposal is optional; it edits only the recipe at the next boundary. For workflow optimization, candidate.source is canonical version 2 workflow YAML; fixed tests run through the ordinary engine. Do not claim verification: runtime checks decide success.',
     };
   }
   async child(record, phase, source, input, workspace = null) {
@@ -518,8 +544,32 @@ export class GoalController {
   }
   async once(record, phase, source, input, workspace) {
     const file = this.recordPath(record.state, `child-${phase}`);
-    if (fs.existsSync(file)) { record.state.activeChild = null; return read(file); }
+    if (fs.existsSync(file)) {
+      if (record.state.activeChild?.phase === phase) record.state.activeChild = null;
+      return read(file);
+    }
     return this.child(record, phase, source, input, workspace);
+  }
+  async repairResult(record, result) {
+    const state = record.state;
+    const originalText = state.contract.tests.length ? null : repairableCandidateText(result.output);
+    if (originalText === null) return null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      this.check(record);
+      const phase = `${state.iterationIntent.phase}-format-${attempt}`;
+      state.outputRecovery = { originalRunId: result.runId, phase, attempt, textDigest: hash(originalText), exhausted: false };
+      this.save(state);
+      const repaired = await this.once(record, phase, FORMAT_RECIPE, JSON.stringify(originalText));
+      const envelope = parseGoalReply(repaired.output);
+      if (envelope?.candidate?.text === originalText) {
+        state.outputRecovery = { ...state.outputRecovery, repairedRunId: repaired.runId, recovered: true };
+        this.save(state);
+        // Formatting has no authority to introduce findings, code or proposals.
+        return { candidate: { text: originalText } };
+      }
+    }
+    state.outputRecovery = { ...state.outputRecovery, exhausted: true }; this.save(state);
+    return null;
   }
   async drive(record) {
     const state = record.state;
@@ -562,7 +612,7 @@ export class GoalController {
       } else {
       const result = await this.once(record, state.iterationIntent.phase, recipe.source, state.setupResult?.summary || state.contract.objective);
       if (result.output.length > 64000) throw new Error('Candidate output exceeds 64,000 characters; return a smaller artifact');
-      const envelope = parseGoalReply(result.output);
+      const envelope = parseGoalReply(result.output) ?? await this.repairResult(record, result);
       if (!envelope?.candidate || typeof envelope.candidate.text !== 'string') throw new Error('Recipe must return JSON with candidate.text; malformed results cannot satisfy a Goal');
       const candidate = { text: envelope.candidate.text, source: envelope.candidate.source ?? null };
       const tests = [];

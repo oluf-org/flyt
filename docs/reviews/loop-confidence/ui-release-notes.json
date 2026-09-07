@@ -1,0 +1,121 @@
+{
+  "id": "ui-release-notes",
+  "goalId": "79f0b397-fab2-4056-bc14-8b9bd0de235e",
+  "status": "achieved",
+  "iterations": 2,
+  "calls": 7,
+  "knownUsd": 0.00217207,
+  "unknownCostCalls": 1,
+  "elapsedMs": 131173,
+  "resultReviews": [
+    {
+      "artifact": "iteration-1",
+      "digest": "4152ebe3bfcc3aac15c49cc20573081fb00cd5fb4a8d9fa686c41449e06f4549",
+      "decision": "changes",
+      "feedback": "For iteration 2, keep the notes concise and clearly planned, then add Ready for review. Remove unsupported claims about exact progress percentages, completion confirmation, or current UI behavior: the brief only says export progress. Fix the grammar. Add a short reviewer note that the product name and version were not supplied. Preserve the cloud-sync exclusion.",
+      "at": 1788801657622
+    },
+    {
+      "artifact": "iteration-2",
+      "digest": "b216a5712266c660f4164b9d6fdea48720b79cb5e5a31814e14a7d73db2d9880",
+      "decision": "approve",
+      "feedback": "",
+      "at": 1788801876751
+    }
+  ],
+  "history": [
+    {
+      "iteration": 1,
+      "revision": 1,
+      "score": 0.75,
+      "runId": "goal-79f0b397-fab2-4056-bc14-8b9bd0de235e-iteration-1",
+      "artifact": "iteration-1",
+      "preview": "# Release Notes — DRAFT (Planned Changes, Not Yet Shipped)\n\n**Status: This is a draft of planned changes.** Nothing described below has shipped yet. All items are planned for the upcoming release and may change, be delayed, or be dropped before it ships. No release date is announced yet.\n\n## Planned for the next release\n\n### Fixed — Import cancellation will no longer delete notes (planned)\nToday, cancelling an import can delete notes you already had. We are planning a fix so that cancelling an i",
+      "verified": false,
+      "findings": [
+        "release-brief.md is an internal plan (team names Ada/Ben/Cy, effort estimates, workday schedule); those internal details were deliberately excluded from the customer-facing draft to keep notes useful and non-confusing.",
+        "Iteration 1 draft intentionally omits the 'Ready for review' marker, which the goal contract reserves for the iteration 2 revision."
+      ]
+    },
+    {
+      "iteration": 2,
+      "revision": 1,
+      "score": 1,
+      "runId": "goal-79f0b397-fab2-4056-bc14-8b9bd0de235e-iteration-2",
+      "artifact": "iteration-2",
+      "preview": "# Release Notes — Planned Changes (Draft, Ready for review)\n\n**Status: planned, not yet shipped.** Everything below is planned for the upcoming release and has not shipped yet. Items may change, be delayed, or be dropped before release, and no release date has been announced.\n\n## Planned for the next release\n\n### Fixed — Import cancellation will no longer delete notes (planned)\nToday, cancelling an import can delete notes you already had. We plan to fix this so that cancelling an import simply s",
+      "verified": true,
+      "findings": [
+        "Per review feedback, removed unsupported claims from the export-progress item (percentages, completion confirmation, and statements about current behavior); the brief only says 'add export progress'.",
+        "Added the 'Ready for review' marker and a reviewer note that the brief supplies no product name or version; internal plan details (Ada/Ben/Cy, effort estimates, workday schedule) remain excluded from customer notes."
+      ]
+    }
+  ],
+  "result": {
+    "number": 2,
+    "revision": 1,
+    "runId": "goal-79f0b397-fab2-4056-bc14-8b9bd0de235e-iteration-2",
+    "candidate": {
+      "text": "# Release Notes — Planned Changes (Draft, Ready for review)\n\n**Status: planned, not yet shipped.** Everything below is planned for the upcoming release and has not shipped yet. Items may change, be delayed, or be dropped before release, and no release date has been announced.\n\n## Planned for the next release\n\n### Fixed — Import cancellation will no longer delete notes (planned)\nToday, cancelling an import can delete notes you already had. We plan to fix this so that cancelling an import simply stops the import and leaves your existing notes untouched.\n\n### Improved — Export progress (planned)\nWe plan to add a progress indicator for exports, so you can see how an export is progressing while it runs.\n\n### Improved — Large-font layout on Android (planned)\nWe plan layout improvements so screens stay readable and properly arranged when your device uses large system font sizes.\n\n## Before release (planned)\nImports, exports, and large-font layouts are planned for regression testing before this release, and a rollback window is reserved at the end of the schedule in case anything needs to be undone.\n\n## Not planned for this release\n\n- **Cloud sync** — Cloud sync is explicitly out of scope for this release. No cloud sync is planned; your notes remain stored on your device.\n\n## Notes for reviewers\n\n- The brief did not include a product name or version, so these notes are generic. Please add the product name and version before publishing.\n- Internal planning details (team assignments, effort estimates, and the day-by-day schedule) are intentionally omitted from these customer-facing notes.\n- Changes from the previous draft: the export-progress item no longer claims specifics the brief does not support (such as percentages, a completion confirmation, or current UI behavior), and the cloud-sync exclusion and all \"planned / not yet shipped\" wording were kept.\n\n---\n*Reminder: all items above are planned changes, not yet shipped.*",
+      "source": null
+    },
+    "checks": [
+      {
+        "index": 0,
+        "passed": true,
+        "digest": "383d2ed764c80f83b19d9a20ddeddbb16c43c901b775a3f2077ae88533adcd57"
+      },
+      {
+        "index": 1,
+        "passed": true,
+        "digest": "383d2ed764c80f83b19d9a20ddeddbb16c43c901b775a3f2077ae88533adcd57"
+      },
+      {
+        "index": 2,
+        "passed": true,
+        "digest": "383d2ed764c80f83b19d9a20ddeddbb16c43c901b775a3f2077ae88533adcd57"
+      },
+      {
+        "index": 3,
+        "passed": true,
+        "digest": "383d2ed764c80f83b19d9a20ddeddbb16c43c901b775a3f2077ae88533adcd57"
+      }
+    ],
+    "tests": [],
+    "score": 1,
+    "achieved": true,
+    "findings": [
+      {
+        "text": "Per review feedback, removed unsupported claims from the export-progress item (percentages, completion confirmation, and statements about current behavior); the brief only says 'add export progress'.",
+        "iteration": 2,
+        "source": "goal-79f0b397-fab2-4056-bc14-8b9bd0de235e-iteration-2",
+        "status": "hypothesis"
+      },
+      {
+        "text": "Added the 'Ready for review' marker and a reviewer note that the brief supplies no product name or version; internal plan details (Ada/Ben/Cy, effort estimates, workday schedule) remain excluded from customer notes.",
+        "iteration": 2,
+        "source": "goal-79f0b397-fab2-4056-bc14-8b9bd0de235e-iteration-2",
+        "status": "hypothesis"
+      },
+      {
+        "text": "Preserved the cloud-sync exclusion and all planned/not-yet-shipped caveats; grammar fix from the prior draft ('waiting on an silent, indeterminate task') was applied by removing that unsupported phrase.",
+        "iteration": 2,
+        "source": "goal-79f0b397-fab2-4056-bc14-8b9bd0de235e-iteration-2",
+        "status": "hypothesis"
+      }
+    ],
+    "proposal": null,
+    "knownUsd": 0.00217207,
+    "calls": 7,
+    "needsInput": null
+  },
+  "manualActions": [
+    "Created and published through Windows UI",
+    "Paused during an active model turn at 2 charged calls",
+    "Closed and reopened the verification app; paused state and calls survived",
+    "Resumed to iteration 1 review",
+    "Requested specific factual corrections",
+    "Resumed to iteration 2 and inspected the full result",
+    "Approved iteration 2 through the UI"
+  ]
+}

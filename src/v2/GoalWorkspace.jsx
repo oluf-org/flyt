@@ -41,13 +41,15 @@ function Field({ address, label, value, type = 'text', disabled, onChange, onQuo
   </div>;
 }
 
-function ReviewDialog({ definition, requirements, onClose, onApprove, busy }) {
+function ReviewDialog({ definition, requirements, goal, onClose, onApprove, busy }) {
   const ref = useRef(null), trigger = useRef(null);
   useEffect(() => { trigger.current = document.activeElement; ref.current.showModal(); return () => trigger.current?.isConnected && trigger.current.focus(); }, []);
-  return <dialog className="goal-review-dialog" ref={ref} aria-labelledby="goal-review-title" onCancel={event => { event.preventDefault(); onClose(); }}><h2 id="goal-review-title">Review and start</h2>
+  const action = !goal || goal.status === 'ready' ? 'start' : goal.status === 'failed' ? 'retry' : 'resume';
+  return <dialog className="goal-review-dialog" ref={ref} aria-labelledby="goal-review-title" onCancel={event => { event.preventDefault(); onClose(); }}><h2 id="goal-review-title">Review and {action}</h2>
     <p className="goal-review-objective">{definition.objective}</p><dl><dt>Model</dt><dd>{definition.worker?.model || 'No model selected'}</dd><dt>Workspace</dt><dd>{definition.createFolder ? 'A new folder under ' : 'Use '}{definition.folder || 'the project folder'}</dd><dt>Budget</dt><dd>{definition.limits.iterations} iterations · {definition.limits.calls} calls · {definition.limits.minutes} min{definition.limits.usd ? ` · $${definition.limits.usd}` : ''}</dd><dt>Checks</dt><dd>{definition.criteria.length ? <ul>{definition.criteria.map((item, index) => <li key={index}>{item.value ?? stringify(item)}</li>)}</ul> : 'None'}</dd><dt>Tools</dt><dd>{definition.tools.join(', ') || 'None'}</dd><dt>Review</dt><dd>{definition.reviewResults ? 'Human, every iteration' : 'Runtime checks'}</dd></dl>
     <GoalRequirements report={requirements}/>
-    <div className="goal-actions"><button className="goal-primary" disabled={busy} onClick={onApprove}>Approve and start</button><button disabled={busy} onClick={onClose}>Back to draft</button></div></dialog>;
+    {action !== 'start' && <p>Continuing this run preserves its {goal.iteration} completed iterations, {goal.calls} model calls, and recorded spend. The budget above is the total limit.</p>}
+    <div className="goal-actions"><button className="goal-primary" disabled={busy} onClick={onApprove}>Approve and {action}</button><button disabled={busy} onClick={onClose}>Back to draft</button></div></dialog>;
 }
 
 export default function GoalWorkspace({ projectId, onOpenRun }) {
@@ -315,7 +317,7 @@ export default function GoalWorkspace({ projectId, onOpenRun }) {
         scope={scope} onScope={value => { setScope(value); if (value.type !== 'fields') setQuotes([]); }} steps={steps}
         selectedFiles={selectedFiles} onSelectedFiles={setSelectedFiles}
         usage={draft.authoringCalls ? `${draft.authoringCalls} calls · $${draft.knownUsd.toFixed(4)}${draft.unknownCostCalls ? ` + ${draft.unknownCostCalls} unpriced` : ''}` : ''}/>
-      {review && <ReviewDialog definition={definition} requirements={requirements} busy={busy} onClose={() => setReview(false)} onApprove={() => act(async () => { const next = await invoke('author-publish', { baseRevision: draft.revision }); commitDraft(next); await invoke('start', { goalId: next.goalId }); setReview(false); setRevisionView('running'); await refresh(); })}/>}
+      {review && <ReviewDialog definition={definition} requirements={requirements} goal={goal} busy={busy} onClose={() => setReview(false)} onApprove={() => act(async () => { const next = await invoke('author-publish', { baseRevision: draft.revision }); commitDraft(next); await invoke('start', { goalId: next.goalId }); setReview(false); setRevisionView('running'); await refresh(); })}/>}
     </>}
   </div>;
 }

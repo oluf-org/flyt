@@ -1,0 +1,175 @@
+{
+  "id": "runbook-revision",
+  "projectId": "D:\\electron\\llm-flow\\.flyt\\confidence-live\\workspaces\\runbook-revision",
+  "goalId": "d8e6a34f-c877-4b4c-b8d1-b62023b6ae77",
+  "draftId": "4195c245-461b-4d99-9826-63fdf297b82f",
+  "output": "runbook.md",
+  "status": "limit_reached",
+  "reason": "Execution cancelled before dispatch",
+  "iterations": 1,
+  "calls": 13,
+  "knownUsd": 0.023287460000000003,
+  "unknownCostCalls": 1,
+  "elapsedMs": 900069,
+  "history": [
+    {
+      "iteration": 1,
+      "revision": 1,
+      "score": 0.6666666666666666,
+      "runId": "goal-d8e6a34f-c877-4b4c-b8d1-b62023b6ae77-iteration-1",
+      "artifact": "iteration-1",
+      "preview": "Iteration 1 complete: wrote runbook.md (2,308 bytes) as a clearly labelled DRAFT from the sole source, incident.md (one paragraph at line 2; verified by direct read — the workspace held only incident.md before this write). The draft contains the labelled status banner, source-and-scope note, four safety rules (work offline, never uninstall, never clear storage, preserve evidence first), eight steps covering the backup question, evidence copy, no-verified-backup escalation, restore gated on expli",
+      "verified": false,
+      "findings": [
+        "incident.md's entire fact base is a single paragraph at line 2 (455 bytes), so every runbook statement cites that one line; anything beyond it was flagged, not asserted.",
+        "The STEP INPUT candidate's findings admitted its Step 8 ending and Open Questions were completions, not source text; this rewrite re-derived all sections from the actual incident.md read."
+      ]
+    }
+  ],
+  "outputRecovery": null,
+  "runs": [
+    {
+      "runId": "goal-d8e6a34f-c877-4b4c-b8d1-b62023b6ae77-iteration-1",
+      "startedAt": "2026-09-07T17:24:34.112Z",
+      "endedAt": "2026-09-07T17:34:02.219Z",
+      "blocks": [
+        {
+          "blockId": "draft-review",
+          "executionId": "draft-review",
+          "status": "active",
+          "use": "flyt-blocks-core:general-analysis"
+        },
+        {
+          "blockId": "draft-review",
+          "executionId": "draft-review",
+          "status": "done"
+        },
+        {
+          "blockId": "critique",
+          "executionId": "critique",
+          "status": "active",
+          "use": "flyt-blocks-judgement:compare"
+        },
+        {
+          "blockId": "critique",
+          "executionId": "critique",
+          "status": "done"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "active",
+          "use": "flyt-blocks-core:work"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "done"
+        }
+      ],
+      "checkpoints": 2,
+      "toolCalls": 5
+    },
+    {
+      "runId": "goal-d8e6a34f-c877-4b4c-b8d1-b62023b6ae77-iteration-2",
+      "startedAt": "2026-09-07T17:34:02.996Z",
+      "endedAt": "2026-09-07T17:38:51.094Z",
+      "blocks": [
+        {
+          "blockId": "draft-review",
+          "executionId": "draft-review",
+          "status": "active",
+          "use": "flyt-blocks-core:general-analysis"
+        },
+        {
+          "blockId": "draft-review",
+          "executionId": "draft-review",
+          "status": "pending",
+          "error": "The model call was aborted"
+        }
+      ],
+      "checkpoints": 1,
+      "toolCalls": 2
+    },
+    {
+      "runId": "goal-d8e6a34f-c877-4b4c-b8d1-b62023b6ae77-setup",
+      "startedAt": "2026-09-07T17:23:51.629Z",
+      "endedAt": "2026-09-07T17:24:33.498Z",
+      "blocks": [
+        {
+          "blockId": "read-incident",
+          "executionId": "read-incident",
+          "status": "active",
+          "use": "flyt-blocks-core:general-analysis"
+        },
+        {
+          "blockId": "read-incident",
+          "executionId": "read-incident",
+          "status": "done"
+        }
+      ],
+      "checkpoints": 0,
+      "toolCalls": 2
+    }
+  ],
+  "checkpoints": 3,
+  "result": {
+    "number": 1,
+    "revision": 1,
+    "runId": "goal-d8e6a34f-c877-4b4c-b8d1-b62023b6ae77-iteration-1",
+    "candidate": {
+      "text": "Iteration 1 complete: wrote runbook.md (2,308 bytes) as a clearly labelled DRAFT from the sole source, incident.md (one paragraph at line 2; verified by direct read — the workspace held only incident.md before this write). The draft contains the labelled status banner, source-and-scope note, four safety rules (work offline, never uninstall, never clear storage, preserve evidence first), eight steps covering the backup question, evidence copy, no-verified-backup escalation, restore gated on explicit user confirmation, record-count plus two-sample-note verification, and honest reporting of unverified restores. Unsupported items are quarantined in Open Questions (backup location, definition of 'verified backup'), and an iteration 2 plan commits to re-checking every statement before adding the review heading. The 'Ready for review' heading is deliberately absent per the iteration 1 contract; 'backup' and 'confirmation' appear naturally in the drafted text. Rough count ~360 words, under the 450 cap (my count of authored text, not a tool-verified check). No code was executed and no other file was written.",
+      "source": null
+    },
+    "checks": [
+      {
+        "index": 0,
+        "passed": false,
+        "digest": "cafc7f80005b7c1be8bfd978322eb7058de506d9034a31c37fe45fdb8fdfe97f",
+        "path": "runbook.md",
+        "content": "# Import Incident Runbook — Missing Notes After Interrupted Import\n\n> **STATUS: DRAFT — iteration 1 of 2.** Every fact below traces to incident.md (one paragraph, line 2). Nothing is invented; anything I could not source is listed under Open Questions instead of asserted. Iteration 2 will fact-check and may change this document.\n\n## Source and scope\nFacts come only from incident.md's incident paragraph. This draft adds no causes, fixes, or product details that the source does not state.\n\n## Safety rules (apply to every step)\n- Work offline for the whole session.\n- Never uninstall the app.\n- Never clear storage.\n- Preserve evidence before any fix, reset, or restore.\n\n## Steps\n1. **Confirm the report.** Record only what the source states: the import was interrupted and notes appear missing. Do not state or imply notes are lost.\n2. **Go offline.** Keep every later step offline.\n3. **Ask the user.** Ask whether an exported JSON backup exists (incident.md directs support to ask this).\n4. **Preserve evidence first.** Take a copy of current app data and diagnostic logs before anything else. Stop before any action that changes or deletes data until that copy exists.\n5. **Branch on the backup answer.**\n   - No verified backup → escalate to engineering. Do not attempt repairs, resets, or restores.\n   - Verified backup exists → go to Step 6.\n6. **Restore only after explicit user confirmation.** If confirmation is absent or ambiguous, stop and wait. Rationale: import replaces notes, so a restore can overwrite data.\n7. **Verify after restore.** Check the record count and two sample notes.\n8. **Report honestly.** Do not claim a successful restore without the Step 7 verification. If verification fails or is inconclusive, report the restore as unverified and escalate to engineering.\n\n## Open questions (resolve in iteration 2)\n- Where the exported JSON backup lives and how to recognize it (the source names it but not its location).\n- What counts as a \"verified backup\" before restore is allowed.\n- Who defines \"verified\" — support, engineering, or the user.\n\n## Iteration 2 plan\nRe-read incident.md; check every statement above against it; correct or remove anything unsupported; add the review heading only after the checks pass. The safety rules must survive revision unchanged.\n"
+      },
+      {
+        "index": 1,
+        "passed": true,
+        "digest": "cafc7f80005b7c1be8bfd978322eb7058de506d9034a31c37fe45fdb8fdfe97f",
+        "path": "runbook.md",
+        "content": "# Import Incident Runbook — Missing Notes After Interrupted Import\n\n> **STATUS: DRAFT — iteration 1 of 2.** Every fact below traces to incident.md (one paragraph, line 2). Nothing is invented; anything I could not source is listed under Open Questions instead of asserted. Iteration 2 will fact-check and may change this document.\n\n## Source and scope\nFacts come only from incident.md's incident paragraph. This draft adds no causes, fixes, or product details that the source does not state.\n\n## Safety rules (apply to every step)\n- Work offline for the whole session.\n- Never uninstall the app.\n- Never clear storage.\n- Preserve evidence before any fix, reset, or restore.\n\n## Steps\n1. **Confirm the report.** Record only what the source states: the import was interrupted and notes appear missing. Do not state or imply notes are lost.\n2. **Go offline.** Keep every later step offline.\n3. **Ask the user.** Ask whether an exported JSON backup exists (incident.md directs support to ask this).\n4. **Preserve evidence first.** Take a copy of current app data and diagnostic logs before anything else. Stop before any action that changes or deletes data until that copy exists.\n5. **Branch on the backup answer.**\n   - No verified backup → escalate to engineering. Do not attempt repairs, resets, or restores.\n   - Verified backup exists → go to Step 6.\n6. **Restore only after explicit user confirmation.** If confirmation is absent or ambiguous, stop and wait. Rationale: import replaces notes, so a restore can overwrite data.\n7. **Verify after restore.** Check the record count and two sample notes.\n8. **Report honestly.** Do not claim a successful restore without the Step 7 verification. If verification fails or is inconclusive, report the restore as unverified and escalate to engineering.\n\n## Open questions (resolve in iteration 2)\n- Where the exported JSON backup lives and how to recognize it (the source names it but not its location).\n- What counts as a \"verified backup\" before restore is allowed.\n- Who defines \"verified\" — support, engineering, or the user.\n\n## Iteration 2 plan\nRe-read incident.md; check every statement above against it; correct or remove anything unsupported; add the review heading only after the checks pass. The safety rules must survive revision unchanged.\n"
+      },
+      {
+        "index": 2,
+        "passed": true,
+        "digest": "cafc7f80005b7c1be8bfd978322eb7058de506d9034a31c37fe45fdb8fdfe97f",
+        "path": "runbook.md",
+        "content": "# Import Incident Runbook — Missing Notes After Interrupted Import\n\n> **STATUS: DRAFT — iteration 1 of 2.** Every fact below traces to incident.md (one paragraph, line 2). Nothing is invented; anything I could not source is listed under Open Questions instead of asserted. Iteration 2 will fact-check and may change this document.\n\n## Source and scope\nFacts come only from incident.md's incident paragraph. This draft adds no causes, fixes, or product details that the source does not state.\n\n## Safety rules (apply to every step)\n- Work offline for the whole session.\n- Never uninstall the app.\n- Never clear storage.\n- Preserve evidence before any fix, reset, or restore.\n\n## Steps\n1. **Confirm the report.** Record only what the source states: the import was interrupted and notes appear missing. Do not state or imply notes are lost.\n2. **Go offline.** Keep every later step offline.\n3. **Ask the user.** Ask whether an exported JSON backup exists (incident.md directs support to ask this).\n4. **Preserve evidence first.** Take a copy of current app data and diagnostic logs before anything else. Stop before any action that changes or deletes data until that copy exists.\n5. **Branch on the backup answer.**\n   - No verified backup → escalate to engineering. Do not attempt repairs, resets, or restores.\n   - Verified backup exists → go to Step 6.\n6. **Restore only after explicit user confirmation.** If confirmation is absent or ambiguous, stop and wait. Rationale: import replaces notes, so a restore can overwrite data.\n7. **Verify after restore.** Check the record count and two sample notes.\n8. **Report honestly.** Do not claim a successful restore without the Step 7 verification. If verification fails or is inconclusive, report the restore as unverified and escalate to engineering.\n\n## Open questions (resolve in iteration 2)\n- Where the exported JSON backup lives and how to recognize it (the source names it but not its location).\n- What counts as a \"verified backup\" before restore is allowed.\n- Who defines \"verified\" — support, engineering, or the user.\n\n## Iteration 2 plan\nRe-read incident.md; check every statement above against it; correct or remove anything unsupported; add the review heading only after the checks pass. The safety rules must survive revision unchanged.\n"
+      }
+    ],
+    "tests": [],
+    "score": 0.6666666666666666,
+    "achieved": false,
+    "findings": [
+      {
+        "text": "incident.md's entire fact base is a single paragraph at line 2 (455 bytes), so every runbook statement cites that one line; anything beyond it was flagged, not asserted.",
+        "iteration": 1,
+        "source": "goal-d8e6a34f-c877-4b4c-b8d1-b62023b6ae77-iteration-1",
+        "status": "hypothesis"
+      },
+      {
+        "text": "The STEP INPUT candidate's findings admitted its Step 8 ending and Open Questions were completions, not source text; this rewrite re-derived all sections from the actual incident.md read.",
+        "iteration": 1,
+        "source": "goal-d8e6a34f-c877-4b4c-b8d1-b62023b6ae77-iteration-1",
+        "status": "hypothesis"
+      },
+      {
+        "text": "Backup export location and the 'verified backup' definition are absent from the source — genuinely unverified coverage left for iteration 2.",
+        "iteration": 1,
+        "source": "goal-d8e6a34f-c877-4b4c-b8d1-b62023b6ae77-iteration-1",
+        "status": "hypothesis"
+      }
+    ],
+    "proposal": null,
+    "knownUsd": 0.02003952,
+    "calls": 10,
+    "needsInput": null
+  }
+}

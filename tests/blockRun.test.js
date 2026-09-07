@@ -535,9 +535,12 @@ test('reasoning-only length stops use bounded turn repair instead of an unbounde
     ceiling: ['peek'],
   });
 
-  const result = await loopIn(boot, { continueOnLength: true, maxTurnRepairs: 2 });
+  const result = await loopIn(boot, { continueOnLength: true, maxTurnRepairs: 2, maxTokens: 6000 });
   assert.equal(result.stopped, 'bound');
   assert.equal(boot.llm.seen.length, 3, 'the initial turn plus two repairs is a hard bound');
+  assert.match(result.reason, /6,000-token completion allowance on reasoning/);
+  assert.match(boot.llm.seen[1].messages.at(-1).content, /do not restart the analysis/);
+  assert.ok(boot.llm.seen.every(request => request.maxTokens === 6000), 'recovery respects the configured ceiling');
   const events = boot.session.readSync();
   assert.equal(events.filter(event => event.type === 'block.warning'
     && event.data.code === 'empty_turn_repair').length, 2);

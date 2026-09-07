@@ -1,0 +1,38 @@
+version: 2
+id: release-plan
+name: "release-plan"
+blocks:
+  - id: plan
+    use: flyt-blocks-core:plan-start
+    title: "plan"
+    config:
+      instructions: "Read release-brief.md. Return exactly three complete task objects, grouping Ben tasks, Ada task, Cy QA. Include owner, scope, dependencies, estimates and acceptance. No invented backlog IDs."
+      maxTokens: 6000
+    outputs:
+      - name: "tasks"
+        type: "list"
+  - id: detail-each
+    kind: foreach
+    roster: plan.tasks
+    max: 3
+    body:
+      - id: detail
+        use: flyt-blocks-core:general-analysis
+        title: "detail"
+        config:
+          instructions: "Expand only this roster item into a concrete work package with owner, days, dependencies and acceptance. Preserve constraints in the item."
+          maxTokens: 6000
+  - id: merge-plan
+    use: flyt-blocks-core:combine
+    title: "merge plan"
+    config:
+      instructions: "Combine the three work packages into one dependency-aware day-by-day ten-day release plan. Preserve day 10 for rollback, no cloud sync."
+      maxTokens: 6000
+  - id: publish
+    use: flyt-blocks-core:work
+    title: "publish"
+    config:
+      instructions: " Write the complete useful deliverable to release-plan.md. Use file tools, not shell. Return only the Goal JSON envelope with candidate.text summarizing the actual result and naming release-plan.md; findings may hold short lessons."
+      maxTokens: 6000
+      effect: "artifact"
+      systemPrompt: "Produce the requested document from the supplied evidence. Preserve facts, cite source files when applicable, and write only the requested output file. Do not build or execute project code."

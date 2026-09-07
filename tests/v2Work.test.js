@@ -138,6 +138,19 @@ test('a failed block carries its reason', () => {
   assert.equal(view.running, false);
 });
 
+test('terminal runs settle unfinished activity without inventing a completed response', () => {
+  for (const stage of ['failed', 'stopped', 'interrupted']) {
+    const trace = foldTrace([...RUN.slice(0, 6),
+      { seq: 7, at: 't3', type: 'run.stage', data: { stage } },
+    ]);
+    const view = runView(trace);
+    assert.equal(view.blocks.plan.metrics.waitingForToken, false);
+    assert(view.blocks.plan.activity.every(item => !['running', 'waiting'].includes(item.status)));
+    assert.equal(view.blocks.plan.activity.find(item => item.kind === 'chat').status, stage === 'failed' ? 'error' : 'interrupted');
+    assert.equal(trace.turns[0].steps[0].request.settled, false, 'raw evidence stays unchanged');
+  }
+});
+
 test('a soft running-limit warning remains visible while active and clears after success', () => {
   const active = foldTrace([
     ...RUN.slice(0, 3),

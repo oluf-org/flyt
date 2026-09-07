@@ -14,6 +14,7 @@ import { PluginReviewCoordinator } from './plugins/tools.js';
 export * from './seams/index.js';
 export * from './loader/index.js';
 export * from './profiles.js';
+export { mergeReasoningDetails } from './models/replay.js';
 export * from './events.js';
 export type * from './types.js';
 export * from './stack/index.js';

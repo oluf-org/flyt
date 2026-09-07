@@ -1,0 +1,58 @@
+{
+  "runId": "goal-3bd73627-ac23-46f6-a1cb-e894c71ff332-iteration-1-repair-1",
+  "reconstruction": {
+    "throughSeq": 885,
+    "blockId": "orient",
+    "afterSeq": 3
+  },
+  "originalMessages": 36,
+  "originalCharacters": 381357,
+  "effectiveMessages": 9,
+  "effectiveCharacters": 48856,
+  "ceiling": 96000,
+  "actions": [
+    "assemble_reasoning_replay",
+    "retain_recent_turns",
+    "durable_compaction_checkpoint"
+  ],
+  "reasoningTextPreserved": true,
+  "originalLogUnchanged": true,
+  "replayItems": [
+    {
+      "before": 8,
+      "after": 1,
+      "textCharacters": 41
+    },
+    {
+      "before": 71,
+      "after": 1,
+      "textCharacters": 293
+    },
+    {
+      "before": 455,
+      "after": 1,
+      "textCharacters": 2117
+    },
+    {
+      "before": 435,
+      "after": 1,
+      "textCharacters": 1434
+    },
+    {
+      "before": 80,
+      "after": 1,
+      "textCharacters": 354
+    },
+    {
+      "before": 47,
+      "after": 1,
+      "textCharacters": 217
+    },
+    {
+      "before": 2021,
+      "after": 1,
+      "textCharacters": 6185
+    }
+  ],
+  "scope": "Read-only reconstruction of the actual saved failing request; no new Everest audit was dispatched."
+}

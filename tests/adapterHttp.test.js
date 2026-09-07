@@ -46,6 +46,27 @@ const sseRes = lines => ({
 
 test.afterEach(restoreFetch);
 
+test('openrouter: streamed reasoning deltas merge without changing opaque replay or item boundaries', async () => {
+  const fragments = Array.from({ length: 2200 }, () => ({ type: 'reasoning.text', text: 'word ', format: 'unknown', index: 0 }));
+  const tail = [
+    { type: 'reasoning.encrypted', data: 'opaque-one', index: 0 },
+    { type: 'reasoning.encrypted', data: 'opaque-two', index: 0 },
+    { type: 'reasoning.summary', summary: 'first ', index: 0 },
+    { type: 'reasoning.summary', summary: 'summary', index: 0 },
+    { type: 'reasoning.text', text: 'separate', index: 0 },
+    { type: 'reasoning.text', text: 'other-id', id: 'b', index: 0 },
+  ];
+  stubFetch(() => sseRes([
+    ...[...fragments, ...tail].map(item => ({ choices: [{ delta: { reasoning_details: [item] } }] })),
+    { choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] }, '[DONE]',
+  ]));
+  const result = await callModel({ provider: 'openrouter', model: 'm', prompt: 'p', apiKey: 'k', onText() {} });
+  assert.deepEqual(result.replay.items, [
+    { ...fragments[0], text: 'word '.repeat(2200) }, tail[0], tail[1],
+    { ...tail[2], summary: 'first summary' }, tail[4], tail[5],
+  ]);
+});
+
 // --- OpenRouter -----------------------------------------------------------
 
 test('openrouter: single-shot request shape and response parsing', async () => {

@@ -9,6 +9,7 @@
 // every OpenAI-compatible chat-completions provider (openrouter, openai, kimi):
 // same body shape, same streaming/tool-call reassembly, different base URL and
 // auth headers. Add a provider = one small file calling the factory.
+import { mergeReasoningDetails } from '#kernel';
 
 // Returns the hint in ms, or null when the provider didn't give one.
 export function parseRetryAfter(res, bodyText) {
@@ -297,7 +298,7 @@ export function openaiCompatible({
         );
       }
       const replay = replayItems.length
-        ? { provider: provider.toLowerCase().replaceAll(' ', ''), items: replayItems, required: true, protection: 'provider-dependent' }
+        ? { provider: provider.toLowerCase().replaceAll(' ', ''), items: provider === 'OpenRouter' ? mergeReasoningDetails(replayItems) : replayItems, required: true, protection: 'provider-dependent' }
         : null;
       return {
         text, reasoning, usage, finishReason, resolvedModel,

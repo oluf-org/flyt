@@ -1,0 +1,161 @@
+{
+  "completedScenarios": 8,
+  "totalInstances": 12,
+  "totalCalls": 149,
+  "knownUsd": 0.16712601225,
+  "unpricedCalls": 3,
+  "leafBlockTypes": [
+    "flyt-blocks-core:combine",
+    "flyt-blocks-core:general-analysis",
+    "flyt-blocks-core:plan-start",
+    "flyt-blocks-core:research",
+    "flyt-blocks-core:split",
+    "flyt-blocks-core:work",
+    "flyt-blocks-inquiry:orient",
+    "flyt-blocks-judgement:compare",
+    "flyt-blocks-judgement:evaluation",
+    "flyt-blocks-judgement:prompt-refiner",
+    "flyt-blocks-loop:backlog-plan"
+  ],
+  "containers": [
+    "sequence",
+    "foreach",
+    "parallel",
+    "until",
+    "if"
+  ],
+  "instances": [
+    {
+      "id": "support-faq",
+      "status": "achieved",
+      "behaviorPassed": true,
+      "iterations": 1,
+      "calls": 9,
+      "activeMinutes": 7.86,
+      "checkpoints": 3,
+      "knownUsd": 0.0064915500000000004,
+      "unpricedCalls": 0
+    },
+    {
+      "id": "release-plan",
+      "status": "achieved",
+      "behaviorPassed": true,
+      "iterations": 1,
+      "calls": 13,
+      "activeMinutes": 10.74,
+      "checkpoints": 1,
+      "knownUsd": 0.01021988225,
+      "unpricedCalls": 0
+    },
+    {
+      "id": "storage-decision",
+      "status": "achieved",
+      "behaviorPassed": true,
+      "iterations": 1,
+      "calls": 9,
+      "activeMinutes": 7.07,
+      "checkpoints": 1,
+      "knownUsd": 0.015028525,
+      "unpricedCalls": 0
+    },
+    {
+      "id": "two-pass-runbook",
+      "status": "achieved",
+      "behaviorPassed": false,
+      "iterations": 1,
+      "calls": 18,
+      "activeMinutes": 10.55,
+      "checkpoints": 15,
+      "knownUsd": 0.014528001000000002,
+      "unpricedCalls": 0
+    },
+    {
+      "id": "check-and-branch",
+      "status": "achieved",
+      "behaviorPassed": true,
+      "iterations": 1,
+      "calls": 5,
+      "activeMinutes": 4.79,
+      "checkpoints": 1,
+      "knownUsd": 0.004482355,
+      "unpricedCalls": 0
+    },
+    {
+      "id": "migration-backlog",
+      "status": "failed",
+      "behaviorPassed": false,
+      "iterations": 0,
+      "calls": 11,
+      "activeMinutes": 14.58,
+      "checkpoints": 2,
+      "knownUsd": 0.0221214,
+      "unpricedCalls": 0
+    },
+    {
+      "id": "long-evidence",
+      "status": "limit_reached",
+      "behaviorPassed": false,
+      "iterations": 0,
+      "calls": 19,
+      "activeMinutes": 15,
+      "checkpoints": 13,
+      "knownUsd": 0.01598405,
+      "unpricedCalls": 1
+    },
+    {
+      "id": "runbook-revision",
+      "status": "limit_reached",
+      "behaviorPassed": false,
+      "iterations": 1,
+      "calls": 13,
+      "activeMinutes": 15,
+      "checkpoints": 3,
+      "knownUsd": 0.023287460000000003,
+      "unpricedCalls": 1
+    },
+    {
+      "id": "long-evidence-retest",
+      "status": "achieved",
+      "behaviorPassed": true,
+      "iterations": 1,
+      "calls": 15,
+      "activeMinutes": 5.67,
+      "checkpoints": 10,
+      "knownUsd": 0.011856794999999996,
+      "unpricedCalls": 0
+    },
+    {
+      "id": "runbook-completion",
+      "status": "achieved",
+      "behaviorPassed": true,
+      "iterations": 2,
+      "calls": 21,
+      "activeMinutes": 21.84,
+      "checkpoints": 15,
+      "knownUsd": 0.03425987375,
+      "unpricedCalls": 0
+    },
+    {
+      "id": "migration-completion",
+      "status": "achieved",
+      "behaviorPassed": true,
+      "iterations": 1,
+      "calls": 9,
+      "activeMinutes": 6.4,
+      "checkpoints": 1,
+      "knownUsd": 0.00669405025,
+      "unpricedCalls": 0
+    },
+    {
+      "id": "ui-release-notes",
+      "status": "achieved",
+      "behaviorPassed": true,
+      "iterations": 2,
+      "calls": 7,
+      "activeMinutes": 2.19,
+      "checkpoints": 0,
+      "knownUsd": 0.00217207,
+      "unpricedCalls": 1
+    }
+  ]
+}

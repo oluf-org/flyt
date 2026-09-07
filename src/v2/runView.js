@@ -289,16 +289,19 @@ export function runView(trace, snapshot = null) {
   const blocks = {};
   for (const [blockId, at] of Object.entries(states)) {
     const foldedMetrics = metrics[blockId] ?? {};
+    const inactive = TERMINAL_STAGES.has(stage) || ['done', 'failed', 'skipped'].includes(at.status);
     const terminalAt = ['done', 'failed', 'skipped'].includes(at.status) ? at.at : null;
     const visibleMetrics = at.startedAt || Object.keys(foldedMetrics).length ? {
       ...foldedMetrics,
       startedAt: earlier(foldedMetrics.startedAt, at.startedAt) ?? null,
       endedAt: terminalAt ? later(foldedMetrics.endedAt, terminalAt) : foldedMetrics.endedAt ?? null,
+      ...(inactive ? { waitingForToken: false } : {}),
     } : null;
     blocks[blockId] = {
       ...at,
       metrics: visibleMetrics,
-      activity: activity[blockId] ?? [],
+      activity: (activity[blockId] ?? []).map(item => inactive && ['running', 'waiting'].includes(item.status)
+        ? { ...item, status: at.status === 'failed' || stage === 'failed' ? 'error' : 'interrupted' } : item),
       // An active block shows what it is saying; a finished one shows what it
       // produced. Never both, and never the streaming text after the
       // deliverable exists — that would replace an answer with a draft of it.

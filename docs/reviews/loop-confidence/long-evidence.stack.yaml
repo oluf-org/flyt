@@ -1,0 +1,24 @@
+version: 2
+id: long-evidence
+name: "long-evidence"
+blocks:
+  - id: read-evidence
+    use: flyt-blocks-core:general-analysis
+    title: "read evidence"
+    config:
+      instructions: "Read all 18 service records and extract the recorded outcomes near each file end. Work in batches of three file reads. Keep a running compact table of facts. Use read_tool_result or file offsets to recover any truncated result; do not repeat an entire large read. Return all 18 incident counts and the sum, plus priority actions."
+      maxTokens: 6000
+  - id: verify-priorities
+    use: flyt-blocks-judgement:compare
+    title: "verify priorities"
+    config:
+      instructions: "Check the supplied table has 18 distinct service IDs and recompute the sum. Compare priority candidates by recorded incidents; return the complete corrected table and top three actionable priorities."
+      maxTokens: 6000
+  - id: publish
+    use: flyt-blocks-core:work
+    title: "publish"
+    config:
+      instructions: "Preserve every row and the computed TOTAL_INCIDENTS and TOP_PRIORITY markers. Do not reread all records if the complete evidence table is already supplied. Write the complete useful deliverable to maintenance-priority.md. Use file tools, not shell. Return only the Goal JSON envelope with candidate.text summarizing the actual result and naming maintenance-priority.md; findings may hold short lessons."
+      maxTokens: 6000
+      effect: "artifact"
+      systemPrompt: "Produce the requested document from the supplied evidence. Preserve facts, cite source files when applicable, and write only the requested output file. Do not build or execute project code."

@@ -1,0 +1,63 @@
+{
+  "id": "long-evidence",
+  "projectId": "D:\\electron\\llm-flow\\.flyt\\confidence-live\\workspaces\\long-evidence",
+  "goalId": "4e85b077-9f52-4659-8859-eb74df47c0d0",
+  "draftId": "132767a7-13d1-4b4d-9a53-e4e8459a10c4",
+  "output": "maintenance-priority.md",
+  "status": "limit_reached",
+  "reason": "Execution cancelled before dispatch",
+  "iterations": 0,
+  "calls": 19,
+  "knownUsd": 0.01598405,
+  "unknownCostCalls": 1,
+  "elapsedMs": 900069,
+  "history": [],
+  "outputRecovery": null,
+  "runs": [
+    {
+      "runId": "goal-4e85b077-9f52-4659-8859-eb74df47c0d0-iteration-1",
+      "startedAt": "2026-09-07T17:14:34.052Z",
+      "endedAt": "2026-09-07T17:29:33.570Z",
+      "blocks": [
+        {
+          "blockId": "read-evidence",
+          "executionId": "read-evidence",
+          "status": "active",
+          "use": "flyt-blocks-core:general-analysis"
+        },
+        {
+          "blockId": "read-evidence",
+          "executionId": "read-evidence",
+          "status": "done"
+        },
+        {
+          "blockId": "verify-priorities",
+          "executionId": "verify-priorities",
+          "status": "active",
+          "use": "flyt-blocks-judgement:compare"
+        },
+        {
+          "blockId": "verify-priorities",
+          "executionId": "verify-priorities",
+          "status": "done"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "active",
+          "use": "flyt-blocks-core:work"
+        },
+        {
+          "blockId": "publish",
+          "executionId": "publish",
+          "status": "pending",
+          "error": "The model call was aborted"
+        }
+      ],
+      "checkpoints": 13,
+      "toolCalls": 49
+    }
+  ],
+  "checkpoints": 13,
+  "result": null
+}

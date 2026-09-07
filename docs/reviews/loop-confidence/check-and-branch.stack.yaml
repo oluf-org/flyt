@@ -1,0 +1,49 @@
+version: 2
+id: check-and-branch
+name: "check-and-branch"
+blocks:
+  - id: quality-loop
+    kind: until
+    condition:
+      source: "evaluate.success"
+      operator: "is"
+      literal: true
+    max: 3
+    body:
+      - id: draft
+        use: flyt-blocks-core:general-analysis
+        title: "draft"
+        config:
+          instructions: "Write a complete checklist with four labelled sections: backup, confirmation, rollback, verification. If supplied a prior critique, fix it. Include actionable steps. This step returns the checklist text, not a Goal envelope."
+          maxTokens: 6000
+      - id: evaluate
+        use: flyt-blocks-judgement:evaluation
+        title: "evaluate"
+        config:
+          instructions: "Pass only if the supplied checklist includes actionable backup, confirmation, rollback and verification steps. In explanation include the full checklist so it survives the downstream handoff. Return the evaluation JSON required by this block."
+          maxTokens: 6000
+        outputs:
+          - name: "success"
+            type: "boolean"
+  - id: publish-if-passed
+    kind: if
+    predicate:
+      source: "evaluate.success"
+      operator: "is"
+      literal: true
+    body:
+      - id: publish
+        use: flyt-blocks-core:work
+        title: "publish"
+        config:
+          instructions: "Extract and polish the complete checklist from the evaluation explanation. Preserve all four required sections in lowercase. Write the complete useful deliverable to checklist.md. Use file tools, not shell. Return only the Goal JSON envelope with candidate.text summarizing the actual result and naming checklist.md; findings may hold short lessons."
+          maxTokens: 6000
+          effect: "artifact"
+          systemPrompt: "Produce the requested document from the supplied evidence. Preserve facts, cite source files when applicable, and write only the requested output file. Do not build or execute project code."
+    else:
+      - id: failure-note
+        use: flyt-blocks-core:general-analysis
+        title: "failure note"
+        config:
+          instructions: "Return a Goal envelope stating the checklist could not be verified; do not claim success."
+          maxTokens: 6000

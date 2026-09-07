@@ -158,6 +158,24 @@ test('automatic provider recovery cannot bypass a Goal call cap', async t => {
   const done = await finish(f.invoke, state.id);
   assert.equal(done.status, 'limit_reached', done.reason);
   assert.equal(done.calls, 1); assert.equal(f.seen.length, 1);
+  assert.match(done.reason, /1-call limit.*saved progress retained/);
+});
+
+test('a time limit retains its diagnosis when cancellation interrupts pending validation', async t => {
+  const f = await fixture(t, () => assert.fail('expired validation must not dispatch'));
+  const state = await f.invoke('create', { definition: f.definition });
+  const owner = new GoalController({ project: () => f.engine.registry.get(f.projectId), runs: {} });
+  owner.validateSource = () => new Promise(() => {});
+  await owner.start({ projectId: f.projectId, goalId: state.id });
+  // Advance the controller's elapsed-time input without waiting a real minute.
+  owner.live.get(state.id).began -= 60001;
+  await owner.control({ projectId: f.projectId, goalId: state.id, action: 'limit' });
+  await waitFor(() => !owner.live.has(state.id));
+  const done = owner.get(f.projectId, state.id);
+  assert.equal(done.status, 'limit_reached');
+  assert.match(done.reason, /1-minute time limit.*saved progress retained/);
+  assert.equal(done.calls, 0);
+  await owner.shutdown();
 });
 
 test('pausing during transient backoff prevents further provider calls', async t => {
@@ -219,6 +237,51 @@ test('malformed output can retry without editing the recipe', async t => {
   await f.invoke('start', { goalId: state.id });
   const done = await finish(f.invoke, state.id);
   assert.equal(done.status, 'achieved', done.reason); assert.equal(done.calls, 2);
+});
+
+test('a malformed JSON envelope is repaired without replaying work or changing the candidate', async t => {
+  const f = await fixture(t, (_, count) => count === 1 ? '{"candidate":{"text":"ALPHA BETA"' : response('ALPHA BETA'));
+  const state = await f.invoke('create', { definition: f.definition });
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'achieved', done.reason);
+  assert.equal(done.calls, 2);
+  assert.equal(done.iteration, 1);
+  assert.equal(done.outputRecovery.recovered, true);
+  assert.match(done.outputRecovery.repairedRunId, /iteration-1-format-1$/);
+  assert.equal(f.seen[1].tools?.length ?? 0, 0, 'formatting cannot repeat writes');
+  assert.equal(done.current.preview, 'ALPHA BETA');
+});
+
+test('format repair cannot fabricate passing text and is bounded to two attempts', async t => {
+  const f = await fixture(t, (_, count) => count === 1 ? '{"candidate":{"text":"ALPHA"' : response('ALPHA BETA'));
+  const state = await f.invoke('create', { definition: f.definition });
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'failed');
+  assert.equal(done.calls, 3);
+  assert.equal(done.iteration, 0);
+  assert.equal(done.outputRecovery.exhausted, true);
+});
+
+test('retrying a saved formatting failure uses the completed child and retains spent budget', async t => {
+  const f = await fixture(t, () => response('ALPHA BETA'));
+  const state = await f.invoke('create', { definition: f.definition });
+  const folder = path.join(f.engine.registry.get(f.projectId).store.rootDir, 'goals', state.id);
+  const phase = 'iteration-1';
+  fs.writeFileSync(path.join(folder, `child-${phase}.json`), JSON.stringify({
+    runId: `goal-${state.id}-${phase}`, output: '{"candidate":{"text":"ALPHA BETA"',
+  }));
+  fs.writeFileSync(path.join(folder, 'state.json'), JSON.stringify({ ...state, status: 'failed', calls: 4,
+    iterationIntent: { number: 1, revision: 1, phase }, reason: 'Malformed result envelope',
+  }));
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'achieved', done.reason);
+  assert.equal(done.calls, 5);
+  assert.equal(f.seen.length, 1, 'the completed recipe is not run again');
+  assert.match(f.seen[0].messages.filter(message => message.role === 'system').map(message => message.content).join('\n'), /repair JSON formatting only/);
+  assert.equal(done.current.runId, `goal-${state.id}-${phase}`);
 });
 
 test('orphaned running Goals display interruption and accept pause and stop without charging downtime', async t => {

@@ -1,0 +1,24 @@
+version: 2
+id: runbook-completion
+name: "runbook-completion"
+blocks:
+  - id: draft-review
+    use: flyt-blocks-core:general-analysis
+    title: "draft review"
+    config:
+      instructions: "Read incident.md. If iteration 2 or later, also read runbook.md. Produce a complete runbook draft or corrected version, with numbered steps and explicit stop/escalation criteria. Follow the current iteration in the Goal context. Keep the complete runbook under 450 words. The Goal context iteration number is set by the controller: perform ONLY that iteration and return; never enact a future iteration yourself."
+      maxTokens: 16384
+  - id: critique
+    use: flyt-blocks-judgement:compare
+    title: "critique"
+    config:
+      instructions: "Compare the supplied runbook against the fixed Goal objective and constraints. Return the full corrected runbook, not just criticisms. Preserve every safety condition. In iteration 1 label DRAFT; in iteration 2 include Ready for review. Keep the complete runbook under 450 words. The Goal context iteration number is set by the controller: perform ONLY that iteration and return; never enact a future iteration yourself."
+      maxTokens: 16384
+  - id: publish
+    use: flyt-blocks-core:work
+    title: "publish"
+    config:
+      instructions: "Follow the current Goal iteration. Iteration 1 is DRAFT and must NOT contain Ready for review. Iteration 2 must review the existing file and include Ready for review. Write the complete useful deliverable to runbook.md. Use file tools, not shell. Return only the Goal JSON envelope with candidate.text summarizing the actual result and naming runbook.md; findings may hold short lessons. Keep the complete runbook under 450 words. The Goal context iteration number is set by the controller: perform ONLY that iteration and return; never enact a future iteration yourself."
+      maxTokens: 16384
+      effect: "artifact"
+      systemPrompt: "Produce the requested document from the supplied evidence. Preserve facts, cite source files when applicable, and write only the requested output file. Do not build or execute project code."
