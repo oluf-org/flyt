@@ -3,6 +3,7 @@ import { applyOpenAIRequest } from './openai.js';
 
 export function applyOpenRouterRequest(body, options = {}) {
   applyOpenAIRequest(body, options);
+  if (options.requireParameters) body.provider = { ...body.provider, require_parameters: true };
   if (options.reasoning?.effort) body.reasoning = { effort: options.reasoning.effort };
   return body;
 }

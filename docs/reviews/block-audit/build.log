@@ -1,0 +1,26 @@
+
+> flyt@2.1.0 build
+> npm run build:kernel && vite build
+
+
+> flyt@2.1.0 build:kernel
+> tsc -p kernel
+
+vite v6.4.3 building for production...
+transforming...
+✓ 123 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                         2.78 kB │ gzip:  1.21 kB
+dist/assets/DailyRoot-B33UGut8.css    113.44 kB │ gzip: 19.76 kB
+dist/assets/index-__CgKnmK.css        172.11 kB │ gzip: 29.72 kB
+dist/assets/types-DZY6LdwR.js           1.01 kB │ gzip:  0.48 kB
+dist/assets/buildSurface-gvr6SQbZ.js    4.30 kB │ gzip:  1.43 kB
+dist/assets/edit-Dhl8CJ5I.js            5.17 kB │ gzip:  1.70 kB
+dist/assets/traceModel-BQCMbRkx.js      7.48 kB │ gzip:  2.11 kB
+dist/assets/projectTheme-CAb2Pqbi.js    7.74 kB │ gzip:  3.19 kB
+dist/assets/parse-B-Nol5oS.js          17.90 kB │ gzip:  6.30 kB
+dist/assets/devMock-BrEzHYBR.js        59.81 kB │ gzip: 20.17 kB
+dist/assets/index-CcEVepil.js         147.53 kB │ gzip: 47.76 kB
+dist/assets/DailyRoot-BnRkYgbV.js     325.59 kB │ gzip: 95.76 kB
+✓ built in 1.52s

@@ -1,0 +1,15 @@
+
+> flyt@2.1.0 lint
+> npm run stack -- lint
+
+
+> flyt@2.1.0 stack
+> npm run build:kernel --silent && node core/stacklint.js lint
+
+OK      stacks/fable-at-home.stack.yaml
+OK      stacks/learn-from-repo.stack.yaml
+OK      stacks/loop-task.stack.yaml
+OK      stacks/pipeline.stack.yaml
+OK      stacks/research.stack.yaml
+OK      stacks/spec-an-idea.stack.yaml
+OK — 6 stacks

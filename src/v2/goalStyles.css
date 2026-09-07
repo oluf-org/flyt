@@ -1,33 +1,573 @@
-/* Goals surface. Tokens come from src/styles.css (Slate & Sage): a Goal page
-   is an ordinary app surface, so it borrows the card/border/text scale rather
-   than inventing one. The best-attempt panel is set apart by a tinted surface
-   and a full hairline, not a colored edge. */
-.goal-page { padding: 28px; overflow: auto; height: 100%; color: var(--tx); }
-.goal-header { display:flex; justify-content:space-between; align-items:center; gap:20px; margin-bottom:20px; }
-.goal-header h1,.goal-header h2 { margin:0 0 8px; }
-.goal-header p { margin:0; color:var(--dim); max-width:800px; }
-.goal-layout { display:grid; grid-template-columns:220px minmax(0,1fr); gap:28px; }
-.goal-layout aside { display:flex; flex-direction:column; gap:8px; }
-.goal-page button { padding:8px 12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; }
-.goal-page button:disabled { opacity:.5; cursor:default; }
-.goal-layout aside button { text-align:left; display:grid; gap:6px; }
-.goal-layout aside button[aria-pressed=true] { border-color:var(--accent); background:var(--accent-soft); }
-.goal-layout aside span { font-size:12px; color:var(--dim); }
-.goal-fields { display:grid; gap:14px; max-width:860px; }
-.goal-fields label { display:grid; gap:6px; font-size:13px; }
-.goal-fields input,.goal-fields textarea,.goal-fields select { padding:9px; width:100%; border:1px solid var(--border); border-radius:5px; color:inherit; background:var(--card); }
-.goal-fields .goal-check { display:flex; align-items:center; }
-.goal-fields .goal-check input { width:auto; }
-.goal-fields p { font-size:13px; color:var(--dim); margin:0; }
-.goal-limits { display:flex; gap:16px; }
-.goal-limits label { flex:1; }
-.goal-recipe { margin:28px 0; border-top:1px solid var(--border); padding-top:12px; }
-.goal-recipe .block-editor { min-height:380px; }
-.goal-actions { display:flex; gap:8px; flex-wrap:wrap; }
-.goal-stats { display:flex; flex-wrap:wrap; gap:32px; padding:18px 0; }
-.goal-stats dt { font-size:12px; color:var(--dim); }.goal-stats dd { font-size:19px; margin:6px 0 0; }
-.goal-best { border:1px solid color-mix(in srgb, var(--accent) 34%, var(--border)); border-radius:8px; padding:14px 18px 18px; background:var(--accent-soft); }
-.goal-page table { width:100%; border-collapse:collapse; margin:16px 0; }.goal-page th,.goal-page td { text-align:left; padding:10px; border-bottom:1px solid var(--border); }
-.goal-inspection { padding:20px; margin:20px 0; border:1px solid var(--border); border-radius:8px; background:var(--card); }.goal-inspection pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:600px; overflow:auto; }
-.goal-error { color:var(--err); }
-@media(max-width:850px) { .goal-layout { grid-template-columns:1fr; }.goal-layout aside { flex-direction:row; flex-wrap:wrap; } }
+/* Goals — a loop you can read at a glance.
+   Header (identity + the three things you do) · sidebar (inspector) · canvas (Steps | Loop).
+   Every colour is a token, so light and dark are one definition. The one local
+   token is --goal-fill: the accent is a 3.9:1 surface against white, which is
+   fine for a border and not fine behind 12px text, so filled controls use a
+   darker step of the same hue. */
+
+.goal-page {
+  --goal-fill: light-dark(oklch(from var(--accent) 0.52 c h), var(--accent));
+  /* Same reason as --goal-fill: the amber is a surface, not 11px type. */
+  --goal-warn-tx: light-dark(oklch(from var(--warn) 0.44 c h), var(--warn));
+  --goal-ctl: 30px;
+  display: flex; flex-direction: column; height: 100%; overflow: hidden;
+  background: var(--canvas); color: var(--tx);
+}
+.goal-page * { box-sizing: border-box; }
+.goal-requirements { margin: 0 0 14px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.goal-sidebar .goal-requirements { padding: 10px; margin-bottom: 14px; }
+.goal-requirements.has-warnings { border-color: var(--goal-warn-tx); }
+.goal-requirements.has-warnings > summary, .goal-field-warning, .goal-field.path-warning > label small { color: var(--goal-warn-tx); }
+.goal-requirements ul { list-style: none; margin: 8px 0; padding: 0; max-height: 280px; overflow-y: auto; }
+.goal-requirements li { padding: 8px 0; border-top: 1px solid var(--border); }
+.goal-requirements li small { display: block; color: var(--muted); margin-top: 4px; }
+.goal-requirements li p { margin: 6px 0; }
+.goal-requirements .missing code { color: var(--goal-warn-tx); font-weight: 600; }
+.goal-field.path-warning textarea, .goal-field.path-warning input { border-color: var(--goal-warn-tx); }
+.goal-field-warning { font-size: 11px; margin: 4px 0; overflow-wrap: anywhere; }
+.goal-library-dialog { width: min(800px, 92vw); max-height: 85vh; padding: 24px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); color: var(--tx); overflow-y: auto; }
+.goal-library-dialog::backdrop { background: #0007; }
+.goal-library-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.goal-library-dialog h2 { margin: 0; }
+.goal-library-dialog > p { color: var(--muted); font-size: 13px; }
+.goal-library-dialog > input { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--canvas); color: var(--tx); }
+.goal-library-dialog ul { list-style: none; padding: 0; margin: 16px 0 0; }
+.goal-library-dialog li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; padding: 16px 0; border-top: 1px solid var(--border); }
+.goal-library-dialog li > div { flex: 1 1 280px; min-width: 0; overflow-wrap: anywhere; }
+.goal-library-dialog h3 { margin: 0 0 5px; font-size: 15px; }
+.goal-library-dialog small { color: var(--muted); }
+.goal-library-dialog li p { margin: 8px 0 0; font-size: 13px; }
+.goal-eyebrow { font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; font-weight: 700; color: var(--faint); }
+.goal-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+
+/* ---------- controls ---------- */
+
+.goal-page button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  height: var(--goal-ctl); padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--card); color: var(--tx);
+  font: inherit; font-size: 12px; cursor: pointer;
+  transition: background-color .14s ease, border-color .14s ease, color .14s ease;
+}
+.goal-page button:hover:not(:disabled) { border-color: var(--divider); background: var(--chip); }
+.goal-page button:disabled { opacity: .45; cursor: default; }
+.goal-page button:focus-visible, .goal-page input:focus-visible,
+.goal-page textarea:focus-visible, .goal-page select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.goal-page .goal-primary { border-color: transparent; background: var(--goal-fill); color: var(--accent-tx); font-weight: 600; }
+.goal-page .goal-primary:hover:not(:disabled) { filter: brightness(1.1); background: var(--goal-fill); border-color: transparent; }
+
+.goal-count {
+  display: inline-grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 999px; background: var(--goal-fill); color: var(--accent-tx);
+  font-size: 9.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+/* The one continuously animated thing on the page: a request actually in flight. */
+.goal-page button.working::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--goal-fill); animation: goal-pulse 1.6s ease-in-out infinite;
+}
+@keyframes goal-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .goal-page *, .goal-page *::before, .goal-page *::after { animation-duration: .001s !important; transition-duration: .001s !important; }
+}
+
+.goal-page input, .goal-page textarea, .goal-page select {
+  min-width: 0; padding: 8px 9px;
+  border: 1px solid var(--border); border-radius: 7px;
+  background: var(--card); color: var(--tx); font: inherit; font-size: 12px;
+}
+.goal-page textarea { width: 100%; resize: vertical; line-height: 1.6; }
+.goal-page select { height: var(--goal-ctl); padding: 0 8px; cursor: pointer; }
+.goal-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+
+.goal-segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--accent-soft); }
+.goal-page .goal-segmented button { height: 25px; padding: 0 13px; border: 0; border-radius: 7px; background: transparent; font-size: 11.5px; }
+.goal-page .goal-segmented button:hover:not(:disabled):not([aria-pressed=true]) { background: color-mix(in oklab, var(--card) 55%, transparent); }
+.goal-page .goal-segmented button[aria-pressed=true] { background: var(--goal-fill); color: var(--accent-tx); font-weight: 600; }
+
+/* ---------- header ---------- */
+
+.goal-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  flex-shrink: 0; padding: 12px 20px;
+  background: var(--card); border-bottom: 1px solid var(--border);
+}
+.goal-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.goal-page .goal-title { margin: 0; min-width: 0; font-size: 19px; font-weight: 600; line-height: 1.35; letter-spacing: -.4px; }
+.goal-picker { position: relative; display: inline-flex; min-width: 0; max-width: min(38vw, 340px); }
+.goal-page .goal-picker-trigger {
+  display: inline-flex; align-items: center; justify-content: flex-start; gap: 6px; min-width: 0;
+  margin-left: -8px; padding: 3px 8px; border: 0; border-radius: 8px;
+  background: transparent; font: inherit; color: inherit;
+  transition: background-color .14s ease;
+}
+.goal-page .goal-picker-trigger:hover:not(:disabled) { background: var(--chip); }
+.goal-picker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-picker-caret {
+  flex: none; width: 6px; height: 6px; margin-top: -3px;
+  border-right: 1.6px solid var(--dim); border-bottom: 1.6px solid var(--dim);
+  transform: rotate(45deg); transition: transform .16s var(--spring, ease);
+}
+.goal-picker-trigger[aria-expanded=true] .goal-picker-caret { transform: translateY(3px) rotate(-135deg); }
+
+/* The popup the operating system used to draw. */
+.goal-picker-menu {
+  position: absolute; z-index: 40; top: calc(100% + 6px); left: -8px;
+  min-width: 264px; max-width: min(76vw, 400px);
+  max-height: min(52vh, 420px); overflow-y: auto; overscroll-behavior: contain;
+  padding: 5px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--card); box-shadow: var(--shadow-selected);
+  animation: goal-picker-in .13s ease-out;
+}
+@keyframes goal-picker-in { from { opacity: 0; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) {
+  .goal-picker-menu { animation: none; }
+  .goal-picker-caret { transition: none; }
+}
+.goal-picker-menu ul { margin: 0; padding: 0; list-style: none; }
+.goal-picker-group {
+  margin: 6px 0 3px; padding: 0 8px;
+  color: var(--faint); font-size: 9.5px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.goal-picker-group:first-child { margin-top: 2px; }
+.goal-picker-empty { margin: 10px 8px; color: var(--dim); font-size: 12px; }
+
+.goal-picker-row { display: flex; align-items: center; gap: 2px; border-radius: 8px; }
+.goal-picker-row:hover { background: var(--chip); }
+.goal-page .goal-picker-name {
+  display: flex; align-items: center; justify-content: flex-start; gap: 8px; flex: 1; min-width: 0;
+  height: 30px; padding: 0 8px; border: 0; border-radius: 8px;
+  background: transparent; font-size: 13px; font-weight: 500; text-align: left;
+}
+.goal-picker-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-page .goal-picker-name small {
+  flex: none; color: var(--faint); font-size: 9.5px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+}
+/* Which one you are looking at. Every row said "My goal" and nothing said which. */
+.goal-picker-dot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: transparent; }
+.goal-page .goal-picker-name[aria-current] { font-weight: 650; }
+.goal-page .goal-picker-name[aria-current] .goal-picker-dot { background: var(--accent); }
+
+/* Rename and delete stay out of the way until the row is under the pointer, and
+   arrive whenever either of them has focus, so the keyboard is not shown an
+   empty row. */
+.goal-picker-tools { display: flex; gap: 2px; padding-right: 4px; opacity: 0; transition: opacity .12s ease; }
+.goal-picker-row:hover .goal-picker-tools,
+.goal-picker-tools:focus-within { opacity: 1; }
+.goal-page .goal-picker-tool {
+  display: grid; place-items: center; width: 26px; height: 26px;
+  padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--chip-tx);
+}
+.goal-page .goal-picker-tool svg { width: 15px; height: 15px; }
+.goal-page .goal-picker-tool:hover:not(:disabled) { background: var(--accent-soft); color: var(--tx); }
+.goal-page .goal-picker-tool.danger:hover:not(:disabled) { background: var(--err-soft); color: var(--err); }
+
+.goal-picker-row.renaming, .goal-picker-row.confirming { gap: 4px; padding: 3px 4px; }
+.goal-picker-row.confirming { background: var(--err-soft); }
+.goal-page .goal-picker-row input {
+  flex: 1; min-width: 0; height: 28px; padding: 0 8px;
+  border: 1px solid var(--accent); border-radius: 7px;
+  background: var(--card); font-size: 13px;
+}
+.goal-picker-ask {
+  flex: 1; min-width: 0; padding-left: 6px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--tx);
+}
+.goal-page .goal-picker-row.renaming button, .goal-page .goal-picker-row.confirming button {
+  flex: none; height: 26px; padding: 0 10px; border-radius: 7px; font-size: 11.5px;
+}
+.goal-page .goal-picker-confirm { background: var(--accent-fill); color: var(--on-accent); border-color: transparent; }
+.goal-page .goal-picker-danger { background: var(--err); color: #fff; border-color: transparent; }
+.goal-page .goal-new { width: 26px; height: 26px; padding: 0; border-radius: 8px; color: var(--dim); font-size: 16px; line-height: 1; }
+
+.goal-status {
+  flex: none; padding: 3px 8px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--ok);
+  font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+}
+.goal-status.quiet { background: var(--chip); color: var(--chip-tx); font-weight: 650; }
+
+/* Version and Save read as one control: which draft you are looking at, and the
+   act of writing to it. */
+.goal-version-group { display: inline-flex; align-items: center; height: var(--goal-ctl); border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+.goal-version { display: inline-flex; align-items: center; gap: 4px; padding-left: 10px; color: var(--dim); font-size: 11px; }
+.goal-version select {
+  height: 26px; padding: 0 4px; border-color: transparent; background: transparent;
+  color: var(--tx); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.goal-page .goal-save { height: 28px; margin: 0 1px 0 4px; border: 0; border-left: 1px solid var(--border); border-radius: 0 7px 7px 0; }
+
+/* ---------- layout ---------- */
+
+.goal-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.goal-resizer { flex-shrink: 0; width: 5px; background: var(--canvas); cursor: col-resize; touch-action: none; }
+.goal-resizer:hover, .goal-resizer:focus-visible { background: var(--accent-soft); outline: 1px solid var(--accent); }
+
+.goal-sidebar {
+  flex-shrink: 0; width: 320px; min-width: 280px; max-width: 460px; resize: none;
+  overflow: auto; padding: 16px 18px 40px;
+  background: var(--side); border-right: 1px solid var(--border);
+}
+.goal-sidebar-head { display: flex; align-items: center; min-height: 24px; margin-bottom: 14px; }
+.goal-sidebar-head h2 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+.goal-page .goal-back { height: 24px; padding: 0 9px; border-color: transparent; background: transparent; color: var(--dim); font-size: 11px; }
+.goal-sidebar h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; }
+.goal-sidebar h4 { margin: 14px 0 4px; font-size: 11px; color: var(--dim); }
+.goal-sidebar p { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.goal-sidebar pre { max-height: 240px; overflow: auto; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.goal-sidebar > button, .goal-sidebar > .goal-actions { margin-top: 12px; }
+
+.goal-sidebar details { border-top: 1px solid var(--border); padding: 12px 0; }
+.goal-sidebar summary {
+  display: flex; align-items: center; gap: 7px; cursor: pointer; list-style: none;
+  font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--dim);
+}
+.goal-sidebar summary::-webkit-details-marker { display: none; }
+.goal-sidebar summary::before {
+  content: ''; flex: none; width: 5px; height: 5px;
+  border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor;
+  transform: translateY(-1px) rotate(-45deg); transition: transform .16s ease;
+}
+.goal-sidebar details[open] > summary { margin-bottom: 14px; }
+.goal-sidebar details[open] > summary::before { transform: translateY(-2px) rotate(45deg); }
+.goal-sidebar summary:hover { color: var(--tx); }
+
+.goal-field { display: flex; flex-direction: column; gap: 6px; margin: 0 0 15px; color: var(--dim); font-size: 11px; }
+.goal-field > label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.goal-field small { color: var(--faint); font-size: 10px; font-weight: 400; }
+.goal-field input, .goal-field select, .goal-field textarea { width: 100%; max-width: 100%; color: var(--tx); font-size: 12px; }
+.goal-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.goal-field-actions { display: flex; gap: 4px; opacity: 0; transition: opacity .14s ease; }
+.goal-field:hover .goal-field-actions, .goal-field:focus-within .goal-field-actions { opacity: 1; }
+.goal-field-actions button { height: 22px; padding: 0 6px; border-color: transparent; background: transparent; color: var(--faint); font-size: 10px; }
+.goal-field-actions button:first-child { padding-left: 0; }
+.goal-field-actions button:hover:not(:disabled) { background: transparent; color: var(--accent); border-color: transparent; }
+.goal-field.ai-changed { padding: 10px; margin-left: -10px; margin-right: -10px; border-radius: 8px; background: var(--accent-soft); }
+
+.goal-hint { margin: -6px 0 14px; color: var(--faint); font-size: 11px !important; line-height: 1.55 !important; }
+.goal-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 0 16px; }
+.goal-meta span { padding: 3px 8px; border-radius: 6px; background: var(--chip); color: var(--chip-tx); font-size: 10px; overflow-wrap: anywhere; }
+.goal-check { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin: 10px 0; font-size: 12px; line-height: 1.45; }
+.goal-check input { flex: none; width: auto; margin-top: 1px; accent-color: var(--accent); }
+.goal-check small { flex-basis: 100%; padding-left: 21px; color: var(--faint); font-size: 10.5px; }
+.goal-sidebar fieldset { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; }
+.goal-sidebar legend { padding: 0 5px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.goal-children { display: grid; gap: 6px; margin: 0 0 14px; padding: 0; list-style: none; }
+.goal-children button { width: 100%; justify-content: flex-start; }
+
+.goal-progress { margin: 16px 0; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+.goal-progress dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; margin: 12px 0 0; font-size: 11.5px; }
+.goal-progress dt { color: var(--dim); }
+.goal-progress dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.goal-pending-review { margin: 16px 0; padding: 14px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); }
+.goal-pending-review h3 { margin-top: 0; }
+.goal-change-badge {
+  padding: 2px 6px; border-radius: 5px; background: var(--accent-soft); color: var(--ok);
+  font-size: 9.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- canvas ---------- */
+
+.goal-main {
+  position: relative; flex: 1; min-width: 0; overflow: auto;
+  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size: 22px 22px; background-position: -1px -1px;
+}
+.goal-canvas { display: flex; flex-direction: column; min-height: 100%; padding: 0 24px 32px; }
+.goal-canvas-toolbar { display: flex; justify-content: flex-end; padding: 14px 0 10px; }
+
+.goal-flow, .goal-loop { width: 100%; margin: auto; }
+.goal-flow { max-width: 520px; }
+.goal-loop { max-width: 620px; }
+.goal-flow { padding-left: 50px; }
+.goal-loop { display: flex; flex-direction: column; align-items: center; }
+
+/* Setup is the part that does not repeat, so it sits above the loop and stays
+   outside the return path. */
+.goal-setup-strip { display: grid; gap: 7px; padding-left: 42px; }
+.goal-setup-strip .goal-node { border-style: dashed; }
+.goal-setup-strip.centered { justify-items: center; padding-left: 0; }
+.goal-setup-cards { display: flex; flex-wrap: wrap; gap: 8px; }
+.goal-setup-strip .goal-node { width: auto; min-width: 190px; padding: 9px 12px; }
+.goal-setup-strip::after { content: ''; width: 1px; height: 20px; margin-left: -27px; background: var(--divider); }
+.goal-setup-strip.centered::after { margin-left: 0; }
+
+/* Steps — one pass top to bottom, with the return path drawn in the gutter so
+   "this repeats" needs no sentence. */
+.goal-steps-wrap { position: relative; }
+.goal-steps { position: relative; display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.goal-steps::before { content: ''; position: absolute; left: 15px; top: 31px; bottom: 31px; width: 1px; background: var(--divider); }
+.goal-steps li { position: relative; display: grid; grid-template-columns: 30px 1fr; gap: 12px; align-items: center; min-height: 62px; }
+.goal-steps-return {
+  position: absolute; left: -44px; top: 31px; bottom: 31px; width: 40px;
+  border: 1px dashed var(--divider); border-right: 0; border-radius: 14px 0 0 14px;
+  pointer-events: none;
+}
+.goal-steps-return::after {
+  content: ''; position: absolute; right: -8px; top: -5px;
+  border: 5px solid transparent; border-left-color: var(--accent);
+}
+.goal-steps-return i {
+  position: absolute; left: 0; top: 50%; transform: translate(-50%, -50%);
+  padding: 3px 0; background: var(--canvas); color: var(--faint); font: 400 12px/1 inherit;
+}
+.goal-step-mark {
+  z-index: 1; display: grid; place-items: center; width: 30px; height: 30px;
+  border: 1px solid var(--divider); border-radius: 50%;
+  background: var(--canvas); color: var(--dim);
+  font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+
+/* Loop — a real circle: the box is square, so the 35% radius is a radius. */
+.goal-circle { position: relative; width: min(100%, 620px, calc(240px + var(--goal-nodes, 5) * 80px)); aspect-ratio: 1; margin: 0 auto; }
+.goal-circle > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.goal-circle circle { fill: none; stroke: var(--divider); stroke-width: 1.4; }
+.goal-circle svg path { stroke: var(--accent); stroke-width: 1.6; }
+.goal-circle-center {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 50%; text-align: center; pointer-events: none;
+}
+.goal-circle-center h2 {
+  margin: 0; font-size: 14.5px; font-weight: 550; line-height: 1.45; letter-spacing: -.2px;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+}
+.goal-circle-center h2.placeholder { color: var(--faint); font-weight: 450; }
+.goal-circle-center p { margin: 8px 0 0; color: var(--ok); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.goal-node-position { position: absolute; width: max(27%, 150px); transform: translate(-50%, -50%); }
+.goal-node-position .goal-step-mark { position: absolute; top: -11px; left: -11px; background: var(--card); }
+
+/* The step card is the same object in both views. */
+.goal-page .goal-node {
+  width: 100%; height: auto; min-height: 60px; display: flex; justify-content: center; flex-direction: column; align-items: flex-start; gap: 5px;
+  padding: 12px 14px; border-radius: 10px; text-align: left;
+  box-shadow: var(--shadow-rest);
+}
+.goal-page .goal-node:hover:not([aria-pressed=true]) { border-color: var(--divider); background: var(--card); box-shadow: var(--shadow-float); }
+.goal-page .goal-node[aria-pressed=true] { border-color: var(--accent); background: var(--card); box-shadow: var(--shadow-selected); }
+.goal-page .goal-node.system { border-style: dashed; background: var(--accent-soft); }
+.goal-page .goal-node.system:hover, .goal-page .goal-node.system[aria-pressed=true] { background: var(--accent-soft); }
+.goal-node strong {
+  font-size: 12.5px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.goal-node small { color: var(--faint); font-size: 10px; }
+.goal-node-meta { display: flex; align-items: center; gap: 6px; }
+.goal-node-state { color: var(--dim); font-size: 10px; font-weight: 650; }
+.goal-node-state.done { color: var(--ok); }
+.goal-node-state.live { color: var(--ok); }
+.goal-node-state.live::after { content: ''; display: inline-block; width: 5px; height: 5px; margin-left: 5px; border-radius: 50%; background: currentColor; animation: goal-pulse 1.6s ease-in-out infinite; }
+.goal-lock { width: 11px; height: 11px; fill: none; stroke: var(--faint); stroke-width: 1.1; }
+
+/* ---------- chat ---------- */
+
+.goal-chat {
+  position: fixed; inset: 0 0 0 min(25vw, 340px); margin: auto;
+  width: min(480px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: min(70dvh, 720px);
+  padding: 0; border: 0; background: none; color: var(--tx); box-shadow: none; overflow: visible;
+}
+.goal-chat[open] { display: flex; flex-direction: column; animation: goal-chat-in .2s ease-out; }
+
+/* Two things in the room: the title, and the box you type into. The panel that
+   used to hold them was a third, and it said nothing. What is behind is pushed
+   out of focus and dimmed rather than covered over, so the loop you are
+   describing stays visible underneath the words describing it. */
+.goal-chat::backdrop {
+  background: light-dark(rgba(22, 30, 26, .18), rgba(5, 8, 7, .46));
+  backdrop-filter: blur(14px) saturate(.94);
+  animation: goal-veil .18s ease-out;
+}
+@keyframes goal-veil { from { opacity: 0; } }
+@keyframes goal-chat-in { from { opacity: 0; transform: translateY(7px); } }
+@media (prefers-reduced-motion: reduce) {
+  .goal-chat[open], .goal-chat::backdrop { animation: none; }
+}
+
+/* Padded to the composer's own text inset, so the title and the caret start on
+   one line rather than two. */
+.goal-chat header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 2px 12px 14px; background: none; border: 0; }
+.goal-chat h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.3px; }
+.goal-chat h2 span { color: var(--accent); }
+.goal-chat header small { margin-left: auto; color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+.goal-page .goal-chat header button { width: 26px; height: 26px; padding: 0; border-color: transparent; background: transparent; color: var(--dim); font-size: 18px; }
+.goal-page .goal-chat header button:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--tx); }
+
+.goal-chat-history { flex: 0 1 auto; min-height: 0; overflow: auto; padding: 0 14px 12px; font-size: 12.5px; line-height: 1.6; }
+.goal-chat-history article { margin-bottom: 14px; }
+.goal-chat-history p { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Two voices, told apart by where they sit rather than by a label on each one:
+   what you asked is a bubble on your side, what came back is plain text on the
+   veil. */
+.goal-chat-user {
+  width: fit-content; max-width: 85%; margin-left: auto; padding: 8px 12px;
+  border-radius: 12px 12px 4px 12px; background: var(--accent-soft);
+}
+.goal-chat-working { display: flex; align-items: center; gap: 8px; color: var(--dim); }
+.goal-chat-note { color: var(--dim); font-size: 11px; overflow-wrap: anywhere; }
+/* What the request was allowed to touch, when that was narrowed. */
+.goal-chat-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; margin: 5px 0 0; }
+.goal-chat-meta span { padding: 2px 8px; border-radius: 999px; background: var(--chip); color: var(--chip-tx); font-size: 10px; overflow-wrap: anywhere; }
+.goal-chat-tool { margin: 6px 0; font-size: 11px; }
+.goal-chat-tool pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.goal-page .goal-chat-link { height: 24px; padding: 0 9px; margin-top: 4px; font-size: 11px; }
+
+/* The composer holds everything the message carries: the fields it quotes, the
+   words, and the two pills that say how far the edit may reach and what it may
+   read. One object, so there is one place to look. */
+.goal-chat form { flex-shrink: 0; padding: 0; }
+.goal-composer {
+  position: relative; display: grid; padding: 4px;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--card);
+  transition: border-color .14s ease;
+}
+/* The one solid object left, so it has to hold its own edge against whatever
+   the blur leaves behind it. */
+.goal-chat .goal-composer { box-shadow: var(--shadow-selected); }
+.goal-composer:focus-within { border-color: var(--accent); }
+.goal-page .goal-composer textarea {
+  min-height: 66px; max-height: 150px; padding: 8px 9px 2px;
+  border: 0; background: transparent; resize: none;
+}
+.goal-page .goal-composer textarea:focus-visible { outline: 0; }
+
+.goal-chat-quotes { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px 4px 1px; }
+.goal-chat-quotes > span { display: flex; align-items: center; max-width: 100%; border-radius: 999px; background: var(--accent-soft); }
+.goal-page .goal-chat-quotes button { height: 22px; padding: 0 4px 0 10px; border-color: transparent; border-radius: 999px; background: transparent; color: var(--ok); font-size: 10.5px; }
+.goal-page .goal-chat-quotes button + button { padding: 0 9px 0 2px; font-size: 13px; line-height: 1; opacity: .55; }
+.goal-page .goal-chat-quotes button:hover:not(:disabled) { border-color: transparent; background: transparent; opacity: 1; }
+
+/* One line, always: the pills give up label width before the send button gives
+   up its place. */
+.goal-composer-foot { display: flex; align-items: center; gap: 6px; padding: 2px 4px 3px; }
+.goal-page .goal-send {
+  flex: none; width: 28px; height: 28px; padding: 0; border-radius: 50%;
+  border-color: transparent; background: var(--goal-fill); color: var(--accent-tx);
+}
+.goal-page .goal-send:hover:not(:disabled) { filter: brightness(1.1); background: var(--goal-fill); border-color: transparent; }
+.goal-send svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+/* Amber, not rose: a scope waiting on a selection has not failed. */
+.goal-composer-warn { margin: 8px 0 0; padding: 0 6px; color: var(--goal-warn-tx); font-size: 11px; }
+
+/* ---------- composer pills ---------- */
+
+.goal-menu { position: relative; display: inline-flex; min-width: 0; }
+/* The model belongs to the send, not to the scope: it sits with the button. */
+.goal-menu.push { margin-left: auto; }
+.goal-menu.push .goal-menu-pop { left: auto; right: 0; }
+.goal-page .goal-menu-trigger {
+  height: 26px; min-width: 0; gap: 6px; padding: 0 8px 0 9px;
+  border-color: transparent; border-radius: 999px;
+  background: var(--chip); color: var(--dim); font-size: 11px;
+}
+.goal-page .goal-menu-trigger:hover:not(:disabled),
+.goal-page .goal-menu-trigger[aria-expanded=true] { border-color: transparent; background: var(--accent-soft); color: var(--tx); }
+.goal-page .goal-menu-trigger.warn,
+.goal-page .goal-menu-trigger.warn:hover:not(:disabled),
+.goal-page .goal-menu-trigger.warn[aria-expanded=true] { background: var(--warn-soft); color: var(--goal-warn-tx); box-shadow: inset 0 0 0 1px var(--warn); }
+.goal-menu-trigger svg { flex: none; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.goal-menu-value { flex: 0 1 auto; min-width: 0; max-width: 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-menu-caret {
+  flex: none; width: 5px; height: 5px; margin: -3px 0 0 -1px; opacity: .7;
+  border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor;
+  transform: rotate(45deg); transition: transform .16s var(--spring, ease);
+}
+.goal-menu-trigger[aria-expanded=true] .goal-menu-caret { transform: translateY(3px) rotate(-135deg); }
+
+/* Opens upward, because the composer is the floor of the dialog. */
+.goal-menu-pop {
+  position: absolute; z-index: 40; bottom: calc(100% + 7px); left: 0;
+  width: max-content; min-width: 224px; max-width: min(78vw, 330px);
+  max-height: min(46vh, 340px); overflow-y: auto; overscroll-behavior: contain;
+  padding: 5px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--card); box-shadow: var(--shadow-selected);
+  animation: goal-menu-in .13s ease-out;
+}
+@keyframes goal-menu-in { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) {
+  .goal-menu-pop { animation: none; }
+  .goal-menu-caret { transition: none; }
+}
+.goal-menu-pop ul { margin: 0; padding: 0; list-style: none; }
+.goal-menu-group {
+  margin: 9px 0 3px; padding: 0 9px;
+  color: var(--faint); font-size: 9.5px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.goal-menu-group:first-child { margin-top: 2px; }
+.goal-page .goal-menu-option {
+  display: flex; align-items: center; justify-content: flex-start; gap: 8px;
+  width: 100%; height: 29px; padding: 0 9px;
+  border: 0; border-radius: 8px; background: transparent;
+  font-size: 12.5px; text-align: left;
+}
+.goal-page .goal-menu-option:hover:not(:disabled) { border-color: transparent; background: var(--chip); }
+.goal-menu-dot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: transparent; }
+.goal-page .goal-menu-option[aria-current] { font-weight: 650; }
+.goal-page .goal-menu-option[aria-current] .goal-menu-dot { background: var(--accent); }
+.goal-menu-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-page .goal-menu-option small { flex: none; margin-left: auto; padding-left: 10px; color: var(--faint); font-size: 10px; }
+.goal-page .goal-menu-input { min-height: 84px; max-height: 200px; margin-bottom: 3px; padding: 8px 9px; font-size: 12px; line-height: 1.55; resize: vertical; }
+.goal-menu-pop > small { display: block; padding: 1px 4px 2px; color: var(--faint); font-size: 10px; line-height: 1.5; }
+.goal-menu-empty { margin: 8px 9px; color: var(--dim); font-size: 12px; line-height: 1.5; }
+
+/* ---------- review, inspection, empty, error ---------- */
+
+.goal-review-dialog {
+  width: min(520px, calc(100vw - 24px)); max-height: 85dvh; padding: 24px 26px;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--card); color: var(--tx);
+}
+.goal-review-dialog::backdrop { background: #0004; }
+.goal-review-dialog h2 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -.3px; }
+.goal-review-objective { margin: 10px 0 18px; font-size: 13px; line-height: 1.6; color: var(--dim); }
+.goal-review-dialog dl { display: grid; grid-template-columns: 84px 1fr; gap: 9px 16px; margin: 0 0 22px; font-size: 12.5px; }
+.goal-review-dialog dt { color: var(--faint); font-size: 11px; padding-top: 1px; }
+.goal-review-dialog dd { margin: 0; overflow-wrap: anywhere; }
+.goal-review-dialog dd ul { margin: 0; padding-left: 16px; }
+.goal-review-dialog dd li { margin-bottom: 2px; }
+
+.goal-inspection { margin: 0 24px 24px; padding: 18px; border: 1px solid var(--border); border-radius: 11px; background: var(--card); }
+.goal-inspection header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.goal-inspection h2 { margin: 0; font-size: 14px; }
+.goal-inspection pre { max-height: 480px; overflow: auto; font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.goal-empty { margin: auto; padding: 40px; text-align: center; }
+.goal-empty h2 { margin: 0 0 22px; color: var(--tx); font-size: 27px; font-weight: 450; line-height: 1.35; letter-spacing: -.7px; }
+.goal-page .goal-empty button { height: 34px; padding: 0 18px; }
+.goal-error { flex-shrink: 0; margin: 0; padding: 10px 20px; background: var(--err-soft); color: var(--err); font-size: 12px; overflow-wrap: anywhere; }
+.goal-page .goal-error button { float: right; width: 20px; height: 20px; padding: 0; border-color: transparent; background: transparent; color: inherit; }
+
+/* ---------- narrow ---------- */
+
+.goal-mobile-tabs { display: none; }
+@media (max-width: 1100px) {
+  .goal-header { flex-wrap: wrap; padding: 12px 16px; }
+  .goal-sidebar { width: 290px; min-width: 250px; }
+  .goal-canvas { padding: 0 14px 24px; }
+  .goal-node-position { min-width: 118px; }
+}
+@media (max-width: 760px) {
+  .goal-flow { padding-left: 44px; }
+  .goal-steps-return { left: -38px; width: 34px; }
+  .goal-page .goal-title { font-size: 17px; }
+  .goal-mobile-tabs { display: flex; gap: 7px; padding: 9px 14px; border-bottom: 1px solid var(--border); background: var(--card); }
+  .goal-page .goal-mobile-tabs button[aria-pressed=true] { border-color: var(--accent); background: var(--accent-soft); }
+  .goal-layout.mobile-steps .goal-sidebar, .goal-layout.mobile-steps .goal-resizer { display: none; }
+  .goal-layout.mobile-details .goal-main { display: none; }
+  .goal-sidebar { width: 100% !important; min-width: 0; max-width: none; }
+  .goal-main { width: 100%; }
+  .goal-node-position { width: 30%; min-width: 0; }
+  .goal-page .goal-node { padding: 9px 10px; }
+  .goal-node strong { font-size: 11px; }
+  .goal-circle-center { width: 44%; }
+  .goal-circle-center h2 { font-size: 13px; -webkit-line-clamp: 3; }
+  .goal-chat { inset: 0; max-height: 85dvh; }
+  /* Too little room to hang a popup off its own pill without running past the
+     right edge, so it spans the composer instead. */
+  .goal-menu { position: static; }
+  .goal-menu-pop, .goal-menu.push .goal-menu-pop { left: 4px; right: 4px; width: auto; min-width: 0; max-width: none; }
+  .goal-menu-value { max-width: 96px; }
+  .goal-field-row, .goal-sidebar fieldset { grid-template-columns: 1fr; }
+}

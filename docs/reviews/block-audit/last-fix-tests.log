@@ -1,0 +1,80 @@
+TAP version 13
+# Subtest: multiline Split JSON remains two complete foreach assignments
+ok 1 - multiline Split JSON remains two complete foreach assignments
+  ---
+  duration_ms: 1.7839
+  ...
+# Subtest: legacy Markdown task details stay attached to their task headings
+ok 2 - legacy Markdown task details stay attached to their task headings
+  ---
+  duration_ms: 0.6079
+  ...
+# Subtest: broken JSON cannot become a list of brackets and property lines
+ok 3 - broken JSON cannot become a list of brackets and property lines
+  ---
+  duration_ms: 0.5366
+  ...
+# Subtest: a real Split -> foreach run visits two tasks, including their complete criteria
+ok 4 - a real Split -> foreach run visits two tasks, including their complete criteria
+  ---
+  duration_ms: 515.5367
+  ...
+# Subtest: a length-truncated list continues before it is parsed or marked complete
+ok 5 - a length-truncated list continues before it is parsed or marked complete
+  ---
+  duration_ms: 351.7505
+  ...
+# Subtest: Backlog handoff runs in a desktop workflow and queues real tasks without a model
+ok 6 - Backlog handoff runs in a desktop workflow and queues real tasks without a model
+  ---
+  duration_ms: 347.5743
+  ...
+# Subtest: handoff validates the entire batch before queuing anything
+ok 7 - handoff validates the entire batch before queuing anything
+  ---
+  duration_ms: 283.1596
+  ...
+# Subtest: handoff obeys a denied write approval and a narrowed tool ceiling
+ok 8 - handoff obeys a denied write approval and a narrowed tool ceiling
+  ---
+  duration_ms: 582.5907
+  ...
+# Subtest: retrying the same durable handoff returns the same receipts without duplicate tasks
+ok 9 - retrying the same durable handoff returns the same receipts without duplicate tasks
+  ---
+  duration_ms: 232.4076
+  ...
+# Subtest: repository analysis and planning offer readers but no writers
+ok 10 - repository analysis and planning offer readers but no writers
+  ---
+  duration_ms: 562.1985
+  ...
+# Subtest: a partial backlog storage failure keeps honest receipts and replay fills the remaining task
+ok 11 - a partial backlog storage failure keeps honest receipts and replay fills the remaining task
+  ---
+  duration_ms: 250.8265
+  ...
+# Subtest: AI step instructions enforce their explicit word ceiling
+ok 12 - AI step instructions enforce their explicit word ceiling
+  ---
+  duration_ms: 296.0249
+  ...
+# Subtest: input-only transformations offer no tools despite a reader-capable block ceiling
+ok 13 - input-only transformations offer no tools despite a reader-capable block ceiling
+  ---
+  duration_ms: 306.9325
+  ...
+# Subtest: a failed parallel lane stops the containing sequence even when the last lane succeeds
+ok 14 - a failed parallel lane stops the containing sequence even when the last lane succeeds
+  ---
+  duration_ms: 298.794
+  ...
+1..14
+# tests 14
+# suites 0
+# pass 14
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4291.563

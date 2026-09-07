@@ -1,0 +1,10 @@
+START second-edge/split
+END split: done/pass, 1 calls, 55s
+START second-edge/foreach
+FAIL foreach: Expected done, got stopped: undefined
+END foreach: stopped/fail, 7 calls, 240s
+START second-edge/parallel-failure
+END parallel-failure: failed/pass, 1 calls, 7s
+START second-edge/until-exhausted
+END until-exhausted: failed/pass, 2 calls, 8s
+Report: D:\electron\llm-flow\docs\reviews\block-audit\second-edge-split-foreach-parallel-failure-until-exhausted.json

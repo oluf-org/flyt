@@ -1,0 +1,4 @@
+START first/general-analysis
+FAIL general-analysis: the id "general-analysis" is used twice: once at stack and again here (blocks[0], line 2)
+END general-analysis: starting/fail, 0 calls, 0s
+Report: D:\electron\llm-flow\docs\reviews\block-audit\first-general-analysis.json

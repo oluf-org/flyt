@@ -20,6 +20,8 @@ const PROMPT_REFINER_SYSTEM = [
   'Preserve references such as "this repository" or "the bound workspace" for downstream blocks, and never ask the user for repository paths or file contents.',
   'You may ask at most one question. After its answer, make any remaining assumptions explicit and finish the brief.',
   'Never return an unanswered question as the brief. Otherwise take the reading a competent person would and mark the assumption.',
+  'Preserve the requested scope and acceptance bar. Do not invent requirements, expand test coverage beyond the request, or suggest skipping failing tests to make a run pass. Keep a simple request concise.',
+  'Assumptions cannot grant permission for additional files or changes. Do not authorize package metadata edits, new infrastructure, or other ancillary work absent from the request. For a fully specified request, tighten its wording without expanding it.',
 ].join(' ');
 
 /** A final refiner answer must be a brief, never a question accidentally sent downstream. */
@@ -149,7 +151,7 @@ export const evaluationBlock = judge(
 export const compareBlock = judge(
   'flyt-blocks-judgement:compare', 'Compare',
   'Compare upstream alternatives: agreements, differences, strengths, and a keep-the-best recommendation.',
-  'Compare the alternatives in front of you: where they agree, where they differ, each one’s strengths, and a keep-the-best recommendation. Say which you would keep and why.',
+  'Compare the requested alternatives against the stated requirements. Upstream review lanes are evidence about those alternatives; do not rank the reviewers instead of the requested options. Cover agreements, differences and strengths only as relevant, then recommend a feasible option and explain why. Do not claim facts absent from the input.',
   { name: 'comparison' },
 );
 export const promptRefinerBlock = judge(
@@ -201,7 +203,7 @@ export const humanCheckpointBlock: BlockDefinition = {
     type: 'object', additionalProperties: false,
     properties: {
       enabled: {
-        type: 'boolean', title: 'Require approval',
+        type: 'boolean', title: 'Require approval', default: true,
         description: 'When off, the artifact passes through without pausing.',
       },
     },
@@ -214,12 +216,12 @@ export const humanCheckpointBlock: BlockDefinition = {
     }
     const callId = `${run.blockId}-checkpoint`;
     const args = {
-      question: 'Approve the refined request before the workflow spends more on planning?',
+      question: 'Approve this artifact and continue the workflow?',
       options: ['Approve and continue', 'Stop this workflow'],
       context: run.input,
     };
     const session = await run.ctx.sessions.open(run.runId);
-    await session.append({ type: 'tool.call', data: { callId, name: 'ask_human', args } });
+    await session.append({ type: 'tool.call', data: { callId, blockId: run.blockId, name: 'ask_human', args } });
     const result = await run.ctx.tools.execute({
       runId: run.runId, blockId: run.blockId, step: 1,
       call: { id: callId, name: 'ask_human', args },
@@ -228,7 +230,7 @@ export const humanCheckpointBlock: BlockDefinition = {
     });
     await session.append({
       type: 'tool.result',
-      data: { callId, name: 'ask_human', content: result.content ?? '', ...(result.error ? { error: result.error } : {}) },
+      data: { callId, blockId: run.blockId, name: 'ask_human', content: result.content ?? '', ...(result.error ? { error: result.error } : {}) },
     });
     if (result.error) return { status: 'failed', output: run.input, error: result.error };
     let answer = '';

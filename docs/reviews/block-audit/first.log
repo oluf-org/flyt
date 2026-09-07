@@ -1,0 +1,38 @@
+START first/general-analysis
+END general-analysis: done/pass, 1 calls, 16s
+START first/combine
+END combine: done/pass, 1 calls, 22s
+START first/split
+FAIL split: Expected 2 complete parts, got undefined
+END split: done/fail, 1 calls, 10s
+START first/plan-start
+FAIL plan-start: Expected 2 complete tasks, got undefined
+END plan-start: done/fail, 1 calls, 50s
+START first/evaluation
+FAIL evaluation: Wrong verdict
+END evaluation: done/fail, 1 calls, 7s
+START first/compare
+END compare: done/pass, 1 calls, 29s
+START first/prompt-refiner
+END prompt-refiner: done/pass, 1 calls, 55s
+START first/human-checkpoint
+FAIL human-checkpoint: Wrong approval value
+END human-checkpoint: done/fail, 0 calls, 0s
+START first/interrogate
+END interrogate: done/pass, 5 calls, 225s
+START first/orient
+END orient: done/pass, 2 calls, 24s
+START first/backlog-plan
+FAIL backlog-plan: Expected 2 claimable tasks, got undefined
+END backlog-plan: done/fail, 3 calls, 73s
+START first/loop-handoff
+FAIL loop-handoff: Expected done, got failed: Block "loop-handoff" failed: Backlog handoff is unavailable in canonical workflows. No tasks were queued. Use the explicit backlog queue command.
+END loop-handoff: failed/fail, 0 calls, 0s
+START first/work
+END work: done/pass, 8 calls, 77s
+START first/research
+END research: done/pass, 4 calls, 46s
+START first/task-graph
+FAIL task-graph: No generated child tasks
+END task-graph: done/fail, 7 calls, 70s
+Report: D:\electron\llm-flow\docs\reviews\block-audit\first.json

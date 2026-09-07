@@ -1,0 +1,95 @@
+TAP version 13
+# Subtest: multiline Split JSON remains two complete foreach assignments
+ok 1 - multiline Split JSON remains two complete foreach assignments
+  ---
+  duration_ms: 1.8324
+  ...
+# Subtest: legacy Markdown task details stay attached to their task headings
+ok 2 - legacy Markdown task details stay attached to their task headings
+  ---
+  duration_ms: 0.5932
+  ...
+# Subtest: broken JSON cannot become a list of brackets and property lines
+ok 3 - broken JSON cannot become a list of brackets and property lines
+  ---
+  duration_ms: 0.4922
+  ...
+# Subtest: a real Split -> foreach run visits two tasks, including their complete criteria
+ok 4 - a real Split -> foreach run visits two tasks, including their complete criteria
+  ---
+  duration_ms: 559.2644
+  ...
+# Subtest: a length-truncated list continues before it is parsed or marked complete
+ok 5 - a length-truncated list continues before it is parsed or marked complete
+  ---
+  duration_ms: 359.5004
+  ...
+# Subtest: Backlog handoff runs in a desktop workflow and queues real tasks without a model
+ok 6 - Backlog handoff runs in a desktop workflow and queues real tasks without a model
+  ---
+  duration_ms: 374.3024
+  ...
+# Subtest: handoff validates the entire batch before queuing anything
+ok 7 - handoff validates the entire batch before queuing anything
+  ---
+  duration_ms: 430.2702
+  ...
+# Subtest: handoff obeys a denied write approval and a narrowed tool ceiling
+ok 8 - handoff obeys a denied write approval and a narrowed tool ceiling
+  ---
+  duration_ms: 577.1736
+  ...
+# Subtest: retrying the same durable handoff returns the same receipts without duplicate tasks
+ok 9 - retrying the same durable handoff returns the same receipts without duplicate tasks
+  ---
+  duration_ms: 227.4425
+  ...
+# Subtest: repository analysis and planning offer readers but no writers
+ok 10 - repository analysis and planning offer readers but no writers
+  ---
+  duration_ms: 626.9264
+  ...
+# Subtest: a partial backlog storage failure keeps honest receipts and replay fills the remaining task
+ok 11 - a partial backlog storage failure keeps honest receipts and replay fills the remaining task
+  ---
+  duration_ms: 237.7695
+  ...
+# Subtest: AI step instructions enforce their explicit word ceiling
+ok 12 - AI step instructions enforce their explicit word ceiling
+  ---
+  duration_ms: 303.3728
+  ...
+# Subtest: an in-process Build surface refreshes its live stack after a command
+ok 13 - an in-process Build surface refreshes its live stack after a command
+  ---
+  duration_ms: 1.3904
+  ...
+# Subtest: the desktop Build bridge opens, edits, and persists a real canonical stack
+ok 14 - the desktop Build bridge opens, edits, and persists a real canonical stack
+  ---
+  duration_ms: 359.6896
+  ...
+# Subtest: removing a step is allowed when an unrelated pre-existing config error remains
+ok 15 - removing a step is allowed when an unrelated pre-existing config error remains
+  ---
+  duration_ms: 231.127
+  ...
+# Subtest: Build selects a coexisting legacy flow and retires it only on its first accepted edit
+ok 16 - Build selects a coexisting legacy flow and retires it only on its first accepted edit
+  ---
+  duration_ms: 222.5956
+  ...
+# Subtest: the production Build controller refuses a legacy template absent from its installed registry
+ok 17 - the production Build controller refuses a legacy template absent from its installed registry
+  ---
+  duration_ms: 13.3364
+  ...
+1..17
+# tests 17
+# suites 0
+# pass 17
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3974.469

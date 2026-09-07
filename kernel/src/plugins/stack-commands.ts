@@ -162,7 +162,9 @@ export function registerStackCommands(ctx: Context, stack: StackHandle): () => v
           use: spec['use'],
           title: typeof spec['title'] === 'string' ? spec['title'] : null,
           config: (spec['config'] ?? {}) as Record<string, JsonValue>,
-          outputs: [],
+          // Preserve the registered contract so downstream controls can bind
+          // this block's outputs immediately after a palette or agent insert.
+          outputs: (ctx.blocks?.resolve(spec['use'])?.outputs ?? []).map(output => ({ ...output })),
           // Authored rather than parsed, so there is no line to point at. The
           // path is filled in when the stack is next written and read back.
           position: { line: 0, path: '' },

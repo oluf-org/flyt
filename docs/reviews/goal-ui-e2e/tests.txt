@@ -1,0 +1,706 @@
+TAP version 13
+# Subtest: geometry comes from the derived layout and nothing is stored
+ok 1 - geometry comes from the derived layout and nothing is stored
+  ---
+  duration_ms: 3.848
+  ...
+# Subtest: every node has a rendered box, containers included
+ok 2 - every node has a rendered box, containers included
+  ---
+  duration_ms: 0.7328
+  ...
+# Subtest: containment renders as containment, with no edges anywhere
+ok 3 - containment renders as containment, with no edges anywhere
+  ---
+  duration_ms: 0.5254
+  ...
+# Subtest: nesting reads as nesting at every depth the parser allows
+ok 4 - nesting reads as nesting at every depth the parser allows
+  ---
+  duration_ms: 1.1135
+  ...
+# Subtest: a block naming an uninstalled type draws as missing, naming what is missing
+ok 5 - a block naming an uninstalled type draws as missing, naming what is missing
+  ---
+  duration_ms: 1.1322
+  ...
+# Subtest: an empty stack draws as an empty stack rather than as nothing
+ok 6 - an empty stack draws as an empty stack rather than as nothing
+  ---
+  duration_ms: 0.9019
+  ...
+# Subtest: nothing about position is stored or read
+ok 7 - nothing about position is stored or read
+  ---
+  duration_ms: 1.6567
+  ...
+# Subtest: the editor draws the root as the container the parser made it
+ok 8 - the editor draws the root as the container the parser made it
+  ---
+  duration_ms: 0.4045
+  ...
+# Subtest: scale is a renderer choice, not a second layout
+ok 9 - scale is a renderer choice, not a second layout
+  ---
+  duration_ms: 0.6848
+  ...
+# Subtest: Build and Run share connected blocks while drag handles stay in Build
+ok 10 - Build and Run share connected blocks while drag handles stay in Build
+  ---
+  duration_ms: 1.6902
+  ...
+# Subtest: generated tasks hang off a dispatch rail while activity steps keep compact top notches
+ok 11 - generated tasks hang off a dispatch rail while activity steps keep compact top notches
+  ---
+  duration_ms: 1.6249
+  ...
+# Subtest: a running or waiting activity step renders open without an unknown React prop
+ok 12 - a running or waiting activity step renders open without an unknown React prop
+  ---
+  duration_ms: 9116.7333
+  ...
+# Subtest: quoted A plus B is rejected atomically, including no-op parent replacement
+ok 13 - quoted A plus B is rejected atomically, including no-op parent replacement
+  ---
+  duration_ms: 273.1685
+  ...
+# Subtest: exact range preserves every surrounding character and stale quotes fail closed
+ok 14 - exact range preserves every surrounding character and stale quotes fail closed
+  ---
+  duration_ms: 86.1241
+  ...
+# Subtest: locks reject whole-source, inherited binding and structural bypasses
+ok 15 - locks reject whole-source, inherited binding and structural bypasses
+  ---
+  duration_ms: 65.4421
+  ...
+# Subtest: acceptance is atomic, idempotent, persistent and stale approvals fail
+ok 16 - acceptance is atomic, idempotent, persistent and stale approvals fail
+  ---
+  duration_ms: 124.9599
+  ...
+# Subtest: policy changes and expired grants invalidate proposals
+ok 17 - policy changes and expired grants invalidate proposals
+  ---
+  duration_ms: 62.3357
+  ...
+# Subtest: parallel human writes compare the revision after acquiring the transaction
+ok 18 - parallel human writes compare the revision after acquiring the transaction
+  ---
+  duration_ms: 63.1532
+  ...
+# Subtest: authoring has no workspace side effects; submitted request survives UI saves
+ok 19 - authoring has no workspace side effects; submitted request survives UI saves
+  ---
+  duration_ms: 83.8327
+  ...
+# Subtest: publishing requires complete checks and resolved proposals, preserves pinned model
+ok 20 - publishing requires complete checks and resolved proposals, preserves pinned model
+  ---
+  duration_ms: 115.8992
+  ...
+# Subtest: circle keeps parallel groups collapsed and exact canonical order
+ok 21 - circle keeps parallel groups collapsed and exact canonical order
+  ---
+  duration_ms: 0.6557
+  ...
+# Subtest: invalid field types never become renderable proposals or human drafts
+ok 22 - invalid field types never become renderable proposals or human drafts
+  ---
+  duration_ms: 86.1815
+  ...
+# Subtest: duplicate request submission invokes the model once and cancellation is explicit
+ok 23 - duplicate request submission invokes the model once and cancellation is explicit
+  ---
+  duration_ms: 76.2932
+  ...
+# Subtest: rejected proposals preserve baseline and no-op proposals create no badges
+ok 24 - rejected proposals preserve baseline and no-op proposals create no badges
+  ---
+  duration_ms: 66.7443
+  ...
+# Subtest: project identities containing punctuation are safely scoped on disk
+ok 25 - project identities containing punctuation are safely scoped on disk
+  ---
+  duration_ms: 28.5304
+  ...
+# Subtest: a single delimited JSON artifact is valid; ambiguous multiple objects and prose are not
+ok 26 - a single delimited JSON artifact is valid; ambiguous multiple objects and prose are not
+  ---
+  duration_ms: 1.6281
+  ...
+# Subtest: human result review survives reload and cannot approve failed checks as achieved
+ok 27 - human result review survives reload and cannot approve failed checks as achieved
+  ---
+  duration_ms: 1537.3605
+  ...
+# Subtest: new authoring Goals pause for runtime proposals and activate only after human review
+ok 28 - new authoring Goals pause for runtime proposals and activate only after human review
+  ---
+  duration_ms: 944.9533
+  ...
+# Subtest: canonical Goal runs setup once, improves across two iterations and preserves verified best
+ok 29 - canonical Goal runs setup once, improves across two iterations and preserves verified best
+  ---
+  duration_ms: 1446.5994
+  ...
+# Subtest: self proposed shared editor command activates only at the next iteration boundary
+ok 30 - self proposed shared editor command activates only at the next iteration boundary
+  ---
+  duration_ms: 1127.2022
+  ...
+# Subtest: fixed candidate tests use owned canonical child runs and share model call budget
+ok 31 - fixed candidate tests use owned canonical child runs and share model call budget
+  ---
+  duration_ms: 953.4024
+  ...
+# Subtest: limit reached retains a partial best and never says achieved
+ok 32 - limit reached retains a partial best and never says achieved
+  ---
+  duration_ms: 1023.3984
+  ...
+# Subtest: malformed output cannot pass acceptance even when prose contains every keyword
+ok 33 - malformed output cannot pass acceptance even when prose contains every keyword
+  ---
+  duration_ms: 553.3837
+  ...
+# Subtest: strict isolation refuses launch without writing a goal; unavailable block and path escape fail
+ok 34 - strict isolation refuses launch without writing a goal; unavailable block and path escape fail
+  ---
+  duration_ms: 92.9674
+  ...
+# Subtest: active model call ceiling stops before another iteration
+ok 35 - active model call ceiling stops before another iteration
+  ---
+  duration_ms: 560.384
+  ...
+# Subtest: a model can retrieve one earlier result through the scoped history tool
+ok 36 - a model can retrieve one earlier result through the scoped history tool
+  ---
+  duration_ms: 1029.5131
+  ...
+# Subtest: a failed recipe trial can restore an earlier version without losing best evidence or resetting budget
+ok 37 - a failed recipe trial can restore an earlier version without losing best evidence or resetting budget
+  ---
+  duration_ms: 1218.057
+  ...
+# Subtest: parallel blocks reserve the shared call budget before invoking a provider
+ok 38 - parallel blocks reserve the shared call budget before invoking a provider
+  ---
+  duration_ms: 458.3899
+  ...
+# Subtest: folder checks reject an escaping junction even when its final target does not exist
+ok 39 - folder checks reject an escaping junction even when its final target does not exist
+  ---
+  duration_ms: 69.829
+  ...
+# Subtest: fifty iterations keep bounded memory and searchable earlier evidence
+ok 40 - fifty iterations keep bounded memory and searchable earlier evidence
+  ---
+  duration_ms: 22336.942
+  ...
+# Subtest: pause/resume preserves completed setup and pins the interrupted iteration ahead of a pending edit
+ok 41 - pause/resume preserves completed setup and pins the interrupted iteration ahead of a pending edit
+  ---
+  duration_ms: 1161.4092
+  ...
+# Subtest: simultaneous human edits use compare-and-swap even before a goal starts
+ok 42 - simultaneous human edits use compare-and-swap even before a goal starts
+  ---
+  duration_ms: 108.0222
+  ...
+# Subtest: a proposal cannot change the fixed contract or bypass evaluation
+ok 43 - a proposal cannot change the fixed contract or bypass evaluation
+  ---
+  duration_ms: 771.5694
+  ...
+# Subtest: typed JSON evaluation satisfies exact Until equality in one pass
+ok 44 - typed JSON evaluation satisfies exact Until equality in one pass
+  ---
+  duration_ms: 49.7348
+  ...
+# Subtest: prose and contradictory structured evaluations fail closed
+    # Subtest: pass — all checks succeeded
+    ok 1 - pass — all checks succeeded
+      ---
+      duration_ms: 23.9093
+      ...
+    # Subtest: {"verdict":"pass","success":false,"score":1,"explanation":"oops"}
+    ok 2 - {"verdict":"pass","success":false,"score":1,"explanation":"oops"}
+      ---
+      duration_ms: 25.9069
+      ...
+    # Subtest: {"verdict":"pass","success":true,"score":"1","explanation":"oops"}
+    ok 3 - {"verdict":"pass","success":true,"score":"1","explanation":"oops"}
+      ---
+      duration_ms: 21.757
+      ...
+    1..3
+ok 45 - prose and contradictory structured evaluations fail closed
+  ---
+  duration_ms: 73.0858
+  ...
+# Subtest: legacy handoff fails explicitly without a model call or a false queue receipt
+ok 46 - legacy handoff fails explicitly without a model call or a false queue receipt
+  ---
+  duration_ms: 18.3562
+  ...
+# Subtest: resume runs the recorded tree even when the library source is replaced or removed
+ok 47 - resume runs the recorded tree even when the library source is replaced or removed
+  ---
+  duration_ms: 29.0692
+  ...
+# Subtest: a tool-free workflow runs when the Windows command sandbox is unavailable
+ok 48 - a tool-free workflow runs when the Windows command sandbox is unavailable
+  ---
+  duration_ms: 782.6353
+  ...
+# Subtest: production Loop host edits only its worktree and exposes durable status and spend
+ok 49 - production Loop host edits only its worktree and exposes durable status and spend
+  ---
+  duration_ms: 570.4025
+  ...
+# Subtest: the selected Loop band keeps its routing, retry and timeout policy at the adapter boundary
+ok 50 - the selected Loop band keeps its routing, retry and timeout policy at the adapter boundary
+  ---
+  duration_ms: 341.9077
+  ...
+# Subtest: workspace-change is enforced inside the kernel block, before landing
+ok 51 - workspace-change is enforced inside the kernel block, before landing
+  ---
+  duration_ms: 312.3466
+  ...
+# Subtest: kernel approval refusal reaches the model and cannot mutate the worktree
+ok 52 - kernel approval refusal reaches the model and cannot mutate the worktree
+  ---
+  duration_ms: 345.5203
+  ...
+# Subtest: a malformed canonical stack keeps its parser diagnostic
+ok 53 - a malformed canonical stack keeps its parser diagnostic
+  ---
+  duration_ms: 293.2557
+  ...
+# Subtest: an interrupted session resumes from its log and explains the missing tool result
+ok 54 - an interrupted session resumes from its log and explains the missing tool result
+  ---
+  duration_ms: 763.8187
+  ...
+# Subtest: stop reaches a live kernel run, settles cooperatively, and then fails honestly
+ok 55 - stop reaches a live kernel run, settles cooperatively, and then fails honestly
+  ---
+  duration_ms: 381.6384
+  ...
+# Subtest: kernel session activity uses the existing live and incremental run channels
+ok 56 - kernel session activity uses the existing live and incremental run channels
+  ---
+  duration_ms: 1190.3634
+  ...
+# Subtest: run:restartBlock durably re-pins a failed kernel block and starts it on the new route
+ok 57 - run:restartBlock durably re-pins a failed kernel block and starts it on the new route
+  ---
+  duration_ms: 1573.6139
+  ...
+# Subtest: Supervisor has no compatibility fallback for unattended execution
+ok 58 - Supervisor has no compatibility fallback for unattended execution
+  ---
+  duration_ms: 1.0895
+  ...
+# Subtest: a fresh Supervisor claim reaches kernel, gates, review, merge and canary
+ok 59 - a fresh Supervisor claim reaches kernel, gates, review, merge and canary
+  ---
+  duration_ms: 8768.834
+  ...
+# Subtest: migration moves a legacy openrouterApiKey into the providers map, once
+ok 60 - migration moves a legacy openrouterApiKey into the providers map, once
+  ---
+  duration_ms: 2.4136
+  ...
+# Subtest: migration does not overwrite a providers-map key with the legacy field
+ok 61 - migration does not overwrite a providers-map key with the legacy field
+  ---
+  duration_ms: 0.7543
+  ...
+# Subtest: migration fills defaults: priority order, pinned starter models, kimi keyKind
+ok 62 - migration fills defaults: priority order, pinned starter models, kimi keyKind
+  ---
+  duration_ms: 1.8326
+  ...
+# Subtest: migration normalizes priority and active-model entries
+ok 63 - migration normalizes priority and active-model entries
+  ---
+  duration_ms: 0.4855
+  ...
+# Subtest: per-token catalog prices become per-million; junk becomes null
+ok 64 - per-token catalog prices become per-million; junk becomes null
+  ---
+  duration_ms: 0.9413
+  ...
+# Subtest: the OpenRouter payload keeps the facts the pickers show
+ok 65 - the OpenRouter payload keeps the facts the pickers show
+  ---
+  duration_ms: 0.8246
+  ...
+# Subtest: OpenRouter daily rankings aggregate model rows by creator with integer precision
+ok 66 - OpenRouter daily rankings aggregate model rows by creator with integer precision
+  ---
+  duration_ms: 0.6231
+  ...
+# Subtest: stored popularity is normalized and malformed caches are discarded
+ok 67 - stored popularity is normalized and malformed caches are discarded
+  ---
+  duration_ms: 0.4215
+  ...
+# Subtest: facts omit what the catalog did not say — unknown must not read as free
+ok 68 - facts omit what the catalog did not say — unknown must not read as free
+  ---
+  duration_ms: 0.656
+  ...
+# Subtest: a later fetch updates the ids it covers and leaves the rest alone
+ok 69 - a later fetch updates the ids it covers and leaves the rest alone
+  ---
+  duration_ms: 0.8513
+  ...
+# Subtest: migration normalizes stored facts and drops empty ones
+ok 70 - migration normalizes stored facts and drops empty ones
+  ---
+  duration_ms: 0.3738
+  ...
+# Subtest: set ids are slugs; names survive
+ok 71 - set ids are slugs; names survive
+  ---
+  duration_ms: 0.7457
+  ...
+# Subtest: a bare array is accepted as shorthand, and an empty set is legal
+ok 72 - a bare array is accepted as shorthand, and an empty set is legal
+  ---
+  duration_ms: 0.301
+  ...
+# Subtest: sets are capped so one cannot become the whole catalog
+ok 73 - sets are capped so one cannot become the whole catalog
+  ---
+  duration_ms: 0.3934
+  ...
+# Subtest: resolving a set drops members that are no longer active models
+ok 74 - resolving a set drops members that are no longer active models
+  ---
+  duration_ms: 2.3623
+  ...
+# Subtest: migration keeps model sets and defaults them to empty
+ok 75 - migration keeps model sets and defaults them to empty
+  ---
+  duration_ms: 0.4341
+  ...
+# Subtest: workflow model profiles are normalized independently and may share one breakout model
+ok 76 - workflow model profiles are normalized independently and may share one breakout model
+  ---
+  duration_ms: 0.6269
+  ...
+# Subtest: the starter set fills every role, from four different labs
+ok 77 - the starter set fills every role, from four different labs
+  ---
+  duration_ms: 0.8158
+  ...
+# Subtest: the starter set refuses models the agent loop cannot give tools to, and the price outlier
+ok 78 - the starter set refuses models the agent loop cannot give tools to, and the price outlier
+  ---
+  duration_ms: 0.4497
+  ...
+# Subtest: the starter set is deterministic and survives a catalog with none of the preferred ids
+ok 79 - the starter set is deterministic and survives a catalog with none of the preferred ids
+  ---
+  duration_ms: 0.9052
+  ...
+# Subtest: an empty or tool-less catalog proposes nothing rather than guessing
+ok 80 - an empty or tool-less catalog proposes nothing rather than guessing
+  ---
+  duration_ms: 0.2376
+  ...
+# Subtest: a catalog with no pricing at all still fills every role
+ok 81 - a catalog with no pricing at all still fills every role
+  ---
+  duration_ms: 0.4424
+  ...
+# Subtest: canServe: each provider claims only its own id shapes
+ok 82 - canServe: each provider claims only its own id shapes
+  ---
+  duration_ms: 0.615
+  ...
+# Subtest: auto walks the priority list and takes the first connected hit
+ok 83 - auto walks the priority list and takes the first connected hit
+  ---
+  duration_ms: 0.4234
+  ...
+# Subtest: auto skips providers that cannot serve the id
+ok 84 - auto skips providers that cannot serve the id
+  ---
+  duration_ms: 0.2254
+  ...
+# Subtest: disconnected providers are skipped, and an id nobody connected can serve fails
+ok 85 - disconnected providers are skipped, and an id nobody connected can serve fails
+  ---
+  duration_ms: 0.6858
+  ...
+# Subtest: a pinned source wins over the priority list
+ok 86 - a pinned source wins over the priority list
+  ---
+  duration_ms: 0.2429
+  ...
+# Subtest: a pinned source without a key fails fast and points at Models
+ok 87 - a pinned source without a key fails fast and points at Models
+  ---
+  duration_ms: 0.3218
+  ...
+# Subtest: no match fails with a Models-pointing error
+ok 88 - no match fails with a Models-pointing error
+  ---
+  duration_ms: 0.3125
+  ...
+# Subtest: mock is available only to suites that inject it explicitly
+ok 89 - mock is available only to suites that inject it explicitly
+  ---
+  duration_ms: 0.4253
+  ...
+# Subtest: a production process cannot reach the mock adapter
+ok 90 - a production process cannot reach the mock adapter
+  ---
+  duration_ms: 287.4758
+  ...
+# Subtest: migration removes legacy mock routes from product settings
+ok 91 - migration removes legacy mock routes from product settings
+  ---
+  duration_ms: 0.4461
+  ...
+# Subtest: capability cache catches a stale Codex catalog model without credentials
+ok 92 - capability cache catches a stale Codex catalog model without credentials
+  ---
+  duration_ms: 0.798
+  ...
+# Subtest: capability cache validates every selected model, deduplicates, and refreshes
+ok 93 - capability cache validates every selected model, deduplicates, and refreshes
+  ---
+  duration_ms: 0.9531
+  ...
+# Subtest: capability refresh cannot be overwritten by an older in-flight probe
+ok 94 - capability refresh cannot be overwritten by an older in-flight probe
+  ---
+  duration_ms: 0.6799
+  ...
+# Subtest: capability cache has a fixed LRU capacity
+ok 95 - capability cache has a fixed LRU capacity
+  ---
+  duration_ms: 0.4087
+  ...
+# Subtest: the default subscription probe is tiny, single-attempt, timed, and classifies safely
+ok 96 - the default subscription probe is tiny, single-attempt, timed, and classifies safely
+  ---
+  duration_ms: 2.2627
+  ...
+# Subtest: resolveCallTarget: legacy workers read providerKeys; auto workers use the resolver
+ok 97 - resolveCallTarget: legacy workers read providerKeys; auto workers use the resolver
+  ---
+  duration_ms: 0.4105
+  ...
+# Subtest: resolveCallTarget: kimi workers keep their keyKind
+ok 98 - resolveCallTarget: kimi workers keep their keyKind
+  ---
+  duration_ms: 0.2359
+  ...
+# Subtest: curated catalogs are consistent with canServe
+ok 99 - curated catalogs are consistent with canServe
+  ---
+  duration_ms: 0.5297
+  ...
+# Subtest: openai: posts to api.openai.com with the bearer key
+ok 100 - openai: posts to api.openai.com with the bearer key
+  ---
+  duration_ms: 3.2568
+  ...
+# Subtest: openai: falls back to OPENAI_API_KEY from the environment
+ok 101 - openai: falls back to OPENAI_API_KEY from the environment
+  ---
+  duration_ms: 0.7042
+  ...
+# Subtest: kimi: a platform key hits api.moonshot.ai, a code key hits api.kimi.com/coding with the coding-agent UA
+ok 102 - kimi: a platform key hits api.moonshot.ai, a code key hits api.kimi.com/coding with the coding-agent UA
+  ---
+  duration_ms: 1.1597
+  ...
+# Subtest: kimi: missing keyKind defaults to the platform endpoint
+ok 103 - kimi: missing keyKind defaults to the platform endpoint
+  ---
+  duration_ms: 0.5456
+  ...
+# Subtest: openai/kimi: a missing key fails permanently, without a request
+ok 104 - openai/kimi: a missing key fails permanently, without a request
+  ---
+  duration_ms: 3.4073
+  ...
+# Subtest: resume continues an interrupted run without re-executing completed nodes
+ok 105 - resume continues an interrupted run without re-executing completed nodes
+  ---
+  duration_ms: 130.1122
+  ...
+# Subtest: reconcileInterrupted flags only runs that were actually cut off
+ok 106 - reconcileInterrupted flags only runs that were actually cut off
+  ---
+  duration_ms: 100.9346
+  ...
+# Subtest: a live run is never resumable from underneath itself
+ok 107 - a live run is never resumable from underneath itself
+  ---
+  duration_ms: 49.7788
+  ...
+# Subtest: resume requeues tasks that were mid-flight, including agent-spawned ones
+ok 108 - resume requeues tasks that were mid-flight, including agent-spawned ones
+  ---
+  duration_ms: 149.2392
+  ...
+# Subtest: an agentTask whose task already finished is not re-run on resume
+ok 109 - an agentTask whose task already finished is not re-run on resume
+  ---
+  duration_ms: 121.7719
+  ...
+# Subtest: a second process must not mark a LIVE run interrupted
+ok 110 - a second process must not mark a LIVE run interrupted
+  ---
+  duration_ms: 49.7095
+  ...
+# Subtest: a lease whose holder is gone does not keep a dead run looking alive
+ok 111 - a lease whose holder is gone does not keep a dead run looking alive
+  ---
+  duration_ms: 13.7909
+  ...
+# Subtest: run keys keep project and run identity unambiguous
+ok 112 - run keys keep project and run identity unambiguous
+  ---
+  duration_ms: 1.4101
+  ...
+# Subtest: equivalent launches share one host and dispose it only after the last owner settles
+ok 113 - equivalent launches share one host and dispose it only after the last owner settles
+  ---
+  duration_ms: 11.7667
+  ...
+# Subtest: different composition authority never shares a host
+ok 114 - different composition authority never shares a host
+  ---
+  duration_ms: 3.6834
+  ...
+# Subtest: controls return explicit negative results and resume does not invent success
+ok 115 - controls return explicit negative results and resume does not invent success
+  ---
+  duration_ms: 1.9344
+  ...
+# Subtest: shutdown stops and awaits every owned run before returning
+ok 116 - shutdown stops and awaits every owned run before returning
+  ---
+  duration_ms: 1.834
+  ...
+# Subtest: Work, Build, Goals, Library, Models and History are permanent destinations
+ok 117 - Work, Build, Goals, Library, Models and History are permanent destinations
+  ---
+  duration_ms: 3.3816
+  ...
+# Subtest: the shell starts on Work, no run addressed
+ok 118 - the shell starts on Work, no run addressed
+  ---
+  duration_ms: 0.2588
+  ...
+# Subtest: headings name every permanent surface, and only those
+ok 119 - headings name every permanent surface, and only those
+  ---
+  duration_ms: 0.4595
+  ...
+# Subtest: every destination is reachable from every other in one hop
+ok 120 - every destination is reachable from every other in one hop
+  ---
+  duration_ms: 0.5246
+  ...
+# Subtest: a run addressed once stays addressed across navigation
+ok 121 - a run addressed once stays addressed across navigation
+  ---
+  duration_ms: 0.4638
+  ...
+# Subtest: state is a judgement-proof view of the location
+ok 122 - state is a judgement-proof view of the location
+  ---
+  duration_ms: 0.5443
+  ...
+# Subtest: the window mounts the cutover Root and no renderer reads the retired flag
+ok 123 - the window mounts the cutover Root and no renderer reads the retired flag
+  ---
+  duration_ms: 17.9818
+  ...
+# Subtest: the shipping shell keeps a lazy startup boundary
+ok 124 - the shipping shell keeps a lazy startup boundary
+  ---
+  duration_ms: 15.3107
+  ...
+# Subtest: an uncontrolled shell renders its own state, not the prop default
+ok 125 - an uncontrolled shell renders its own state, not the prop default
+  ---
+  duration_ms: 1.2308
+  ...
+# Subtest: the host re-reads the stack when a command settles, so an edit redraws
+ok 126 - the host re-reads the stack when a command settles, so an edit redraws
+  ---
+  duration_ms: 1.0073
+  ...
+# Subtest: the daily host wires the surviving entry controls into the v2 shell
+ok 127 - the daily host wires the surviving entry controls into the v2 shell
+  ---
+  duration_ms: 1.3232
+  ...
+# Subtest: Build exposes organized library groups, resize separators, and explicit drop slots
+ok 128 - Build exposes organized library groups, resize separators, and explicit drop slots
+  ---
+  duration_ms: 1.299
+  ...
+# Subtest: Work receives the manual stop path required by soft worker limits
+ok 129 - Work receives the manual stop path required by soft worker limits
+  ---
+  duration_ms: 0.5706
+  ...
+# Subtest: model requests isolate lanes with maxParallel=1, retaining only own tool rounds
+ok 130 - model requests isolate lanes with maxParallel=1, retaining only own tool rounds
+  ---
+  duration_ms: 228.4386
+  ...
+# Subtest: model requests isolate lanes with maxParallel=2, retaining only own tool rounds
+ok 131 - model requests isolate lanes with maxParallel=2, retaining only own tool rounds
+  ---
+  duration_ms: 160.8266
+  ...
+# Subtest: nested joins expose only the selected inner artifacts to the outer join
+ok 132 - nested joins expose only the selected inner artifacts to the outer join
+  ---
+  duration_ms: 99.3445
+  ...
+# Subtest: resume retains unfinished own tool history but excludes completed siblings and older invocations
+ok 133 - resume retains unfinished own tool history but excludes completed siblings and older invocations
+  ---
+  duration_ms: 60.1703
+  ...
+# Subtest: each foreach item gets a fresh transcript even when the block id is reused
+ok 134 - each foreach item gets a fresh transcript even when the block id is reused
+  ---
+  duration_ms: 85.4145
+  ...
+# Subtest: resumed sibling structured outputs are hidden until the explicit join
+ok 135 - resumed sibling structured outputs are hidden until the explicit join
+  ---
+  duration_ms: 56.9456
+  ...
+# Subtest: a degraded refiner carries only its own clarification from the current execution
+ok 136 - a degraded refiner carries only its own clarification from the current execution
+  ---
+  duration_ms: 44.8429
+  ...
+1..136
+# tests 139
+# suites 0
+# pass 139
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 36056.8315

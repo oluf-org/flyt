@@ -39,7 +39,7 @@ export function workflowSteps(flow, presetId = null) {
 
 export function workflowOutcome(flow) {
   const uses = new Set((flow?.steps ?? []).map(step => step.use));
-  if (uses.has('flyt-blocks-loop:loop-handoff')) return 'Prepares a Loop handoff';
+  if (uses.has('flyt-blocks-loop:loop-handoff')) return 'Queues the planned backlog tasks and returns their receipts here';
   if (uses.has('flyt-blocks-core:work')) return 'Changes the project and reports the result here';
   if (uses.has('flyt-blocks-core:research')) return 'Returns a sourced answer here';
   if ([...uses].some(use => String(use).includes('interrogate'))) return 'Asks questions, then returns a finished artifact here';

@@ -1,6 +1,7 @@
 /** OpenAI Chat Completions request/response transforms. */
 
 export function applyOpenAIRequest(body, { responseFormat, reasoning, toolChoice } = {}) {
+  if (responseFormat?.type === 'json_object') body.response_format = { type: 'json_object' };
   if (responseFormat?.schema) {
     body.response_format = {
       type: 'json_schema',

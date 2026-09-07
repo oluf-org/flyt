@@ -1,0 +1,45 @@
+START second/general-analysis
+END general-analysis: done/pass, 1 calls, 12s
+START second/combine
+END combine: done/pass, 1 calls, 42s
+START second/split
+END split: done/pass, 1 calls, 33s
+START second/plan-start
+END plan-start: done/pass, 2 calls, 89s
+START second/evaluation
+END evaluation: done/pass, 1 calls, 8s
+START second/compare
+END compare: done/pass, 1 calls, 55s
+START second/prompt-refiner
+END prompt-refiner: done/pass, 1 calls, 40s
+START second/human-checkpoint
+END human-checkpoint: failed/pass, 0 calls, 0s
+START second/interrogate
+END interrogate: done/pass, 4 calls, 137s
+START second/orient
+END orient: done/pass, 2 calls, 21s
+START second/backlog-plan
+END backlog-plan: done/pass, 4 calls, 134s
+START second/loop-handoff
+END loop-handoff: done/pass, 0 calls, 0s
+START second/work
+END work: done/pass, 7 calls, 64s
+START second/research
+END research: done/pass, 5 calls, 48s
+START second/task-graph
+END task-graph: done/pass, 6 calls, 30s
+START second/analysis-files
+END analysis-files: done/pass, 3 calls, 21s
+START second/foreach
+END foreach: done/pass, 5 calls, 150s
+START second/parallel-sequence
+END parallel-sequence: done/pass, 4 calls, 39s
+START second/repeat
+END repeat: done/pass, 3 calls, 38s
+START second/until
+END until: done/pass, 2 calls, 12s
+START second/if
+END if: done/pass, 2 calls, 17s
+START second/plan-handoff
+END plan-handoff: done/pass, 4 calls, 74s
+Report: D:\electron\llm-flow\docs\reviews\block-audit\second.json

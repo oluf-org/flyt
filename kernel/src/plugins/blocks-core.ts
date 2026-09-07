@@ -342,28 +342,32 @@ const aiStep = (
 
 export const generalAnalysisBlock = aiStep('flyt-blocks-core:general-analysis', 'General analysis',
   'General text analysis: summary, structure, claims and evidence, gaps, risks, recommendations.',
-  'Analyse the input. Give a summary, its structure, the claims and the evidence for them, the gaps, the risks, and a recommendation. Ground every claim in what you were given.',
+  'Analyse the input. Give a summary, its structure, the claims and the evidence for them, the gaps, the risks, and a recommendation. Ground every claim in what you were given. Open project files when the request asks for repository evidence; otherwise analyze the supplied material directly without exploring the workspace. Follow narrower output instructions and keep the depth proportional to the task.',
   { name: 'analysis' });
+// The shipped repository-reading lanes use this block. Input-only analysis
+// still answers directly; repository analysis must be able to open its evidence.
+generalAnalysisBlock.ceiling = ['read_file', 'glob', 'search_files', 'search_references', 'read_tool_result'];
 export const combineBlock = aiStep('flyt-blocks-core:combine', 'Combine',
   'Merge parallel upstream outputs into one coherent deliverable, keeping the best of each.',
   'Merge the upstream outputs into one coherent deliverable, keeping the best of each. Small fixes inline; a larger gap becomes a named fix task, not a silent patch.',
   { name: 'combined' });
 export const splitBlock = aiStep('flyt-blocks-core:split', 'Split',
   'Divide the upstream work into clearly labeled independent parts that downstream blocks can run in parallel.',
-  'Divide the upstream work into clearly labeled, independent parts that downstream blocks can run in parallel.',
+  'Divide the upstream work into clearly labeled, independent parts that downstream blocks can run in parallel. Preserve the requested scope and criteria verbatim where possible; add only the context needed to execute each part. Do not invent databases, interfaces, or additional work. Do not claim a current defect or implementation exists unless the input establishes it; frame unspecified behavior as something to verify or implement. Preserving text means round-trip fidelity, not removing necessary escaping, validation, or sanitization.',
   // The one core roster: a typed list is the only source a `For each` may
   // read, which is what keeps a roster from ever being prose split on
   // newlines at the lint rule's discretion (D56).
   { name: 'parts', type: 'list' });
 export const planStartBlock = aiStep('flyt-blocks-core:plan-start', 'Plan',
-  'Produce a tasks.md with well-defined tasks and explicit per-file context.',
+  'Produce complete, well-defined tasks with explicit per-file context.',
   ['ROLE: plan-start',
-    'Given the brief, produce ONLY a structured tasks.md.',
+    'Given the brief, produce a structured task plan. Keep each task and all of its context and criteria in one complete item.',
     'Decompose the work into the smallest independently-verifiable tasks that still carry real meaning.',
     'For every task include a "Context files:" section naming each file and, per file, exactly which part is needed.',
     'Call out risks, unknowns, and acceptance criteria per task.'].join('\n'),
   // `plan.tasks`, the field the Phase 3 predicate examples name.
   { name: 'tasks', type: 'list' });
+planStartBlock.ceiling = generalAnalysisBlock.ceiling;
 
 export function apply(ctx: Context): void {
   ctx.blocks.register(workBlock);

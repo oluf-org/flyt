@@ -1,0 +1,285 @@
+TAP version 13
+# Subtest: multiline Split JSON remains two complete foreach assignments
+ok 1 - multiline Split JSON remains two complete foreach assignments
+  ---
+  duration_ms: 2.2994
+  ...
+# Subtest: legacy Markdown task details stay attached to their task headings
+ok 2 - legacy Markdown task details stay attached to their task headings
+  ---
+  duration_ms: 0.5811
+  ...
+# Subtest: broken JSON cannot become a list of brackets and property lines
+ok 3 - broken JSON cannot become a list of brackets and property lines
+  ---
+  duration_ms: 0.51
+  ...
+# Subtest: a real Split -> foreach run visits two tasks, including their complete criteria
+ok 4 - a real Split -> foreach run visits two tasks, including their complete criteria
+  ---
+  duration_ms: 734.4721
+  ...
+# Subtest: a length-truncated list continues before it is parsed or marked complete
+ok 5 - a length-truncated list continues before it is parsed or marked complete
+  ---
+  duration_ms: 460.8066
+  ...
+# Subtest: Backlog handoff runs in a desktop workflow and queues real tasks without a model
+ok 6 - Backlog handoff runs in a desktop workflow and queues real tasks without a model
+  ---
+  duration_ms: 378.2614
+  ...
+# Subtest: handoff validates the entire batch before queuing anything
+ok 7 - handoff validates the entire batch before queuing anything
+  ---
+  duration_ms: 337.6307
+  ...
+# Subtest: handoff obeys a denied write approval and a narrowed tool ceiling
+ok 8 - handoff obeys a denied write approval and a narrowed tool ceiling
+  ---
+  duration_ms: 1059.707
+  ...
+# Subtest: retrying the same durable handoff returns the same receipts without duplicate tasks
+ok 9 - retrying the same durable handoff returns the same receipts without duplicate tasks
+  ---
+  duration_ms: 353.6542
+  ...
+# Subtest: repository analysis and planning offer readers but no writers
+ok 10 - repository analysis and planning offer readers but no writers
+  ---
+  duration_ms: 839.6538
+  ...
+# Subtest: a partial backlog storage failure keeps honest receipts and replay fills the remaining task
+ok 11 - a partial backlog storage failure keeps honest receipts and replay fills the remaining task
+  ---
+  duration_ms: 308.5439
+  ...
+# Subtest: AI step instructions enforce their explicit word ceiling
+ok 12 - AI step instructions enforce their explicit word ceiling
+  ---
+  duration_ms: 406.1831
+  ...
+# Subtest: a failed parallel lane stops the containing sequence even when the last lane succeeds
+ok 13 - a failed parallel lane stops the containing sequence even when the last lane succeeds
+  ---
+  duration_ms: 391.824
+  ...
+# Subtest: a tool-free workflow runs when the Windows command sandbox is unavailable
+ok 14 - a tool-free workflow runs when the Windows command sandbox is unavailable
+  ---
+  duration_ms: 718.104
+  ...
+# Subtest: production Loop host edits only its worktree and exposes durable status and spend
+ok 15 - production Loop host edits only its worktree and exposes durable status and spend
+  ---
+  duration_ms: 524.4089
+  ...
+# Subtest: the selected Loop band keeps its routing, retry and timeout policy at the adapter boundary
+ok 16 - the selected Loop band keeps its routing, retry and timeout policy at the adapter boundary
+  ---
+  duration_ms: 337.4068
+  ...
+# Subtest: workspace-change is enforced inside the kernel block, before landing
+ok 17 - workspace-change is enforced inside the kernel block, before landing
+  ---
+  duration_ms: 341.9045
+  ...
+# Subtest: kernel approval refusal reaches the model and cannot mutate the worktree
+ok 18 - kernel approval refusal reaches the model and cannot mutate the worktree
+  ---
+  duration_ms: 629.5781
+  ...
+# Subtest: a malformed canonical stack keeps its parser diagnostic
+ok 19 - a malformed canonical stack keeps its parser diagnostic
+  ---
+  duration_ms: 318.5992
+  ...
+# Subtest: an interrupted session resumes from its log and explains the missing tool result
+ok 20 - an interrupted session resumes from its log and explains the missing tool result
+  ---
+  duration_ms: 873.5804
+  ...
+# Subtest: stop reaches a live kernel run, settles cooperatively, and then fails honestly
+ok 21 - stop reaches a live kernel run, settles cooperatively, and then fails honestly
+  ---
+  duration_ms: 409.3714
+  ...
+# Subtest: kernel session activity uses the existing live and incremental run channels
+ok 22 - kernel session activity uses the existing live and incremental run channels
+  ---
+  duration_ms: 1328.2937
+  ...
+# Subtest: run:restartBlock durably re-pins a failed kernel block and starts it on the new route
+ok 23 - run:restartBlock durably re-pins a failed kernel block and starts it on the new route
+  ---
+  duration_ms: 2035.0823
+  ...
+# Subtest: Supervisor has no compatibility fallback for unattended execution
+ok 24 - Supervisor has no compatibility fallback for unattended execution
+  ---
+  duration_ms: 1.0511
+  ...
+# Subtest: a fresh Supervisor claim reaches kernel, gates, review, merge and canary
+ok 25 - a fresh Supervisor claim reaches kernel, gates, review, merge and canary
+  ---
+  duration_ms: 8734.2961
+  ...
+# Subtest: a two-block sequence runs in order, each fed what the one before produced
+ok 26 - a two-block sequence runs in order, each fed what the one before produced
+  ---
+  duration_ms: 28.7902
+  ...
+# Subtest: start returns before the walk finishes, and settled is what you await
+ok 27 - start returns before the walk finishes, and settled is what you await
+  ---
+  duration_ms: 11.2902
+  ...
+# Subtest: a parallel runs its lanes together and never more than maxParallel at once
+ok 28 - a parallel runs its lanes together and never more than maxParallel at once
+  ---
+  duration_ms: 91.3648
+  ...
+# Subtest: a lane cannot see what a sibling lane produced
+ok 29 - a lane cannot see what a sibling lane produced
+  ---
+  duration_ms: 25.0447
+  ...
+# Subtest: the block after a parallel receives every lane result, labeled, not only the last lane
+ok 30 - the block after a parallel receives every lane result, labeled, not only the last lane
+  ---
+  duration_ms: 30.6631
+  ...
+# Subtest: a block that fails ends the run as failed, naming the block
+ok 31 - a block that fails ends the run as failed, naming the block
+  ---
+  duration_ms: 13.1741
+  ...
+# Subtest: a block that throws is a failed block, not a crashed run
+ok 32 - a block that throws is a failed block, not a crashed run
+  ---
+  duration_ms: 10.1886
+  ...
+# Subtest: a block narrows the run’s ceiling and cannot widen it
+ok 33 - a block narrows the run’s ceiling and cannot widen it
+  ---
+  duration_ms: 9.5393
+  ...
+# Subtest: a stack naming a block nobody installed fails before anything is spent
+ok 34 - a stack naming a block nobody installed fails before anything is spent
+  ---
+  duration_ms: 4.8386
+  ...
+# Subtest: starting a stack that does not exist says so
+ok 35 - starting a stack that does not exist says so
+  ---
+  duration_ms: 4.4935
+  ...
+# Subtest: an if whose predicate holds runs the body, and never the else
+ok 36 - an if whose predicate holds runs the body, and never the else
+  ---
+  duration_ms: 20.3605
+  ...
+# Subtest: an if whose predicate does not hold runs the else, and never the body
+ok 37 - an if whose predicate does not hold runs the else, and never the body
+  ---
+  duration_ms: 18.1768
+  ...
+# Subtest: an if with no else and a predicate that fails passes its input through unchanged
+ok 38 - an if with no else and a predicate that fails passes its input through unchanged
+  ---
+  duration_ms: 12.8338
+  ...
+# Subtest: a field the block never set is empty rather than an error at run time
+ok 39 - a field the block never set is empty rather than an error at run time
+  ---
+  duration_ms: 16.4621
+  ...
+# Subtest: a lane cannot read what a sibling lane produced, even through a predicate
+ok 40 - a lane cannot read what a sibling lane produced, even through a predicate
+  ---
+  duration_ms: 17.8031
+  ...
+# Subtest: a for-each runs its body once per roster element, each fed its own element
+ok 41 - a for-each runs its body once per roster element, each fed its own element
+  ---
+  duration_ms: 24.9226
+  ...
+# Subtest: a roster longer than the authored max is cut, and the log says by how much
+ok 42 - a roster longer than the authored max is cut, and the log says by how much
+  ---
+  duration_ms: 19.4976
+  ...
+# Subtest: a block that declared a list and returned a string iterates nothing
+ok 43 - a block that declared a list and returned a string iterates nothing
+  ---
+  duration_ms: 13.8122
+  ...
+# Subtest: an empty roster runs the body no times and does not fail the run
+ok 44 - an empty roster runs the body no times and does not fail the run
+  ---
+  duration_ms: 15.0122
+  ...
+# Subtest: an until stops the first time its condition holds
+ok 45 - an until stops the first time its condition holds
+  ---
+  duration_ms: 18.0482
+  ...
+# Subtest: an until goes round again while the condition does not hold
+ok 46 - an until goes round again while the condition does not hold
+  ---
+  duration_ms: 31.423
+  ...
+# Subtest: an until that runs out of passes fails the run rather than carrying on
+ok 47 - an until that runs out of passes fails the run rather than carrying on
+  ---
+  duration_ms: 22.0586
+  ...
+# Subtest: what follows an until reads the pass that was accepted
+ok 48 - what follows an until reads the pass that was accepted
+  ---
+  duration_ms: 20.5157
+  ...
+# Subtest: model requests isolate lanes with maxParallel=1, retaining only own tool rounds
+ok 49 - model requests isolate lanes with maxParallel=1, retaining only own tool rounds
+  ---
+  duration_ms: 230.8775
+  ...
+# Subtest: model requests isolate lanes with maxParallel=2, retaining only own tool rounds
+ok 50 - model requests isolate lanes with maxParallel=2, retaining only own tool rounds
+  ---
+  duration_ms: 191.1852
+  ...
+# Subtest: nested joins expose only the selected inner artifacts to the outer join
+ok 51 - nested joins expose only the selected inner artifacts to the outer join
+  ---
+  duration_ms: 148.119
+  ...
+# Subtest: resume retains unfinished own tool history but excludes completed siblings and older invocations
+ok 52 - resume retains unfinished own tool history but excludes completed siblings and older invocations
+  ---
+  duration_ms: 44.0872
+  ...
+# Subtest: each foreach item gets a fresh transcript even when the block id is reused
+ok 53 - each foreach item gets a fresh transcript even when the block id is reused
+  ---
+  duration_ms: 82.5904
+  ...
+# Subtest: resumed sibling structured outputs are hidden until the explicit join
+ok 54 - resumed sibling structured outputs are hidden until the explicit join
+  ---
+  duration_ms: 80.4365
+  ...
+# Subtest: a degraded refiner carries only its own clarification from the current execution
+ok 55 - a degraded refiner carries only its own clarification from the current execution
+  ---
+  duration_ms: 38.1006
+  ...
+1..55
+# tests 55
+# suites 0
+# pass 55
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 16618.9471

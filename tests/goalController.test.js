@@ -61,9 +61,69 @@ async function fixture(t, call) {
     engine.telemetry.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
-  return { invoke, definition, seen, engine, workspace, root, projectId: project.id };
+  return { invoke, definition, seen, engine, api, workspace, root, projectId: project.id };
 }
 const finish = (invoke, goalId) => waitFor(async () => { const state = await invoke('get', { goalId }); return !state.live && state.status !== 'ready' ? state : null; });
+
+test('shared library API starts a fresh destination run despite advisory missing project paths', async t => {
+  const f = await fixture(t, () => response('ALPHA BETA'));
+  const source = await f.invoke('author-open', { definition: { ...f.definition, requiredPaths: ['missing-input.md'] } });
+  const folder = path.join(f.root, 'destination'); fs.mkdirSync(folder);
+  const target = await f.api.invoke('project:open', { folder });
+  const library = await f.invoke('library');
+  const entry = library.find(item => item.draftId === source.id);
+  const next = await f.invoke('reuse', { projectId: target.id, libraryId: entry.id });
+  const invoke = (action, args = {}) => f.invoke(action, { ...args, projectId: target.id });
+  const report = await invoke('requirements', { draftId: next.id });
+  assert.equal(report.paths[0].status, 'missing');
+  const published = await invoke('author-publish', { draftId: next.id, baseRevision: 1 });
+  await invoke('start', { goalId: published.goalId });
+  const done = await finish(invoke, published.goalId);
+  assert.equal(done.status, 'achieved'); assert.equal(done.contract.folder, folder);
+  assert.equal(done.iteration, 1); assert.equal(done.calls, 1);
+  assert.equal((await f.invoke('list')).length, 0);
+  assert.equal((await f.invoke('author-read', { draftId: source.id })).goalId, null);
+});
+
+test('human result review survives reload and cannot approve failed checks as achieved', async t => {
+  const f = await fixture(t, (_, count) => response(count === 1 ? 'ALPHA' : 'ALPHA BETA'));
+  const state = await f.invoke('create', { definition: { ...f.definition, reviewResults: true } });
+  await f.invoke('start', { goalId: state.id });
+  const first = await finish(f.invoke, state.id);
+  assert.equal(first.status, 'paused'); assert.equal(first.iteration, 1);
+  await assert.rejects(f.invoke('start', { goalId: state.id }), /Review the pending result/);
+  await assert.rejects(f.invoke('review-result', { goalId: state.id, ...first.pendingResult, digest: 'wrong', decision: 'approve' }), /Stale/);
+  const reviewed = await f.invoke('review-result', { goalId: state.id, ...first.pendingResult, decision: 'approve' });
+  assert.equal(reviewed.status, 'paused');
+  await f.invoke('start', { goalId: state.id });
+  const second = await finish(f.invoke, state.id);
+  assert.equal(second.status, 'paused'); assert.equal(second.iteration, 2);
+  const args = { goalId: state.id, ...second.pendingResult, decision: 'approve' };
+  assert.equal((await f.invoke('review-result', args)).status, 'achieved');
+  assert.equal((await f.invoke('review-result', args)).status, 'achieved');
+  assert.equal((await f.invoke('get', { goalId: state.id })).calls, 2);
+});
+
+test('new authoring Goals pause for runtime proposals and activate only after human review', async t => {
+  const f = await fixture(t, (_, count) => response(count === 1 ? 'ALPHA' : 'ALPHA BETA', count === 1 ? { proposal: { baseRevision: 1, rationale: 'Include missing BETA', commands: [{ name: 'stack:configure-block', args: { nodeId: 'improve', config: { instructions: 'Include BETA' } } }] } } : {}));
+  const draft = await f.invoke('author-open', { definition: f.definition });
+  const published = await f.invoke('author-publish', { draftId: draft.id, baseRevision: 1 });
+  await f.invoke('start', { goalId: published.goalId });
+  const paused = await finish(f.invoke, published.goalId);
+  assert.equal(paused.status, 'paused'); assert.equal(paused.iteration, 1); assert.equal(paused.activeRevision, 1);
+  const pending = await f.invoke('author-read', { draftId: draft.id });
+  assert.equal(pending.proposals[0].status, 'pending');
+  await assert.rejects(f.invoke('start', { goalId: published.goalId }), /REVIEW_REQUIRED/);
+  const accepted = await f.invoke('author-review', { draftId: draft.id, proposalId: pending.proposals[0].id, decision: 'accept' });
+  await f.invoke('author-publish', { draftId: draft.id, baseRevision: accepted.revision });
+  await f.invoke('start', { goalId: published.goalId });
+  const done = await finish(f.invoke, published.goalId);
+  assert.equal(done.status, 'achieved'); assert.deepEqual(done.history.map(item => item.revision), [1, 2]);
+  const clone = await f.invoke('clone', { goalId: published.goalId });
+  assert.notEqual(clone.contract.authoringId, published.id);
+  const cloneDraft = await f.invoke('author-open', { goalId: clone.id });
+  assert.equal(cloneDraft.goalId, clone.id); assert.equal(clone.iteration, 0);
+});
 
 test('canonical Goal runs setup once, improves across two iterations and preserves verified best', async t => {
   const f = await fixture(t, (_, count) => count === 1 ? 'Baseline established' : response(count === 2 ? 'ALPHA' : 'ALPHA BETA', { findings: ['Observed a missing BETA in the first attempt'] }));

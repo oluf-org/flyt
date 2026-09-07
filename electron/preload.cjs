@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 // templates and settings are global (T2) and stay unscoped.
 const api = {
   goal: (action, args = {}) => {
-    if (!['list', 'get', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft'].includes(action)) throw new Error('Unknown Goal action');
+    if (!['list', 'get', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft', 'author-open', 'author-read', 'author-edit', 'author-lock', 'author-ui', 'author-message', 'author-review', 'author-publish', 'review-result', 'author-cancel', 'author-list', 'author-delete', 'library', 'reuse', 'requirements'].includes(action)) throw new Error('Unknown Goal action');
     return ipcRenderer.invoke(`goal:${action}`, args);
   },
   reportRendererError: details => ipcRenderer.invoke('diagnostics:renderer', details),

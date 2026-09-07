@@ -1,0 +1,222 @@
+{
+  "model": "z-ai/glm-5.3-flash",
+  "blocks": [
+    "flyt-blocks-core:combine",
+    "flyt-blocks-core:general-analysis",
+    "flyt-blocks-core:plan-start",
+    "flyt-blocks-core:research",
+    "flyt-blocks-core:split",
+    "flyt-blocks-core:task-graph",
+    "flyt-blocks-core:work",
+    "flyt-blocks-inquiry:interrogate",
+    "flyt-blocks-inquiry:orient",
+    "flyt-blocks-judgement:compare",
+    "flyt-blocks-judgement:evaluation",
+    "flyt-blocks-judgement:human-checkpoint",
+    "flyt-blocks-judgement:prompt-refiner",
+    "flyt-blocks-loop:backlog-plan",
+    "flyt-blocks-loop:loop-handoff"
+  ],
+  "latest": [
+    {
+      "id": "general-analysis",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 25044,
+      "calls": 2,
+      "evidence": "second-final-general-analysis-analysis-files-foreach.json"
+    },
+    {
+      "id": "combine",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 42223,
+      "calls": 1,
+      "evidence": "second.json"
+    },
+    {
+      "id": "split",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 54639,
+      "calls": 1,
+      "evidence": "second-edge-split-foreach-parallel-failure-until-exhausted.json"
+    },
+    {
+      "id": "plan-start",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 88774,
+      "calls": 2,
+      "evidence": "second.json"
+    },
+    {
+      "id": "evaluation",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 8141,
+      "calls": 1,
+      "evidence": "second.json"
+    },
+    {
+      "id": "compare",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 50267,
+      "calls": 1,
+      "evidence": "second-quality-split-prompt-refiner-backlog-plan-compare-parallel-sequence-plan-handoff.json"
+    },
+    {
+      "id": "prompt-refiner",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 37090,
+      "calls": 1,
+      "evidence": "second-quality-split-prompt-refiner-backlog-plan-compare-parallel-sequence-plan-handoff.json"
+    },
+    {
+      "id": "human-checkpoint",
+      "status": "failed",
+      "quality": "pass",
+      "durationMs": 403,
+      "calls": 0,
+      "evidence": "second.json"
+    },
+    {
+      "id": "interrogate",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 137341,
+      "calls": 4,
+      "evidence": "second.json"
+    },
+    {
+      "id": "orient",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 20875,
+      "calls": 2,
+      "evidence": "second.json"
+    },
+    {
+      "id": "backlog-plan",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 149913,
+      "calls": 6,
+      "evidence": "second-quality-split-prompt-refiner-backlog-plan-compare-parallel-sequence-plan-handoff.json"
+    },
+    {
+      "id": "loop-handoff",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 405,
+      "calls": 0,
+      "evidence": "second.json"
+    },
+    {
+      "id": "work",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 64062,
+      "calls": 7,
+      "evidence": "second.json"
+    },
+    {
+      "id": "research",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 48472,
+      "calls": 5,
+      "evidence": "second.json"
+    },
+    {
+      "id": "task-graph",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 29839,
+      "calls": 6,
+      "evidence": "second.json"
+    },
+    {
+      "id": "analysis-files",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 23014,
+      "calls": 3,
+      "evidence": "second-final-general-analysis-analysis-files-foreach.json"
+    },
+    {
+      "id": "foreach",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 137636,
+      "calls": 3,
+      "evidence": "second-input-only-foreach.json"
+    },
+    {
+      "id": "parallel-sequence",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 100479,
+      "calls": 4,
+      "evidence": "second-controls-foreach-parallel-sequence-repeat-until-if.json"
+    },
+    {
+      "id": "repeat",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 17274,
+      "calls": 3,
+      "evidence": "second-controls-foreach-parallel-sequence-repeat-until-if.json"
+    },
+    {
+      "id": "until",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 11043,
+      "calls": 2,
+      "evidence": "second-controls-foreach-parallel-sequence-repeat-until-if.json"
+    },
+    {
+      "id": "if",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 20744,
+      "calls": 2,
+      "evidence": "second-controls-foreach-parallel-sequence-repeat-until-if.json"
+    },
+    {
+      "id": "plan-handoff",
+      "status": "done",
+      "quality": "pass",
+      "durationMs": 71907,
+      "calls": 4,
+      "evidence": "second-quality-split-prompt-refiner-backlog-plan-compare-parallel-sequence-plan-handoff.json"
+    },
+    {
+      "id": "parallel-failure",
+      "status": "failed",
+      "quality": "pass",
+      "durationMs": 7244,
+      "calls": 1,
+      "evidence": "second-edge-split-foreach-parallel-failure-until-exhausted.json"
+    },
+    {
+      "id": "until-exhausted",
+      "status": "failed",
+      "quality": "pass",
+      "durationMs": 7715,
+      "calls": 2,
+      "evidence": "second-edge-split-foreach-parallel-failure-until-exhausted.json"
+    }
+  ],
+  "recordedRuns": 67,
+  "modelResponses": 178,
+  "costUsd": 0.05711589500000002,
+  "tests": {
+    "passed": 2534,
+    "skipped": 4,
+    "total": 2538
+  }
+}

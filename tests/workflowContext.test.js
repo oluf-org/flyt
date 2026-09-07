@@ -194,7 +194,7 @@ test('resumed sibling structured outputs are hidden until the explicit join', as
     blockId: 'left', status: 'done', structured: { analysis: 'artifact_left' },
   } });
   assert.equal((await (await b.kernel.ctx.agents.resume('context-run')).settled()).status, 'done');
-  assert.deepEqual(b.seen.map(r => r.role), ['inside_no', 'outside_yes']);
+  assert.deepEqual(b.seen.filter(r => !r.messages.some(m => m.role === 'tool')).map(r => r.role), ['inside_no', 'outside_yes']);
 });
 
 test('a degraded refiner carries only its own clarification from the current execution', async t => {

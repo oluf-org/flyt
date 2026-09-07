@@ -1,0 +1,24 @@
+START first-repair/split
+END split: done/pass, 1 calls, 27s
+START first-repair/plan-start
+FAIL plan-start: Expected done, got failed: Block "plan-start" failed: The tasks output must be a valid JSON array of complete items.
+END plan-start: failed/fail, 2 calls, 113s
+START first-repair/backlog-plan
+END backlog-plan: done/pass, 4 calls, 95s
+START first-repair/loop-handoff
+END loop-handoff: done/pass, 0 calls, 0s
+START first-repair/analysis-files
+END analysis-files: done/pass, 3 calls, 22s
+START first-repair/foreach
+END foreach: done/pass, 6 calls, 188s
+START first-repair/parallel-sequence
+END parallel-sequence: done/pass, 4 calls, 77s
+START first-repair/repeat
+END repeat: done/pass, 2 calls, 18s
+START first-repair/until
+END until: done/pass, 2 calls, 20s
+START first-repair/if
+END if: done/pass, 2 calls, 14s
+START first-repair/plan-handoff
+END plan-handoff: done/pass, 4 calls, 69s
+Report: D:\electron\llm-flow\docs\reviews\block-audit\first-repair-split-plan-start-backlog-plan-loop-handoff-analysis-files-foreach-parallel-sequence-repeat-until-if-plan-handoff.json

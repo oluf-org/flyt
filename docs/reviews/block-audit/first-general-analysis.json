@@ -1,0 +1,265 @@
+{
+  "pass": "first",
+  "model": "z-ai/glm-5.3-flash",
+  "startedAt": "2026-09-06T19:29:41.660Z",
+  "root": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-block-audit-first-w7jRxF",
+  "results": [
+    {
+      "id": "general-analysis",
+      "workspace": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-block-audit-first-w7jRxF\\general-analysis",
+      "status": "starting",
+      "calls": [],
+      "questions": [],
+      "tools": [],
+      "warnings": [],
+      "blockOutputs": [],
+      "generated": [],
+      "quality": "fail",
+      "finding": "the id \"general-analysis\" is used twice: once at stack and again here (blocks[0], line 2)",
+      "durationMs": 411
+    }
+  ],
+  "inventory": [
+    {
+      "use": "flyt-blocks-core:combine",
+      "title": "Combine",
+      "outputs": [
+        {
+          "name": "combined",
+          "type": "string"
+        }
+      ],
+      "ceiling": []
+    },
+    {
+      "use": "flyt-blocks-core:general-analysis",
+      "title": "General analysis",
+      "outputs": [
+        {
+          "name": "analysis",
+          "type": "string"
+        }
+      ],
+      "ceiling": []
+    },
+    {
+      "use": "flyt-blocks-core:plan-start",
+      "title": "Plan",
+      "outputs": [
+        {
+          "name": "tasks",
+          "type": "list"
+        }
+      ],
+      "ceiling": []
+    },
+    {
+      "use": "flyt-blocks-core:research",
+      "title": "Research",
+      "ceiling": [
+        "web_search",
+        "web_fetch",
+        "scrape_page",
+        "extract_page",
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "read_tool_result"
+      ]
+    },
+    {
+      "use": "flyt-blocks-core:split",
+      "title": "Split",
+      "outputs": [
+        {
+          "name": "parts",
+          "type": "list"
+        }
+      ],
+      "ceiling": []
+    },
+    {
+      "use": "flyt-blocks-core:task-graph",
+      "title": "Plan & dispatch",
+      "outputs": [
+        {
+          "name": "tasks",
+          "type": "list"
+        },
+        {
+          "name": "results",
+          "type": "string"
+        }
+      ],
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "read_tool_result",
+        "list_tasks",
+        "read_task",
+        "why_blocked",
+        "read_run",
+        "create_file",
+        "write_file",
+        "edit_file",
+        "create_task",
+        "enqueue_task",
+        "write_task_md",
+        "update_task",
+        "ask_human",
+        "bash",
+        "run_gate"
+      ]
+    },
+    {
+      "use": "flyt-blocks-core:work",
+      "title": "Work",
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "read_tool_result",
+        "list_tasks",
+        "read_task",
+        "why_blocked",
+        "read_run",
+        "create_file",
+        "write_file",
+        "edit_file",
+        "create_task",
+        "enqueue_task",
+        "write_task_md",
+        "update_task",
+        "ask_human",
+        "bash",
+        "run_gate"
+      ]
+    },
+    {
+      "use": "flyt-blocks-inquiry:interrogate",
+      "title": "Interrogate",
+      "outputs": [
+        {
+          "name": "spec",
+          "type": "string"
+        }
+      ],
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "ask_human"
+      ]
+    },
+    {
+      "use": "flyt-blocks-inquiry:orient",
+      "title": "Orient",
+      "outputs": [
+        {
+          "name": "orientation",
+          "type": "string"
+        }
+      ],
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "ask_human"
+      ]
+    },
+    {
+      "use": "flyt-blocks-judgement:compare",
+      "title": "Compare",
+      "outputs": [
+        {
+          "name": "comparison",
+          "type": "string"
+        }
+      ],
+      "ceiling": []
+    },
+    {
+      "use": "flyt-blocks-judgement:evaluation",
+      "title": "Evaluation",
+      "outputs": [
+        {
+          "name": "verdict",
+          "type": "string"
+        },
+        {
+          "name": "success",
+          "type": "boolean"
+        },
+        {
+          "name": "score",
+          "type": "number"
+        },
+        {
+          "name": "explanation",
+          "type": "string"
+        }
+      ],
+      "ceiling": []
+    },
+    {
+      "use": "flyt-blocks-judgement:human-checkpoint",
+      "title": "Human checkpoint",
+      "outputs": [
+        {
+          "name": "approved",
+          "type": "boolean"
+        }
+      ],
+      "ceiling": [
+        "ask_human"
+      ]
+    },
+    {
+      "use": "flyt-blocks-judgement:prompt-refiner",
+      "title": "Prompt refiner",
+      "outputs": [
+        {
+          "name": "brief",
+          "type": "string"
+        }
+      ],
+      "ceiling": [
+        "ask_human"
+      ]
+    },
+    {
+      "use": "flyt-blocks-loop:backlog-plan",
+      "title": "Backlog plan",
+      "outputs": [
+        {
+          "name": "tasks",
+          "type": "list"
+        }
+      ],
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references"
+      ]
+    },
+    {
+      "use": "flyt-blocks-loop:loop-handoff",
+      "title": "Backlog handoff (unavailable)",
+      "outputs": [
+        {
+          "name": "queued",
+          "type": "list"
+        }
+      ],
+      "ceiling": []
+    }
+  ],
+  "completedAt": "2026-09-06T19:29:42.090Z"
+}

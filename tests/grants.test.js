@@ -44,7 +44,7 @@ test('selectors resolve by what a tool IS, not by a list someone maintains', () 
   // "reaches nothing beyond the network". Using the subset test here would
   // sweep in every read-only tool.
   assert.deepEqual([...expandRefs('uses:write', ctx).ids].sort(),
-    ['ask_human', 'create_file', 'create_task', 'edit_file', 'enqueue_task', 'update_task', 'write_file', 'write_task_md']);
+    ['ask_human', 'create_file', 'create_task', 'edit_file', 'enqueue_task', 'queue_backlog_tasks', 'update_task', 'write_file', 'write_task_md']);
   // The web set was declared and empty for its whole life; DECISIONS.md D45
   // filled it, and the membership test is what picks its members out.
   assert.deepEqual([...expandRefs('uses:network', ctx).ids].sort(), ['extract_page', 'scrape_page', 'web_fetch', 'web_search']);

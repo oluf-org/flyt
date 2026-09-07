@@ -104,6 +104,23 @@ export default function DailyRoot() {
     activeRef.current = payload.active ?? null;
   }, []);
 
+  const catalogRequest = useRef(0);
+  const acceptWorkflows = useCallback(workflows => {
+    const available = (workflows ?? []).map(workflow => ({ ...workflow, modes: workflow.presets ?? [] }));
+    flowsRef.current = available;
+    setFlows(available);
+    setConfigs(Object.fromEntries(available.map(workflow => [workflow.id, (workflow.presets ?? []).map(preset => ({
+      ...preset, badges: [],
+    }))])));
+    return available;
+  }, []);
+  const refreshWorkflows = useCallback(async () => {
+    const request = ++catalogRequest.current;
+    const available = await window.flyt.listWorkflows();
+    if (request === catalogRequest.current) acceptWorkflows(available);
+    return available ?? [];
+  }, [acceptWorkflows]);
+
   useEffect(() => {
     let live = true;
     Promise.all([
@@ -113,22 +130,18 @@ export default function DailyRoot() {
       window.flyt.getSettings(),
     ]).then(([projectPayload, recentProjects, availableWorkflows, publicSettings]) => {
       if (!live) return;
-      const availableFlows = (availableWorkflows ?? []).map(workflow => ({ ...workflow, modes: workflow.presets ?? [] }));
+      const availableFlows = acceptWorkflows(availableWorkflows);
       acceptProjects(projectPayload);
       setRecents(recentProjects ?? []);
-      setFlows(availableFlows);
       const active = (projectPayload.tabs ?? []).find(tab => tab.id === projectPayload.active);
       loadWorkflowModels(active);
       const openingFlowId = initialFlowId(availableFlows, active?.state?.runWorkflowId ?? active?.state?.runFlowId);
       setFlowId(openingFlowId);
       setModeId(initialModeId(availableFlows, openingFlowId, active?.state?.runPresetId ?? null));
-      setConfigs(Object.fromEntries(availableFlows.map(workflow => [workflow.id, (workflow.presets ?? []).map(preset => ({
-        ...preset, badges: [],
-      }))])));
       setSettings(publicSettings);
     }).catch(err => { if (live) setError(cleanIpcError(err)); });
     return () => { live = false; };
-  }, [acceptProjects, loadWorkflowModels]);
+  }, [acceptProjects, acceptWorkflows, loadWorkflowModels]);
 
   useEffect(() => {
     let live = true;
@@ -143,6 +156,9 @@ export default function DailyRoot() {
   useEffect(() => build?.subscribePluginReview?.(() => setReviewRevision(n => n + 1)), [build]);
   useEffect(() => build?.subscribePlugins?.(() => setPluginRevision(n => n + 1)), [build]);
   useEffect(() => build?.subscribeUiExtensions?.(() => setUiExtensionRevision(n => n + 1)), [build]);
+  useEffect(() => {
+    if (edits || pluginRevision) refreshWorkflows().catch(err => setError(cleanIpcError(err)));
+  }, [edits, pluginRevision, refreshWorkflows]);
 
   const refreshRuns = useCallback(async (projectId = activeRef.current) => {
     if (!projectId) { setRuns([]); return []; }
@@ -637,10 +653,14 @@ export default function DailyRoot() {
           } catch (err) { setError(cleanIpcError(err)); } finally { setReplyBusy(false); }
         }}
         workflowReplyBusy={replyBusy}
-        onRunBuild={stack => {
+        onRunBuild={async stack => {
           if (!stack?.id) return;
-          updateFlow(stack.id, stack.presets?.[modeId] ? modeId : defaultModeId(stack));
-          watchingRef.current = null; setWatching(null); setLocation(current => ({ ...current, dest: WORK, run: null }));
+          try {
+            const available = await refreshWorkflows();
+            if (!available.some(workflow => workflow.id === stack.id)) throw new Error('This workflow is not available to run. Check its validation and launchable setting.');
+            updateFlow(stack.id, stack.presets?.[modeId] ? modeId : defaultModeId(stack));
+            watchingRef.current = null; setWatching(null); setLocation(current => ({ ...current, dest: WORK, run: null }));
+          } catch (err) { setError(cleanIpcError(err)); }
         }}
         projectTabs={projectTabs}
         models={<ModelsPage

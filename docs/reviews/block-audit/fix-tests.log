@@ -1,0 +1,175 @@
+TAP version 13
+# Subtest: multiline Split JSON remains two complete foreach assignments
+ok 1 - multiline Split JSON remains two complete foreach assignments
+  ---
+  duration_ms: 1.8992
+  ...
+# Subtest: legacy Markdown task details stay attached to their task headings
+ok 2 - legacy Markdown task details stay attached to their task headings
+  ---
+  duration_ms: 0.6794
+  ...
+# Subtest: broken JSON cannot become a list of brackets and property lines
+ok 3 - broken JSON cannot become a list of brackets and property lines
+  ---
+  duration_ms: 0.526
+  ...
+# Subtest: a real Split -> foreach run visits two tasks, including their complete criteria
+ok 4 - a real Split -> foreach run visits two tasks, including their complete criteria
+  ---
+  duration_ms: 682.0591
+  ...
+# Subtest: a length-truncated list continues before it is parsed or marked complete
+ok 5 - a length-truncated list continues before it is parsed or marked complete
+  ---
+  duration_ms: 403.1583
+  ...
+# Subtest: Backlog handoff runs in a desktop workflow and queues real tasks without a model
+ok 6 - Backlog handoff runs in a desktop workflow and queues real tasks without a model
+  ---
+  duration_ms: 422.4174
+  ...
+# Subtest: handoff validates the entire batch before queuing anything
+ok 7 - handoff validates the entire batch before queuing anything
+  ---
+  duration_ms: 460.7571
+  ...
+# Subtest: handoff obeys a denied write approval and a narrowed tool ceiling
+ok 8 - handoff obeys a denied write approval and a narrowed tool ceiling
+  ---
+  duration_ms: 998.9627
+  ...
+# Subtest: retrying the same durable handoff returns the same receipts without duplicate tasks
+ok 9 - retrying the same durable handoff returns the same receipts without duplicate tasks
+  ---
+  duration_ms: 352.2872
+  ...
+# Subtest: repository analysis and planning offer readers but no writers
+ok 10 - repository analysis and planning offer readers but no writers
+  ---
+  duration_ms: 985.974
+  ...
+# Subtest: selectors resolve by what a tool IS, not by a list someone maintains
+ok 11 - selectors resolve by what a tool IS, not by a list someone maintains
+  ---
+  duration_ms: 3.0033
+  ...
+# Subtest: the store's catalog is the shape the linter reads
+ok 12 - the store's catalog is the shape the linter reads
+  ---
+  duration_ms: 78.1622
+  ...
+# Subtest: toolsets compose, exclude wins, and a cycle degrades instead of hanging
+ok 13 - toolsets compose, exclude wins, and a cycle degrades instead of hanging
+  ---
+  duration_ms: 0.6204
+  ...
+# Subtest: the grant is intersected with the ceiling, and exceeding it is REFUSED, not merely absent
+ok 14 - the grant is intersected with the ceiling, and exceeding it is REFUSED, not merely absent
+  ---
+  duration_ms: 0.5389
+  ...
+# Subtest: MIGRATION: absent a ceiling, the ceiling IS the static grant
+ok 15 - MIGRATION: absent a ceiling, the ceiling IS the static grant
+  ---
+  duration_ms: 0.5469
+  ...
+# Subtest: an absent grant means everything the ceiling allows
+ok 16 - an absent grant means everything the ceiling allows
+  ---
+  duration_ms: 0.3107
+  ...
+# Subtest: a missing or disabled tool degrades the node; it never fails the resolution
+ok 17 - a missing or disabled tool degrades the node; it never fails the resolution
+  ---
+  duration_ms: 0.6283
+  ...
+# Subtest: an orchestrator child narrows its parent, and can never widen it
+ok 18 - an orchestrator child narrows its parent, and can never widen it
+  ---
+  duration_ms: 0.5572
+  ...
+# Subtest: lint: grant-exceeds-ceiling names the tool and the ceiling that refused it
+ok 19 - lint: grant-exceeds-ceiling names the tool and the ceiling that refused it
+  ---
+  duration_ms: 0.8174
+  ...
+# Subtest: lint: unknown-toolset, and broad-ceiling warns rather than blocks
+ok 20 - lint: unknown-toolset, and broad-ceiling warns rather than blocks
+  ---
+  duration_ms: 1.7209
+  ...
+# Subtest: lint: a child inside an orchestrator cannot exceed its box
+ok 21 - lint: a child inside an orchestrator cannot exceed its box
+  ---
+  duration_ms: 0.6232
+  ...
+# Subtest: lint: an aiStep may hold read-effect tools, and only those
+ok 22 - lint: an aiStep may hold read-effect tools, and only those
+  ---
+  duration_ms: 0.4122
+  ...
+# Subtest: lint: the ceiling rules skip rather than guess when the library is unavailable
+ok 23 - lint: the ceiling rules skip rather than guess when the library is unavailable
+  ---
+  duration_ms: 0.2012
+  ...
+# Subtest: a refused grant never reaches the model, and shows up as a problem, not an absence
+ok 24 - a refused grant never reaches the model, and shows up as a problem, not an absence
+  ---
+  duration_ms: 24.0619
+  ...
+# Subtest: without a ceiling a task keeps its exact pre-P3 envelope
+ok 25 - without a ceiling a task keeps its exact pre-P3 envelope
+  ---
+  duration_ms: 19.9326
+  ...
+# Subtest: the ceiling reaches the resolved node, so the runner can carry it onto the task
+ok 26 - the ceiling reaches the resolved node, so the runner can carry it onto the task
+  ---
+  duration_ms: 0.6029
+  ...
+# Subtest: model requests isolate lanes with maxParallel=1, retaining only own tool rounds
+ok 27 - model requests isolate lanes with maxParallel=1, retaining only own tool rounds
+  ---
+  duration_ms: 266.1219
+  ...
+# Subtest: model requests isolate lanes with maxParallel=2, retaining only own tool rounds
+ok 28 - model requests isolate lanes with maxParallel=2, retaining only own tool rounds
+  ---
+  duration_ms: 176.6433
+  ...
+# Subtest: nested joins expose only the selected inner artifacts to the outer join
+ok 29 - nested joins expose only the selected inner artifacts to the outer join
+  ---
+  duration_ms: 127.3827
+  ...
+# Subtest: resume retains unfinished own tool history but excludes completed siblings and older invocations
+ok 30 - resume retains unfinished own tool history but excludes completed siblings and older invocations
+  ---
+  duration_ms: 39.3378
+  ...
+# Subtest: each foreach item gets a fresh transcript even when the block id is reused
+ok 31 - each foreach item gets a fresh transcript even when the block id is reused
+  ---
+  duration_ms: 65.3551
+  ...
+# Subtest: resumed sibling structured outputs are hidden until the explicit join
+ok 32 - resumed sibling structured outputs are hidden until the explicit join
+  ---
+  duration_ms: 60.2877
+  ...
+# Subtest: a degraded refiner carries only its own clarification from the current execution
+ok 33 - a degraded refiner carries only its own clarification from the current execution
+  ---
+  duration_ms: 33.4538
+  ...
+1..33
+# tests 33
+# suites 0
+# pass 33
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4646.3652

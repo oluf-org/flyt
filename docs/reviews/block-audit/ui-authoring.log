@@ -1,0 +1,22 @@
+22:22:06 [vite] (client) Re-optimizing dependencies because vite config has changed
+UI block combine: inserted, configured, outputs preserved
+UI block general-analysis: inserted, configured, outputs preserved
+UI block plan-start: inserted, configured, outputs preserved
+UI block research: inserted, configured, outputs preserved
+UI block split: inserted, configured, outputs preserved
+UI block task-graph: inserted, configured, outputs preserved
+UI block work: inserted, configured, outputs preserved
+UI block interrogate: inserted, configured, outputs preserved
+UI block orient: inserted, configured, outputs preserved
+UI block compare: inserted, configured, outputs preserved
+UI block evaluation: inserted, configured, outputs preserved
+UI block human-checkpoint: inserted, configured, outputs preserved
+UI block prompt-refiner: inserted, configured, outputs preserved
+UI block backlog-plan: inserted, configured, outputs preserved
+UI block loop-handoff: inserted, configured, outputs preserved
+UI control sequence: configured and validated
+UI control parallel: configured and validated
+UI control repeat: configured and validated
+UI control foreach: configured and validated
+UI control until: configured and validated
+UI control if: configured and validated

@@ -406,7 +406,9 @@ export class StackRunner extends Service implements AgentsSeam {
     done: Map<string, BlockOutcome> = new Map(),
   ): Promise<RunOutcome> {
     try {
-      const walked = await this.walk(run, root, input, session, done);
+      // The implicit root is represented by run.stage; authored controls
+      // below it own the container lifecycle shown in Work.
+      const walked = await this.runSequence(run, root, input, session, done);
       if (run.stopReason) {
         await session.append({
           type: 'run.stage',
@@ -448,12 +450,28 @@ export class StackRunner extends Service implements AgentsSeam {
     await run.waitIfPaused(session);
     if (run.stopReason) return [];
     if (node.kind === 'block') return [await this.runBlock(run, node, input, session, done, scope)];
-    if (node.kind === 'parallel') return this.runParallel(run, node, input, session, done, scope);
-    if (node.kind === 'repeat') return this.runRepeat(run, node, input, session, done, scope);
-    if (node.kind === 'if') return this.runIf(run, node, input, session, done, scope);
-    if (node.kind === 'foreach') return this.runForEach(run, node, input, session, done, scope);
-    if (node.kind === 'until') return this.runUntil(run, node, input, session, done, scope);
-    return this.runSequence(run, node, input, session, done, scope);
+    const identity = { blockId: node.id, kind: node.kind, executionId: scope ? `${scope}/${node.id}` : node.id };
+    // Controls have a lifecycle too. Child completion alone cannot describe
+    // a running Repeat, an empty For each, or an If's unselected branch.
+    // For each announces its active state with roster size and truncation.
+    if (node.kind !== 'foreach') await session.append({ type: 'block.status', data: { ...identity, status: 'active' } });
+    try {
+      const steps = node.kind === 'parallel' ? await this.runParallel(run, node, input, session, done, scope)
+        : node.kind === 'repeat' ? await this.runRepeat(run, node, input, session, done, scope)
+        : node.kind === 'if' ? await this.runIf(run, node, input, session, done, scope)
+        : node.kind === 'foreach' ? await this.runForEach(run, node, input, session, done, scope)
+        : node.kind === 'until' ? await this.runUntil(run, node, input, session, done, scope)
+        : await this.runSequence(run, node, input, session, done, scope);
+      const failure = steps.find(step => step.outcome.status === 'failed');
+      await session.append({ type: 'block.status', data: { ...identity,
+        status: run.stopReason ? 'pending' : failure ? 'failed' : 'done',
+        ...(failure?.outcome.error ? { error: failure.outcome.error } : {}),
+      } });
+      return steps;
+    } catch (error) {
+      await session.append({ type: 'block.status', data: { ...identity, status: 'failed', error: String((error as Error)?.message ?? error) } });
+      throw error;
+    }
   }
 
   /** Children, top to bottom, each fed what the one before produced. */
@@ -470,7 +488,7 @@ export class StackRunner extends Service implements AgentsSeam {
       const ran = await this.walk(run, child, carried, session, done, scope);
       steps.push(...ran);
       const last = ran.at(-1);
-      if (last?.outcome.status === 'failed') break;
+      if (ran.some(step => step.outcome.status === 'failed')) break;
       if (child.kind === 'parallel') carried = parallelCarry(child, ran) ?? carried;
       else if (last) carried = last.outcome.output;
     }
@@ -540,7 +558,7 @@ export class StackRunner extends Service implements AgentsSeam {
       const walked = await this.runSequence(run, body, carried, session, attempt, `${scope}/${node.id}[${i}]`);
       steps.push(...walked);
       const last = walked.at(-1);
-      if (last?.outcome.status === 'failed') break;
+      if (walked.some(step => step.outcome.status === 'failed')) break;
       if (last) carried = last.outcome.output;
       for (const step of walked) done.set(step.node.id, step.outcome);
     }
@@ -600,7 +618,7 @@ export class StackRunner extends Service implements AgentsSeam {
       const ran = await this.runSequence(run, body, carried, session, attempt, `${scope}/${node.id}[${pass - 1}]`);
       steps.push(...ran);
       const last = ran.at(-1);
-      if (last?.outcome.status === 'failed') return steps;
+      if (ran.some(step => step.outcome.status === 'failed')) return steps;
       if (last) carried = last.outcome.output;
       if (this.holds(node.condition, attempt)) {
         await session.append({
@@ -653,9 +671,10 @@ export class StackRunner extends Service implements AgentsSeam {
       // work instead of its own.
       const attempt = new Map(upstream);
       for (const id of blockIds(body)) attempt.delete(id);
-      const ran = await this.runSequence(run, body, String(item ?? ''), session, attempt, `${scope}/${node.id}[${index}]`);
+      const itemInput = typeof item === 'string' ? item : JSON.stringify(item ?? null);
+      const ran = await this.runSequence(run, body, itemInput, session, attempt, `${scope}/${node.id}[${index}]`);
       steps.push(...ran);
-      if (ran.at(-1)?.outcome.status === 'failed') break;
+      if (ran.some(step => step.outcome.status === 'failed')) break;
       // Downstream structured consumers see the last completed element.
       for (const step of ran) done.set(step.node.id, step.outcome);
     }

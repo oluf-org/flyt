@@ -383,6 +383,7 @@ export function deriveMessages(events: readonly SessionEvent[], upTo?: number, b
   // events when the bounded log has exactly one possible owner; ambiguous
   // multi-block history must never become shared context during migration.
   const owners = new Set(events.filter(e => (upTo === undefined || e.seq <= upTo) && e.seq > after)
+    .filter(e => !(e.type === 'block.status' && ['sequence', 'parallel', 'repeat', 'foreach', 'until', 'if'].includes(String(asRecord(e.data).kind))))
     .map(e => asRecord(e.data).blockId).filter(id => typeof id === 'string'));
   const onlyOwner = owners.size === 1 ? [...owners][0] : undefined;
   const legacyOwner = onlyOwner !== undefined && events.some(event => {

@@ -253,7 +253,7 @@ function controlLabel(node) {
   return 'Sequence';
 }
 
-function ContainerFields({ node, draft, update }) {
+function ContainerFields({ node, draft, update, jsonField }) {
   const number = name => <label><span>{name === 'maxParallel' ? 'Maximum parallel lanes' : name}</span>
     <input type="number" min="1" value={draft[name] ?? ''} onChange={event => update(name, { type: 'integer' }, event.target.value)} /></label>;
   if (node.kind === 'sequence') return <p className="be-empty-copy">Sequence has no runtime settings.</p>;
@@ -261,29 +261,43 @@ function ContainerFields({ node, draft, update }) {
   if (node.kind === 'repeat') return number('count');
   if (node.kind === 'foreach') return <>{number('max')}<label><span>Roster output</span><input value={draft.roster ?? ''}
     onChange={event => update('roster', {}, event.target.value)} placeholder="plan.tasks" /></label></>;
-  if (node.kind === 'until') return <>{number('max')}<label><span>Condition (JSON)</span><textarea rows="5"
-    value={JSON.stringify(draft.condition ?? {}, null, 2)} onChange={event => {
-      try { update('condition', {}, JSON.parse(event.target.value)); } catch { /* retain last valid value */ }
-    }} /></label></>;
-  return <label><span>Predicate (JSON)</span><textarea rows="6" value={JSON.stringify(draft.predicate ?? {}, null, 2)}
-    onChange={event => { try { update('predicate', {}, JSON.parse(event.target.value)); } catch { /* retain last valid value */ } }} /></label>;
+  if (node.kind === 'until') return <>{number('max')}<label><span>Condition (JSON)</span>{jsonField('condition', {}, 5, 'Condition (JSON)')}</label></>;
+  return <label><span>Predicate (JSON)</span>{jsonField('predicate', {}, 6, 'Predicate (JSON)')}</label>;
 }
 
 function GenericConfigForm({ node, definition, commands, onError }) {
   const initial = node.kind === 'block' ? node.config ?? {} : containerConfig(node);
   const [draft, setDraft] = useState(initial);
-  useEffect(() => setDraft(initial), [node.id, JSON.stringify(initial)]);
+  const [jsonDrafts, setJsonDrafts] = useState({});
+  useEffect(() => { setDraft(initial); setJsonDrafts({}); }, [node.id, JSON.stringify(initial)]);
   const props = definition?.settings?.properties ?? {};
   const update = (name, field, raw) => {
     let value = raw;
-    if (field.type === 'integer' || field.type === 'number') value = raw === '' ? null : Number(raw);
+    if (field.type === 'integer' || field.type === 'number') value = raw === '' ? undefined : Number(raw);
+    if (field.enum && raw === '') value = undefined;
     if (field.type === 'boolean') value = Boolean(raw);
-    setDraft(current => ({ ...current, [name]: value }));
+    setDraft(current => {
+      const next = { ...current };
+      if (value === undefined) delete next[name]; else next[name] = value;
+      return next;
+    });
   };
+  // Keep text while it is being edited. JSON is often temporarily invalid
+  // between keystrokes; validate on Save instead of erasing those keystrokes.
+  const jsonField = (name, fallback, rows = 5, label = name) => <textarea rows={rows} aria-label={label}
+    value={jsonDrafts[name] ?? (draft[name] === undefined ? '' : JSON.stringify(draft[name] ?? fallback, null, 2))}
+    onChange={event => setJsonDrafts(current => ({ ...current, [name]: event.target.value }))} />;
   const save = async () => {
     if (!commands?.invoke) return;
     try {
-      await commands.invoke(node.kind === 'block' ? 'stack:configure-block' : 'stack:configure-container', { nodeId: node.id, config: draft }, 'human');
+      const config = { ...draft };
+      for (const [name, text] of Object.entries(jsonDrafts)) {
+        if (!text.trim()) { delete config[name]; continue; }
+        try { config[name] = JSON.parse(text); }
+        catch { throw new Error(`${name} must contain valid JSON.`); }
+      }
+      await commands.invoke(node.kind === 'block' ? 'stack:configure-block' : 'stack:configure-container', { nodeId: node.id, config }, 'human');
+      onError('');
     } catch (error) { onError(String(error?.message ?? error)); }
   };
   return <div className="be-config-form">
@@ -292,12 +306,13 @@ function GenericConfigForm({ node, definition, commands, onError }) {
       <span>{field.title ?? name}</span>{field.description && <small>{field.description}</small>}
       {field.enum ? <select value={draft[name] ?? ''} onChange={event => update(name, field, event.target.value)}>
         <option value="">Default</option>{field.enum.map(option => <option key={option} value={option}>{option}</option>)}</select>
-        : field.type === 'boolean' ? <input type="checkbox" checked={Boolean(draft[name])} onChange={event => update(name, field, event.target.checked)} />
+        : field.type === 'boolean' ? <input type="checkbox" checked={Boolean(draft[name] ?? field.default)} onChange={event => update(name, field, event.target.checked)} />
+          : (field.type === 'array' || field.type === 'object') ? jsonField(name, field.type === 'array' ? [] : {})
           : (name === 'instructions' || field.format === 'multiline') ? <textarea rows="7" value={draft[name] ?? ''} onChange={event => update(name, field, event.target.value)} />
             : <input type={field.type === 'number' || field.type === 'integer' ? 'number' : 'text'} value={draft[name] ?? ''}
                 min={field.minimum} max={field.maximum} onChange={event => update(name, field, event.target.value)} />}
     </label>)}
-    {node.kind !== 'block' && <ContainerFields node={node} draft={draft} update={update} />}
+    {node.kind !== 'block' && <ContainerFields node={node} draft={draft} update={update} jsonField={jsonField} />}
     <button type="button" className="be-primary" disabled={!commands?.invoke} onClick={save}>Save configuration</button>
   </div>;
 }

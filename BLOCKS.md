@@ -7,9 +7,9 @@ A block is one executable step contributed by a plugin. A stack references it wi
 | Plugin | Blocks | Purpose |
 |---|---|---|
 | `flyt-blocks-core` | `work`, `research`, `general-analysis`, `combine`, `split`, `plan-start`, `task-graph` | Bounded repository work, untrusted web reading, transformations, and agent-planned task dispatch |
-| `flyt-blocks-judgement` | `evaluation`, `compare`, `prompt-refiner` | Review, comparison, and brief refinement |
+| `flyt-blocks-judgement` | `evaluation`, `compare`, `prompt-refiner`, `human-checkpoint` | Review, comparison, brief refinement, and explicit human approval |
 | `flyt-blocks-inquiry` | `interrogate`, `orient` | Bounded questioning and grounded project orientation |
-| `flyt-blocks-loop` | `backlog-plan`, `loop-handoff` | Produce claimable tasks and hand them to Loop |
+| `flyt-blocks-loop` | `backlog-plan`, `loop-handoff` | Propose claimable tasks and queue them with durable receipts |
 
 The source of these contracts is `kernel/src/plugins/blocks-*.ts`. If this document disagrees with a registered definition, the definition is authoritative and this document must be corrected.
 
@@ -34,6 +34,16 @@ Classification is not a grant. A plugin tool arrives unclassified and unreachabl
 
 Blocks live inside `sequence`, `parallel`, `repeat`, `foreach`, `until`, and `if` containers. Containment is the graph. A sequence passes its result forward; parallel lanes receive the same input and remain isolated until the container aggregates them. Repetition and predicates are statically bounded before execution. See [`STACK_LANG.md`](./STACK_LANG.md) for the exact grammar.
 
+Authored controls emit active and terminal statuses, including empty rosters and branches. A failed parallel lane fails its containing sequence or loop even when another lane completes successfully; downstream work does not receive a partially failed result. For each serializes object items as JSON so a worker receives the complete task, not a JavaScript object label.
+
+Split, Plan, and Backlog plan produce JSON arrays of complete items. Each task's title, context, and criteria stay together; individual JSON lines are never separate work items. Existing Markdown headings and top-level lists remain accepted as grouped items. Invalid JSON fails visibly. Palette and agent insertion copy the registered output declarations into the authored stack so controls can bind them immediately.
+
+General analysis and Plan may read workspace evidence but cannot write or run commands. Text-only tasks use the supplied input directly. Backlog plan declares every intended write in `blastRadius`, including new test and document files; read-only context does not widen the write scope.
+
+For transformations that need only their supplied input, set `inputOnly: true` ("Use input only" in Build). This removes tool access, making summaries of task objects predictable even when the task text itself mentions repository work. It defaults off so inquiry and evidence-reading steps keep their normal tools.
+
+Backlog handoff accepts explicit task objects and calls `queue_backlog_tasks` through the normal permission seam. The whole batch is validated before writing. Receipts identify actual stored tasks, retries of the same run/block/input reuse the same identities, and a storage failure reports partial receipts honestly. It does not start the Loop or make a model call. Ordinary workers retain their desktop queue restrictions; Goal recipes still exclude this queue boundary.
+
 `flyt-blocks-core:task-graph` is a leaf in the authored language and a run-time container in Work. Its planner produces a bounded DAG; validation rejects unknown dependencies, duplicate outputs, missing required producers, and cycles before child work is announced. An explicitly read-only brief also rejects any generated non-empty `writeFiles` scope before a child exists. Data producers and same-file writers receive deterministic edges, then ready tasks run in bounded waves. A generated task with an empty `writeFiles` declaration receives a read-only ceiling, so an analysis worker cannot spend its turn requesting writers or shell. The generated child blocks are durable run events nested under the authored block, never edits silently written back to the workflow.
 
 ## Execution and evidence
@@ -43,6 +53,8 @@ The kernel runner resolves every `use` before spending, intersects the run and b
 Every model query also records its assembled messages, offered tools, token ceiling, route, attempts, finish reason, usage, internal reasoning, and visible response as distinct fields. A failed block can be retried in place: completed upstream blocks remain complete and only the selected block and its downstream generated work run again.
 
 Working-agent round limits are soft for a watched block. The default warning threshold is 120 rounds; crossing it records a visible warning and the worker continues until it answers or is cancelled, with later warnings at exponential milestones. Worker queries allow 32,768 output tokens by default. A provider `length` stop records a warning and continues in a new query rather than making a partial response look finished. Small structural and clarification turns may still declare a hard bound.
+
+AI-step blocks default to 16,384 completion tokens, including reasoning, and allow at most two length continuations before failing. `maxTokens` can narrow or raise that per-query budget. Numeric word ceilings in configuration or instructions are enforced with one correction attempt; otherwise an explicit ceiling in the input applies.
 
 A generated Plan & dispatch worker is bounded. Its profile still warns at the soft threshold, but `workerMaxSteps` (default 200) is a hard bound: at that round the harness records a `hard_step_limit` warning, withdraws every tool, and gives the worker a few answer-only turns to deliver from the evidence it already holds. A worker that still requests tools through those turns fails as incomplete instead of running until a person stops it. `hardMaxSteps` gives an authored `work` block the same bound when a stack wants it.
 

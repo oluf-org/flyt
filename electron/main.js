@@ -34,6 +34,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // INSIDE app.asar — readable, never writable (fs.mkdirSync there fails with
 // ENOTDIR because the archive is a file, not a directory).
 const projectRoot = path.join(__dirname, '..');
+// Live-app verification uses a separate profile and mutable data directory so
+// it can run alongside the user's app without reconciling their live runs.
+if (!app.isPackaged && process.env.FLYT_VERIFY_USER_DATA && process.env.FLYT_VERIFY_DATA_ROOT) {
+  app.setPath('userData', path.resolve(process.env.FLYT_VERIFY_USER_DATA));
+}
 const diagnostics = createDiagnosticLog(path.join(app.getPath('userData'), 'logs', 'flyt.jsonl'));
 diagnostics.info('process.start', { version: app.getVersion(), packaged: app.isPackaged, platform: process.platform });
 process.on('uncaughtExceptionMonitor', error => diagnostics.error('process.uncaughtException', error));
@@ -59,7 +64,7 @@ migrateUserDataDir({
 // flows/, nodes/ and runs/ are all read-write stores, so they must never be
 // resolved against projectRoot in a packaged build. The engine does the
 // seeding and directory creation from these two roots.
-const dataRoot = app.isPackaged ? app.getPath('userData') : projectRoot;
+const dataRoot = app.isPackaged ? app.getPath('userData') : (process.env.FLYT_VERIFY_USER_DATA && process.env.FLYT_VERIFY_DATA_ROOT ? path.resolve(process.env.FLYT_VERIFY_DATA_ROOT) : projectRoot);
 
 // One instance per runs/ directory, claimed before anything reads or writes it.
 // runs/ is a shared mutable store and liveness is tracked in process memory
@@ -447,7 +452,7 @@ bindIpc('config:get');
 bindIpc('flow:run', (projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) =>
   ({ projectId, flowId, userInput, workspaceDir, approvalMode, launch }));
 bindIpc('workflow:list');
-for (const action of ['list', 'get', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft']) {
+for (const action of ['list', 'get', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft', 'author-open', 'author-read', 'author-edit', 'author-lock', 'author-ui', 'author-message', 'author-review', 'author-publish', 'review-result', 'author-cancel', 'author-list', 'author-delete', 'library', 'reuse', 'requirements']) {
   bindIpc(`goal:${action}`, args => args);
 }
 bindIpc('workflow:run', (projectId, workflowId, input = '', approvalMode = null, presetId = null, modelSelection = null) =>

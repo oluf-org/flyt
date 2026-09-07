@@ -1,0 +1,13 @@
+START second-quality/split
+END split: done/pass, 1 calls, 47s
+START second-quality/compare
+END compare: done/pass, 1 calls, 50s
+START second-quality/prompt-refiner
+END prompt-refiner: done/pass, 1 calls, 37s
+START second-quality/backlog-plan
+END backlog-plan: done/pass, 6 calls, 150s
+START second-quality/parallel-sequence
+END parallel-sequence: done/pass, 4 calls, 43s
+START second-quality/plan-handoff
+END plan-handoff: done/pass, 4 calls, 72s
+Report: D:\electron\llm-flow\docs\reviews\block-audit\second-quality-split-prompt-refiner-backlog-plan-compare-parallel-sequence-plan-handoff.json

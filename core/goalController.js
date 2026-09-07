@@ -7,6 +7,7 @@ import os from 'node:os';
 import Ajv from 'ajv';
 import { bootKernel } from './v2.js';
 import { serializeStack } from './stackstore.js';
+import { goalFolder, goalRequirements, validateRequiredPaths } from './goalRequirements.js';
 
 const clone = value => structuredClone(value);
 const id = () => crypto.randomUUID();
@@ -38,6 +39,11 @@ function immutable(file, value, exclusive = false) {
   } finally { fs.unlinkSync(temporary); }
 }
 const terminal = new Set(['achieved', 'limit_reached', 'plateau', 'needs_input', 'failed', 'stopped']);
+export function validateGoalTools(tools) {
+  if (!Array.isArray(tools) || tools.some(tool => typeof tool !== 'string')) throw new Error('Tools must be a list');
+  const forbidden = tools.filter(tool => /task|reference|run_log|read_run|other_run|agent|workflow|goal/i.test(tool));
+  if (forbidden.length) throw new Error(`Goal tools cannot enqueue work or read unrelated runs/references. Remove unavailable tools: ${forbidden.join(', ')}`);
+}
 export function parseGoalReply(output) {
   try { return JSON.parse(output.trim()); } catch { /* tolerate one explicitly delimited JSON artifact */ }
   const fences = [...output.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)];
@@ -105,13 +111,16 @@ export class GoalController {
     const bounds = kernel.boundStack(stack.root);
     if (bounds.expansion > 100 || bounds.blocks > 50) throw new Error('Goal workflows are limited to 50 authored and 100 expanded blocks');
     const ajv = new Ajv({ strict: false, validateFormats: false });
+    const nodeIds = new Set();
     const visit = node => {
+      if (nodeIds.has(node.id)) throw new Error(`Duplicate Goal node identity: ${node.id}`);
+      nodeIds.add(node.id);
       if (node.kind === 'block') {
         const definition = definitions.find(block => block.use === node.use);
         if (!definition) throw new Error(`Unavailable block: ${node.use}`);
         if (node.use === 'flyt-blocks-loop:loop-handoff') throw new Error('Legacy backlog handoff cannot run in a Goal');
         if (definition.settings && !ajv.validate(definition.settings, node.config ?? {})) throw new Error(`Invalid settings for ${node.id}: ${ajv.errorsText()}`);
-        if (node.config?.model || node.config?.modelFallbacks) throw new Error('Goal model selection belongs to the fixed contract');
+        if (node.config?.model || node.config?.modelFallbacks || node.config?.modelTier) throw new Error('Goal model selection belongs to the fixed contract');
       } else {
         if (node.kind === 'parallel' && (node.maxParallel ?? node.children.length) > contract.maxParallel) throw new Error('Recipe exceeds fixed parallelism limit');
         node.children.forEach(visit); node.else?.forEach(visit);
@@ -124,7 +133,8 @@ export class GoalController {
     if (input.folderMode === 'strict') throw new Error('Strict folder isolation is unavailable: this machine has no provider with a restricted filesystem view. Choose Folder focus explicitly.');
     if (input.folderMode && input.folderMode !== 'focus') throw new Error('Unknown folder policy');
     const entry = this.project(projectId);
-    const folder = fs.realpathSync(input.folder || entry.folder || entry.workspaceRoot);
+    const folder = fs.realpathSync(goalFolder(input, entry));
+    const requiredPaths = validateRequiredPaths(input.requiredPaths);
     const criteria = input.criteria;
     if (!Array.isArray(criteria) || !criteria.length || criteria.length > 30) throw new Error('Define 1–30 fixed acceptance checks');
     for (const criterion of criteria) {
@@ -144,16 +154,14 @@ export class GoalController {
     if (!Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > 4) throw new Error('Parallelism must be 1–4');
     const plateau = input.plateau ?? 3;
     if (!Number.isInteger(plateau) || plateau < 1 || plateau > 1000) throw new Error('Plateau must be 1–1000');
-    if (!Array.isArray(input.tools ?? []) || (input.tools ?? []).some(tool => typeof tool !== 'string')) throw new Error('Tools must be a list');
-    // Queue operations and other-run readers are outside this goal ownership.
-    const forbidden = /task|reference|run_log|read_run|other_run|agent|workflow|goal/i;
-    if ((input.tools ?? []).some(tool => forbidden.test(tool))) throw new Error('Goal tools cannot enqueue work or read unrelated runs/references');
+    validateGoalTools(input.tools ?? []);
     return {
       version: 1, objective: bounded(input.objective, 8000, 'Objective'),
-      constraints: String(input.constraints ?? '').slice(0, 8000), criteria: clone(criteria), tests: clone(tests),
+      constraints: String(input.constraints ?? '').slice(0, 8000), criteria: clone(criteria), tests: clone(tests), requiredPaths,
       folder, folderIdentity: identity(folder), folderMode: 'focus', createFolder: Boolean(input.createFolder), limits, maxParallel, plateau,
-      selfRedesign: Boolean(input.selfRedesign), tools: [...new Set(input.tools ?? [])],
-      worker: clone(input.worker?.model ? input.worker : this.worker()),
+      selfRedesign: Boolean(input.selfRedesign), reviewAi: Boolean(input.reviewAi), reviewResults: Boolean(input.reviewResults),
+      authoringId: input.authoringId ?? null, tools: [...new Set(input.tools ?? [])],
+      worker: clone(this.resolveWorker ? this.resolveWorker(input.worker?.model ? input.worker : this.worker()) : (input.worker?.model ? input.worker : this.worker())),
     };
   }
   async create({ projectId, definition }) {
@@ -179,6 +187,7 @@ export class GoalController {
     let state = this.live.get(goalId)?.state ?? read(this.file(projectId, goalId));
     if (state.projectId !== projectId) throw new Error('Goal belongs to another project');
     if (author === 'model' && !state.contract.selfRedesign) throw new Error('Self redesign is disabled');
+    if (author === 'model' && state.contract.reviewAi) throw new Error('REVIEW_REQUIRED: Model revisions must go through the authoring proposal validator');
     if (baseRevision !== (state.pendingRevision ?? state.activeRevision)) throw new Error('Stale recipe revision. Reload before editing.');
     const previous = read(this.recordPath(state, `recipe-${baseRevision}`));
     if (commands) {
@@ -253,6 +262,8 @@ export class GoalController {
     projectId = this.project(projectId).id;
     if (this.live.has(goalId)) return this.get(projectId, goalId);
     const state = read(this.file(projectId, goalId));
+    if (state.pendingResult) throw new Error('Review the pending result before resuming');
+    if (state.contract.reviewAi && this.hasPendingReview?.(state)) throw new Error('REVIEW_REQUIRED: Resolve and publish the draft before resuming');
     if (state.controlIntent === 'stop' || state.controlIntent === 'limit') {
       state.status = state.controlIntent === 'stop' ? 'stopped' : 'limit_reached';
       state.reason = `Recovered recorded ${state.controlIntent} request`; this.save(state);
@@ -299,6 +310,28 @@ export class GoalController {
     await Promise.allSettled(records.map(record => this.control({ projectId: record.state.projectId, goalId: record.state.id, action: 'pause' })));
     await Promise.allSettled(records.map(record => record.task));
   }
+  reviewResult({ projectId, goalId, artifact, digest: expectedDigest, decision, feedback = '' }) {
+    projectId = this.project(projectId).id;
+    if (this.live.has(goalId)) throw new Error('Wait for the iteration to settle before reviewing');
+    const state = read(this.file(projectId, goalId));
+    if (!state.pendingResult) {
+      if (state.resultReviews?.some(item => item.artifact === artifact && item.digest === expectedDigest && item.decision === decision)) return state;
+      throw new Error('No matching result awaiting review');
+    }
+    const record = read(this.recordPath(state, artifact));
+    if (state.pendingResult.artifact !== artifact || hash(JSON.stringify(record)) !== expectedDigest) throw new Error('Stale result review');
+    if (!['approve', 'changes', 'stop'].includes(decision)) throw new Error('Invalid review decision');
+    state.resultReviews ??= [];
+    state.resultReviews.push({ artifact, digest: expectedDigest, decision, feedback: String(feedback).slice(0, 2000), at: Date.now() });
+    state.pendingResult = null;
+    if (decision === 'stop') { state.status = 'stopped'; state.reason = 'Stopped during human result review'; }
+    else if (decision === 'approve' && record.achieved) { state.status = 'achieved'; state.reason = 'Fixed checks passed and result approved'; }
+    else {
+      state.status = 'paused'; state.reason = decision === 'changes' ? 'Human requested another iteration' : 'Result reviewed; mandatory checks still incomplete';
+      if (feedback) state.memory = [...state.memory, { text: String(feedback).slice(0, 2000), source: 'human review', iteration: state.iteration, status: 'feedback' }].slice(-10);
+    }
+    this.save(state); return state;
+  }
   check(record) {
     const state = record.state;
     const limits = state.contract.limits;
@@ -314,6 +347,7 @@ export class GoalController {
       goalId: state.id, objective: state.contract.objective, constraints: state.contract.constraints,
       criteria: state.contract.criteria, tests: state.contract.tests, iteration: state.iteration + 1,
       recipeRevision: state.activeRevision, folder: state.workspace.path, folderMode: 'focus',
+      projectRequirements: goalRequirements(state.contract, this.project(state.projectId), { workspace: state.workspace.path }),
       remaining: { calls: state.contract.limits.calls - state.calls, iterations: state.contract.limits.iterations - state.iteration },
       best: state.best, current: state.current, findings: state.memory,
       recipe: state.contract.selfRedesign ? read(this.recordPath(state, `recipe-${state.activeRevision}`)).source : undefined,
@@ -410,12 +444,20 @@ export class GoalController {
     while (state.iteration < state.contract.limits.iterations) {
       this.check(record);
       if (state.pendingProposal) {
+        if (state.contract.reviewAi) {
+          try { await this.queueReview?.(state, state.pendingProposal); }
+          catch (error) { state.lastRevisionError = String(error.message); }
+          state.pendingProposal = null; state.status = 'paused'; state.reason = 'Waiting for recipe review'; this.save(state); return;
+        }
         try { await this.editSource({ ...state.pendingProposal, projectId: state.projectId, goalId: state.id, author: 'model' }); }
         catch (error) { state.lastRevisionError = String(error.message); state.pendingProposal = null; this.save(state); }
       }
       if (state.pendingRevision && !state.activeChild && !state.iterationIntent) {
         state.activeRevision = state.pendingRevision; state.pendingRevision = null;
         this.save(state); // activation is durable before the next child starts
+      }
+      if (state.contract.reviewAi && !state.activeChild && !state.iterationIntent && this.hasPendingReview?.(state)) {
+        state.status = 'paused'; state.reason = 'Waiting for draft review at the iteration boundary'; this.save(state); return;
       }
       const number = state.iteration + 1;
       state.iterationIntent ??= { number, revision: state.activeRevision, phase: `iteration-${number}${state.repairAttempt ? `-repair-${state.repairAttempt}` : ''}` }; this.save(state);
@@ -469,6 +511,10 @@ export class GoalController {
       state.memory = [...state.memory, ...committed.findings].filter((item, index, all) => all.findIndex(other => other.text === item.text) === index).slice(-10);
       state.history.push(summary); state.iteration = number; state.iterationIntent = null;
       state.pendingProposal = committed.proposal;
+      if (state.contract.reviewResults) {
+        state.pendingResult = { artifact: `iteration-${number}`, digest: hash(JSON.stringify(committed)), iteration: number, revision: committed.revision };
+        state.status = 'paused'; state.reason = 'Waiting for human result review'; this.save(state); return;
+      }
       if (committed.achieved) { state.status = 'achieved'; state.reason = 'All fixed acceptance checks passed'; }
       else if (committed.needsInput) { state.status = 'needs_input'; state.reason = committed.needsInput; }
       else if (state.plateauCount >= state.contract.plateau) { state.status = 'plateau'; state.reason = 'No improvement across the configured comparable iterations'; }

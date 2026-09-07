@@ -20,6 +20,7 @@
  */
 import type { JsonValue } from '../types.js';
 import { outputWordLimit } from '../blocks/output-contract.js';
+import { parseListOutput } from '../blocks/list-output.js';
 import type { BlockOutcome, BlockRun } from '../blocks/types.js';
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
 
@@ -49,6 +50,8 @@ export const AI_STEP_SETTINGS = {
       description: 'Replace this block’s standing system prompt for this workflow instance.',
     },
     maxOutputWords: { type: 'integer', minimum: 1, description: 'Hard final-answer word limit, with one tool-free correction before failure.' },
+    maxTokens: { type: 'integer', minimum: 1, maximum: 131_072, description: 'Per-query completion budget, including reasoning. A truncated answer continues before the block completes.' },
+    inputOnly: { type: 'boolean', default: false, title: 'Use input only', description: 'Disable tools for this step. Use for summaries and transformations that need only the supplied material.' },
     instructions: { type: 'string', description: 'Appended to the block’s standing brief.' },
     effort: {
       enum: ['low', 'medium', 'high'],
@@ -76,7 +79,7 @@ export const AI_STEP_OUTPUT = 'text';
  * @param brief — the block's standing instructions (its role).
  * @param output — the declared structured field this pass fills, and what it
  *   holds: the deliverable itself unless it is 'list', when the deliverable
- *   is the newline-separated items a For each roster may be read from (D56).
+ *   is an array of complete items a For each roster may be read from (D56).
  * @returns what it produced, and why it stopped.
  */
 export async function executeAiStep(
@@ -92,12 +95,15 @@ export async function executeAiStep(
   const instructions = str(run.config.instructions);
   const effort = str(run.config.effort);
   const standing = str(run.config.systemPrompt, brief);
-  const tools = run.ctx.tools.list().filter(t => run.ceiling.includes(t.name));
+  const ceiling = run.config.inputOnly === true ? [] : run.ceiling;
+  const tools = run.ctx.tools.list().filter(t => ceiling.includes(t.name));
 
   const system = [
     standing,
+    ...(str(run.config.systemPrompt) ? [] : ['\nFollow the requested scope and output format. Keep depth proportional to the task. Do not invent infrastructure, authorize additional changes, or add requirements to the supplied acceptance criteria. Label consequential assumptions. If instructions narrow this general role, follow that narrower task.']),
     ...(effort ? [`\nWork at ${effort.toUpperCase()} effort.`] : []),
     ...(instructions ? [`\n${instructions}`] : []),
+    ...(output.type === 'list' ? [`\nOutput contract: return ONLY a JSON array. Each item is one complete, self-contained part or task, either a string (with all its Markdown details inside that string) or a task object. Do not make headings, context files, or acceptance criteria separate items. An empty list is [].`] : []),
   ].join('');
 
   const result = await runAgentLoop({
@@ -113,9 +119,12 @@ export async function executeAiStep(
       : [],
     system,
     input: run.input,
-    maxOutputWords: outputWordLimit(run.config.maxOutputWords),
+    maxOutputWords: outputWordLimit(run.config.maxOutputWords, instructions) ?? outputWordLimit(undefined, run.input),
+    maxTokens: typeof run.config.maxTokens === 'number' ? run.config.maxTokens : 16_384,
+    continueOnLength: true,
+    maxLengthContinuations: 2,
     tools,
-    ceiling: run.ceiling,
+    ceiling,
     ...(options.maxSteps != null ? { maxSteps: options.maxSteps } : {}),
     softMaxSteps: typeof run.config.maxSteps === 'number' ? run.config.maxSteps : MAX_STEPS,
     ...(options.toolLimits ? { toolLimits: options.toolLimits } : {}),
@@ -129,8 +138,12 @@ export async function executeAiStep(
   // The declaration is the contract: the one field this block declared is
   // the one field `structured` carries, so a predicate or a roster never
   // names a field the block did not fill.
-  const structured = output.type === 'list'
-    ? { [output.name]: result.content.split('\n').map(line => line.trim()).filter(Boolean) }
-    : { [output.name]: result.content };
-  return { status: 'done', output: result.content, structured };
+  try {
+    const structured = output.type === 'list'
+      ? { [output.name]: parseListOutput(result.content, output.name) }
+      : { [output.name]: result.content };
+    return { status: 'done', output: result.content, structured };
+  } catch (error) {
+    return { status: 'failed', output: result.content, error: String((error as Error).message) };
+  }
 }

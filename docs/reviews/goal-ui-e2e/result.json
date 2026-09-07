@@ -1,0 +1,543 @@
+{
+  "goal": {
+    "id": "f8166e5c-fdce-4817-9d60-4caa13c488e1",
+    "projectId": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-goal-live-UUwGqQ",
+    "name": "Live Goal acceptance 1788637210226",
+    "createdAt": "2026-09-05T19:40:30.833Z",
+    "contract": {
+      "version": 1,
+      "objective": "Exercise the Goal loop with a staged text artifact. Read the CURRENT iteration number in the Goal context. If it is 1, return {\"candidate\":{\"text\":\"ALPHA\"}}. If it is 2 or later, return {\"candidate\":{\"text\":\"ALPHA BETA\"}}. Return exactly ONE JSON object for the current iteration only. Do not show both objects or simulate future iterations. This staged fixture intentionally needs two iterations.",
+      "constraints": "Do not use tools. Do not change the checks. Preserve the original objective across steps.",
+      "criteria": [
+        {
+          "type": "output_contains",
+          "value": "ALPHA"
+        },
+        {
+          "type": "output_contains",
+          "value": "BETA"
+        }
+      ],
+      "tests": [],
+      "folder": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-goal-live-UUwGqQ",
+      "folderIdentity": {
+        "path": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-goal-live-UUwGqQ",
+        "dev": 3664952411,
+        "ino": 3659174700446508,
+        "birthtimeMs": 1788637210226.0227
+      },
+      "folderMode": "focus",
+      "createFolder": true,
+      "limits": {
+        "iterations": 3,
+        "calls": 12,
+        "minutes": 6,
+        "usd": null
+      },
+      "maxParallel": 1,
+      "plateau": 3,
+      "selfRedesign": false,
+      "reviewAi": true,
+      "reviewResults": true,
+      "authoringId": "fc559e8a-c406-4e74-bb5d-5542805df6a3",
+      "tools": [],
+      "worker": {
+        "provider": "openrouter",
+        "model": "z-ai/glm-5.3-flash"
+      }
+    },
+    "status": "achieved",
+    "reason": "Fixed checks passed and result approved",
+    "definition": {
+      "setup": "version: 2\nid: goal-setup\nname: Establish baseline\nblocks:\n  - id: baseline\n    use: flyt-blocks-core:general-analysis\n    title: Record baseline and plan\n    config:\n      instructions: \"Establish a concise baseline and approach for the Goal. Return a short setup note, at most 150 words.\"\n",
+      "recipe": "version: 2\nid: goal-recipe\nname: \"Improve a candidate\"\nblocks:\n  - id: improve\n    use: flyt-blocks-core:general-analysis\n    title: \"Build / improve candidate\"\n    config:\n      systemPrompt: \"You build the next candidate for a persistent Goal. Follow its fixed contract and CURRENT iteration number. Return exactly ONE JSON object with candidate.text and optional findings/proposal for this iteration only. Never emit multiple objects or simulate future iterations. Execute the requested task; do not summarize the Goal packet or continue the preceding prose.\"\n      instructions: \"Work toward the fixed Goal criteria. Read the Goal memory and improve the best candidate. Return the JSON output contract from the Goal context, with candidate.text containing the complete result. Return the complete current candidate.\"\n"
+    },
+    "activeRevision": 1,
+    "pendingRevision": null,
+    "revisionCount": 1,
+    "iteration": 2,
+    "setupDone": true,
+    "workspace": {
+      "path": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-goal-live-UUwGqQ\\goal-f8166e5c-fdce-4817-9d60-4caa13c488e1",
+      "dev": 3664952411,
+      "ino": 1970324840185006,
+      "birthtimeMs": 1788637230849.49
+    },
+    "activeChild": null,
+    "calls": 3,
+    "knownUsd": 0.001272975,
+    "unknownCostCalls": 0,
+    "elapsedMs": 81897,
+    "plateauCount": 0,
+    "best": {
+      "iteration": 2,
+      "revision": 1,
+      "score": 1,
+      "runId": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-iteration-2",
+      "artifact": "iteration-2",
+      "preview": "ALPHA BETA",
+      "verified": true,
+      "findings": [
+        "Iteration 2 confirmed via Goal context (iteration:2, remaining {calls:10, iterations:2}; best/current at iteration 1 with preview 'ALPHA', score 0.5), so per the staged objective 'ALPHA BETA' is emitted this iteration; it contains both required tokens ALPHA and BETA, so both output_contains criteria are expected to pass — verification is left to runtime checks.",
+        "No tools used, checks unchanged, objective preserved verbatim; the two-iteration staging is complete, so no recipe proposal is needed at this boundary."
+      ]
+    },
+    "current": {
+      "iteration": 2,
+      "revision": 1,
+      "score": 1,
+      "runId": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-iteration-2",
+      "artifact": "iteration-2",
+      "preview": "ALPHA BETA",
+      "verified": true,
+      "findings": [
+        "Iteration 2 confirmed via Goal context (iteration:2, remaining {calls:10, iterations:2}; best/current at iteration 1 with preview 'ALPHA', score 0.5), so per the staged objective 'ALPHA BETA' is emitted this iteration; it contains both required tokens ALPHA and BETA, so both output_contains criteria are expected to pass — verification is left to runtime checks.",
+        "No tools used, checks unchanged, objective preserved verbatim; the two-iteration staging is complete, so no recipe proposal is needed at this boundary."
+      ]
+    },
+    "memory": [
+      {
+        "text": "Iteration 1 confirmed via Goal context (iteration:1, current/best null), so per the staged objective only 'ALPHA' is emitted this iteration; criteria require both ALPHA and BETA, so a pass is expected only at iteration 2+ when 'ALPHA BETA' is returned.",
+        "iteration": 1,
+        "source": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-iteration-1",
+        "status": "hypothesis"
+      },
+      {
+        "text": "No tools used, checks unchanged, objective preserved verbatim; success is not claimed since runtime checks decide.",
+        "iteration": 1,
+        "source": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-iteration-1",
+        "status": "hypothesis"
+      },
+      {
+        "text": "Iteration 2 confirmed via Goal context (iteration:2, remaining {calls:10, iterations:2}; best/current at iteration 1 with preview 'ALPHA', score 0.5), so per the staged objective 'ALPHA BETA' is emitted this iteration; it contains both required tokens ALPHA and BETA, so both output_contains criteria are expected to pass — verification is left to runtime checks.",
+        "iteration": 2,
+        "source": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-iteration-2",
+        "status": "hypothesis"
+      },
+      {
+        "text": "No tools used, checks unchanged, objective preserved verbatim; the two-iteration staging is complete, so no recipe proposal is needed at this boundary.",
+        "iteration": 2,
+        "source": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-iteration-2",
+        "status": "hypothesis"
+      }
+    ],
+    "history": [
+      {
+        "iteration": 1,
+        "revision": 1,
+        "score": 0.5,
+        "runId": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-iteration-1",
+        "artifact": "iteration-1",
+        "preview": "ALPHA",
+        "verified": false,
+        "findings": [
+          "Iteration 1 confirmed via Goal context (iteration:1, current/best null), so per the staged objective only 'ALPHA' is emitted this iteration; criteria require both ALPHA and BETA, so a pass is expected only at iteration 2+ when 'ALPHA BETA' is returned.",
+          "No tools used, checks unchanged, objective preserved verbatim; success is not claimed since runtime checks decide."
+        ]
+      },
+      {
+        "iteration": 2,
+        "revision": 1,
+        "score": 1,
+        "runId": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-iteration-2",
+        "artifact": "iteration-2",
+        "preview": "ALPHA BETA",
+        "verified": true,
+        "findings": [
+          "Iteration 2 confirmed via Goal context (iteration:2, remaining {calls:10, iterations:2}; best/current at iteration 1 with preview 'ALPHA', score 0.5), so per the staged objective 'ALPHA BETA' is emitted this iteration; it contains both required tokens ALPHA and BETA, so both output_contains criteria are expected to pass — verification is left to runtime checks.",
+          "No tools used, checks unchanged, objective preserved verbatim; the two-iteration staging is complete, so no recipe proposal is needed at this boundary."
+        ]
+      }
+    ],
+    "updatedAt": "2026-09-05T19:41:56.513Z",
+    "activeSince": null,
+    "controlIntent": null,
+    "setupResult": {
+      "runId": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-setup",
+      "summary": "## Analysis\n\n**Summary** — A self-contained fixture for exercising the Goal loop: at iteration 1 the required candidate text is `\"ALPHA\"`; at iteration 2 or later it is `\"ALPHA BETA\"`. Success criteria require the output to contain both `ALPHA` and `BETA`, so the fixture cannot pass until the second pass — explicitly \"intentionally needs two iterations.\"\n\n**Structure** — A Goal contract (id, objective, constraints, two `output_contains` criteria, empty tests, `iteration:1`, budget 12 calls / 3 iterations, null current/best, no findings) plus a STEP INPUT restating the objective verbatim.\n\n**Claims and evidence**\n- Current iteration is 1 — evidence: `\"iteration\":1`, `\"current\":null`, `\"best\":null`.\n- Both criteria cannot pass yet — evidence: criteria demand `ALPHA` and `BETA`; the iteration-1 rule returns only `\"ALPHA\"`.\n- Budget suffices — evidence: `\"remaining\":{\"calls\":12,\"iterations\":3}`.\n\n**Gaps** — `\"tests\":[]` is empty; no proposal commands specified; behavior beyond iteration 2 is only implied (\"2 or later\").\n\n**Risks** — Emitting `\"ALPHA BETA\"` now violates \"If it is 1…\"; showing two JSON objects violates \"Return exactly ONE JSON object\"; claiming success is barred (\"runtime checks decide success\").\n\n**Recommendation** — Return exactly one candidate, `\"ALPHA\"`, this iteration; defer `\"ALPHA BETA\"` to iteration 2; no recipe proposal.\n\n## Setup note\n\nBaseline: iteration 1 of 3, 12 calls remaining, no current/best, no findings. Criteria require output containing both ALPHA and BETA; the staged objective returns \"ALPHA\" at iteration 1 and \"ALPHA BETA\" from iteration 2, so pass is impossible until the second pass — by design. Approach: this step returns exactly one candidate, text \"ALPHA\", matching the current iteration; no tools, no changes to checks, objective preserved verbatim. A finding records the deliberate two-iteration staging. At the next boundary, iteration 2 returns \"ALPHA BETA\" to satisfy both checks. No verification is claimed; runtime checks decide"
+    },
+    "iterationIntent": null,
+    "pendingProposal": null,
+    "pendingResult": null,
+    "resultReviews": [
+      {
+        "artifact": "iteration-1",
+        "digest": "e24b5f175058261967127febdde97a74f60b287c9771492589572b8287e87431",
+        "decision": "approve",
+        "feedback": "",
+        "at": 1788637296255
+      },
+      {
+        "artifact": "iteration-2",
+        "digest": "dac630186da404bbed2ad778dabc8595d55c5d372e0bf54cb75b9cea90d901cb",
+        "decision": "approve",
+        "feedback": "",
+        "at": 1788637316513
+      }
+    ],
+    "live": false,
+    "recoverable": false
+  },
+  "best": {
+    "number": 2,
+    "revision": 1,
+    "runId": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-iteration-2",
+    "candidate": {
+      "text": "ALPHA BETA",
+      "source": null
+    },
+    "checks": [
+      {
+        "index": 0,
+        "passed": true,
+        "digest": "7a7205f31a1571be03581d685c97c092b2d932d32f477a90a4058a8530b47c96"
+      },
+      {
+        "index": 1,
+        "passed": true,
+        "digest": "7a7205f31a1571be03581d685c97c092b2d932d32f477a90a4058a8530b47c96"
+      }
+    ],
+    "tests": [],
+    "score": 1,
+    "achieved": true,
+    "findings": [
+      {
+        "text": "Iteration 2 confirmed via Goal context (iteration:2, remaining {calls:10, iterations:2}; best/current at iteration 1 with preview 'ALPHA', score 0.5), so per the staged objective 'ALPHA BETA' is emitted this iteration; it contains both required tokens ALPHA and BETA, so both output_contains criteria are expected to pass — verification is left to runtime checks.",
+        "iteration": 2,
+        "source": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-iteration-2",
+        "status": "hypothesis"
+      },
+      {
+        "text": "No tools used, checks unchanged, objective preserved verbatim; the two-iteration staging is complete, so no recipe proposal is needed at this boundary.",
+        "iteration": 2,
+        "source": "goal-f8166e5c-fdce-4817-9d60-4caa13c488e1-iteration-2",
+        "status": "hypothesis"
+      }
+    ],
+    "proposal": null,
+    "knownUsd": 0.001272975,
+    "calls": 3,
+    "needsInput": null
+  },
+  "authoring": {
+    "id": "fc559e8a-c406-4e74-bb5d-5542805df6a3",
+    "projectId": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-goal-live-UUwGqQ",
+    "goalId": "f8166e5c-fdce-4817-9d60-4caa13c488e1",
+    "runtimeRevision": 1,
+    "definition": {
+      "name": "Live Goal acceptance 1788637210226",
+      "objective": "Exercise the Goal loop with a staged text artifact. Read the CURRENT iteration number in the Goal context. If it is 1, return {\"candidate\":{\"text\":\"ALPHA\"}}. If it is 2 or later, return {\"candidate\":{\"text\":\"ALPHA BETA\"}}. Return exactly ONE JSON object for the current iteration only. Do not show both objects or simulate future iterations. This staged fixture intentionally needs two iterations.",
+      "constraints": "Do not use tools. Do not change the checks. Preserve the original objective across steps.",
+      "criteria": [
+        {
+          "type": "output_contains",
+          "value": "ALPHA"
+        },
+        {
+          "type": "output_contains",
+          "value": "BETA"
+        }
+      ],
+      "tests": [],
+      "tools": [],
+      "folder": "",
+      "folderMode": "focus",
+      "createFolder": true,
+      "maxParallel": 1,
+      "plateau": 3,
+      "selfRedesign": false,
+      "reviewResults": true,
+      "worker": {
+        "provider": "auto",
+        "model": "z-ai/glm-5.3-flash"
+      },
+      "setup": "version: 2\nid: goal-setup\nname: Establish baseline\nblocks:\n  - id: baseline\n    use: flyt-blocks-core:general-analysis\n    title: Record baseline and plan\n    config:\n      instructions: \"Establish a concise baseline and approach for the Goal. Return a short setup note, at most 150 words.\"\n",
+      "limits": {
+        "iterations": 3,
+        "calls": 12,
+        "minutes": 6,
+        "usd": null
+      },
+      "recipe": "version: 2\nid: goal-recipe\nname: \"Improve a candidate\"\nblocks:\n  - id: improve\n    use: flyt-blocks-core:general-analysis\n    title: \"Build / improve candidate\"\n    config:\n      systemPrompt: \"You build the next candidate for a persistent Goal. Follow its fixed contract and CURRENT iteration number. Return exactly ONE JSON object with candidate.text and optional findings/proposal for this iteration only. Never emit multiple objects or simulate future iterations. Execute the requested task; do not summarize the Goal packet or continue the preceding prose.\"\n      instructions: \"Work toward the fixed Goal criteria. Read the Goal memory and improve the best candidate. Return the JSON output contract from the Goal context, with candidate.text containing the complete result. Return the complete current candidate.\"\n"
+    },
+    "revision": 3,
+    "hash": "1f430ad20e76358401cf8551acf86a143f3c7236b218e16b4b0056221839e104",
+    "policyRevision": 2,
+    "locks": [
+      "goal/worker"
+    ],
+    "baseline": "human",
+    "approvedHash": "1f430ad20e76358401cf8551acf86a143f3c7236b218e16b4b0056221839e104",
+    "grants": [
+      {
+        "id": "72036110-70a2-4839-a46b-2122702434e3",
+        "baseRevision": 2,
+        "hash": "bbccbe75d3508756c4980539145e924db54b6f416a595b5213ed5856207c118f",
+        "policyRevision": 2,
+        "quotes": [
+          {
+            "address": "recipe/improve/config/instructions",
+            "value": "Work toward the fixed Goal criteria. Read the Goal memory and improve the best candidate. Return the JSON output contract from the Goal context, with candidate.text containing the complete result."
+          }
+        ],
+        "expires": 1788639012658
+      }
+    ],
+    "proposals": [
+      {
+        "id": "247475e5-2fcf-400c-b5cf-da3b3dc36b66",
+        "grantId": "72036110-70a2-4839-a46b-2122702434e3",
+        "baseRevision": 2,
+        "policyRevision": 2,
+        "hash": "1f430ad20e76358401cf8551acf86a143f3c7236b218e16b4b0056221839e104",
+        "definition": {
+          "name": "Live Goal acceptance 1788637210226",
+          "objective": "Exercise the Goal loop with a staged text artifact. Read the CURRENT iteration number in the Goal context. If it is 1, return {\"candidate\":{\"text\":\"ALPHA\"}}. If it is 2 or later, return {\"candidate\":{\"text\":\"ALPHA BETA\"}}. Return exactly ONE JSON object for the current iteration only. Do not show both objects or simulate future iterations. This staged fixture intentionally needs two iterations.",
+          "constraints": "Do not use tools. Do not change the checks. Preserve the original objective across steps.",
+          "criteria": [
+            {
+              "type": "output_contains",
+              "value": "ALPHA"
+            },
+            {
+              "type": "output_contains",
+              "value": "BETA"
+            }
+          ],
+          "tests": [],
+          "tools": [],
+          "folder": "",
+          "folderMode": "focus",
+          "createFolder": true,
+          "maxParallel": 1,
+          "plateau": 3,
+          "selfRedesign": false,
+          "reviewResults": true,
+          "worker": {
+            "provider": "auto",
+            "model": "z-ai/glm-5.3-flash"
+          },
+          "setup": "version: 2\nid: goal-setup\nname: Establish baseline\nblocks:\n  - id: baseline\n    use: flyt-blocks-core:general-analysis\n    title: Record baseline and plan\n    config:\n      instructions: \"Establish a concise baseline and approach for the Goal. Return a short setup note, at most 150 words.\"\n",
+          "limits": {
+            "iterations": 3,
+            "calls": 12,
+            "minutes": 6,
+            "usd": null
+          },
+          "recipe": "version: 2\nid: goal-recipe\nname: \"Improve a candidate\"\nblocks:\n  - id: improve\n    use: flyt-blocks-core:general-analysis\n    title: \"Build / improve candidate\"\n    config:\n      systemPrompt: \"You build the next candidate for a persistent Goal. Follow its fixed contract and CURRENT iteration number. Return exactly ONE JSON object with candidate.text and optional findings/proposal for this iteration only. Never emit multiple objects or simulate future iterations. Execute the requested task; do not summarize the Goal packet or continue the preceding prose.\"\n      instructions: \"Work toward the fixed Goal criteria. Read the Goal memory and improve the best candidate. Return the JSON output contract from the Goal context, with candidate.text containing the complete result. Return the complete current candidate.\"\n"
+        },
+        "diff": [
+          {
+            "address": "recipe/improve/config/instructions",
+            "before": "Work toward the fixed Goal criteria. Read the Goal memory and improve the best candidate. Return the JSON output contract from the Goal context, with candidate.text containing the complete result.",
+            "after": "Work toward the fixed Goal criteria. Read the Goal memory and improve the best candidate. Return the JSON output contract from the Goal context, with candidate.text containing the complete result. Return the complete current candidate.",
+            "kind": "changed"
+          }
+        ],
+        "rationale": "Appended exactly the requested sentence 'Return the complete current candidate.' to the granted instructions field, preserving every existing instruction character-for-character. Only the single quoted field was modified; no other goal or recipe fields, structure, or node IDs were touched.",
+        "author": "model",
+        "status": "accepted",
+        "initial": false,
+        "at": 1788637229283
+      }
+    ],
+    "requests": [
+      {
+        "id": "0437c438-bf9b-4648-9f60-f4b7251a537e",
+        "text": "Append exactly this sentence to the instructions: Return the complete current candidate. Preserve every existing instruction.",
+        "grantId": "72036110-70a2-4839-a46b-2122702434e3",
+        "quotes": [
+          {
+            "address": "recipe/improve/config/instructions",
+            "value": "Work toward the fixed Goal criteria. Read the Goal memory and improve the best candidate. Return the JSON output contract from the Goal context, with candidate.text containing the complete result."
+          }
+        ],
+        "status": "complete",
+        "at": 1788637212670,
+        "pid": 8816,
+        "model": "z-ai/glm-5.3-flash",
+        "proposalId": "247475e5-2fcf-400c-b5cf-da3b3dc36b66"
+      }
+    ],
+    "history": [
+      {
+        "author": "human",
+        "diff": [
+          {
+            "address": "goal/name",
+            "before": "My goal",
+            "after": "Live Goal acceptance 1788637210226",
+            "kind": "changed"
+          },
+          {
+            "address": "goal/objective",
+            "before": "",
+            "after": "Exercise the Goal loop with a staged text artifact. Read the CURRENT iteration number in the Goal context. If it is 1, return {\"candidate\":{\"text\":\"ALPHA\"}}. If it is 2 or later, return {\"candidate\":{\"text\":\"ALPHA BETA\"}}. Return exactly ONE JSON object for the current iteration only. Do not show both objects or simulate future iterations. This staged fixture intentionally needs two iterations.",
+            "kind": "changed"
+          },
+          {
+            "address": "goal/constraints",
+            "before": "",
+            "after": "Do not use tools. Do not change the checks. Preserve the original objective across steps.",
+            "kind": "changed"
+          },
+          {
+            "address": "goal/criteria",
+            "before": [],
+            "after": [
+              {
+                "type": "output_contains",
+                "value": "ALPHA"
+              },
+              {
+                "type": "output_contains",
+                "value": "BETA"
+              }
+            ],
+            "kind": "changed"
+          },
+          {
+            "address": "goal/limits",
+            "before": {
+              "iterations": 10,
+              "calls": 100,
+              "minutes": 30,
+              "usd": null
+            },
+            "after": {
+              "iterations": 3,
+              "calls": 12,
+              "minutes": 6,
+              "usd": null
+            },
+            "kind": "changed"
+          },
+          {
+            "address": "goal/worker",
+            "before": null,
+            "after": {
+              "provider": "auto",
+              "model": "z-ai/glm-5.3-flash"
+            },
+            "kind": "changed"
+          },
+          {
+            "address": "goal/reviewResults",
+            "before": false,
+            "after": true,
+            "kind": "changed"
+          },
+          {
+            "address": "setup/structure",
+            "before": null,
+            "after": {
+              "version": 2,
+              "id": "goal-setup",
+              "name": "Establish baseline",
+              "description": "",
+              "launchable": false,
+              "presets": {},
+              "nodes": [
+                {
+                  "id": "goal-setup",
+                  "kind": "sequence",
+                  "use": null,
+                  "parent": null,
+                  "branch": null,
+                  "index": 0
+                },
+                {
+                  "id": "baseline",
+                  "kind": "block",
+                  "use": "flyt-blocks-core:general-analysis",
+                  "parent": "goal-setup",
+                  "branch": "children",
+                  "index": 0
+                }
+              ]
+            },
+            "kind": "changed"
+          },
+          {
+            "address": "setup/goal-setup/title",
+            "before": null,
+            "after": "",
+            "kind": "added"
+          },
+          {
+            "address": "setup/goal-setup/position",
+            "before": null,
+            "after": {
+              "line": 0,
+              "path": "stack"
+            },
+            "kind": "added"
+          },
+          {
+            "address": "setup/baseline/title",
+            "before": null,
+            "after": "Record baseline and plan",
+            "kind": "added"
+          },
+          {
+            "address": "setup/baseline/config/instructions",
+            "before": null,
+            "after": "Establish a concise baseline and approach for the Goal. Return a short setup note, at most 150 words.",
+            "kind": "added"
+          },
+          {
+            "address": "setup/baseline/outputs",
+            "before": null,
+            "after": [],
+            "kind": "added"
+          },
+          {
+            "address": "setup/baseline/position",
+            "before": null,
+            "after": {
+              "line": 5,
+              "path": "blocks[0]"
+            },
+            "kind": "added"
+          }
+        ],
+        "at": 1788637211720,
+        "revision": 2
+      },
+      {
+        "author": "human",
+        "action": "lock",
+        "address": "goal/worker",
+        "at": 1788637211773
+      },
+      {
+        "author": "human",
+        "proposalId": "247475e5-2fcf-400c-b5cf-da3b3dc36b66",
+        "decision": "accept",
+        "hash": "1f430ad20e76358401cf8551acf86a143f3c7236b218e16b4b0056221839e104",
+        "at": 1788637230548
+      },
+      {
+        "author": "human",
+        "action": "approve-definition",
+        "hash": "1f430ad20e76358401cf8551acf86a143f3c7236b218e16b4b0056221839e104",
+        "revision": 3,
+        "at": 1788637230836
+      }
+    ],
+    "ui": {
+      "composer": "",
+      "quotes": [
+        {
+          "address": "recipe/improve/config/instructions",
+          "value": "Work toward the fixed Goal criteria. Read the Goal memory and improve the best candidate. Return the JSON output contract from the Goal context, with candidate.text containing the complete result."
+        }
+      ]
+    },
+    "authoringCalls": 1,
+    "knownUsd": 0.00031665,
+    "unknownCostCalls": 0,
+    "sequence": 13
+  }
+}

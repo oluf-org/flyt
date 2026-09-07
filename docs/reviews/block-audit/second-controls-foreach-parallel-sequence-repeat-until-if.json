@@ -1,0 +1,930 @@
+{
+  "pass": "second-controls",
+  "model": "z-ai/glm-5.3-flash",
+  "startedAt": "2026-09-06T20:07:27.602Z",
+  "root": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-block-audit-second-controls-fN45Jw",
+  "results": [
+    {
+      "id": "foreach",
+      "workspace": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-block-audit-second-controls-fN45Jw\\foreach",
+      "status": "done",
+      "calls": [
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 22615,
+          "usage": {
+            "prompt_tokens": 242,
+            "completion_tokens": 951,
+            "total_tokens": 1193,
+            "cost": 0.0002559,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.0002559,
+              "upstream_inference_prompt_cost": 0.00001815,
+              "upstream_inference_completions_cost": 0.00023775
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 809,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        },
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 16234,
+          "usage": {
+            "prompt_tokens": 1865,
+            "completion_tokens": 564,
+            "total_tokens": 2429,
+            "cost": 0.000280875,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.000280875,
+              "upstream_inference_prompt_cost": 0.000139875,
+              "upstream_inference_completions_cost": 0.000141
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 506,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        },
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 18502,
+          "usage": {
+            "prompt_tokens": 1883,
+            "completion_tokens": 366,
+            "total_tokens": 2249,
+            "cost": 0.000232725,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.000232725,
+              "upstream_inference_prompt_cost": 0.000141225,
+              "upstream_inference_completions_cost": 0.0000915
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 309,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        }
+      ],
+      "questions": [],
+      "tools": [],
+      "warnings": [],
+      "blockOutputs": [
+        {
+          "blockId": "split",
+          "executionId": "split",
+          "status": "done",
+          "structured": {
+            "parts": [
+              {
+                "title": "Preserve zero counts in displayed output: counts with the value 0 must still be rendered (e.g., as \"0\"), never dropped, filtered out, or shown as blank/omitted.",
+                "acceptance": "zero is displayed"
+              },
+              {
+                "title": "Preserve Unicode labels through to displayed output: label text containing non-ASCII characters must pass through unchanged, with no escaping, transliteration, encoding corruption (mojibake), or normalization applied (e.g., \"blåbær\" must appear exactly as written).",
+                "acceptance": "blåbær stays unchanged"
+              }
+            ]
+          }
+        },
+        {
+          "blockId": "describe",
+          "executionId": "/each[0]/describe",
+          "status": "done",
+          "structured": {
+            "analysis": "The supplied part, **\"Preserve zero counts in displayed output,\"** requires that counts with the value 0 are still rendered (e.g., as \"0\") and never dropped, filtered out, or shown blank/omitted, with acceptance met when zero is displayed."
+          }
+        },
+        {
+          "blockId": "describe",
+          "executionId": "/each[1]/describe",
+          "status": "done",
+          "structured": {
+            "analysis": "**Preserve Unicode labels through to displayed output** — label text containing non-ASCII characters must pass through to displayed output exactly as written (no escaping, transliteration, mojibake, or normalization), with acceptance confirmed when \"blåbær\" stays unchanged."
+          }
+        }
+      ],
+      "generated": [],
+      "runId": "2026-09-06T20-07-28-353Z-lgi4",
+      "outputs": {
+        "split": "[\n  {\n    \"title\": \"Preserve zero counts in displayed output: counts with the value 0 must still be rendered (e.g., as \\\"0\\\"), never dropped, filtered out, or shown as blank/omitted.\",\n    \"acceptance\": \"zero is displayed\"\n  },\n  {\n    \"title\": \"Preserve Unicode labels through to displayed output: label text containing non-ASCII characters must pass through unchanged, with no escaping, transliteration, encoding corruption (mojibake), or normalization applied (e.g., \\\"blåbær\\\" must appear exactly as written).\",\n    \"acceptance\": \"blåbær stays unchanged\"\n  }\n]",
+        "describe": "**Preserve Unicode labels through to displayed output** — label text containing non-ASCII characters must pass through to displayed output exactly as written (no escaping, transliteration, mojibake, or normalization), with acceptance confirmed when \"blåbær\" stays unchanged."
+      },
+      "nodeStatus": {
+        "audit-foreach": "done",
+        "split": "done",
+        "each": "done",
+        "describe": "done"
+      },
+      "backlog": [],
+      "quality": "pass",
+      "durationMs": 58495
+    },
+    {
+      "id": "parallel-sequence",
+      "workspace": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-block-audit-second-controls-fN45Jw\\parallel-sequence",
+      "status": "done",
+      "calls": [
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 12212,
+          "usage": {
+            "prompt_tokens": 1866,
+            "completion_tokens": 475,
+            "total_tokens": 2341,
+            "cost": 0.00015502,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 1728,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.00015502,
+              "upstream_inference_prompt_cost": 0.00003627,
+              "upstream_inference_completions_cost": 0.00011875
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 414,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        },
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 12372,
+          "usage": {
+            "prompt_tokens": 1866,
+            "completion_tokens": 461,
+            "total_tokens": 2327,
+            "cost": 0.00015152,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 1728,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.00015152,
+              "upstream_inference_prompt_cost": 0.00003627,
+              "upstream_inference_completions_cost": 0.00011525
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 405,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        },
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 25413,
+          "usage": {
+            "prompt_tokens": 283,
+            "completion_tokens": 1038,
+            "total_tokens": 1321,
+            "cost": 0.000280725,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.000280725,
+              "upstream_inference_prompt_cost": 0.000021225,
+              "upstream_inference_completions_cost": 0.0002595
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 932,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        },
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 62045,
+          "usage": {
+            "prompt_tokens": 213,
+            "completion_tokens": 2662,
+            "total_tokens": 2875,
+            "cost": 0.000681475,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.000681475,
+              "upstream_inference_prompt_cost": 0.000015975,
+              "upstream_inference_completions_cost": 0.0006655
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 2461,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        }
+      ],
+      "questions": [],
+      "tools": [],
+      "warnings": [],
+      "blockOutputs": [
+        {
+          "blockId": "memory",
+          "executionId": "memory",
+          "status": "done",
+          "structured": {
+            "analysis": "Option B is non-compliant. It removes zero quantities, violating the hard requirement that zeros must be retained; its 10 ms runtime cannot offset that breach. Only zero-retaining options qualify — Option A (30 ms) satisfies the requirement. Recommendation: reject Option B and select Option A."
+          }
+        },
+        {
+          "blockId": "speed",
+          "executionId": "speed",
+          "status": "done",
+          "structured": {
+            "analysis": "**Recommendation: Option A.** It satisfies the hard requirement (zero quantities retained) at 30 ms. Option B (10 ms) is faster but removes zeros, violating the hard requirement, so it is excluded. The only trade-off is triple the runtime."
+          }
+        },
+        {
+          "blockId": "compare",
+          "executionId": "compare",
+          "status": "done",
+          "structured": {
+            "comparison": "Both lanes agree: Option B (10 ms) removes zero quantities, violating the hard requirement, so its speed advantage is irrelevant. Both correctly prioritize compliance over performance. They differ only in framing: speed notes the triple-runtime trade-off (30 ms vs 10 ms); memory rejects B outright. No conflicts between reviews. Assumption: no unstated requirements apply. Recommendation: select Option A, the only feasible choice; it is compliant with zero retention at 30 ms, while Option B is excluded regardless of runtime."
+          }
+        },
+        {
+          "blockId": "combine",
+          "executionId": "combine",
+          "status": "done",
+          "structured": {
+            "combined": "**Merged review — Option A vs. Option B**\n\nBoth lanes agree on the decisive point: Option B (10 ms) removes zero quantities and therefore violates the hard requirement, so its speed advantage cannot rescue it. Both reviews correctly rank compliance above performance. Their only difference is framing — the speed lane records the 3× runtime cost of compliance (30 ms vs. 10 ms), while the memory lane rejects B outright without weighing runtime. This is a difference in emphasis, not a conflict; the merged view keeps both framings.\n\nNo gaps requiring a named fix task were found; the framing difference was reconciled inline.\n\n**Assumption (consequential):** No unstated requirements apply. If any hidden constraint exists (e.g., additional retention rules or a constraint Option A itself fails), this conclusion must be re-validated.\n\n**Recommendation:** Select Option A — the only feasible choice, compliant with zero retention at 30 ms; Option B is excluded regardless of runtime."
+          }
+        }
+      ],
+      "generated": [],
+      "runId": "2026-09-06T20-08-26-551Z-hnrg",
+      "outputs": {
+        "memory": "Option B is non-compliant. It removes zero quantities, violating the hard requirement that zeros must be retained; its 10 ms runtime cannot offset that breach. Only zero-retaining options qualify — Option A (30 ms) satisfies the requirement. Recommendation: reject Option B and select Option A.",
+        "speed": "**Recommendation: Option A.** It satisfies the hard requirement (zero quantities retained) at 30 ms. Option B (10 ms) is faster but removes zeros, violating the hard requirement, so it is excluded. The only trade-off is triple the runtime.",
+        "compare": "Both lanes agree: Option B (10 ms) removes zero quantities, violating the hard requirement, so its speed advantage is irrelevant. Both correctly prioritize compliance over performance. They differ only in framing: speed notes the triple-runtime trade-off (30 ms vs 10 ms); memory rejects B outright. No conflicts between reviews. Assumption: no unstated requirements apply. Recommendation: select Option A, the only feasible choice; it is compliant with zero retention at 30 ms, while Option B is excluded regardless of runtime.",
+        "combine": "**Merged review — Option A vs. Option B**\n\nBoth lanes agree on the decisive point: Option B (10 ms) removes zero quantities and therefore violates the hard requirement, so its speed advantage cannot rescue it. Both reviews correctly rank compliance above performance. Their only difference is framing — the speed lane records the 3× runtime cost of compliance (30 ms vs. 10 ms), while the memory lane rejects B outright without weighing runtime. This is a difference in emphasis, not a conflict; the merged view keeps both framings.\n\nNo gaps requiring a named fix task were found; the framing difference was reconciled inline.\n\n**Assumption (consequential):** No unstated requirements apply. If any hidden constraint exists (e.g., additional retention rules or a constraint Option A itself fails), this conclusion must be re-validated.\n\n**Recommendation:** Select Option A — the only feasible choice, compliant with zero retention at 30 ms; Option B is excluded regardless of runtime."
+      },
+      "nodeStatus": {
+        "audit-parallel-sequence": "done",
+        "options": "done",
+        "speed": "done",
+        "memory": "done",
+        "compare": "done",
+        "combine": "done"
+      },
+      "backlog": [],
+      "quality": "pass",
+      "durationMs": 100479
+    },
+    {
+      "id": "repeat",
+      "workspace": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-block-audit-second-controls-fN45Jw\\repeat",
+      "status": "done",
+      "calls": [
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 5923,
+          "usage": {
+            "prompt_tokens": 1804,
+            "completion_tokens": 43,
+            "total_tokens": 1847,
+            "cost": 0.00014605,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.00014605,
+              "upstream_inference_prompt_cost": 0.0001353,
+              "upstream_inference_completions_cost": 0.00001075
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 40,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        },
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 4915,
+          "usage": {
+            "prompt_tokens": 1818,
+            "completion_tokens": 36,
+            "total_tokens": 1854,
+            "cost": 0.00014535,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.00014535,
+              "upstream_inference_prompt_cost": 0.00013635,
+              "upstream_inference_completions_cost": 0.000009
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 33,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        },
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 6048,
+          "usage": {
+            "prompt_tokens": 1818,
+            "completion_tokens": 62,
+            "total_tokens": 1880,
+            "cost": 0.00015185,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.00015185,
+              "upstream_inference_prompt_cost": 0.00013635,
+              "upstream_inference_completions_cost": 0.0000155
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 59,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        }
+      ],
+      "questions": [],
+      "tools": [],
+      "warnings": [],
+      "blockOutputs": [
+        {
+          "blockId": "increment",
+          "executionId": "/repeat-counter[0]/increment",
+          "status": "done",
+          "structured": {
+            "analysis": "11"
+          }
+        },
+        {
+          "blockId": "increment",
+          "executionId": "/repeat-counter[1]/increment",
+          "status": "done",
+          "structured": {
+            "analysis": "12"
+          }
+        },
+        {
+          "blockId": "increment",
+          "executionId": "/repeat-counter[2]/increment",
+          "status": "done",
+          "structured": {
+            "analysis": "13"
+          }
+        }
+      ],
+      "generated": [],
+      "runId": "2026-09-06T20-10-06-857Z-tvdm",
+      "outputs": {
+        "increment": "13"
+      },
+      "nodeStatus": {
+        "audit-repeat": "done",
+        "repeat-counter": "done",
+        "increment": "done"
+      },
+      "backlog": [],
+      "quality": "pass",
+      "durationMs": 17274
+    },
+    {
+      "id": "until",
+      "workspace": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-block-audit-second-controls-fN45Jw\\until",
+      "status": "done",
+      "calls": [
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 5459,
+          "usage": {
+            "prompt_tokens": 1818,
+            "completion_tokens": 53,
+            "total_tokens": 1871,
+            "cost": 0.00004208,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 1792,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.00004208,
+              "upstream_inference_prompt_cost": 0.00002883,
+              "upstream_inference_completions_cost": 0.00001325
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 48,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        },
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 5188,
+          "usage": {
+            "prompt_tokens": 1818,
+            "completion_tokens": 51,
+            "total_tokens": 1869,
+            "cost": 0.00004158,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 1792,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.00004158,
+              "upstream_inference_prompt_cost": 0.00002883,
+              "upstream_inference_completions_cost": 0.00001275
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 46,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        }
+      ],
+      "questions": [],
+      "tools": [],
+      "warnings": [],
+      "blockOutputs": [
+        {
+          "blockId": "increment",
+          "executionId": "/converge[0]/increment",
+          "status": "done",
+          "structured": {
+            "analysis": "11"
+          }
+        },
+        {
+          "blockId": "increment",
+          "executionId": "/converge[1]/increment",
+          "status": "done",
+          "structured": {
+            "analysis": "12"
+          }
+        }
+      ],
+      "generated": [],
+      "runId": "2026-09-06T20-10-24-152Z-2jzj",
+      "outputs": {
+        "increment": "12"
+      },
+      "nodeStatus": {
+        "audit-until": "done",
+        "converge": "done",
+        "increment": "done"
+      },
+      "backlog": [],
+      "quality": "pass",
+      "durationMs": 11043
+    },
+    {
+      "id": "if",
+      "workspace": "C:\\Users\\Olav\\AppData\\Local\\Temp\\flyt-block-audit-second-controls-fN45Jw\\if",
+      "status": "done",
+      "calls": [
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 7034,
+          "usage": {
+            "prompt_tokens": 143,
+            "completion_tokens": 248,
+            "total_tokens": 391,
+            "cost": 0.000072725,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.000072725,
+              "upstream_inference_prompt_cost": 0.000010725,
+              "upstream_inference_completions_cost": 0.000062
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 168,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        },
+        {
+          "model": "z-ai/glm-5.3-flash",
+          "provider": "openrouter",
+          "durationMs": 13332,
+          "usage": {
+            "prompt_tokens": 1879,
+            "completion_tokens": 434,
+            "total_tokens": 2313,
+            "cost": 0.000141905,
+            "is_byok": false,
+            "prompt_tokens_details": {
+              "cached_tokens": 1792,
+              "cache_write_tokens": 0,
+              "audio_tokens": 0,
+              "video_tokens": 0
+            },
+            "cost_details": {
+              "upstream_inference_cost": 0.000141905,
+              "upstream_inference_prompt_cost": 0.000033405,
+              "upstream_inference_completions_cost": 0.0001085
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 430,
+              "image_tokens": 0,
+              "audio_tokens": 0
+            }
+          },
+          "finishReason": "stop"
+        }
+      ],
+      "questions": [],
+      "tools": [],
+      "warnings": [],
+      "blockOutputs": [
+        {
+          "blockId": "evaluation",
+          "executionId": "evaluation",
+          "status": "done",
+          "structured": {
+            "verdict": "retry",
+            "success": false,
+            "score": 0.5,
+            "explanation": "The requirement demands both ALPHA and BETA. The candidate satisfies the ALPHA condition, but the evidence explicitly confirms BETA is absent, so the full acceptance criterion is not met. Retry: add BETA to the candidate (e.g., 'ALPHA BETA') and resubmit."
+          }
+        },
+        {
+          "blockId": "revision",
+          "executionId": "revision",
+          "status": "done",
+          "structured": {
+            "analysis": "REVISE"
+          }
+        }
+      ],
+      "generated": [],
+      "runId": "2026-09-06T20-10-35-192Z-xolu",
+      "outputs": {
+        "evaluation": "{\"verdict\":\"retry\",\"success\":false,\"score\":0.5,\"explanation\":\"The requirement demands both ALPHA and BETA. The candidate satisfies the ALPHA condition, but the evidence explicitly confirms BETA is absent, so the full acceptance criterion is not met. Retry: add BETA to the candidate (e.g., 'ALPHA BETA') and resubmit.\"}",
+        "revision": "REVISE"
+      },
+      "nodeStatus": {
+        "audit-if": "done",
+        "evaluation": "done",
+        "branch": "done",
+        "revision": "done"
+      },
+      "backlog": [],
+      "quality": "pass",
+      "durationMs": 20744
+    }
+  ],
+  "inventory": [
+    {
+      "use": "flyt-blocks-core:combine",
+      "title": "Combine",
+      "outputs": [
+        {
+          "name": "combined",
+          "type": "string"
+        }
+      ],
+      "ceiling": []
+    },
+    {
+      "use": "flyt-blocks-core:general-analysis",
+      "title": "General analysis",
+      "outputs": [
+        {
+          "name": "analysis",
+          "type": "string"
+        }
+      ],
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "read_tool_result"
+      ]
+    },
+    {
+      "use": "flyt-blocks-core:plan-start",
+      "title": "Plan",
+      "outputs": [
+        {
+          "name": "tasks",
+          "type": "list"
+        }
+      ],
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "read_tool_result"
+      ]
+    },
+    {
+      "use": "flyt-blocks-core:research",
+      "title": "Research",
+      "ceiling": [
+        "web_search",
+        "web_fetch",
+        "scrape_page",
+        "extract_page",
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "read_tool_result"
+      ]
+    },
+    {
+      "use": "flyt-blocks-core:split",
+      "title": "Split",
+      "outputs": [
+        {
+          "name": "parts",
+          "type": "list"
+        }
+      ],
+      "ceiling": []
+    },
+    {
+      "use": "flyt-blocks-core:task-graph",
+      "title": "Plan & dispatch",
+      "outputs": [
+        {
+          "name": "tasks",
+          "type": "list"
+        },
+        {
+          "name": "results",
+          "type": "string"
+        }
+      ],
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "read_tool_result",
+        "list_tasks",
+        "read_task",
+        "why_blocked",
+        "read_run",
+        "create_file",
+        "write_file",
+        "edit_file",
+        "create_task",
+        "enqueue_task",
+        "write_task_md",
+        "update_task",
+        "ask_human",
+        "bash",
+        "run_gate"
+      ]
+    },
+    {
+      "use": "flyt-blocks-core:work",
+      "title": "Work",
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "read_tool_result",
+        "list_tasks",
+        "read_task",
+        "why_blocked",
+        "read_run",
+        "create_file",
+        "write_file",
+        "edit_file",
+        "create_task",
+        "enqueue_task",
+        "write_task_md",
+        "update_task",
+        "ask_human",
+        "bash",
+        "run_gate"
+      ]
+    },
+    {
+      "use": "flyt-blocks-inquiry:interrogate",
+      "title": "Interrogate",
+      "outputs": [
+        {
+          "name": "spec",
+          "type": "string"
+        }
+      ],
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "ask_human"
+      ]
+    },
+    {
+      "use": "flyt-blocks-inquiry:orient",
+      "title": "Orient",
+      "outputs": [
+        {
+          "name": "orientation",
+          "type": "string"
+        }
+      ],
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references",
+        "ask_human"
+      ]
+    },
+    {
+      "use": "flyt-blocks-judgement:compare",
+      "title": "Compare",
+      "outputs": [
+        {
+          "name": "comparison",
+          "type": "string"
+        }
+      ],
+      "ceiling": []
+    },
+    {
+      "use": "flyt-blocks-judgement:evaluation",
+      "title": "Evaluation",
+      "outputs": [
+        {
+          "name": "verdict",
+          "type": "string"
+        },
+        {
+          "name": "success",
+          "type": "boolean"
+        },
+        {
+          "name": "score",
+          "type": "number"
+        },
+        {
+          "name": "explanation",
+          "type": "string"
+        }
+      ],
+      "ceiling": []
+    },
+    {
+      "use": "flyt-blocks-judgement:human-checkpoint",
+      "title": "Human checkpoint",
+      "outputs": [
+        {
+          "name": "approved",
+          "type": "boolean"
+        }
+      ],
+      "ceiling": [
+        "ask_human"
+      ]
+    },
+    {
+      "use": "flyt-blocks-judgement:prompt-refiner",
+      "title": "Prompt refiner",
+      "outputs": [
+        {
+          "name": "brief",
+          "type": "string"
+        }
+      ],
+      "ceiling": [
+        "ask_human"
+      ]
+    },
+    {
+      "use": "flyt-blocks-loop:backlog-plan",
+      "title": "Backlog plan",
+      "outputs": [
+        {
+          "name": "tasks",
+          "type": "list"
+        }
+      ],
+      "ceiling": [
+        "read_file",
+        "glob",
+        "search_files",
+        "search_references"
+      ]
+    },
+    {
+      "use": "flyt-blocks-loop:loop-handoff",
+      "title": "Backlog handoff",
+      "outputs": [
+        {
+          "name": "queued",
+          "type": "list"
+        }
+      ],
+      "ceiling": [
+        "queue_backlog_tasks"
+      ]
+    }
+  ],
+  "completedAt": "2026-09-06T20:10:55.666Z"
+}

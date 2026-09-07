@@ -13,6 +13,7 @@ import readFile from './read_file.js';
 import bash from './bash.js';
 import createTask from './create_task.js';
 import enqueueTask from './enqueue_task.js';
+import queueBacklogTasks from './queue_backlog_tasks.js';
 import searchReferences from './search_references.js';
 import writeTaskMd from './write_task_md.js';
 import readToolResult from './read_tool_result.js';
@@ -35,7 +36,7 @@ import extractPage from './extract_page.js';
 import askHuman from './ask_human.js';
 
 export const BUILTIN_MODULES = [
-  readFile, glob, searchFiles, createFile, writeFile, editFile, bash, createTask, enqueueTask,
+  readFile, glob, searchFiles, createFile, writeFile, editFile, bash, createTask, enqueueTask, queueBacklogTasks,
   searchReferences, writeTaskMd, readToolResult,
   runGate, listTasks, readTask, whyBlocked, updateTask, readRun, webFetch, webSearch, scrapePage, extractPage, askHuman
 ];

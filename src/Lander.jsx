@@ -484,7 +484,7 @@ export default function Lander({
                 </div>
               </>}
             </div>}
-            <div className="lander-preview-result"><span aria-hidden>→</span> {workflowOutcome(selectedFlow)}. Loop queue writes are unavailable in this mode.</div>
+            <div className="lander-preview-result"><span aria-hidden>→</span> {workflowOutcome(selectedFlow)}. {(selectedFlow?.steps ?? []).some(step => step.use === 'flyt-blocks-loop:loop-handoff') ? 'The handoff queues tasks without starting the Loop.' : 'Only an explicit Backlog handoff block can queue tasks during a workflow.'}</div>
           </section>
         ) : null}
 

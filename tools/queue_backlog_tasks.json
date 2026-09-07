@@ -1,0 +1,108 @@
+{
+  "id": "queue_backlog_tasks",
+  "title": "Hand off backlog tasks",
+  "description": "Queue the explicit task objects supplied to a Backlog handoff block. Returns durable task receipts; never starts execution. Replaying the same handoff does not create duplicates.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "write"
+  ],
+  "scope": "workspace",
+  "risk": "caution",
+  "autoExecute": false,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "tasks"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "tasks": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "title",
+            "goal"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "goal": {
+              "type": "string",
+              "minLength": 1
+            },
+            "doneWhen": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxItems": 64
+            },
+            "blastRadius": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxItems": 64
+            },
+            "dependsOn": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxItems": 64
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxItems": 64
+            },
+            "gates": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxItems": 64
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            },
+            "effort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            }
+          }
+        },
+        "maxItems": 32
+      }
+    }
+  },
+  "keywords": [],
+  "examples": [],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 24000,
+    "artifact": true
+  }
+}

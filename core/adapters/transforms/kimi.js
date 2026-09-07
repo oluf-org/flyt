@@ -1,5 +1,6 @@
 /** Kimi OpenAI-compatible fields, isolated because endpoint support differs. */
 export function applyKimiRequest(body, { responseFormat, toolChoice } = {}) {
+  if (responseFormat?.type === 'json_object') body.response_format = { type: 'json_object' };
   if (responseFormat?.schema) body.response_format = {
     type: 'json_schema',
     json_schema: { name: responseFormat.name, schema: responseFormat.schema, strict: responseFormat.strict !== false },

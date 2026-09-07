@@ -1,0 +1,75 @@
+TAP version 13
+# Subtest: quoted A plus B is rejected atomically, including no-op parent replacement
+ok 1 - quoted A plus B is rejected atomically, including no-op parent replacement
+  ---
+  duration_ms: 162.396
+  ...
+# Subtest: exact range preserves every surrounding character and stale quotes fail closed
+ok 2 - exact range preserves every surrounding character and stale quotes fail closed
+  ---
+  duration_ms: 55.8692
+  ...
+# Subtest: locks reject whole-source, inherited binding and structural bypasses
+ok 3 - locks reject whole-source, inherited binding and structural bypasses
+  ---
+  duration_ms: 39.2893
+  ...
+# Subtest: acceptance is atomic, idempotent, persistent and stale approvals fail
+ok 4 - acceptance is atomic, idempotent, persistent and stale approvals fail
+  ---
+  duration_ms: 74.1168
+  ...
+# Subtest: policy changes and expired grants invalidate proposals
+ok 5 - policy changes and expired grants invalidate proposals
+  ---
+  duration_ms: 32.1121
+  ...
+# Subtest: parallel human writes compare the revision after acquiring the transaction
+ok 6 - parallel human writes compare the revision after acquiring the transaction
+  ---
+  duration_ms: 31.1421
+  ...
+# Subtest: authoring has no workspace side effects; submitted request survives UI saves
+ok 7 - authoring has no workspace side effects; submitted request survives UI saves
+  ---
+  duration_ms: 55.4988
+  ...
+# Subtest: publishing requires complete checks and resolved proposals, preserves pinned model
+ok 8 - publishing requires complete checks and resolved proposals, preserves pinned model
+  ---
+  duration_ms: 74.6075
+  ...
+# Subtest: circle keeps parallel groups collapsed and exact canonical order
+ok 9 - circle keeps parallel groups collapsed and exact canonical order
+  ---
+  duration_ms: 0.6402
+  ...
+# Subtest: invalid field types never become renderable proposals or human drafts
+ok 10 - invalid field types never become renderable proposals or human drafts
+  ---
+  duration_ms: 78.3477
+  ...
+# Subtest: duplicate request submission invokes the model once and cancellation is explicit
+ok 11 - duplicate request submission invokes the model once and cancellation is explicit
+  ---
+  duration_ms: 67.082
+  ...
+# Subtest: rejected proposals preserve baseline and no-op proposals create no badges
+ok 12 - rejected proposals preserve baseline and no-op proposals create no badges
+  ---
+  duration_ms: 58.1438
+  ...
+# Subtest: project identities containing punctuation are safely scoped on disk
+ok 13 - project identities containing punctuation are safely scoped on disk
+  ---
+  duration_ms: 17.0659
+  ...
+1..13
+# tests 13
+# suites 0
+# pass 13
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 896.5495

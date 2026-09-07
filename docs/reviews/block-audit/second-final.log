@@ -1,0 +1,7 @@
+START second-final/general-analysis
+END general-analysis: done/pass, 2 calls, 25s
+START second-final/analysis-files
+END analysis-files: done/pass, 3 calls, 23s
+START second-final/foreach
+END foreach: done/pass, 3 calls, 41s
+Report: D:\electron\llm-flow\docs\reviews\block-audit\second-final-general-analysis-analysis-files-foreach.json

@@ -1,0 +1,657 @@
+{
+  "model": "z-ai/glm-5.3-flash",
+  "status": "complete",
+  "response": {
+    "type": "proposal",
+    "text": "Restructure the loop into a staged security audit: orient on the repo, dispatch parallel investigation tasks across attack surfaces, verify each candidate finding and write one severity-prefixed Markdown report per confirmed vulnerability, then produce the final envelope with an index summary. Grants file and shell tools needed for investigation and reproducible verification, sets a durable criteria check on the findings index, and tightens the objective/constraints for the audit. Nothing is executed now.",
+    "validation": {
+      "valid": true,
+      "readyToStart": false,
+      "readinessError": "Goal tools cannot enqueue work or read unrelated runs/references.",
+      "runtimeVerified": false,
+      "changes": [
+        {
+          "address": "goal/objective",
+          "kind": "changed"
+        },
+        {
+          "address": "goal/constraints",
+          "kind": "changed"
+        },
+        {
+          "address": "goal/criteria",
+          "kind": "changed"
+        },
+        {
+          "address": "goal/limits",
+          "kind": "changed"
+        },
+        {
+          "address": "goal/tools",
+          "kind": "changed"
+        },
+        {
+          "address": "recipe/goal-recipe/title",
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/goal-recipe/position",
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/improve/title",
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/improve/config/systemPrompt",
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/improve/config/instructions",
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/improve/outputs",
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/improve/position",
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/structure",
+          "kind": "changed"
+        },
+        {
+          "address": "recipe/security-audit/title",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/security-audit/position",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/title",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/config/effort",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/config/maxSteps",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/config/instructions",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/outputs",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/position",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/title",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/effort",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/parallelism",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/minTasks",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/maxTasks",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/maxParallel",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/workerMaxSteps",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/workerSystemPrompt",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/workerInstructions",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/systemPrompt",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/outputs",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/position",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/title",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/config/effort",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/config/maxSteps",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/config/effect",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/config/instructions",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/outputs",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/position",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/finalize/title",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/finalize/config/effort",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/finalize/config/instructions",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/finalize/outputs",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/finalize/position",
+          "kind": "added"
+        }
+      ]
+    }
+  },
+  "calls": 1,
+  "knownUsd": 0.00121225,
+  "unknownCostCalls": 0,
+  "attempts": [
+    {
+      "startedAt": 1788709308779,
+      "status": "complete",
+      "correction": false,
+      "model": "z-ai/glm-5.3-flash",
+      "promptChars": 29575,
+      "maxTokens": 12000,
+      "contentChars": 6360,
+      "reasoningChars": 1421,
+      "responseMode": "json_schema",
+      "capabilitySource": "OpenRouter public model catalogue",
+      "firstProgressAt": 1788709310139,
+      "provider": "openrouter",
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 6393,
+        "completion_tokens": 1637,
+        "total_tokens": 8030,
+        "cost": 0.00121225,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00121225,
+          "upstream_inference_prompt_cost": 0.0006393,
+          "upstream_inference_completions_cost": 0.00057295
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 297,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "httpStatus": 200,
+      "firstByteMs": 1224,
+      "firstReasoningMs": 1224,
+      "firstVisibleMs": 11747,
+      "ms": 79187,
+      "attemptMs": 79187,
+      "completedAt": 1788709388102,
+      "elapsedMs": 79323,
+      "completionProblem": null,
+      "rawResponse": "{\"type\":\"proposal\",\"text\":null,\"rationale\":\"Restructure the loop into a staged security audit: orient on the repo, dispatch parallel investigation tasks across attack surfaces, verify each candidate finding and write one severity-prefixed Markdown report per confirmed vulnerability, then produce the final envelope with an index summary. Grants file and shell tools needed for investigation and reproducible verification, sets a durable criteria check on the findings index, and tightens the objective/constraints for the audit. Nothing is executed now.\",\"operations\":[{\"op\":\"replace\",\"address\":\"goal/objective\",\"valueJson\":\"\\\"Perform a structured, step-by-step security review of the authorized locally cloned repository under repos/. Investigate the codebase systematically (reconnaissance, dependency review, authentication/authorization, input handling, injection surfaces, secrets, configuration). For each CONFIRMED vulnerability, write one Markdown report in the findings/ folder explaining the vulnerability and giving reproducible verification steps. Prefix each report filename with its severity: low-, medium-, or high-. Maintain findings/summary.md as an index of all confirmed findings. Do not exploit beyond what is needed to verify; no destructive actions.\\\"\"},{\"op\":\"replace\",\"address\":\"goal/constraints\",\"valueJson\":\"\\\"Authorization: the target is a locally cloned repository under repos/ explicitly authorized for review. Stay inside that directory; no network attacks, no exfiltration, no destructive or persistent changes to the repository. Only report findings you actually confirmed with evidence; speculative issues go nowhere or are explicitly marked unverified in prose, never as report files. Every report file must start its filename with low-, medium-, or high- and live in findings/. Each report must contain: title, severity, affected file(s) and line references, description, impact, and step-by-step reproducible verification instructions. Keep findings/summary.md updated as the index of confirmed findings.\\\"\"},{\"op\":\"replace\",\"address\":\"goal/criteria\",\"valueJson\":\"[{\\\"type\\\":\\\"file_contains\\\",\\\"path\\\":\\\"findings/summary.md\\\",\\\"value\\\":\\\"Severity\\\"},{\\\"type\\\":\\\"file_contains\\\",\\\"path\\\":\\\"findings/summary.md\\\",\\\"value\\\":\\\"Verification\\\"}]\"},{\"op\":\"replace\",\"address\":\"goal/tools\",\"valueJson\":\"[\\\"read_file\\\",\\\"glob\\\",\\\"search_files\\\",\\\"search_references\\\",\\\"read_tool_result\\\",\\\"create_file\\\",\\\"write_file\\\",\\\"edit_file\\\",\\\"bash\\\",\\\"run_gate\\\"]\"},{\"op\":\"replace\",\"address\":\"goal/limits\",\"valueJson\":\"{\\\"iterations\\\":10,\\\"calls\\\":150,\\\"minutes\\\":60,\\\"usd\\\":null}\"},{\"op\":\"replace\",\"address\":\"recipe\",\"valueJson\":\"\\\"version: 2\\\\nid: security-audit\\\\nname: Structured security audit\\\\nblocks:\\\\n  - id: orient\\\\n    use: flyt-blocks-inquiry:orient\\\\n    title: Survey the repository\\\\n    config:\\\\n      effort: medium\\\\n      maxSteps: 40\\\\n      instructions: \\\\\\\"Survey the authorized repository under repos/. Map its structure, languages, frameworks, dependencies, entry points, and trust boundaries. Produce a concise orientation: what the project is, its attack surface, and which areas deserve focused review. This is an authorized local security audit; do not modify the repository.\\\\\\\"\\\\n  - id: investigate\\\\n    use: flyt-blocks-core:task-graph\\\\n    title: Investigate attack surfaces\\\\n    config:\\\\n      effort: high\\\\n      parallelism: low\\\\n      minTasks: 3\\\\n      maxTasks: 10\\\\n      maxParallel: 3\\\\n      workerMaxSteps: 150\\\\n      workerSystemPrompt: \\\\\\\"You are a careful security reviewer working on an explicitly authorized local audit of a repository under repos/. Read code methodically, follow data flow from untrusted inputs to sinks, and check dependencies, auth logic, injection surfaces, secrets handling, and configuration. Record concrete evidence (file paths and line references) for every candidate finding. Do not modify the repository and do not write report files in this phase; return your candidate findings with evidence.\\\\\\\"\\\\n      workerInstructions: \\\\\\\"Investigate your assigned area of the repository. Return a list of candidate vulnerabilities, each with: title, suspected severity (low/medium/high), affected files and lines, description, impact, and the concrete evidence you observed. If nothing was found in your area, say so explicitly.\\\\\\\"\\\\n      systemPrompt: \\\\\\\"Plan investigation tasks that partition the repository's attack surface (e.g. input handling and injection, authentication/authorization, dependency and supply-chain review, secrets and configuration, logic and access-control flaws) so each is reviewed independently. Workers are read-only in this phase.\\\\\\\"\\\\n  - id: verify\\\\n    use: flyt-blocks-core:work\\\\n    title: Verify findings and write reports\\\\n    config:\\\\n      effort: high\\\\n      maxSteps: 120\\\\n      effect: workspace-change\\\\n      instructions: \\\\\\\"You are verifying candidate findings from an authorized local security audit of the repository under repos/. For each candidate: re-read the affected code, confirm or refute it with concrete evidence, and where safe write and run a minimal local reproduction (never destructive, no network attacks). For every CONFIRMED vulnerability, create one Markdown file in findings/ named '<severity>-<short-kebab-title>.md' (severity = low, medium, or high) containing: title, severity, affected file(s) with line references, description, impact, and numbered reproducible verification steps (including commands or code snippets where applicable). Then create or update findings/summary.md as an index listing every confirmed finding with its file, severity, one-line description, and a Verification column/section. Do not create report files for unconfirmed candidates.\\\\\\\"\\\\n  - id: finalize\\\\n    use: flyt-blocks-core:general-analysis\\\\n    title: Finalize result envelope\\\\n    config:\\\\n      effort: medium\\\\n      instructions: \\\\\\\"Read findings/summary.md and the report files. Return exactly ONE JSON object: {\\\\\\\"candidate\\\\\\\":{\\\\\\\"text\\\\\\\":\\\\\\\"...\\\\\\\"},\\\\\\\"findings\\\\\\\":[]}. candidate.text must be a complete audit summary: scope reviewed, confirmed findings with severities and report filenames, and the reproducible verification approach. List any areas covered with no findings. Do not invent findings not present in findings/.\\\\\\\"\\\\n\\\"\"}]  ,\"name\":null,\"arguments\":null}",
+      "rawResponseTruncated": false
+    }
+  ],
+  "toolCalls": [],
+  "proposals": [
+    {
+      "status": "pending",
+      "rationale": "Restructure the loop into a staged security audit: orient on the repo, dispatch parallel investigation tasks across attack surfaces, verify each candidate finding and write one severity-prefixed Markdown report per confirmed vulnerability, then produce the final envelope with an index summary. Grants file and shell tools needed for investigation and reproducible verification, sets a durable criteria check on the findings index, and tightens the objective/constraints for the audit. Nothing is executed now.",
+      "diff": [
+        {
+          "address": "goal/objective",
+          "before": "",
+          "after": "Perform a structured, step-by-step security review of the authorized locally cloned repository under repos/. Investigate the codebase systematically (reconnaissance, dependency review, authentication/authorization, input handling, injection surfaces, secrets, configuration). For each CONFIRMED vulnerability, write one Markdown report in the findings/ folder explaining the vulnerability and giving reproducible verification steps. Prefix each report filename with its severity: low-, medium-, or high-. Maintain findings/summary.md as an index of all confirmed findings. Do not exploit beyond what is needed to verify; no destructive actions.",
+          "kind": "changed"
+        },
+        {
+          "address": "goal/constraints",
+          "before": "",
+          "after": "Authorization: the target is a locally cloned repository under repos/ explicitly authorized for review. Stay inside that directory; no network attacks, no exfiltration, no destructive or persistent changes to the repository. Only report findings you actually confirmed with evidence; speculative issues go nowhere or are explicitly marked unverified in prose, never as report files. Every report file must start its filename with low-, medium-, or high- and live in findings/. Each report must contain: title, severity, affected file(s) and line references, description, impact, and step-by-step reproducible verification instructions. Keep findings/summary.md updated as the index of confirmed findings.",
+          "kind": "changed"
+        },
+        {
+          "address": "goal/criteria",
+          "before": [],
+          "after": [
+            {
+              "type": "file_contains",
+              "path": "findings/summary.md",
+              "value": "Severity"
+            },
+            {
+              "type": "file_contains",
+              "path": "findings/summary.md",
+              "value": "Verification"
+            }
+          ],
+          "kind": "changed"
+        },
+        {
+          "address": "goal/limits",
+          "before": {
+            "iterations": 10,
+            "calls": 100,
+            "minutes": 30,
+            "usd": null
+          },
+          "after": {
+            "iterations": 10,
+            "calls": 150,
+            "minutes": 60,
+            "usd": null
+          },
+          "kind": "changed"
+        },
+        {
+          "address": "goal/tools",
+          "before": [],
+          "after": [
+            "read_file",
+            "glob",
+            "search_files",
+            "search_references",
+            "read_tool_result",
+            "create_file",
+            "write_file",
+            "edit_file",
+            "bash",
+            "run_gate"
+          ],
+          "kind": "changed"
+        },
+        {
+          "address": "recipe/goal-recipe/title",
+          "before": "",
+          "after": null,
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/goal-recipe/position",
+          "before": {
+            "line": 0,
+            "path": "stack"
+          },
+          "after": null,
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/improve/title",
+          "before": "Build / improve candidate",
+          "after": null,
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/improve/config/systemPrompt",
+          "before": "You build the next candidate for a persistent Goal. Follow its fixed contract and CURRENT iteration number. Return exactly ONE JSON object with candidate.text and optional findings/proposal for this iteration only. Never emit multiple objects or simulate future iterations. Execute the requested task; do not summarize the Goal packet or continue the preceding prose.",
+          "after": null,
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/improve/config/instructions",
+          "before": "Work toward the fixed Goal criteria. Read the Goal memory and improve the best candidate. Return the JSON output contract from the Goal context, with candidate.text containing the complete result.",
+          "after": null,
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/improve/outputs",
+          "before": [],
+          "after": null,
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/improve/position",
+          "before": {
+            "line": 5,
+            "path": "blocks[0]"
+          },
+          "after": null,
+          "kind": "removed"
+        },
+        {
+          "address": "recipe/structure",
+          "before": {
+            "version": 2,
+            "id": "goal-recipe",
+            "name": "Improve a candidate",
+            "description": "",
+            "launchable": false,
+            "presets": {},
+            "nodes": [
+              {
+                "id": "goal-recipe",
+                "kind": "sequence",
+                "use": null,
+                "parent": null,
+                "branch": null,
+                "index": 0
+              },
+              {
+                "id": "improve",
+                "kind": "block",
+                "use": "flyt-blocks-core:general-analysis",
+                "parent": "goal-recipe",
+                "branch": "children",
+                "index": 0
+              }
+            ]
+          },
+          "after": {
+            "version": 2,
+            "id": "security-audit",
+            "name": "Structured security audit",
+            "description": "",
+            "launchable": false,
+            "presets": {},
+            "nodes": [
+              {
+                "id": "security-audit",
+                "kind": "sequence",
+                "use": null,
+                "parent": null,
+                "branch": null,
+                "index": 0
+              },
+              {
+                "id": "orient",
+                "kind": "block",
+                "use": "flyt-blocks-inquiry:orient",
+                "parent": "security-audit",
+                "branch": "children",
+                "index": 0
+              },
+              {
+                "id": "investigate",
+                "kind": "block",
+                "use": "flyt-blocks-core:task-graph",
+                "parent": "security-audit",
+                "branch": "children",
+                "index": 1
+              },
+              {
+                "id": "verify",
+                "kind": "block",
+                "use": "flyt-blocks-core:work",
+                "parent": "security-audit",
+                "branch": "children",
+                "index": 2
+              },
+              {
+                "id": "finalize",
+                "kind": "block",
+                "use": "flyt-blocks-core:general-analysis",
+                "parent": "security-audit",
+                "branch": "children",
+                "index": 3
+              }
+            ]
+          },
+          "kind": "changed"
+        },
+        {
+          "address": "recipe/security-audit/title",
+          "before": null,
+          "after": "",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/security-audit/position",
+          "before": null,
+          "after": {
+            "line": 0,
+            "path": "stack"
+          },
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/title",
+          "before": null,
+          "after": "Survey the repository",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/config/effort",
+          "before": null,
+          "after": "medium",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/config/maxSteps",
+          "before": null,
+          "after": 40,
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/config/instructions",
+          "before": null,
+          "after": "Survey the authorized repository under repos/. Map its structure, languages, frameworks, dependencies, entry points, and trust boundaries. Produce a concise orientation: what the project is, its attack surface, and which areas deserve focused review. This is an authorized local security audit; do not modify the repository.",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/outputs",
+          "before": null,
+          "after": [],
+          "kind": "added"
+        },
+        {
+          "address": "recipe/orient/position",
+          "before": null,
+          "after": {
+            "line": 5,
+            "path": "blocks[0]"
+          },
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/title",
+          "before": null,
+          "after": "Investigate attack surfaces",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/effort",
+          "before": null,
+          "after": "high",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/parallelism",
+          "before": null,
+          "after": "low",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/minTasks",
+          "before": null,
+          "after": 3,
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/maxTasks",
+          "before": null,
+          "after": 10,
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/maxParallel",
+          "before": null,
+          "after": 3,
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/workerMaxSteps",
+          "before": null,
+          "after": 150,
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/workerSystemPrompt",
+          "before": null,
+          "after": "You are a careful security reviewer working on an explicitly authorized local audit of a repository under repos/. Read code methodically, follow data flow from untrusted inputs to sinks, and check dependencies, auth logic, injection surfaces, secrets handling, and configuration. Record concrete evidence (file paths and line references) for every candidate finding. Do not modify the repository and do not write report files in this phase; return your candidate findings with evidence.",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/workerInstructions",
+          "before": null,
+          "after": "Investigate your assigned area of the repository. Return a list of candidate vulnerabilities, each with: title, suspected severity (low/medium/high), affected files and lines, description, impact, and the concrete evidence you observed. If nothing was found in your area, say so explicitly.",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/config/systemPrompt",
+          "before": null,
+          "after": "Plan investigation tasks that partition the repository's attack surface (e.g. input handling and injection, authentication/authorization, dependency and supply-chain review, secrets and configuration, logic and access-control flaws) so each is reviewed independently. Workers are read-only in this phase.",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/outputs",
+          "before": null,
+          "after": [],
+          "kind": "added"
+        },
+        {
+          "address": "recipe/investigate/position",
+          "before": null,
+          "after": {
+            "line": 12,
+            "path": "blocks[1]"
+          },
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/title",
+          "before": null,
+          "after": "Verify findings and write reports",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/config/effort",
+          "before": null,
+          "after": "high",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/config/maxSteps",
+          "before": null,
+          "after": 120,
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/config/effect",
+          "before": null,
+          "after": "workspace-change",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/config/instructions",
+          "before": null,
+          "after": "You are verifying candidate findings from an authorized local security audit of the repository under repos/. For each candidate: re-read the affected code, confirm or refute it with concrete evidence, and where safe write and run a minimal local reproduction (never destructive, no network attacks). For every CONFIRMED vulnerability, create one Markdown file in findings/ named '<severity>-<short-kebab-title>.md' (severity = low, medium, or high) containing: title, severity, affected file(s) with line references, description, impact, and numbered reproducible verification steps (including commands or code snippets where applicable). Then create or update findings/summary.md as an index listing every confirmed finding with its file, severity, one-line description, and a Verification column/section. Do not create report files for unconfirmed candidates.",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/outputs",
+          "before": null,
+          "after": [],
+          "kind": "added"
+        },
+        {
+          "address": "recipe/verify/position",
+          "before": null,
+          "after": {
+            "line": 25,
+            "path": "blocks[2]"
+          },
+          "kind": "added"
+        },
+        {
+          "address": "recipe/finalize/title",
+          "before": null,
+          "after": "Finalize result envelope",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/finalize/config/effort",
+          "before": null,
+          "after": "medium",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/finalize/config/instructions",
+          "before": null,
+          "after": "Read findings/summary.md and the report files. Return exactly ONE JSON object: {\"candidate\":{\"text\":\"...\"},\"findings\":[]}. candidate.text must be a complete audit summary: scope reviewed, confirmed findings with severities and report filenames, and the reproducible verification approach. List any areas covered with no findings. Do not invent findings not present in findings/.",
+          "kind": "added"
+        },
+        {
+          "address": "recipe/finalize/outputs",
+          "before": null,
+          "after": [],
+          "kind": "added"
+        },
+        {
+          "address": "recipe/finalize/position",
+          "before": null,
+          "after": {
+            "line": 33,
+            "path": "blocks[3]"
+          },
+          "kind": "added"
+        }
+      ]
+    }
+  ],
+  "goalId": null
+}

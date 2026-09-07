@@ -30,6 +30,14 @@ user-owned fields (`enabled`, `keywords`, `examples`). Editing it by hand to
 change a schema or an effect is a lie the registry will overwrite — change the
 module.
 
+`queue_backlog_tasks` is the deterministic Backlog handoff operation. It needs
+a bound project backlog and run/block identity, accepts up to 32 task objects,
+and validates the complete batch before writing. Dependencies must name existing
+backlog tasks. Identical replay returns the same durable receipts; storage
+failure returns partial receipts plus a refusal. It has workspace write effects
+and uses the ordinary approval/ceiling checks. Ordinary worker blocks do not
+receive this tool, and queuing does not start a supervisor.
+
 ## The module
 
 ```js

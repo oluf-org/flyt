@@ -1,0 +1,3 @@
+START second-input-only/foreach
+END foreach: done/pass, 3 calls, 138s
+Report: D:\electron\llm-flow\docs\reviews\block-audit\second-input-only-foreach.json

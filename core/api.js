@@ -34,6 +34,8 @@ import {
 } from './runProjection.js';
 import { RunController } from './runController.js';
 import { GoalController } from './goalController.js';
+import { GoalAuthoring } from './goalAuthoring.js';
+import { createAuthoringModelCaller } from './goalAuthoringModel.js';
 import { parentRunIdOf, repairInterruptedSessions } from '#kernel';
 import { StackStore } from './stackstore.js';
 import { summarizeWorkflowRun } from './conversationSupervisor.js';
@@ -506,6 +508,24 @@ export function createApi(engine) {
     if (!withKey) return target;
     const apiKey = runtimeConfig.providerKeys?.[target.provider] ?? null;
     return apiKey ? { ...target, apiKey } : target;
+  };
+
+  const callGoalAuthor = createAuthoringModelCaller();
+  const goalAuthoring = new GoalAuthoring({ root: path.join(engine.userDataDir, 'goal-authoring'), goals,
+    models: () => (engine.settings?.activeModels ?? []).filter(model => model.enabled !== false).map(model => ({ id: model.id, provider: model.source ?? 'auto' })),
+    call: async ({ worker, ...request }) => {
+      const target = resolveWorkerArg(worker, { withKey: true });
+      if (!target) throw new Error('Choose a connected authoring model');
+      if (SUBSCRIPTION_PROVIDERS.includes(target.provider)) throw new Error('Authoring requires a model API with no workspace execution tools');
+      return callGoalAuthor({ target, facts: runtimeConfig.modelFacts?.[target.model] ?? {}, ...request });
+    },
+  });
+  goals.resolveWorker = worker => resolveWorkerArg(worker);
+  goals.queueReview = (state, proposal) => goalAuthoring.queueRuntime(state, proposal);
+  goals.hasPendingReview = state => {
+    if (!state.contract.authoringId) return false;
+    const draft = goalAuthoring.read({ projectId: state.projectId, draftId: state.contract.authoringId });
+    return draft.approvedHash !== draft.hash || draft.proposals.some(item => item.status === 'pending') || draft.requests.some(item => item.status === 'working');
   };
 
   // --- the loop's status, on disk (DESIGN-SPEC.md §8) --------------------------
@@ -1021,6 +1041,21 @@ export function createApi(engine) {
 
     // Supervisor launch: a narrower profile, through the same controller.
     'goal:list': ({ projectId }) => goals.list(projectId),
+    'goal:author-open': args => goalAuthoring.open(args),
+    'goal:author-list': args => goalAuthoring.list(args),
+    'goal:library': () => goalAuthoring.library(),
+    'goal:reuse': args => goalAuthoring.reuse(args),
+    'goal:requirements': args => goalAuthoring.requirements(args),
+    'goal:author-delete': args => goalAuthoring.remove(args),
+    'goal:author-read': args => goalAuthoring.read(args),
+    'goal:author-edit': args => goalAuthoring.edit(args),
+    'goal:author-lock': args => goalAuthoring.setLock(args),
+    'goal:author-ui': args => goalAuthoring.ui(args),
+    'goal:author-message': args => goalAuthoring.author(args),
+    'goal:author-cancel': args => goalAuthoring.cancel(args),
+    'goal:author-review': args => goalAuthoring.review(args),
+    'goal:author-publish': args => goalAuthoring.publish(args),
+    'goal:review-result': args => goals.reviewResult(args),
     'goal:draft': args => goals.draft(args),
     'goal:get': ({ projectId, goalId }) => goals.get(projectId, goalId),
     'goal:create': args => goals.create(args),
@@ -1033,10 +1068,16 @@ export function createApi(engine) {
       const recipe = goals.inspect({ projectId, goalId, record: `recipe-${Number(revision)}` });
       return goals.editSource({ projectId, goalId, baseRevision, source: recipe.source, rationale: `Restore recipe ${revision}` });
     },
-    'goal:clone': ({ projectId, goalId }) => {
+    'goal:clone': async ({ projectId, goalId }) => {
       const state = goals.get(projectId, goalId);
-      return goals.create({ projectId, definition: { ...state.contract, ...state.definition, name: state.name,
+      const draft = await goalAuthoring.open({ projectId, definition: { ...state.contract, ...state.definition, name: state.name,
         recipe: goals.inspect({ projectId, goalId, record: `recipe-${state.pendingRevision ?? state.activeRevision}` }).source } });
+      if (state.contract.authoringId) {
+        const original = goalAuthoring.read({ projectId, draftId: state.contract.authoringId });
+        for (const address of original.locks) await goalAuthoring.setLock({ projectId, draftId: draft.id, baseRevision: draft.revision, address, locked: true });
+      }
+      const published = await goalAuthoring.publish({ projectId, draftId: draft.id, baseRevision: draft.revision });
+      return goals.get(projectId, published.goalId);
     },
 
     'stack:run': async ({
@@ -2350,6 +2391,7 @@ export function createApi(engine) {
    * request, including aborting active provider and CLI calls.
    */
   async function shutdown(reason = 'application closing') {
+    await goalAuthoring.shutdown();
     await goals.shutdown();
     for (const supervisor of supervisors.values()) {
       try { if (supervisor?.running) supervisor.stop(reason); } catch { /* continue with owned runs */ }

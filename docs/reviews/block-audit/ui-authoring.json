@@ -1,0 +1,216 @@
+{
+  "blocks": [
+    {
+      "id": "combine",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "combined",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "id": "general-analysis",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "analysis",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "id": "plan-start",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "tasks",
+          "type": "list"
+        }
+      ]
+    },
+    {
+      "id": "research",
+      "inserted": true,
+      "configured": true,
+      "outputs": []
+    },
+    {
+      "id": "split",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "parts",
+          "type": "list"
+        }
+      ]
+    },
+    {
+      "id": "task-graph",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "tasks",
+          "type": "list"
+        },
+        {
+          "name": "results",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "id": "work",
+      "inserted": true,
+      "configured": true,
+      "outputs": []
+    },
+    {
+      "id": "interrogate",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "spec",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "id": "orient",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "orientation",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "id": "compare",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "comparison",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "id": "evaluation",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "verdict",
+          "type": "string"
+        },
+        {
+          "name": "success",
+          "type": "boolean"
+        },
+        {
+          "name": "score",
+          "type": "number"
+        },
+        {
+          "name": "explanation",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "id": "human-checkpoint",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "approved",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "id": "prompt-refiner",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "brief",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "id": "backlog-plan",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "tasks",
+          "type": "list"
+        }
+      ]
+    },
+    {
+      "id": "loop-handoff",
+      "inserted": true,
+      "configured": true,
+      "outputs": [
+        {
+          "name": "queued",
+          "type": "list"
+        }
+      ]
+    }
+  ],
+  "controls": [
+    {
+      "kind": "sequence",
+      "child": "general-analysis-2",
+      "valid": true
+    },
+    {
+      "kind": "parallel",
+      "child": "general-analysis-3",
+      "valid": true
+    },
+    {
+      "kind": "repeat",
+      "child": "general-analysis-4",
+      "valid": true
+    },
+    {
+      "kind": "foreach",
+      "child": "general-analysis-5",
+      "valid": true
+    },
+    {
+      "kind": "until",
+      "child": "general-analysis-6",
+      "valid": true
+    },
+    {
+      "kind": "if",
+      "child": "general-analysis-7",
+      "valid": true
+    }
+  ],
+  "checks": [
+    "Use input only persists from the block configuration form",
+    "optional numeric and enum settings reset to defaults",
+    "until JSON survives partial typing; invalid save rejected; valid save persists",
+    "if JSON survives partial typing; invalid save rejected; valid save persists",
+    "new workflow appears selected in Work immediately after Build > Run"
+  ],
+  "errors": [],
+  "passed": true
+}
