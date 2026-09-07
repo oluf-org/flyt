@@ -101,6 +101,8 @@ export interface LlmAdaptersConfig {
   /** What the seam can reach, for `models()`. */
   models?: () => Promise<ModelInfo[]> | ModelInfo[];
   capability?: (model: string, provider: string) => Promise<ModelCapabilityProfile> | ModelCapabilityProfile;
+  maxMessageChars?: number;
+  checkpointInputTokens?: number;
 }
 
 /** Cordis plugin name. */
@@ -289,7 +291,9 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           attachments: request.attachments,
           requestedOutput: request.maxTokens,
           profile,
-          checkpointInputTokens: request.checkpointInputTokens,
+          checkpointInputTokens: Math.min(request.checkpointInputTokens ?? Infinity, config.checkpointInputTokens ?? Infinity),
+          maxMessageChars: config.maxMessageChars,
+          measureMessages: messages => JSON.stringify(messagesFor(request, messages)).length,
         });
         if (structured) budget.resolutions.push({
           field: 'structured_output', requested: 'json_schema',

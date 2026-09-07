@@ -212,6 +212,7 @@ export type ContextPolicyAction =
   | 'none'
   | 'prune_superseded_tool_previews'
   | 'retain_recent_turns'
+  | 'bound_tool_previews'
   | 'load_explicit_artifacts_by_handle'
   | 'durable_compaction_checkpoint';
 
@@ -326,6 +327,9 @@ export function manageContextBudget(input: {
   providerContextLimit?: number | null;
   providerOutputLimit?: number | null;
   checkpointInputTokens?: number | null;
+  /** Application request bound, measured after provider serialization. */
+  maxMessageChars?: number;
+  measureMessages?: (messages: Message[]) => number;
 }): ContextBudgetDecision {
   const tools = input.tools ?? [];
   const attachments = input.attachments ?? [];
@@ -361,7 +365,10 @@ export function manageContextBudget(input: {
     ? Math.floor(Number(input.checkpointInputTokens)) : null;
   const overCheckpoint = (): boolean => checkpointInput != null
     && current.total - current.reservedOutput - current.providerOverhead >= checkpointInput;
-  if (current.total > contextLimit || overCheckpoint()) {
+  const measureMessages = input.measureMessages ?? (messages => JSON.stringify(messages).length);
+  const overMessages = (value = messages): boolean => input.maxMessageChars != null
+    && measureMessages(value) > input.maxMessageChars;
+  if (current.total > contextLimit || overCheckpoint() || overMessages()) {
     const pruned = replaceToolPreviews(messages);
     messages = pruned.messages;
     if (pruned.changed) actions.push({
@@ -371,7 +378,7 @@ export function manageContextBudget(input: {
     current = breakdown(messages, tools, attachments, effectiveOutput, overhead);
   }
 
-  if (current.total > contextLimit || overCheckpoint()) {
+  if (current.total > contextLimit || overCheckpoint() || overMessages()) {
     const systems = messages.filter(message => message.role === 'system');
     const nonSystems = messages.filter(message => message.role !== 'system');
     const originalAssignment = nonSystems.find(message => message.role === 'user');
@@ -385,15 +392,21 @@ export function manageContextBudget(input: {
     let start = Math.max(0, nonSystems.length - 8);
     while (start < nonSystems.length && nonSystems[start].role !== 'user') start += 1;
     if (start >= nonSystems.length) start = Math.max(0, nonSystems.length - 2);
+    // A parallel tool batch is one exchange. Never retain its results without
+    // the assistant message that declared every tool_call_id.
+    while (start > 0 && nonSystems[start]?.role === 'tool') start -= 1;
     let kept = nonSystems.slice(start);
     while (kept.length > 2) {
       const retainedAssignment = assignmentAnchor && !kept.includes(originalAssignment!) ? [assignmentAnchor] : [];
       const candidate = breakdown([...systems, ...retainedAssignment, ...kept], tools, attachments, effectiveOutput, overhead);
       const candidateInput = candidate.total - candidate.reservedOutput - candidate.providerOverhead;
-      if (candidate.total <= contextLimit && (checkpointInput == null || candidateInput < checkpointInput)) break;
-      const nextTurn = kept.findIndex((message, index) => index > 0 && message.role === 'user');
+      if (candidate.total <= contextLimit && (checkpointInput == null || candidateInput < checkpointInput)
+        && !overMessages([...systems, ...retainedAssignment, ...kept])) break;
+      const nextUser = kept.findIndex((message, index) => index > 0 && message.role === 'user');
+      const nextTurn = nextUser > 0 ? nextUser : kept.findIndex((message, index) => index > 0 && message.role === 'assistant');
       kept = nextTurn > 0 ? kept.slice(nextTurn) : kept;
       if (nextTurn <= 0) break;
+      start += nextTurn;
     }
     const removed = nonSystems.length - kept.length;
     if (removed > 0) {
@@ -417,7 +430,7 @@ export function manageContextBudget(input: {
         `Completed findings: ${priorAssistant.length ? priorAssistant.map(message => message.content.slice(0, findingChars)).join(' | ') : 'See durable tool results and artifacts.'}`,
         ...(inspected.length ? [`Already inspected (compacted; do not repeat these calls, cite the findings above or read a narrower range): ${inspected.join(', ')}`] : []),
         `Remaining work: ${remaining.slice(0, 400)}`,
-        `Artifact handles: ${handles.length ? [...new Set(handles)].join(', ') : 'none'}.`,
+        `Artifact handles: ${handles.length ? [...new Set(handles)].slice(-24).join(', ') : 'none'}.`,
         'Do not replay completed work. Continue from this checkpoint; the immutable trace remains available for diagnostics.',
       ].join('\n');
       const retainedAssignment = assignmentAnchor && !kept.includes(originalAssignment!) ? [assignmentAnchor] : [];
@@ -432,6 +445,25 @@ export function manageContextBudget(input: {
       });
       current = breakdown(messages, tools, attachments, effectiveOutput, overhead);
     }
+  }
+
+  // A single large read (or parallel batch) can exceed an application's bound
+  // even after old exchanges were removed. Shorten only loadable tool previews;
+  // keep calls, instructions, and the immutable evidence intact.
+  if (overMessages()) {
+    let changed = 0;
+    const handles = new Set<string>();
+    for (let previewChars = 8_000; overMessages() && previewChars >= 250; previewChars = Math.floor(previewChars / 2)) {
+      messages = messages.map(message => {
+        if (message.role !== 'tool' || !message.handle || message.content.length <= previewChars) return message;
+        changed += 1; handles.add(message.handle);
+        return { ...message, content: `${message.content.slice(0, previewChars)}\n[Preview shortened by context policy. Retrieve a narrow range with read_tool_result using handle ${message.handle}; full evidence remains on disk.]` };
+      });
+    }
+    if (changed) actions.push({ action: 'bound_tool_previews', affectedMessages: handles.size, handles: [...handles],
+      reason: 'loadable tool previews were shortened to fit the application request bound' });
+    current = breakdown(messages, tools, attachments, effectiveOutput, overhead);
+    if (overMessages()) throw Object.assign(new Error(`Context cannot fit: instructions, assignment or the latest exchange exceed the ${input.maxMessageChars}-character application limit. Reduce fixed input or request smaller tool results.`), { code: 'context_budget_exhausted', requested, effective: current });
   }
 
   // Output is the final elastic component.  If fixed input itself is too big,

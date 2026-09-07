@@ -455,6 +455,11 @@ export function deriveMessages(events: readonly SessionEvent[], upTo?: number, b
         const name = String(data.name ?? pending?.name ?? '');
         if (name) message.name = name;
         if (data.handle) message.handle = String(data.handle);
+        else if (data.result !== undefined && data.blockId && id) {
+          // Older canonical runs retained the full result but omitted its
+          // retrieval handle. Recover it without rewriting the saved trace.
+          message.handle = `@call:${encodeURIComponent(String(data.blockId))}/${encodeURIComponent(id)}`;
+        }
         messages.push(message);
         break;
       }

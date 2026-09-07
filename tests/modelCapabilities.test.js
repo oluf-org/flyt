@@ -12,6 +12,33 @@ const assertFact = fact => {
   assert.ok(fact.source.length > 0);
 };
 
+test('application context limit compacts parallel tool batches without orphaned results', () => {
+  const messages = [{ role: 'system', content: 'Fixed audit constraints' }, { role: 'user', content: 'Audit the local app' }];
+  for (let round = 0; round < 12; round++) {
+    const calls = Array.from({ length: 6 }, (_, index) => ({ id: `read-${round}-${index}`, name: 'read_file', args: { path: `file-${round}-${index}` } }));
+    messages.push({ role: 'assistant', content: `Observed finding ${round}`, toolCalls: calls });
+    for (const call of calls) messages.push({ role: 'tool', name: call.name, toolCallId: call.id, handle: `@tool:${call.id}`, content: '\"\\\n'.repeat(6000) });
+  }
+  const before = structuredClone(messages);
+  const decision = manageContextBudget({ messages, profile: unknownCapability('large', 'test'), requestedOutput: 4096, maxMessageChars: 96000 });
+  assert(JSON.stringify(decision.messages).length <= 96000);
+  assert.deepEqual(messages, before, 'full evidence stays immutable');
+  assert(decision.actions.some(action => action.action === 'bound_tool_previews'));
+  const latest = decision.messages.find(message => message.toolCalls?.some(call => call.id === 'read-11-0'));
+  assert(latest, 'the latest assistant call batch survives');
+  for (const call of latest.toolCalls) assert(decision.messages.some(message => message.toolCallId === call.id));
+  for (const result of decision.messages.filter(message => message.role === 'tool')) {
+    assert(decision.messages.some(message => message.toolCalls?.some(call => call.id === result.toolCallId)));
+  }
+  assert.equal(decision.effectiveOutput, 4096);
+  assert.match(decision.checkpoint, /Observed finding/);
+});
+
+test('unshrinkable fixed instructions fail before dispatch with an actionable context error', () => {
+  assert.throws(() => manageContextBudget({ messages: [{ role: 'system', content: 'x'.repeat(100000) }],
+    profile: unknownCapability('large', 'test'), maxMessageChars: 96000 }), /instructions.*96000-character application limit/);
+});
+
 test('the registry has attributed facts for every capability category, including explicit unknowns', () => {
   for (const profile of [defaultModelCapabilityRegistry.get('gpt-5.6-sol', 'openai'), unknownCapability('mystery', 'relay')]) {
     assertFact(profile.provenance);

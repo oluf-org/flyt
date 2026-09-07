@@ -65,6 +65,112 @@ async function fixture(t, call) {
 }
 const finish = (invoke, goalId) => waitFor(async () => { const state = await invoke('get', { goalId }); return !state.live && state.status !== 'ready' ? state : null; });
 
+test('long file-reading Goals compact repeatedly, retain tool pairs and finish within the request bound', async t => {
+  const rounds = 14;
+  const f = await fixture(t, (request, count) => {
+    assert(JSON.stringify(request.messages).length <= 96000, 'every effective provider request fits');
+    for (const message of request.messages.filter(message => message.role === 'tool')) {
+      assert(request.messages.some(assistant => assistant.tool_calls?.some(call => call.id === message.tool_call_id)), 'no orphaned tool results');
+    }
+    if (count > rounds) return response('ALPHA BETA');
+    return { text: `Review progress ${count}`, finishReason: 'tool_calls', message: { tool_calls: Array.from({ length: 5 }, (_, index) => ({
+      id: `read-${count}-${index}`, function: { name: 'read_file', arguments: JSON.stringify({ path: `source-${(count - 1) * 5 + index}.txt` }) },
+    })) } };
+  });
+  for (let index = 0; index < rounds * 5; index++) fs.writeFileSync(path.join(f.workspace, `source-${index}.txt`), `Evidence ${index}\n${'audit evidence with quotes " and backslashes \\ \n'.repeat(1000)}`);
+  const state = await f.invoke('create', { definition: { ...f.definition, tools: ['read_file', 'read_tool_result'] } });
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'achieved', done.reason);
+  assert.equal(done.calls, rounds + 1);
+  const events = fs.readFileSync(path.join(f.engine.registry.get(f.projectId).store.rootDir, done.current.runId, 'session.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert(events.filter(event => event.type === 'context.checkpoint').length > 1, 'long runs checkpoint more than once');
+  assert(events.some(event => event.type === 'context.budget' && event.data.requested.total > event.data.effective.total));
+});
+
+test('transient provider errors recover automatically and every attempt consumes the shared allowance', async t => {
+  const f = await fixture(t, (_, count) => {
+    if (count === 1) throw Object.assign(new Error('Service unavailable'), { status: 503 });
+    return response('ALPHA BETA');
+  });
+  const state = await f.invoke('create', { definition: f.definition });
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'achieved', done.reason);
+  assert.equal(done.calls, 2);
+  assert.equal(done.unknownCostCalls, 1, 'unpriced failed attempts remain visible');
+});
+
+test('canonical result handles retrieve evidence after its preview was compacted', async t => {
+  const f = await fixture(t, (request, count) => {
+    if (count === 1) return { text: '', finishReason: 'tool_calls', message: { tool_calls: [{ id: 'source-read', function: { name: 'read_file', arguments: '{"path":"evidence.txt"}' } }] } };
+    if (count === 2) {
+      const result = request.messages.find(message => message.role === 'tool');
+      assert.match(result.content, /@call:improve\/source-read/);
+      return { text: '', finishReason: 'tool_calls', message: { tool_calls: [{ id: 'retrieve', function: { name: 'read_tool_result', arguments: JSON.stringify({ handle: result.handle, jsonPath: '$.content', maxChars: 100000 }) } }] } };
+    }
+    assert.match(request.messages.filter(message => message.role === 'tool').at(-1).content, /VERIFIED_TAIL/);
+    return response('ALPHA BETA');
+  });
+  fs.writeFileSync(path.join(f.workspace, 'evidence.txt'), `${'source evidence\n'.repeat(2500)}VERIFIED_TAIL`);
+  const state = await f.invoke('create', { definition: { ...f.definition, tools: ['read_file', 'read_tool_result'] } });
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'achieved', done.reason);
+});
+
+test('repaired audit recipe can write a summary with zero vulnerabilities and no shell tools', async t => {
+  const f = await fixture(t, (request, count) => {
+    const tools = request.tools.map(tool => tool.function.name);
+    assert(tools.includes('read_tool_result'), 'both readers and report writers can retrieve evidence');
+    assert(!tools.includes('bash') && !tools.includes('run_gate'), 'report creation does not grant code execution');
+    if (count === 1) { assert(!tools.includes('create_file')); return 'Repository overview'; }
+    if (count === 2) {
+      assert(tools.includes('create_file'));
+      return { text: '', finishReason: 'tool_calls', message: { tool_calls: [{ id: 'summary', function: { name: 'create_file', arguments: JSON.stringify({ path: 'security-findings/summary.md', content: '# Reviewed areas\nNo confirmed vulnerabilities in this test fixture.\n' }) } }] } };
+    }
+    return response('ALPHA BETA security-findings/summary.md');
+  });
+  const source = fs.readFileSync(path.join(projectRoot, 'docs/reviews/2026-09-07-security-review.stack.yaml'), 'utf8');
+  const state = await f.invoke('create', { definition: { ...f.definition, recipe: source,
+    tools: ['read_file', 'glob', 'search_files', 'read_tool_result', 'create_file', 'write_file', 'edit_file'],
+    criteria: [{ type: 'file_contains', path: 'security-findings/summary.md', value: 'Reviewed areas' }, { type: 'output_contains', value: 'security-findings/' }],
+  } });
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'achieved', done.reason);
+  assert.deepEqual(fs.readdirSync(path.join(f.workspace, 'security-findings')), ['summary.md']);
+});
+
+test('authentication failures are actionable and are never retried as transient outages', async t => {
+  const f = await fixture(t, () => { throw Object.assign(new Error('Unauthorized'), { status: 401 }); });
+  const state = await f.invoke('create', { definition: f.definition });
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'failed'); assert.match(done.reason, /Unauthorized/);
+  assert.equal(f.seen.length, 1);
+});
+
+test('automatic provider recovery cannot bypass a Goal call cap', async t => {
+  const f = await fixture(t, () => { throw Object.assign(new Error('Service unavailable'), { status: 503 }); });
+  const state = await f.invoke('create', { definition: { ...f.definition, limits: { calls: 1, minutes: 1, iterations: 5 } } });
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'limit_reached', done.reason);
+  assert.equal(done.calls, 1); assert.equal(f.seen.length, 1);
+});
+
+test('pausing during transient backoff prevents further provider calls', async t => {
+  const f = await fixture(t, () => { throw Object.assign(new Error('Service unavailable'), { status: 503, retryAfterMs: 30000 }); });
+  const state = await f.invoke('create', { definition: f.definition });
+  await f.invoke('start', { goalId: state.id });
+  await waitFor(() => f.seen.length === 1);
+  await f.invoke('control', { goalId: state.id, action: 'pause' });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'paused', done.reason);
+  assert.equal(f.seen.length, 1);
+});
+
 test('failed child retries its node with completed predecessors and Goal budget intact', async t => {
   let fail = true;
   const f = await fixture(t, (request, count) => {

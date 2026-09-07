@@ -430,9 +430,13 @@ export class GoalController {
     const pending = state.activeChild;
     if (pending.phase !== phase) throw new Error('Recovery phase does not match pending child');
     const guard = {
+      maxMessageChars: 96_000,
+      checkpointInputTokens: 16_000,
       beforeCall: async request => {
         this.check(record);
-        if (JSON.stringify(request.messages ?? []).length > 96000) throw new Error('Goal model request exceeds 96,000 characters; chunk the inputs or retrieve less history');
+        // The adapter compacts against this same bound before accounting and
+        // dispatch. This is an invariant check, not the context recovery path.
+        if (JSON.stringify(request.messages ?? []).length > guard.maxMessageChars) throw new Error('Goal context policy did not fit the model request');
         if (request.model !== state.contract.worker.model) throw new Error('A descendant cannot change the Goal model contract');
         state.calls++; state.unknownCostCalls++; this.save(state);
       },

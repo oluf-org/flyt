@@ -1,7 +1,7 @@
 {
   "id": "read_tool_result",
   "title": "Read an earlier tool result",
-  "description": "Read the full result of an earlier tool call by its handle (e.g. \"@tool:14\"), optionally narrowed to one part with a jsonPath like \"$.stdout\" or \"$.items[0].name\". Use this instead of repeating a call whose result was truncated.",
+  "description": "Read the full result of an earlier tool call by its handle (e.g. \"@call:review/read-1\" or legacy \"@tool:14\"), optionally narrowed to one part with a jsonPath like \"$.stdout\" or \"$.items[0].name\". Use this instead of repeating a call whose result was truncated.",
   "provider": "builtin",
   "enabled": true,
   "effects": [
@@ -25,7 +25,7 @@
     "properties": {
       "handle": {
         "type": "string",
-        "description": "The handle from a previous tool result, e.g. \"@tool:14\"."
+        "description": "The exact @call: or @tool: handle from a previous tool result."
       },
       "jsonPath": {
         "type": "string",

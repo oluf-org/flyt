@@ -1,0 +1,21 @@
+version: 2
+id: security-review
+name: "Structured security review"
+blocks:
+  - id: orient
+    use: flyt-blocks-inquiry:orient
+    title: "Survey the repository"
+    config:
+      effort: "medium"
+      maxSteps: 8
+      instructions: "Explore the project root (the repository this Goal runs in) to identify the project, languages, structure and entry points. Output an orientation: reviewed layout, chosen review order over the areas (dependencies, auth/session, input validation/injection, secrets, crypto, file/path handling, configuration, authorization), and how findings will be written to security-findings/."
+  - id: review
+    use: flyt-blocks-core:work
+    # Reports are artifacts; an audit may legitimately find no vulnerabilities.
+    title: "Investigate areas and write findings"
+    config:
+      effort: "high"
+      effect: "artifact"
+      maxSteps: 40
+      systemPrompt: "You are a security auditor working read-only. Never modify, build or execute project code. Only report vulnerabilities confirmed by code you actually read, with file paths. Write one Markdown file per vulnerability to security-findings/, named <severity>_<slug>.md with severity exactly low, medium or high. Each file must contain: title, severity with a one-line rationale, affected file paths, description of the vulnerability and its impact, and a numbered step-by-step guide to verify its existence."
+      instructions: "Work through the review areas one at a time, reading the actual code at the project root (the repository this Goal runs in). After each area, write finding files for confirmed vulnerabilities to security-findings/ and note findings in the Goal memory. Read prior run output before continuing so each iteration advances the review instead of repeating it. When all areas are done, write security-findings/summary.md listing the reviewed areas and every finding file, and return the Goal result envelope with candidate.text summarizing reviewed areas and findings."

@@ -2,19 +2,21 @@
 // all of it, or one narrowed slice — without re-running the call
 // (DESIGN-SPEC.md §5).
 //
-// Every call writes runs/<id>/tools/<seq>-<tool>.json and the model gets a
-// bounded preview plus a handle ("@tool:14"). This is how the handle is
+// Canonical calls retain results in session.jsonl (@call:<block>/<call>).
+// Legacy runs use tools/<seq>-<tool>.json (@tool:14). This is how a handle is
 // redeemed. Idempotent, free, read-effect: re-reading an artifact costs a disk
 // read, where re-running the call might cost a request, a rate limit, or a
 // side effect.
 import { previewResult, DEFAULT_MAX_PREVIEW_CHARS } from './preview.js';
+import path from 'node:path';
+import { readSessionLogFile } from '#kernel';
 
 const MAX_CHARS = 100_000;
 
 export default {
   name: 'read_tool_result',
   title: 'Read an earlier tool result',
-  description: 'Read the full result of an earlier tool call by its handle (e.g. "@tool:14"), optionally narrowed to one part with a jsonPath like "$.stdout" or "$.items[0].name". Use this instead of repeating a call whose result was truncated.',
+  description: 'Read the full result of an earlier tool call by its handle (e.g. "@call:review/read-1" or legacy "@tool:14"), optionally narrowed to one part with a jsonPath like "$.stdout" or "$.items[0].name". Use this instead of repeating a call whose result was truncated.',
   effects: ['read'],
   // The one tool that must not be previewed again on its way out.
   //
@@ -40,7 +42,7 @@ export default {
     required: ['handle'],
     additionalProperties: false,
     properties: {
-      handle: { type: 'string', description: 'The handle from a previous tool result, e.g. "@tool:14".' },
+      handle: { type: 'string', description: 'The exact @call: or @tool: handle from a previous tool result.' },
       jsonPath: { type: 'string', description: 'Optional path into the result, e.g. "$.stdout" or "$.items[0].name". Omit for the whole result.' },
       maxChars: { type: 'integer', minimum: 200, maximum: MAX_CHARS, description: `Optional cap on how much comes back (default ${MAX_CHARS / 10}).` }
     }
@@ -49,9 +51,18 @@ export default {
     if (!ctx?.store?.readToolResult || !ctx.runId) {
       throw new Error('read_tool_result is only available inside a run');
     }
-    const seq = parseHandle(args.handle);
-    if (seq == null) throw new Error(`"${args.handle}" is not a tool handle — expected something like "@tool:14".`);
-    const artifact = ctx.store.readToolResult(ctx.runId, seq);
+    const canonical = String(args.handle ?? '').match(/^@call:([^/]+)\/([^/]+)$/);
+    let artifact;
+    if (canonical) {
+      const blockId = decodeURIComponent(canonical[1]), callId = decodeURIComponent(canonical[2]);
+      const events = readSessionLogFile(path.join(ctx.store.runDir(ctx.runId), 'session.jsonl')).events;
+      const result = events.findLast(event => event.type === 'tool.result' && event.data.blockId === blockId && event.data.callId === callId)?.data;
+      if (result) artifact = { tool: result.name, ok: !result.error, error: result.error, result: result.result ?? result.content };
+    } else {
+      const seq = parseHandle(args.handle);
+      if (seq == null) throw new Error(`"${args.handle}" is not a tool handle — use the @call: or @tool: handle from an earlier result.`);
+      artifact = ctx.store.readToolResult(ctx.runId, seq);
+    }
     if (!artifact) throw new Error(`No tool result ${args.handle} in this run.`);
     if (artifact.ok === false) return { handle: args.handle, tool: artifact.tool, ok: false, error: artifact.error };
 

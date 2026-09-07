@@ -7,10 +7,12 @@
 // written in run.created before execution begins.
 import fs from 'node:fs';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { bootKernel } from './v2.js';
 import { StackStore } from './stackstore.js';
 import { Workspace } from './workspace.js';
-import { callModel } from './adapters/index.js';
+import { callModel, DEFAULT_RETRY } from './adapters/index.js';
+import { classifyAdapterError } from './adapters/failures.js';
 import { executeTool, getTools, refusedResult } from './tools/index.js';
 import { previewResult } from './tools/preview.js';
 import { loadSkills, skillsSection } from './skills.js';
@@ -196,26 +198,38 @@ export async function bootRunKernel({
     return profile;
   };
   const callThrough = async request => {
-    await goalGuard?.beforeCall(request);
-    try {
-      const result = await call({
-    ...(runtimeConfig.retry ? { retry: runtimeConfig.retry } : {}),
-    ...(runtimeConfig.timeout ? { timeout: runtimeConfig.timeout } : {}),
-    ...request,
-    // Goal accounting reserves each adapter invocation; do not hide retries
-    // inside that boundary. Any retry must be a new, charged invocation.
-    ...(goalGuard ? { retry: { attempts: 1 } } : {}),
-    // OpenRouter's Auto Router band is part of the worker selection, not the
-    // model id. Dropping it makes low/high/max all send the same request while
-    // the Supervisor and ledger claim they ran different rungs.
-    ...((workerByModel.get(request.model)?.routing
-      ?? (request.model === model ? worker?.routing : null)) ? {
-      routing: workerByModel.get(request.model)?.routing ?? worker.routing,
-    } : {}),
-      });
+    const policy = { ...DEFAULT_RETRY, ...runtimeConfig.retry, ...request.retry };
+    const attempts = goalGuard ? Math.max(1, Math.min(5, policy.attempts)) : 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      await goalGuard?.beforeCall(request);
+      let result;
+      try {
+        result = await call({
+          ...(runtimeConfig.retry ? { retry: runtimeConfig.retry } : {}),
+          ...(runtimeConfig.timeout ? { timeout: runtimeConfig.timeout } : {}),
+          ...request,
+          // Each Goal attempt must pass through accounting, including retries.
+          ...(goalGuard ? { retry: { attempts: 1 } } : {}),
+          // Auto Router bands belong to worker selection as well as model ID.
+          ...((workerByModel.get(request.model)?.routing
+            ?? (request.model === model ? worker?.routing : null)) ? {
+            routing: workerByModel.get(request.model)?.routing ?? worker.routing,
+          } : {}),
+        });
+      } catch (error) {
+        await goalGuard?.callFailed?.(error);
+        const failure = error.failure ?? classifyAdapterError(error, request);
+        if (!goalGuard || attempt + 1 >= attempts || request.signal?.aborted || !failure.retryable
+          || failure.userInitiated || failure.visibleOutputProduced || failure.toolCallProduced || failure.durableWriteProduced) throw error;
+        const delayMs = Math.round(Math.min(policy.maxMs, Math.max(policy.baseMs * 2 ** attempt, error.retryAfterMs ?? 0)));
+        request.onRetry?.({ attempt: attempt + 1, attempts, delayMs, failure, error: String(error.message).slice(0, 300) });
+        // Stop/pause cancels backoff without restarting any blocks.
+        await delay(delayMs, undefined, { signal: request.signal });
+        continue;
+      }
       await goalGuard?.afterCall(result);
       return result;
-    } catch (error) { await goalGuard?.callFailed?.(error); throw error; }
+    }
   };
 
   await booted.install([
@@ -238,7 +252,9 @@ export async function bootRunKernel({
         return allowed ? 'allowed-once' : 'rejected';
       } } : {}),
     } },
-    { id: 'llm-adapters', name: kernel.BUILTIN.adapters, config: { callModel: callThrough, resolve, capability } },
+    { id: 'llm-adapters', name: kernel.BUILTIN.adapters, config: { callModel: callThrough, resolve, capability,
+      ...(goalGuard ? { maxMessageChars: goalGuard.maxMessageChars, checkpointInputTokens: goalGuard.checkpointInputTokens } : {}),
+    } },
   ]);
   if (typeof onSessionEvent === 'function') {
     booted.ctx.on('session/append', (runId, event) => onSessionEvent(runId, event));
@@ -302,10 +318,11 @@ export async function bootRunKernel({
         // The structured preview stays what the model reads; the error flag is
         // what the loop's progress accounting reads.
         const refused = record.ok ? refusedResult(record.result) : null;
+        const handle = `@call:${encodeURIComponent(execution.blockId)}/${encodeURIComponent(execution.call.id)}`;
         return {
-          content: `${safeJson(preview.value)}${preview.truncated ? '\n[Preview truncated; the complete result is retained in the run trace.]' : ''}`,
+          content: `${safeJson(preview.value)}\n[Full result: ${handle}. Use read_tool_result to retrieve a bounded part${preview.truncated ? '; preview truncated' : ''}.]`,
           durableResult: complete,
-          ...(record.handle ? { handle: record.handle } : {}),
+          handle,
           ...(record.ok ? (refused ? { error: refused } : {}) : { error: record.error ?? 'tool failed' }),
         };
       },

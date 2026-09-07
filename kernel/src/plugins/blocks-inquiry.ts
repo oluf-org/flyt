@@ -21,7 +21,7 @@ export const name = 'flyt-blocks-inquiry';
 export const inject = ['blocks', 'sessions'];
 
 /** What an inquiry block may reach: read the project, nothing else. */
-const INQUIRY_CEILING = ['read_file', 'glob', 'search_files', 'search_references', 'ask_human'] as const;
+const INQUIRY_CEILING = ['read_file', 'glob', 'search_files', 'search_references', 'read_tool_result', 'ask_human'] as const;
 
 const inquire = (
   use: string, title: string, description: string, brief: string,
