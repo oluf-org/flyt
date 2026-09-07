@@ -79,7 +79,7 @@ test('shared library API starts a fresh destination run despite advisory missing
   const published = await invoke('author-publish', { draftId: next.id, baseRevision: 1 });
   await invoke('start', { goalId: published.goalId });
   const done = await finish(invoke, published.goalId);
-  assert.equal(done.status, 'achieved'); assert.equal(done.contract.folder, folder);
+  assert.equal(done.status, 'achieved'); assert.equal(done.contract.folder, fs.realpathSync(folder));
   assert.equal(done.iteration, 1); assert.equal(done.calls, 1);
   assert.equal((await f.invoke('list')).length, 0);
   assert.equal((await f.invoke('author-read', { draftId: source.id })).goalId, null);

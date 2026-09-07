@@ -47,7 +47,7 @@ test('persisted definitions can be reused after the source project closes withou
   assert.deepEqual(report.paths.map(item => item.status), ['missing', 'missing']);
   const next = await reopened.publish({ projectId: 'target', draftId: reused.id, baseRevision: reused.revision });
   const run = f.goals.get('target', next.goalId);
-  assert.equal(run.contract.folder, f.entries.get('target').folder);
+  assert.equal(run.contract.folder, fs.realpathSync(f.entries.get('target').folder));
   assert.equal(run.iteration, 0); assert.equal(run.calls, 0); assert.deepEqual(run.memory, []);
   const [directory, id] = loop.id.split(':');
   assert.equal(fs.readFileSync(path.join(f.author.root, directory, `${id}.json`), 'utf8'), originalBytes);
