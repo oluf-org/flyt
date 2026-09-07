@@ -273,7 +273,7 @@ export function runStage(trace) {
  * @param trace — the folded trace.
  * @returns per-block state with the live text folded in, plus the run's stage.
  */
-export function runView(trace) {
+export function runView(trace, snapshot = null) {
   const states = blockStates(trace);
   const metrics = blockMetrics(trace);
   const activity = blockActivity(trace);
@@ -308,6 +308,8 @@ export function runView(trace) {
   const active = Object.entries(blocks).filter(([, b]) => b.status === 'active').map(([id]) => id);
   return {
     blocks,
+    lifecycle: snapshot?.meta?.lifecycle ?? null,
+    actions: snapshot?.meta?.actions ?? null,
     // Plural on purpose: a parallel has several, and rendering "the" active
     // block would make lanes running together look like one running alone.
     active,

@@ -474,6 +474,7 @@ bindIpc('run:pause', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:restartBlock', (projectId, runId, blockId, guidance = '', worker = null) =>
   ({ projectId, runId, blockId, guidance, worker }));
 bindIpc('run:rename', (projectId, runId, name) => ({ projectId, runId, name }));
+bindIpc('run:retryCleanup', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:delete', (projectId, runId) => ({ projectId, runId }));
 bindIpc('compare:begin', projectId => ({ projectId }));
 bindIpc('compare:save', (projectId, record) => ({ projectId, record }));
@@ -483,6 +484,8 @@ bindIpc('compare:list', projectId => ({ projectId }));
 // a second implementation of the same panel.
 bindIpc('loop:start', (projectId, opts = {}) => ({ projectId, ...opts }));
 bindIpc('loop:stop', projectId => ({ projectId }));
+bindIpc('loop:pause', projectId => ({ projectId }));
+bindIpc('loop:resume', projectId => ({ projectId }));
 bindIpc('loop:status', projectId => ({ projectId }));
 bindIpc('loop:report', projectId => ({ projectId }));
 bindIpc('loop:log', projectId => ({ projectId }));

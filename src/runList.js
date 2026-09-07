@@ -100,6 +100,10 @@ const STAGE_LABEL = {
 // A user-stopped run (RUN-CONTROL 'cancelled') reads like an interruption, not
 // a failure — its finished work is kept, and it can be restarted or branched.
 export function runStatus(run) {
+  if (run?.lifecycle?.phase === 'settled') {
+    if (run.lifecycle.cleanup === 'failed') return { kind: 'failed', label: 'Cleanup needs attention' };
+    if (['pending', 'running'].includes(run.lifecycle.cleanup)) return { kind: 'paused', label: 'Finishing cleanup' };
+  }
   const stage = run?.stage;
   if (stage === 'cancelled') return { kind: 'interrupted', label: 'Stopped' };
   if (stage === 'stopped' || stage === 'interrupted') {

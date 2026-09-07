@@ -7,6 +7,8 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { acquireOwner, ownerAlive, readOwner, writeAtomic, bounded, abortable } from './executionOwnership.js';
+import { workflowActions } from './lifecycle.js';
 import {
   startStackRun, resumeStackRun, restartStackBlock,
   stopStackRun, pauseStackRun, continueStackRun,
@@ -59,7 +61,10 @@ export class RunController {
   #live = new Map();
   #hosts = new Map();
   #hostBoots = new Map();
-  #repaired = new Set();
+  #repairs = new Map();
+  #operations = new Map();
+  #closing = false;
+  #cleanupTimeoutMs;
 
   constructor({
     bootHost,
@@ -76,6 +81,7 @@ export class RunController {
     onActivity = null,
     now = () => Date.now(),
     hostname = () => os.hostname(),
+    cleanupTimeoutMs = 10000,
   } = {}) {
     if (typeof bootHost !== 'function') throw new Error('RunController needs bootHost');
     if (typeof runsRootForProject !== 'function') throw new Error('RunController needs runsRootForProject');
@@ -94,6 +100,7 @@ export class RunController {
     this.#onActivity = onActivity;
     this.#now = now;
     this.#hostname = hostname;
+    this.#cleanupTimeoutMs = cleanupTimeoutMs;
   }
 
   #hostKey(projectId, request) {
@@ -129,22 +136,74 @@ export class RunController {
     return JSON.stringify(stable(authority));
   }
 
-  async #repair(projectId) {
+  async reconcile(projectId, runId = null) {
     if (!this.#repairStored) return;
     const root = this.#runsRootForProject(projectId);
-    if (this.#repaired.has(root)) return;
-    this.#repaired.add(root);
-    try { await this.#repairStored(root); }
-    catch (error) { this.#repaired.delete(root); throw error; }
+    const key = `${root}\n${runId ?? '*'}`;
+    if (runId && this.#repairs.has(`${root}\n*`)) return this.#repairs.get(`${root}\n*`);
+    if (!this.#repairs.has(key)) {
+      const pending = runId ? [] : [...this.#repairs].filter(([at]) => at.startsWith(`${root}\n`)).map(([, promise]) => promise);
+      const promise = Promise.all(pending).then(() => this.#repairStored(root, {
+        ...(runId ? { runIds: [runId] } : {}),
+        claim: id => {
+          const file = this.#file(projectId, id, 'execution-owner.json');
+          if (!file) return () => {};
+          try { return acquireOwner(file).release; }
+          catch (error) { if (['run_already_live', 'EEXIST'].includes(error.code)) return null; throw error; }
+        },
+      }))
+        .finally(() => this.#repairs.delete(key));
+      this.#repairs.set(key, promise);
+    }
+    return this.#repairs.get(key);
   }
 
-  async #acquireHost(projectId, request) {
+  #file(projectId, runId, name) {
+    const store = this.#storeForProject(projectId);
+    return store.runDir ? path.join(store.runDir(runId), name) : null;
+  }
+
+  #launch(projectId, runId, action) {
+    const key = runKey(projectId, runId);
+    if (this.#closing) return Promise.reject(coded('The application is closing; no new execution can start.', 'run_closing'));
+    if (this.#operations.has(key) || this.#live.has(key)) return Promise.reject(coded(`Run "${runId}" is already owned; wait for execution and cleanup to finish.`, 'run_already_live'));
+    const op = { projectId, runId, abort: new AbortController(), requested: null, owner: null, task: null };
+    this.#operations.set(key, op);
+    op.task = Promise.resolve().then(async () => {
+      const file = this.#file(projectId, runId, 'execution-owner.json');
+      if (this.#leaseLive(projectId, runId)) throw coded('Run is owned by another live process.', 'run_already_live');
+      if (file) op.owner = acquireOwner(file);
+      return await action(op);
+    }).finally(async () => {
+      this.#operations.delete(key);
+      if (op.owner && !this.#live.has(key)) op.owner.release();
+      if (op.hostRecord) {
+        op.hostRecord.owners.delete(op);
+        await this.#disposeIfUnused(op.hostKey, op.hostRecord);
+      }
+      this.#onActivity?.(projectId);
+    });
+    return op.task;
+  }
+
+  #checkLaunch(op) {
+    if (this.#closing || op.abort.signal.aborted) throw coded('Execution cancelled before dispatch', 'run_cancelled');
+  }
+
+  async #acquireHost(projectId, request, op = null) {
     const hostKey = this.#hostKey(projectId, request);
     let record = this.#hosts.get(hostKey);
-    if (record) return { hostKey, record };
+    if (record) {
+      if (op) { this.#checkLaunch(op); record.owners.set(op, runKey(projectId, op.runId)); op.hostRecord = record; op.hostKey = hostKey; }
+      return { hostKey, record };
+    }
     let pending = this.#hostBoots.get(hostKey);
     if (!pending) {
       pending = Promise.resolve(this.#bootHost(projectId, request)).then(host => {
+        if (this.#closing) {
+          void bounded(Promise.resolve().then(() => host.dispose()), this.#cleanupTimeoutMs, 'Host cleanup').catch(() => {});
+          throw coded('The application closed during host startup', 'run_closing');
+        }
         const created = { host, runIds: new Set(), owners: new Map() };
         this.#hosts.set(hostKey, created);
         return created;
@@ -152,13 +211,17 @@ export class RunController {
       this.#hostBoots.set(hostKey, pending);
     }
     record = await pending;
+    if (op) {
+      if (op.abort.signal.aborted) { await this.#disposeIfUnused(hostKey, record); this.#checkLaunch(op); }
+      record.owners.set(op, runKey(projectId, op.runId)); op.hostRecord = record; op.hostKey = hostKey;
+    }
     return { hostKey, record };
   }
 
   async #disposeIfUnused(hostKey, record) {
     if (record.owners.size || this.#hosts.get(hostKey) !== record) return;
     this.#hosts.delete(hostKey);
-    try { await record.host.dispose(); } catch { /* a durable run outlives host cleanup */ }
+    try { await bounded(Promise.resolve().then(() => record.host.dispose()), this.#cleanupTimeoutMs, 'Host cleanup'); } catch { /* a durable run outlives host cleanup */ }
   }
 
   #beat(record) {
@@ -173,61 +236,116 @@ export class RunController {
     });
   }
 
-  #register(projectId, hostKey, hostRecord, run, afterSettled = null) {
+  #register(projectId, hostKey, hostRecord, run, afterSettled = null, op = null) {
     const key = runKey(projectId, run.runId);
     const watchToken = run;
     const record = {
       runId: run.runId, projectId, hostKey, host: hostRecord.host, run, watchToken,
       leaseTimer: null, settlement: null, startedAt: new Date(this.#now()).toISOString(),
+      phase: 'running', cleanup: 'pending', outcome: null, owner: op?.owner ?? null, hostRecord,
+      completedCleanup: new Set(), cleanupPending: null, afterSettled,
     };
     this.#live.set(key, record);
     hostRecord.runIds.add(key);
+    if (op) hostRecord.owners.delete(op);
     hostRecord.owners.set(watchToken, key);
     this.#beat(record);
     record.leaseTimer = setInterval(() => this.#beat(record), 5_000);
     record.leaseTimer.unref?.();
     this.#onActivity?.(projectId);
 
-    record.settlement = Promise.resolve(run.settled()).then(async outcome => {
-      const cleanup = async (phase, action) => {
-        try { await action?.(); }
-        catch (error) { await this.#onSettled?.({ phase, error, record }); }
-      };
-      // Tree quiescence comes first; temp capabilities and their directories
-      // are revoked only after no owned process can still be using them.  Each
-      // cleanup is isolated so one failure cannot suppress the remaining work
-      // or rewrite the run's semantic outcome.
-      await cleanup('subprocess cleanup', () => record.host.ctx.subprocess?.terminateOwner(record.runId, 'run settled'));
-      await cleanup('sandbox cleanup', () => record.host.ctx.sandbox?.disposeOwner(record.runId));
-      await cleanup('sandbox policy cleanup', () => record.host.ctx.sandboxPolicy?.disposeOwner?.(record.runId));
-      try { await afterSettled?.(outcome, record); }
-      catch (error) { await this.#onSettled?.({ phase: 'afterSettled', error, record }); }
-      try { await this.#snapshotLive(record.host.ctx, record.runId, record.host.kernelModule); }
-      catch (error) { await this.#onSettled?.({ phase: 'projection', error, record }); }
+    record.settlement = Promise.resolve().then(() => run.settled()).catch(error => ({ status: 'failed', error: String(error?.message ?? error) })).then(async outcome => {
+      record.outcome = outcome; record.phase = 'settled'; record.cleanup = 'running';
+      this.#publishLifecycle(record);
+      await this.#cleanup(record);
       return outcome;
-    }).finally(async () => {
-      clearInterval(record.leaseTimer);
-      const owns = this.#live.get(key)?.watchToken === watchToken;
-      if (owns) {
-        this.#storeForProject(projectId).clearLease(record.runId);
-        this.#live.delete(key);
-      }
-      hostRecord.owners.delete(watchToken);
-      if (![...hostRecord.owners.values()].includes(key)) hostRecord.runIds.delete(key);
-      await this.#disposeIfUnused(hostKey, hostRecord);
-      if (owns) this.#onActivity?.(projectId);
     });
     return record;
   }
 
-  async start(launch) {
-    await this.#repair(launch.projectId);
-    if (launch.runId && this.isLive(launch.projectId, launch.runId)) {
-      throw coded(`Run "${launch.runId}" is already live in this process.`, 'run_already_live');
+  #publishLifecycle(record) {
+    const file = this.#file(record.projectId, record.runId, 'lifecycle.json');
+    if (file) writeAtomic(file, { phase: record.phase, cleanup: record.cleanup, cleanupError: record.cleanupError ?? null, outcome: { status: record.outcome?.status, error: record.outcome?.error }, updatedAt: new Date().toISOString() });
+    this.#onActivity?.(record.projectId);
+  }
+
+  async #cleanup(record) {
+    if (record.cleanupTask) return record.cleanupTask;
+    record.cleanupTask = this.#doCleanup(record).finally(() => { record.cleanupTask = null; });
+    return record.cleanupTask;
+  }
+
+  async #doCleanup(record) {
+    record.cleanup = 'running'; record.cleanupError = null; this.#publishLifecycle(record);
+    const steps = [
+      ['subprocess cleanup', () => record.host.ctx.subprocess?.terminateOwner(record.runId, 'run settled')],
+      ['sandbox cleanup', () => record.host.ctx.sandbox?.disposeOwner(record.runId)],
+      ['sandbox policy cleanup', () => record.host.ctx.sandboxPolicy?.disposeOwner?.(record.runId)],
+      ['afterSettled', () => record.afterSettled?.(record.outcome, record)],
+      ['projection', () => this.#snapshotLive(record.host.ctx, record.runId, record.host.kernelModule)],
+      ['host cleanup', async () => {
+        const hostRecord = record.hostRecord;
+        if ([...hostRecord.owners.keys()].some(owner => owner !== record.watchToken)) {
+          hostRecord.owners.delete(record.watchToken);
+          hostRecord.runIds.delete(runKey(record.projectId, record.runId));
+          return;
+        }
+        if (this.#hosts.get(record.hostKey) === hostRecord) this.#hosts.delete(record.hostKey);
+        await hostRecord.host.dispose();
+      }],
+    ];
+    for (const [phase, action] of steps) {
+      if (record.completedCleanup.has(phase)) continue;
+      const pending = record.cleanupPending ?? { phase, promise: Promise.resolve().then(action) };
+      record.cleanupPending = pending;
+      try {
+        await bounded(pending.promise, this.#cleanupTimeoutMs, phase);
+        record.completedCleanup.add(phase); record.cleanupPending = null;
+      } catch (error) {
+        record.cleanup = 'failed'; record.cleanupError = `${phase}: ${error.message}`;
+        this.#publishLifecycle(record);
+        try { await bounded(Promise.resolve().then(() => this.#onSettled?.({ phase, error, record })), this.#cleanupTimeoutMs, 'Cleanup reporting'); } catch { /* the original error remains inspectable */ }
+        if (error.code === 'cleanup_timeout') {
+          // Reuse the original operation; never run a second cleanup over resources
+          // that the first one is still using. Late success resumes teardown.
+          pending.promise.then(() => {
+            if (record.cleanupPending !== pending) return;
+            record.completedCleanup.add(phase); record.cleanupPending = null;
+            setTimeout(() => { void this.#cleanup(record).catch(() => {}); }, 0);
+          }, () => { if (record.cleanupPending === pending) record.cleanupPending = null; });
+        } else record.cleanupPending = null;
+        return;
+      }
     }
+    record.cleanup = 'complete'; this.#publishLifecycle(record);
+    clearInterval(record.leaseTimer);
+    const key = runKey(record.projectId, record.runId);
+    this.#storeForProject(record.projectId).clearLease(record.runId);
+    this.#live.delete(key); record.owner?.release();
+    const hostRecord = this.#hosts.get(record.hostKey);
+    if (hostRecord) {
+      hostRecord.owners.delete(record.watchToken); hostRecord.runIds.delete(key);
+      await this.#disposeIfUnused(record.hostKey, hostRecord);
+    }
+    this.#onActivity?.(record.projectId);
+  }
+
+  async retryCleanup(projectId, runId) {
+    const record = this.get(projectId, runId);
+    if (!record || record.phase !== 'settled') return { ok: false, code: 'cleanup_unavailable', message: 'No settled run awaiting cleanup in this process.' };
+    await this.#cleanup(record);
+    return { ok: record.cleanup === 'complete', state: record.cleanup, message: record.cleanupError };
+  }
+
+  async start(launch) {
+    launch = { ...launch, runId: launch.runId ?? `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID().slice(0, 8)}` };
+    return this.#launch(launch.projectId, launch.runId, async op => {
+    await this.reconcile(launch.projectId);
+    this.#checkLaunch(op);
     const request = { ...launch.host, runsRoot: launch.host?.runsRoot ?? this.#runsRootForProject(launch.projectId) };
-    const { hostKey, record: hostRecord } = await this.#acquireHost(launch.projectId, request);
+    const { hostKey, record: hostRecord } = await abortable(this.#acquireHost(launch.projectId, request, op), op.abort.signal);
     try {
+      this.#checkLaunch(op);
       const { runId, run } = await this.#startRun({
         host: hostRecord.host,
         stackId: launch.stackId,
@@ -235,23 +353,26 @@ export class RunController {
         id: launch.runId ?? null,
         metadata: launch.metadata ?? null,
       });
-      this.#register(launch.projectId, hostKey, hostRecord, run, launch.afterSettled ?? null);
+      this.#register(launch.projectId, hostKey, hostRecord, run, launch.afterSettled ?? null, op);
+      if (this.#closing || op.abort.signal.aborted) await this.stop(launch.projectId, runId);
+      else if (op.requested === 'pause') await this.pause(launch.projectId, runId);
       return { runId, run };
     } catch (error) {
       await this.#disposeIfUnused(hostKey, hostRecord);
       throw error;
     }
+    });
   }
 
   #leaseLive(projectId, runId) {
-    const lease = this.#storeForProject(projectId).readLease(runId);
+    const lease = this.#storeForProject(projectId).readLease?.(runId);
     if (!lease || this.#now() - Number(lease.beatAt ?? 0) >= 60_000) return false;
     if (lease.host && lease.host !== this.#hostname()) return true;
     try { process.kill(Number(lease.pid), 0); return true; }
     catch (error) { return error?.code === 'EPERM'; }
   }
 
-  async #storedHost(projectId, runId, workerOverride = null, blockId = null, hostOverrides = null) {
+  async #storedHost(projectId, runId, workerOverride = null, blockId = null, hostOverrides = null, op = null) {
     const live = this.get(projectId, runId);
     if (live && !workerOverride) return { live, hostKey: live.hostKey, hostRecord: this.#hosts.get(live.hostKey) };
     if (live) throw coded(`Run "${runId}" is already live; stop it before changing its worker.`, 'run_already_live');
@@ -300,16 +421,19 @@ export class RunController {
       ceiling: meta.ceiling ?? null,
       ...(hostOverrides ?? {}),
     };
-    const acquired = await this.#acquireHost(projectId, host);
+    const acquired = await this.#acquireHost(projectId, host, op);
     return { hostKey: acquired.hostKey, hostRecord: acquired.record, meta, desktopBlockOverride };
   }
 
   async resume({ projectId, runId, workerOverride = null, blockId = null, hostOverrides = null }) {
-    await this.#repair(projectId);
     const existing = this.get(projectId, runId);
-    if (existing && !workerOverride) return { runId, run: existing.run, control: await this.continue(projectId, runId) };
-    const { hostKey, hostRecord, meta } = await this.#storedHost(projectId, runId, workerOverride, blockId, hostOverrides);
+    if (existing?.phase !== 'settled' && existing && !workerOverride) return { runId, run: existing.run, control: await this.continue(projectId, runId) };
+    return this.#launch(projectId, runId, async op => {
+    await this.reconcile(projectId, runId);
+    this.#checkLaunch(op);
+    const { hostKey, hostRecord, meta } = await abortable(this.#storedHost(projectId, runId, workerOverride, blockId, hostOverrides, op), op.abort.signal);
     try {
+      this.#checkLaunch(op);
       const { run } = await this.#resumeRun(hostRecord.host, runId);
       const previous = meta.sandbox ?? null;
       const current = hostRecord.host.metadata?.sandbox ?? null;
@@ -320,34 +444,46 @@ export class RunController {
           executionWorld: hostRecord.host.metadata?.executionWorld ?? meta.executionWorld ?? null,
         } });
       }
-      this.#register(projectId, hostKey, hostRecord, run);
+      this.#register(projectId, hostKey, hostRecord, run, null, op);
+      if (this.#closing || op.abort.signal.aborted) await this.stop(projectId, runId);
+      else if (op.requested === 'pause') await this.pause(projectId, runId);
       return { runId, run };
     } catch (error) {
       await this.#disposeIfUnused(hostKey, hostRecord);
       throw error;
     }
+    });
   }
 
-  async restartBlock({ projectId, runId, blockId, guidance = '', worker = null }) {
-    await this.#repair(projectId);
-    const { hostKey, hostRecord, desktopBlockOverride } = await this.#storedHost(projectId, runId, worker, blockId);
+  async restartBlock({ projectId, runId, blockId, guidance = '', worker = null, hostOverrides = null }) {
+    return this.#launch(projectId, runId, async op => {
+    await this.reconcile(projectId, runId);
+    this.#checkLaunch(op);
+    const { hostKey, hostRecord, desktopBlockOverride } = await abortable(this.#storedHost(projectId, runId, worker, blockId, hostOverrides, op), op.abort.signal);
     const reconfigured = worker?.model
       ? desktopBlockOverride
         ? { blockWorkers: hostRecord.host.metadata.blockWorkers, blockFallbacks: hostRecord.host.metadata.blockFallbacks }
         : { model: worker.model, provider: worker.provider ?? 'auto', routing: worker.routing ?? null }
       : null;
     try {
+      this.#checkLaunch(op);
       const { run } = await this.#restartBlock(hostRecord.host, runId, blockId, String(guidance ?? ''), reconfigured);
-      this.#register(projectId, hostKey, hostRecord, run);
+      this.#register(projectId, hostKey, hostRecord, run, null, op);
+      if (this.#closing || op.abort.signal.aborted) await this.stop(projectId, runId);
+      else if (op.requested === 'pause') await this.pause(projectId, runId);
       return { runId, run };
     } catch (error) {
       await this.#disposeIfUnused(hostKey, hostRecord);
       throw error;
     }
+    });
   }
 
   async stop(projectId, runId, reason = 'stopped by request') {
     const record = this.get(projectId, runId);
+    const pending = this.#operations.get(runKey(projectId, runId));
+    if (pending && !record) { pending.requested = 'stop'; pending.abort.abort(); return { ok: true, state: 'stopping' }; }
+    if (record?.phase === 'settled') return { ok: true, state: 'settled', cleanup: record.cleanup };
     if (!record) return { ok: false, code: 'run_not_live', error: 'not-live', message: `Run ${runId} is not live in this process.` };
     const result = await stopStackRun(record.host.ctx, runId, reason);
     return result.ok ? result : { ...result, code: 'run_control_failed' };
@@ -355,6 +491,8 @@ export class RunController {
 
   async pause(projectId, runId, reason = 'paused by request') {
     const record = this.get(projectId, runId);
+    const pending = this.#operations.get(runKey(projectId, runId));
+    if (pending && !record) { if (pending.requested !== 'stop') pending.requested = 'pause'; return { ok: true, state: pending.requested === 'stop' ? 'stopping' : 'pausing' }; }
     if (!record) return { ok: false, code: 'run_not_live', error: 'not-live', message: `Run ${runId} is not live in this process.` };
     const result = await pauseStackRun(record.host.ctx, runId, reason);
     return result.ok ? result : { ...result, code: 'run_control_failed' };
@@ -371,17 +509,37 @@ export class RunController {
 
   list(projectId = null) {
     return [...this.#live.values()]
-      .filter(record => projectId == null || record.projectId === projectId)
+      .filter(record => record.phase !== 'settled' && (projectId == null || record.projectId === projectId))
       .map(record => record.runId);
   }
 
-  isLive(projectId, runId) { return this.#live.has(runKey(projectId, runId)); }
+  isLive(projectId, runId) { return this.#operations.has(runKey(projectId, runId)) || Boolean(this.get(projectId, runId) && this.get(projectId, runId).phase !== 'settled'); }
+
+  lifecycle(projectId, runId) {
+    const record = this.get(projectId, runId);
+    const op = this.#operations.get(runKey(projectId, runId));
+    const saved = this.#file(projectId, runId, 'lifecycle.json');
+    const ownerFile = this.#file(projectId, runId, 'execution-owner.json');
+    const external = ownerFile && ownerAlive(readOwner(ownerFile)) || this.#leaseLive(projectId, runId);
+    return record ? { phase: record.phase, cleanup: record.cleanup, cleanupError: record.cleanupError, outcome: record.outcome, owner: 'local' }
+      : op ? { phase: 'starting', requested: op.requested, owner: 'local', cleanup: null }
+      : external ? { ...(saved ? readOwner(saved) : {}), owner: 'external' }
+      : saved ? { ...readOwner(saved), owner: 'none', cleanup: readOwner(saved)?.cleanup === 'complete' ? 'complete' : 'interrupted' } : null;
+  }
+
+  decorate(projectId, runId, snapshot) {
+    const lifecycle = this.lifecycle(projectId, runId);
+    return { ...snapshot, meta: { ...snapshot.meta, lifecycle, actions: workflowActions(snapshot.meta?.stage, lifecycle) } };
+  }
 
   async shutdown(reason = 'application closing') {
+    this.#closing = true;
+    const operations = [...this.#operations.values()];
+    operations.forEach(op => { op.requested = 'stop'; op.abort.abort(); });
     const records = [...this.#live.values()];
-    await Promise.allSettled(records.map(record => this.stop(record.projectId, record.runId, reason)));
-    await Promise.allSettled(records.map(record => record.settlement));
-    return { stopped: records.length };
+    await Promise.allSettled(records.map(record => bounded(this.stop(record.projectId, record.runId, reason), this.#cleanupTimeoutMs, 'Stop acknowledgement')));
+    await Promise.allSettled([...operations.map(op => bounded(op.task, this.#cleanupTimeoutMs, 'Startup cancellation')), ...records.map(record => bounded(record.settlement, this.#cleanupTimeoutMs * 2, 'Run shutdown'))]);
+    return { stopped: records.length, cancelledStarts: operations.length, pendingCleanup: [...this.#live.values()].map(record => record.runId) };
   }
 }
 

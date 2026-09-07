@@ -556,18 +556,33 @@ function defaultLeaseLive(lease: Record<string, any>): boolean {
 export async function repairInterruptedSessions(root: string, {
   reason = 'The process ended before the workflow settled.',
   isLeaseLive = defaultLeaseLive,
+  runIds,
+  claim,
 }: {
   reason?: string;
   isLeaseLive?: (lease: Record<string, any>, runId: string) => boolean | Promise<boolean>;
+  runIds?: readonly string[];
+  claim?: (runId: string) => (() => void) | null;
 } = {}): Promise<string[]> {
   const store = new JsonlSessionStore(root);
   const repaired: string[] = [];
   for (const runId of await store.list()) {
+    if (runIds && !runIds.includes(runId)) continue;
+    let owner: Record<string, any> | null = null;
+    try { owner = asRecord(JSON.parse(fs.readFileSync(path.join(root, runId, 'execution-owner.json'), 'utf8'))); } catch { /* no owner */ }
+    if (owner && await isLeaseLive(owner, runId)) continue;
     const leaseFile = path.join(root, runId, 'live.json');
     let lease: Record<string, any> | null = null;
     try { lease = asRecord(JSON.parse(fs.readFileSync(leaseFile, 'utf8'))); } catch { /* no lease */ }
     if (lease && await isLeaseLive(lease, runId)) continue;
-
+    // Completed history needs no temporary execution claim. Recheck inside
+    // the claim below before repairing an unfinished session.
+    const recorded = readSessionLogFile(path.join(root, runId, 'session.jsonl')).events;
+    const recordedStage = recorded.filter(event => event.type === 'run.stage').at(-1)?.data as Record<string, any> | undefined;
+    if (TERMINAL_STAGES.has(String(recordedStage?.stage ?? ''))) continue;
+    const release = claim?.(runId);
+    if (claim && !release) continue;
+    try {
     const session = await store.open(runId);
     const events = session.readSync();
     if (!events.some(event => event.type === 'run.created')) continue;
@@ -594,6 +609,7 @@ export async function repairInterruptedSessions(root: string, {
     materialise(path.join(root, runId), projectRun(session.readSync(), runId));
     try { fs.rmSync(leaseFile, { force: true }); } catch { /* already absent */ }
     repaired.push(runId);
+    } finally { release?.(); }
   }
   return repaired;
 }

@@ -582,6 +582,18 @@ export default function DailyRoot() {
         stopBusy={stopBusy}
         pauseBusy={pauseBusy}
         resumeBusy={resumeBusy}
+        onRetryCleanup={async () => {
+          const projectId = activeRef.current;
+          const runId = watchingRef.current?.runId;
+          if (!projectId || !runId || resumeBusy) return;
+          setResumeBusy(true); setError('');
+          try {
+            const result = await window.flyt.retryRunCleanup(projectId, runId);
+            if (result?.ok === false) throw new Error(result.message ?? 'Cleanup could not finish.');
+            await watchRun(projectId, runId); await refreshRuns(projectId);
+          } catch (err) { setError(cleanIpcError(err)); }
+          finally { setResumeBusy(false); }
+        }}
         onStopRun={async () => {
           const projectId = activeRef.current;
           const runId = watchingRef.current?.runId;

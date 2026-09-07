@@ -242,10 +242,16 @@ test('a loop running in another process is visible here — and a dead one is no
   // possibly a half-landed merge behind — the exact things the landing sequence
   // exists to avoid.
   fs.writeFileSync(file, JSON.stringify({ ...record, pid: process.pid, at: new Date().toISOString() }));
+  assert.equal((await api.invoke('loop:pause', { projectId })).requested, true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(workspace, '.flyt', 'loop-stop'), 'utf8')).action, 'pause');
+  assert.equal((await api.invoke('loop:resume', { projectId })).requested, true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(workspace, '.flyt', 'loop-stop'), 'utf8')).action, 'resume');
   const asked = await api.invoke('loop:stop', { projectId, reason: 'enough for today' });
   assert.equal(asked.requested, true);
   assert.equal(asked.stopped, false, 'asked, not done — the other process decides when');
   assert.equal(JSON.parse(fs.readFileSync(path.join(workspace, '.flyt', 'loop-stop'), 'utf8')).reason, 'enough for today');
+  await api.invoke('loop:pause', { projectId });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(workspace, '.flyt', 'loop-stop'), 'utf8')).action, 'stop', 'pause cannot overwrite stop');
 
   // ...and with nothing running there is nothing to ask.
   fs.rmSync(path.join(workspace, '.flyt', 'loop-stop'));

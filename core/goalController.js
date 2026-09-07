@@ -8,6 +8,8 @@ import Ajv from 'ajv';
 import { bootKernel } from './v2.js';
 import { serializeStack } from './stackstore.js';
 import { goalFolder, goalRequirements, validateRequiredPaths } from './goalRequirements.js';
+import { readSessionLogFile } from '#kernel';
+import { acquireOwner, ownerAlive, readOwner, writeAtomic, abortable, bounded as waitBounded } from './executionOwnership.js';
 
 const clone = value => structuredClone(value);
 const id = () => crypto.randomUUID();
@@ -77,15 +79,23 @@ function identity(folder) {
 export class GoalController {
   constructor({ runs, project, worker, sandbox = {}, emit = () => {} }) {
     this.runs = runs; this.project = project; this.worker = worker; this.sandbox = sandbox; this.emit = emit;
-    this.live = new Map(); this.registry = null;
+    this.live = new Map(); this.registry = null; this.closing = false;
   }
   root(projectId) { return path.join(this.project(projectId).store.rootDir, 'goals'); }
   file(projectId, goalId) { return path.join(this.root(projectId), safe(goalId), 'state.json'); }
   get(projectId, goalId) {
     const state = read(this.file(projectId, goalId));
     const live = this.live.get(goalId);
-    return { ...state, live: Boolean(live), recoverable: state.status === 'running' && !live,
-      elapsedMs: state.elapsedMs + (live ? Date.now() - live.began : 0) };
+    const owner = readOwner(this.recordPath(state, 'owner'));
+    const external = !live && ownerAlive(owner);
+    const interrupted = ['running', 'pausing', 'stopping', 'finishing'].includes(state.status) && !live && !external;
+    return { ...state, ...(interrupted ? {
+      status: state.controlIntent === 'limit' ? 'limit_reached' : state.controlIntent === 'stop' ? 'stopped' : state.controlIntent === 'pause' ? 'paused' : 'interrupted',
+      reason: state.controlIntent === 'limit' ? 'Goal budget reached' : 'Execution was interrupted. Resume to continue from saved progress, or stop this goal.',
+    } : {}), live: Boolean(live || external), ownership: live ? 'local' : external ? 'external' : 'none',
+      controlAvailable: !external || owner.controls === 1,
+      recoverable: interrupted && !['stop', 'limit'].includes(state.controlIntent),
+      elapsedMs: state.elapsedMs + (live ? Date.now() - live.began : external && state.activeSince ? Date.now() - state.activeSince : 0) };
   }
   list(projectId) {
     const root = this.root(projectId);
@@ -247,68 +257,113 @@ export class GoalController {
     return value;
   }
   acquire(state) {
-    const file = this.recordPath(state, 'owner');
-    if (fs.existsSync(file)) {
-      const previous = read(file);
-      let alive = true;
-      try { process.kill(previous.pid, 0); } catch (error) { alive = error.code === 'EPERM'; }
-      if (alive) throw new Error('Goal is owned by another active controller');
-      fs.unlinkSync(file);
-    }
-    fs.writeFileSync(file, JSON.stringify({ pid: process.pid }), { flag: 'wx' });
-    return () => fs.unlinkSync(file);
+    const owner = acquireOwner(this.recordPath(state, 'owner'));
+    return Object.assign(() => owner.release(), { token: owner.token });
   }
-  async start({ projectId, goalId }) {
+  async start({ projectId, goalId, retry = null }) {
+    if (this.closing) throw new Error('The application is closing; no Goal can start');
     projectId = this.project(projectId).id;
-    if (this.live.has(goalId)) return this.get(projectId, goalId);
+    if (this.live.has(goalId)) {
+      if (retry) throw new Error('Pause or stop the Goal before retrying a node');
+      return this.get(projectId, goalId);
+    }
     const state = read(this.file(projectId, goalId));
     if (state.pendingResult) throw new Error('Review the pending result before resuming');
     if (state.contract.reviewAi && this.hasPendingReview?.(state)) throw new Error('REVIEW_REQUIRED: Resolve and publish the draft before resuming');
-    if (state.controlIntent === 'stop' || state.controlIntent === 'limit') {
-      state.status = state.controlIntent === 'stop' ? 'stopped' : 'limit_reached';
+    if (state.controlIntent === 'limit') {
+      state.status = 'limit_reached';
       state.reason = `Recovered recorded ${state.controlIntent} request`; this.save(state);
     }
-    if (state.status === 'failed' && state.pendingRevision) {
+    if (retry && (state.activeChild?.runId !== retry.runId || !retry.blockId)) throw new Error('Only the pending Goal child can be retried');
+    if (retry && state.pendingRevision) throw new Error('Resume the Goal to apply the published repair before retrying a node');
+    if (terminal.has(state.status) && !['failed', 'stopped'].includes(state.status)) throw new Error('This Goal is terminal. Start a new instance from its saved definition.');
+    const release = this.acquire(state);
+    if ((state.status === 'failed' || state.failureReason) && (state.pendingRevision || !state.activeChild)) {
       state.repairs ??= [];
       state.repairs.push({ child: state.activeChild?.runId ?? (state.iterationIntent ? `goal-${state.id}-${state.iterationIntent.phase}` : null), reason: state.reason, revision: state.activeRevision, at: new Date().toISOString() });
       state.repairAttempt = (state.repairAttempt ?? 0) + 1;
       state.status = 'ready'; state.activeChild = null; state.iterationIntent = null;
     }
-    if (terminal.has(state.status)) throw new Error('This Goal is terminal. Start a new instance from its saved definition.');
-    const release = this.acquire(state);
-    if (state.activeSince) state.elapsedMs += Math.max(0, Date.now() - state.activeSince);
-    const record = { state, release, task: null, requested: null, began: Date.now(), timer: null };
+    if (retry) state.activeChild.retry = { blockId: String(retry.blockId), guidance: String(retry.guidance ?? '') };
+    state.failureReason = null;
+    // A closed application is not execution time. Count only activity recorded
+    // before interruption; retain all previously charged calls and spend.
+    if (state.activeSince) state.elapsedMs += Math.max(0, (state.elapsedCheckpointAt ?? Date.parse(state.updatedAt)) - state.activeSince) || 0;
+    const record = { state, release, task: null, requested: null, began: Date.now(), timer: null, abort: new AbortController() };
     this.live.set(goalId, record);
-    state.activeSince = record.began; state.status = 'running'; state.reason = 'Running'; this.save(state);
-    record.timer = setTimeout(() => { void this.control({ projectId, goalId, action: 'limit' }); }, Math.max(1, state.contract.limits.minutes * 60000 - state.elapsedMs));
-    record.task = this.drive(record).catch(error => {
-      state.status = record.requested === 'limit' || error.code === 'goal_limit' ? 'limit_reached' : record.requested === 'pause' ? 'paused' : record.requested === 'stop' ? 'stopped' : 'failed';
-      state.reason = String(error.message ?? error); this.save(state);
+    state.activeSince = record.began; state.elapsedCheckpointAt = record.began; state.status = 'running'; state.reason = 'Running'; this.save(state);
+    record.poll = setInterval(() => {
+      try {
+        if (Date.now() - state.elapsedCheckpointAt >= 5000) { state.elapsedCheckpointAt = Date.now(); this.save(state); }
+        const folder = path.dirname(this.file(projectId, goalId));
+        for (const name of fs.readdirSync(folder).filter(name => name.startsWith('control-') && name.endsWith('.json')).sort()) {
+          const file = path.join(folder, name), request = read(file); fs.unlinkSync(file);
+          if (request.owner === release.token) void this.control({ projectId, goalId, action: request.action }).catch(error => { state.reason = error.message; this.save(state); });
+        }
+      } catch (error) { state.reason = error.message; this.save(state); }
+    }, 250); record.poll.unref?.();
+    record.timer = setTimeout(() => {
+      void this.control({ projectId, goalId, action: 'limit' }).catch(error => {
+        state.reason = String(error.message ?? error); this.save(state);
+      });
+    }, Math.max(1, state.contract.limits.minutes * 60000 - state.elapsedMs));
+    record.task = this.drive(record).then(() => {
+      if (record.requested) this.check(record);
+    }).catch(error => {
+      state.status = record.requested === 'limit' || error.code === 'goal_limit' ? 'limit_reached' : record.requested === 'pause' ? 'paused' : record.requested === 'stop' ? 'stopped' : error.code === 'goal_cleanup_pending' ? 'cleanup_failed' : 'failed';
+      state.reason = String(error.message ?? error);
+      if (state.status === 'failed') state.failureReason = state.reason;
+      this.save(state);
     }).finally(() => {
-      clearTimeout(record.timer); state.elapsedMs += Date.now() - record.began; state.activeSince = null;
-      this.save(state); this.live.delete(goalId); release();
+      clearTimeout(record.timer); clearInterval(record.poll); state.elapsedMs += Date.now() - record.began; state.activeSince = null;
+      this.live.delete(goalId); release(); this.save(state);
     });
     return clone(state);
   }
   async control({ projectId, goalId, action }) {
     projectId = this.project(projectId).id;
+    if (!['pause', 'stop', 'limit'].includes(action)) throw new Error('Unknown goal control');
     const record = this.live.get(goalId);
     if (!record) {
       const state = read(this.file(projectId, goalId));
-      if (['ready', 'paused', 'running'].includes(state.status) && action === 'stop') { state.status = 'stopped'; state.reason = 'Stopped by user'; this.save(state); }
-      return state;
+      const owner = readOwner(this.recordPath(state, 'owner'));
+      if (ownerAlive(owner)) {
+        if (owner.controls !== 1) throw new Error('This Goal is running in an older controller; control it from that process');
+        writeAtomic(this.recordPath(state, `control-${Date.now()}-${id()}`), { owner: owner.token, action });
+        return { ...this.get(projectId, goalId), requested: action };
+      }
+      if (['ready', 'paused', 'running', 'pausing', 'stopping', 'interrupted', 'failed', 'stopped', 'finishing', 'cleanup_failed'].includes(state.status)) {
+        const release = this.acquire(state);
+        try {
+          if (state.status === 'failed') state.failureReason = state.reason;
+          if (state.activeSince) state.elapsedMs += Math.max(0, (state.elapsedCheckpointAt ?? Date.parse(state.updatedAt)) - state.activeSince) || 0;
+          state.activeSince = null; state.controlIntent = action;
+          state.status = action === 'stop' ? 'stopped' : action === 'pause' ? 'paused' : 'limit_reached';
+          state.reason = action === 'stop' ? 'Stopped by user' : action === 'pause' ? 'Paused by user' : 'Goal budget reached';
+          this.save(state);
+        } finally { release(); }
+      }
+      return this.get(projectId, goalId);
     }
-    if (!['pause', 'stop', 'limit'].includes(action)) throw new Error('Unknown goal control');
     if (record.state.projectId !== projectId) throw new Error('Goal belongs to another project');
+    // A later pause (including shutdown) must never undo an explicit stop.
+    if (record.requested === 'stop' || record.requested === 'limit') action = record.requested;
     record.requested = action;
+    record.abort.abort();
+    record.state.status = action === 'pause' ? 'pausing' : 'stopping';
+    record.state.reason = action === 'pause' ? 'Pausing execution' : 'Stopping execution';
     record.state.controlIntent = action; this.save(record.state);
-    if (record.state.activeChild) await this.runs.stop(projectId, record.state.activeChild.runId, `Goal ${action}`);
+    if (record.state.activeChild) {
+      const result = await this.runs.stop(projectId, record.state.activeChild.runId, `Goal ${action}`);
+      if (result?.ok === false && result.code !== 'run_not_live') throw new Error(result.message || 'Could not signal the child run; try Stop again');
+    }
     return clone(record.state);
   }
   async shutdown() {
+    this.closing = true;
     const records = [...this.live.values()];
-    await Promise.allSettled(records.map(record => this.control({ projectId: record.state.projectId, goalId: record.state.id, action: 'pause' })));
-    await Promise.allSettled(records.map(record => record.task));
+    await Promise.allSettled(records.map(record => waitBounded(this.control({ projectId: record.state.projectId, goalId: record.state.id, action: 'pause' }), 5000, 'Goal pause acknowledgement')));
+    await Promise.allSettled(records.map(record => waitBounded(record.task, 15000, 'Goal shutdown')));
   }
   reviewResult({ projectId, goalId, artifact, digest: expectedDigest, decision, feedback = '' }) {
     projectId = this.project(projectId).id;
@@ -357,7 +412,9 @@ export class GoalController {
   async child(record, phase, source, input, workspace = null) {
     const state = record.state;
     this.check(record);
-    const parsed = await this.validateSource(source, state.contract);
+    const validation = this.validateSource(source, state.contract);
+    const parsed = await (record.abort ? abortable(validation, record.abort.signal) : validation);
+    this.check(record);
     const candidateTest = phase.startsWith('candidate-');
     // Test workers see their input and inherited policy, never expected answers
     // or the optimizer's memory. This keeps evaluation separate from building.
@@ -404,18 +461,50 @@ export class GoalController {
     };
     const runDir = this.project(state.projectId).store.runDir(pending.runId);
     const exists = fs.existsSync(path.join(runDir, 'session.jsonl'));
+    const past = exists ? readSessionLogFile(path.join(runDir, 'session.jsonl')).events : [];
+    const lastStage = past.filter(event => event.type === 'run.stage').at(-1)?.data.stage;
+    const failedBlock = lastStage === 'failed' ? past.filter(event => event.type === 'run.error').at(-1)?.data.blockId : null;
+    const retry = pending.retry ?? (lastStage === 'failed' ? { blockId: failedBlock ?? parsed.root.id, guidance: '' } : null);
+    if (retry) {
+      const contains = node => node.id === retry.blockId || [...(node.children ?? []), ...(node.else ?? [])].some(contains);
+      if (!contains(parsed.root)) throw new Error(`Unknown retry node: ${retry.blockId}`);
+      const status = past.filter(event => event.type === 'block.status' && event.data.blockId === retry.blockId).at(-1)?.data.status;
+      if (status === 'done') throw new Error('Retry a failed or interrupted node; completed nodes are preserved');
+    }
+    this.check(record);
+    const existing = this.runs.get?.(state.projectId, pending.runId);
+    if (existing?.phase === 'settled') {
+      state.status = 'finishing'; state.reason = 'Finishing child cleanup'; this.save(state);
+      if (existing.cleanup === 'failed') {
+        const cleanup = this.runs.retryCleanup(state.projectId, pending.runId);
+        await (record.abort ? abortable(cleanup, record.abort.signal) : cleanup);
+      }
+      else await (record.abort ? abortable(existing.settlement, record.abort.signal) : existing.settlement);
+      if (existing.cleanup !== 'complete') throw Object.assign(new Error(existing.cleanupError || 'Child cleanup still owns resources; retry cleanup before continuing'), { code: 'goal_cleanup_pending' });
+      state.status = 'running';
+    }
     const launched = exists
-      ? await this.runs.resume({ projectId: state.projectId, runId: pending.runId, hostOverrides: host })
+      ? retry
+        ? await this.runs.restartBlock({ projectId: state.projectId, runId: pending.runId, ...retry, hostOverrides: host })
+        : await this.runs.resume({ projectId: state.projectId, runId: pending.runId, hostOverrides: host })
       : await this.runs.start({
         projectId: state.projectId, runId: pending.runId, stackId: parsed.id, input: pending.input, host,
         metadata: { goalId: state.id, parentGoalId: state.id, parentRunId: candidateTest ? `goal-${state.id}-${state.iterationIntent?.phase ?? `iteration-${state.iteration + 1}`}` : null,
           iteration: state.iteration + 1, recipeRevision: state.activeRevision, goalContext, ceiling: host.ceiling },
       });
+    delete pending.retry;
+    this.save(state);
     if (record.requested) await this.runs.stop(state.projectId, pending.runId, `Goal ${record.requested}`);
     const outcome = await launched.run.settled();
-    await this.runs.get(state.projectId, pending.runId)?.settlement;
+    const owned = this.runs.get(state.projectId, pending.runId);
+    if (owned) {
+      state.status = record.requested ? state.status : 'finishing'; state.reason = 'Finishing child cleanup'; this.save(state);
+      await (record.abort ? abortable(owned.settlement, record.abort.signal) : owned.settlement);
+      if (owned.cleanup && owned.cleanup !== 'complete') throw Object.assign(new Error(owned.cleanupError || 'Child cleanup has not completed'), { code: 'goal_cleanup_pending' });
+      if (!record.requested) { state.status = 'running'; state.reason = 'Running'; }
+    }
     if (record.requested) this.check(record);
-    const events = fs.readFileSync(path.join(runDir, 'session.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+    const events = readSessionLogFile(path.join(runDir, 'session.jsonl')).events;
     const output = events.filter(event => event.type === 'block.output' && !event.data.port).at(-1)?.data.content ?? '';
     if (outcome.status !== 'done') throw Object.assign(new Error(`Child ${phase} ${outcome.status}: ${outcome.error || 'interrupted'}`), { code: record.budgetHit ? 'goal_limit' : 'goal_child_failed' });
     const result = { runId: pending.runId, output: String(output) };

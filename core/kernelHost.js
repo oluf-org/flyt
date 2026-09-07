@@ -215,7 +215,7 @@ export async function bootRunKernel({
       });
       await goalGuard?.afterCall(result);
       return result;
-    } catch (error) { await goalGuard?.callFailed(error); throw error; }
+    } catch (error) { await goalGuard?.callFailed?.(error); throw error; }
   };
 
   await booted.install([
@@ -442,12 +442,21 @@ export async function restartStackBlock(host, id, blockId, guidance = '', reconf
   if (!host?.ctx?.agents) throw Object.assign(new Error('The kernel host is unavailable.'), { code: 'kernel_unavailable' });
   if (host.ctx.agents.get(id)) throw new Error(`Kernel run "${id}" is still live; stop it before restarting a block.`);
   const session = await host.ctx.sessions.open(id);
+  const events = [];
+  for await (const event of session.read()) events.push(event);
+  const root = events.find(event => event.type === 'stack.resolved')?.data?.stack;
+  const find = node => node && (node.id === blockId ? node : [...(node.children ?? []), ...(node.else ?? [])].map(find).find(Boolean));
+  const target = find(root);
+  if (root && !target) throw new Error(`Unknown retry node: ${blockId}`);
+  const reset = [];
+  const visit = node => { reset.push(node.id); [...(node.children ?? []), ...(node.else ?? [])].forEach(visit); };
+  if (target) visit(target); else reset.push(blockId);
   if (reconfigured) {
     await session.append({ type: 'run.reconfigured', data: reconfigured });
   }
-  await session.append({
+  for (const resetId of reset) await session.append({
     type: 'block.status',
-    data: { blockId, status: 'pending', reason: 'restarted by supervisor',
+    data: { blockId: resetId, status: 'pending', reason: 'restarted by supervisor',
       ...(String(guidance ?? '').trim() ? { guidance: String(guidance) } : {}) },
   });
   if (String(guidance ?? '').trim()) {

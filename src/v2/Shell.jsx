@@ -81,7 +81,7 @@ export default function Shell({
   onWorkflowReply = null, workflowReplyBusy = false, runs = [], onOpenRun = null,
   onNewChat = null, onOpenFlow = null, onOpenSettings = null,
   onRetryFailed = null, retryBusy = false, retryError = '', controlError = '', onRevealRunLog = null,
-  onRevealDiagnosticLog = null, onStopRun = null, stopBusy = false,
+  onRevealDiagnosticLog = null, onRetryCleanup = null, onStopRun = null, stopBusy = false,
   onPauseRun = null, pauseBusy = false, onResumeRun = null, resumeBusy = false,
   onDebugRun = null,
   projects = { tabs: [], active: null },
@@ -304,6 +304,7 @@ export default function Shell({
                   retryBusy={retryBusy}
                   retryError={retryError}
                   controlError={controlError}
+                  onRetryCleanup={onRetryCleanup}
                   onStopRun={onStopRun}
                   stopBusy={stopBusy}
                   onPauseRun={onPauseRun}

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createEngine } from '../core/engine.js';
 import { createApi } from '../core/api.js';
 import { registerProvider } from '../core/adapters/index.js';
-import { parseGoalReply } from '../core/goalController.js';
+import { GoalController, parseGoalReply } from '../core/goalController.js';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const recipe = `version: 2
@@ -64,6 +64,86 @@ async function fixture(t, call) {
   return { invoke, definition, seen, engine, api, workspace, root, projectId: project.id };
 }
 const finish = (invoke, goalId) => waitFor(async () => { const state = await invoke('get', { goalId }); return !state.live && state.status !== 'ready' ? state : null; });
+
+test('failed child retries its node with completed predecessors and Goal budget intact', async t => {
+  let fail = true;
+  const f = await fixture(t, (request, count) => {
+    if (count === 1) return 'Baseline';
+    if (fail) throw new Error('Provider unavailable');
+    return response('ALPHA BETA');
+  });
+  const state = await f.invoke('create', { definition: { ...f.definition, recipe: recipe + '  - id: finish\n    use: flyt-blocks-core:general-analysis\n    config: {}\n' } });
+  await f.invoke('start', { goalId: state.id });
+  const failed = await finish(f.invoke, state.id);
+  assert.equal(failed.status, 'failed'); assert(failed.activeChild);
+  assert.match(failed.reason, /Provider unavailable/);
+  const before = f.seen.length;
+  fail = false;
+  await f.api.invoke('run:restartBlock', { projectId: f.projectId, runId: failed.activeChild.runId, blockId: 'finish', guidance: 'Try again' });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'achieved', done.reason);
+  assert.equal(f.seen.length, before + 1, 'completed predecessor is not rerun');
+  assert(done.calls > failed.calls); assert.equal(done.iteration, 1);
+});
+
+test('resume retries a failed child automatically and still enforces the remaining call limit', async t => {
+  const f = await fixture(t, (_, count) => { if (count === 1) throw new Error('Temporary provider failure'); return response('ALPHA BETA'); });
+  const state = await f.invoke('create', { definition: { ...f.definition, limits: { iterations: 5, calls: 2, minutes: 1 } } });
+  await f.invoke('start', { goalId: state.id });
+  const failed = await finish(f.invoke, state.id);
+  assert.equal(failed.status, 'failed'); assert.equal(failed.calls, 1);
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'achieved', done.reason); assert.equal(done.calls, 2);
+
+  const capped = await f.invoke('create', { definition: { ...f.definition, limits: { iterations: 5, calls: 1, minutes: 1 } } });
+  // Reuse the persisted failed child state with its already-spent allowance.
+  const file = path.join(f.engine.registry.get(f.projectId).store.rootDir, 'goals', capped.id, 'state.json');
+  fs.writeFileSync(file, JSON.stringify({ ...capped, status: 'failed', calls: 1, reason: 'Earlier provider failure' }));
+  await f.invoke('start', { goalId: capped.id });
+  assert.equal((await finish(f.invoke, capped.id)).status, 'limit_reached');
+  assert.equal(f.seen.length, 2, 'retry never resets an exhausted call allowance');
+});
+
+test('malformed output can retry without editing the recipe', async t => {
+  const f = await fixture(t, (_, count) => count === 1 ? 'Malformed output' : response('ALPHA BETA'));
+  const state = await f.invoke('create', { definition: f.definition });
+  await f.invoke('start', { goalId: state.id });
+  assert.equal((await finish(f.invoke, state.id)).status, 'failed');
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'achieved', done.reason); assert.equal(done.calls, 2);
+});
+
+test('orphaned running Goals display interruption and accept pause and stop without charging downtime', async t => {
+  const f = await fixture(t, () => response('ALPHA BETA'));
+  const state = await f.invoke('create', { definition: f.definition });
+  const file = path.join(f.engine.registry.get(f.projectId).store.rootDir, 'goals', state.id, 'state.json');
+  const interrupted = { ...state, status: 'running', activeSince: Date.now() - 120000, updatedAt: new Date(Date.now() - 119000).toISOString() };
+  fs.writeFileSync(file, JSON.stringify(interrupted));
+  const stale = await f.invoke('get', { goalId: state.id });
+  assert.equal(stale.status, 'interrupted'); assert.equal(stale.live, false); assert.equal(stale.recoverable, true);
+  assert.equal((await f.invoke('control', { goalId: state.id, action: 'pause' })).status, 'paused');
+  const stopped = await f.invoke('control', { goalId: state.id, action: 'stop' });
+  assert.equal(stopped.status, 'stopped'); assert(stopped.elapsedMs < 2000);
+  await f.invoke('start', { goalId: state.id });
+  assert.equal((await finish(f.invoke, state.id)).status, 'achieved');
+});
+
+test('stop during asynchronous validation prevents child dispatch, and a later pause cannot undo stop', async t => {
+  const f = await fixture(t, () => response('ALPHA BETA'));
+  const state = await f.invoke('create', { definition: f.definition });
+  let release, entered;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const controller = new GoalController({ project: () => f.engine.registry.get(f.projectId), runs: { start: () => assert.fail('must not dispatch after stop') } });
+  controller.validateSource = async () => { entered(); await new Promise(resolve => { release = resolve; }); return { id: 'test' }; };
+  await controller.start({ projectId: f.projectId, goalId: state.id }); await waiting;
+  assert.equal((await controller.control({ projectId: f.projectId, goalId: state.id, action: 'pause' })).status, 'pausing');
+  assert.equal((await controller.control({ projectId: f.projectId, goalId: state.id, action: 'stop' })).status, 'stopping');
+  await controller.control({ projectId: f.projectId, goalId: state.id, action: 'pause' });
+  const task = controller.live.get(state.id).task; release(); await task;
+  assert.equal(controller.get(f.projectId, state.id).status, 'stopped');
+});
 
 test('shared library API starts a fresh destination run despite advisory missing project paths', async t => {
   const f = await fixture(t, () => response('ALPHA BETA'));
@@ -303,4 +383,23 @@ test('a proposal cannot change the fixed contract or bypass evaluation', async t
   const done = await finish(f.invoke, state.id);
   assert.equal(done.status, 'limit_reached'); assert.match(done.lastRevisionError, /Unsupported recipe command/);
   assert.equal(done.contract.criteria.length, 2); assert.equal(done.activeRevision, 1);
+});
+
+
+test('another controller observes the owner and can stop validation that never resolves', async t => {
+  const f = await fixture(t, () => response('ALPHA BETA'));
+  const state = await f.invoke('create', { definition: f.definition });
+  const owner = new GoalController({ project: () => f.engine.registry.get(f.projectId), runs: { start: () => assert.fail('cancelled validation must not dispatch') } });
+  owner.validateSource = () => new Promise(() => {});
+  await owner.start({ projectId: f.projectId, goalId: state.id });
+  const watcher = new GoalController({ project: () => f.engine.registry.get(f.projectId), runs: {} });
+  const shown = watcher.get(f.projectId, state.id);
+  assert.equal(shown.live, true); assert.equal(shown.status, 'running'); assert.equal(shown.ownership, 'external');
+  assert.equal(shown.controlAvailable, true); assert.equal(shown.recoverable, false);
+  await assert.rejects(watcher.start({ projectId: f.projectId, goalId: state.id }), /owned/);
+  assert.equal((await watcher.control({ projectId: f.projectId, goalId: state.id, action: 'stop' })).requested, 'stop');
+  await waitFor(() => !owner.live.has(state.id));
+  assert.equal(watcher.get(f.projectId, state.id).status, 'stopped');
+  assert.equal(f.seen.length, 0);
+  await owner.shutdown(); await watcher.shutdown();
 });

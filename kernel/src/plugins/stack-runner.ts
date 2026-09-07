@@ -94,6 +94,14 @@ class Run implements AgentRun {
   private pauseRequest = false;
   private pauseGate: Promise<void> | null = null;
   private releasePause: (() => void) | null = null;
+  private transitions: Promise<unknown> = Promise.resolve();
+  finished = false;
+
+  transition<T>(action: () => Promise<T>): Promise<T> {
+    const next = this.transitions.then(action);
+    this.transitions = next.catch(() => {});
+    return next;
+  }
 
   constructor(runId: string, walk: (run: Run) => Promise<RunOutcome>, readonly replay = new Map<string, BlockOutcome>()) {
     this.runId = runId;
@@ -116,6 +124,7 @@ class Run implements AgentRun {
   settled(): Promise<RunOutcome> { return this.settledPromise; }
 
   async stop(reason: string): Promise<void> {
+    if (this.finished) return;
     // Idempotent, and harmless after the fact: a caller that crashed halfway
     // through a shutdown has to be able to finish it, and a run that already
     // settled has nothing to stop.
@@ -142,26 +151,44 @@ class Run implements AgentRun {
 
   /** Cooperatively hold between durable block boundaries. */
   async waitIfPaused(session: SessionHandle): Promise<void> {
-    if (!this.pauseRequest || this.stopRequest) return;
-    const ownsGate = !this.pauseGate;
-    if (ownsGate) {
-      this.pauseGate = new Promise(resolve => { this.releasePause = resolve; });
-      await session.append({
-        type: 'run.stage',
-        data: { stage: 'paused', afterBlock: this.lastBlockId },
-      });
-    }
-    await this.pauseGate;
-    if (ownsGate) {
+    let gate: Promise<void> | null = null;
+    await this.transition(async () => {
+      if (!this.pauseRequest || this.stopRequest || this.finished) return;
+      if (!this.pauseGate) {
+        this.pauseGate = new Promise(resolve => { this.releasePause = resolve; });
+        await session.append({ type: 'run.stage', data: { stage: 'paused', afterBlock: this.lastBlockId } });
+      }
+      gate = this.pauseGate;
+    });
+    await gate;
+    if (gate && this.pauseGate === gate) {
       this.pauseGate = null;
       this.releasePause = null;
     }
+  }
+
+  complete(session: SessionHandle, error: string | null = null, blockId: string | null = null, blocksRan = 0): Promise<RunOutcome> {
+    return this.transition(async () => {
+      this.finished = true;
+      if (this.stopRequest) {
+        await session.append({ type: 'run.stage', data: { stage: 'stopped', reason: this.stopRequest, afterBlock: this.lastBlockId, blocksRan } });
+        return { status: 'stopped', reason: this.stopRequest };
+      }
+      if (error) {
+        await session.append({ type: 'run.error', data: { error, ...(blockId ? { blockId } : {}) } });
+        await session.append({ type: 'run.stage', data: { stage: 'failed' } });
+        return { status: 'failed', error };
+      }
+      await session.append({ type: 'run.stage', data: { stage: 'done' } });
+      return { status: 'done', messages: await session.deriveMessages() as Message[] };
+    });
   }
 }
 
 /** The scheduler. Provider of `ctx.agents`. */
 export class StackRunner extends Service implements AgentsSeam {
   private runs = new Map<string, Run>();
+  private launches = new Set<string>();
   private stacks: StackSource | null;
   private ceiling: readonly string[];
   private contextTools: readonly string[];
@@ -182,6 +209,13 @@ export class StackRunner extends Service implements AgentsSeam {
    * await rather than the thing you got.
    */
   async start(stack: StackRef, input: string): Promise<AgentRun> {
+    if (this.launches.has(stack.runId) || this.runs.has(stack.runId)) throw new Error(`Run "${stack.runId}" is already live or starting`);
+    this.launches.add(stack.runId);
+    try { return await this.startReserved(stack, input); }
+    finally { this.launches.delete(stack.runId); }
+  }
+
+  private async startReserved(stack: StackRef, input: string): Promise<AgentRun> {
     const resolved = this.stacks?.resolve(stack.id) ?? null;
     const root = resolved ? structuredClone(resolved) : null;
     if (!root) {
@@ -244,8 +278,15 @@ export class StackRunner extends Service implements AgentsSeam {
    * nobody asked.
    */
   async resume(runId: string): Promise<AgentRun> {
+    if (this.launches.has(runId)) throw new Error(`Run "${runId}" is already starting or resuming`);
     const live = this.runs.get(runId);
     if (live) return live;
+    this.launches.add(runId);
+    try { return await this.resumeReserved(runId); }
+    finally { this.launches.delete(runId); }
+  }
+
+  private async resumeReserved(runId: string): Promise<AgentRun> {
 
     // `read` refuses a run with no log, naming it — which is the honest answer
     // to "resume something that never started".
@@ -361,36 +402,38 @@ export class StackRunner extends Service implements AgentsSeam {
   async stop(runId: string, reason: string): Promise<boolean> {
     const run = this.runs.get(runId);
     if (!run) return false;
-    const session = await this.ctx.sessions.open(runId);
-    await session.append({
-      type: 'run.stage',
-      data: { stage: 'stopping', reason: reason || 'stopped', afterBlock: run.lastBlockId },
+    const pending = run.transition(async () => {
+      if (run.finished) return false;
+      const session = await this.ctx.sessions.open(runId);
+      await session.append({ type: 'run.stage', data: { stage: 'stopping', reason: reason || 'stopped', afterBlock: run.lastBlockId } });
+      return true;
     });
+    // Signal immediately, while ordering the acknowledgement ahead of settlement.
     await run.stop(reason);
-    return true;
+    return pending;
   }
 
   async pause(runId: string, reason = 'paused by request'): Promise<boolean> {
     const run = this.runs.get(runId);
-    if (!run || !await run.pause(reason)) return false;
-    const session = await this.ctx.sessions.open(runId);
-    await session.append({
-      type: 'run.stage',
-      data: { stage: 'pausing', reason, afterBlock: run.lastBlockId },
+    if (!run) return false;
+    return run.transition(async () => {
+      if (run.finished || !await run.pause(reason)) return false;
+      const session = await this.ctx.sessions.open(runId);
+      await session.append({ type: 'run.stage', data: { stage: 'pausing', reason, afterBlock: run.lastBlockId } });
+      return true;
     });
-    return true;
   }
 
   async continue(runId: string): Promise<boolean> {
     const run = this.runs.get(runId);
     if (!run) return false;
-    if (!await run.continue()) return false;
-    const session = await this.ctx.sessions.open(runId);
-    await session.append({
-      type: 'run.stage',
-      data: { stage: 'resumed', afterBlock: run.lastBlockId },
+    return run.transition(async () => {
+      if (run.finished || run.stopReason) return false;
+      if (!await run.continue()) return false;
+      const session = await this.ctx.sessions.open(runId);
+      await session.append({ type: 'run.stage', data: { stage: 'resumed', afterBlock: run.lastBlockId } });
+      return true;
     });
-    return true;
   }
 
   // Ordinary private methods below, never `#private` ones. Cordis derives a
@@ -409,32 +452,11 @@ export class StackRunner extends Service implements AgentsSeam {
       // The implicit root is represented by run.stage; authored controls
       // below it own the container lifecycle shown in Work.
       const walked = await this.runSequence(run, root, input, session, done);
-      if (run.stopReason) {
-        await session.append({
-          type: 'run.stage',
-          data: {
-            stage: 'stopped', reason: run.stopReason,
-            // Where it landed. A stop that cannot say where is a stop nobody
-            // can resume from.
-            afterBlock: run.lastBlockId, blocksRan: walked.length
-          }
-        });
-        return { status: 'stopped', reason: run.stopReason };
-      }
       const failed = walked.find(s => s.outcome.status === 'failed');
-      if (failed) {
-        const error = `Block "${failed.node.id}" failed: ${failed.outcome.error ?? 'no reason given'}`;
-        await session.append({ type: 'run.error', data: { error, blockId: failed.node.id } });
-        await session.append({ type: 'run.stage', data: { stage: 'failed' } });
-        return { status: 'failed', error };
-      }
-      await session.append({ type: 'run.stage', data: { stage: 'done' } });
-      return { status: 'done', messages: await session.deriveMessages() as Message[] };
+      return run.complete(session, failed ? `Block "${failed.node.id}" failed: ${failed.outcome.error ?? 'no reason given'}` : null, failed?.node.id, walked.length);
     } catch (err) {
       const error = String((err as Error)?.message ?? err);
-      await session.append({ type: 'run.error', data: { error } });
-      await session.append({ type: 'run.stage', data: { stage: 'failed' } });
-      return { status: 'failed', error };
+      return run.complete(session, error);
     }
   }
 

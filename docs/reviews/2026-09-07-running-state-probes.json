@@ -1,0 +1,69 @@
+[
+  {
+    "name": "abort-ignoring-provider",
+    "afterAbort": "still pending",
+    "hardDeadlineMs": 80,
+    "observedAfterMs": 150
+  },
+  {
+    "name": "orphan-read-and-stop",
+    "snapshotStage": "execution",
+    "listStage": "execution",
+    "stop": "run_not_live"
+  },
+  {
+    "name": "pause-event-order",
+    "stages": [
+      "execution",
+      "paused",
+      "pausing"
+    ],
+    "displayedStage": "pausing",
+    "resumeVisible": false
+  },
+  {
+    "name": "stop-event-order",
+    "stages": [
+      "execution",
+      "done",
+      "stopping"
+    ],
+    "executionOutcome": "done",
+    "kernelLive": false
+  },
+  {
+    "name": "duplicate-start",
+    "sameRunId": true,
+    "distinctExecutions": true,
+    "calls": 2
+  },
+  {
+    "name": "cleanup-is-live",
+    "executionOutcome": "done",
+    "controllerLive": true,
+    "stop": "run_control_failed",
+    "leaseWritten": true
+  },
+  {
+    "name": "launch-outlives-shutdown",
+    "shutdownStopped": 0,
+    "liveAfterShutdown": true
+  },
+  {
+    "name": "goal-owner-disagreement",
+    "displayedStatus": "interrupted",
+    "recoverable": true,
+    "stopError": "Goal is owned by another active controller"
+  },
+  {
+    "name": "goal-torn-tail-recovery",
+    "error": "Unexpected end of JSON input",
+    "resumeInvocations": 0,
+    "kernelReadableEvents": 2
+  },
+  {
+    "name": "goal-container-retry",
+    "error": "Unknown retry node: repeat-until",
+    "resumeInvocations": 0
+  }
+]

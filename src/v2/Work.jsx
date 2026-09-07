@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import BlockEditor from './BlockEditor.jsx';
+import { workflowActions } from '../../core/lifecycle.js';
 import { runView } from './runView.js';
 import { groupRuns, runStatus, runTimeLabel, runTimeTitle } from '../runList.js';
 import DebugPanel from './DebugPanel.jsx';
@@ -79,9 +80,11 @@ const STAGE_LABELS = {
   rejected: 'Rejected', interrupted: 'Interrupted', cancelled: 'Stopped',
 };
 
-function RunActions({ view, onPauseRun, onResumeRun, onStopRun, onOpenFlow, onOpenDebug, pauseBusy, resumeBusy, stopBusy }) {
+function RunActions({ view, onPauseRun, onResumeRun, onStopRun, onRetryCleanup, onOpenFlow, onOpenDebug, pauseBusy, resumeBusy, stopBusy }) {
   const menu = useRef(null);
-  const label = STAGE_LABELS[view.stage] ?? (view.stage ? view.stage.replaceAll('_', ' ') : 'Starting');
+  const actions = view.actions ?? workflowActions(view.stage, view.lifecycle);
+  const cleaning = view.lifecycle?.phase === 'settled' && ['running', 'failed', 'pending'].includes(view.lifecycle.cleanup);
+  const label = (cleaning ? (view.lifecycle.cleanup === 'failed' ? 'Cleanup needs attention' : 'Finishing cleanup') : STAGE_LABELS[view.stage]) ?? (view.stage ? view.stage.replaceAll('_', ' ') : 'Starting');
   useEffect(() => {
     const close = event => {
       if (event.key === 'Escape' || (menu.current?.open && !menu.current.contains(event.target))) menu.current?.removeAttribute('open');
@@ -94,15 +97,17 @@ function RunActions({ view, onPauseRun, onResumeRun, onStopRun, onOpenFlow, onOp
   return <details className="work-run-actions" ref={menu}>
     <summary className={`work-stage stage-${view.stage}`} aria-label={`${label} — run actions`}><span>{label}</span><ChevronIcon/></summary>
     <div className="work-run-menu">
-      {view.resumable && <button type="button" disabled={resumeBusy} onClick={act(onResumeRun)}>
+      {actions.canResume && <button type="button" disabled={resumeBusy} onClick={act(onResumeRun)}>
         <span aria-hidden="true">▶</span>{resumeBusy ? 'Resuming…' : 'Resume run'}
       </button>}
-      {view.running && !view.paused && !view.stopping && <button type="button" disabled={pauseBusy || view.pausing} onClick={act(onPauseRun)}>
+      {actions.canPause && <button type="button" disabled={pauseBusy || view.pausing} onClick={act(onPauseRun)}>
         <span aria-hidden="true">Ⅱ</span>{pauseBusy || view.pausing ? 'Pausing…' : 'Pause run'}
       </button>}
-      {(view.running || view.paused) && <button type="button" className="danger" disabled={stopBusy || view.stopping} onClick={act(onStopRun)}>
+      {actions.canStop && <button type="button" className="danger" disabled={stopBusy} onClick={act(onStopRun)}>
         <span aria-hidden="true">■</span>{stopBusy || view.stopping ? 'Stopping…' : 'Stop run'}
       </button>}
+      {actions.canRetryCleanup && <button type="button" disabled={resumeBusy} onClick={act(onRetryCleanup)}>Retry cleanup</button>}
+      {actions.reason && <p>{actions.reason}</p>}
       <button type="button" onClick={act(onOpenFlow)}><span aria-hidden="true">↗</span>Open builder</button>
       <button type="button" className="debug-menu-entry" onClick={act(onOpenDebug)}><span aria-hidden="true">⌁</span>Debug workflow</button>
       {(view.stage === 'stopped' || view.stage === 'interrupted') && <p>Resume continues from the last durable block.</p>}
@@ -117,9 +122,9 @@ export default function Work({
   onRetryFailed = null, retryBusy = false, retryError = '', controlError = '', onRevealRunLog = null,
   onRevealDiagnosticLog = null, onStopRun = null, stopBusy = false,
   onPauseRun = null, pauseBusy = false, onResumeRun = null, resumeBusy = false,
-  onDebugRun = null,
+  onDebugRun = null, onRetryCleanup = null,
 }) {
-  const view = runView(trace);
+  const view = runView(trace, snapshot);
   const [reply, setReply] = useState('');
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugBusy, setDebugBusy] = useState(false);
@@ -145,12 +150,12 @@ export default function Work({
   if (!stack) return <div className="v2-work" data-v2>{history}<section className="work-surface">{composer}<p className="muted work-empty">Choose a workflow and send a message to start.</p></section></div>;
   return <div className="v2-work work-run-mode" data-v2>{history}<section className="work-surface"><header className="work-run-head">
     <div className="work-run-title"><span className="section-label">{view.running ? 'Running workflow' : 'Workflow run'}</span><h1>{stack.name ?? stack.id}</h1></div>
-    <RunActions view={view} onPauseRun={onPauseRun} onResumeRun={onResumeRun} onStopRun={onStopRun} onOpenFlow={onOpenFlow} onOpenDebug={openDebug}
+    <RunActions onRetryCleanup={onRetryCleanup} view={view} onPauseRun={onPauseRun} onResumeRun={onResumeRun} onStopRun={onStopRun} onOpenFlow={onOpenFlow} onOpenDebug={openDebug}
       pauseBusy={pauseBusy} resumeBusy={resumeBusy} stopBusy={stopBusy}/></header>
     {controlError && <p className="work-error" role="alert">{controlError}</p>}
     {view.error && <section className="work-failure" role="alert">
       <strong>{view.error}</strong><div className="work-failure-actions">
-        {view.errorBlockId && <button type="button" className="work-retry" disabled={retryBusy}
+        {view.errorBlockId && <button type="button" className="work-retry" disabled={retryBusy || ['running', 'failed', 'pending'].includes(view.lifecycle?.cleanup) && view.lifecycle?.phase === 'settled'}
           onClick={() => onRetryFailed?.(view.errorBlockId)}>{retryBusy ? 'Restarting…' : `Retry ${view.errorBlockId}`}</button>}
         <button type="button" onClick={onOpenTrace}>Inspect queries</button>
         <button type="button" onClick={onRevealRunLog}>Reveal raw run log</button>

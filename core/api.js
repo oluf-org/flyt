@@ -13,6 +13,7 @@
 // caller asking for one gets an honest error rather than a silent no-op.
 import fs from 'node:fs';
 import path from 'node:path';
+import { bounded } from './executionOwnership.js';
 import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
 import { correctionFields } from './repair.js';
@@ -223,9 +224,8 @@ export function createApi(engine) {
   const composeRunHost = async (projectId, request) => {
     const entry = proj(projectId);
     let composed = null;
-    const pushUpdate = engine.pushSnapshotFor(entry.id, runId => (
-      snapshotStoredStackRun(entry.store.rootDir, runId, composed?.kernelModule, { materialise: false })
-    ));
+    const pushUpdate = engine.pushSnapshotFor(entry.id, async runId => runController.decorate(entry.id, runId,
+      await snapshotStoredStackRun(entry.store.rootDir, runId, composed?.kernelModule, { materialise: false })));
     const pushEvents = engine.pushEventsFor(entry.id);
     composed = await bootRunKernel({
       runsRoot: request.runsRoot ?? entry.store.rootDir,
@@ -273,7 +273,13 @@ export function createApi(engine) {
     runsRootForProject: projectId => proj(projectId).store.rootDir,
     storeForProject: projectId => proj(projectId).store,
     repairStored: repairInterruptedSessions,
-    onActivity: projectId => engine.broadcastActivity(projectId),
+    onActivity: projectId => {
+      engine.broadcastActivity(projectId);
+      for (const runId of engine.pushStateFor(projectId).channels.keys()) {
+        engine.pushSnapshotFor(projectId, async id => runController.decorate(projectId, id,
+          await snapshotStoredStackRun(proj(projectId).store.rootDir, id, null, { materialise: false })))(runId);
+      }
+    },
     onSettled: ({ phase, error, record }) => engine.emitWorkflow?.(record.projectId, {
       kind: 'warning', runId: record.runId,
       message: `Final ${phase} work failed: ${String(error?.message ?? error)}`,
@@ -586,11 +592,15 @@ export function createApi(engine) {
     return dir ? path.join(dir, 'loop-stop') : null;
   };
 
-  const requestLoopStop = (projectId, reason) => {
+  const requestLoopStop = (projectId, reason, action = 'stop') => {
     const file = loopStopFile(projectId);
     if (!file) return false;
+    if (action !== 'stop' && fs.existsSync(file)) {
+      try { if ((JSON.parse(fs.readFileSync(file, 'utf8')).action ?? 'stop') === 'stop') return false; }
+      catch { return false; }
+    }
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ reason, at: new Date().toISOString(), by: process.pid }));
+    fs.writeFileSync(file, JSON.stringify({ reason, action, at: new Date().toISOString(), by: process.pid }));
     return true;
   };
 
@@ -600,7 +610,10 @@ export function createApi(engine) {
     const file = loopStopFile(projectId);
     if (!file || !fs.existsSync(file)) return null;
     let reason = 'stopped by request';
-    try { reason = JSON.parse(fs.readFileSync(file, 'utf8')).reason ?? reason; } catch { /* keep the default */ }
+    try {
+      const request = JSON.parse(fs.readFileSync(file, 'utf8'));
+      reason = ['pause', 'resume'].includes(request.action) ? { action: request.action } : request.reason ?? reason;
+    } catch { /* keep the default */ }
     try { fs.rmSync(file); } catch { /* it will be read again and stop again, which is harmless */ }
     return reason;
   };
@@ -851,8 +864,9 @@ export function createApi(engine) {
 
     // --- Projects ----------------------------------------------------------
     'project:list': () => ({ tabs: registry.listOpen(), active: registry.activeId }),
-    'project:open': ({ folder = null }) => {
+    'project:open': async ({ folder = null }) => {
       const { project } = registry.open(folder);
+      await runController.reconcile(project.id);
       return { id: project.id, name: project.name, kind: project.kind, folder: project.folder ?? null };
     },
 
@@ -1114,8 +1128,9 @@ export function createApi(engine) {
       return legacyControl(entry, runId) ?? runController.stop(projectId, runId, reason);
     },
 
-    'run:list': ({ projectId }) => {
+    'run:list': async ({ projectId }) => {
       const store = proj(projectId).store;
+      await runController.reconcile(projectId);
       const comparisons = store.listComparisons();
       const membership = new Map();
       for (const rec of comparisons) {
@@ -1123,7 +1138,7 @@ export function createApi(engine) {
           if (!membership.has(id)) membership.set(id, { id: rec.id, label: index === 0 ? 'A' : 'B' });
         });
       }
-      return store.runSummaries().map(row => ({ ...row, compareGroup: membership.get(row.id) ?? null }));
+      return store.runSummaries().map(row => ({ ...row, lifecycle: runController.lifecycle(projectId, row.id), compareGroup: membership.get(row.id) ?? null }));
     },
     'run:log': ({ projectId, runId }) => {
       const store = proj(projectId).store;
@@ -1146,13 +1161,14 @@ export function createApi(engine) {
           status: 404, code: 'run_not_found',
         });
       }
+      await runController.reconcile(projectId, runId);
       const chans = engine.pushStateFor(entry.id).channels;
       const live = runController.get(projectId, runId);
-      const snapshot = isCanonicalRun(entry.store, runId)
+      const snapshot = runController.decorate(projectId, runId, isCanonicalRun(entry.store, runId)
         ? live
           ? await snapshotStackRun(live.host.ctx, runId, live.host.kernelModule)
           : await snapshotStoredStackRun(entry.store.rootDir, runId)
-        : entry.store.snapshot(runId);
+        : entry.store.snapshot(runId));
       const rev = (chans.get(runId)?.rev ?? 0) + 1;
       chans.set(runId, { snapshot, rev });
       const comparison = entry.store.listComparisons().find(rec => rec.runIds?.includes(runId));
@@ -1160,6 +1176,7 @@ export function createApi(engine) {
         ...snapshot,
         meta: {
           ...(snapshot.meta ?? {}),
+          lifecycle: runController.lifecycle(projectId, runId),
           compareGroup: comparison ? {
             id: comparison.id, label: comparison.runIds[0] === runId ? 'A' : 'B',
           } : null,
@@ -1209,7 +1226,7 @@ export function createApi(engine) {
 
     'run:delete': ({ projectId, runId }) => {
       const entry = proj(projectId);
-      if (runController.isLive(projectId, runId)) {
+      if (runController.isLive(projectId, runId) || runController.get(projectId, runId) || runController.lifecycle(projectId, runId)?.owner === 'external') {
         throw new ApiError('This run is still executing. Wait for it to finish before deleting it.', {
           status: 409, code: 'run_already_live',
         });
@@ -1232,29 +1249,40 @@ export function createApi(engine) {
       if (goalId) { await goals.start({ projectId, goalId }); return { ok: true, runId, goalId }; }
       const legacy = legacyControl(entry, runId);
       if (legacy) return legacy;
-      await runController.resume({ projectId, runId });
-      return { ok: true, runId };
+      const result = await runController.resume({ projectId, runId });
+      return { ok: true, runId, ...(result.control ?? {}) };
     },
     'run:stop': async ({ projectId, runId, reason = 'stopped by request' }) => {
       const entry = proj(projectId);
       const goalId = storedStackRunMetadata(entry.store.rootDir, runId)?.goalId;
-      if (goalId) { await goals.control({ projectId, goalId, action: 'stop' }); return { ok: true, state: 'stopping', goalId }; }
+      if (goalId) { const goal = await goals.control({ projectId, goalId, action: 'stop' }); return { ok: true, state: goal.requested ?? goal.status, goalId }; }
       const legacy = legacyControl(entry, runId);
       if (legacy) return legacy;
       settleWorkflowInteractions(projectId, runId);
+      if (!runController.isLive(projectId, runId) && !runController.get(projectId, runId)) {
+        await runController.reconcile(projectId, runId);
+        const snapshot = await snapshotStoredStackRun(entry.store.rootDir, runId);
+        if (['interrupted', 'stopped', 'done', 'failed', 'cancelled', 'rejected'].includes(snapshot.meta.stage)) return { ok: true, state: snapshot.meta.stage };
+      }
       return runController.stop(projectId, runId, reason);
     },
     'run:pause': async ({ projectId, runId }) => {
       const entry = proj(projectId);
       const goalId = storedStackRunMetadata(entry.store.rootDir, runId)?.goalId;
-      if (goalId) { await goals.control({ projectId, goalId, action: 'pause' }); return { ok: true, state: 'pausing', goalId }; }
+      if (goalId) { const goal = await goals.control({ projectId, goalId, action: 'pause' }); return { ok: true, state: goal.requested ?? goal.status, goalId }; }
       return legacyControl(entry, runId) ?? runController.pause(projectId, runId);
     },
+    'run:retryCleanup': ({ projectId, runId }) => runController.retryCleanup(projectId, runId),
     // `worker` re-pins the node's model for this attempt only (D39) — the way
     // back from "the step failed because of the model it was pointed at".
     'run:restartBlock': async ({ projectId, runId, blockId, guidance = '', worker = null }) => {
       const entry = proj(projectId);
-      if (storedStackRunMetadata(entry.store.rootDir, runId)?.goalId) throw new Error('Resume the owning Goal or create a new Goal instance; child runs cannot bypass its contract and budget.');
+      const goalId = storedStackRunMetadata(entry.store.rootDir, runId)?.goalId;
+      if (goalId) {
+        if (worker?.model) throw new Error('A Goal retry uses its fixed model contract');
+        await goals.start({ projectId, goalId, retry: { runId, blockId, guidance } });
+        return { ok: true, runId, blockId, goalId };
+      }
       const legacy = legacyControl(entry, runId);
       if (legacy) return legacy;
       await runController.restartBlock({
@@ -2041,6 +2069,18 @@ export function createApi(engine) {
         caps: sup.config.loop.caps
       };
     },
+    'loop:pause': ({ projectId }) => {
+      const sup = supervisors.get(projectId);
+      if (sup?.running) return sup.pause();
+      if (readLoopStatus(projectId)?.running && requestLoopStop(projectId, 'paused by request', 'pause')) return { requested: true };
+      return { paused: false, reason: 'no loop running' };
+    },
+    'loop:resume': ({ projectId }) => {
+      const sup = supervisors.get(projectId);
+      if (sup?.running) return sup.resume();
+      if (readLoopStatus(projectId)?.running && requestLoopStop(projectId, 'resumed by request', 'resume')) return { requested: true };
+      return { resumed: false, reason: 'no loop running' };
+    },
     'loop:stop': ({ projectId, reason = 'stopped by request' }) => {
       const sup = supervisors.get(projectId);
       if (sup) {
@@ -2391,12 +2431,14 @@ export function createApi(engine) {
    * request, including aborting active provider and CLI calls.
    */
   async function shutdown(reason = 'application closing') {
-    await goalAuthoring.shutdown();
-    await goals.shutdown();
+    const authoring = goalAuthoring.shutdown();
+    const goalShutdown = goals.shutdown();
     for (const supervisor of supervisors.values()) {
       try { if (supervisor?.running) supervisor.stop(reason); } catch { /* continue with owned runs */ }
     }
-    return runController.shutdown(reason);
+    const runs = runController.shutdown(reason);
+    await Promise.allSettled([bounded(authoring, 15000, 'Authoring shutdown'), bounded(goalShutdown, 20000, 'Goal shutdown'), runs]);
+    return runs;
   }
 
   const runCliWorkflow = args => startWorkflow({ ...args, profile: 'flyt-cli' });

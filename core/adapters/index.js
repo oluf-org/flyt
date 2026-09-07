@@ -162,7 +162,7 @@ function startDeadline({ provider, signal, idleMs, hardMs }) {
     rejectExpired(fired);
   };
   // The caller's own stop: abort downstream, but never as a timeout.
-  const onOuterAbort = () => { clear(); ctl.abort(); };
+  const onOuterAbort = () => { clear(); ctl.abort(); rejectExpired(abortError()); };
 
   // Unref'd on purpose: a deadline must not be the reason a process stays
   // alive. While a real call is in flight its socket or child process holds the
@@ -172,17 +172,17 @@ function startDeadline({ provider, signal, idleMs, hardMs }) {
   const arm = (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; };
 
   const touch = () => {
-    if (fired || !idleMs) return;
+    if (fired || ctl.signal.aborted || !idleMs) return;
     clearTimeout(idleTimer);
     idleTimer = arm(() => fire('idle'), idleMs);
   };
 
   if (signal) {
-    if (signal.aborted) ctl.abort();
+    if (signal.aborted) onOuterAbort();
     else signal.addEventListener('abort', onOuterAbort, { once: true });
   }
   touch();
-  if (hardMs) hardTimer = arm(() => fire('hard'), hardMs);
+  if (hardMs && !ctl.signal.aborted) hardTimer = arm(() => fire('hard'), hardMs);
 
   return {
     signal: ctl.signal,
@@ -284,6 +284,7 @@ export async function callModel({ provider, model, system, prompt, maxTokens = 4
     const streamIdleGaps = [];
     const watched = onText
       ? (text, opts) => {
+        if (deadline.signal.aborted) return;
         const now = Date.now();
         const elapsed = now - attemptStarted;
         const telemetry = opts?.telemetry ?? {};

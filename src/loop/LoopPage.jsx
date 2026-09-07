@@ -31,6 +31,15 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
   const [lines, setLines] = useState([]);
   const [series, setSeries] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [controlBusy, setControlBusy] = useState(null);
+  const control = async action => {
+    setControlBusy(action);
+    try {
+      await window.flyt[action === 'stop' ? 'loopStop' : action === 'pause' ? 'loopPause' : 'loopResume'](projectId);
+      await refresh();
+    } catch (err) { setError(String(err?.message ?? err)); }
+    finally { setControlBusy(current => current === action ? null : current); }
+  };
   const [error, setError] = useState(null);
 
   const [workers, setWorkers] = useState({});
@@ -421,19 +430,17 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
         )}
 
         <div className="loop-actions">
-          {/* A loop this window did not start cannot be stopped from it — the
-              supervisor lives in that other process. Saying where it is beats a
-              Stop button that fails. */}
           {running && status?.observed && (
             <span className="loop-elsewhere" title={`Started by process ${status.pid}`}>elsewhere</span>
           )}
+          {running && !status?.stopping && <button disabled={controlBusy === 'pause' || controlBusy === 'resume'} title="Pause after current tasks finish" onClick={() => control(status?.paused ? 'resume' : 'pause')}>{status?.paused ? 'Resume' : 'Pause'}</button>}
           {running
             // Stop works either way: for a loop this window owns it is direct,
             // and for one it is only watching it leaves a request the loop reads
             // on its next poll — which winds down cleanly, where killing the
             // process would leave a worktree, a claimed task and possibly a
             // half-landed merge behind.
-            ? <button className="reject" disabled={busy} onClick={() => quiet(() => window.flyt.loopStop(projectId))}>Stop</button>
+            ? <button className="reject" disabled={controlBusy === 'stop'} onClick={() => control('stop')}>Stop</button>
             : <button className="primary" disabled={busy} onClick={() => quiet(() => window.flyt.loopStart(projectId, {}))}>Start loop</button>}
           <button disabled={busy} onClick={() => quiet(async () => {
             const md = await window.flyt.loopReport(projectId);

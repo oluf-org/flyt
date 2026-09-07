@@ -367,7 +367,8 @@ test('circle keeps parallel groups collapsed and exact canonical order', () => {
   assert.deepEqual(circlePositions(4), circlePositions(4));
   assert.equal(circlePositions(4)[0].y, 15);
   assert.equal(goalNodeStatus({ meta: { nodeStatus: { improve: 'done' } } }, { setupDone: true }, 'recipe', 'improve'), 'Done');
-  assert.equal(goalNodeStatus({ meta: { blockStatus: { improve: 'active' } } }, {}, 'recipe', 'improve'), 'Running');
+  assert.equal(goalNodeStatus({ meta: { blockStatus: { improve: 'active' } } }, { live: true }, 'recipe', 'improve'), 'Running');
+  assert.equal(goalNodeStatus({ meta: { blockStatus: { improve: 'active' } } }, { live: false }, 'recipe', 'improve'), 'Interrupted');
   assert.equal(goalNodeStatus({ meta: { nodeStatus: { improve: 'done' } } }, { activeChild: { phase: 'setup' } }, 'recipe', 'improve'), 'Not run in this view');
 });
 

@@ -8,6 +8,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { pilesOf, burndown, flightRow, headline, humanDuration, tailLines, trendBars, taskDetail, shortStamp, PILE_ORDER, clampLoopDrawerHeight } from '../src/loopViewData.js';
 
+test('paused loops distinguish finishing work from an idle paused queue', () => {
+  assert.equal(headline({ status: { running: true, paused: true, inFlight: [{}] } }), 'Pausing — finishing current tasks');
+  assert.equal(headline({ status: { running: true, paused: true, inFlight: [] } }), 'Paused');
+});
+
 test('loop drawer height is projected into its safe range', () => {
   assert.equal(clampLoopDrawerHeight(undefined), 300);
   assert.equal(clampLoopDrawerHeight(20), 120);

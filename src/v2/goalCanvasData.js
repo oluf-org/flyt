@@ -23,5 +23,6 @@ export function goalNodeStatus(snapshot, goal, phase, nodeId) {
   const showingSetup = goal?.activeChild?.phase === 'setup';
   if ((phase === 'setup') !== showingSetup) return phase === 'setup' ? 'Pending setup' : 'Not run in this view';
   const status = snapshot?.meta?.nodeStatus?.[nodeId] ?? snapshot?.meta?.blockStatus?.[nodeId];
-  return status === 'active' ? 'Running' : status === 'done' ? 'Done' : status ?? (goal ? 'Not run in this view' : 'Not run');
+  if (['active', 'running'].includes(status)) return goal?.live ? ({ finishing: 'Finishing cleanup', pausing: 'Pausing', stopping: 'Stopping' }[goal.status] ?? 'Running') : 'Interrupted';
+  return status === 'done' ? 'Done' : status ?? (goal ? 'Not run in this view' : 'Not run');
 }

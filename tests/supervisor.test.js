@@ -821,6 +821,43 @@ test('a bounded run that did no work says so, instead of exiting as though it ha
   assert.equal(task.attempts, 0);
 });
 
+test('pause holds the queue after current work settles and resume picks up remaining tasks', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g' }); backlog.add({ title: 'second', goal: 'g' });
+  const engine = fakeEngine({ backlog, stages: { default: ['execution', 'done'] } });
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 2 });
+  const run = sup.run();
+  try {
+    while (!sup.status().inFlight.length) await new Promise(resolve => setTimeout(resolve, 1));
+    sup.pause();
+    while (sup.status().inFlight.length) await new Promise(resolve => setTimeout(resolve, 1));
+    assert.equal(sup.status().paused, true);
+    assert.equal(engine.calls.filter(call => call.name === 'stack:run').length, 1);
+    assert.equal(backlog.get('t-0002').status, 'queued');
+    sup.resume();
+    assert.equal((await run).landed, 2);
+  } finally { sup.stop(); await run; }
+});
+
+test('external pause and stop requests remain actionable while the queue is paused', async () => {
+  const backlog = makeBacklog();
+  backlog.add({ title: 'first', goal: 'g' }); backlog.add({ title: 'second', goal: 'g' });
+  const engine = fakeEngine({ backlog, stages: { default: ['execution', 'done'] } });
+  let request = { action: 'pause' };
+  const sup = new Supervisor({ ...engine, projectId: 'p', backlog, pollMs: 2,
+    stopRequested: () => { const value = request; request = null; return value; } });
+  const run = sup.run();
+  try {
+    while (!sup.status().paused || sup.status().inFlight.length) await new Promise(resolve => setTimeout(resolve, 1));
+    request = 'operator stop';
+    const status = await run;
+    assert.equal(status.running, false); assert.equal(status.paused, false);
+    assert.equal(status.stopping, 'operator stop');
+    assert.equal(engine.calls.filter(call => call.name === 'stack:run').length, 1);
+    assert.equal(backlog.get('t-0002').status, 'queued');
+  } finally { sup.stop(); await run; }
+});
+
 test('a requested stop immediately cancels and releases an in-flight task', async () => {
   const backlog = makeBacklog();
   backlog.add({ title: 'cancel cleanly', goal: 'g' });

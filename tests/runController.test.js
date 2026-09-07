@@ -120,3 +120,49 @@ test('shutdown stops and awaits every owned run before returning', async () => {
   assert.equal(leases.size, 0);
   assert.deepEqual(controller.list(), []);
 });
+
+
+test('cleanup timeout keeps ownership, exposes recovery, and never duplicates pending cleanup', async () => {
+  let finish, release, cleanups = 0;
+  const done = new Promise(resolve => { finish = resolve; });
+  const cleaning = new Promise(resolve => { release = resolve; });
+  const controller = new RunController({
+    cleanupTimeoutMs: 20,
+    bootHost: async () => ({ ctx: { subprocess: { terminateOwner: () => { cleanups++; return cleaning; } } }, dispose: async () => {} }),
+    startRun: async ({ id }) => ({ runId: id, run: { runId: id, settled: () => done } }),
+    runsRootForProject: () => '/unused', storeForProject: () => ({ writeLease() {}, clearLease() {} }), snapshotLive: async () => ({}),
+  });
+  await controller.start({ projectId: 'p', runId: 'cleanup', stackId: 's' });
+  const owned = controller.get('p', 'cleanup'); finish({ status: 'done' }); await owned.settlement;
+  assert.equal(controller.isLive('p', 'cleanup'), false);
+  assert.equal(owned.cleanup, 'failed'); assert.match(owned.cleanupError, /has not finished/);
+  const view = controller.decorate('p', 'cleanup', { meta: { stage: 'done' } });
+  assert.equal(view.meta.actions.canRetryCleanup, true);
+  assert.equal(view.meta.actions.canResume, false);
+  await assert.rejects(controller.start({ projectId: 'p', runId: 'cleanup', stackId: 's' }), /already owned/);
+  assert.equal((await controller.retryCleanup('p', 'cleanup')).ok, false);
+  assert.equal(cleanups, 1);
+  release();
+  for (let i = 0; i < 100 && controller.get('p', 'cleanup'); i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(owned.cleanup, 'complete'); assert.equal(controller.get('p', 'cleanup'), undefined);
+  await controller.shutdown();
+});
+
+test('a rejected cleanup can be retried without rerunning completed cleanup steps', async () => {
+  let subprocesses = 0, sandboxes = 0, disposed = 0, finish;
+  const done = new Promise(resolve => { finish = resolve; });
+  const controller = new RunController({
+    bootHost: async () => ({ ctx: {
+      subprocess: { terminateOwner: () => { subprocesses++; } },
+      sandbox: { disposeOwner: () => { if (++sandboxes === 1) throw new Error('Sandbox busy'); } },
+    }, dispose: async () => { disposed++; } }),
+    startRun: async ({ id }) => ({ runId: id, run: { runId: id, settled: () => done } }),
+    runsRootForProject: () => '/unused', storeForProject: () => ({ writeLease() {}, clearLease() {} }), snapshotLive: async () => ({}),
+  });
+  await controller.start({ projectId: 'p', runId: 'retry-cleanup', stackId: 's' });
+  const owned = controller.get('p', 'retry-cleanup'); finish({ status: 'failed' }); await owned.settlement;
+  assert.equal(owned.cleanup, 'failed'); assert.equal(disposed, 0);
+  assert.equal((await controller.retryCleanup('p', 'retry-cleanup')).ok, true);
+  assert.equal(subprocesses, 1); assert.equal(sandboxes, 2); assert.equal(disposed, 1);
+  await controller.shutdown();
+});

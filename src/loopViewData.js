@@ -191,6 +191,7 @@ export function shortStamp(iso) {
 // A one-line summary for the header: what the loop is doing right now, in the
 // terms someone would ask about it.
 export function headline({ status = {}, piles = {} }) {
+  if (status.running && status.paused) return status.inFlight?.length ? 'Pausing — finishing current tasks' : 'Paused';
   if (status.running) {
     const n = status.inFlight?.length ?? 0;
     return n ? `Working ${n} task${n === 1 ? '' : 's'}` : 'Waiting for something to pick up';

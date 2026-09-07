@@ -70,6 +70,7 @@ const api = {
   saveCompare: (pid, rec) => ipcRenderer.invoke('compare:save', pid, rec),
   listComparisons: (pid) => ipcRenderer.invoke('compare:list', pid),
   renameRun: (pid, runId, name) => ipcRenderer.invoke('run:rename', pid, runId, name),
+  retryRunCleanup: (pid, runId) => ipcRenderer.invoke('run:retryCleanup', pid, runId),
   deleteRun: (pid, runId) => ipcRenderer.invoke('run:delete', pid, runId),
   getSnapshot: (pid, runId) => ipcRenderer.invoke('run:snapshot', pid, runId),
   readRunLog: (pid, runId) => ipcRenderer.invoke('run:log', pid, runId),
@@ -159,6 +160,8 @@ const api = {
   // --- The loop (DESIGN-SPEC.md §8) ---
   loopStart: (pid, opts = {}) => ipcRenderer.invoke('loop:start', pid, opts),
   loopStop: (pid) => ipcRenderer.invoke('loop:stop', pid),
+  loopPause: (pid) => ipcRenderer.invoke('loop:pause', pid),
+  loopResume: (pid) => ipcRenderer.invoke('loop:resume', pid),
   loopStatus: (pid) => ipcRenderer.invoke('loop:status', pid),
   loopReport: (pid) => ipcRenderer.invoke('loop:report', pid),
   loopLog: (pid) => ipcRenderer.invoke('loop:log', pid),

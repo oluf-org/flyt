@@ -426,6 +426,7 @@ export class Supervisor {
     this.stopRequested = stopRequested;
 
     this.running = false;
+    this.paused = false;
     this.stopping = null;      // why we are winding down, if we are
     this.inFlight = new Map(); // taskId -> Heartbeat
     this.attempts = new Map(); // taskId -> attemptId (WR-02 ownership)
@@ -444,6 +445,7 @@ export class Supervisor {
   status() {
     return {
       running: this.running,
+      paused: this.paused,
       stopping: this.stopping,
       // The incident that stopped it, when one did. `stopping` is a sentence;
       // this is the record, with the code, the remedy and the id to resolve it
@@ -553,6 +555,7 @@ export class Supervisor {
    */
   async run({ maxTasks = Infinity } = {}) {
     this.running = true;
+    this.paused = false;
     this.stopping = null;
     this.startedAtMs = Date.now();
     let started = 0;
@@ -576,6 +579,9 @@ export class Supervisor {
     try {
      for (;;) {
       while (this.running && !this.stopping && budgetLeft()) {
+        // A pause holds the queue at a task boundary while already dispatched
+        // work settles. Continue polling so Stop also works while paused.
+        if (this.paused) { await this.#tick(); continue; }
         // The hard cap is checked before anything new begins: finishing the
         // in-flight work and stopping cleanly is the promise (§9).
         const budget = this.#checkBudget();
@@ -705,7 +711,18 @@ export class Supervisor {
     }
   }
 
+  pause() {
+    if (!this.running || this.stopping) return this.status();
+    this.paused = true; this.#publish(); return this.status();
+  }
+
+  resume() {
+    if (!this.running || this.stopping) return this.status();
+    this.paused = false; this.#publish(); return this.status();
+  }
+
   stop(reason = 'stopped by request') {
+    this.paused = false;
     this.stopping = reason;
     // `running` describes whether this process still owns live Loop work, not
     // whether it will claim another task. Keep it true until every cancellation
@@ -1021,8 +1038,9 @@ export class Supervisor {
     // down through the same bounded cancellation path as a local Stop.
     const asked = this.stopRequested();
     if (asked && this.running) {
-      this.log(`stop requested: ${asked}`);
-      this.stop(asked);
+      if (asked.action === 'pause') this.pause();
+      else if (asked.action === 'resume') this.resume();
+      else { this.log(`stop requested: ${asked}`); this.stop(asked); }
     }
     if (this.#stopExpired()) {
       for (const [taskId, hb] of [...this.inFlight]) {
