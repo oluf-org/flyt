@@ -560,7 +560,7 @@ function isReadOnlyBrief(input: string): boolean {
   return /\bread[- ]only\b|\bno (?:file )?(?:writes?|modifications?|changes?)\b|\bdo not (?:modify|write|edit|create (?:files?|artifacts?))\b/i.test(input);
 }
 
-export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
+export async function executeTaskGraph(run: BlockRun, options: { plannerOnly?: boolean } = {}): Promise<BlockOutcome> {
   const session = await run.ctx.sessions.open(run.runId);
   const profiles = (run.ctx as typeof run.ctx & { workerProfiles?: WorkerProfileRegistry }).workerProfiles;
   const profileId = str(run.config.workerProfile, 'default-work');
@@ -614,6 +614,7 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
       ? JSON.stringify(planned.structuredOutput)
       : planned.content;
     parsed = parseTaskGraphPlan(planText, { minTasks, maxTasks, parallelism, readOnly });
+    await session.append({ type: 'block.output', data: { blockId: run.blockId, port: 'evaluation-initial', content: JSON.stringify({ text: planned.content, structured: planned.structuredOutput ?? null, channel: planned.structuredOutput !== undefined ? 'structured' : 'text', contractValid: parsed.ok, finishReason: planned.finishReason ?? null }) } });
     let lastPlanner = planned;
     let lastPlannerBudget = PLANNER_MAX_TOKENS;
     let repairedPlan = false;
@@ -683,6 +684,9 @@ export async function executeTaskGraph(run: BlockRun): Promise<BlockOutcome> {
     } });
   }
   const plan = parsed.plan!;
+  // The evaluation adapter shares all production planning, repair and salvage
+  // above, but has no authority to materialize workers.
+  if (options.plannerOnly) return { status: 'done', output: planText, structured: { tasks: plan.tasks as unknown as JsonValue, plan: plan as unknown as JsonValue } };
   const completed = await priorChildOutcomes(run, session);
   const announced = new Set<string>();
   const attemptsByTask = new Map<string, number>();

@@ -40,7 +40,9 @@ import { createLoopUsageReader } from './loopUsage.js';
 import { GoalAuthoring } from './goalAuthoring.js';
 import { createAuthoringModelCaller } from './goalAuthoringModel.js';
 import { parentRunIdOf, repairInterruptedSessions } from '#kernel';
-import { StackStore } from './stackstore.js';
+import { StackStore, serializeStack } from './stackstore.js';
+import { BenchmarkStore, validateSuite, validateEvaluation, digest, rank } from './evaluation.js';
+import { evaluators } from '#kernel';
 import { summarizeWorkflowRun } from './conversationSupervisor.js';
 import { analyzeWorkflowRun } from './runDebugger.js';
 
@@ -306,6 +308,7 @@ export function createApi(engine) {
   };
 
   const readLoopUsage = createLoopUsageReader();
+  const evaluationBenchmarks = new BenchmarkStore(proj);
   const goals = new GoalController({
     runs: runController, project: proj, worker: supervisorWorker,
     sandbox: runtimeConfig.sandbox ?? {},
@@ -1112,6 +1115,50 @@ export function createApi(engine) {
       }) };
     },
     'goal:list': ({ projectId }) => goals.list(projectId),
+    'goal:evaluators': ({ projectId }) => { proj(projectId); return evaluators.list(); },
+    'goal:benchmark-list': args => evaluationBenchmarks.list(args),
+    'goal:benchmark-get': args => evaluationBenchmarks.get(args),
+    'goal:benchmark-validate': ({ projectId, suite }) => { proj(projectId); return validateSuite(suite); },
+    'goal:benchmark-save': args => evaluationBenchmarks.save(args),
+    'goal:benchmark-export': args => evaluationBenchmarks.export(args),
+    'goal:benchmark-import': ({ projectId, json, baseVersion }) => {
+      if (typeof json !== 'string' || json.length > 96000) throw new Error('Benchmark import exceeds the bound');
+      return evaluationBenchmarks.save({ projectId, suite: JSON.parse(json), baseVersion });
+    },
+    'goal:benchmark-case': ({ projectId, id, baseVersion, caseId, item, remove = false }) => {
+      const { digest: _digest, ...suite } = evaluationBenchmarks.get({ projectId, id, version: baseVersion });
+      if (!suite.cases.some(c => c.id === caseId) && remove) throw new Error('Unknown benchmark case');
+      suite.cases = suite.cases.filter(c => c.id !== caseId);
+      if (!remove) { if (item?.id !== caseId) throw new Error('Case identity mismatch'); suite.cases.push(item); }
+      suite.version++; return evaluationBenchmarks.save({ projectId, suite, baseVersion });
+    },
+    'goal:evaluate': async ({ projectId, evaluation, candidate, worker, limits, runId, blockId, name, tools = [] }) => {
+      const project = proj(projectId); validateEvaluation(evaluation);
+      if (runId) {
+        if (!/^[\w-]{1,200}$/.test(runId)) throw new Error('Invalid source run identity');
+        if (!isCanonicalRun(project.store, runId)) throw new Error('Existing artifact must name a canonical run in this project');
+        const events = storedSnapshots.events(project.store.rootDir, runId);
+        const output = events.filter(e => e.type === 'block.output' && !e.data.port && (!blockId || e.data.blockId === blockId)).at(-1)?.data.content;
+        candidate = { text: String(output ?? '') };
+        if (!candidate.text) throw new Error('Select an explicit immutable artifact from this run');
+      }
+      if (typeof candidate?.text !== 'string' || candidate.text.length > 24000) throw new Error('Candidate artifact must contain at most 24,000 characters');
+      const recipe = serializeStack({ id: 'evaluate-artifact', name: 'Evaluate immutable candidate', root: { kind: 'sequence', id: 'root', children: [{ kind: 'block', id: 'artifact', use: 'flyt-blocks-judgement:immutable-artifact', config: { text: JSON.stringify({ candidate }) } }] } });
+      const state = await goals.create({ projectId, definition: { name: name ?? 'Candidate evaluation', objective: 'Evaluate the supplied immutable candidate under the fixed benchmark policy', criteria: [], tools, recipe, worker, evaluation, limits: { iterations: 1, calls: 20, minutes: 5, ...limits } } });
+      goals.putRecord(state, 'candidate-source', { candidate, digest: digest(candidate), sourceRun: runId ?? null });
+      return goals.start({ projectId, goalId: state.id });
+    },
+    'goal:evaluation-evidence': ({ projectId, goalId, record, offset = 0, limit = 12000 }) => {
+      if (!/^(report-|measurement-|reference-|transition-|benchmark-)/.test(record)) throw new Error('Select an evaluation evidence record');
+      const value = goals.inspect({ projectId, goalId, record }), json = JSON.stringify(value, null, 2), start = Math.max(0, Number(offset) || 0), size = Math.min(24000, Math.max(1, Number(limit) || 12000));
+      return { record, digest: digest(value), total: json.length, offset: start, text: json.slice(start, start + size), nextOffset: start + size < json.length ? start + size : null };
+    },
+    'goal:evaluation-compare': ({ projectId, goalId, candidate, previous }) => {
+      const state = goals.get(projectId, goalId), a = goals.inspect({ projectId, goalId, record: candidate }).evaluation, b = goals.inspect({ projectId, goalId, record: previous }).evaluation;
+      if (!a || !b || a.benchmarkVersion !== b.benchmarkVersion) throw new Error('Compare candidates under the same benchmark version');
+      return { preferred: rank(a, b, state.contract.evaluation.ranking), candidate: a, previous: b };
+    },
+    'goal:reference-review': args => goals.referenceReview(args),
     'goal:author-open': args => goalAuthoring.open(args),
     'goal:author-list': args => goalAuthoring.list(args),
     'goal:library': () => goalAuthoring.library(),

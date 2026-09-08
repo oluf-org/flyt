@@ -70,7 +70,7 @@ function configuredTree(root, {
         ? [base.instructions, skillText].filter(Boolean).join('\n\n')
         : base.instructions;
       const tier = useAuthoredTiers && typeof base.modelTier === 'string' ? base.modelTier : null;
-      const modelBacked = node.use !== 'flyt-blocks-judgement:human-checkpoint';
+      const modelBacked = !['flyt-blocks-judgement:human-checkpoint', 'flyt-blocks-judgement:immutable-artifact'].includes(node.use);
       const authored = tier
         ? (Array.isArray(tierWorkers?.[tier]) ? tierWorkers[tier] : [tierWorkers?.[tier]]).filter(worker => worker?.model)
         : [];

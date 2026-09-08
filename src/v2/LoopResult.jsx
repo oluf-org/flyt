@@ -3,6 +3,7 @@ import MarkdownView from '../MarkdownView.jsx';
 import { loopSummary } from '../../core/loopStatistics.js';
 import { count, cost, elapsed, loopLabel } from '../activityFormat.js';
 import ActivityIcon from '../ActivityIcon.jsx';
+import EvaluationResults from './EvaluationResults.jsx';
 import './loopResultStyles.css';
 
 export function LoopMetrics({ stats }) {
@@ -35,6 +36,7 @@ export default function LoopResult({ projectId, goal, onOpenRun }) {
       .finally(() => live && setLoading(false));
     return () => { live = false; };
   }, [projectId, goal.id, current?.artifact, revision]);
+  if (goal.contract.evaluation) return <EvaluationResults projectId={projectId} goal={goal} metrics={<LoopMetrics stats={data}/>}/>;
   return <section className="loop-result" aria-label="Loop result">
     <header className="loop-result-head"><ActivityIcon kind="loop" id={goal.id} size={32}/><div><h2>{loopLabel(goal.status)}</h2><p>{goal.reason}</p></div>
       {data.score != null && <div className="loop-check-ring" style={{ '--score': `${data.score * 100}%` }} title="Best checks passed"><strong>{data.passedChecks}<small>/{data.checks}</small></strong><span>checks</span></div>}</header>

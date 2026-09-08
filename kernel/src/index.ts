@@ -167,3 +167,4 @@ export function createKernel(options: KernelOptions = {}): Kernel {
 }
 
 export { Context };
+export { evaluators, EvaluatorRegistry, validateResult, metric, rank, digest } from './evaluation/registry.js';

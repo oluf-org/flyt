@@ -4,6 +4,12 @@ import type { JsonValue } from '../types.js';
 export function parseListOutput(content: string, field: string): JsonValue[] {
   const text = content.trim().replace(/^```(?:json)?\s*\n?/i, '').replace(/\s*```$/, '').trim();
   if (!text) return [];
+  // A JSON scalar is a wrong top-level type, not a Markdown task. Preserve
+  // prose/list compatibility while diagnosing explicit structured responses.
+  try {
+    const scalar = JSON.parse(text);
+    if (scalar === null || typeof scalar !== 'object') throw new TypeError(`The ${field} output must be a JSON array, not a scalar.`);
+  } catch (error) { if (error instanceof TypeError) throw error; }
   if (/^[\[{]/.test(text)) {
     let value: unknown;
     try { value = JSON.parse(text); }

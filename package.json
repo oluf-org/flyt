@@ -22,6 +22,8 @@
     "start": "npm run build && electron .",
     "test": "cross-env FLYT_SANDBOX_MODE=danger-full-access FLYT_TEST_MOCK_PROVIDER=1 node --test \"tests/**/*.test.js\"",
     "verify:workflow": "cross-env FLYT_SANDBOX_MODE=danger-full-access FLYT_TEST_MOCK_PROVIDER=1 node --test tests/workflowReliability.test.js",
+    "verify:evaluator": "npm run build:kernel && cross-env FLYT_SANDBOX_MODE=danger-full-access FLYT_TEST_MOCK_PROVIDER=1 node --test tests/robustEvaluation.test.js",
+    "verify:evaluator:fixture": "npm run build:kernel && node scripts/verify-robust-evaluator.mjs",
     "verify:goal": "npm run build:kernel && cross-env FLYT_SANDBOX_MODE=danger-full-access FLYT_TEST_MOCK_PROVIDER=1 node --test tests/goalController.test.js tests/goalFoundation.test.js tests/goalAuthoring.test.js tests/goalAuthoringModel.test.js tests/goalReuse.test.js",
     "verify:goal:app": "npm run build && node scripts/verify-goal-app.mjs",
     "verify:goal:authoring-ui": "npm run build:kernel && node scripts/verify-goal-authoring-ui.mjs",

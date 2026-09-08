@@ -12,6 +12,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { JsonValue } from '../types.js';
 import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js';
 import { AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
+import { robustEvaluationBlock, immutableArtifactBlock } from './blocks-evaluation.js';
 
 const PROMPT_REFINER_SYSTEM = [
   'Rewrite the request into a precise, self-contained brief: goal, constraints, deliverable, acceptance.',
@@ -245,6 +246,8 @@ export const humanCheckpointBlock: BlockDefinition = {
 
 /** Contribute the judgement blocks. */
 export function apply(ctx: Context): void {
+  ctx.blocks.register(robustEvaluationBlock);
+  ctx.blocks.register(immutableArtifactBlock);
   ctx.blocks.register(evaluationBlock);
   ctx.blocks.register(compareBlock);
   ctx.blocks.register(promptRefinerBlock);

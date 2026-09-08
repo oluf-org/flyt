@@ -8,11 +8,12 @@ import { parseGoalReply, validateGoalTools } from './goalController.js';
 import { AUTHORING_SYSTEM, authoringCapabilities, conversationContext, selectProjectFiles, readSelectedFile } from './goalAuthoringContext.js';
 import { boundedResponse, decodeAuthoringResponse, responseProblem, repairContext, REPAIR_SYSTEM, authoringEditContract } from './goalAuthoringProtocol.js';
 import { goalRequirements, referencedGoalPaths, validateRequiredPaths } from './goalRequirements.js';
+import { validateEvaluation } from './evaluation.js';
 
 const copy = value => structuredClone(value);
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = (code, message) => { throw Object.assign(new Error(`${code}: ${message}. No changes applied.`), { code }); };
-const fields = ['name', 'objective', 'constraints', 'criteria', 'tests', 'requiredPaths', 'limits', 'worker', 'tools', 'folder', 'folderMode', 'createFolder', 'maxParallel', 'plateau', 'selfRedesign', 'reviewResults'];
+const fields = ['name', 'objective', 'constraints', 'criteria', 'tests', 'evaluation', 'requiredPaths', 'limits', 'worker', 'tools', 'folder', 'folderMode', 'createFolder', 'maxParallel', 'plateau', 'selfRedesign', 'reviewResults'];
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const safeId = value => { if (!/^[\w-]{1,100}$/.test(value)) fail('INVALID_ID', 'Invalid record identity'); return value; };
 
@@ -214,6 +215,7 @@ export class GoalAuthoring {
       grants: [], proposals: [], requests: [], history: [], ui: { composer: '', quotes: [] }, authoringCalls: 0, knownUsd: 0, unknownCostCalls: 0 });
   }
   async validate(definition, projectId, complete = true) {
+    if (definition?.evaluation) validateEvaluation(definition.evaluation);
     if (!definition || JSON.stringify(definition).length > 150000) fail('INVALID_WORKFLOW', 'Definition is missing or too large');
     try { validateRequiredPaths(definition.requiredPaths); } catch (error) { fail('INVALID_WORKFLOW', error.message); }
     for (const [field, maximum] of [['name', 120], ['objective', 12000], ['constraints', 8000], ['folder', 1000]]) {

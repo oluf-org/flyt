@@ -1,0 +1,138 @@
+{
+  "results": [
+    {
+      "kind": "data",
+      "goalId": "59ab68bb-27ff-4514-9d90-1fa70bd6b25f",
+      "status": "achieved",
+      "iteration": 4,
+      "calls": 27,
+      "knownUsd": 0,
+      "elapsedMs": 5091,
+      "benchmarkVersion": 2,
+      "bestIteration": 4,
+      "transitions": [
+        {
+          "from": 1,
+          "to": 2,
+          "status": "automatically promoted"
+        }
+      ],
+      "attempts": [
+        {
+          "iteration": 1,
+          "eligible": true,
+          "quality": 3,
+          "errors": 0
+        },
+        {
+          "iteration": 2,
+          "eligible": false,
+          "quality": 1,
+          "errors": 0
+        },
+        {
+          "iteration": 3,
+          "eligible": false,
+          "quality": null,
+          "errors": 1
+        },
+        {
+          "iteration": 4,
+          "eligible": true,
+          "quality": 4,
+          "errors": 0
+        }
+      ]
+    },
+    {
+      "kind": "writing",
+      "goalId": "f4319d65-5585-443a-8a23-1b0d0d6d2b67",
+      "status": "achieved",
+      "iteration": 4,
+      "calls": 27,
+      "knownUsd": 0,
+      "elapsedMs": 5337,
+      "benchmarkVersion": 2,
+      "bestIteration": 4,
+      "transitions": [
+        {
+          "from": 1,
+          "to": 2,
+          "status": "automatically promoted"
+        }
+      ],
+      "attempts": [
+        {
+          "iteration": 1,
+          "eligible": true,
+          "quality": 3,
+          "errors": 0
+        },
+        {
+          "iteration": 2,
+          "eligible": false,
+          "quality": 1,
+          "errors": 0
+        },
+        {
+          "iteration": 3,
+          "eligible": false,
+          "quality": null,
+          "errors": 1
+        },
+        {
+          "iteration": 4,
+          "eligible": true,
+          "quality": 4,
+          "errors": 0
+        }
+      ]
+    },
+    {
+      "kind": "planning",
+      "goalId": "ad3f2b21-5a6b-4cea-90b6-764bb2688b1f",
+      "status": "achieved",
+      "iteration": 4,
+      "calls": 36,
+      "knownUsd": 0,
+      "elapsedMs": 9038,
+      "benchmarkVersion": 2,
+      "bestIteration": 4,
+      "transitions": [
+        {
+          "from": 1,
+          "to": 2,
+          "status": "automatically promoted"
+        }
+      ],
+      "attempts": [
+        {
+          "iteration": 1,
+          "eligible": true,
+          "quality": 3,
+          "errors": 0
+        },
+        {
+          "iteration": 2,
+          "eligible": false,
+          "quality": 1,
+          "errors": 0
+        },
+        {
+          "iteration": 3,
+          "eligible": false,
+          "quality": null,
+          "errors": 1
+        },
+        {
+          "iteration": 4,
+          "eligible": true,
+          "quality": 4,
+          "errors": 0
+        }
+      ]
+    }
+  ],
+  "observedAt": "2026-09-08T17:29:34.3139554Z",
+  "label": "SYNTHETIC desktop UI loops, observed again after app restart; no live-model reliability claim"
+}

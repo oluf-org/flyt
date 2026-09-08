@@ -453,7 +453,7 @@ bindIpc('config:get');
 bindIpc('flow:run', (projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) =>
   ({ projectId, flowId, userInput, workspaceDir, approvalMode, launch }));
 bindIpc('workflow:list');
-for (const action of ['list', 'get', 'stats', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft', 'author-open', 'author-read', 'author-edit', 'author-lock', 'author-ui', 'author-message', 'author-review', 'author-publish', 'review-result', 'author-cancel', 'author-list', 'author-delete', 'library', 'reuse', 'requirements']) {
+for (const action of ['list', 'get', 'stats', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft', 'author-open', 'author-read', 'author-edit', 'author-lock', 'author-ui', 'author-message', 'author-review', 'author-publish', 'review-result', 'author-cancel', 'author-list', 'author-delete', 'library', 'reuse', 'requirements', 'evaluators', 'benchmark-list', 'benchmark-get', 'benchmark-validate', 'benchmark-save', 'benchmark-export', 'benchmark-import', 'benchmark-case', 'evaluate', 'evaluation-evidence', 'evaluation-compare', 'reference-review']) {
   bindIpc(`goal:${action}`, args => args);
 }
 bindIpc('workflow:run', (projectId, workflowId, input = '', approvalMode = null, presetId = null, modelSelection = null) =>

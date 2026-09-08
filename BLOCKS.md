@@ -60,6 +60,12 @@ A generated Plan & dispatch worker is bounded. Its profile still warns at the so
 
 Every context checkpoint written during compaction names the tool calls whose results were compacted, so a worker with a bounded window can cite what it already read or read a narrower range instead of opening the same file again. A shell result that was refused or could not be confined carries an error and is never counted as durable progress, so it cannot reset loop detection or write a checkpoint. When the execution world reports that confined commands are unavailable, `work` and its generated children withhold `bash` and `run_gate` before the request is built, record a `commands_unavailable` warning, and tell the model to inspect with readers and say which verification it could not run.
 
+## Versioned evaluation blocks
+
+`flyt-blocks-judgement:robust-evaluation` runs the shared typed evaluator registry. Its `eligible` boolean and `status`, `comparison`, `report` strings can drive If/Until. A Plan target calls the production list executor; a task-graph target calls production planning/repair with `plannerOnly`, before workers are created. Strict raw-format checks remain separate from parser recovery. Judges are isolated, tool-free canonical model calls; command checks use the approved shell tool's structured durable result. Unknown measurements are explicit. The existing Evaluate block's ports and scoring are unchanged.
+
+`flyt-blocks-judgement:immutable-artifact` passes authored bounded `text` with no model call. It supports evaluation of immutable existing artifacts. Neither block installs winning prompts. See `docs/robust-evaluator.md` for schemas, examples, limits and reference transitions.
+
 ## Adding a block
 
 1. Add it to a plugin and register it through `ctx.blocks.register()`.

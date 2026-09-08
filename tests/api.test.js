@@ -399,6 +399,14 @@ test('the score and the archive are reachable from the same map', async () => {
   const empty = await api.invoke('bench:list', { projectId });
   assert.deepEqual(empty.cases, []);
   assert.match(empty.problems[0].error, /No suite directory/);
+  assert.equal((await api.invoke('bench:status', { projectId })).running, false);
+  assert.deepEqual(await api.invoke('bench:run', { projectId }), { started: true, suite: 'default' });
+  for (let attempt = 0; attempt < 100 && (await api.invoke('bench:status', { projectId })).running; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const benchmarkStatus = await api.invoke('bench:status', { projectId });
+  assert.equal(benchmarkStatus.running, false);
+  assert.match(benchmarkStatus.error, /No benchmark cases/);
   await assert.rejects(() => api.invoke('bench:compare', { projectId }), err =>
     err instanceof ApiError && err.code === 'not_enough_cards');
 

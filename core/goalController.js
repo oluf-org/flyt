@@ -10,6 +10,7 @@ import { serializeStack } from './stackstore.js';
 import { goalFolder, goalRequirements, validateRequiredPaths } from './goalRequirements.js';
 import { readSessionLogFile } from '#kernel';
 import { acquireOwner, ownerAlive, readOwner, writeAtomic, abortable, bounded as waitBounded } from './executionOwnership.js';
+import { validateEvaluation, validateSuite, evaluationRecipe, evaluateCandidate, targetMet, rank, digest } from './evaluation.js';
 
 const clone = value => structuredClone(value);
 const id = () => crypto.randomUUID();
@@ -88,6 +89,12 @@ function identity(folder) {
   if (!stat.isDirectory()) throw new Error('Goal workspace must be a directory');
   return { path: fs.realpathSync(folder), dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs };
 }
+// Some Windows Node builds report dev=0 (unavailable), while Electron reports
+// the volume serial. Preserve the other identity checks across those hosts.
+export function sameGoalFolder(a, b) {
+  return Boolean(a && b && a.path === b.path && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs
+    && (a.dev === b.dev || (process.platform === 'win32' && (a.dev === 0 || b.dev === 0))));
+}
 
 export class GoalController {
   constructor({ runs, project, worker, sandbox = {}, emit = () => {} }) {
@@ -118,6 +125,16 @@ export class GoalController {
   }
   save(state) { state.updatedAt = new Date().toISOString(); write(this.file(state.projectId, state.id), state); this.emit(state.projectId, state.id, state); }
   recordPath(state, name) { return path.join(path.dirname(this.file(state.projectId, state.id)), `${safe(name)}.json`); }
+  putRecord(state, name, value) { return immutable(this.recordPath(state, name), value); }
+  evaluationFolder(state, phase) {
+    const folder = within(state.workspace.path, `.goal-tests/${state.id}/${phase}`);
+    fs.mkdirSync(folder, { recursive: true }); return folder;
+  }
+  fixture(folder, fixture) {
+    const file = within(folder, fixture.path); fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') !== fixture.text) throw new Error('Candidate fixture was modified; use a fresh trial');
+    if (!fs.existsSync(file)) fs.writeFileSync(file, fixture.text, { flag: 'wx' });
+  }
   async blocks() {
     this.registry ??= (async () => {
       const kernel = await import('#kernel');
@@ -159,7 +176,7 @@ export class GoalController {
     const folder = fs.realpathSync(goalFolder(input, entry));
     const requiredPaths = validateRequiredPaths(input.requiredPaths);
     const criteria = input.criteria;
-    if (!Array.isArray(criteria) || !criteria.length || criteria.length > 30) throw new Error('Define 1–30 fixed acceptance checks');
+    if (!Array.isArray(criteria) || (!criteria.length && !input.evaluation) || criteria.length > 30) throw new Error('Define fixed acceptance checks or a versioned evaluation');
     for (const criterion of criteria) {
       if (!['output_contains', 'file_contains'].includes(criterion.type)) throw new Error('Checks support output_contains and file_contains');
       bounded(criterion.value, 2000, 'Expected content');
@@ -178,8 +195,11 @@ export class GoalController {
     const plateau = input.plateau ?? 3;
     if (!Number.isInteger(plateau) || plateau < 1 || plateau > 1000) throw new Error('Plateau must be 1–1000');
     validateGoalTools(input.tools ?? []);
+    const evaluation = input.evaluation ? validateEvaluation(input.evaluation) : null;
+    if (evaluation && evaluation.finalVerification.required && (input.tools ?? []).length) throw new Error('Independent held-out verification is unavailable with broad candidate or optimizer tools. Folder focus is not filesystem secrecy. Use a fresh tool-free experiment.');
+    if (evaluation?.targetConfig && Object.keys(evaluation.targetConfig).some(k => !['maxTasks', 'minTasks', 'parallelism', 'maxTokens', 'maxOutputWords'].includes(k))) throw new Error('Unsupported fixed block settings; model, prompts, response and recovery policy belong to their explicit contract fields');
     return {
-      version: 1, objective: bounded(input.objective, 8000, 'Objective'),
+      version: evaluation ? 2 : 1, ...(evaluation ? { evaluation, evaluationPolicy: 'robust-v1' } : { evaluationPolicy: 'legacy-containment-v1' }), objective: bounded(input.objective, 8000, 'Objective'),
       constraints: String(input.constraints ?? '').slice(0, 8000), criteria: clone(criteria), tests: clone(tests), requiredPaths,
       folder, folderIdentity: identity(folder), folderMode: 'focus', createFolder: Boolean(input.createFolder), limits, maxParallel, plateau,
       selfRedesign: Boolean(input.selfRedesign), reviewAi: Boolean(input.reviewAi), reviewResults: Boolean(input.reviewResults),
@@ -193,6 +213,7 @@ export class GoalController {
     if (!contract.worker?.model) throw new Error('Select a connected model before starting a Goal');
     await this.validateSource(definition.recipe, contract);
     if (definition.setup) await this.validateSource(definition.setup, contract);
+    if (contract.evaluation?.referencePreparation && !definition.setup) throw new Error('Reference preparation requires a fixed Setup once workflow');
     const state = {
       id: id(), projectId, name: String(definition.name || 'New goal').slice(0, 120),
       createdAt: new Date().toISOString(), contract, status: 'ready', reason: 'Ready to start',
@@ -202,6 +223,11 @@ export class GoalController {
       calls: 0, knownUsd: 0, unknownCostCalls: 0, elapsedMs: 0, plateauCount: 0,
       best: null, current: null, memory: [], history: [],
     };
+    if (contract.evaluation) {
+      state.benchmark = clone(contract.evaluation.suite); state.referenceRevision = 0; state.promotions = [];
+      state.bestPartial = null; state.holdout = { exposed: false, usedBy: null };
+      this.putRecord(state, contract.evaluation.referencePreparation ? 'benchmark-definition' : `benchmark-${state.benchmark.version}`, state.benchmark);
+    }
     immutable(this.recordPath(state, 'recipe-1'), { version: 1, source: definition.recipe, baseRevision: null, author: 'human', rationale: 'Initial recipe' });
     this.save(state); return state;
   }
@@ -423,6 +449,7 @@ export class GoalController {
     }
   }
   packet(state) {
+    const development = summary => { if (!summary) return summary; const { finalVerification, ...safe } = summary; return safe; };
     return {
       goalId: state.id, objective: state.contract.objective, constraints: state.contract.constraints,
       criteria: state.contract.criteria, tests: state.contract.tests, iteration: state.iteration + 1,
@@ -430,7 +457,8 @@ export class GoalController {
       recipeRevision: state.activeRevision, folder: state.workspace.path, folderMode: 'focus',
       projectRequirements: goalRequirements(state.contract, this.project(state.projectId), { workspace: state.workspace.path }),
       remaining: { calls: state.contract.limits.calls - state.calls, iterations: state.contract.limits.iterations - state.iteration },
-      best: state.best, current: state.current, findings: state.memory,
+      best: development(state.best), current: development(state.current), findings: state.memory,
+      ...(state.contract.evaluation ? { evaluationFeedback: { target: state.contract.evaluation.target, policy: state.contract.evaluation.ranking, developmentCases: state.contract.evaluation.suite.cases.filter(item => item.split === 'development').map(({ id, input, requirements }) => ({ id, input, requirements })), current: state.current?.evaluation ?? null, constraints: 'Only development measurements are supplied. References and held-out cases are private to runtime evaluation.' } } : {}),
       recipe: state.contract.selfRedesign ? read(this.recordPath(state, `recipe-${state.activeRevision}`)).source : undefined,
       outputContract: 'The FINAL recipe step returns JSON {"candidate":{"text":"your result"},"findings":["short uncertain or observed finding"],"proposal":{"baseRevision":number,"rationale":"why","commands":[{"name":"stack:configure-block","args":{"nodeId":"id","config":{}}}]}}. Intermediate steps and setup return their ordinary block output, following their own schema (for example a task list or an Evaluation verdict); do not wrap those outputs in the Goal envelope. proposal is optional; it edits only the recipe at the next boundary. For workflow optimization, candidate.source is canonical version 2 workflow YAML; fixed tests run through the ordinary engine. Do not claim verification: runtime checks decide success.',
     };
@@ -441,7 +469,8 @@ export class GoalController {
     const validation = this.validateSource(source, state.contract);
     const parsed = await (record.abort ? abortable(validation, record.abort.signal) : validation);
     this.check(record);
-    const candidateTest = phase.startsWith('candidate-');
+    const evaluatorWork = phase.startsWith('evaluation-');
+    const candidateTest = phase.startsWith('candidate-') || evaluatorWork;
     // Test workers see their input and inherited policy, never expected answers
     // or the optimizer's memory. This keeps evaluation separate from building.
     const goalContext = candidateTest ? {
@@ -463,7 +492,8 @@ export class GoalController {
         // The adapter compacts against this same bound before accounting and
         // dispatch. This is an invariant check, not the context recovery path.
         if (JSON.stringify(request.messages ?? []).length > guard.maxMessageChars) throw new Error('Goal context policy did not fit the model request');
-        if (request.model !== state.contract.worker.model) throw new Error('A descendant cannot change the Goal model contract');
+        const judgeModels = evaluatorWork ? [...state.contract.evaluation.suite.evaluators, ...state.contract.evaluation.suite.cases.flatMap(c => c.evaluators ?? [])].filter(e => ['reference', 'ai-rubric'].includes(e.id)).map(e => e.config.model) : [];
+        if (request.model !== state.contract.worker.model && !judgeModels.includes(request.model)) throw new Error('A descendant cannot change the Goal model contract');
         state.calls++; state.unknownCostCalls++; this.save(state);
       },
       afterCall: async result => {
@@ -571,18 +601,154 @@ export class GoalController {
     state.outputRecovery = { ...state.outputRecovery, exhausted: true }; this.save(state);
     return null;
   }
+  async measured(record, candidate, label, suite = record.state.benchmark, split = 'development') {
+    const file = this.recordPath(record.state, `measurement-${label}-${suite.version}-${split}`);
+    if (fs.existsSync(file)) return read(file);
+    this.putRecord(record.state, `candidate-${label}`, { candidate, digest: digest(candidate), model: record.state.contract.worker, evaluationDigest: digest(record.state.contract.evaluation) });
+    const measured = await evaluateCandidate(this, record, candidate, label, suite, split);
+    const { reports, ...summary } = measured;
+    if (split === 'development') summary.feedback = reports.slice(0, 12).map(report => ({ caseId: report.caseId, status: report.status,
+      checks: report.checks.filter(check => check.status !== 'pass').slice(0, 4).map(({ name, status, code, explanation }) => ({ name, status, code, explanation: explanation.slice(0, 180) })) }));
+    if ([record.state.contract.evaluation.ranking.primary, ...(record.state.contract.evaluation.ranking.tieBreakers ?? [])].some(key => summary.metrics[key]?.value == null)) { summary.comparable = false; summary.rankingReason = 'A configured ranking measurement is unavailable'; }
+    return this.putRecord(record.state, `measurement-${label}-${suite.version}-${split}`, summary);
+  }
+  async activateReference(record) {
+    const { state } = record, proposal = state.pendingPromotion;
+    if (!proposal || !proposal.verified || proposal.decision === 'rejected') return;
+    if (proposal.authorization === 'manual' && proposal.decision !== 'approved') { state.status = 'paused'; state.reason = 'Verified reference proposal awaits the configured manual review'; this.save(state); return; }
+    try {
+      this.check(record);
+      // Committing a version does not activate its scores. All dispatch keys
+      // remain stable if shutdown interrupts any remeasurement below.
+      this.putRecord(state, `benchmark-${proposal.suite.version}`, proposal.suite);
+      const baseline = await this.measured(record, state.contract.evaluation.baseline, `promotion-${proposal.id}-baseline`, proposal.suite);
+      const leader = state.best ? read(this.recordPath(state, state.best.artifact)).candidate : proposal.candidate;
+      const leading = await this.measured(record, leader, `promotion-${proposal.id}-leader`, proposal.suite);
+      if (!baseline.comparable || !leading.comparable) { proposal.status = 'pending activation'; proposal.reason = 'Baseline or leader re-evaluation is incomplete'; this.save(state); return; }
+      const transition = { id: proposal.id, from: state.benchmark.version, to: proposal.suite.version, authorization: proposal.authorization, proposal: proposal.record, baseline, leading, at: new Date().toISOString() };
+      this.putRecord(state, `transition-${proposal.id}`, transition);
+      state.benchmark = proposal.suite; state.baseline = baseline;
+      state.baselines = [...(state.baselines ?? []).filter(b => b.benchmarkVersion !== baseline.benchmarkVersion), baseline];
+      if (state.best) state.best = { ...state.best, evaluation: leading, eligible: leading.eligible, verified: false };
+      if (state.best && !leading.eligible) { state.bestPartial = state.best; state.best = null; }
+      state.promotions = [...state.promotions.filter(p => p.id !== proposal.id), { ...transition, status: proposal.authorization === 'automatic' ? 'automatically promoted' : 'promoted' }];
+      state.referenceProposal = { ...proposal, status: proposal.authorization === 'automatic' ? 'automatically promoted' : 'promoted' };
+      state.referenceRevision++; state.pendingPromotion = null; state.plateauCount = 0; this.save(state);
+    } catch (error) {
+      proposal.status = 'pending activation'; proposal.reason = error.code === 'goal_limit' ? 'Insufficient remaining owner budget for baseline and leader re-evaluation' : String(error.message); this.save(state); throw error;
+    }
+  }
+  async challengeReference(record, candidate, evaluation, number) {
+    const { state } = record, policy = state.contract.evaluation.promotion;
+    if (policy.mode === 'off' || !evaluation.eligible || !evaluation.comparable || evaluation.comparison !== 'better' || state.promotions.filter(p => !p.id.startsWith('restore-')).length >= policy.limit) return evaluation;
+    const key = `reference-proposal-${number}-${state.benchmark.version}`;
+    if (state.referenceAttempts?.includes(key)) return evaluation;
+    const previous = state.benchmark, id = `${number}-${previous.version}`;
+    state.referenceProposal = { id, status: 'verifying', record: key, candidateDigest: digest(candidate), previousVersion: previous.version, evidence: evaluation.reportIds, uncertainty: 'Model-based agreement under a fixed rubric; not a proof of superiority' }; this.save(state);
+    const confirmation = await this.measured(record, candidate, `confirmation-${id}`, previous);
+    if (!confirmation.eligible || !confirmation.comparable || confirmation.comparison !== 'better') {
+      const proposal = { ...state.referenceProposal, status: 'inconclusive', confirmation, reason: 'Fresh confirmation did not establish conclusive challenger preference' };
+      state.referenceAttempts = [...(state.referenceAttempts ?? []), key];
+      this.putRecord(state, key, proposal); state.referenceProposal = proposal; this.save(state); return evaluation;
+    }
+    const suite = clone(previous); suite.version++;
+    // Each case's actual block output becomes its reference, never the prompt
+    // that produced it. Held-out references require their own fresh evidence.
+    let held = null;
+    if (suite.cases.some(c => c.split === 'held-out')) {
+      held = await this.measured(record, candidate, `reference-held-${id}`, previous, 'held-out');
+      state.holdout.usedBy = number;
+      if (!held.eligible || held.comparison !== 'better') {
+        state.referenceProposal = { ...state.referenceProposal, status: 'inconclusive', confirmation, reason: 'Held-out reference confirmation did not qualify' };
+        state.referenceAttempts = [...(state.referenceAttempts ?? []), key];
+        this.putRecord(state, key, state.referenceProposal); this.save(state); return evaluation;
+      }
+    }
+    for (const item of suite.cases) {
+      const reportId = (item.split === 'held-out' ? held : confirmation).reportIds.find(id => read(this.recordPath(state, id)).caseId === item.id);
+      const report = read(this.recordPath(state, reportId));
+      item.references = [{ text: report.artifact.text, provenance: { goalId: state.id, runId: report.runId, artifactDigest: report.artifactDigest, priorVersion: previous.version, proposal: key }, limitations: 'Automatically qualified by fixed checks and independently invoked model agreement', reviewed: false }];
+    }
+    const proposal = { ...state.referenceProposal, status: 'proposed', verified: true, candidate, suite, confirmation, authorization: policy.mode, decision: policy.mode === 'automatic' ? 'approved' : null };
+    state.referenceAttempts = [...(state.referenceAttempts ?? []), key];
+    this.putRecord(state, key, proposal); state.referenceProposal = proposal; state.pendingPromotion = proposal; this.save(state);
+    await this.activateReference(record);
+    if (state.benchmark.version !== previous.version) return this.measured(record, candidate, `candidate-${number}-activated`, state.benchmark);
+    return evaluation;
+  }
+  referenceReview({ projectId, goalId, baseRevision, decision, version }) {
+    const state = this.get(projectId, goalId);
+    if (state.live) throw new Error('Review references at a settled iteration boundary');
+    const release = this.acquire(state);
+    try {
+      if (read(this.file(projectId, goalId)).referenceRevision !== baseRevision) throw new Error('Stale reference revision');
+      if (baseRevision !== state.referenceRevision) throw new Error('Stale reference revision');
+      if (decision === 'restore') {
+        const prior = read(this.recordPath(state, `benchmark-${Number(version)}`));
+        const suite = { ...prior, version: state.benchmark.version + 1 };
+        state.pendingPromotion = { id: `restore-${state.referenceRevision}`, verified: true, suite, authorization: 'manual', decision: 'approved', status: 'pending activation', record: `reference-restore-${state.referenceRevision}`, candidate: state.best ? read(this.recordPath(state, state.best.artifact)).candidate : state.contract.evaluation.baseline };
+        this.putRecord(state, state.pendingPromotion.record, state.pendingPromotion);
+      } else {
+        if (!['approve', 'reject'].includes(decision) || !state.pendingPromotion?.verified) throw new Error('Only a verified proposal may be approved; failed gates and inconclusive evidence cannot be overridden');
+        state.pendingPromotion.decision = decision === 'approve' ? 'approved' : 'rejected';
+        this.putRecord(state, `reference-review-${state.referenceRevision}`, { decision, proposal: state.pendingPromotion.record, at: new Date().toISOString() });
+        if (decision === 'reject') { state.referenceProposal = { ...state.pendingPromotion, status: 'rejected' }; state.pendingPromotion = null; }
+      }
+      state.referenceRevision++; state.status = 'paused'; state.reason = 'Reference decision recorded; resume within the original limits'; this.save(state); return state;
+    } finally { release(); }
+  }
   async drive(record) {
     const state = record.state;
     state.controlIntent = null;
     if (!state.workspace) {
-      if (JSON.stringify(identity(state.contract.folder)) !== JSON.stringify(state.contract.folderIdentity)) throw new Error('The selected parent folder identity changed');
+      if (!sameGoalFolder(identity(state.contract.folder), state.contract.folderIdentity)) throw new Error('The selected parent folder identity changed');
       const target = state.contract.createFolder ? path.join(state.contract.folder, `goal-${state.id}`) : state.contract.folder;
       fs.mkdirSync(target, { recursive: true });
       state.workspace = identity(target); this.save(state);
-    } else if (JSON.stringify(identity(state.workspace.path)) !== JSON.stringify(state.workspace)) throw new Error('Goal workspace identity changed; inspect before restarting');
+    } else if (!sameGoalFolder(identity(state.workspace.path), state.workspace)) throw new Error('Goal workspace identity changed; inspect before restarting');
     if (!state.setupDone) {
       const setup = await this.once(record, 'setup', state.definition.setup, state.contract.objective);
       state.setupDone = true; state.setupResult = { runId: setup.runId, summary: setup.output.slice(0, 2000) }; this.save(state);
+    }
+    if (state.contract.evaluation) {
+      if (state.contract.evaluation.referencePreparation && !state.referencesPrepared) {
+        const setup = read(this.recordPath(state, 'child-setup'));
+        const prepared = parseGoalReply(setup.output);
+        if (!prepared?.references || typeof prepared.references !== 'object') throw new Error('Reference setup must return {"references":{"case-id":"complete reference artifact"}}');
+        const suite = clone(state.contract.evaluation.suite);
+        for (const item of suite.cases) {
+          const text = prepared.references[item.id];
+          if (typeof text !== 'string' || !text.trim() || text.length > 24000) throw new Error(`Missing or oversized prepared reference for ${item.id}`);
+          const phase = `evaluation-reference-setup-${item.id}`;
+          const request = { id: phase, goalId: state.id, caseId: item.id, trialId: phase, benchmarkVersion: `${suite.id}@${suite.version}:preparation`, artifact: { text }, originalRequest: item.input, constraints: item.requirements ?? state.contract.constraints,
+            evaluators: [...suite.evaluators, ...(item.evaluators ?? [])].filter(e => e.id !== 'reference') };
+          const checked = await this.once(record, phase, evaluationRecipe({ request, target: 'artifact' }), item.input);
+          const report = JSON.parse(checked.output); this.putRecord(state, `report-${phase}`, report);
+          if (!report.eligible) throw new Error(`Prepared reference ${item.id} did not pass fixed verification`);
+          item.references = [{ text, provenance: { goalId: state.id, runId: setup.runId, validationRunId: checked.runId, originalRequest: item.input }, reviewed: false, limitations: 'Prepared by the fixed setup workflow; validation is recorded separately' }];
+        }
+        validateSuite(suite); state.benchmark = suite; state.referencesPrepared = true;
+        this.putRecord(state, 'prepared-references', { suite, runId: setup.runId }); this.putRecord(state, `benchmark-${suite.version}`, suite); this.save(state);
+      }
+      const resumingTransition = Boolean(state.pendingPromotion);
+      await this.activateReference(record);
+      if (state.status === 'paused') return;
+      if (state.pendingPromotion) { state.status = 'paused'; state.reason = state.pendingPromotion.reason ?? 'Reference activation needs complete comparable evidence'; this.save(state); return; }
+      if (resumingTransition && state.current) {
+        const previous = read(this.recordPath(state, state.current.artifact));
+        const measured = await this.measured(record, previous.candidate, `transition-current-${state.referenceRevision}`);
+        state.current = { ...state.current, evaluation: measured, eligible: measured.eligible, verified: false };
+        if (rank(measured, state.best?.evaluation, state.contract.evaluation.ranking)) state.best = state.current;
+        let achieved = targetMet(measured, state.contract.evaluation);
+        if (achieved && state.contract.evaluation.finalVerification.required) {
+          if (state.holdout.exposed) achieved = false;
+          else achieved = targetMet(await this.measured(record, previous.candidate, `transition-final-${state.referenceRevision}`, state.benchmark, 'held-out'), state.contract.evaluation);
+        }
+        if (achieved) { state.current.verified = true; if (state.best?.iteration === state.current.iteration) state.best = state.current; state.status = 'achieved'; state.reason = 'Target and configured final verification passed under the activated reference version'; this.save(state); return; }
+      }
+      if (!state.baseline && state.contract.evaluation.baseline) {
+        state.baseline = await this.measured(record, state.contract.evaluation.baseline, 'baseline'); state.baselines = [state.baseline]; this.save(state);
+      }
     }
     while (state.iteration < state.contract.limits.iterations) {
       this.check(record);
@@ -603,6 +769,7 @@ export class GoalController {
         state.status = 'paused'; state.reason = 'Waiting for draft review at the iteration boundary'; this.save(state); return;
       }
       const number = state.iteration + 1;
+      if (state.holdout?.usedBy != null && state.holdout.usedBy < number) { state.holdout.exposed = true; this.save(state); }
       state.iterationIntent ??= { number, revision: state.activeRevision, phase: `iteration-${number}${state.repairAttempt ? `-repair-${state.repairAttempt}` : ''}` }; this.save(state);
       const recipe = read(this.recordPath(state, `recipe-${state.iterationIntent.revision}`));
       let committed;
@@ -635,30 +802,48 @@ export class GoalController {
         }
         return { index, passed: content.includes(criterion.value), digest: hash(content), ...(criterion.path ? { path: criterion.path, content } : {}) };
       });
-      const score = [...checks, ...tests].filter(check => check.passed).length / (checks.length + tests.length);
+      const score = checks.length + tests.length ? [...checks, ...tests].filter(check => check.passed).length / (checks.length + tests.length) : null;
+      let evaluation = null, achieved = score === 1, finalVerification = null;
+      if (state.contract.evaluation) {
+        evaluation = await this.measured(record, candidate, `candidate-${number}${state.repairAttempt ? `-retry-${state.repairAttempt}` : ''}`);
+        if ([...checks, ...tests].some(c => !c.passed)) evaluation = { ...evaluation, eligible: false, rejection: 'Legacy fixed acceptance checks remain mandatory' };
+        evaluation = await this.challengeReference(record, candidate, evaluation, number);
+        achieved = targetMet(evaluation, state.contract.evaluation);
+        if (achieved && state.contract.evaluation.finalVerification.required) {
+          if (state.holdout.exposed || (state.holdout.usedBy != null && state.holdout.usedBy !== number)) {
+            finalVerification = { eligible: false, reason: 'Held-out set has been exposed; create a new benchmark with fresh verification cases' }; achieved = false;
+          } else {
+            state.holdout.usedBy = number; this.save(state);
+            finalVerification = await this.measured(record, candidate, `final-${number}`, state.benchmark, 'held-out');
+            achieved = targetMet(finalVerification, state.contract.evaluation);
+          }
+        }
+      }
       const learned = Array.isArray(envelope.findings) ? envelope.findings.filter(finding => typeof finding === 'string').slice(0, 4).map(text => ({ text: text.slice(0, 500), iteration: number, source: result.runId, status: 'hypothesis' })) : [];
       committed = immutable(this.recordPath(state, `iteration-${number}`), {
         number, revision: state.iterationIntent.revision, runId: result.runId, candidate, checks, tests, score,
-        achieved: score === 1, findings: learned, proposal: envelope.proposal ?? null, knownUsd: state.knownUsd, calls: state.calls,
+        achieved, ...(evaluation ? { evaluation, finalVerification, evaluationPolicy: 'robust-v1' } : {}), findings: learned, proposal: envelope.proposal ?? null, knownUsd: state.knownUsd, calls: state.calls,
         needsInput: typeof envelope.needsInput === 'string' ? envelope.needsInput.slice(0, 2000) : null,
       });
       }
       // A replay uses the same immutable record and updates all projections in
       // one atomic state replacement. It cannot increment the iteration twice.
-      const improved = !state.best || committed.score > state.best.score;
+      const improved = committed.evaluation ? rank(committed.evaluation, state.best?.evaluation ?? null, state.contract.evaluation.ranking) : !state.best || committed.score > state.best.score;
       const summary = { iteration: number, revision: committed.revision, score: committed.score, runId: committed.runId,
         artifact: `iteration-${number}`, preview: committed.candidate.text.slice(0, 500), verified: committed.achieved,
-        findings: committed.findings.map(finding => finding.text).slice(0, 2) };
+        findings: committed.findings.map(finding => finding.text).slice(0, 2), ...(committed.evaluation ? { score: null, evaluation: committed.evaluation, eligible: committed.evaluation.eligible, finalVerification: committed.finalVerification } : {}) };
       state.current = summary;
-      if (improved) { state.best = summary; state.plateauCount = 0; } else state.plateauCount++;
+      if (improved) { state.best = summary; state.plateauCount = 0; } else if (!committed.evaluation || committed.evaluation.comparable) state.plateauCount++;
+      if (committed.evaluation && !summary.eligible && (!state.bestPartial || committed.evaluation.metrics.gateRate.value > state.bestPartial.evaluation.metrics.gateRate.value)) state.bestPartial = { ...summary, verified: false };
       state.memory = [...state.memory, ...committed.findings].filter((item, index, all) => all.findIndex(other => other.text === item.text) === index).slice(-10);
       state.history.push(summary); state.iteration = number; state.iterationIntent = null;
       state.pendingProposal = committed.proposal;
+      if (state.pendingPromotion) { state.status = 'paused'; state.reason = state.pendingPromotion.reason ?? 'Reference proposal awaits activation or review'; this.save(state); return; }
       if (state.contract.reviewResults) {
         state.pendingResult = { artifact: `iteration-${number}`, digest: hash(JSON.stringify(committed)), iteration: number, revision: committed.revision };
         state.status = 'paused'; state.reason = 'Waiting for human result review'; this.save(state); return;
       }
-      if (committed.achieved) { state.status = 'achieved'; state.reason = 'All fixed acceptance checks passed'; }
+      if (committed.achieved) { state.status = 'achieved'; state.reason = committed.evaluation ? 'Mandatory gates, declared target and configured final verification passed on the observed suite' : 'All fixed acceptance checks passed'; }
       else if (committed.needsInput) { state.status = 'needs_input'; state.reason = committed.needsInput; }
       else if (state.plateauCount >= state.contract.plateau) { state.status = 'plateau'; state.reason = 'No improvement across the configured comparable iterations'; }
       this.save(state);

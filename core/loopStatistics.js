@@ -7,6 +7,8 @@ export function loopSummary(state, usage = state.usage ?? {}) {
   const checks = (state.contract?.criteria?.length ?? 0) + (state.contract?.tests?.length ?? 0);
   const score = state.best?.score ?? null;
   return {
+    evaluationPolicy: state.contract?.evaluationPolicy ?? 'legacy-containment-v1',
+    evaluation: state.best?.evaluation ?? null, bestPartial: state.bestPartial ?? null,
     id: state.id, goalId: state.id, projectId: state.projectId, kind: 'loop', name: state.name,
     createdAt: state.createdAt, updatedAt: state.updatedAt ?? state.createdAt,
     status: state.status, stage: state.status === 'achieved' ? 'done' : state.status,
