@@ -646,6 +646,7 @@ const mockHistorySummary = {
 
 export function installDevMock() {
   window.flyt = {
+    chatHistory: async projectId => (await window.flyt.listRuns(projectId)).map(row => ({ ...row, kind: 'workflow' })),
     historySummary: async () => structuredClone(mockHistorySummary),
     historyTrace: async runId => runId === 'run-history-refactor' ? structuredClone(mockHistoryEvents) : [],
     exportHistory: async format => ({ cancelled: false, file: `preview-history.${format === 'csv' ? 'csv' : 'jsonl'}` }),

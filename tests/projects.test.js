@@ -298,3 +298,20 @@ test('projects: workspace storage creates .flyt on open; stores are per project'
   assert.equal(folderEntry.runner, undefined);
   assert.notEqual(defaultEntry.store.rootDir, folderEntry.store.rootDir);
 });
+
+test('projects: history reopens a closed appdata identity across restarts', () => {
+  const { registry, root } = makeRegistry();
+  const { project } = registry.createAppdata('Review release history');
+  const evidence = path.join(project.appDir, 'runs', 'saved-result.txt');
+  fs.writeFileSync(evidence, 'saved loop result');
+  registry.close(project.id);
+  assert.equal(registry.open(project.id).project, project);
+  registry.close(project.id);
+  const fresh = new ProjectRegistry({ defaultRunsDir: path.join(root, 'runs'), appDataDir: path.join(root, 'appdata') });
+  const reopened = fresh.open(project.id).project;
+  assert.equal(reopened.id, project.id);
+  assert.equal(reopened.kind, 'appdata');
+  assert.equal(fs.readFileSync(evidence, 'utf8'), 'saved loop result');
+  assert.throws(() => fresh.open('appdata:missing-project'), /no longer available/);
+  assert.throws(() => fresh.open('appdata:..'), /Invalid project/);
+});

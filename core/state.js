@@ -115,6 +115,9 @@ export class RunStore {
           stackId: meta.stackId ?? null,
           flowId: meta.flowId ?? null,
           flowName: meta.flowName ?? null,
+          goalId: meta.goalId ?? null,
+          conversationId: meta.conversationId ?? null,
+          parentRunId: meta.parentRunId ?? null,
           turns: Number(meta.turn ?? 0),
           interrupted: Boolean(meta.interrupted),
           error: meta.error ?? null

@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 // templates and settings are global (T2) and stay unscoped.
 const api = {
   goal: (action, args = {}) => {
-    if (!['list', 'get', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft', 'author-open', 'author-read', 'author-edit', 'author-lock', 'author-ui', 'author-message', 'author-review', 'author-publish', 'review-result', 'author-cancel', 'author-list', 'author-delete', 'library', 'reuse', 'requirements'].includes(action)) throw new Error('Unknown Goal action');
+    if (!['list', 'get', 'stats', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft', 'author-open', 'author-read', 'author-edit', 'author-lock', 'author-ui', 'author-message', 'author-review', 'author-publish', 'review-result', 'author-cancel', 'author-list', 'author-delete', 'library', 'reuse', 'requirements'].includes(action)) throw new Error('Unknown Goal action');
     return ipcRenderer.invoke(`goal:${action}`, args);
   },
   reportRendererError: details => ipcRenderer.invoke('diagnostics:renderer', details),
@@ -12,6 +12,7 @@ const api = {
   revealDiagnostics: () => ipcRenderer.invoke('diagnostics:reveal'),
   sandboxDiagnostics: (refresh = false) => ipcRenderer.invoke('sandbox:diagnostics', refresh),
   historySummary: (filters = {}) => ipcRenderer.invoke('history:summary', filters),
+  chatHistory: projectId => ipcRenderer.invoke('history:activity', projectId),
   historyTrace: (runId) => ipcRenderer.invoke('history:trace', runId),
   exportHistory: (format = 'jsonl', filters = {}) => ipcRenderer.invoke('history:export', format, filters),
   v2Build: () => ipcRenderer.invoke('v2:build'),

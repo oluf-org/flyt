@@ -336,7 +336,8 @@ ipcMain.handle('sandbox:diagnostics', async (_event, refresh = false) => {
   const report = await api.invoke('diag:doctor', { projectId: registry.activeId, refresh: Boolean(refresh) });
   return report.executionWorld ?? null;
 });
-ipcMain.handle('history:summary', (_event, filters = {}) => engine.telemetryQuery(filters ?? {}));
+ipcMain.handle('history:summary', (_event, filters = {}) => api.invoke('history:summary', { filters: filters ?? {} }));
+ipcMain.handle('history:activity', (_event, projectId) => api.invoke('history:activity', { projectId }));
 ipcMain.handle('history:trace', (_event, runId) => engine.telemetryTrace(String(runId ?? '')));
 ipcMain.handle('history:export', async (_event, format = 'jsonl', filters = {}) => {
   const type = format === 'csv' ? 'csv' : 'jsonl';
@@ -452,7 +453,7 @@ bindIpc('config:get');
 bindIpc('flow:run', (projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) =>
   ({ projectId, flowId, userInput, workspaceDir, approvalMode, launch }));
 bindIpc('workflow:list');
-for (const action of ['list', 'get', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft', 'author-open', 'author-read', 'author-edit', 'author-lock', 'author-ui', 'author-message', 'author-review', 'author-publish', 'review-result', 'author-cancel', 'author-list', 'author-delete', 'library', 'reuse', 'requirements']) {
+for (const action of ['list', 'get', 'stats', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft', 'author-open', 'author-read', 'author-edit', 'author-lock', 'author-ui', 'author-message', 'author-review', 'author-publish', 'review-result', 'author-cancel', 'author-list', 'author-delete', 'library', 'reuse', 'requirements']) {
   bindIpc(`goal:${action}`, args => args);
 }
 bindIpc('workflow:run', (projectId, workflowId, input = '', approvalMode = null, presetId = null, modelSelection = null) =>

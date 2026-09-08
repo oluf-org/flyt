@@ -13,6 +13,10 @@ All normalized events use schema version 1 and the common envelope in `core/tele
 
 Model requests/results, stream milestones, planner diagnostics, tool calls and approvals, workspace effects, verification gates, human waits, and scheduler events enter through the existing immutable append boundaries. Canonical kernel session events and compatibility-run audit events use the same envelope. Collection begins with this telemetry schema; existing run logs remain available in their original trace surfaces and are not eagerly copied into the global store, avoiding a large first-launch I/O spike.
 
+The execution host binds telemetry to the owning project, including when a different project tab is active. Projection version 2 understands both canonical camel-case usage and provider API usage fields, correlates model responses with requests, and recovers missing measurements from older normalized records. A rebuilt or out-of-date SQLite index replays the missing raw file bytes before serving queries. An index failure falls back to JSONL.
+
+Loop lifecycle changes also write `loop.snapshot` metadata. Historical loop statistics select the latest snapshot per project and goal; they do not add another copy of child-run model usage to global totals. Open projects backfill their existing loop summaries from saved goal state and canonical child-session usage. These snapshots keep completed loops in global statistics after their project tab closes. Chat history remains project-scoped and reads saved runs and goals directly.
+
 The global store is stricter than a run log: model bodies are represented by counts, tool arguments by sorted keys/byte counts/SHA-256 hashes, and secret-shaped fields are redacted recursively. Complete tool results remain in their run artifact and History links to that artifact.
 
 ## Request-level fields

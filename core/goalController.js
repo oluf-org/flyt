@@ -116,7 +116,7 @@ export class GoalController {
     return fs.readdirSync(root).filter(name => fs.existsSync(path.join(root, name, 'state.json')))
       .map(name => this.get(projectId, name)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
-  save(state) { state.updatedAt = new Date().toISOString(); write(this.file(state.projectId, state.id), state); this.emit(state.projectId, state.id); }
+  save(state) { state.updatedAt = new Date().toISOString(); write(this.file(state.projectId, state.id), state); this.emit(state.projectId, state.id, state); }
   recordPath(state, name) { return path.join(path.dirname(this.file(state.projectId, state.id)), `${safe(name)}.json`); }
   async blocks() {
     this.registry ??= (async () => {

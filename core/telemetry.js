@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
 
 export const TELEMETRY_SCHEMA_VERSION = 1;
-export const PROJECTION_VERSION = 1;
+export const PROJECTION_VERSION = 2;
 export const SOURCES = new Set(['provider_reported', 'harness_observed', 'derived', 'estimated']);
 const FLUSH_MS = 120;
 const MAX_BATCH = 250;
@@ -26,7 +26,7 @@ function sqliteModule() {
 }
 
 function iso(value = Date.now()) { return new Date(value).toISOString(); }
-function safeNumber(value) { return Number.isFinite(Number(value)) ? Number(value) : null; }
+function safeNumber(value) { return value == null || value === '' || typeof value === 'boolean' ? null : Number.isFinite(Number(value)) ? Number(value) : null; }
 function sum(object, keys) {
   for (const key of keys) if (safeNumber(object?.[key]) != null) return Number(object[key]);
   return null;
@@ -62,6 +62,23 @@ function clean(value, depth = 0) {
   ]));
 }
 
+// Canonical sessions contain full prompts and outputs. Global analytics keeps
+// their shape and size; the original content stays in the run's session log.
+function canonicalMetadata(value, depth = 0) {
+  if (depth > 5) return '[depth]';
+  if (!value || typeof value !== 'object') return clean(value);
+  if (Array.isArray(value)) return value.slice(0, 100).map(item => canonicalMetadata(item, depth + 1));
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (/^(content|reasoning|text|input|output|delta|prompt|systemPrompt|userMessage|goalContext|messages|arguments|args|result|candidate|preview|instructions)$/.test(key)) {
+      if (key === 'messages') out.messages = Array.isArray(item) ? item.length : item;
+      else if (key === 'args' || key === 'arguments') Object.assign(out, structuralArgs(item));
+      else out[`${key}Chars`] = typeof item === 'string' ? item.length : JSON.stringify(item ?? null).length;
+    } else out[key] = canonicalMetadata(item, depth + 1);
+  }
+  return clean(out);
+}
+
 function envelope(input) {
   const at = input.at ?? iso();
   return {
@@ -84,15 +101,15 @@ function envelope(input) {
   };
 }
 
-function usageMeasurements(usage = {}, record = {}) {
+export function usageMeasurements(usage = {}, record = {}) {
   const detail = usage.completion_tokens_details ?? usage.output_tokens_details ?? {};
   return {
-    promptTokens: sum(usage, ['prompt_tokens', 'input_tokens']),
-    completionTokens: sum(usage, ['completion_tokens', 'output_tokens']),
-    reasoningTokens: sum(detail, ['reasoning_tokens']) ?? sum(usage, ['reasoning_tokens']),
-    cachedTokens: sum(usage.prompt_tokens_details, ['cached_tokens']) ?? sum(usage, ['cached_tokens']),
-    cacheWriteTokens: sum(usage.prompt_tokens_details, ['cache_write_tokens']) ?? sum(usage, ['cache_write_tokens']),
-    costUsd: safeNumber(record.cost ?? usage.cost ?? usage.total_cost),
+    promptTokens: sum(usage, ['promptTokens', 'prompt_tokens', 'input_tokens']),
+    completionTokens: sum(usage, ['completionTokens', 'completion_tokens', 'output_tokens']),
+    reasoningTokens: sum(detail, ['reasoning_tokens']) ?? sum(usage, ['reasoningTokens', 'reasoning_tokens']),
+    cachedTokens: sum(usage.prompt_tokens_details, ['cached_tokens']) ?? sum(usage, ['cachedTokens', 'cached_tokens']),
+    cacheWriteTokens: sum(usage.prompt_tokens_details, ['cache_write_tokens']) ?? sum(usage, ['cacheWriteTokens', 'cache_write_tokens']),
+    costUsd: safeNumber(record.cost ?? usage.costUsd ?? usage.cost ?? usage.total_cost),
   };
 }
 
@@ -203,10 +220,20 @@ export function normalizeSessionEvent(projectId, runId, event) {
   const source = event.type === 'llm.response' && data.usage ? 'provider_reported' : 'harness_observed';
   const attributes = event.type === 'tool.call'
     ? { tool: data.call?.name ?? data.name ?? null, callId: data.call?.id ?? data.callId ?? null, ...structuralArgs(data.call?.arguments ?? data.args) }
-    : clean(data);
+    : canonicalMetadata(data);
+  if (event.type === 'llm.response') {
+    attributes.nativeToolCalls = data.toolCalls?.length ?? 0;
+    attributes.ok = data.ok !== false;
+  }
+  if (event.type === 'tool.result' && data.result && typeof data.result === 'object') {
+    attributes.ok = data.result.ok ?? (data.result.status ? data.result.status === 'ok' : undefined);
+    attributes.resultStatus = data.result.status ?? null;
+  }
   const measurements = event.type === 'llm.response'
     ? {
         ...usageMeasurements(data.usage ?? {}, data),
+        visibleChars: typeof data.content === 'string' ? data.content.length : null,
+        reasoningChars: typeof data.reasoning === 'string' ? data.reasoning.length : null,
         requestedOutputBudget: safeNumber(data.requestedOutputBudget),
         effectiveOutputBudget: safeNumber(data.effectiveOutputBudget),
         toolCallRepairCount: safeNumber(data.toolCallRepairCount),
@@ -247,9 +274,32 @@ class SqliteIndex {
       CREATE INDEX IF NOT EXISTS events_kind_at ON events(kind, at);
       CREATE INDEX IF NOT EXISTS events_run_at ON events(run_id, at);
       CREATE INDEX IF NOT EXISTS events_model_results ON events(kind, at) WHERE kind='llm.result';
+      CREATE TABLE IF NOT EXISTS source_files (name TEXT PRIMARY KEY, bytes INTEGER NOT NULL);
     `);
     this.insert = this.db.prepare(`INSERT OR IGNORE INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   }
+  reconcile(eventsDir) {
+    const lookup = this.db.prepare('SELECT bytes FROM source_files WHERE name = ?');
+    for (const name of fs.readdirSync(eventsDir).filter(name => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(name))) {
+      const file = path.join(eventsDir, name), size = fs.statSync(file).size;
+      const indexed = lookup.get(name)?.bytes ?? 0;
+      if (indexed === size) continue;
+      const offset = indexed <= size ? indexed : 0;
+      const fd = fs.openSync(file, 'r');
+      const buffer = Buffer.alloc(size - offset);
+      try { fs.readSync(fd, buffer, 0, buffer.length, offset); } finally { fs.closeSync(fd); }
+      // A crash may leave a partial final line. Revisit it on the next sync.
+      const end = buffer.lastIndexOf(10) + 1;
+      const rows = [];
+      for (const line of buffer.subarray(0, end).toString('utf8').split('\n')) {
+        if (!line.trim()) continue;
+        try { rows.push(JSON.parse(line)); } catch { /* Match the raw reader's malformed-line handling. */ }
+      }
+      this.append(rows);
+      this.noteFile(name, offset + end);
+    }
+  }
+  noteFile(name, bytes) { this.db.prepare('INSERT OR REPLACE INTO source_files VALUES (?, ?)').run(name, bytes); }
   append(rows) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -297,8 +347,8 @@ export class TelemetryStore {
     this.queue = [];
     this.timer = null;
     fs.mkdirSync(this.eventsDir, { recursive: true });
-    try { this.index = new SqliteIndex(path.join(rootDir, 'telemetry.sqlite')); }
-    catch { this.index = null; }
+    try { this.index = new SqliteIndex(path.join(rootDir, 'telemetry.sqlite')); this.index.reconcile(this.eventsDir); }
+    catch { this.index?.close(); this.index = null; }
   }
   get backend() { return this.index ? 'jsonl+sqlite' : 'jsonl'; }
   record(input) {
@@ -323,11 +373,16 @@ export class TelemetryStore {
     }
     // Raw first. The SQLite index is explicitly disposable and rebuildable.
     for (const [day, lines] of byDay) fs.appendFileSync(path.join(this.eventsDir, `${day}.jsonl`), `${lines.join('\n')}\n`, 'utf8');
-    try { this.index?.append(rows); } catch { /* raw data already survived */ }
+    try { this.index?.reconcile(this.eventsDir); }
+    catch { this.index?.close(); this.index = null; /* Fall back to the authoritative raw reader. */ }
     return rows.length;
   }
   read(filters = {}) {
-    this.flush();
+    const flushed = this.flush();
+    if (!flushed && this.index) {
+      try { this.index.reconcile(this.eventsDir); }
+      catch { this.index.close(); this.index = null; }
+    }
     if (this.index) return this.index.all(filters);
     const selected = datesBetween(filters.from, filters.to);
     const names = selected ?? fs.readdirSync(this.eventsDir).filter(name => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(name)).map(name => name.slice(0, 10));

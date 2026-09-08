@@ -5,6 +5,8 @@ import ChangeRequestDialog from './ChangeRequestDialog.jsx';
 import GoalPicker from './GoalPicker.jsx';
 import GoalLibrary from './GoalLibrary.jsx';
 import GoalRequirements from './GoalRequirements.jsx';
+import LoopResult from './LoopResult.jsx';
+import { LOOP_SETTLED } from '../../core/loopStatistics.js';
 import { findGoalNode } from './goalCanvasData.js';
 import { GOAL_RECIPE } from './goalDefaults.js';
 
@@ -52,7 +54,8 @@ function ReviewDialog({ definition, requirements, goal, onClose, onApprove, busy
     <div className="goal-actions"><button className="goal-primary" disabled={busy} onClick={onApprove}>Approve and {action}</button><button disabled={busy} onClick={onClose}>Back to draft</button></div></dialog>;
 }
 
-export default function GoalWorkspace({ projectId, onOpenRun }) {
+export default function GoalWorkspace({ projectId, initialGoalId = null, onOpenRun }) {
+  const [resultView, setResultView] = useState(null);
   const [goals, setGoals] = useState([]), [draft, setDraft] = useState(null), [models, setModels] = useState([]);
   const [savedDrafts, setSavedDrafts] = useState([]);
   const [library, setLibrary] = useState(null), [requirements, setRequirements] = useState(null);
@@ -124,7 +127,7 @@ export default function GoalWorkspace({ projectId, onOpenRun }) {
       const id = restoreId || item?.contract.authoringId;
       const next = id ? await invoke('author-read', { draftId: id }) : await invoke('author-open', { goalId, definition: { ...defaults, recipe: GOAL_RECIPE } });
       if (!alive.current || generation !== opening.current) return;
-      uiReady.current = false; commitDraft(next); setRequirements(null); setSelected(null); setChatOpen(false); setDetail(false); setReview(false); setInspection(null); setRevisionView('draft');
+      uiReady.current = false; commitDraft(next); setRequirements(null); setSelected(null); setChatOpen(false); setDetail(false); setReview(false); setInspection(null); setRevisionView('draft'); setResultView(null);
       const buffer = localRead(`goal-edits:${projectId}:${next.id}`);
       setEdits(buffer?.values ?? {}); editBase.current = buffer?.baseRevision ?? next.revision; setRevisionView(next.goalId && !Object.keys(buffer?.values ?? {}).length ? 'running' : 'draft');
       const saved = localRead(`goal-ui:${projectId}:${next.id}`) ?? next.ui;
@@ -141,7 +144,7 @@ export default function GoalWorkspace({ projectId, onOpenRun }) {
     const poll = async () => { if (polling) return; polling = true; try { await refresh(); } catch (caught) { if (alive.current) setError(caught.message); } finally { polling = false; } };
     poll();
     window.flyt.getSettings().then(settings => { if (alive.current) setModels((settings.activeModels ?? []).filter(item => item.enabled !== false)); }).catch(caught => alive.current && setError(caught.message));
-    const saved = localRead(`goal-active:${projectId}`); if (saved) open(null, saved);
+    const saved = localRead(`goal-active:${projectId}`); if (initialGoalId) open(initialGoalId); else if (saved) open(null, saved);
     const timer = setInterval(poll, 1500);
     return () => { alive.current = false; clearInterval(timer); };
   }, []);
@@ -306,7 +309,8 @@ export default function GoalWorkspace({ projectId, onOpenRun }) {
         onPointerUp={() => { resizing.current = null; }} onPointerCancel={() => { resizing.current = null; }}
         onKeyDown={event => { if (['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) { event.preventDefault(); setSidebarWidth(width => event.key === 'Home' ? 320 : Math.max(280, Math.min(460, width + (event.key === 'ArrowLeft' ? -10 : 10)))); } }}/>
       <main className="goal-main">
-        {detail && recipe ? <BlockEditor stack={(phase === 'setup' ? setup : recipe).stack} source={(phase === 'setup' ? setup : recipe).source} blocks={{ list: () => recipe.blocks, resolve: use => recipe.blocks.find(item => item.use === use) }} commands={revisionView === 'running' || (phase === 'setup' && goal) ? null : { invoke: async (name, args) => {
+        {goal && <div className="goal-result-tabs" role="group" aria-label="Loop detail view"><button aria-pressed={!(resultView ?? LOOP_SETTLED.has(goal.status))} onClick={() => setResultView(false)}>Loop</button><button aria-pressed={resultView ?? LOOP_SETTLED.has(goal.status)} onClick={() => setResultView(true)}>Results &amp; stats</button></div>}
+        {goal && (resultView ?? LOOP_SETTLED.has(goal.status)) ? <LoopResult key={goal.id} projectId={projectId} goal={goal} onOpenRun={onOpenRun}/> : detail && recipe ? <BlockEditor stack={(phase === 'setup' ? setup : recipe).stack} source={(phase === 'setup' ? setup : recipe).source} blocks={{ list: () => recipe.blocks, resolve: use => recipe.blocks.find(item => item.use === use) }} commands={revisionView === 'running' || (phase === 'setup' && goal) ? null : { invoke: async (name, args) => {
           if (dirty) throw new Error('Save sidebar field edits before structural edits');
           const value = await invoke('draft', { source: draft.definition[phase || 'recipe'], commands: [{ name, args }] });
           const next = await invoke('author-edit', { baseRevision: draft.revision, operations: [{ op: 'replace', address: phase || 'recipe', value: value.source }] }); commitDraft(next);

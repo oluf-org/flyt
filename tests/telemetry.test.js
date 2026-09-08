@@ -87,6 +87,48 @@ test('tool telemetry retains safe structure rather than argument payloads', () =
   assert.doesNotMatch(JSON.stringify(structure), /private|secret/);
 });
 
+test('canonical usage and model attribution survive historical projection and model filters', () => {
+  const created = normalizeSessionEvent('p', 'r', { seq: 0, at: '2026-09-01T10:00:00Z', type: 'run.created', data: { stackId: 'workflow' } });
+  const request = normalizeSessionEvent('p', 'r', { seq: 1, at: '2026-09-01T10:00:01Z', type: 'llm.request', data: { callId: 'c', model: 'model-a' } });
+  const response = normalizeSessionEvent('p', 'r', { seq: 2, at: '2026-09-01T10:00:03Z', type: 'llm.response', data: {
+    callId: 'c', content: 'Visible answer', route: { effective: 'provider/model-a' },
+    usage: { promptTokens: 50, completionTokens: 20, reasoningTokens: 10, cachedTokens: 15, costUsd: .025 },
+  } });
+  const finished = normalizeSessionEvent('p', 'r', { seq: 3, at: '2026-09-01T10:00:04Z', type: 'run.stage', data: { stage: 'done' } });
+  assert.equal(response.measurements.promptTokens, 50);
+  assert.equal(response.measurements.costUsd, .025);
+  assert.equal(response.measurements.visibleChars, 14);
+  assert.equal(response.attributes.content, undefined);
+  assert.equal(response.attributes.contentChars, 14);
+  const view = projectHistory([created, request, { ...response, measurements: {} }, finished], { model: 'model-a' });
+  assert.equal(view.totals.modelCalls, 1);
+  assert.equal(view.totals.promptTokens, 50, 'older normalized rows recover their canonical usage');
+  assert.equal(view.models[0].medianLatencyMs, 2000);
+  assert.equal(view.models[0].noVisibleOutputRate, 0);
+  assert.equal(view.runs[0].status, 'done');
+  assert.equal(view.runs[0].workflow, 'workflow');
+  const unknown = normalizeSessionEvent('p', 'unknown', { type: 'llm.response', data: { usage: { costUsd: null, promptTokens: null } } });
+  assert.equal(unknown.measurements.costUsd, null);
+  assert.equal(unknown.measurements.promptTokens, null);
+});
+
+test('a rebuilt SQLite index recovers raw history and follows later raw-only writes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-history-rebuild-'));
+  const eventsDir = path.join(root, 'events'); fs.mkdirSync(eventsDir);
+  const file = path.join(eventsDir, '2026-09-01.jsonl');
+  const first = normalizeSessionEvent('p', 'r', { at: '2026-09-01T10:00:00Z', type: 'run.created', data: { stackId: 'test' } });
+  fs.writeFileSync(file, JSON.stringify(first) + '\n');
+  const store = new TelemetryStore(root);
+  try {
+    assert.equal(store.read().length, 1);
+    const second = normalizeSessionEvent('p', 'r', { at: '2026-09-01T10:00:01Z', type: 'run.stage', data: { stage: 'done' } });
+    fs.appendFileSync(file, JSON.stringify(second) + '\n');
+    store.record({ projectId: 'p', runId: 'another', kind: 'run.created' });
+    assert.equal(store.read().length, 3, 'an index write must not skip raw-only events');
+    assert.equal(store.read().length, 3, 'refreshing does not duplicate events');
+  } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('history projection keeps reasoning descriptive and names no-visible output accurately', () => {
   const results = [
     { schemaVersion: 1, eventId: '1', traceId: 'r', spanId: 's1', runId: 'r', projectId: 'p', at: '2026-09-01T10:00:00Z', kind: 'llm.result', source: 'provider_reported', attributes: { model: 'm', ok: true, nativeToolCalls: 0 }, measurements: { promptTokens: 10, completionTokens: 100, reasoningTokens: 90, visibleChars: 20, durationMs: 1000 } },

@@ -14,9 +14,10 @@ export const BUILD = 'build';
 export const LIBRARY = 'library';
 export const MODELS = 'models';
 export const HISTORY = 'history';
+export const CHATS = 'chats';
 export const GOALS = 'goals';
 
-export const DESTINATIONS = Object.freeze([WORK, BUILD, GOALS, LIBRARY, MODELS, HISTORY]);
+export const DESTINATIONS = Object.freeze([WORK, BUILD, GOALS, CHATS, LIBRARY, MODELS, HISTORY]);
 
 /**
  * A location in the shell: a destination, an optional addressed run, and an
@@ -38,7 +39,7 @@ export function traceOf(location) {
 /** Navigate to a permanent destination, carrying the run and the workflow
  *  through so moving between Work and Build never loses either one. */
 export function navigate(location, to) {
-  return { dest: to, run: location?.run ?? null, workflow: location?.workflow ?? null };
+  return { dest: to, run: location?.run ?? null, workflow: location?.workflow ?? null, ...(location?.goal ? { goal: location.goal } : {}) };
 }
 
 /** Address a workflow: Build, editing that one. */
@@ -70,7 +71,8 @@ export function heading(dest) {
   if (dest === BUILD) return 'Build';
   if (dest === LIBRARY) return 'Library';
   if (dest === MODELS) return 'Models';
-  if (dest === HISTORY) return 'History';
+  if (dest === HISTORY) return 'Statistics';
+  if (dest === CHATS) return 'Chats';
   if (dest === WORK) return 'Work';
   return null;
 }
@@ -88,7 +90,8 @@ export function hint(dest) {
   if (dest === BUILD) return 'Build — every workflow in this project, and the one you are editing';
   if (dest === LIBRARY) return 'Library — everything installed, and the plugins that install it';
   if (dest === MODELS) return 'Models — the catalog and what each one costs';
-  if (dest === HISTORY) return 'History — global model behavior, metrics and technical traces';
+  if (dest === HISTORY) return 'Statistics — loops, models and workflow usage';
+  if (dest === CHATS) return 'Chats — previous loops and workflows';
   return null;
 }
 

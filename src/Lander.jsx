@@ -26,7 +26,9 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import Constellation from './Constellation.jsx';
 import Logo from './Logo.jsx';
 import ConfigModal from './ConfigModal.jsx';
-import { sigil } from './sigil.js';
+import ActivityIcon from './ActivityIcon.jsx';
+import { loopLabel } from './activityFormat.js';
+import './v2/chatHistoryStyles.css';
 import { runStatus, runTimeLabel } from './runList.js';
 import LaunchInputs from './LaunchInputs.jsx';
 import { ModelBadge, ModelPicker, workerLabel } from './ModelPicker.jsx';
@@ -185,7 +187,7 @@ function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef,
 
 export default function Lander({
   projectName, projectless, recents = [], seed,
-  runs = [], onOpenRun,
+  runs = [], onOpenRun, onOpenHistory = null,
   flows = [], flowId, modeId = null, onSelect, configs = {},
   canonicalWorkflows = false,
   compareOn = false, onToggleCompare, slotB = null, onSelectB,
@@ -526,13 +528,13 @@ export default function Lander({
             for returning users and quietly advertises the sigil identity. */}
         {!projectless && (
           <div className="lander-recent-runs">
-            <span className="section-label">Recent</span>
+            <div className="lander-recents-head"><span className="section-label">Recent</span>{onOpenHistory && <button onClick={onOpenHistory}>Chat history ↗</button>}</div>
             {runs.length === 0 ? (
               <div className="muted lander-recents-empty">Runs will appear here.</div>
             ) : (
               <div className="lander-runs-list">
                 {runs.slice(0, 5).map(run => {
-                  const status = runStatus(run);
+                  const status = run.kind === 'loop' ? { ...runStatus(run), label: loopLabel(run.status) } : runStatus(run);
                   return (
                     <button
                       key={run.id}
@@ -541,11 +543,7 @@ export default function Lander({
                       onClick={() => onOpenRun?.(run.id)}
                       title={`${run.name} · ${status.label}`}
                     >
-                      <span
-                        className={'run-sigil ' + status.kind}
-                        aria-hidden="true"
-                        dangerouslySetInnerHTML={{ __html: sigil(run.id, 20) }}
-                      />
+                      <span className={'run-sigil ' + status.kind}><ActivityIcon kind={run.kind} id={run.id} size={20}/></span>
                       <span className="lander-run-name">{run.name}</span>
                       <span className="lander-run-meta mono">
                         <span className="lander-run-time">{runTimeLabel(run)}</span>

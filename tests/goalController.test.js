@@ -572,3 +572,32 @@ test('another controller observes the owner and can stop validation that never r
   assert.equal(f.seen.length, 0);
   await owner.shutdown(); await watcher.shutdown();
 });
+
+
+test('completed loops share durable statistics with chat history and the global statistics page', async t => {
+  const f = await fixture(t, (_, count) => response(count === 1 ? 'ALPHA' : 'ALPHA BETA'));
+  const state = await f.invoke('create', { definition: f.definition });
+  await f.invoke('start', { goalId: state.id });
+  const done = await finish(f.invoke, state.id);
+  assert.equal(done.status, 'achieved', done.reason);
+  const stats = await f.invoke('stats', { goalId: state.id });
+  assert.equal(stats.iterations, 2);
+  assert.equal(stats.calls, 2);
+  assert.equal(stats.tokens, 140);
+  assert.equal(stats.knownUsd, .002);
+  assert.equal(stats.unknownCostCalls, 0);
+  assert.equal(stats.passedChecks, 2);
+  assert.deepEqual(stats.history.map(item => item.score), [.5, 1]);
+  assert.equal(stats.history[0].checks.filter(check => check.passed).length, 1);
+  const chats = await f.api.invoke('history:activity', { projectId: f.projectId });
+  assert.deepEqual(chats.map(row => [row.id, row.kind]), [[state.id, 'loop']]);
+  const historical = await f.api.invoke('history:summary', { filters: { projectId: f.projectId } });
+  assert.equal(historical.loops.totals.count, 1);
+  assert.equal(historical.loops.totals.calls, 2);
+  assert.equal(historical.loops.rows[0].tokens, stats.tokens);
+  assert.equal(historical.totals.modelCalls, 2, 'loop snapshots must not duplicate model usage');
+  assert.equal((await f.api.invoke('history:summary', { filters: { model: 'no-match' } })).loops.totals.count, 0);
+  f.engine.registry.close(f.projectId);
+  const closed = await f.api.invoke('history:summary', {});
+  assert.equal(closed.loops.rows.find(row => row.id === state.id).tokens, stats.tokens);
+});

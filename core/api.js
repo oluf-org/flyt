@@ -35,6 +35,8 @@ import {
 } from './runProjection.js';
 import { RunController } from './runController.js';
 import { GoalController } from './goalController.js';
+import { loopSummary, aggregateLoops, selectLoops, chatHistory, LOOP_SETTLED } from './loopStatistics.js';
+import { createLoopUsageReader } from './loopUsage.js';
 import { GoalAuthoring } from './goalAuthoring.js';
 import { createAuthoringModelCaller } from './goalAuthoringModel.js';
 import { parentRunIdOf, repairInterruptedSessions } from '#kernel';
@@ -260,6 +262,10 @@ export function createApi(engine) {
       stackSource: request.stackSource ?? null,
       goalGuard: request.goalGuard ?? null,
       onSessionEvent: (runId, event) => {
+        if (Number.isFinite(event?.seq)) {
+          try { engine.telemetry?.recordSessionEvent(entry.id, runId, event); }
+          catch { /* Analytics must not affect execution. */ }
+        }
         pushEvents(runId, event);
         if (!event?.type || SNAPSHOT_UPDATE_EVENTS.has(event.type)) pushUpdate(runId);
       },
@@ -299,11 +305,20 @@ export function createApi(engine) {
     return active[0] ?? null;
   };
 
+  const readLoopUsage = createLoopUsageReader();
   const goals = new GoalController({
     runs: runController, project: proj, worker: supervisorWorker,
     sandbox: runtimeConfig.sandbox ?? {},
-    emit: (projectId, goalId) => engine.emitWorkflow?.(projectId, { kind: 'goal', goalId }),
+    emit: (projectId, goalId, state) => {
+      engine.emitWorkflow?.(projectId, { kind: 'goal', goalId });
+      if (state) {
+        try { engine.telemetry?.record({ projectId, kind: 'loop.snapshot', source: 'harness_observed',
+          attributes: { loop: loopSummary(state, LOOP_SETTLED.has(state.status) ? readLoopUsage(proj(projectId).store, state) : undefined) } }); }
+        catch { /* Analytics must not affect loop settlement. */ }
+      }
+    },
   });
+  const summarizeLoop = (projectId, state, runIds) => loopSummary(state, readLoopUsage(proj(projectId).store, state, runIds));
 
   const appendWorkflowSummary = async (entry, host, runId) => {
     if (runtimeConfig.supervisor?.terminalSummary === false) return null;
@@ -1054,6 +1069,48 @@ export function createApi(engine) {
     },
 
     // Supervisor launch: a narrower profile, through the same controller.
+    'history:activity': async ({ projectId }) => {
+      const entry = proj(projectId);
+      await runController.reconcile(projectId);
+      const loops = goals.list(projectId).map(state => loopSummary(state));
+      const runs = entry.store.runSummaries().map(row => ({ ...row, lifecycle: runController.lifecycle(projectId, row.id) }));
+      return chatHistory(runs, loops);
+    },
+    'history:summary': ({ filters = {} } = {}) => {
+      // Backfill open projects from their durable records; saved snapshots keep
+      // closed projects represented without opening or activating their tabs.
+      const stored = engine.telemetry.read({ kinds: ['loop.snapshot'], limit: 250_000 })
+        .map(event => event.attributes?.loop).filter(Boolean);
+      const current = registry.listOpen().flatMap(project => {
+        const runIds = proj(project.id).store.listRuns();
+        return goals.list(project.id).map(state => {
+          const row = summarizeLoop(project.id, state, runIds);
+          const previous = stored.findLast(item => item.id === row.id && item.projectId === row.projectId);
+          if (previous?.updatedAt !== row.updatedAt || previous?.tokens !== row.tokens || previous?.status !== row.status) {
+            engine.telemetry.record({ projectId: project.id, kind: 'loop.snapshot', source: 'harness_observed', attributes: { loop: row } });
+          }
+          return row;
+        });
+      });
+      const all = selectLoops([...stored, ...current]);
+      const rows = selectLoops(all, filters);
+      const data = engine.telemetryQuery(filters);
+      return { ...data, loops: { rows, totals: aggregateLoops(rows) }, facets: {
+        models: [...new Set([...(data.facets?.models ?? []), ...all.map(row => row.model).filter(Boolean)])].sort(),
+        projects: [...new Set([...(data.facets?.projects ?? []), ...all.map(row => row.projectId)])].sort(),
+      } };
+    },
+    'goal:stats': ({ projectId, goalId }) => {
+      const state = goals.get(projectId, goalId);
+      const summary = summarizeLoop(projectId, state);
+      return { ...summary, history: summary.history.map(item => {
+        try {
+          const record = goals.inspect({ projectId, goalId, record: item.artifact });
+          return { ...item, calls: record.calls ?? null, knownUsd: record.knownUsd ?? null,
+            checks: record.checks ?? [], tests: (record.tests ?? []).map(({ output, ...test }) => test) };
+        } catch { return { ...item, unavailable: true }; }
+      }) };
+    },
     'goal:list': ({ projectId }) => goals.list(projectId),
     'goal:author-open': args => goalAuthoring.open(args),
     'goal:author-list': args => goalAuthoring.list(args),

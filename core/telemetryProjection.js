@@ -1,6 +1,6 @@
 // Pure, versioned projections for the History surface. Raw events remain the
 // authority; every value returned here says which projection produced it.
-import { PROJECTION_VERSION } from './telemetry.js';
+import { PROJECTION_VERSION, usageMeasurements } from './telemetry.js';
 
 const n = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const avg = values => values.length ? values.reduce((a, b) => a + n(b), 0) / values.length : null;
@@ -11,7 +11,7 @@ const percentile = (values, p) => {
   if (!sorted.length) return null;
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))];
 };
-const modelOf = e => e.attributes?.model ?? e.attributes?.effectiveModel ?? 'unknown';
+const modelOf = e => e.attributes?.model ?? e.attributes?.effectiveModel ?? e.attributes?.route?.effective?.split('/').slice(1).join('/') ?? 'unknown';
 const toolNameOf = e => e.attributes?.tool ?? e.attributes?.toolName ?? 'unknown';
 const toolSucceeded = e => e.attributes?.ok === true || e.attributes?.resultStatus === 'success' || e.attributes?.status === 'ok';
 const gateSucceeded = e => e.attributes?.ok === true || ['pass', 'passed'].includes(e.attributes?.status)
@@ -30,7 +30,28 @@ function filtersMatch(event, filters) {
 }
 
 export function projectHistory(events, filters = {}) {
-  const rows = events.filter(event => filtersMatch(event, filters));
+  const callRequests = new Map(events.filter(event => event.kind === 'llm.request' && event.attributes?.callId)
+    .map(event => [`${event.projectId}:${event.runId}:${event.attributes.callId}`, event]));
+  // Old normalized records still carry the canonical provider usage. Repair
+  // their missing measurements in this projection without rewriting raw logs.
+  events = events.map(event => {
+    if (event.kind !== 'llm.result') return event;
+    const usage = usageMeasurements(event.attributes?.usage ?? {}, event.attributes);
+    const measurements = { ...event.measurements };
+    for (const [key, value] of Object.entries(usage)) if (measurements[key] == null) measurements[key] = value;
+    const request = callRequests.get(`${event.projectId}:${event.runId}:${event.attributes?.callId}`);
+    if (request && measurements.durationMs == null) measurements.durationMs = Math.max(0, Date.parse(event.at) - Date.parse(request.at));
+    if (typeof event.attributes?.content === 'string') measurements.visibleChars ??= event.attributes.content.length;
+    if (typeof event.attributes?.reasoning === 'string') measurements.reasoningChars ??= event.attributes.reasoning.length;
+    measurements.visibleChars ??= event.attributes?.contentChars ?? null;
+    measurements.reasoningChars ??= event.attributes?.reasoningChars ?? null;
+    const model = modelOf(event) === 'unknown' && request ? modelOf(request) : modelOf(event);
+    return { ...event, measurements, attributes: { ...event.attributes, model,
+      nativeToolCalls: event.attributes?.nativeToolCalls ?? event.attributes?.toolCalls?.length ?? 0 } };
+  });
+  const matchingRuns = new Set(events.filter(event => filtersMatch(event, filters)).map(event => `${event.projectId}:${event.runId}`));
+  const rows = events.filter(event => filtersMatch(event, filters) || (['run.created', 'run.stage'].includes(event.kind)
+    && matchingRuns.has(`${event.projectId}:${event.runId}`)));
   const results = rows.filter(e => e.kind === 'llm.result');
   const requests = rows.filter(e => e.kind === 'llm.request');
   const tools = rows.filter(e => e.kind === 'tool.result');
@@ -192,8 +213,8 @@ export function projectHistory(events, filters = {}) {
     })).sort((a, b) => b.calls - a.calls).slice(0, 500),
     runs: [...runs.values()].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 250),
     facets: {
-      models: [...new Set(requests.map(modelOf).concat(results.map(modelOf)))].filter(Boolean).sort(),
-      projects: [...new Set(rows.map(e => e.projectId).filter(Boolean))].sort(),
+      models: [...new Set(events.filter(event => ['llm.request', 'llm.result'].includes(event.kind)).map(modelOf))].filter(Boolean).sort(),
+      projects: [...new Set(events.map(e => e.projectId).filter(Boolean))].sort(),
     },
   };
 }

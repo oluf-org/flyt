@@ -235,7 +235,16 @@ export class ProjectRegistry {
   }
 
   open(folder = null) {
-    const entry = this.#entryFor(folder);
+    // Historical statistics can reopen an app-managed project by its stable
+    // identity, including after its tab was closed in an earlier process.
+    let entry;
+    if (isAppdataId(folder)) {
+      const slug = appdataSlugOf(folder);
+      if (!slug || /[\\/:]/.test(slug) || slug === '.' || slug === '..') throw new Error('Invalid project identity');
+      const directory = this.#appDirFor(slug);
+      if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) throw new Error('The original project is no longer available.');
+      entry = this.#appdataEntryFor(slug);
+    } else entry = this.#entryFor(folder);
     // "Whenever a project lacks a color" covers pre-color projects and anything
     // else that arrived without one: assigned on first open, never reassigned.
     this.#colorFor(entry);

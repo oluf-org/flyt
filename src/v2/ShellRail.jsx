@@ -14,6 +14,7 @@ import React from 'react';
 import { DESTINATIONS, heading, hint } from './shellRouting.js';
 
 const ICON = {
+  chats: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 1-8 8H5l-3 3V11a9 9 0 0 1 18 0Z"/><path d="M7 9h8M7 13h5"/></svg>,
   goals: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><path d="M12 2v4M22 12h-4"/></svg>,
   // Work — a single node radiating short rays: the sigil burst as a glyph.
   work: (

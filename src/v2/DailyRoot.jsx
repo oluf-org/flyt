@@ -7,7 +7,8 @@ import TabDeck from '../TabDeck.jsx';
 import TabStrip, { NewTabPage } from '../TabStrip.jsx';
 import Shell from './Shell.jsx';
 import HistoryPage from './HistoryPage.jsx';
-import { BUILD, INITIAL, MODELS, WORK } from './shellRouting.js';
+import ChatHistoryPage from './ChatHistoryPage.jsx';
+import { BUILD, CHATS, GOALS, INITIAL, MODELS, WORK } from './shellRouting.js';
 import { initialFlowId, initialModeId } from './dailyWorkModel.js';
 import { defaultModeId, queueTaskFromPrompt } from './workflowUx.js';
 import {
@@ -49,6 +50,7 @@ export default function DailyRoot() {
   const [configs, setConfigs] = useState({});
   const [settings, setSettings] = useState(null);
   const [runs, setRuns] = useState([]);
+  const [activities, setActivities] = useState([]);
   const [watching, setWatching] = useState(null);
   const [busy, setBusy] = useState(false);
   const [newTabOpen, setNewTabOpen] = useState(false);
@@ -168,6 +170,33 @@ export default function DailyRoot() {
   }, []);
 
   useEffect(() => { refreshRuns().catch(() => setRuns([])); }, [projects.active, refreshRuns]);
+  useEffect(() => { setActivities([]); }, [projects.active]);
+  useEffect(() => {
+    let live = true, loading = false;
+    const projectId = projects.active;
+    const refresh = async () => {
+      if (!projectId || loading || !window.flyt.chatHistory) return;
+      loading = true;
+      try { const next = await window.flyt.chatHistory(projectId); if (live) setActivities(next); }
+      catch (caught) { if (live) setError(cleanIpcError(caught)); }
+      finally { loading = false; }
+    };
+    refresh();
+    const timer = setInterval(refresh, 5000);
+    return () => { live = false; clearInterval(timer); };
+  }, [projects.active, runs]);
+
+  const openActivity = async row => {
+    try {
+      if (row.projectId && row.projectId !== activeRef.current) {
+        if (tabsRef.current.some(tab => tab.id === row.projectId)) await switchProject(row.projectId);
+        else await openProject(row.projectId);
+        if (activeRef.current !== row.projectId) throw new Error('Open the original project to view this loop.');
+      }
+      if (row.kind === 'loop') setLocation(current => ({ ...current, dest: GOALS, goal: row.goalId ?? row.id }));
+      else await watchRun(activeRef.current, row.id);
+    } catch (caught) { setError(cleanIpcError(caught)); }
+  };
 
   useEffect(() => {
     let live = true;
@@ -294,7 +323,7 @@ export default function DailyRoot() {
       setModeId(initialModeId(flowsRef.current, nextFlowId, tab?.state?.runPresetId ?? null));
       setWatching(null);
       watchingRef.current = null;
-      setLocation(current => ({ ...current, run: null }));
+      setLocation(current => ({ ...current, run: null, goal: null }));
     } catch (err) { setError(cleanIpcError(err)); }
   }
 
@@ -459,8 +488,9 @@ export default function DailyRoot() {
         projectless={!activeProject}
         recents={recents}
         seed={activeProject?.id ?? null}
-        runs={runs}
-        onOpenRun={runId => watchRun(activeRef.current, runId).catch(err => setError(cleanIpcError(err)))}
+        runs={activities}
+        onOpenRun={id => openActivity(activities.find(row => row.id === id) ?? { id })}
+        onOpenHistory={() => setLocation(current => ({ ...current, dest: CHATS }))}
         flows={flows}
         flowId={flowId}
         modeId={modeId}
@@ -542,8 +572,8 @@ export default function DailyRoot() {
         build={buildView}
         watching={watching}
         composer={composer}
-        runs={runs}
-        onOpenRun={runId => watchRun(activeRef.current, runId).catch(err => setError(cleanIpcError(err)))}
+        runs={activities}
+        onOpenRun={id => openActivity(activities.find(row => row.id === id) ?? { id })}
         onNewChat={newChat}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenFlow={async () => {
@@ -678,7 +708,8 @@ export default function DailyRoot() {
         models={<ModelsPage
           onChanged={() => window.flyt.getSettings().then(setSettings)}
         />}
-        history={<HistoryPage />}
+        history={<HistoryPage onOpenLoop={openActivity} />}
+        chats={<ChatHistoryPage key={projects.active} projectId={projects.active} onOpen={openActivity} onNewChat={newChat}/>}
       />
       {newTabOpen && <NewTabPage
         recents={recents}

@@ -4,6 +4,8 @@ import { workflowActions } from '../../core/lifecycle.js';
 import { runView } from './runView.js';
 import { groupRuns, runStatus, runTimeLabel, runTimeTitle } from '../runList.js';
 import DebugPanel from './DebugPanel.jsx';
+import ActivityIcon from '../ActivityIcon.jsx';
+import { loopLabel } from '../activityFormat.js';
 import './workStyles.css';
 
 function Interaction({ interaction, onDecide, onAnswer }) {
@@ -29,7 +31,7 @@ function ChevronIcon({ left = false }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={left ? 'm14 7-5 5 5 5' : 'm10 7 5 5-5 5'}/></svg>;
 }
 
-function ChatHistory({ runs, activeRunId, onOpenRun, onNewChat }) {
+function ChatHistory({ runs, activeRunId, onOpenRun, onNewChat, onOpenHistory }) {
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === 'undefined') return false;
     try { return window.localStorage.getItem('flyt.workHistoryCollapsed') === 'true'; }
@@ -54,16 +56,17 @@ function ChatHistory({ runs, activeRunId, onOpenRun, onNewChat }) {
       </button>
     </div>
     <div className="work-history-list">
+      {onOpenHistory && <button className="work-history-item" onClick={onOpenHistory}><HistoryIcon/><span>All conversations ↗</span></button>}
       {!groups.length && <p className="work-history-empty"><HistoryIcon/><span className="work-history-copy">Your chats will appear here.</span></p>}
       {groups.map(group => <section className="work-history-group" key={group.key}>
         <span className="section-label work-history-copy">{group.label}</span>
         {group.runs.map(run => {
           const id = run.id ?? run.runId;
-          const status = runStatus(run);
+          const status = run.kind === 'loop' ? { ...runStatus(run), label: loopLabel(run.status) } : runStatus(run);
           return <button type="button" className={`work-history-item${id === activeRunId ? ' active' : ''}`}
             key={id} onClick={() => onOpenRun?.(id)} aria-current={id === activeRunId ? 'page' : undefined}
             title={`${run.name ?? run.flowName ?? id}\n${runTimeTitle(run)} · ${status.label}`}>
-            <span className={`work-history-state ${status.kind}`} aria-hidden="true"/>
+            <ActivityIcon kind={run.kind} id={id} size={20}/>
             <span className="work-history-copy"><strong>{run.name ?? run.flowName ?? 'Untitled chat'}</strong>
               <small><time>{runTimeLabel(run)}</time>{status.kind !== 'done' && <span>{status.label}</span>}</small></span>
           </button>;
@@ -118,7 +121,7 @@ function RunActions({ view, onPauseRun, onResumeRun, onStopRun, onRetryCleanup, 
 export default function Work({
   stack = null, blocks = null, trace = null, runId = null, composer = null, snapshot = null,
   interaction = null, onDecide = null, onAnswer = null, onReply = null, replyBusy = false,
-  runs = [], onOpenRun = null, onNewChat = null, onOpenFlow = null, onOpenTrace = null,
+  runs = [], onOpenRun = null, onNewChat = null, onOpenHistory = null, onOpenFlow = null, onOpenTrace = null,
   onRetryFailed = null, retryBusy = false, retryError = '', controlError = '', onRevealRunLog = null,
   onRevealDiagnosticLog = null, onStopRun = null, stopBusy = false,
   onPauseRun = null, pauseBusy = false, onResumeRun = null, resumeBusy = false,
@@ -146,7 +149,7 @@ export default function Work({
   };
   const summary = snapshot?.conversation?.filter(turn => turn.role === 'assistant').at(-1) ?? null;
   const runModel = { ...view, summary: summary?.text ?? null, input: snapshot?.meta?.userMessage ?? snapshot?.prompt ?? '' };
-  const history = <ChatHistory runs={runs} activeRunId={runId} onOpenRun={onOpenRun} onNewChat={onNewChat}/>;
+  const history = <ChatHistory runs={runs} activeRunId={runId} onOpenRun={onOpenRun} onNewChat={onNewChat} onOpenHistory={onOpenHistory}/>;
   if (!stack) return <div className="v2-work" data-v2>{history}<section className="work-surface">{composer}<p className="muted work-empty">Choose a workflow and send a message to start.</p></section></div>;
   return <div className="v2-work work-run-mode" data-v2>{history}<section className="work-surface"><header className="work-run-head">
     <div className="work-run-title"><span className="section-label">{view.running ? 'Running workflow' : 'Workflow run'}</span><h1>{stack.name ?? stack.id}</h1></div>

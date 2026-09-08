@@ -25,7 +25,7 @@
 // accents update without a reload, and removed when the last project closes.
 import React, { useEffect, useState } from 'react';
 import {
-  BUILD, GOALS, HISTORY, INITIAL, LIBRARY, MODELS, builderView, closeWorkflow, heading, navigate, openWorkflow,
+  BUILD, CHATS, GOALS, HISTORY, INITIAL, LIBRARY, MODELS, WORK, builderView, closeWorkflow, heading, navigate, openWorkflow,
   resolveLocation, state, traceOf,
 } from './shellRouting.js';
 import BlockEditor from './BlockEditor.jsx';
@@ -76,7 +76,7 @@ export function activeProjectRecord(projectTabsState) {
  */
 export default function Shell({
   location = null, onNavigate, build = null, watching = null,
-  composer = null, projectTabs = null, models = null, history = null, onRunBuild = null,
+  composer = null, projectTabs = null, models = null, history = null, chats = null, onRunBuild = null,
   workflowInteraction = null, onWorkflowDecide = null, onWorkflowAnswer = null,
   onWorkflowReply = null, workflowReplyBusy = false, runs = [], onOpenRun = null,
   onNewChat = null, onOpenFlow = null, onOpenSettings = null,
@@ -206,10 +206,13 @@ export default function Shell({
         <section className="v2-panel" data-surface={showTrace ? 'trace' : here.surface}
           aria-label={showTrace ? 'Trace' : heading(loc.dest) ?? undefined}>
           {showTrace && <h1>Trace</h1>}
+          {loc.dest !== WORK && controlError && <p className="work-error" role="alert">{controlError}</p>}
           {showTrace
             ? <Trace trace={watching?.trace ?? null} runId={trace.run} uiExtensions={build?.uiExtensions ?? []} />
             : loc.dest === GOALS
-              ? <GoalPage key={activeProjectId} projectId={activeProjectId} onOpenRun={onOpenRun} />
+              ? <GoalPage key={`${activeProjectId}:${loc.goal ?? ''}`} projectId={activeProjectId} initialGoalId={loc.goal} onOpenRun={onOpenRun} />
+            : loc.dest === CHATS
+              ? chats
             : loc.dest === HISTORY
               ? history
             : loc.dest === MODELS
@@ -298,6 +301,7 @@ export default function Shell({
                   runs={runs}
                   onOpenRun={onOpenRun}
                   onNewChat={onNewChat}
+                  onOpenHistory={() => go(CHATS)}
                   onOpenFlow={onOpenFlow}
                   onOpenTrace={() => setTracing(true)}
                   onRetryFailed={onRetryFailed}

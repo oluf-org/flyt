@@ -1,4 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import ActivityIcon from '../ActivityIcon.jsx';
+import { elapsed, loopLabel } from '../activityFormat.js';
 import './historyStyles.css';
 
 const pct = value => value == null ? '—' : `${(value * 100).toFixed(1)}%`;
@@ -38,7 +40,10 @@ function TraceTimeline({ run, events, busy, onClose }) {
   </aside>;
 }
 
-export default function HistoryPage() {
+export default function HistoryPage({ onOpenLoop }) {
+  const [tab, setTab] = useState('loops');
+  const [revision, setRevision] = useState(0);
+  const traceRequest = useRef(0);
   const [range, setRange] = useState('30');
   const [model, setModel] = useState('');
   const [projectId, setProjectId] = useState('');
@@ -52,33 +57,48 @@ export default function HistoryPage() {
 
   useEffect(() => {
     let live = true; setBusy(true); setError('');
+    traceRequest.current++; setSelected(null); setTrace([]);
     window.flyt.historySummary(filters).then(next => { if (live) setData(next); })
       .catch(err => { if (live) setError(String(err?.message ?? err)); })
       .finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
-  }, [filters]);
+  }, [filters, revision]);
 
   async function openTrace(run) {
+    const request = ++traceRequest.current;
     setSelected(run); setTrace([]); setTraceBusy(true);
-    try { setTrace(await window.flyt.historyTrace(run.runId)); }
-    catch (err) { setError(String(err?.message ?? err)); }
-    finally { setTraceBusy(false); }
+    try { const next = await window.flyt.historyTrace(run.runId); if (request === traceRequest.current) setTrace(next); }
+    catch (err) { if (request === traceRequest.current) setError(String(err?.message ?? err)); }
+    finally { if (request === traceRequest.current) setTraceBusy(false); }
   }
 
   const totals = data?.totals ?? {};
   return <div className="history-page">
     <header className="history-head">
-      <div><span className="section-label">TRANSPARENCY</span><h1>History</h1><p>Observed behavior, provider reports, and explicit estimates across every project.</p></div>
-      <div className="history-actions"><button onClick={() => window.flyt.exportHistory('jsonl', filters)}>Export raw JSONL</button><button onClick={() => window.flyt.exportHistory('csv', filters)}>Export flat CSV</button></div>
+      <div><h1>Statistics</h1></div>
+      <div className="history-actions"><button disabled={busy} onClick={() => setRevision(value => value + 1)}>Refresh</button><button onClick={() => window.flyt.exportHistory('jsonl', filters).catch(err => setError(String(err.message ?? err)))}>JSONL ↓</button><button onClick={() => window.flyt.exportHistory('csv', filters).catch(err => setError(String(err.message ?? err)))}>CSV ↓</button></div>
     </header>
     <div className="history-filters">
       <label>Range<select value={range} onChange={e => setRange(e.target.value)}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="all">All time</option></select></label>
       <label>Model<select value={model} onChange={e => setModel(e.target.value)}><option value="">All models</option>{data?.facets?.models?.map(value => <option key={value}>{value}</option>)}</select></label>
       <label>Project<select value={projectId} onChange={e => setProjectId(e.target.value)}><option value="">All projects</option>{data?.facets?.projects?.map(value => <option key={value}>{value}</option>)}</select></label>
-      <span className="history-backend">raw JSONL · {data?.backend?.includes('sqlite') ? 'SQLite WAL index' : 'direct projection'} · projection v{data?.projectionVersion ?? 1}</span>
     </div>
+    <div className="history-tabs" role="group" aria-label="Statistics type"><button aria-pressed={tab === 'loops'} onClick={() => setTab('loops')}>Loops</button><button aria-pressed={tab === 'models'} onClick={() => setTab('models')}>Models &amp; workflows</button></div>
     {error && <div className="history-error">{error}</div>}
-    {busy && !data ? <div className="history-empty">Building the projection…</div> : <>
+    {busy ? <div className="history-empty" role="status">Loading statistics…</div> : tab === 'loops' ? <>
+      <section className="history-stats" aria-label="Loop totals">
+        <Stat label="Loops" value={integer(data?.loops?.totals.count ?? 0)}/>
+        <Stat label="Achieved" value={integer(data?.loops?.totals.achieved ?? 0)} detail={`${pct(data?.loops?.totals.successRate)} of settled loops`}/>
+        <Stat label="Iterations" value={integer(data?.loops?.totals.iterations ?? 0)}/>
+        <Stat label="Average active time" value={elapsed(data?.loops?.totals.averageElapsedMs)}/>
+        <Stat label="Known cost" value={money(data?.loops?.totals.knownUsd ?? 0)} detail={data?.loops?.totals.unknownCostCalls ? `${integer(data.loops.totals.unknownCostCalls)} unpriced calls` : null}/>
+      </section>
+      <section className="history-card history-table-card"><div className="history-table-wrap"><table><thead><tr><th>Loop</th><th>Outcome</th><th>Checks</th><th>Iterations</th><th>Active time</th><th>Calls</th><th>Tokens</th><th>Known cost</th></tr></thead><tbody>
+        {data?.loops?.rows?.map(row => <tr key={`${row.projectId}:${row.id}`}><td><button className="history-loop-link" onClick={() => onOpenLoop?.(row)} title={row.name}><ActivityIcon kind="loop" id={row.id} size={22}/><span><strong>{row.name}</strong><small>{new Date(row.createdAt).toLocaleDateString()}</small></span></button></td>
+          <td><span className={`history-loop-outcome ${row.status}`}>{loopLabel(row.status)}</span></td><td>{row.score == null ? '—' : `${row.passedChecks}/${row.checks}`}<progress className="history-check-progress" max="1" value={row.score ?? 0} aria-label={`${row.name}: checks passed`}/></td><td>{integer(row.iterations)}</td><td>{elapsed(row.elapsedMs)}</td><td>{integer(row.calls)}</td><td>{integer(row.tokens)}</td><td>{money(row.knownUsd)}{row.unknownCostCalls > 0 && <small className="history-unpriced">+ {row.unknownCostCalls} unpriced</small>}</td></tr>)}
+        {!data?.loops?.rows?.length && <tr><td colSpan="8" className="history-empty-cell">No loops in this range.</td></tr>}
+      </tbody></table></div></section>
+    </> : <>
       <section className="history-stats" aria-label="Global totals">
         <Stat label="Runs" value={integer(totals.runs)} />
         <Stat label="Model calls" value={integer(totals.modelCalls)} detail={`${integer(totals.promptTokens + totals.completionTokens)} total tokens`} />
@@ -132,6 +152,6 @@ export default function HistoryPage() {
         </tbody></table></div>
       </section>
     </>}
-    {selected && <TraceTimeline run={selected} events={trace} busy={traceBusy} onClose={() => { setSelected(null); setTrace([]); }} />}
+    {selected && <TraceTimeline run={selected} events={trace} busy={traceBusy} onClose={() => { traceRequest.current++; setSelected(null); setTrace([]); }} />}
   </div>;
 }
