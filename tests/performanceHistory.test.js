@@ -13,9 +13,10 @@ import { watchingFromRun } from '../src/v2/dailyWorkModel.js';
 import { runView } from '../src/v2/runView.js';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
-function temporary(t) {
+function temporary(t, beforeCleanup = async () => {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-perf-test-'));
-  t.after(() => {
+  t.after(async () => {
+    await beforeCleanup();
     assert.equal(path.dirname(dir), path.resolve(os.tmpdir()));
     assert(path.basename(dir).startsWith('flyt-perf-test-'));
     fs.rmSync(dir, { recursive: true, force: true });
@@ -23,10 +24,13 @@ function temporary(t) {
   return dir;
 }
 function harness(t) {
-  const dir = temporary(t);
-  const engine = createEngine({ projectRoot: repo, dataRoot: path.join(dir, 'data'), userDataDir: path.join(dir, 'profile'), log: () => {}, warn: () => {} });
+  let engine;
+  const dir = temporary(t, async () => {
+    await engine.runController.shutdown();
+    engine.telemetry.close();
+  });
+  engine = createEngine({ projectRoot: repo, dataRoot: path.join(dir, 'data'), userDataDir: path.join(dir, 'profile'), log: () => {}, warn: () => {} });
   const api = createApi(engine);
-  t.after(async () => { await engine.runController.shutdown(); engine.telemetry.close(); });
   const { project } = engine.registry.createAppdata('Performance test');
   return { engine, api, project, invoke: name => api.invoke(name, { projectId: project.id }) };
 }
