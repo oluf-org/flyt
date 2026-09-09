@@ -1,6 +1,6 @@
 {
   "name": "flyt",
-  "version": "2.1.9",
+  "version": "2.1.10",
   "description": "Flyt — AI-first orchestration with file-backed plugin stacks",
   "author": "olaaxe",
   "main": "electron/main.js",

@@ -9,8 +9,12 @@ export class HistoryDirectoryIndex {
   #watcher = null;
   #all = true;
   #swept = 0;
-  constructor(root, { watch = fs.watch, now = Date.now, sweepMs = 30000 } = {}) {
+  constructor(root, { watch = fs.watch, now = Date.now, sweepMs = 30000, platform = process.platform } = {}) {
     this.root = root; this.now = now; this.sweepMs = sweepMs;
+    // macOS coalesces recursive watch notifications beyond an event-loop turn.
+    // Scan fingerprints in the worker on each read so immediate external edits
+    // are visible; unchanged session and summary bodies remain cached.
+    if (platform === 'darwin') return;
     try {
       this.#watcher = watch(root, { recursive: true }, (_event, filename) => {
         if (!filename) { this.#all = true; return; }

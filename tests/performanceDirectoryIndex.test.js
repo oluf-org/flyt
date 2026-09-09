@@ -9,7 +9,7 @@ test('history index invalidates changed directories, discovers removals, sweeps 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-index-test-'));
   const watcher = new EventEmitter(); watcher.close = () => {}; watcher.unref = () => {};
   let changed, now = 0;
-  const index = new HistoryDirectoryIndex(root, { watch: (_root, _options, callback) => { changed = callback; return watcher; }, now: () => now, sweepMs: 100 });
+  const index = new HistoryDirectoryIndex(root, { platform: 'linux', watch: (_root, _options, callback) => { changed = callback; return watcher; }, now: () => now, sweepMs: 100 });
   t.after(() => { index.close(); fs.rmSync(root, { recursive: true, force: true }); });
   fs.mkdirSync(path.join(root, 'a')); fs.mkdirSync(path.join(root, 'b'));
   assert.deepEqual(await index.changes(), ['a', 'b']);
@@ -22,4 +22,15 @@ test('history index invalidates changed directories, discovers removals, sweeps 
   changed('rename', null); assert.deepEqual(await index.changes(), ['b']);
   watcher.emit('error', new Error('watch unavailable')); assert.deepEqual(await index.changes(), ['b']);
   assert.deepEqual(await index.changes(), ['b']);
+});
+
+test('macOS history rechecks cached directories without waiting for coalesced watch events', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-index-test-'));
+  const index = new HistoryDirectoryIndex(root, { platform: 'darwin', watch: () => { assert.fail('macOS must not rely on delayed watch events'); } });
+  t.after(() => { index.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  fs.mkdirSync(path.join(root, 'a'));
+  assert.deepEqual(await index.changes(), ['a']);
+  index.rows.set('a', { inspection: { terminal: true } });
+  fs.writeFileSync(path.join(root, 'a', 'prompt.md'), 'External edit');
+  assert.deepEqual(await index.changes(), ['a']);
 });
