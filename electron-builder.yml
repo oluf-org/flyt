@@ -36,7 +36,7 @@ files:
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 publish:
   provider: github
-  owner: olaaxe
+  owner: oluf-org
   repo: flyt
 # Icons are generated from the in-app mark's own geometry by
 # `npm run icons` (scripts/make-icons.mjs) — sage on transparent. Without these
