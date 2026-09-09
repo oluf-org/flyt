@@ -15,6 +15,8 @@ export const REQUIRED_PACKAGE_ENTRIES = Object.freeze([
   'electron/preload.cjs',
   'kernel/dist/index.js',
   'core/engine.js',
+  'core/readWorker.js',
+  'core/readWorkerClient.js',
   'src/flowTypes.js',
   'stacks/loop-task.stack.yaml',
   'stacks/pipeline.stack.yaml',

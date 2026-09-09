@@ -195,7 +195,7 @@ export default function Lander({
   declaredInputs = [], declaredValues, onDeclaredInput,
   models = [], activeModels = [],
   hasKey = true, claudeSubActive = false, onOpenSettings,
-  busy, inputRef, onSubmit, onOpenProject, onOpenFolder,
+  busy, ready = true, inputRef, onSubmit, onOpenProject, onOpenFolder,
   submitKind = 'run', onSubmitKind = null,
   queueLevel = 'low', onQueueLevel = null,
   fallbackWorker = null, modelTiers = {}, defaultTier = 'standard', blockTiers = {}, authoredBlockTiers = {}, modelOverrides = {},
@@ -209,7 +209,7 @@ export default function Lander({
   const [modelsOpen, setModelsOpen] = useState(false);
   const localRef = useRef(null);
   const taRef = inputRef ?? localRef;
-  const canRun = text.trim().length > 0 && !busy;
+  const canRun = text.trim().length > 0 && !busy && ready;
   const selectedFlow = flows.find(f => f.id === flowId) ?? null;
   const selectedPreset = selectedWorkflowPreset(selectedFlow, modeId);
   const selectedSteps = workflowSteps(selectedFlow, modeId);
@@ -365,7 +365,7 @@ export default function Lander({
               onClick={submit}
               disabled={!canRun}
             >
-              {busy ? (queued ? 'Adding…' : 'Starting…') : queued ? 'Add task' : compareOn ? 'Compare' : 'Run'}<kbd className="shortcut">↵</kbd>
+              {!ready ? 'Loading…' : busy ? (queued ? 'Adding…' : 'Starting…') : queued ? 'Add task' : compareOn ? 'Compare' : 'Run'}<kbd className="shortcut">↵</kbd>
             </button>
           </div>
         </div>

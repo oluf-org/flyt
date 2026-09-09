@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { renderResolved } from './helpers/renderResolved.js';
 import { createServer as createViteServer } from 'vite';
 import { createKernel, flytUiExtensions, parseStack } from '#kernel';
 import { bootKernel } from '../core/v2.js';
@@ -201,7 +202,7 @@ blocks:
     // Build with no workflow addressed is its gallery; the editor is what a
     // workflow address opens. Both are asserted, because the second used to be
     // the only view Build had.
-    const galleryHtml = renderToStaticMarkup(React.createElement(Shell, {
+    const galleryHtml = await renderResolved(React.createElement(Shell, {
       location: { dest: 'build', run: null, workflow: null }, build: emptySurface,
     }));
     assert.match(galleryHtml, /This project has no workflows/,

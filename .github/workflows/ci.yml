@@ -30,6 +30,19 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      # Deterministic work budgets; timing distributions are evidence, not
+      # hardware-sensitive release gates on shared runners.
+      - run: npm run perf:check
+        env:
+          FLYT_PERF_COUNTS: '10,100,500'
+          FLYT_PERF_REPEATS: '3'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-${{ matrix.os }}
+          path: .flyt/performance/core.json
+          include-hidden-files: true
+          if-no-files-found: ignore
       - run: npm run lint
       # A renderer build is not an application package. --dir exercises the
       # platform packager without spending time on an installer; afterPack then

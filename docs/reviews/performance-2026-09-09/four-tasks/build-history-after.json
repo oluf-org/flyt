@@ -1,0 +1,39 @@
+{
+  "mode": "after",
+  "contentEquivalent": true,
+  "at": "2026-09-09T14:03:57.276Z",
+  "cpu": "AMD Ryzen 7 3800X 8-Core Processor             ",
+  "node": "v22.12.0",
+  "samples": [
+    {
+      "visible": false,
+      "durationMs": 0.09269999999992251,
+      "calls": 0,
+      "responseBytes": 0
+    },
+    {
+      "visible": true,
+      "durationMs": 224.28689999999983,
+      "calls": 1,
+      "responseBytes": 2651
+    },
+    {
+      "visible": true,
+      "durationMs": 0.03580000000010841,
+      "calls": 0,
+      "responseBytes": 0
+    },
+    {
+      "visible": false,
+      "durationMs": 0.0039000000001578883,
+      "calls": 0,
+      "responseBytes": 0
+    },
+    {
+      "visible": true,
+      "durationMs": 0.017900000000054206,
+      "calls": 0,
+      "responseBytes": 0
+    }
+  ]
+}

@@ -1,6 +1,10 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import Root from './Root.jsx';
+import './fonts.css';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/ibm-plex-mono/500.css';
+import '@fontsource/ibm-plex-mono/600.css';
 import './styles.css';
 // Per-project theming (see src/lib/applyProjectTheme.js): loads after the
 // base sheet so its project-scoped token overrides win the cascade.

@@ -1,0 +1,41 @@
+{
+  "date": "2026-09-09",
+  "productChange": "Replace the selected history row's rounded inset shadow with a 2px absolutely positioned accent marker, inset 8px vertically. Preserve active colors, row geometry, hit testing and selection logic.",
+  "productionBuild": "npm run build:kernel and npx vite build --sourcemap hidden passed; existing 523.18 kB DailyRoot chunk warning remains",
+  "tests": [
+    { "command": "npm run test:perf", "passed": 30, "failed": 0, "durationMs": 14055.6456 },
+    { "command": "node --test tests/dailyWork.test.js", "passed": 9, "failed": 0, "durationMs": 27162.051 }
+  ],
+  "syntaxAndWhitespace": "node --check scripts/profile-electron.mjs and git diff --check for workStyles.css passed",
+  "nativeAttribution": {
+    "reports": ["marker-profile-history-inset-shadow.json", "marker-profile-baseline.json"],
+    "archive": "marker-profiles.zip",
+    "result": "FillRRectOp shader compilation took 31.231ms with the old inset shadow; no such compile with the production marker. Other initial shader compilations remain.",
+    "focusRecoveries": 0,
+    "draftAndReadOverlapChecksPassed": true,
+    "schedulingCaveat": "Profiles used the earlier first-key scheduling, passed actual read overlap, and are separate from the unprofiled timing cohort."
+  },
+  "unprofiledComparison": {
+    "report": "marker-comparison.json",
+    "acceptedRuns": 12,
+    "repeatsPerFixtureAndVariant": 3,
+    "order": "Alternating before/after order",
+    "focusRecoveries": 0,
+    "checks": ["Exact composer and two-burst reply drafts", "Draft survives detail expansion/collapse", "Input overlaps real reads", "Exactly two shared polls in eleven seconds", "Computed marker present, width 2px, no inset shadow, pointer-events none"],
+    "standardMedianP95Ms": { "before": 64, "after": 40 },
+    "largeMedianP95Ms": { "before": 96, "after": 40 },
+    "standardMedianMaximumMs": { "before": 96, "after": 64 },
+    "largeMedianMaximumMs": { "before": 104, "after": 64 },
+    "secondBurstP95RangeMs": { "before": [16, 24], "after": [16, 32] },
+    "target": "Initial-burst improvement established; 50ms p95 not consistent across individual runs; no sustained-typing improvement claimed"
+  },
+  "probeCorrection": "Dispatch the first reply key when the actual main-process snapshot handler starts, then subsequent keys at 30ms intervals. Continue measuring real renderer event timestamps and asserting in-flight-read overlap. No artificial read delay. All twelve comparisons restarted under the same scheduling.",
+  "preliminaryReports": "Three reports outside the final timing cohort retained under excluded or previous-input-scheduling names: two failed read-overlap assertions and one passed under the earlier scheduling.",
+  "visualReview": {
+    "screenshot": "marker-profile-baseline.png",
+    "inspected": true,
+    "result": "Clear selected-row accent marker; intact reply and Send button. Before/after active row geometry matches: x75 y165.5 width211 height49."
+  },
+  "scopeLimits": "Synthetic settled workloads, production bundle in development Electron, Windows RTX3080 ANGLE D3D11. Event Timing >=16ms, quantized to 8ms, grouped by interaction. Not all-keystroke percentiles or INP. No installed-release, live-stream, cross-GPU or dark/narrow visual comparison in this follow-up.",
+  "temporaryData": "Fresh synthetic profiles and fixtures on the workspace drive for all comparison variants; user projects untouched."
+}

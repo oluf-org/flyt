@@ -34,6 +34,7 @@ import {
   appendStoredRunEvent, storedSnapshots, SNAPSHOT_UPDATE_EVENTS,
 } from './runProjection.js';
 import { RunController } from './runController.js';
+import { ReadWorkerClient } from './readWorkerClient.js';
 import { GoalController } from './goalController.js';
 import { loopSummary, aggregateLoops, selectLoops, chatHistory, LOOP_SETTLED } from './loopStatistics.js';
 import { createLoopUsageReader } from './loopUsage.js';
@@ -154,6 +155,54 @@ export class ApiError extends Error {
  */
 export function createApi(engine) {
   const { registry, flows, stackRoot, nodeLibrary, toolLibrary, runtimeConfig, publicSettings } = engine;
+  const readWorker = new ReadWorkerClient();
+  const readScopes = new Map();
+  const readSignal = projectId => {
+    if (!readScopes.has(projectId)) readScopes.set(projectId, new AbortController());
+    return readScopes.get(projectId).signal;
+  };
+  const cancelReads = projectId => {
+    readScopes.get(projectId)?.abort();
+    readScopes.delete(projectId);
+  };
+  const activateReads = projectId => {
+    for (const id of readScopes.keys()) if (id !== projectId) cancelReads(id);
+  };
+  const readSummaries = async (store, signal) => {
+    const rows = await readWorker.request('summaries', { root: store.rootDir }, { signal });
+    signal.throwIfAborted();
+    return rows.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  };
+  const readHistory = async (projectId, store, signal) => {
+    let indexed = await readWorker.request('history', { root: store.rootDir }, { signal });
+    let repaired = false;
+    for (const entry of indexed) {
+      signal.throwIfAborted();
+      if (!entry.inspection || entry.inspection.terminal && entry.inspection.fingerprint && !entry.hasOwner) continue;
+      // Terminal display hints never authorize writes. All recovery, including
+      // liveness checks, remains targeted canonical validation in the controller.
+      const changes = await runController.reconcile(projectId, entry.runId, { signal });
+      repaired ||= Boolean(changes?.length);
+    }
+    if (repaired) indexed = await readWorker.request('history', { root: store.rootDir }, { signal });
+    signal.throwIfAborted();
+    return indexed.filter(row => row.summary).sort((a, b) => String(b.summary.createdAt).localeCompare(String(a.summary.createdAt)));
+  };
+  const decorateSummaries = async (indexed, projectId, signal, membership = null) => {
+    let yieldedAt = performance.now();
+    const result = [];
+    for (const entry of indexed) {
+      const row = entry.summary;
+      if (performance.now() - yieldedAt >= 8) {
+        await new Promise(resolve => setImmediate(resolve));
+        signal.throwIfAborted();
+        yieldedAt = performance.now();
+      }
+      result.push({ ...row, lifecycle: runController.lifecycle(projectId, row.id, entry),
+        ...(membership ? { compareGroup: membership.get(row.id) ?? null } : {}) });
+    }
+    return result;
+  };
   const workflowApprovals = new Map();
   const workflowQuestions = new Map();
 
@@ -229,7 +278,7 @@ export function createApi(engine) {
     const entry = proj(projectId);
     let composed = null;
     const pushUpdate = engine.pushSnapshotFor(entry.id, async runId => runController.decorate(entry.id, runId,
-      await snapshotStoredStackRun(entry.store.rootDir, runId, composed?.kernelModule, { materialise: false })));
+      await readWorker.request('snapshot', { root: entry.store.rootDir, runId }, { signal: readSignal(entry.id) })));
     const pushEvents = engine.pushEventsFor(entry.id);
     composed = await bootRunKernel({
       runsRoot: request.runsRoot ?? entry.store.rootDir,
@@ -277,15 +326,19 @@ export function createApi(engine) {
   };
 
   const runController = new RunController({
+    disposeReads: () => readWorker.close(),
     bootHost: composeRunHost,
     runsRootForProject: projectId => proj(projectId).store.rootDir,
     storeForProject: projectId => proj(projectId).store,
-    repairStored: repairInterruptedSessions,
+    repairStored: (root, options) => repairInterruptedSessions(root, {
+      ...options,
+      inspectSessions: (root, runIds) => readWorker.request('inspect', { root, runIds }, { signal: options.signal }),
+    }),
     onActivity: projectId => {
       engine.broadcastActivity(projectId);
       for (const runId of engine.pushStateFor(projectId).channels.keys()) {
         engine.pushSnapshotFor(projectId, async id => runController.decorate(projectId, id,
-          await snapshotStoredStackRun(proj(projectId).store.rootDir, id, null, { materialise: false })))(runId);
+          await readWorker.request('snapshot', { root: proj(projectId).store.rootDir, runId: id }, { signal: readSignal(projectId) })))(runId);
       }
     },
     onSettled: ({ phase, error, record }) => engine.emitWorkflow?.(record.projectId, {
@@ -884,6 +937,7 @@ export function createApi(engine) {
     'project:list': () => ({ tabs: registry.listOpen(), active: registry.activeId }),
     'project:open': async ({ folder = null }) => {
       const { project } = registry.open(folder);
+      activateReads(registry.activeId);
       await runController.reconcile(project.id);
       return { id: project.id, name: project.name, kind: project.kind, folder: project.folder ?? null };
     },
@@ -1074,9 +1128,9 @@ export function createApi(engine) {
     // Supervisor launch: a narrower profile, through the same controller.
     'history:activity': async ({ projectId }) => {
       const entry = proj(projectId);
-      await runController.reconcile(projectId);
+      const signal = readSignal(projectId);
       const loops = goals.list(projectId).map(state => loopSummary(state));
-      const runs = entry.store.runSummaries().map(row => ({ ...row, lifecycle: runController.lifecycle(projectId, row.id) }));
+      const runs = await decorateSummaries(await readHistory(projectId, entry.store, signal), projectId, signal);
       return chatHistory(runs, loops);
     },
     'history:summary': ({ filters = {} } = {}) => {
@@ -1234,7 +1288,8 @@ export function createApi(engine) {
 
     'run:list': async ({ projectId }) => {
       const store = proj(projectId).store;
-      await runController.reconcile(projectId);
+      const signal = readSignal(projectId);
+      const indexed = await readHistory(projectId, store, signal);
       const comparisons = store.listComparisons();
       const membership = new Map();
       for (const rec of comparisons) {
@@ -1242,14 +1297,22 @@ export function createApi(engine) {
           if (!membership.has(id)) membership.set(id, { id: rec.id, label: index === 0 ? 'A' : 'B' });
         });
       }
-      return store.runSummaries().map(row => ({ ...row, lifecycle: runController.lifecycle(projectId, row.id), compareGroup: membership.get(row.id) ?? null }));
+      return decorateSummaries(indexed, projectId, signal, membership);
+    },
+    'run:block-history': async ({ projectId, runIds = [] }) => {
+      if (!Array.isArray(runIds) || runIds.length > 10 || runIds.some(id => typeof id !== 'string')) throw new Error('Expected at most ten run IDs');
+      const store = proj(projectId).store;
+      const signal = readSignal(projectId);
+      const summaries = await readSummaries(store, signal);
+      const selected = new Set(runIds);
+      return readWorker.request('blockHistory', { root: store.rootDir, runIds: summaries.filter(row => selected.has(row.id)) }, { signal });
     },
     'run:log': ({ projectId, runId }) => {
       const store = proj(projectId).store;
       const retired = store.runRetirement(runId);
       if (retired) return { retired: true, runId, ...retired };
       if (isCanonicalRun(store, runId)) {
-        return storedSnapshots.events(store.rootDir, runId);
+        return readWorker.request('log', { root: store.rootDir, runId }, { signal: readSignal(projectId) });
       }
       return store.readLog(runId);
     },
@@ -1258,6 +1321,7 @@ export function createApi(engine) {
     // instant, so the rev it gets back is the one subsequent patches build on.
     'run:snapshot': async ({ projectId, runId }) => {
       const entry = proj(projectId);
+      const signal = readSignal(projectId);
       const retired = entry.store.runRetirement(runId);
       if (retired) return { retired: true, runId, ...retired };
       if (!fs.existsSync(entry.store.runDir(runId))) {
@@ -1265,14 +1329,13 @@ export function createApi(engine) {
           status: 404, code: 'run_not_found',
         });
       }
-      await runController.reconcile(projectId, runId);
+      await runController.reconcile(projectId, runId, { signal });
+      signal.throwIfAborted();
       const chans = engine.pushStateFor(entry.id).channels;
-      const live = runController.get(projectId, runId);
       const snapshot = runController.decorate(projectId, runId, isCanonicalRun(entry.store, runId)
-        ? live
-          ? await snapshotStackRun(live.host.ctx, runId, live.host.kernelModule)
-          : await snapshotStoredStackRun(entry.store.rootDir, runId)
+        ? await readWorker.request('snapshot', { root: entry.store.rootDir, runId }, { signal })
         : entry.store.snapshot(runId));
+      signal.throwIfAborted();
       const rev = (chans.get(runId)?.rev ?? 0) + 1;
       chans.set(runId, { snapshot, rev });
       const comparison = entry.store.listComparisons().find(rec => rec.runIds?.includes(runId));
@@ -2535,6 +2598,7 @@ export function createApi(engine) {
    * request, including aborting active provider and CLI calls.
    */
   async function shutdown(reason = 'application closing') {
+    for (const id of readScopes.keys()) cancelReads(id);
     const authoring = goalAuthoring.shutdown();
     const goalShutdown = goals.shutdown();
     for (const supervisor of supervisors.values()) {
@@ -2542,9 +2606,10 @@ export function createApi(engine) {
     }
     const runs = runController.shutdown(reason);
     await Promise.allSettled([bounded(authoring, 15000, 'Authoring shutdown'), bounded(goalShutdown, 20000, 'Goal shutdown'), runs]);
+    await readWorker.close();
     return runs;
   }
 
   const runCliWorkflow = args => startWorkflow({ ...args, profile: 'flyt-cli' });
-  return { commands, invoke, shutdown, runCliWorkflow, runController, names: () => Object.keys(commands) };
+  return { commands, invoke, shutdown, cancelReads, activateReads, runCliWorkflow, runController, names: () => Object.keys(commands) };
 }

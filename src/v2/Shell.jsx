@@ -23,25 +23,26 @@
 // (src/lib/applyProjectTheme.js, consumed by src/styles/project-theme.css),
 // re-applied on every active-project/color change so tabs and the two lander
 // accents update without a reload, and removed when the last project closes.
-import React, { useEffect, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   BUILD, CHATS, GOALS, HISTORY, INITIAL, LIBRARY, MODELS, WORK, builderView, closeWorkflow, heading, navigate, openWorkflow,
   resolveLocation, state, traceOf,
 } from './shellRouting.js';
 import BlockEditor from './BlockEditor.jsx';
-import GoalPage from './GoalPage.jsx';
-import WorkflowGallery from './WorkflowGallery.jsx';
-import LibraryPage from './LibraryPage.jsx';
 import ShellRail from './ShellRail.jsx';
-import Trace from './Trace.jsx';
 import Work from './Work.jsx';
-import Library from './Library.jsx';
 import PluginTrustReview from './PluginTrustReview.jsx';
 import { PluginContributionSection } from './PluginContributionView.jsx';
 import {
   applyProjectTheme,
   clearProjectTheme,
 } from '../lib/applyProjectTheme.js';
+
+const GoalPage = lazy(() => import('./GoalPage.jsx'));
+const WorkflowGallery = lazy(() => import('./WorkflowGallery.jsx'));
+const LibraryPage = lazy(() => import('./LibraryPage.jsx'));
+const Library = lazy(() => import('./Library.jsx'));
+const Trace = lazy(() => import('./Trace.jsx'));
 
 /** The active project record, when the host has one open. */
 export function activeProjectRecord(projectTabsState) {
@@ -84,6 +85,7 @@ export default function Shell({
   onRevealDiagnosticLog = null, onRetryCleanup = null, onStopRun = null, stopBusy = false,
   onPauseRun = null, pauseBusy = false, onResumeRun = null, resumeBusy = false,
   onDebugRun = null,
+  onBuildVisibilityChange = null,
   projects = { tabs: [], active: null },
 }) {
   const [focus, setFocus] = useState(location ?? INITIAL);
@@ -102,6 +104,8 @@ export default function Shell({
   const [tracing, setTracing] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const showTrace = tracing && Boolean(trace);
+  const buildVisible = !showTrace && loc.dest === BUILD && builderView(loc) !== 'gallery';
+  useEffect(() => { onBuildVisibilityChange?.(buildVisible); }, [buildVisible, onBuildVisibilityChange]);
   useEffect(() => {
     if (!libraryOpen) return undefined;
     const closeOnEscape = event => { if (event.key === 'Escape') setLibraryOpen(false); };
@@ -117,6 +121,9 @@ export default function Shell({
   // closing the last tab clears them. Records without a color use a preset.
   const activeProject = activeProjectRecord(projects);
   const activeProjectId = activeProject?.id ?? null;
+  // Work unmounts under Trace and other destinations. Keep this run's draft in
+  // the shell without making keystrokes rerender the shell or the run view.
+  const replyDraft = useMemo(() => ({ value: '' }), [activeProjectId, watching?.runId]);
   const activeProjectColor = activeProject?.colorHex ?? activeProject?.color ?? null;
   useEffect(() => {
     const mode = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
@@ -207,6 +214,7 @@ export default function Shell({
           aria-label={showTrace ? 'Trace' : heading(loc.dest) ?? undefined}>
           {showTrace && <h1>Trace</h1>}
           {loc.dest !== WORK && controlError && <p className="work-error" role="alert">{controlError}</p>}
+          <Suspense fallback={<p role="status">Loading {showTrace ? 'Trace' : heading(loc.dest)}…</p>}>
           {showTrace
             ? <Trace trace={watching?.trace ?? null} runId={trace.run} uiExtensions={build?.uiExtensions ?? []} />
             : loc.dest === GOALS
@@ -298,6 +306,7 @@ export default function Shell({
                   onAnswer={onWorkflowAnswer}
                   onReply={onWorkflowReply}
                   replyBusy={workflowReplyBusy}
+                  replyDraft={replyDraft}
                   runs={runs}
                   onOpenRun={onOpenRun}
                   onNewChat={onNewChat}
@@ -319,6 +328,7 @@ export default function Shell({
                   onRevealDiagnosticLog={onRevealDiagnosticLog}
                   onDebugRun={onDebugRun}
                 />}
+          </Suspense>
         </section>
       </div>
       {/* At the root, and deliberately: a review published while somebody is on

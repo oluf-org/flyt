@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readSessionLogFile } from '#kernel';
+import { fileFingerprint } from './fileFingerprint.js';
 
 async function eventsFor(ctx, id) {
   const session = await ctx.sessions.read(id);
@@ -113,20 +114,34 @@ export async function snapshotStackRun(ctx, id, kernelModule = null, options = {
 export class StoredStackSnapshotReader {
   #files = new Map();
   #maxFiles;
-  constructor({ maxFiles = 64 } = {}) { this.#maxFiles = Math.max(1, Number(maxFiles) || 64); }
+  #maxBytes;
+  constructor({ maxFiles = 64, maxBytes = 32 * 1024 * 1024 } = {}) {
+    this.#maxFiles = Math.max(1, Number(maxFiles) || 64);
+    this.#maxBytes = maxBytes;
+  }
 
   events(runsRoot, id) {
     const file = path.join(runsRoot, id, 'session.jsonl');
     if (!fs.existsSync(file)) throw new Error(`Run "${id}" has no canonical session log.`);
     const size = fs.statSync(file).size;
+    const fingerprint = fileFingerprint(file);
     let state = this.#files.get(file);
-    // Historical runs change only when an explicit append command mutates
-    // them. Re-scan on size change through the kernel's bounded line reader;
+    // Detect appends, external edits and replacement through the fingerprint.
+    // Re-scan changed files through the kernel's bounded line reader;
     // never allocate `size` bytes or turn the complete JSONL into one string.
-    if (!state || size !== state.size) state = { size, events: readSessionLogFile(file).events };
+    if (!state || !fingerprint || fingerprint !== state.fingerprint) {
+      state = { size, fingerprint, events: readSessionLogFile(file).events };
+      if (fingerprint !== fileFingerprint(file)) state.fingerprint = null;
+    }
     this.#files.delete(file);
     this.#files.set(file, state);
     while (this.#files.size > this.#maxFiles) this.#files.delete(this.#files.keys().next().value);
+    let bytes = [...this.#files.values()].reduce((total, item) => total + item.size, 0);
+    while (bytes > this.#maxBytes && this.#files.size) {
+      const oldest = this.#files.keys().next().value;
+      bytes -= this.#files.get(oldest).size;
+      this.#files.delete(oldest);
+    }
     return state.events;
   }
 

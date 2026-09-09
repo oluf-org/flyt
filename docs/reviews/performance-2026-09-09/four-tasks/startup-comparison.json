@@ -1,0 +1,67 @@
+{
+  "method": "Three serial fresh-profile production Electron launches before, then three after startup boundaries and local fonts. Same settled 100-run fixture. Includes all runs; first before launch had a large unattributed stall. Entry-to-composer is not OS process cold-launch time. Timing sample is small. No CPU tracing.",
+  "samples": [
+    {
+      "variant": "before",
+      "trial": 1,
+      "composerMs": 1098.720947265625,
+      "chatsMs": 63.841064453125,
+      "runOpenMs": 71.394775390625,
+      "focusRecoveries": 0,
+      "error": null
+    },
+    {
+      "variant": "before",
+      "trial": 2,
+      "composerMs": 655.240966796875,
+      "chatsMs": 50.683349609375,
+      "runOpenMs": 71.10400390625,
+      "focusRecoveries": 0,
+      "error": null
+    },
+    {
+      "variant": "before",
+      "trial": 3,
+      "composerMs": 642.83544921875,
+      "chatsMs": 47.9150390625,
+      "runOpenMs": 65.7099609375,
+      "focusRecoveries": 0,
+      "error": null
+    },
+    {
+      "variant": "after",
+      "trial": 1,
+      "composerMs": 613.6279296875,
+      "chatsMs": 63.2802734375,
+      "runOpenMs": 65.587646484375,
+      "focusRecoveries": 0,
+      "error": null
+    },
+    {
+      "variant": "after",
+      "trial": 2,
+      "composerMs": 456.0185546875,
+      "chatsMs": 61.830078125,
+      "runOpenMs": 63.62060546875,
+      "focusRecoveries": 0,
+      "error": null
+    },
+    {
+      "variant": "after",
+      "trial": 3,
+      "composerMs": 453.275146484375,
+      "chatsMs": 63.165771484375,
+      "runOpenMs": 64.53857421875,
+      "focusRecoveries": 0,
+      "error": null
+    }
+  ],
+  "medianComposerMs": {
+    "before": 655.240966796875,
+    "after": 456.0185546875
+  },
+  "dailyRootBytes": {
+    "before": 525880,
+    "after": 178800
+  }
+}

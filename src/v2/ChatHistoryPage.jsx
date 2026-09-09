@@ -4,25 +4,10 @@ import { loopLabel, count, elapsed } from '../activityFormat.js';
 import ActivityIcon from '../ActivityIcon.jsx';
 import './chatHistoryStyles.css';
 
-export default function ChatHistoryPage({ projectId, onOpen, onNewChat }) {
-  const [rows, setRows] = useState([]), [query, setQuery] = useState(''), [kind, setKind] = useState('all');
-  const [busy, setBusy] = useState(true), [error, setError] = useState(''), [revision, setRevision] = useState(0);
+export default function ChatHistoryPage({ rows = [], busy = false, error = '', onRefresh, onOpen, onNewChat }) {
+  const [query, setQuery] = useState(''), [kind, setKind] = useState('all');
   const [limit, setLimit] = useState(60);
   useEffect(() => { setLimit(60); }, [kind, query]);
-  useEffect(() => {
-    let live = true, loading = false;
-    setRows([]); setBusy(true); setError('');
-    const refresh = async () => {
-      if (loading) return;
-      loading = true;
-      try { const next = projectId ? await window.flyt.chatHistory(projectId) : []; if (live) { setRows(next); setError(''); } }
-      catch (caught) { if (live) setError(String(caught.message ?? caught)); }
-      finally { loading = false; if (live) setBusy(false); }
-    };
-    refresh();
-    const timer = setInterval(refresh, 5000);
-    return () => { live = false; clearInterval(timer); };
-  }, [projectId, revision]);
   const filtered = useMemo(() => rows.filter(row => (kind === 'all' || row.kind === kind)
     && `${row.name} ${row.model ?? ''} ${row.flowName ?? ''} ${row.status ?? row.stage}`.toLowerCase().includes(query.trim().toLowerCase())), [rows, kind, query]);
   const groups = groupRuns(filtered.slice(0, limit));
@@ -31,7 +16,7 @@ export default function ChatHistoryPage({ projectId, onOpen, onNewChat }) {
       <button className="chats-new" onClick={onNewChat}>＋ New chat</button></header>
     <div className="chats-toolbar"><input type="search" aria-label="Search chat history" placeholder="Search history…" value={query} onChange={event => setQuery(event.target.value)}/>
       <div className="chats-tabs" role="group" aria-label="Conversation type">{[['all', 'All'], ['loop', 'Loops'], ['workflow', 'Workflows']].map(([value, label]) => <button key={value} aria-pressed={kind === value} onClick={() => setKind(value)}>{label}</button>)}</div></div>
-    {error && <p role="alert" className="chats-error">{error} <button onClick={() => setRevision(value => value + 1)}>Retry</button></p>}
+    {error && <p role="alert" className="chats-error">{error} <button onClick={onRefresh}>Retry</button></p>}
     {busy ? <p role="status" className="chats-empty">Loading history…</p> : !groups.length ? <div className="chats-empty"><ActivityIcon kind={kind === 'loop' ? 'loop' : 'workflow'} id="empty-history" size={36}/><p>{query || kind !== 'all' ? 'No matches' : 'No conversations yet'}</p>{(query || kind !== 'all') && <button onClick={() => { setQuery(''); setKind('all'); }}>Clear filters</button>}</div> : groups.map(group => <section className="chats-group" key={group.key} aria-label={group.label}>
       <h2>{group.label}</h2><div className="chats-list">{group.runs.map(row => {
         const status = row.kind === 'loop' ? { label: loopLabel(row.status), kind: row.status === 'achieved' ? 'done' : row.settled ? 'settled' : row.status } : runStatus(row);

@@ -1,5 +1,5 @@
 import { mergeSnapshot } from '../../core/snapshotDiff.js';
-import { feed } from '../traceModel.js';
+import { feed, copyTraceChanges } from '../traceModel.js';
 import { stackFromSnapshot, watchingFromRun } from './dailyWorkModel.js';
 
 export const DAILY_PROJECT_ACTIONS = Object.freeze([
@@ -79,7 +79,7 @@ export function applyDailyRunUpdate(current, payload) {
       // feed mutates the open tail efficiently; fresh outer arrays make the
       // change visible to React memoization without cloning the full trace.
       trace: incoming.length
-        ? { ...current.trace, turns: [...current.trace.turns], others: [...current.trace.others] }
+        ? copyTraceChanges(current.trace, { ...current.trace, turns: [...current.trace.turns], others: [...current.trace.others] })
         : current.trace,
       cursor,
     },

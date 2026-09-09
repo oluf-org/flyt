@@ -1,0 +1,857 @@
+{
+  "method": "Three unprofiled fresh-profile trials per fixture/variant, alternating order. Same production build; before restores the inset shadow and suppresses the marker, after uses actual production CSS. Event Timing grouped by interaction, >=16ms threshold and 8ms quantization; not all-keystroke percentiles or INP. Profiles and synthetic data are on the workspace drive for both variants.",
+  "groups": [
+    {
+      "size": "100",
+      "history-inset-shadow": {
+        "p95": [
+          64,
+          64,
+          64
+        ],
+        "max": [
+          96,
+          88,
+          96
+        ],
+        "medianP95": 64,
+        "medianMax": 96,
+        "steadyP95": [
+          16,
+          16,
+          16
+        ]
+      },
+      "baseline": {
+        "p95": [
+          40,
+          56,
+          32
+        ],
+        "max": [
+          64,
+          56,
+          64
+        ],
+        "medianP95": 40,
+        "medianMax": 64,
+        "steadyP95": [
+          24,
+          16,
+          16
+        ]
+      }
+    },
+    {
+      "size": "large",
+      "history-inset-shadow": {
+        "p95": [
+          80,
+          96,
+          104
+        ],
+        "max": [
+          104,
+          96,
+          104
+        ],
+        "medianP95": 96,
+        "medianMax": 104,
+        "steadyP95": [
+          16,
+          16,
+          24
+        ]
+      },
+      "baseline": {
+        "p95": [
+          40,
+          40,
+          72
+        ],
+        "max": [
+          40,
+          64,
+          72
+        ],
+        "medianP95": 40,
+        "medianMax": 64,
+        "steadyP95": [
+          24,
+          24,
+          32
+        ]
+      }
+    }
+  ],
+  "rows": [
+    {
+      "file": "marker-100-history-inset-shadow-1.json",
+      "size": "100",
+      "variant": "history-inset-shadow",
+      "first": {
+        "durationMs": {
+          "count": 29,
+          "min": 16,
+          "p50": 16,
+          "p95": 64,
+          "p99": 96,
+          "max": 96
+        },
+        "inputDelayMs": {
+          "count": 29,
+          "min": 0.1,
+          "p50": 0.3,
+          "p95": 0.8,
+          "p99": 0.9,
+          "max": 0.9
+        },
+        "processingMs": {
+          "count": 29,
+          "min": 0,
+          "p50": 0.8,
+          "p95": 1,
+          "p99": 1.1,
+          "max": 1.1
+        },
+        "presentationDelayMs": {
+          "count": 29,
+          "min": 14.6,
+          "p50": 15,
+          "p95": 63.7,
+          "p99": 95.3,
+          "max": 95.3
+        }
+      },
+      "steady": {
+        "count": 3,
+        "min": 16,
+        "p50": 16,
+        "p95": 16,
+        "p99": 16,
+        "max": 16
+      },
+      "indicator": {
+        "boxShadow": "oklch(0.596 0.07 157) 2px 0px 0px 0px inset",
+        "marker": {
+          "content": "none",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 196,
+          "height": 49
+        }
+      }
+    },
+    {
+      "file": "marker-100-history-inset-shadow-2.json",
+      "size": "100",
+      "variant": "history-inset-shadow",
+      "first": {
+        "durationMs": {
+          "count": 22,
+          "min": 16,
+          "p50": 16,
+          "p95": 64,
+          "p99": 88,
+          "max": 88
+        },
+        "inputDelayMs": {
+          "count": 22,
+          "min": 0.1,
+          "p50": 0.3,
+          "p95": 0.3,
+          "p99": 0.4,
+          "max": 0.4
+        },
+        "processingMs": {
+          "count": 22,
+          "min": 0,
+          "p50": 0.7,
+          "p95": 1,
+          "p99": 1.2,
+          "max": 1.2
+        },
+        "presentationDelayMs": {
+          "count": 22,
+          "min": 14.5,
+          "p50": 15.1,
+          "p95": 63.6,
+          "p99": 87.4,
+          "max": 87.4
+        }
+      },
+      "steady": {
+        "count": 10,
+        "min": 16,
+        "p50": 16,
+        "p95": 16,
+        "p99": 16,
+        "max": 16
+      },
+      "indicator": {
+        "boxShadow": "oklch(0.596 0.07 157) 2px 0px 0px 0px inset",
+        "marker": {
+          "content": "none",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 196,
+          "height": 49
+        }
+      }
+    },
+    {
+      "file": "marker-100-history-inset-shadow-3.json",
+      "size": "100",
+      "variant": "history-inset-shadow",
+      "first": {
+        "durationMs": {
+          "count": 20,
+          "min": 16,
+          "p50": 16,
+          "p95": 64,
+          "p99": 96,
+          "max": 96
+        },
+        "inputDelayMs": {
+          "count": 20,
+          "min": 0.1,
+          "p50": 0.2,
+          "p95": 0.4,
+          "p99": 0.4,
+          "max": 0.4
+        },
+        "processingMs": {
+          "count": 20,
+          "min": 0,
+          "p50": 0.7,
+          "p95": 0.9,
+          "p99": 1,
+          "max": 1
+        },
+        "presentationDelayMs": {
+          "count": 20,
+          "min": 14.7,
+          "p50": 15,
+          "p95": 63.7,
+          "p99": 95.6,
+          "max": 95.6
+        }
+      },
+      "steady": {
+        "count": 10,
+        "min": 16,
+        "p50": 16,
+        "p95": 16,
+        "p99": 16,
+        "max": 16
+      },
+      "indicator": {
+        "boxShadow": "oklch(0.596 0.07 157) 2px 0px 0px 0px inset",
+        "marker": {
+          "content": "none",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 196,
+          "height": 49
+        }
+      }
+    },
+    {
+      "file": "marker-100-baseline-1.json",
+      "size": "100",
+      "variant": "baseline",
+      "first": {
+        "durationMs": {
+          "count": 22,
+          "min": 16,
+          "p50": 16,
+          "p95": 40,
+          "p99": 64,
+          "max": 64
+        },
+        "inputDelayMs": {
+          "count": 22,
+          "min": 0.1,
+          "p50": 0.3,
+          "p95": 0.4,
+          "p99": 0.5,
+          "max": 0.5
+        },
+        "processingMs": {
+          "count": 22,
+          "min": 0,
+          "p50": 0.8,
+          "p95": 1,
+          "p99": 1.1,
+          "max": 1.1
+        },
+        "presentationDelayMs": {
+          "count": 22,
+          "min": 14.5,
+          "p50": 15,
+          "p95": 39.6,
+          "p99": 63.6,
+          "max": 63.6
+        }
+      },
+      "steady": {
+        "count": 17,
+        "min": 16,
+        "p50": 16,
+        "p95": 24,
+        "p99": 24,
+        "max": 24
+      },
+      "indicator": {
+        "boxShadow": "none",
+        "marker": {
+          "content": "\"\"",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 196,
+          "height": 49
+        }
+      }
+    },
+    {
+      "file": "marker-100-baseline-2.json",
+      "size": "100",
+      "variant": "baseline",
+      "first": {
+        "durationMs": {
+          "count": 16,
+          "min": 16,
+          "p50": 16,
+          "p95": 56,
+          "p99": 56,
+          "max": 56
+        },
+        "inputDelayMs": {
+          "count": 16,
+          "min": 0.1,
+          "p50": 0.3,
+          "p95": 0.5,
+          "p99": 0.5,
+          "max": 0.5
+        },
+        "processingMs": {
+          "count": 16,
+          "min": 0,
+          "p50": 0.7,
+          "p95": 1.1,
+          "p99": 1.1,
+          "max": 1.1
+        },
+        "presentationDelayMs": {
+          "count": 16,
+          "min": 14.6,
+          "p50": 14.9,
+          "p95": 55.5,
+          "p99": 55.5,
+          "max": 55.5
+        }
+      },
+      "steady": {
+        "count": 10,
+        "min": 16,
+        "p50": 16,
+        "p95": 16,
+        "p99": 16,
+        "max": 16
+      },
+      "indicator": {
+        "boxShadow": "none",
+        "marker": {
+          "content": "\"\"",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 196,
+          "height": 49
+        }
+      }
+    },
+    {
+      "file": "marker-100-baseline-3.json",
+      "size": "100",
+      "variant": "baseline",
+      "first": {
+        "durationMs": {
+          "count": 22,
+          "min": 16,
+          "p50": 16,
+          "p95": 32,
+          "p99": 64,
+          "max": 64
+        },
+        "inputDelayMs": {
+          "count": 22,
+          "min": 0.1,
+          "p50": 0.2,
+          "p95": 0.4,
+          "p99": 0.5,
+          "max": 0.5
+        },
+        "processingMs": {
+          "count": 22,
+          "min": 0.1,
+          "p50": 0.7,
+          "p95": 0.9,
+          "p99": 1,
+          "max": 1
+        },
+        "presentationDelayMs": {
+          "count": 22,
+          "min": 14.7,
+          "p50": 15.1,
+          "p95": 31.7,
+          "p99": 63.7,
+          "max": 63.7
+        }
+      },
+      "steady": {
+        "count": 8,
+        "min": 16,
+        "p50": 16,
+        "p95": 16,
+        "p99": 16,
+        "max": 16
+      },
+      "indicator": {
+        "boxShadow": "none",
+        "marker": {
+          "content": "\"\"",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 196,
+          "height": 49
+        }
+      }
+    },
+    {
+      "file": "marker-large-history-inset-shadow-1.json",
+      "size": "large",
+      "variant": "history-inset-shadow",
+      "first": {
+        "durationMs": {
+          "count": 26,
+          "min": 16,
+          "p50": 16,
+          "p95": 80,
+          "p99": 104,
+          "max": 104
+        },
+        "inputDelayMs": {
+          "count": 26,
+          "min": 0.1,
+          "p50": 0.3,
+          "p95": 0.5,
+          "p99": 3.5,
+          "max": 3.5
+        },
+        "processingMs": {
+          "count": 26,
+          "min": 0,
+          "p50": 0.6,
+          "p95": 0.9,
+          "p99": 1.6,
+          "max": 1.6
+        },
+        "presentationDelayMs": {
+          "count": 26,
+          "min": 14.6,
+          "p50": 15.1,
+          "p95": 76.4,
+          "p99": 103.6,
+          "max": 103.6
+        }
+      },
+      "steady": {
+        "count": 11,
+        "min": 16,
+        "p50": 16,
+        "p95": 16,
+        "p99": 16,
+        "max": 16
+      },
+      "indicator": {
+        "boxShadow": "oklch(0.596 0.07 157) 2px 0px 0px 0px inset",
+        "marker": {
+          "content": "none",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 211,
+          "height": 49
+        }
+      }
+    },
+    {
+      "file": "marker-large-history-inset-shadow-2.json",
+      "size": "large",
+      "variant": "history-inset-shadow",
+      "first": {
+        "durationMs": {
+          "count": 16,
+          "min": 16,
+          "p50": 16,
+          "p95": 96,
+          "p99": 96,
+          "max": 96
+        },
+        "inputDelayMs": {
+          "count": 16,
+          "min": 0.1,
+          "p50": 0.2,
+          "p95": 0.3,
+          "p99": 0.3,
+          "max": 0.3
+        },
+        "processingMs": {
+          "count": 16,
+          "min": 0.1,
+          "p50": 0.6,
+          "p95": 0.7,
+          "p99": 0.7,
+          "max": 0.7
+        },
+        "presentationDelayMs": {
+          "count": 16,
+          "min": 15,
+          "p50": 15.2,
+          "p95": 95.6,
+          "p99": 95.6,
+          "max": 95.6
+        }
+      },
+      "steady": {
+        "count": 12,
+        "min": 16,
+        "p50": 16,
+        "p95": 16,
+        "p99": 16,
+        "max": 16
+      },
+      "indicator": {
+        "boxShadow": "oklch(0.596 0.07 157) 2px 0px 0px 0px inset",
+        "marker": {
+          "content": "none",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 211,
+          "height": 49
+        }
+      }
+    },
+    {
+      "file": "marker-large-history-inset-shadow-3.json",
+      "size": "large",
+      "variant": "history-inset-shadow",
+      "first": {
+        "durationMs": {
+          "count": 19,
+          "min": 16,
+          "p50": 16,
+          "p95": 104,
+          "p99": 104,
+          "max": 104
+        },
+        "inputDelayMs": {
+          "count": 19,
+          "min": 0.1,
+          "p50": 0.3,
+          "p95": 0.5,
+          "p99": 0.5,
+          "max": 0.5
+        },
+        "processingMs": {
+          "count": 19,
+          "min": 0,
+          "p50": 0.5,
+          "p95": 1,
+          "p99": 1,
+          "max": 1
+        },
+        "presentationDelayMs": {
+          "count": 19,
+          "min": 15,
+          "p50": 15.6,
+          "p95": 103.7,
+          "p99": 103.7,
+          "max": 103.7
+        }
+      },
+      "steady": {
+        "count": 14,
+        "min": 16,
+        "p50": 16,
+        "p95": 24,
+        "p99": 24,
+        "max": 24
+      },
+      "indicator": {
+        "boxShadow": "oklch(0.596 0.07 157) 2px 0px 0px 0px inset",
+        "marker": {
+          "content": "none",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 211,
+          "height": 49
+        }
+      }
+    },
+    {
+      "file": "marker-large-baseline-1.json",
+      "size": "large",
+      "variant": "baseline",
+      "first": {
+        "durationMs": {
+          "count": 22,
+          "min": 16,
+          "p50": 16,
+          "p95": 40,
+          "p99": 40,
+          "max": 40
+        },
+        "inputDelayMs": {
+          "count": 22,
+          "min": 0.1,
+          "p50": 0.3,
+          "p95": 0.4,
+          "p99": 0.4,
+          "max": 0.4
+        },
+        "processingMs": {
+          "count": 22,
+          "min": 0.1,
+          "p50": 0.6,
+          "p95": 0.9,
+          "p99": 1.1,
+          "max": 1.1
+        },
+        "presentationDelayMs": {
+          "count": 22,
+          "min": 14.7,
+          "p50": 15.1,
+          "p95": 39.6,
+          "p99": 39.7,
+          "max": 39.7
+        }
+      },
+      "steady": {
+        "count": 6,
+        "min": 16,
+        "p50": 16,
+        "p95": 24,
+        "p99": 24,
+        "max": 24
+      },
+      "indicator": {
+        "boxShadow": "none",
+        "marker": {
+          "content": "\"\"",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 211,
+          "height": 49
+        }
+      }
+    },
+    {
+      "file": "marker-large-baseline-2.json",
+      "size": "large",
+      "variant": "baseline",
+      "first": {
+        "durationMs": {
+          "count": 20,
+          "min": 16,
+          "p50": 16,
+          "p95": 40,
+          "p99": 64,
+          "max": 64
+        },
+        "inputDelayMs": {
+          "count": 20,
+          "min": 0.1,
+          "p50": 0.3,
+          "p95": 0.4,
+          "p99": 0.4,
+          "max": 0.4
+        },
+        "processingMs": {
+          "count": 20,
+          "min": 0,
+          "p50": 0.6,
+          "p95": 0.8,
+          "p99": 0.9,
+          "max": 0.9
+        },
+        "presentationDelayMs": {
+          "count": 20,
+          "min": 14.8,
+          "p50": 15.2,
+          "p95": 39.8,
+          "p99": 63.5,
+          "max": 63.5
+        }
+      },
+      "steady": {
+        "count": 3,
+        "min": 16,
+        "p50": 16,
+        "p95": 24,
+        "p99": 24,
+        "max": 24
+      },
+      "indicator": {
+        "boxShadow": "none",
+        "marker": {
+          "content": "\"\"",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 211,
+          "height": 49
+        }
+      }
+    },
+    {
+      "file": "marker-large-baseline-3.json",
+      "size": "large",
+      "variant": "baseline",
+      "first": {
+        "durationMs": {
+          "count": 17,
+          "min": 16,
+          "p50": 16,
+          "p95": 72,
+          "p99": 72,
+          "max": 72
+        },
+        "inputDelayMs": {
+          "count": 17,
+          "min": 0.1,
+          "p50": 0.2,
+          "p95": 10.3,
+          "p99": 10.3,
+          "max": 10.3
+        },
+        "processingMs": {
+          "count": 17,
+          "min": 0,
+          "p50": 0.6,
+          "p95": 0.8,
+          "p99": 0.8,
+          "max": 0.8
+        },
+        "presentationDelayMs": {
+          "count": 17,
+          "min": 15,
+          "p50": 15.2,
+          "p95": 71.4,
+          "p99": 71.4,
+          "max": 71.4
+        }
+      },
+      "steady": {
+        "count": 11,
+        "min": 16,
+        "p50": 16,
+        "p95": 32,
+        "p99": 32,
+        "max": 32
+      },
+      "indicator": {
+        "boxShadow": "none",
+        "marker": {
+          "content": "\"\"",
+          "width": "2px",
+          "top": "8px",
+          "bottom": "8px",
+          "background": "oklch(0.596 0.07 157)",
+          "pointerEvents": "none"
+        },
+        "row": {
+          "x": 75,
+          "y": 165.5,
+          "width": 211,
+          "height": 49
+        }
+      }
+    }
+  ]
+}

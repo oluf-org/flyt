@@ -38,6 +38,13 @@ const TOOL_INPUT_END = 'tool.input.end';
 const TOOL_CALL = 'tool.call';
 const TOOL_RESULT = 'tool.result';
 const PERMISSION_DECISION = 'permission.decision';
+const changesByTrace = new WeakMap();
+export const traceChanges = trace => trace && changesByTrace.get(trace);
+export function copyTraceChanges(from, to) {
+  const changes = changesByTrace.get(from);
+  if (changes) changesByTrace.set(to, changes);
+  return to;
+}
 /**
  * The event types this fold understands, as data.
  *
@@ -143,8 +150,12 @@ export function emptyTrace() {
  * feed a cursor's worth of new events instead of re-reading the log.
  */
 export function feed(trace, events) {
+  const previous = changesByTrace.get(trace);
+  const changes = { source: previous?.source ?? {}, version: (previous?.version ?? 0) + 1, structural: false, streams: new Map() };
+  changesByTrace.set(trace, changes);
   for (const event of events ?? []) {
     const type = typeof event?.type === 'string' ? event.type : '';
+    if (type !== LLM_STREAM) changes.structural = true;
     if (!type) {
       trace.others.push(asOther(event));
       continue;
@@ -351,8 +362,13 @@ export function feed(trace, events) {
       }
 
       case LLM_STREAM: {
-        const request = openStep(trace)?.request ?? null;
+        const step = openStep(trace);
+        const request = step?.request ?? null;
         if (!request) break;
+        if (!changes.streams.has(step)) {
+          const chars = String(request.content ?? '').length + String(request.reasoning ?? '').length;
+          changes.streams.set(step, chars ? Math.max(1, Math.ceil(chars / 4)) : 0);
+        }
         if (data.text != null) {
           request.content = `${request.content ?? ''}${String(data.text)}`;
           if (String(data.text).length) request.contentSeq ??= typeof event.seq === 'number' ? event.seq : null;

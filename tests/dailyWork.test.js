@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { renderResolved } from './helpers/renderResolved.js';
 import { createServer as createViteServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 import {
@@ -133,7 +134,7 @@ test('the rendered shell keeps the composer and tabs on Work and opens Models in
       'the window bar does not expose a timestamp-shaped run id');
 
     // The Library is a destination of its own now, not a drawer inside Build.
-    const library = renderToStaticMarkup(React.createElement(Shell, {
+    const library = await renderResolved(React.createElement(Shell, {
       ...props, location: { dest: 'library', run: null },
       build: { library: { plugins: [{ id: 'p', name: 'A plugin', specifier: 'x', builtin: false, state: 'active' }] } },
     }));

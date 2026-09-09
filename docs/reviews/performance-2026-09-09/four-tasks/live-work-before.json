@@ -1,0 +1,28 @@
+{
+  "mode": "before",
+  "at": "2026-09-09T14:10:50.668Z",
+  "cpu": "AMD Ryzen 7 3800X 8-Core Processor             ",
+  "node": "v22.12.0",
+  "priorSteps": 1000,
+  "batches": 120,
+  "chunksPerBatch": 8,
+  "foldAndViewMs": {
+    "count": 120,
+    "min": 2.5,
+    "p50": 2.96,
+    "p95": 31.08,
+    "p99": 44.06,
+    "max": 46.93
+  },
+  "serverRenderMs": {
+    "count": 6,
+    "min": 418.82,
+    "p50": 432.97,
+    "p95": 525.16,
+    "p99": 525.16,
+    "max": 525.16
+  },
+  "mountedActivityRows": 2003,
+  "equivalent": true,
+  "limitations": "CPU replay and React server rendering; excludes browser layout, paint and input delay. No provider effects."
+}

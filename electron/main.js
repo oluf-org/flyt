@@ -468,6 +468,7 @@ bindIpc('workflow:answer', (projectId, runId, questionId, answer = '') =>
 bindIpc('run:list', projectId => ({ projectId }));
 bindIpc('run:log', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:snapshot', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:block-history', (projectId, runIds) => ({ projectId, runIds }));
 bindIpc('run:debug', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:resume', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:stop', (projectId, runId) => ({ projectId, runId }));
@@ -607,7 +608,12 @@ ipcMain.handle('workspace:open', (_e, projectId, runId) => {
 });
 
 // --- Project tabs (D22): registry surface for the strip, new-tab page & deck ---
+let readProjectId = registry.activeId;
 function projectListPayload() {
+  if (readProjectId !== registry.activeId) {
+    readProjectId = registry.activeId;
+    api.activateReads(readProjectId);
+  }
   return {
     tabs: registry.listOpen(),
     active: registry.activeId,
@@ -681,6 +687,7 @@ ipcMain.handle('project:reveal', (_e, projectId) => {
   return dir ? shell.openPath(dir) : null;
 });
 ipcMain.handle('project:close', (_e, projectId) => {
+  api.cancelReads(projectId);
   // T13: closing a tab never kills work — the entry (store + runner) stays
   // live in this process; only the tab goes.
   registry.close(projectId);

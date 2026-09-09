@@ -4,6 +4,7 @@
 import { SEED_NODE_TEMPLATES, normalizeTemplate, AGENT_TOOLS } from './flowTypes.js';
 import { slugFromPrompt, dedupeSlug } from '../core/projectName.js';
 import { factsFromCatalog } from '../core/modelSource.js';
+import { blockHistoryRows } from '../core/blockHistory.js';
 import { normalizeHexColor } from './lib/projectTheme.js';
 
 const snapshots = {
@@ -647,6 +648,10 @@ const mockHistorySummary = {
 export function installDevMock() {
   window.flyt = {
     chatHistory: async projectId => (await window.flyt.listRuns(projectId)).map(row => ({ ...row, kind: 'workflow' })),
+    getBlockHistory: async (projectId, ids) => {
+      const runs = await window.flyt.listRuns(projectId);
+      return (await Promise.all(ids.map(async id => blockHistoryRows(await window.flyt.getSnapshot(projectId, id), runs.find(row => row.id === id) ?? { id })))).flat();
+    },
     historySummary: async () => structuredClone(mockHistorySummary),
     historyTrace: async runId => runId === 'run-history-refactor' ? structuredClone(mockHistoryEvents) : [],
     exportHistory: async format => ({ cancelled: false, file: `preview-history.${format === 'csv' ? 'csv' : 'jsonl'}` }),

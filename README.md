@@ -23,6 +23,8 @@ npm run stack -- lint
 
 Build installers with `npm run dist`, or use `dist:win`, `dist:mac`, and `dist:linux` for one platform.
 
+Measure responsiveness with `npm run perf:core` and `npm run perf:app`. See the [performance audit and probe guide](docs/performance-audit.md) for baseline results, isolated interactive recordings, and regression budgets.
+
 ## Durable files
 
 ```text

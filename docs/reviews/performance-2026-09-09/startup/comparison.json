@@ -1,0 +1,724 @@
+{
+  "date": "2026-09-09T08:28:54.157Z",
+  "method": "Three serial, alternating before/after launches per fixture. Same production renderer. Before temporarily removes only the empty-contract fast path from the generated kernel module, restored in finally; no source, recovery, or worker changes between variants. Final unprofiled repetitions keep the synthetic window always on top. CPU profiles are separate and include tracing overhead.",
+  "samples": [
+    {
+      "size": "100",
+      "variant": "before",
+      "repeat": 1,
+      "file": "startup-final-100-before-1.json",
+      "mainMaxGapMs": 334.783447265625,
+      "buildOverlapMaxGapMs": 334.783447265625,
+      "buildIpcMs": 306.796875,
+      "composerDomMs": 584.553466796875,
+      "runOpenMs": 77.09130859375,
+      "replyP95Ms": 136,
+      "replyQueueP95Ms": 0.4,
+      "replyProcessingP95Ms": 1,
+      "replyPresentationP95Ms": 135.5,
+      "historyPollP95Ms": 36.9,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 10
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "size": "100",
+      "variant": "before",
+      "repeat": 2,
+      "file": "startup-final-100-before-2.json",
+      "mainMaxGapMs": 329.257568359375,
+      "buildOverlapMaxGapMs": 329.257568359375,
+      "buildIpcMs": 303.672119140625,
+      "composerDomMs": 581.800048828125,
+      "runOpenMs": 81.564208984375,
+      "replyP95Ms": 176,
+      "replyQueueP95Ms": 0.6,
+      "replyProcessingP95Ms": 1.1,
+      "replyPresentationP95Ms": 175.3,
+      "historyPollP95Ms": 37.59,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 11
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "size": "100",
+      "variant": "before",
+      "repeat": 3,
+      "file": "startup-final-100-before-3.json",
+      "mainMaxGapMs": 344.5390625,
+      "buildOverlapMaxGapMs": 344.5390625,
+      "buildIpcMs": 327.5947265625,
+      "composerDomMs": 697.901123046875,
+      "runOpenMs": 72.987060546875,
+      "replyP95Ms": 160,
+      "replyQueueP95Ms": 0.6,
+      "replyProcessingP95Ms": 0.8,
+      "replyPresentationP95Ms": 159.7,
+      "historyPollP95Ms": 33.1,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 12
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "size": "100",
+      "variant": "after",
+      "repeat": 1,
+      "file": "startup-final-100-after-1.json",
+      "mainMaxGapMs": 188.05078125,
+      "buildOverlapMaxGapMs": 109.161865234375,
+      "buildIpcMs": 86.88720703125,
+      "composerDomMs": 578.92431640625,
+      "runOpenMs": 78.242431640625,
+      "replyP95Ms": 152,
+      "replyQueueP95Ms": 0.4,
+      "replyProcessingP95Ms": 1,
+      "replyPresentationP95Ms": 151.7,
+      "historyPollP95Ms": 34.28,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 18
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "size": "100",
+      "variant": "after",
+      "repeat": 2,
+      "file": "startup-final-100-after-2.json",
+      "mainMaxGapMs": 188.67333984375,
+      "buildOverlapMaxGapMs": 107.446044921875,
+      "buildIpcMs": 89.218994140625,
+      "composerDomMs": 573.44091796875,
+      "runOpenMs": 71.9755859375,
+      "replyP95Ms": 144,
+      "replyQueueP95Ms": 0.4,
+      "replyProcessingP95Ms": 1.1,
+      "replyPresentationP95Ms": 143.7,
+      "historyPollP95Ms": 36.43,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 18
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "size": "100",
+      "variant": "after",
+      "repeat": 3,
+      "file": "startup-final-100-after-3.json",
+      "mainMaxGapMs": 181.244873046875,
+      "buildOverlapMaxGapMs": 104.194580078125,
+      "buildIpcMs": 84.321044921875,
+      "composerDomMs": 560.415283203125,
+      "runOpenMs": 70.84814453125,
+      "replyP95Ms": 144,
+      "replyQueueP95Ms": 0.4,
+      "replyProcessingP95Ms": 1.1,
+      "replyPresentationP95Ms": 143.6,
+      "historyPollP95Ms": 34.69,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 16
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "size": "large",
+      "variant": "before",
+      "repeat": 1,
+      "file": "startup-final-large-before-1.json",
+      "mainMaxGapMs": 352.780517578125,
+      "buildOverlapMaxGapMs": 352.780517578125,
+      "buildIpcMs": 334.44677734375,
+      "composerDomMs": 595.616455078125,
+      "runOpenMs": 89.80712890625,
+      "replyP95Ms": 152,
+      "replyQueueP95Ms": 0.4,
+      "replyProcessingP95Ms": 0.9,
+      "replyPresentationP95Ms": 142.5,
+      "historyPollP95Ms": 5.54,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 10
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "size": "large",
+      "variant": "before",
+      "repeat": 2,
+      "file": "startup-final-large-before-2.json",
+      "mainMaxGapMs": 328.755126953125,
+      "buildOverlapMaxGapMs": 328.755126953125,
+      "buildIpcMs": 319.64111328125,
+      "composerDomMs": 579.912841796875,
+      "runOpenMs": 125.828857421875,
+      "replyP95Ms": 152,
+      "replyQueueP95Ms": 0.4,
+      "replyProcessingP95Ms": 0.9,
+      "replyPresentationP95Ms": 151.7,
+      "historyPollP95Ms": 5.57,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 11
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "size": "large",
+      "variant": "before",
+      "repeat": 3,
+      "file": "startup-final-large-before-3.json",
+      "mainMaxGapMs": 357.8349609375,
+      "buildOverlapMaxGapMs": 357.8349609375,
+      "buildIpcMs": 342.22509765625,
+      "composerDomMs": 618.684814453125,
+      "runOpenMs": 91.7451171875,
+      "replyP95Ms": 168,
+      "replyQueueP95Ms": 0.4,
+      "replyProcessingP95Ms": 0.9,
+      "replyPresentationP95Ms": 167.7,
+      "historyPollP95Ms": 4.59,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 11
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "size": "large",
+      "variant": "after",
+      "repeat": 1,
+      "file": "startup-final-large-after-1.json",
+      "mainMaxGapMs": 209.962890625,
+      "buildOverlapMaxGapMs": 140.75048828125,
+      "buildIpcMs": 111.248779296875,
+      "composerDomMs": 630.456298828125,
+      "runOpenMs": 124.5458984375,
+      "replyP95Ms": 120,
+      "replyQueueP95Ms": 0.4,
+      "replyProcessingP95Ms": 0.9,
+      "replyPresentationP95Ms": 107.9,
+      "historyPollP95Ms": 4.98,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 19
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "size": "large",
+      "variant": "after",
+      "repeat": 2,
+      "file": "startup-final-large-after-2.json",
+      "mainMaxGapMs": 202.06787109375,
+      "buildOverlapMaxGapMs": 118.109375,
+      "buildIpcMs": 102.283203125,
+      "composerDomMs": 600.946044921875,
+      "runOpenMs": 125.763916015625,
+      "replyP95Ms": 184,
+      "replyQueueP95Ms": 9,
+      "replyProcessingP95Ms": 1,
+      "replyPresentationP95Ms": 183.9,
+      "historyPollP95Ms": 4.7,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 19
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "size": "large",
+      "variant": "after",
+      "repeat": 3,
+      "file": "startup-final-large-after-3.json",
+      "mainMaxGapMs": 213.72802734375,
+      "buildOverlapMaxGapMs": 97.928466796875,
+      "buildIpcMs": 84.47607421875,
+      "composerDomMs": 623.0185546875,
+      "runOpenMs": 94.593017578125,
+      "replyP95Ms": 144,
+      "replyQueueP95Ms": 0.5,
+      "replyProcessingP95Ms": 1,
+      "replyPresentationP95Ms": 134.2,
+      "historyPollP95Ms": 5.59,
+      "draftChecks": {
+        "composer": true,
+        "reply": true,
+        "detailToggle": true
+      },
+      "inputsDuringRead": [
+        {
+          "phase": "composer-typing",
+          "count": 18
+        },
+        {
+          "phase": "reply-typing",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "comparisons": [
+    {
+      "size": "100",
+      "variant": "before",
+      "distributions": {
+        "mainMaxGapMs": {
+          "count": 3,
+          "min": 329.26,
+          "p50": 334.78,
+          "p95": 344.54,
+          "p99": 344.54,
+          "max": 344.54
+        },
+        "buildOverlapMaxGapMs": {
+          "count": 3,
+          "min": 329.26,
+          "p50": 334.78,
+          "p95": 344.54,
+          "p99": 344.54,
+          "max": 344.54
+        },
+        "buildIpcMs": {
+          "count": 3,
+          "min": 303.67,
+          "p50": 306.8,
+          "p95": 327.59,
+          "p99": 327.59,
+          "max": 327.59
+        },
+        "composerDomMs": {
+          "count": 3,
+          "min": 581.8,
+          "p50": 584.55,
+          "p95": 697.9,
+          "p99": 697.9,
+          "max": 697.9
+        },
+        "runOpenMs": {
+          "count": 3,
+          "min": 72.99,
+          "p50": 77.09,
+          "p95": 81.56,
+          "p99": 81.56,
+          "max": 81.56
+        },
+        "replyP95Ms": {
+          "count": 3,
+          "min": 136,
+          "p50": 160,
+          "p95": 176,
+          "p99": 176,
+          "max": 176
+        },
+        "replyQueueP95Ms": {
+          "count": 3,
+          "min": 0.4,
+          "p50": 0.6,
+          "p95": 0.6,
+          "p99": 0.6,
+          "max": 0.6
+        },
+        "replyProcessingP95Ms": {
+          "count": 3,
+          "min": 0.8,
+          "p50": 1,
+          "p95": 1.1,
+          "p99": 1.1,
+          "max": 1.1
+        },
+        "replyPresentationP95Ms": {
+          "count": 3,
+          "min": 135.5,
+          "p50": 159.7,
+          "p95": 175.3,
+          "p99": 175.3,
+          "max": 175.3
+        },
+        "historyPollP95Ms": {
+          "count": 3,
+          "min": 33.1,
+          "p50": 36.9,
+          "p95": 37.59,
+          "p99": 37.59,
+          "max": 37.59
+        }
+      }
+    },
+    {
+      "size": "100",
+      "variant": "after",
+      "distributions": {
+        "mainMaxGapMs": {
+          "count": 3,
+          "min": 181.24,
+          "p50": 188.05,
+          "p95": 188.67,
+          "p99": 188.67,
+          "max": 188.67
+        },
+        "buildOverlapMaxGapMs": {
+          "count": 3,
+          "min": 104.19,
+          "p50": 107.45,
+          "p95": 109.16,
+          "p99": 109.16,
+          "max": 109.16
+        },
+        "buildIpcMs": {
+          "count": 3,
+          "min": 84.32,
+          "p50": 86.89,
+          "p95": 89.22,
+          "p99": 89.22,
+          "max": 89.22
+        },
+        "composerDomMs": {
+          "count": 3,
+          "min": 560.42,
+          "p50": 573.44,
+          "p95": 578.92,
+          "p99": 578.92,
+          "max": 578.92
+        },
+        "runOpenMs": {
+          "count": 3,
+          "min": 70.85,
+          "p50": 71.98,
+          "p95": 78.24,
+          "p99": 78.24,
+          "max": 78.24
+        },
+        "replyP95Ms": {
+          "count": 3,
+          "min": 144,
+          "p50": 144,
+          "p95": 152,
+          "p99": 152,
+          "max": 152
+        },
+        "replyQueueP95Ms": {
+          "count": 3,
+          "min": 0.4,
+          "p50": 0.4,
+          "p95": 0.4,
+          "p99": 0.4,
+          "max": 0.4
+        },
+        "replyProcessingP95Ms": {
+          "count": 3,
+          "min": 1,
+          "p50": 1.1,
+          "p95": 1.1,
+          "p99": 1.1,
+          "max": 1.1
+        },
+        "replyPresentationP95Ms": {
+          "count": 3,
+          "min": 143.6,
+          "p50": 143.7,
+          "p95": 151.7,
+          "p99": 151.7,
+          "max": 151.7
+        },
+        "historyPollP95Ms": {
+          "count": 3,
+          "min": 34.28,
+          "p50": 34.69,
+          "p95": 36.43,
+          "p99": 36.43,
+          "max": 36.43
+        }
+      }
+    },
+    {
+      "size": "large",
+      "variant": "before",
+      "distributions": {
+        "mainMaxGapMs": {
+          "count": 3,
+          "min": 328.76,
+          "p50": 352.78,
+          "p95": 357.83,
+          "p99": 357.83,
+          "max": 357.83
+        },
+        "buildOverlapMaxGapMs": {
+          "count": 3,
+          "min": 328.76,
+          "p50": 352.78,
+          "p95": 357.83,
+          "p99": 357.83,
+          "max": 357.83
+        },
+        "buildIpcMs": {
+          "count": 3,
+          "min": 319.64,
+          "p50": 334.45,
+          "p95": 342.23,
+          "p99": 342.23,
+          "max": 342.23
+        },
+        "composerDomMs": {
+          "count": 3,
+          "min": 579.91,
+          "p50": 595.62,
+          "p95": 618.68,
+          "p99": 618.68,
+          "max": 618.68
+        },
+        "runOpenMs": {
+          "count": 3,
+          "min": 89.81,
+          "p50": 91.75,
+          "p95": 125.83,
+          "p99": 125.83,
+          "max": 125.83
+        },
+        "replyP95Ms": {
+          "count": 3,
+          "min": 152,
+          "p50": 152,
+          "p95": 168,
+          "p99": 168,
+          "max": 168
+        },
+        "replyQueueP95Ms": {
+          "count": 3,
+          "min": 0.4,
+          "p50": 0.4,
+          "p95": 0.4,
+          "p99": 0.4,
+          "max": 0.4
+        },
+        "replyProcessingP95Ms": {
+          "count": 3,
+          "min": 0.9,
+          "p50": 0.9,
+          "p95": 0.9,
+          "p99": 0.9,
+          "max": 0.9
+        },
+        "replyPresentationP95Ms": {
+          "count": 3,
+          "min": 142.5,
+          "p50": 151.7,
+          "p95": 167.7,
+          "p99": 167.7,
+          "max": 167.7
+        },
+        "historyPollP95Ms": {
+          "count": 3,
+          "min": 4.59,
+          "p50": 5.54,
+          "p95": 5.57,
+          "p99": 5.57,
+          "max": 5.57
+        }
+      }
+    },
+    {
+      "size": "large",
+      "variant": "after",
+      "distributions": {
+        "mainMaxGapMs": {
+          "count": 3,
+          "min": 202.07,
+          "p50": 209.96,
+          "p95": 213.73,
+          "p99": 213.73,
+          "max": 213.73
+        },
+        "buildOverlapMaxGapMs": {
+          "count": 3,
+          "min": 97.93,
+          "p50": 118.11,
+          "p95": 140.75,
+          "p99": 140.75,
+          "max": 140.75
+        },
+        "buildIpcMs": {
+          "count": 3,
+          "min": 84.48,
+          "p50": 102.28,
+          "p95": 111.25,
+          "p99": 111.25,
+          "max": 111.25
+        },
+        "composerDomMs": {
+          "count": 3,
+          "min": 600.95,
+          "p50": 623.02,
+          "p95": 630.46,
+          "p99": 630.46,
+          "max": 630.46
+        },
+        "runOpenMs": {
+          "count": 3,
+          "min": 94.59,
+          "p50": 124.55,
+          "p95": 125.76,
+          "p99": 125.76,
+          "max": 125.76
+        },
+        "replyP95Ms": {
+          "count": 3,
+          "min": 120,
+          "p50": 144,
+          "p95": 184,
+          "p99": 184,
+          "max": 184
+        },
+        "replyQueueP95Ms": {
+          "count": 3,
+          "min": 0.4,
+          "p50": 0.5,
+          "p95": 9,
+          "p99": 9,
+          "max": 9
+        },
+        "replyProcessingP95Ms": {
+          "count": 3,
+          "min": 0.9,
+          "p50": 1,
+          "p95": 1,
+          "p99": 1,
+          "max": 1
+        },
+        "replyPresentationP95Ms": {
+          "count": 3,
+          "min": 107.9,
+          "p50": 134.2,
+          "p95": 183.9,
+          "p99": 183.9,
+          "max": 183.9
+        },
+        "historyPollP95Ms": {
+          "count": 3,
+          "min": 4.7,
+          "p50": 4.98,
+          "p95": 5.59,
+          "p99": 5.59,
+          "max": 5.59
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 3,
+  "at": "2026-09-09T08:24:22.314Z",
+  "versions": {
+    "node": "24.18.1",
+    "acorn": "8.16.0",
+    "ada": "3.4.4",
+    "amaro": "1.1.9",
+    "ares": "1.34.6",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "149",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.69.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.4",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.1",
+    "tz": "2025c",
+    "undici": "7.29.0",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.2.124.13-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "44.0.0",
+    "chrome": "152.0.7977.54"
+  },
+  "cpu": "AMD Ryzen 7 3800X 8-Core Processor             ",
+  "profiling": false,
+  "fixture": {
+    "count": 100,
+    "chunks": 200,
+    "toolBytes": 0,
+    "sessionBytes": 13322390
+  },
+  "ipc": [
+    {
+      "channel": "titlebar:setTheme",
+      "at": 1788942263008.993,
+      "durationMs": 0.1279296875,
+      "ok": true
+    },
+    {
+      "channel": "project:list",
+      "at": 1788942263009.179,
+      "durationMs": 0.198486328125,
+      "ok": true
+    },
+    {
+      "channel": "project:recents",
+      "at": 1788942263009.4375,
+      "durationMs": 0.034423828125,
+      "ok": true
+    },
+    {
+      "channel": "workflow:list",
+      "at": 1788942263009.5107,
+      "durationMs": 7.07666015625,
+      "ok": true
+    },
+    {
+      "channel": "settings:get",
+      "at": 1788942263016.8,
+      "durationMs": 18.3779296875,
+      "ok": true
+    },
+    {
+      "channel": "titlebar:setTheme",
+      "at": 1788942263043.364,
+      "durationMs": 0.0361328125,
+      "ok": true
+    },
+    {
+      "channel": "v2:build",
+      "at": 1788942263284.8918,
+      "durationMs": 250.4306640625,
+      "ok": true
+    },
+    {
+      "channel": "v2:plugin-review",
+      "at": 1788942263553.5715,
+      "durationMs": 0.084228515625,
+      "ok": true
+    },
+    {
+      "channel": "history:activity",
+      "at": 1788942263038.0215,
+      "durationMs": 717.8369140625,
+      "ok": true
+    },
+    {
+      "channel": "run:list",
+      "at": 1788942263043.455,
+      "durationMs": 744.845703125,
+      "ok": true
+    },
+    {
+      "channel": "history:activity",
+      "at": 1788942263043.702,
+      "durationMs": 756.716796875,
+      "ok": true
+    }
+  ],
+  "phases": [
+    {
+      "name": "app-entry-to-composer-dom",
+      "at": 1788942262314.33,
+      "durationMs": 587.111572265625
+    },
+    {
+      "name": "composer-typing",
+      "at": 1788942263036.4915,
+      "durationMs": 1555.293212890625
+    },
+    {
+      "name": "startup-through-composer-typing",
+      "at": 1788942262314.33,
+      "durationMs": 2277.798583984375
+    },
+    {
+      "name": "chats-click-to-rows-observed",
+      "at": 1788942264592.1296,
+      "durationMs": 63.21728515625
+    },
+    {
+      "name": "history-polling",
+      "at": 1788942264655.3484,
+      "durationMs": 11000.927001953125
+    }
+  ],
+  "mainHeartbeat": [
+    {
+      "at": 1788942262499.9165,
+      "gapMs": 185.58642578125
+    },
+    {
+      "at": 1788942262614.99,
+      "gapMs": 115.073486328125
+    },
+    {
+      "at": 1788942263036.0022,
+      "gapMs": 51.544189453125
+    },
+    {
+      "at": 1788942263551.4084,
+      "gapMs": 276.712646484375
+    }
+  ],
+  "limitations": "Production dist with development Electron host; synthetic settled history and injected input. Online fonts and contention affect timings. CPU/Chromium tracing adds overhead and an initial blank navigation; compare separately from unprofiled repetitions. Event Timing is quantized to 8ms and thresholded at 16ms; reported interaction tails exclude faster interactions and are not INP. Presentation delay is the Event Timing estimate, not physical display latency. Input-to-RAF remains a separate proxy. No provider execution, live replay, or release-quality tail estimates.",
+  "error": "one shared history stream should make two polls in eleven seconds\n\n0 !== 2\n",
+  "uiState": {
+    "hidden": true,
+    "historyRows": 60,
+    "historyLoading": false,
+    "historyError": false,
+    "replyReady": false
+  }
+}

@@ -62,9 +62,14 @@ export class RunController {
   #hosts = new Map();
   #hostBoots = new Map();
   #repairs = new Map();
+  // Rebuildable recovery hints, scoped to this controller rather than execution
+  // authority. Explicit per-run reconciliation always validates the log again.
+  #terminalSessions = new Map();
+  #lifecycleHints = new Map();
   #operations = new Map();
   #closing = false;
   #cleanupTimeoutMs;
+  #disposeReads;
 
   constructor({
     bootHost,
@@ -82,6 +87,7 @@ export class RunController {
     now = () => Date.now(),
     hostname = () => os.hostname(),
     cleanupTimeoutMs = 10000,
+    disposeReads = null,
   } = {}) {
     if (typeof bootHost !== 'function') throw new Error('RunController needs bootHost');
     if (typeof runsRootForProject !== 'function') throw new Error('RunController needs runsRootForProject');
@@ -101,6 +107,7 @@ export class RunController {
     this.#now = now;
     this.#hostname = hostname;
     this.#cleanupTimeoutMs = cleanupTimeoutMs;
+    this.#disposeReads = disposeReads;
   }
 
   #hostKey(projectId, request) {
@@ -136,15 +143,22 @@ export class RunController {
     return JSON.stringify(stable(authority));
   }
 
-  async reconcile(projectId, runId = null) {
+  async reconcile(projectId, runId = null, { signal } = {}) {
     if (!this.#repairStored) return;
     const root = this.#runsRootForProject(projectId);
     const key = `${root}\n${runId ?? '*'}`;
-    if (runId && this.#repairs.has(`${root}\n*`)) return this.#repairs.get(`${root}\n*`);
+    // Wait for a broad scan, then validate the requested run without its hints.
+    // A mutation must not inherit a cached terminal skip from an overlapping poll.
+    if (runId && this.#repairs.has(`${root}\n*`)) {
+      try { await this.#repairs.get(`${root}\n*`); }
+      catch (error) { if (error.name !== 'AbortError') throw error; }
+    }
     if (!this.#repairs.has(key)) {
       const pending = runId ? [] : [...this.#repairs].filter(([at]) => at.startsWith(`${root}\n`)).map(([, promise]) => promise);
       const promise = Promise.all(pending).then(() => this.#repairStored(root, {
         ...(runId ? { runIds: [runId] } : {}),
+        ...(!runId ? { terminalCache: this.#terminalSessions } : {}),
+        ...(signal ? { signal } : {}),
         claim: id => {
           const file = this.#file(projectId, id, 'execution-owner.json');
           if (!file) return () => {};
@@ -155,7 +169,14 @@ export class RunController {
         .finally(() => this.#repairs.delete(key));
       this.#repairs.set(key, promise);
     }
-    return this.#repairs.get(key);
+    try { return await this.#repairs.get(key); }
+    catch (error) {
+      // A mutation may have joined a display read just before project switch.
+      // Cancellation belongs to that reader; canonical execution validation
+      // must retry independently, never inherit its aborted worker request.
+      if (!signal && !this.#closing && error.name === 'AbortError') return this.reconcile(projectId, runId);
+      throw error;
+    }
   }
 
   #file(projectId, runId, name) {
@@ -515,16 +536,26 @@ export class RunController {
 
   isLive(projectId, runId) { return this.#operations.has(runKey(projectId, runId)) || Boolean(this.get(projectId, runId) && this.get(projectId, runId).phase !== 'settled'); }
 
-  lifecycle(projectId, runId) {
+  lifecycle(projectId, runId, observation = null) {
     const record = this.get(projectId, runId);
     const op = this.#operations.get(runKey(projectId, runId));
+    if (record) return { phase: record.phase, cleanup: record.cleanup, cleanupError: record.cleanupError, outcome: record.outcome, owner: 'local' };
+    if (op) return { phase: 'starting', requested: op.requested, owner: 'local', cleanup: null };
+    const key = runKey(projectId, runId);
+    const stamp = observation && !observation.hasOwner ? observation.lifecycleStamp : null;
+    const cached = this.#lifecycleHints.get(key);
+    if (stamp != null && cached?.stamp === stamp) return cached.value;
     const saved = this.#file(projectId, runId, 'lifecycle.json');
     const ownerFile = this.#file(projectId, runId, 'execution-owner.json');
     const external = ownerFile && ownerAlive(readOwner(ownerFile)) || this.#leaseLive(projectId, runId);
-    return record ? { phase: record.phase, cleanup: record.cleanup, cleanupError: record.cleanupError, outcome: record.outcome, owner: 'local' }
-      : op ? { phase: 'starting', requested: op.requested, owner: 'local', cleanup: null }
-      : external ? { ...(saved ? readOwner(saved) : {}), owner: 'external' }
-      : saved ? { ...readOwner(saved), owner: 'none', cleanup: readOwner(saved)?.cleanup === 'complete' ? 'complete' : 'interrupted' } : null;
+    const lifecycle = saved ? readOwner(saved) : null;
+    const value = external ? { ...lifecycle, owner: 'external' }
+      : saved ? { ...lifecycle, owner: 'none', cleanup: lifecycle?.cleanup === 'complete' ? 'complete' : 'interrupted' } : null;
+    if (stamp != null && !external) {
+      this.#lifecycleHints.set(key, { stamp, value });
+      if (this.#lifecycleHints.size > 10000) this.#lifecycleHints.delete(this.#lifecycleHints.keys().next().value);
+    } else this.#lifecycleHints.delete(key);
+    return value;
   }
 
   decorate(projectId, runId, snapshot) {
@@ -539,6 +570,7 @@ export class RunController {
     const records = [...this.#live.values()];
     await Promise.allSettled(records.map(record => bounded(this.stop(record.projectId, record.runId, reason), this.#cleanupTimeoutMs, 'Stop acknowledgement')));
     await Promise.allSettled([...operations.map(op => bounded(op.task, this.#cleanupTimeoutMs, 'Startup cancellation')), ...records.map(record => bounded(record.settlement, this.#cleanupTimeoutMs * 2, 'Run shutdown'))]);
+    await this.#disposeReads?.();
     return { stopped: records.length, cancelledStarts: operations.length, pendingCleanup: [...this.#live.values()].map(record => record.runId) };
   }
 }

@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import BlockEditor from './BlockEditor.jsx';
 import { workflowActions } from '../../core/lifecycle.js';
-import { runView } from './runView.js';
+import { createRunView } from './runView.js';
 import { groupRuns, runStatus, runTimeLabel, runTimeTitle } from '../runList.js';
 import DebugPanel from './DebugPanel.jsx';
 import ActivityIcon from '../ActivityIcon.jsx';
@@ -118,17 +118,27 @@ function RunActions({ view, onPauseRun, onResumeRun, onStopRun, onRetryCleanup, 
   </details>;
 }
 
+function ReplyComposer({ onReply, replyBusy, visible, draft }) {
+  const [reply, setReply] = useState(() => draft?.value ?? '');
+  const update = value => { if (draft) draft.value = value; setReply(value); };
+  if (!visible) return null;
+  return <form className="work-reply" onSubmit={event => { event.preventDefault(); if (!reply.trim()) return; onReply?.(reply); update(''); }}>
+    <textarea rows="2" value={reply} onChange={event => update(event.target.value)} placeholder="Continue this conversation…" />
+    <button type="submit" disabled={replyBusy || !reply.trim()}>{replyBusy ? 'Starting…' : 'Send'}</button>
+  </form>;
+}
+
 export default function Work({
   stack = null, blocks = null, trace = null, runId = null, composer = null, snapshot = null,
-  interaction = null, onDecide = null, onAnswer = null, onReply = null, replyBusy = false,
+  interaction = null, onDecide = null, onAnswer = null, onReply = null, replyBusy = false, replyDraft = null,
   runs = [], onOpenRun = null, onNewChat = null, onOpenHistory = null, onOpenFlow = null, onOpenTrace = null,
   onRetryFailed = null, retryBusy = false, retryError = '', controlError = '', onRevealRunLog = null,
   onRevealDiagnosticLog = null, onStopRun = null, stopBusy = false,
   onPauseRun = null, pauseBusy = false, onResumeRun = null, resumeBusy = false,
   onDebugRun = null, onRetryCleanup = null,
 }) {
-  const view = runView(trace, snapshot);
-  const [reply, setReply] = useState('');
+  const projectView = useMemo(() => createRunView(), [runId]);
+  const view = useMemo(() => projectView(trace, snapshot), [projectView, trace, snapshot]);
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugBusy, setDebugBusy] = useState(false);
   const [debugReport, setDebugReport] = useState(null);
@@ -169,9 +179,7 @@ export default function Work({
     <div className="work-run-grid"><main className="work-run-main">
       <BlockEditor stack={stack} blocks={blocks} mode="run" run={runModel}/>
       <Interaction interaction={interaction} onDecide={onDecide} onAnswer={onAnswer}/>
-      {!view.running && !view.resumable && !view.stopping && !interaction && <form className="work-reply" onSubmit={event => { event.preventDefault(); if (!reply.trim()) return; onReply?.(reply); setReply(''); }}>
-        <textarea rows="2" value={reply} onChange={event => setReply(event.target.value)} placeholder="Continue this conversation…" />
-        <button type="submit" disabled={replyBusy || !reply.trim()}>{replyBusy ? 'Starting…' : 'Send'}</button></form>}
+      <ReplyComposer key={runId} visible={!view.running && !view.resumable && !view.stopping && !interaction} onReply={onReply} replyBusy={replyBusy} draft={replyDraft}/>
     </main></div>
     {debugOpen && <DebugPanel runId={runId} trace={trace} view={view} report={debugReport} busy={debugBusy} error={debugError}
       retryBusy={retryBusy} onAnalyze={analyze} onRetry={onRetryFailed} onClose={() => setDebugOpen(false)}

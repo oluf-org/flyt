@@ -26,7 +26,14 @@ export function contractFromCommands(commands: readonly CommandDefinition[]): Ap
   }])));
 }
 
-function validator(name: string, schema: JsonValue): ValidateFunction {
+function validator(name: string, schema: JsonValue): ((value: unknown) => boolean) & Pick<ValidateFunction, 'errors'> {
+  // Build's legacy commands use unconstrained request/response/error schemas.
+  // Their meaning is already known: every value is valid. Avoid initializing
+  // Ajv and recompiling its meta-schemas for each of these empty contracts.
+  // Constrained schemas still get an isolated compiler and eager validation.
+  if (schema === true || (schema !== null && typeof schema === 'object' && !Array.isArray(schema) && Object.keys(schema).length === 0)) {
+    return () => true;
+  }
   try { return new Ajv2020({ allErrors: true, strict: false }).compile(schema as object); }
   catch (error) { throw new Error(`Invalid ${name} schema: ${String((error as Error)?.message ?? error)}`); }
 }

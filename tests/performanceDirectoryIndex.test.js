@@ -1,0 +1,25 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { HistoryDirectoryIndex } from '../core/historyDirectoryIndex.js';
+test('history index invalidates changed directories, discovers removals, sweeps missed events and falls back on watch failure', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-index-test-'));
+  const watcher = new EventEmitter(); watcher.close = () => {}; watcher.unref = () => {};
+  let changed, now = 0;
+  const index = new HistoryDirectoryIndex(root, { watch: (_root, _options, callback) => { changed = callback; return watcher; }, now: () => now, sweepMs: 100 });
+  t.after(() => { index.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  fs.mkdirSync(path.join(root, 'a')); fs.mkdirSync(path.join(root, 'b'));
+  assert.deepEqual(await index.changes(), ['a', 'b']);
+  index.rows.set('a', { inspection: { terminal: true } }); index.rows.set('b', { inspection: { terminal: true } });
+  assert.deepEqual(await index.changes(), []);
+  changed('change', 'b/meta.json'); assert.deepEqual(await index.changes(), ['b']);
+  now = 100; assert.deepEqual(await index.changes(), ['a', 'b']);
+  index.rows.get('a').hasOwner = true; assert.deepEqual(await index.changes(), ['a']);
+  fs.rmdirSync(path.join(root, 'a')); await index.changes(); assert(!index.rows.has('a'));
+  changed('rename', null); assert.deepEqual(await index.changes(), ['b']);
+  watcher.emit('error', new Error('watch unavailable')); assert.deepEqual(await index.changes(), ['b']);
+  assert.deepEqual(await index.changes(), ['b']);
+});

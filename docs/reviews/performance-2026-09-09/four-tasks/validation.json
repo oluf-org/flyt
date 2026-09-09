@@ -1,0 +1,28 @@
+{
+  "date": "2026-09-09",
+  "baselineCommit": "0be02ec",
+  "implementationOrder": ["visible compact Build history", "incremental history directory index", "incremental live view and activity pages", "startup boundaries and bundled fonts"],
+  "build": { "command": "npm run build", "passed": true, "dailyRootMinifiedKB": 179.11, "chunkSizeWarning": false },
+  "lint": { "command": "npm run lint", "passed": true },
+  "tests": { "command": "npm test", "passed": 2630, "failed": 0, "skipped": 4, "total": 2634 },
+  "coreGate": { "command": "npm run perf:check", "passed": true, "evidence": "history-final.json" },
+  "electronRegression": {
+    "command": "node scripts/profile-app.mjs",
+    "evidence": "app-final.json",
+    "passed": true,
+    "checks": ["composer draft", "reply draft during concurrent reads", "details expansion and collapse", "reply draft after Trace round trip", "two shared history polls", "typing overlaps actual reads", "zero focus recovery"],
+    "note": "Final functional regression scenario, separate from the six startup timing trials. Chromium reported GPU state invalid during forced process shutdown after the passing report."
+  },
+  "nativeComputerUse": {
+    "host": "Windows, production dist with development Electron",
+    "isolation": "Separate app profile and workspace; configured provider; no user project opened",
+    "model": "z-ai/glm-5.3-flash",
+    "workflow": { "name": "Fable at home", "status": "done", "file": "greeting.txt", "exactContent": "Hello from Flyt!\n", "bytes": 17, "readBackVerified": true },
+    "goal": { "status": "achieved", "iterations": 2, "modelCalls": 2, "iteration1": { "candidate": "ALPHA", "checksPassed": 1, "checksTotal": 2 }, "iteration2": { "candidate": "ALPHA BETA", "checksPassed": 2, "checksTotal": 2 } },
+    "screensChecked": ["Work", "Build gallery", "Build editor and compact history", "Goals and iteration results", "Chats", "Library", "Models", "Statistics", "Settings", "Trace"],
+    "longActivity": { "syntheticSteps": 125, "activityRows": 250, "pageSize": 60, "earlierLaterPassed": true, "expansionSurvivesPageRoundTrip": true },
+    "draftRetention": { "traceRoundTrip": true, "chatsRoundTrip": true, "fixFoundDuringAcceptance": true },
+    "screenshots": ["workflow-done.jpg", "goal-achieved.jpg", "activity-pagination.jpg", "draft-retained.jpg"]
+  },
+  "limits": ["Not an installed release run", "No long soak or slower-machine measurements", "Live replay timings exclude browser layout, paint and input delay", "Startup cohort has three samples per variant and excludes OS process launch", "Watcher failures fall back to scans; missed notifications can defer external display updates until a 30-second sweep"]
+}

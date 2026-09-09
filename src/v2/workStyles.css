@@ -32,7 +32,9 @@
 .work-history-group + .work-history-group { margin-top: 14px; }
 .work-history-group > .section-label { display: block; margin: 0 7px 6px; }
 .work-history-item { position: relative; width: 100%; min-width: 0; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 8px; padding: 8px 9px; background: transparent; color: var(--dim); text-align: left; cursor: pointer; }
-.work-history-item:hover { background: var(--card); color: var(--tx); }.work-history-item.active { background: var(--card); color: var(--tx); box-shadow: inset 2px 0 0 var(--accent); }
+.work-history-item:hover { background: var(--card); color: var(--tx); }.work-history-item.active { background: var(--card); color: var(--tx); }
+/* A simple inset marker avoids the rounded inset-shadow shader on first paint. */
+.work-history-item.active::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; background: var(--accent); pointer-events: none; }
 .work-history-state { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--faint); }
 .work-history-state.running { background: var(--running); box-shadow: 0 0 0 3px var(--running-soft); }.work-history-state.done { background: var(--ok); }.work-history-state.interrupted, .work-history-state.failed { background: var(--err); }.work-history-state.waiting { background: #d97706; }
 .work-history-item .work-history-copy { min-width: 0; display: flex; flex: 1; flex-direction: column; gap: 3px; }
@@ -61,7 +63,9 @@
 .work-interaction > div { display: flex; flex-wrap: wrap; gap: 7px; }.work-interaction button { border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--tx); padding: 6px 10px; cursor: pointer; }.work-interaction .work-allow { background: var(--accent-fill); color: var(--on-accent); border-color: var(--accent-fill); }
 .work-interaction textarea, .work-reply textarea { width: 100%; box-sizing: border-box; resize: vertical; border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--tx); padding: 8px; }
 .work-options { margin-bottom: 9px; }.work-options button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
-.work-reply { position: sticky; bottom: 0; margin-top: auto; display: flex; align-items: flex-end; gap: 8px; padding: 12px 18px; background: color-mix(in srgb, var(--canvas) 92%, transparent); border-top: 1px solid var(--border); backdrop-filter: blur(8px); }
+/* Keep the sticky input opaque: sampling and blurring the scrolling run behind
+   it adds GPU work to the first reply frames. */
+.work-reply { position: sticky; bottom: 0; margin-top: auto; display: flex; align-items: flex-end; gap: 8px; padding: 12px 18px; background: var(--canvas); border-top: 1px solid var(--border); }
 .work-reply button { border: 0; border-radius: 7px; padding: 8px 13px; background: var(--accent-fill); color: var(--on-accent); cursor: pointer; }.work-reply button:disabled { opacity: .5; }
 
 /* The debugger is deliberately tucked behind the run-status menu. Once open,

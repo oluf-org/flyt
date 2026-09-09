@@ -9,6 +9,7 @@
 // a second read of the log would be a second answer.
 
 /** A block's state, as the log tells it. */
+import { traceChanges } from '../traceModel.js';
 export const BLOCK_STATES = ['pending', 'active', 'done', 'failed', 'blocked', 'waiting', 'approval', 'input', 'skipped'];
 const TERMINAL_STAGES = new Set(['done', 'failed', 'stopped', 'interrupted', 'cancelled', 'rejected']);
 const ACTIVE_STAGES = new Set(['execution', 'resumed', 'pausing', 'paused', 'stopping']);
@@ -326,5 +327,46 @@ export function runView(trace, snapshot = null) {
     paused: stage === 'paused',
     stopping: stage === 'stopping',
     resumable: stage === 'paused' || stage === 'stopped' || stage === 'interrupted',
+  };
+}
+
+// Token-only batches change one request's text and estimates. Retain completed
+// blocks and activity rows; structural events or skipped revisions rebuild
+// through the reference projection above. The cache is local to one Work view.
+export function createRunView() {
+  let previous = null;
+  return (trace, snapshot = null) => {
+    const changes = traceChanges(trace);
+    const remember = value => { previous = { changes, value }; return value; };
+    const full = () => remember(runView(trace, snapshot));
+    if (!changes || !previous || changes.source !== previous.changes?.source) return full();
+    if (changes.version === previous.changes.version) return remember({ ...previous.value, lifecycle: snapshot?.meta?.lifecycle ?? null, actions: snapshot?.meta?.actions ?? null });
+    if (changes.structural || changes.version !== previous.changes.version + 1 || !previous.value.running) return full();
+    const blocks = { ...previous.value.blocks };
+    for (const [step, oldEstimate] of changes.streams) {
+      const blockId = step.blockId;
+      const prior = blocks[blockId];
+      if (!prior || prior.status !== 'active' || blockId !== visibleBlockId(blockId) || step.request?.settled) return full();
+      const request = step.request;
+      const chars = String(request.content ?? '').length + String(request.reasoning ?? '').length;
+      const estimate = chars ? Math.max(1, Math.ceil(chars / 4)) : 0;
+      const metrics = { ...prior.metrics,
+        lastTokenAt: later(prior.metrics?.lastTokenAt, request.lastTokenAt),
+        ...(estimate || oldEstimate ? { estimatedTokensOut: (prior.metrics?.estimatedTokensOut ?? 0) + estimate - oldEstimate } : {}),
+      };
+      const updated = new Map((blockActivity({ turns: [{ steps: [step] }] })[blockId] ?? []).map(item => [item.id, item]));
+      let reordered = false;
+      const activity = prior.activity.map(item => {
+        const next = updated.get(item.id);
+        if (!next) return item;
+        updated.delete(item.id);
+        reordered ||= next.seq !== item.seq || next.order !== item.order;
+        return Object.keys(next).every(key => next[key] === item[key]) ? item : next;
+      });
+      if (updated.size) { activity.push(...updated.values()); reordered = true; }
+      if (reordered) activity.sort((a, b) => a.seq - b.seq || a.order - b.order);
+      blocks[blockId] = { ...prior, metrics, activity, showing: liveOutput(trace, blockId) ?? '' };
+    }
+    return remember({ ...previous.value, blocks, lifecycle: snapshot?.meta?.lifecycle ?? null, actions: snapshot?.meta?.actions ?? null });
   };
 }

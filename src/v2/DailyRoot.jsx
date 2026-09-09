@@ -1,13 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { hydrateDaily } from './dailyStartup.js';
+import { createHistoryFeed } from './historyFeed.js';
+import { createBuildHistoryReader } from './buildHistory.js';
 import Lander from '../Lander.jsx';
 import { ModelMetaProvider } from '../ModelPicker.jsx';
-import ModelsPage from '../ModelsPage.jsx';
-import Settings from '../Settings.jsx';
 import TabDeck from '../TabDeck.jsx';
 import TabStrip, { NewTabPage } from '../TabStrip.jsx';
 import Shell from './Shell.jsx';
-import HistoryPage from './HistoryPage.jsx';
-import ChatHistoryPage from './ChatHistoryPage.jsx';
 import { BUILD, CHATS, GOALS, INITIAL, MODELS, WORK } from './shellRouting.js';
 import { initialFlowId, initialModeId } from './dailyWorkModel.js';
 import { defaultModeId, queueTaskFromPrompt } from './workflowUx.js';
@@ -32,7 +31,13 @@ function liveByProject(tabs) {
  * owns tabs, the prompt launch, and the run being watched; Build still owns
  * canonical authoring and Shell still owns destination/Trace routing.
  */
+const ModelsPage = lazy(() => import('../ModelsPage.jsx'));
+const Settings = lazy(() => import('../Settings.jsx'));
+const HistoryPage = lazy(() => import('./HistoryPage.jsx'));
+const ChatHistoryPage = lazy(() => import('./ChatHistoryPage.jsx'));
+
 export default function DailyRoot() {
+  const [startupReady, setStartupReady] = useState(false);
   const [build, setBuild] = useState(null);
   const [edits, setEdits] = useState(0);
   const [reviewRevision, setReviewRevision] = useState(0);
@@ -50,7 +55,9 @@ export default function DailyRoot() {
   const [configs, setConfigs] = useState({});
   const [settings, setSettings] = useState(null);
   const [runs, setRuns] = useState([]);
-  const [activities, setActivities] = useState([]);
+  const historyFeed = useMemo(() => createHistoryFeed(window.flyt, projects.active), [projects.active]);
+  const historyState = useSyncExternalStore(historyFeed.subscribe, historyFeed.getSnapshot, historyFeed.getSnapshot);
+  const activities = historyState.rows;
   const [watching, setWatching] = useState(null);
   const [busy, setBusy] = useState(false);
   const [newTabOpen, setNewTabOpen] = useState(false);
@@ -60,6 +67,14 @@ export default function DailyRoot() {
   const [deck, setDeck] = useState(null);
   const [workflowInteraction, setWorkflowInteraction] = useState(null);
   const [blockRunHistory, setBlockRunHistory] = useState([]);
+  const [buildHistoryVisible, setBuildHistoryVisible] = useState(false);
+  const blockHistoryReader = useMemo(() => createBuildHistoryReader((pid, ids) => window.flyt.getBlockHistory(pid, ids)), []);
+  const [pageVisible, setPageVisible] = useState(() => !document.hidden);
+  useEffect(() => {
+    const changed = () => setPageVisible(!document.hidden);
+    document.addEventListener('visibilitychange', changed);
+    return () => document.removeEventListener('visibilitychange', changed);
+  }, []);
   const [replyBusy, setReplyBusy] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
   const [stopBusy, setStopBusy] = useState(false);
@@ -123,27 +138,23 @@ export default function DailyRoot() {
     return available ?? [];
   }, [acceptWorkflows]);
 
-  useEffect(() => {
-    let live = true;
-    Promise.all([
-      window.flyt.listProjects(),
-      window.flyt.projectRecents(),
-      window.flyt.listWorkflows(),
-      window.flyt.getSettings(),
-    ]).then(([projectPayload, recentProjects, availableWorkflows, publicSettings]) => {
-      if (!live) return;
-      const availableFlows = acceptWorkflows(availableWorkflows);
-      acceptProjects(projectPayload);
-      setRecents(recentProjects ?? []);
-      const active = (projectPayload.tabs ?? []).find(tab => tab.id === projectPayload.active);
-      loadWorkflowModels(active);
-      const openingFlowId = initialFlowId(availableFlows, active?.state?.runWorkflowId ?? active?.state?.runFlowId);
+  useEffect(() => hydrateDaily(window.flyt, {
+    onProjects: payload => {
+      acceptProjects(payload);
+      loadWorkflowModels((payload.tabs ?? []).find(tab => tab.id === payload.active));
+    },
+    onWorkflows: acceptWorkflows,
+    onSettings: setSettings,
+    onRecents: rows => setRecents(rows ?? []),
+    onSelection: (payload, workflows) => {
+      const active = (payload.tabs ?? []).find(tab => tab.id === payload.active);
+      const openingFlowId = initialFlowId(workflows, active?.state?.runWorkflowId ?? active?.state?.runFlowId);
       setFlowId(openingFlowId);
-      setModeId(initialModeId(availableFlows, openingFlowId, active?.state?.runPresetId ?? null));
-      setSettings(publicSettings);
-    }).catch(err => { if (live) setError(cleanIpcError(err)); });
-    return () => { live = false; };
-  }, [acceptProjects, acceptWorkflows, loadWorkflowModels]);
+      setModeId(initialModeId(workflows, openingFlowId, active?.state?.runPresetId ?? null));
+    },
+    onReady: () => setStartupReady(true),
+    onError: error => setError(cleanIpcError(error)),
+  }), [acceptProjects, acceptWorkflows, loadWorkflowModels]);
 
   useEffect(() => {
     let live = true;
@@ -170,21 +181,6 @@ export default function DailyRoot() {
   }, []);
 
   useEffect(() => { refreshRuns().catch(() => setRuns([])); }, [projects.active, refreshRuns]);
-  useEffect(() => { setActivities([]); }, [projects.active]);
-  useEffect(() => {
-    let live = true, loading = false;
-    const projectId = projects.active;
-    const refresh = async () => {
-      if (!projectId || loading || !window.flyt.chatHistory) return;
-      loading = true;
-      try { const next = await window.flyt.chatHistory(projectId); if (live) setActivities(next); }
-      catch (caught) { if (live) setError(cleanIpcError(caught)); }
-      finally { loading = false; }
-    };
-    refresh();
-    const timer = setInterval(refresh, 5000);
-    return () => { live = false; clearInterval(timer); };
-  }, [projects.active, runs]);
 
   const openActivity = async row => {
     try {
@@ -203,36 +199,12 @@ export default function DailyRoot() {
     const projectId = projects.active;
     const workflowId = build?.stack?.id;
     if (!projectId || !workflowId) { setBlockRunHistory([]); return () => { live = false; }; }
-    // The run list already carries its workflow identity. Filtering the index
-    // first avoids opening and parsing thirty full snapshots every time a live
-    // run updates or the Build surface changes selection.
-    const candidates = (runs ?? []).filter(run => (
-      (run.stackId ?? run.flowId) === workflowId
-    )).slice(0, 10);
-    Promise.all(candidates.map(async run => {
-      try {
-        const snapshot = await window.flyt.getSnapshot(projectId, run.id);
-        if (snapshot?.meta?.stackId !== workflowId) return [];
-        return Object.entries(snapshot.meta?.nodeStatus ?? {}).map(([nodeId, status]) => {
-          const evidence = snapshot.retrospectives?.[nodeId] ?? {};
-          const output = snapshot.nodeOutputs?.[nodeId];
-          return {
-            kind: 'run', nodeId, runId: run.id,
-            command: `Run · ${status}`,
-            caller: run.name ?? run.id,
-            at: run.updatedAt ?? run.createdAt,
-            error: evidence.error ?? (status === 'failed' ? snapshot.meta?.error : null),
-            details: [
-              evidence.toolCalls?.length ? `${evidence.toolCalls.length} tool call${evidence.toolCalls.length === 1 ? '' : 's'}` : '',
-              Object.keys(evidence.usage ?? {}).length ? `usage ${JSON.stringify(evidence.usage)}` : '',
-              output != null ? `output ${String(output).slice(0, 240)}` : '',
-            ].filter(Boolean).join(' · '),
-          };
-        });
-      } catch { return []; }
-    })).then(groups => { if (live) setBlockRunHistory(groups.flat()); });
+    const visible = pageVisible && buildHistoryVisible;
+    blockHistoryReader.read({ projectId, workflowId, runs, visible })
+      .then(rows => { if (live) setBlockRunHistory(rows); })
+      .catch(() => { if (live) setBlockRunHistory([]); });
     return () => { live = false; };
-  }, [projects.active, runs, build?.stack?.id]);
+  }, [projects.active, runs, build?.stack?.id, buildHistoryVisible, pageVisible, blockHistoryReader]);
 
   useEffect(() => window.flyt.onWorkflowEvent?.(entry => {
     if (entry?.projectId !== activeRef.current) return;
@@ -372,7 +344,7 @@ export default function DailyRoot() {
   }
 
   async function launch(text) {
-    if (!flowId || busy) return;
+    if (!startupReady || !flowId || busy) return;
     setBusy(true);
     setError('');
     setQueueReceipt(null);
@@ -414,7 +386,7 @@ export default function DailyRoot() {
   }
 
   async function enqueue(text) {
-    if (busy) return;
+    if (!startupReady || busy) return;
     setBusy(true); setError(''); setQueueReceipt(null);
     try {
       let projectId = activeRef.current;
@@ -503,6 +475,7 @@ export default function DailyRoot() {
         claudeSubActive={settings?.claudeSubscriptionActive ?? false}
         onOpenSettings={() => setLocation(current => ({ ...current, dest: MODELS }))}
         busy={busy}
+        ready={startupReady}
         onSubmit={submitKind === 'loop' ? enqueue : launch}
         submitKind={submitKind}
         onSubmitKind={setSubmitKind}
@@ -566,6 +539,7 @@ export default function DailyRoot() {
   return (
     <ModelMetaProvider value={{ ...(settings ?? {}), catalog: models }}>
       <Shell
+        onBuildVisibilityChange={setBuildHistoryVisible}
         projects={projects}
         location={location}
         onNavigate={setLocation}
@@ -709,7 +683,7 @@ export default function DailyRoot() {
           onChanged={() => window.flyt.getSettings().then(setSettings)}
         />}
         history={<HistoryPage onOpenLoop={openActivity} />}
-        chats={<ChatHistoryPage key={projects.active} projectId={projects.active} onOpen={openActivity} onNewChat={newChat}/>}
+        chats={<ChatHistoryPage key={projects.active} rows={activities} busy={historyState.busy} error={historyState.error} onRefresh={historyFeed.refresh} onOpen={openActivity} onNewChat={newChat}/>}
       />
       {newTabOpen && <NewTabPage
         recents={recents}
@@ -732,7 +706,7 @@ export default function DailyRoot() {
           return next;
         })}
       />}
-      {settingsOpen && <Settings
+      {settingsOpen && <Suspense fallback={<p role="status">Opening settings…</p>}><Settings
         onClose={() => setSettingsOpen(false)}
         // Safety choices bind the NEXT run launched from here, so this state
         // has to follow the panel rather than the mount-time snapshot.
@@ -752,7 +726,7 @@ export default function DailyRoot() {
             acceptProjects(await window.flyt.listProjects());
           } catch (err) { setError(cleanIpcError(err)); }
         }}
-      />}
+      /></Suspense>}
     </ModelMetaProvider>
   );
 }

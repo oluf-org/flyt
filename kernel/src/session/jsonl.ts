@@ -544,6 +544,15 @@ export class JsonlSessionStore implements SessionsSeam {
 
 const TERMINAL_STAGES = new Set(['done', 'failed', 'stopped', 'interrupted', 'cancelled', 'rejected']);
 
+// Include identity and change time so replacement or same-size edits invalidate
+// a hint, even when a writer preserves mtime. No persisted metadata is trusted.
+function sessionFingerprint(file: string): string | null {
+  try {
+    const s = fs.statSync(file, { bigint: true });
+    return `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;
+  } catch { return null; }
+}
+
 function defaultLeaseLive(lease: Record<string, any>): boolean {
   const fresh = Date.now() - Number(lease.beatAt ?? 0) < 60_000;
   if (!fresh) return false;
@@ -563,16 +572,39 @@ export async function repairInterruptedSessions(root: string, {
   isLeaseLive = defaultLeaseLive,
   runIds,
   claim,
+  terminalCache,
+  inspectSessions,
+  signal,
 }: {
   reason?: string;
   isLeaseLive?: (lease: Record<string, any>, runId: string) => boolean | Promise<boolean>;
   runIds?: readonly string[];
   claim?: (runId: string) => (() => void) | null;
+  /** Optional process-local hints for unchanged terminal logs; never execution authority. */
+  terminalCache?: Map<string, string>;
+  /** Read-only preflight; a terminal result is usable only for the same file. */
+  inspectSessions?: (root: string, runIds?: readonly string[]) => Promise<Array<{ runId: string; terminal: boolean; fingerprint: string | null; error?: { message: string; code?: string } }>>;
+  signal?: AbortSignal;
 } = {}): Promise<string[]> {
   const store = new JsonlSessionStore(root);
   const repaired: string[] = [];
-  for (const runId of await store.list()) {
-    if (runIds && !runIds.includes(runId)) continue;
+  let yieldedAt = performance.now();
+  const inspected = inspectSessions ? await inspectSessions(root, runIds) : null;
+  signal?.throwIfAborted();
+  const observations = new Map(inspected?.map(row => [row.runId, row]));
+  const candidates = inspected ? inspected.map(row => row.runId)
+    : runIds ? runIds.filter(id => fs.existsSync(store.fileFor(id))) : await store.list();
+  for (const runId of candidates) {
+    signal?.throwIfAborted();
+    // Large histories must allow IPC/input between files, including the first scan.
+    if (performance.now() - yieldedAt >= 8) {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      yieldedAt = performance.now();
+    }
+    const file = store.fileFor(runId);
+    const fingerprint = terminalCache && !runIds ? sessionFingerprint(file) : null;
+    if (fingerprint && terminalCache?.get(file) === fingerprint) continue;
+    terminalCache?.delete(file);
     let owner: Record<string, any> | null = null;
     try { owner = asRecord(JSON.parse(fs.readFileSync(path.join(root, runId, 'execution-owner.json'), 'utf8'))); } catch { /* no owner */ }
     if (owner && await isLeaseLive(owner, runId)) continue;
@@ -582,9 +614,26 @@ export async function repairInterruptedSessions(root: string, {
     if (lease && await isLeaseLive(lease, runId)) continue;
     // Completed history needs no temporary execution claim. Recheck inside
     // the claim below before repairing an unfinished session.
-    const recorded = readSessionLogFile(path.join(root, runId, 'session.jsonl')).events;
-    const recordedStage = recorded.filter(event => event.type === 'run.stage').at(-1)?.data as Record<string, any> | undefined;
-    if (TERMINAL_STAGES.has(String(recordedStage?.stage ?? ''))) continue;
+    let observation = observations.get(runId);
+    if (inspectSessions && (!observation?.fingerprint || sessionFingerprint(file) !== observation.fingerprint)) {
+      observation = (await inspectSessions(root, [runId]))[0];
+      signal?.throwIfAborted();
+    }
+    // An unstable/missing observation falls through to claimed canonical
+    // validation. Worker results can never authorize a recovery write.
+    if (observation?.error) throw Object.assign(new Error(observation.error.message), { code: observation.error.code });
+    const terminal = inspectSessions
+      ? observation?.terminal && observation.fingerprint && sessionFingerprint(file) === observation.fingerprint
+      : TERMINAL_STAGES.has(String((readSessionLogFile(file).events.findLast(event => event.type === 'run.stage')?.data as Record<string, any> | undefined)?.stage ?? ''));
+    if (terminal) {
+      // Do not cache a file changed during validation. Keep memory bounded; a
+      // discarded hint costs another scan, never a missed recovery.
+      if (fingerprint && sessionFingerprint(file) === fingerprint) {
+        terminalCache?.set(file, fingerprint);
+        if (terminalCache && terminalCache.size > 10_000) terminalCache.delete(terminalCache.keys().next().value!);
+      }
+      continue;
+    }
     const release = claim?.(runId);
     if (claim && !release) continue;
     try {

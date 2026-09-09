@@ -130,14 +130,15 @@ function activityClock(value) {
   return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-function ActivityItem({ item }) {
+const ActivityItem = React.memo(function ActivityItem({ item, savedExpanded, onExpanded }) {
   const live = item.status === 'running' || item.status === 'waiting';
   // The step is uncontrolled: `open` is an initial attribute captured once, so a
   // collapse the reader performs is never undone by a re-render and a step that
   // finishes does not snap shut on the result it just produced. A step that only
   // becomes live after mount is opened imperatively on that edge.
   const ref = useRef(null);
-  const openedAtMount = useRef(live).current;
+  const openedAtMount = useRef(savedExpanded ?? live).current;
+  const [expanded, setExpanded] = useState(savedExpanded ?? live);
   const wasLive = useRef(live);
   useEffect(() => {
     if (live && !wasLive.current && ref.current) ref.current.open = true;
@@ -152,7 +153,7 @@ function ActivityItem({ item }) {
   const hasBody = item.kind === 'tool'
     || Boolean(item.content) || item.diagnostics?.length > 0 || item.transformations?.length > 0
     || (item.kind === 'chat' && item.status === 'empty');
-  const body = <div className="be-activity-body">
+  const body = expanded && <div className="be-activity-body">
     {item.content && <pre>{activityValue(item.content)}</pre>}
     {item.kind === 'chat' && !item.content && <p>{item.status === 'waiting'
       ? 'Waiting for visible output.'
@@ -170,18 +171,42 @@ function ActivityItem({ item }) {
     <span className={`be-activity-state state-${item.status}`}>{item.status}</span>
     {activityClock(item.at) && <time dateTime={item.at}>{activityClock(item.at)}</time>}
   </summary>;
-  return <details ref={ref} className={`be-activity-item kind-${item.kind}${hasBody ? '' : ' no-body'}`} open={openedAtMount}>
+  return <details ref={ref} className={`be-activity-item kind-${item.kind}${hasBody ? '' : ' no-body'}`} open={openedAtMount} onToggle={event => { setExpanded(event.currentTarget.open); onExpanded?.(item.id, event.currentTarget.open); }}>
     {summary}{hasBody && body}
   </details>;
-}
+});
 
 function BlockActivity({ items }) {
   const [open, setOpen] = useState(true);
+  const [anchor, setAnchor] = useState(null);
+  const [expanded, setExpanded] = useState(() => new Map());
+  const saveExpanded = useCallback((id, value) => setExpanded(current => {
+    if (current.get(id) === value) return current;
+    return new Map(current).set(id, value);
+  }), []);
   if (!items?.length) return null;
-  const running = items.filter(item => item.status === 'running' || item.status === 'waiting').length;
+  const live = items.filter(item => item.status === 'running' || item.status === 'waiting');
+  const found = anchor == null ? -1 : items.findIndex(item => item.id === anchor);
+  const end = found < 0 ? items.length : found + 1;
+  const start = Math.max(0, end - 60);
+  const page = items.slice(start, end);
+  const pageIds = new Set(page.map(item => item.id));
+  const visible = [...page, ...live.filter(item => !pageIds.has(item.id))];
+  const preserveSelection = event => {
+    const selection = window.getSelection?.();
+    if (selection?.toString() && event.currentTarget.contains(selection.anchorNode)) setAnchor(items[end - 1].id);
+  };
   return <details className="be-block-activity" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary><span>Steps</span><small>{items.length} event{items.length === 1 ? '' : 's'}{running ? ` · ${running} live` : ''}</small></summary>
-    <div className="be-activity-list">{items.map(item => <ActivityItem item={item} key={item.id}/>)}</div>
+    <summary><span>Steps</span><small>{items.length} event{items.length === 1 ? '' : 's'}{live.length ? ` · ${live.length} live` : ''}</small></summary>
+    {open && <div onMouseUp={preserveSelection} onKeyUp={preserveSelection}>
+      {items.length > 60 && <nav className="be-activity-pages" aria-label="Activity pages">
+        <button type="button" disabled={start === 0} onClick={() => setAnchor(items[start - 1].id)}>Earlier steps</button>
+        <span>{start + 1}–{end} of {items.length}</span>
+        <button type="button" disabled={end === items.length} onClick={() => setAnchor(items[Math.min(items.length, end + 60) - 1].id)}>Later steps</button>
+        <button type="button" disabled={anchor === null} onClick={() => setAnchor(null)}>Latest</button>
+      </nav>}
+      <div className="be-activity-list">{visible.map(item => <ActivityItem item={item} key={item.id} savedExpanded={expanded.get(item.id)} onExpanded={saveExpanded}/>)}</div>
+    </div>}
   </details>;
 }
 

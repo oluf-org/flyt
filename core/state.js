@@ -4,9 +4,11 @@
 // state in memory — they read and write these files.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileFingerprint } from './fileFingerprint.js';
 
 export class RunStore {
-  constructor(rootDir, { projectId = null, telemetry = null } = {}) {
+  #summaryCache = new Map();
+  constructor(rootDir, { projectId = null, telemetry = null, readonly = false } = {}) {
     this.rootDir = rootDir; // e.g. <project>/runs
     // Global analytics is a secondary sink. The per-run JSONL above remains
     // authoritative and a telemetry failure must never change execution.
@@ -16,7 +18,7 @@ export class RunStore {
     // number in this process so a many-tool run does not rescan every prior
     // result for every new result (quadratic metadata I/O).
     this.toolSequences = new Map();
-    fs.mkdirSync(rootDir, { recursive: true });
+    if (!readonly) fs.mkdirSync(rootDir, { recursive: true });
   }
 
   createRun(prompt) {
@@ -93,37 +95,80 @@ export class RunStore {
   }
 
   // The index view of every run: enough for a list to name, group and sort runs
-  // without opening any of them. There is no separate index file to drift —
-  // runs are self-describing on disk, so a summary is just meta.json plus the
-  // first line of prompt.md. Newest first, the order the list shows them in.
-  runSummaries() {
-    return this.listRuns()
-      .map(runId => {
-        let meta = {};
-        try { meta = this.readMeta(runId) ?? {}; } catch { /* unreadable meta still lists, unnamed */ }
-        const named = String(meta.name ?? '').trim();
-        // Runs predating createdAt (and any half-written meta) still sort and
-        // group correctly: the runId itself carries the creation instant.
-        const createdAt = meta.createdAt ?? timeFromRunId(runId) ?? this.#mtime(runId);
-        return {
-          id: runId,
-          name: named || deriveRunName(this.#tryPrompt(runId)),
-          named: Boolean(named),
-          createdAt,
-          updatedAt: meta.updatedAt ?? createdAt,
-          stage: meta.stage ?? 'unknown',
-          stackId: meta.stackId ?? null,
-          flowId: meta.flowId ?? null,
-          flowName: meta.flowName ?? null,
-          goalId: meta.goalId ?? null,
-          conversationId: meta.conversationId ?? null,
-          parentRunId: meta.parentRunId ?? null,
-          turns: Number(meta.turn ?? 0),
-          interrupted: Boolean(meta.interrupted),
-          error: meta.error ?? null
-        };
-      })
+  // without opening their logs. The bounded in-memory index is rebuilt from
+  // meta.json and prompt.md; external writes are detected on every list read.
+  runSummaries(ids = this.listRuns()) {
+    return ids
+      .map(runId => this.#runSummary(runId))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+
+  // UI/API reads also yield while building a cold index. Synchronous callers
+  // retain the same interface, sharing the same rebuildable rows.
+  async runSummariesAsync() {
+    const ids = this.listRuns();
+    const present = new Set(ids);
+    for (const id of this.#summaryCache.keys()) if (!present.has(id)) this.#summaryCache.delete(id);
+    const rows = [];
+    let yieldedAt = performance.now();
+    for (const id of ids) {
+      if (performance.now() - yieldedAt >= 8) {
+        await new Promise(resolve => setImmediate(resolve));
+        yieldedAt = performance.now();
+      }
+      rows.push(this.#runSummary(id));
+    }
+    return rows.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+
+  // Worker protocol keeps individual summary messages bounded. The caller
+  // sorts the completed result with the same ordering as runSummariesAsync.
+  *runSummaryBatches(batchSize = 32) {
+    const ids = this.listRuns();
+    const present = new Set(ids);
+    for (const id of this.#summaryCache.keys()) if (!present.has(id)) this.#summaryCache.delete(id);
+    for (let at = 0; at < ids.length; at += batchSize) {
+      yield ids.slice(at, at + batchSize).map(id => this.#runSummary(id));
+    }
+  }
+
+  #runSummary(runId) {
+    const dir = this.runDir(runId);
+    const stamp = () => [fileFingerprint(path.join(dir, 'meta.json')), fileFingerprint(path.join(dir, 'prompt.md'))].join('|');
+    const before = stamp();
+    const cached = this.#summaryCache.get(runId);
+    if (cached?.stamp === before) return { ...cached.row };
+    this.#summaryCache.delete(runId);
+    let meta = {};
+    try { meta = this.readMeta(runId) ?? {}; } catch { /* unreadable meta still lists, unnamed */ }
+    const named = String(meta.name ?? '').trim();
+    // Runs predating createdAt (and any half-written meta) still sort and
+    // group correctly: the runId itself carries the creation instant.
+    const createdAt = meta.createdAt ?? timeFromRunId(runId) ?? this.#mtime(runId);
+    const row = {
+      id: runId,
+      name: named || deriveRunName(this.#tryPrompt(runId)),
+      named: Boolean(named),
+      createdAt,
+      updatedAt: meta.updatedAt ?? createdAt,
+      stage: meta.stage ?? 'unknown',
+      stackId: meta.stackId ?? null,
+      flowId: meta.flowId ?? null,
+      flowName: meta.flowName ?? null,
+      goalId: meta.goalId ?? null,
+      conversationId: meta.conversationId ?? null,
+      parentRunId: meta.parentRunId ?? null,
+      turns: Number(meta.turn ?? 0),
+      interrupted: Boolean(meta.interrupted),
+      error: meta.error ?? null
+    };
+    // Cache only stable, timestamped rows. Legacy fallback directory mtimes
+    // can change independently of these two files and remain uncached.
+    if ((meta.createdAt || timeFromRunId(runId)) && before === stamp()) {
+      this.#summaryCache.set(runId, { stamp: before, row });
+      if (this.#summaryCache.size > 10_000) this.#summaryCache.delete(this.#summaryCache.keys().next().value);
+    }
+    return { ...row };
   }
 
   // Rename a run. A blank name clears the override rather than storing an empty
@@ -677,7 +722,9 @@ export class RunStore {
     try { fs.writeFileSync(p, JSON.stringify(lease), 'utf8'); } catch { /* a lease is advisory */ }
   }
   readLease(runId) {
-    try { return JSON.parse(fs.readFileSync(path.join(this.runDir(runId), 'live.json'), 'utf8')); }
+    const file = path.join(this.runDir(runId), 'live.json');
+    if (!fs.existsSync(file)) return null;
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
     catch { return null; }
   }
   clearLease(runId) {

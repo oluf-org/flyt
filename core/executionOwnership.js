@@ -6,6 +6,9 @@ import crypto from 'node:crypto';
 const processId = crypto.randomUUID();
 const held = new Map();
 export function readOwner(file) {
+  // Missing ownership/lifecycle files are normal for settled history. Avoid an
+  // exception-producing open for every row (particularly expensive on Windows).
+  if (!fs.existsSync(file)) return null;
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 export function ownerAlive(owner) {
