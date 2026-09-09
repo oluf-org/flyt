@@ -38,6 +38,9 @@ jobs:
           FLYT_PERF_REPEATS: '3'
       - uses: actions/upload-artifact@v4
         if: always()
+        # The measurements are also in the perf:check log. Artifact storage
+        # availability must not prevent lint and package verification.
+        continue-on-error: true
         with:
           name: performance-${{ matrix.os }}
           path: .flyt/performance/core.json
