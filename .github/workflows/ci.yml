@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [blacksmith-4vcpu-windows-2025, blacksmith-6vcpu-macos-15, blacksmith-4vcpu-ubuntu-2404]
         node: [22]
     steps:
       - uses: actions/checkout@v7
@@ -55,7 +55,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
   dependencies:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -71,7 +71,7 @@ jobs:
   # as its own job so that a red build says WHICH promise decayed, on a
   # dependency preview whose APIs are expected to move.
   compat:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
