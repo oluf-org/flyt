@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import os from 'node:os';
 import { createServer } from 'vite';
 import React from 'react';
@@ -44,6 +45,8 @@ try {
   const report = { mode, at: new Date().toISOString(), cpu: os.cpus()[0].model, node: process.version, priorSteps: 1000, batches: 120, chunksPerBatch: 8,
     foldAndViewMs: distribution(samples), serverRenderMs: distribution(render), mountedActivityRows: (html.match(/class="be-activity-item /g) ?? []).length, equivalent: true,
     limitations: 'CPU replay and React server rendering; excludes browser layout, paint and input delay. No provider effects.' };
-  fs.writeFileSync(`docs/reviews/performance-2026-09-09/four-tasks/live-work-${mode}.json`, JSON.stringify(report, null, 2));
+  const output = process.env.FLYT_PERF_OUTPUT || `.flyt/performance/live-work-${mode}.json`;
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  fs.writeFileSync(output, JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally { await vite.close(); }

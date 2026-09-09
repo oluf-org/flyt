@@ -8,6 +8,7 @@ import { blockHistoryRows } from '../core/blockHistory.js';
 import { seedPerformanceRuns } from './performance-fixture.mjs';
 const mode = process.argv[2] ?? 'before';
 const repo = path.resolve('.');
+fs.mkdirSync(path.join(repo, '.flyt/performance'), { recursive: true });
 const temp = fs.mkdtempSync(path.join(repo, '.flyt/performance/build-history-'));
 const engine = createEngine({ projectRoot: repo, dataRoot: path.join(temp, 'data'), userDataDir: path.join(temp, 'profile'), log() {}, warn() {} });
 const api = createApi(engine);
@@ -41,7 +42,7 @@ try {
   const expected = (await Promise.all(runs.map(async run => blockHistoryRows(await api.invoke('run:snapshot', { projectId: project.id, runId: run.id }), run)))).flat();
   assert.deepEqual(visibleRows, expected);
   const report = { mode, contentEquivalent: true, at: new Date().toISOString(), cpu: os.cpus()[0].model, node: process.version, samples };
-  const output = `docs/reviews/performance-2026-09-09/four-tasks/build-history-${mode}.json`;
+  const output = process.env.FLYT_PERF_OUTPUT || `.flyt/performance/build-history-${mode}.json`;
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(output, JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
