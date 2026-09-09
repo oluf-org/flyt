@@ -15,9 +15,13 @@ test('history index invalidates changed directories, discovers removals, sweeps 
   assert.deepEqual(await index.changes(), ['a', 'b']);
   index.rows.set('a', { inspection: { terminal: true } }); index.rows.set('b', { inspection: { terminal: true } });
   assert.deepEqual(await index.changes(), []);
+  fs.writeFileSync(path.join(root, 'a', 'prompt.md'), 'Edit without a notification');
+  assert.deepEqual(await index.changes(), ['a']);
+  assert.deepEqual(await index.changes(), []);
   changed('change', 'b/meta.json'); assert.deepEqual(await index.changes(), ['b']);
   now = 100; assert.deepEqual(await index.changes(), ['a', 'b']);
   index.rows.get('a').hasOwner = true; assert.deepEqual(await index.changes(), ['a']);
+  fs.unlinkSync(path.join(root, 'a', 'prompt.md'));
   fs.rmdirSync(path.join(root, 'a')); await index.changes(); assert(!index.rows.has('a'));
   changed('rename', null); assert.deepEqual(await index.changes(), ['b']);
   watcher.emit('error', new Error('watch unavailable')); assert.deepEqual(await index.changes(), ['b']);
