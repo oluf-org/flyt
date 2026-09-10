@@ -15,6 +15,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build:sandbox:win
+      - run: npm run build:kernel
       - name: Test real Windows sandbox as a standard user
         shell: powershell
         run: |
