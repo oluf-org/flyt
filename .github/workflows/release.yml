@@ -107,13 +107,20 @@ jobs:
             $credential = [pscredential]::new(".\$testUser", $securePassword)
             $stdoutPath = Join-Path $testRoot 'stdout.log'
             $stderrPath = Join-Path $testRoot 'stderr.log'
-            $env:FLYT_RELEASE_SANDBOX_E2E = '1'
-            $env:TEMP = $testRoot
-            $env:TMP = $testRoot
-            $env:TMPDIR = $testRoot
-            $process = Start-Process -FilePath (Get-Command node).Source `
-              -ArgumentList @('--test', 'tests/executionWorldPlatform.test.js') `
-              -WorkingDirectory $pwd.Path -Credential $credential -WindowStyle Hidden -Wait -PassThru `
+            # Alternate credentials do not inherit the runner's environment.
+            $scriptPath = Join-Path $testRoot 'run-tests.cmd'
+            @"
+          @echo off
+          set "FLYT_RELEASE_SANDBOX_E2E=1"
+          set "TEMP=$testRoot"
+          set "TMP=$testRoot"
+          set "TMPDIR=$testRoot"
+          "$((Get-Command node).Source)" --test tests/executionWorldPlatform.test.js
+          exit /b %ERRORLEVEL%
+          "@ | Set-Content $scriptPath -Encoding ASCII
+            $process = Start-Process -FilePath $env:ComSpec `
+              -ArgumentList @('/c', $scriptPath) `
+              -WorkingDirectory $pwd.Path -Credential $credential -LoadUserProfile -WindowStyle Hidden -Wait -PassThru `
               -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
             Get-Content $stdoutPath
             Get-Content $stderrPath
