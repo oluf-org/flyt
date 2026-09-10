@@ -102,23 +102,41 @@ jobs:
             icacls.exe $pwd.Path /grant "${testUser}:(OI)(CI)RX" | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Could not grant repository read access ($LASTEXITCODE)." }
 
-            $securePassword = ConvertTo-SecureString $plainPassword -AsPlainText -Force
-            $credential = [pscredential]::new(".\$testUser", $securePassword)
             $stdoutPath = Join-Path $testRoot 'stdout.log'
             $stderrPath = Join-Path $testRoot 'stderr.log'
-            $env:FLYT_RELEASE_SANDBOX_E2E = '1'
-            $env:TEMP = $testRoot
-            $env:TMP = $testRoot
-            $env:TMPDIR = $testRoot
-            $process = Start-Process -FilePath (Get-Command node).Source `
-              -ArgumentList @('--test', 'tests/executionWorldPlatform.test.js') `
-              -WorkingDirectory $pwd.Path -Credential $credential -Wait -PassThru `
-              -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+            $exitPath = Join-Path $testRoot 'exit-code.txt'
+            $scriptPath = Join-Path $testRoot 'run-tests.cmd'
+            @"
+          @echo off
+          set "FLYT_RELEASE_SANDBOX_E2E=1"
+          set "TEMP=$testRoot"
+          set "TMP=$testRoot"
+          set "TMPDIR=$testRoot"
+          cd /d "$($pwd.Path)"
+          "$((Get-Command node).Source)" --test tests/executionWorldPlatform.test.js > "$stdoutPath" 2> "$stderrPath"
+          echo %ERRORLEVEL% > "$exitPath"
+          "@ | Set-Content $scriptPath -Encoding ASCII
+            # Batch logon gives the standard user its own noninteractive
+            # session, independent of the runner service's desktop ACLs.
+            $action = New-ScheduledTaskAction -Execute $env:ComSpec -Argument "/c `"$scriptPath`"" -WorkingDirectory $pwd.Path
+            Register-ScheduledTask -TaskName $testUser -Action $action -User ".\$testUser" -Password $plainPassword -RunLevel Limited -Force | Out-Null
+            Start-ScheduledTask -TaskName $testUser
+            $deadline = (Get-Date).AddMinutes(5)
+            while (!(Test-Path $exitPath)) {
+              if ((Get-Date) -gt $deadline) {
+                Get-ScheduledTaskInfo -TaskName $testUser | Format-List
+                throw 'Windows sandbox tests did not complete within five minutes.'
+              }
+              Start-Sleep -Seconds 2
+            }
             Get-Content $stdoutPath
             Get-Content $stderrPath
-            if ($process.ExitCode -ne 0) { throw "Windows sandbox tests failed ($($process.ExitCode))." }
+            $testExitCode = [int](Get-Content $exitPath)
+            if ($testExitCode -ne 0) { throw "Windows sandbox tests failed ($testExitCode)." }
           }
           finally {
+            Get-ScheduledTask -TaskName $testUser -ErrorAction SilentlyContinue | Stop-ScheduledTask
+            Unregister-ScheduledTask -TaskName $testUser -Confirm:$false -ErrorAction SilentlyContinue
             net user $testUser /delete | Out-Null
           }
       - run: npm run build
