@@ -23,6 +23,7 @@
 // two runs shown side by side. The picker is extracted to WorkflowPicker so a
 // slot and the single-run chip share exactly one keyboard-correct listbox.
 import { Fragment, useEffect, useRef, useState } from 'react';
+import { useAssetDraft, AttachmentTools } from './AssetComposer.jsx';
 import Constellation from './Constellation.jsx';
 import Logo from './Logo.jsx';
 import ConfigModal from './ConfigModal.jsx';
@@ -186,7 +187,7 @@ function WorkflowPicker({ flows, flowId, modeId, onPick, ariaLabel, composerRef,
 }
 
 export default function Lander({
-  projectName, projectless, recents = [], seed,
+  projectId = null, projectName, projectless, recents = [], seed,
   runs = [], onOpenRun, onOpenHistory = null,
   flows = [], flowId, modeId = null, onSelect, configs = {},
   canonicalWorkflows = false,
@@ -196,25 +197,23 @@ export default function Lander({
   models = [], activeModels = [],
   hasKey = true, claudeSubActive = false, onOpenSettings,
   busy, ready = true, inputRef, onSubmit, onOpenProject, onOpenFolder,
-  submitKind = 'run', onSubmitKind = null,
-  queueLevel = 'low', onQueueLevel = null,
   fallbackWorker = null, modelTiers = {}, defaultTier = 'standard', blockTiers = {}, authoredBlockTiers = {}, modelOverrides = {},
   onDefaultTier = null, onStepTier = null, onModelTier = null,
   onStepWorker = null, onResetStepWorker = null,
-  queueReceipt = null,
   returnRun = null, onReturnRun = null,
 }) {
-  const [text, setText] = useState('');
+  const composer = useAssetDraft(`launch:${projectId ?? 'new'}`, projectId, value => onSubmit(canonicalWorkflows ? value : value.text));
+  const text = composer.draft.text;
+  const setText = composer.updateText;
   const [configOpen, setConfigOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
   const localRef = useRef(null);
   const taRef = inputRef ?? localRef;
-  const canRun = text.trim().length > 0 && !busy && ready;
+  const canRun = composer.canSend && !busy && ready;
   const selectedFlow = flows.find(f => f.id === flowId) ?? null;
   const selectedPreset = selectedWorkflowPreset(selectedFlow, modeId);
   const selectedSteps = workflowSteps(selectedFlow, modeId);
   const modelSteps = selectedSteps.filter(step => step.modelBacked !== false);
-  const queued = submitKind === 'loop';
   const customModelCount = new Set([
     ...Object.keys(blockTiers ?? {}), ...Object.keys(modelOverrides ?? {}),
   ]).size;
@@ -228,14 +227,13 @@ export default function Lander({
 
   const submit = () => {
     if (!canRun) return;
-    onSubmit(text.trim());
-    setText('');
+    void composer.submit();
   };
 
   // Enter runs, Shift+Enter inserts a newline — the composer convention every
   // chat app has trained users on.
   const onKeyDown = e => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       submit();
     }
@@ -285,22 +283,24 @@ export default function Lander({
           />
         )}
 
-        <div className="lander-composer">
+        <div className="lander-composer" {...(canonicalWorkflows ? composer.dropProps : {})}>
           <textarea
             ref={taRef}
             className="lander-input"
             placeholder="Describe what you want…"
             value={text}
+            disabled={composer.draft.sending}
             onChange={e => setText(e.target.value)}
             onKeyDown={onKeyDown}
             aria-label="Describe what you want"
             autoFocus
             rows={3}
           />
+          {canonicalWorkflows && <AttachmentTools composer={composer} projectId={projectId}/>}
           <div className="lander-composer-footer">
             {/* Workflow choice (L3 / T11). One chip normally; two slots (A vs B)
                 when Compare is on — each an independent flow+mode selection. */}
-            {!queued && compareOn ? (
+            {compareOn ? (
               <div className="lander-compare-slots">
                 <span className="compare-slot-label" aria-hidden>A</span>
                 <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow A" composerRef={taRef} configs={configs} />
@@ -308,7 +308,7 @@ export default function Lander({
                 <span className="compare-slot-label" aria-hidden>B</span>
                 <WorkflowPicker flows={flows} flowId={bFlowId} modeId={bModeId} onPick={onSelectB} ariaLabel="Workflow B" composerRef={taRef} configs={configs} />
               </div>
-            ) : !queued ? (
+            ) : (
               <div className="lander-workflow-group">
                 <WorkflowPicker flows={flows} flowId={flowId} modeId={modeId} onPick={onSelect} ariaLabel="Workflow" composerRef={taRef} configs={configs} flowsOnly={!canonicalWorkflows} />
                 {/* The cog is the "later stage" of choosing: which config of the
@@ -327,19 +327,11 @@ export default function Lander({
                   <span aria-hidden>⚙</span>
                 </button>}
               </div>
-            ) : (
-              <div className="lander-queue-level" role="group" aria-label="Starting effort">
-                <span>Starting effort</span>
-                {['low', 'medium', 'high'].map(level => (
-                  <button key={level} type="button" className={queueLevel === level ? 'active' : ''}
-                    aria-pressed={queueLevel === level} onClick={() => onQueueLevel?.(level)}>{level}</button>
-                ))}
-              </div>
             )}
 
             {/* Compare toggle (T11): splits the chip into A/B slots and fires two
                 runs from one prompt. Off by default — the common path is one run. */}
-            {!queued && onToggleCompare && (
+            {onToggleCompare && (
               <button
                 type="button"
                 className={'lander-compare-toggle' + (compareOn ? ' active' : '')}
@@ -352,34 +344,18 @@ export default function Lander({
               </button>
             )}
 
-            <div className="lander-submit-kind" role="group" aria-label="What should happen">
-              <button type="button" className={!queued ? 'active' : ''} aria-pressed={!queued}
-                onClick={() => onSubmitKind?.('run')} title="Run the selected workflow now and show its result here">Run now</button>
-              <button type="button" className={queued ? 'active' : ''} aria-pressed={queued}
-                onClick={() => onSubmitKind?.('loop')} title="Add this request to the Loop queue without running a workflow now">Add to Loop</button>
-            </div>
-
             <button
               type="button"
               className="lander-run primary"
               onClick={submit}
               disabled={!canRun}
             >
-              {!ready ? 'Loading…' : busy ? (queued ? 'Adding…' : 'Starting…') : queued ? 'Add task' : compareOn ? 'Compare' : 'Run'}<kbd className="shortcut">↵</kbd>
+              {!ready ? 'Loading…' : busy ? 'Starting…' : compareOn ? 'Compare' : 'Run'}<kbd className="shortcut">↵</kbd>
             </button>
           </div>
         </div>
 
-        {queued ? (
-          <section className="lander-run-preview queue" aria-label="Loop task summary">
-            <div className="lander-preview-head">
-              <div><span className="section-label">ADD TO LOOP</span><strong>Queue for unattended work</strong></div>
-              <span className="lander-preview-model">{queueLevel} effort</span>
-            </div>
-            <p>This creates one backlog task. It does not run the selected workflow or start the Loop.</p>
-            <div className="lander-preview-result"><span aria-hidden>→</span> The Loop claims it later, in an isolated worktree, and can escalate its effort if it fails.</div>
-          </section>
-        ) : selectedFlow ? (
+        {selectedFlow ? (
           <section className="lander-run-preview" aria-label="Selected workflow summary">
             <div className="lander-preview-head">
               <div>
@@ -486,15 +462,9 @@ export default function Lander({
                 </div>
               </>}
             </div>}
-            <div className="lander-preview-result"><span aria-hidden>→</span> {workflowOutcome(selectedFlow)}. {(selectedFlow?.steps ?? []).some(step => step.use === 'flyt-blocks-loop:loop-handoff') ? 'The handoff queues tasks without starting the Loop.' : 'Only an explicit Backlog handoff block can queue tasks during a workflow.'}</div>
+            <div className="lander-preview-result"><span aria-hidden>→</span> {workflowOutcome(selectedFlow)}.</div>
           </section>
         ) : null}
-
-        {queueReceipt && (
-          <div className="lander-queue-receipt" role="status">
-            <span aria-hidden>✓</span><span><strong>{queueReceipt.title}</strong> added to Loop as <code>{queueReceipt.id}</code>. It has not started yet.</span>
-          </div>
-        )}
 
         {returnRun && (
           <button type="button" className="lander-return-run" onClick={onReturnRun}>
@@ -506,7 +476,7 @@ export default function Lander({
         {/* First-ever-launch (no key): a single quiet line under the composer,
             not a wall (§3). The run path still works for no-file flows, so
             this informs rather than blocks. */}
-        {!queued && !hasKey && (
+        {!hasKey && (
           <div className="lander-hint">
             Add an OpenRouter key in{' '}
             <button type="button" className="link" onClick={onOpenSettings}>Models</button>
@@ -516,7 +486,7 @@ export default function Lander({
 
         {/* Claude-subscription notice (DESIGN-SPEC.md §6): the user
             opted in, but each run should still say where its usage lands. */}
-        {!queued && claudeSubActive && (
+        {claudeSubActive && (
           <div className="lander-hint lander-hint-warn">
             <span aria-hidden>⚠</span> Runs may use your Claude subscription (via Claude Code) — plan limits apply.{' '}
             <button type="button" className="link" onClick={onOpenSettings}>Manage in Models</button>

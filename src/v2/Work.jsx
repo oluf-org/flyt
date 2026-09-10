@@ -1,3 +1,4 @@
+import AssetComposer, { ContextAssets, useAssetDraft } from '../AssetComposer.jsx';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import BlockEditor from './BlockEditor.jsx';
 import { workflowActions } from '../../core/lifecycle.js';
@@ -8,8 +9,7 @@ import ActivityIcon from '../ActivityIcon.jsx';
 import { loopLabel } from '../activityFormat.js';
 import './workStyles.css';
 
-function Interaction({ interaction, onDecide, onAnswer }) {
-  const [answer, setAnswer] = useState('');
+function Interaction({ interaction, onDecide, onAnswer, projectId, assets }) {
   if (!interaction) return null;
   if (interaction.kind === 'approval') return <section className="work-interaction approval" aria-live="assertive">
     <span className="section-label">Approval required · {interaction.blockId}</span><h3>{interaction.tool} wants to run</h3>
@@ -19,8 +19,8 @@ function Interaction({ interaction, onDecide, onAnswer }) {
   return <section className="work-interaction question" aria-live="assertive"><span className="section-label">Question · {interaction.blockId}</span>
     <h3>{interaction.question}</h3>{interaction.context && <p>{interaction.context}</p>}{interaction.options?.length > 0 && <div className="work-options">
       {interaction.options.map(option => <button key={option} onClick={() => onAnswer?.(option)}>{option}</button>)}</div>}
-    <textarea rows="3" value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Answer this block directly" />
-    <button className="work-allow" disabled={!answer.trim()} onClick={() => onAnswer?.(answer)}>Send answer to block</button></section>;
+    <ContextAssets assets={assets} projectId={projectId}/>
+    <AssetComposer projectId={projectId} draftKey={`answer:${projectId}:${interaction.questionId}`} onSubmit={onAnswer} placeholder="Answer this block directly" label="Send answer to block"/></section>;
 }
 
 function HistoryIcon() {
@@ -118,17 +118,8 @@ function RunActions({ view, onPauseRun, onResumeRun, onStopRun, onRetryCleanup, 
   </details>;
 }
 
-function ReplyComposer({ onReply, replyBusy, visible, draft }) {
-  const [reply, setReply] = useState(() => draft?.value ?? '');
-  const update = value => { if (draft) draft.value = value; setReply(value); };
-  if (!visible) return null;
-  return <form className="work-reply" onSubmit={event => { event.preventDefault(); if (!reply.trim()) return; onReply?.(reply); update(''); }}>
-    <textarea rows="2" value={reply} onChange={event => update(event.target.value)} placeholder="Continue this conversation…" />
-    <button type="submit" disabled={replyBusy || !reply.trim()}>{replyBusy ? 'Starting…' : 'Send'}</button>
-  </form>;
-}
-
 export default function Work({
+  projectId = null,
   stack = null, blocks = null, trace = null, runId = null, composer = null, snapshot = null,
   interaction = null, onDecide = null, onAnswer = null, onReply = null, replyBusy = false, replyDraft = null,
   runs = [], onOpenRun = null, onNewChat = null, onOpenHistory = null, onOpenFlow = null, onOpenTrace = null,
@@ -137,6 +128,7 @@ export default function Work({
   onPauseRun = null, pauseBusy = false, onResumeRun = null, resumeBusy = false,
   onDebugRun = null, onRetryCleanup = null,
 }) {
+  const replyComposer = useAssetDraft(`reply:${projectId}:${runId}`, projectId, onReply);
   const projectView = useMemo(() => createRunView(), [runId]);
   const view = useMemo(() => projectView(trace, snapshot), [projectView, trace, snapshot]);
   const [debugOpen, setDebugOpen] = useState(false);
@@ -158,10 +150,10 @@ export default function Work({
     if (!debugReport && !debugBusy) analyze();
   };
   const summary = snapshot?.conversation?.filter(turn => turn.role === 'assistant').at(-1) ?? null;
-  const runModel = { ...view, summary: summary?.text ?? null, input: snapshot?.meta?.userMessage ?? snapshot?.prompt ?? '' };
+  const runModel = { ...view, projectId, attachments: snapshot?.meta?.attachments ?? [], contextAssets: snapshot?.meta?.contextAssets ?? {}, summary: summary?.text ?? null, input: snapshot?.meta?.userMessage ?? snapshot?.prompt ?? '' };
   const history = <ChatHistory runs={runs} activeRunId={runId} onOpenRun={onOpenRun} onNewChat={onNewChat} onOpenHistory={onOpenHistory}/>;
   if (!stack) return <div className="v2-work" data-v2>{history}<section className="work-surface">{composer}<p className="muted work-empty">Choose a workflow and send a message to start.</p></section></div>;
-  return <div className="v2-work work-run-mode" data-v2>{history}<section className="work-surface"><header className="work-run-head">
+  return <div className="v2-work work-run-mode" data-v2>{history}<section className="work-surface" {...replyComposer.dropProps}><header className="work-run-head">
     <div className="work-run-title"><span className="section-label">{view.running ? 'Running workflow' : 'Workflow run'}</span><h1>{stack.name ?? stack.id}</h1></div>
     <RunActions onRetryCleanup={onRetryCleanup} view={view} onPauseRun={onPauseRun} onResumeRun={onResumeRun} onStopRun={onStopRun} onOpenFlow={onOpenFlow} onOpenDebug={openDebug}
       pauseBusy={pauseBusy} resumeBusy={resumeBusy} stopBusy={stopBusy}/></header>
@@ -178,8 +170,8 @@ export default function Work({
     {summary?.degraded && <p className="work-warning" role="status"><strong>Post-run conversation summary degraded.</strong> This happened after the workflow settled and did not cause its failure{summary.reason ? `: ${summary.reason}` : '.'}</p>}
     <div className="work-run-grid"><main className="work-run-main">
       <BlockEditor stack={stack} blocks={blocks} mode="run" run={runModel}/>
-      <Interaction interaction={interaction} onDecide={onDecide} onAnswer={onAnswer}/>
-      <ReplyComposer key={runId} visible={!view.running && !view.resumable && !view.stopping && !interaction} onReply={onReply} replyBusy={replyBusy} draft={replyDraft}/>
+      <Interaction interaction={interaction} onDecide={onDecide} onAnswer={onAnswer} projectId={projectId} assets={runModel.contextAssets[interaction?.blockId] ?? []}/>
+      {!interaction && <AssetComposer projectId={projectId} draftKey={`reply:${projectId}:${runId}`} onSubmit={onReply} busy={replyBusy || view.running || view.resumable || view.stopping} placeholder="Continue this conversation…"/>}
     </main></div>
     {debugOpen && <DebugPanel runId={runId} trace={trace} view={view} report={debugReport} busy={debugBusy} error={debugError}
       retryBusy={retryBusy} onAnalyze={analyze} onRetry={onRetryFailed} onClose={() => setDebugOpen(false)}

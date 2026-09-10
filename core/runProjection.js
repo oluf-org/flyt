@@ -100,7 +100,7 @@ function projectRunSnapshot(kernel, events, id, runsRoot, { materialise = true, 
     status: projected.meta.blockStatus[blockId], toolCalls, usage,
   }]));
   const conversation = relevant.flatMap(event => {
-    if (event.type === 'message.user') return [{ role: 'user', text: String(event.data?.content ?? ''), at: event.at }];
+    if (event.type === 'message.user') return [{ role: 'user', text: String(event.data?.content ?? ''), attachments: event.data?.attachments ?? [], parts: event.data?.parts, at: event.at }];
     if (event.type === 'supervisor.summary') return [{
       role: 'assistant', text: String(event.data?.content ?? ''), at: event.at,
       supervisor: true, degraded: Boolean(event.data?.degraded), reason: event.data?.reason ?? null,

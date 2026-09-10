@@ -220,6 +220,9 @@ export function catalogFromOpenRouter(payload) {
       name: m.name ?? m.id.trim(),
       contextLength: Number.isFinite(m.context_length) ? m.context_length : null,
       supportsTools: (m.supported_parameters || []).includes('tools'),
+      ...(Array.isArray(m.architecture?.input_modalities) ? {
+        inputModalities: m.architecture.input_modalities, modalitiesUpdatedAt: new Date().toISOString(),
+      } : {}),
       inUsdPerM: usdPerMillion(m.pricing?.prompt),
       outUsdPerM: usdPerMillion(m.pricing?.completion)
     }));
@@ -286,6 +289,8 @@ export function modelFactsOf(m) {
   const f = {};
   if (typeof m.name === 'string' && m.name.trim() && m.name.trim() !== m.id.trim()) f.name = m.name.trim();
   if (Number.isFinite(m.contextLength) && m.contextLength > 0) f.contextLength = m.contextLength;
+  if (Array.isArray(m.inputModalities)) f.inputModalities = m.inputModalities.filter(value => typeof value === 'string');
+  if (m.modalitiesUpdatedAt) f.modalitiesUpdatedAt = m.modalitiesUpdatedAt;
   if (typeof m.supportsTools === 'boolean') f.supportsTools = m.supportsTools;
   if (Number.isFinite(m.inUsdPerM)) f.inUsdPerM = m.inUsdPerM;
   if (Number.isFinite(m.outUsdPerM)) f.outUsdPerM = m.outUsdPerM;

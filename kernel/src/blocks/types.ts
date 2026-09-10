@@ -20,7 +20,7 @@
  * @module #kernel/blocks/types
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { FailureMetadata, JsonValue } from '../types.js';
+import type { AssetRef, FailureMetadata, JsonValue } from '../types.js';
 
 /**
  * Which shelf of the library a block sits on.
@@ -80,6 +80,7 @@ export interface BlockRun {
   config: Record<string, JsonValue>;
   /** What entered this block: the previous block's output, or the run's input. */
   input: string;
+  attachments?: AssetRef[];
   /** Scheduler-owned context boundary, independent of block configuration. */
   context?: BlockContext;
   /**
@@ -99,6 +100,7 @@ export interface BlockOutcome {
   status: 'done' | 'failed';
   /** The model-visible deliverable. Projected to `runs/<id>/blocks/<blockId>.md`. */
   output: string;
+  attachments?: AssetRef[];
   /**
    * Fields the block DECLARED it would produce.
    *

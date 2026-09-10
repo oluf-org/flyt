@@ -12,6 +12,8 @@
 // they are how a human touches the app, not what the app does. A headless
 // caller asking for one gets an honest error rather than a silent no-op.
 import fs from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { projectAssets, draftAssets, chatSubmission } from './assets.js';
 import path from 'node:path';
 import { bounded } from './executionOwnership.js';
 import { Workspace } from './workspace.js';
@@ -426,13 +428,42 @@ export function createApi(engine) {
     }
   };
 
-  const startWorkflow = async ({
+  const claimAssets = async (entry, refs = []) => {
+    const store = projectAssets(entry.store.rootDir);
+    if (!Array.isArray(refs) || refs.length > 10) throw new Error('Attach at most 10 images');
+    const claimed = [];
+    for (const ref of refs) {
+      if (ref.draftId) {
+        const imported = await draftAssets(engine.userDataDir ?? engine.dataRoot, ref.draftId).read(ref, 'original');
+        claimed.push(await store.import({ name: imported.ref.name, bytes: imported.bytes }));
+      } else claimed.push(ref);
+    }
+    return store.references(claimed);
+  };
+  const submissions = new Map();
+  const startWorkflow = async args => {
+    const submission = chatSubmission(args.input);
+    const entry = proj(args.projectId);
+    const requestId = submission.requestId;
+    const key = requestId ? `${entry.id}/${requestId}` : null;
+    const runId = key ? `chat-${createHash('sha256').update(key).digest('hex').slice(0, 32)}` : null;
+    if (key && submissions.has(key)) return submissions.get(key);
+    if (runId) {
+      const previous = storedStackRunMetadata(entry.store.rootDir, runId);
+      if (previous?.requestId === requestId) return { runId, conversationId: previous.conversationId };
+    }
+    const launch = startWorkflowImpl({ ...args, input: submission.text, attachments: submission.attachments, requestId, requestedRunId: runId });
+    if (key) submissions.set(key, launch);
+    try { return await launch; } finally { if (key) submissions.delete(key); }
+  };
+  const startWorkflowImpl = async ({
     projectId, workflowId, input = '', approvalMode = null, presetId = null,
     conversationId = null, parentRunId = null, userMessage = null,
     modelSelection = null, profile = 'flyt-desktop', level = null,
-    sandboxMode = null, sandboxEnforcement = null,
+    sandboxMode = null, sandboxEnforcement = null, attachments = [], requestId = null, requestedRunId = null,
   }) => {
     const entry = proj(projectId);
+    attachments = await claimAssets(entry, attachments);
     presetId = await resolvePresetId(workflowId, presetId);
     const workspace = entry.folder
       ? new Workspace(entry.folder).ensure().root
@@ -456,6 +487,7 @@ export function createApi(engine) {
     const conversation = conversationId || `conversation-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const { runId } = await runController.start({
       projectId,
+      ...(requestedRunId ? { runId: requestedRunId } : {}),
       stackId: workflowId,
       input,
       host: {
@@ -477,7 +509,7 @@ export function createApi(engine) {
         allowAttendedEscalation: true,
       },
       metadata: {
-        conversationId: conversation, parentRunId, presetId,
+        conversationId: conversation, parentRunId, presetId, attachments, requestId,
         supervisorSummary: runtimeConfig.supervisor?.terminalSummary !== false,
         userMessage: String(userMessage ?? input),
       },
@@ -1045,6 +1077,17 @@ export function createApi(engine) {
       });
     },
 
+    'asset:import': async ({ projectId = null, draftId = null, name, base64 }) => {
+      draftId ??= randomUUID();
+      const store = projectId ? projectAssets(proj(projectId).store.rootDir) : draftAssets(engine.userDataDir ?? engine.dataRoot, draftId);
+      const ref = await store.import({ name, base64 });
+      return projectId ? ref : { ...ref, draftId };
+    },
+    'asset:preview': async ({ projectId = null, asset, full = false }) => {
+      const store = projectId ? projectAssets(proj(projectId).store.rootDir) : draftAssets(engine.userDataDir ?? engine.dataRoot, asset?.draftId);
+      const value = await store.read(asset, full ? 'display' : 'thumbnail');
+      return { dataUrl: `data:${value.mimeType};base64,${value.bytes.toString('base64')}` };
+    },
     'workflow:run': startWorkflow,
 
     // The event channel is intentionally transient, but the pending promise is
@@ -1076,17 +1119,21 @@ export function createApi(engine) {
       return { ok: true };
     },
 
-    'workflow:answer': ({ projectId, runId, questionId, answer }) => {
+    'workflow:answer': async ({ projectId, runId, questionId, answer }) => {
       const key = `${projectId}\n${runId}\n${questionId}`;
       const pending = workflowQuestions.get(key);
       if (!pending) return { ok: false, error: 'not-pending' };
+      const submission = chatSubmission(answer);
+      submission.attachments = await claimAssets(proj(projectId), submission.attachments);
       workflowQuestions.delete(key);
-      pending.resolve(String(answer ?? ''));
+      pending.resolve(submission.attachments.length ? submission : submission.text);
       return { ok: true };
     },
 
     'workflow:reply': async ({ projectId, runId, text, approvalMode = null }) => {
       const entry = proj(projectId);
+      const submission = chatSubmission(text);
+      text = submission.text;
       const metadata = storedStackRunMetadata(entry.store.rootDir, runId);
       if (!metadata?.stackId) throw new ApiError(`Run "${runId}" does not identify its workflow.`, {
         status: 409, code: 'workflow_metadata_missing',
@@ -1118,10 +1165,10 @@ export function createApi(engine) {
           blocks: metadata.blockWorkers ?? {},
           blockFallbacks: metadata.blockFallbacks ?? {},
         },
-        input: [
+        input: { ...submission, attachments: [...new Map([...(metadata.attachments ?? []), ...Object.values(snapshot.meta?.contextAssets ?? {}).flat(), ...submission.attachments].map(asset => [asset.assetId, asset])).values()], text: [
           'CONVERSATION CONTEXT FROM THE PREVIOUS IMMUTABLE RUN:', context,
           'USER FOLLOW-UP:', String(text ?? ''),
-        ].join('\n\n'),
+        ].join('\n\n') },
       });
     },
 

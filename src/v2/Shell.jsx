@@ -295,6 +295,7 @@ export default function Shell({
                 </div>
               )
               : <Work
+                  projectId={activeProjectId}
                   stack={addressedWatching?.stack ?? null}
                   blocks={build?.blocks ?? null}
                   trace={addressedWatching?.trace ?? null}

@@ -16,7 +16,12 @@ export function anthropicMessages(messages, fallbackPrompt = '') {
         type: 'tool_use', id: call.id, name: call.function?.name ?? call.name,
         input: parseObject(call.function?.arguments ?? call.args),
       })),
-      ...(message.content ? [{ type: 'text', text: String(message.content) }] : []),
+      ...(Array.isArray(message.content) ? message.content.map(part => {
+        if (part.type === 'text') return part;
+        const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(part.image_url?.url ?? '');
+        if (part.type !== 'image_url' || !match) throw new Error('Anthropic requires a validated local image');
+        return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } };
+      }) : message.content ? [{ type: 'text', text: String(message.content) }] : []),
     ];
     return { role: message.role === 'assistant' ? 'assistant' : 'user', content: content.length ? content : [{ type: 'text', text: '' }] };
   });

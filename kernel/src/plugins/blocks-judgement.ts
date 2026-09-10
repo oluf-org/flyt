@@ -104,9 +104,10 @@ async function executePromptRefiner(run: BlockRun): Promise<BlockOutcome> {
       toolLimits: { ask_human: 1 }, toolGuard: guardRefinerQuestion, maxSteps: 4,
     });
   } catch (error) {
+    if (run.attachments?.length) return { status: 'failed', output: '', error: String((error as Error)?.message ?? error) };
     return deterministicRefinerFallback(run, String((error as Error)?.message ?? error));
   }
-  if (first.status !== 'done') return deterministicRefinerFallback(run, first.error ?? 'The refiner did not finish.');
+  if (first.status !== 'done') return run.attachments?.length ? first : deterministicRefinerFallback(run, first.error ?? 'The refiner did not finish.');
   const question = unansweredRefinerQuestion(first.output);
   if (!question) return first;
   try {
@@ -120,6 +121,7 @@ async function executePromptRefiner(run: BlockRun): Promise<BlockOutcome> {
     return settled.status === 'done'
       ? settled : deterministicRefinerFallback(run, settled.error ?? 'The refiner did not finish after clarification.');
   } catch (error) {
+    if (run.attachments?.length) return { status: 'failed', output: '', error: String((error as Error)?.message ?? error) };
     return deterministicRefinerFallback(run, String((error as Error)?.message ?? error));
   }
 }

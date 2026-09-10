@@ -21,6 +21,9 @@ import type { SessionEvent } from '../seams/sessions.js';
 
 /** What the run folder's `meta.json` says. The same shape v1 wrote, in v2 nouns. */
 export interface RunMeta {
+  attachments?: JsonValue;
+  requestId?: string;
+  contextAssets?: Record<string, JsonValue>;
   runId: string;
   name: string | null;
   createdAt: string;
@@ -178,6 +181,9 @@ export function createRunProjector(runId: string, { retainArtifacts = true } = {
 
     switch (event.type) {
       case 'run.created':
+        meta.attachments = (data.attachments ?? []) as JsonValue;
+        meta.requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
+        if (!data.userMessage && !data.input && Array.isArray(data.attachments) && data.attachments.length) meta.name = 'Image conversation';
         meta.createdAt = String(data.createdAt ?? event.at ?? '');
         meta.stackId = data.stackId ? String(data.stackId) : meta.stackId;
         meta.stackName = data.stackName ? String(data.stackName) : meta.stackName;
@@ -248,10 +254,20 @@ export function createRunProjector(runId: string, { retainArtifacts = true } = {
         meta.stage = String(data.stage ?? 'failed');
         break;
 
+      case 'message.user': {
+        const id = String(data.blockId ?? '');
+        if (id && Array.isArray(data.attachments)) {
+          const current = (meta.contextAssets?.[id] ?? []) as import('../types.js').AssetRef[];
+          const incoming = data.attachments as import('../types.js').AssetRef[];
+          meta.contextAssets = { ...meta.contextAssets, [id]: [...new Map([...current, ...incoming].map(asset => [asset.assetId, asset])).values()] };
+        }
+        break;
+      }
       case 'block.status': {
         const id = String(data.blockId ?? '');
         if (!id) break;
         meta.blockStatus[id] = String(data.status ?? 'pending');
+        if (Array.isArray(data.attachments)) meta.contextAssets = { ...meta.contextAssets, [id]: data.attachments as JsonValue };
         if (data.status === 'active') meta.currentBlockId = id;
         break;
       }

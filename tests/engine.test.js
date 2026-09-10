@@ -20,7 +20,13 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-engine-'));
 async function settleRun(api, projectId, runId) {
   const deadline = Date.now() + 60000;
   while (Date.now() < deadline) {
-    const stage = (await api.invoke('run:snapshot', { projectId, runId })).meta?.stage;
+    // Active runs may append during a snapshot read; retry the explicit
+    // resynchronization signal while retaining the overall deadline.
+    const snapshot = await api.invoke('run:snapshot', { projectId, runId }).catch(error => {
+      if (error.code === 'session_read_changed') return null;
+      throw error;
+    });
+    const stage = snapshot?.meta?.stage;
     if (['done', 'failed'].includes(stage)) return stage;
     await new Promise(resolve => setTimeout(resolve, 20));
   }

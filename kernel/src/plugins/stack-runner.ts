@@ -1,3 +1,5 @@
+import type { AssetRef } from '../types.js';
+const mergeAssets = (...groups: (AssetRef[] | undefined)[]) => [...new Map(groups.flatMap(group => group ?? []).map(ref => [ref.assetId, ref])).values()];
 /**
  * `flyt-stack-runner` — `ctx.agents`, the scheduler over containment.
  *
@@ -350,7 +352,7 @@ export class StackRunner extends Service implements AgentsSeam {
     const outputs = new Map<string, string>();
     const owners = new Map<string, string>();
     for (const event of events) {
-      const data = event.data as { blockId?: unknown; executionId?: string; status?: unknown; content?: unknown; error?: unknown; port?: unknown };
+      const data = event.data as { blockId?: unknown; executionId?: string; status?: unknown; attachments?: AssetRef[]; content?: unknown; error?: unknown; port?: unknown };
       const key = data.executionId ?? String(data.blockId ?? '');
       if (typeof data.blockId === 'string') owners.set(key, data.blockId);
       if (event.type === 'block.output' && typeof data.blockId === 'string') {
@@ -370,6 +372,7 @@ export class StackRunner extends Service implements AgentsSeam {
       if (data.status === 'done' || data.status === 'failed') {
         done.set(key, {
           status: data.status,
+          attachments: (data.attachments ?? []) as AssetRef[],
           output: outputs.get(key) ?? '',
           ...(data.error ? { error: String(data.error) } : {}),
           // The structured fields go back too, or a resumed run reads every
@@ -451,7 +454,11 @@ export class StackRunner extends Service implements AgentsSeam {
     try {
       // The implicit root is represented by run.stage; authored controls
       // below it own the container lifecycle shown in Work.
-      const walked = await this.runSequence(run, root, input, session, done);
+      let attachments: AssetRef[] = [];
+      for await (const event of session.read()) if (event.type === 'run.created') {
+        attachments = ((event.data as Record<string, JsonValue>).attachments ?? []) as AssetRef[]; break;
+      }
+      const walked = await this.runSequence(run, root, input, session, done, '', attachments);
       const failed = walked.find(s => s.outcome.status === 'failed');
       return run.complete(session, failed ? `Block "${failed.node.id}" failed: ${failed.outcome.error ?? 'no reason given'}` : null, failed?.node.id, walked.length);
     } catch (err) {
@@ -467,23 +474,23 @@ export class StackRunner extends Service implements AgentsSeam {
    */
   private async walk(
     run: Run, node: StackNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>, scope = '',
+    done: Map<string, BlockOutcome>, scope = '', attachments: AssetRef[] = [],
   ): Promise<BlockStep[]> {
     await run.waitIfPaused(session);
     if (run.stopReason) return [];
-    if (node.kind === 'block') return [await this.runBlock(run, node, input, session, done, scope)];
+    if (node.kind === 'block') return [await this.runBlock(run, node, input, session, done, scope, attachments)];
     const identity = { blockId: node.id, kind: node.kind, executionId: scope ? `${scope}/${node.id}` : node.id };
     // Controls have a lifecycle too. Child completion alone cannot describe
     // a running Repeat, an empty For each, or an If's unselected branch.
     // For each announces its active state with roster size and truncation.
     if (node.kind !== 'foreach') await session.append({ type: 'block.status', data: { ...identity, status: 'active' } });
     try {
-      const steps = node.kind === 'parallel' ? await this.runParallel(run, node, input, session, done, scope)
-        : node.kind === 'repeat' ? await this.runRepeat(run, node, input, session, done, scope)
-        : node.kind === 'if' ? await this.runIf(run, node, input, session, done, scope)
-        : node.kind === 'foreach' ? await this.runForEach(run, node, input, session, done, scope)
-        : node.kind === 'until' ? await this.runUntil(run, node, input, session, done, scope)
-        : await this.runSequence(run, node, input, session, done, scope);
+      const steps = node.kind === 'parallel' ? await this.runParallel(run, node, input, session, done, scope, attachments)
+        : node.kind === 'repeat' ? await this.runRepeat(run, node, input, session, done, scope, attachments)
+        : node.kind === 'if' ? await this.runIf(run, node, input, session, done, scope, attachments)
+        : node.kind === 'foreach' ? await this.runForEach(run, node, input, session, done, scope, attachments)
+        : node.kind === 'until' ? await this.runUntil(run, node, input, session, done, scope, attachments)
+        : await this.runSequence(run, node, input, session, done, scope, attachments);
       const failure = steps.find(step => step.outcome.status === 'failed');
       await session.append({ type: 'block.status', data: { ...identity,
         status: run.stopReason ? 'pending' : failure ? 'failed' : 'done',
@@ -499,7 +506,7 @@ export class StackRunner extends Service implements AgentsSeam {
   /** Children, top to bottom, each fed what the one before produced. */
   private async runSequence(
     run: Run, node: SequenceNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>, scope = '',
+    done: Map<string, BlockOutcome>, scope = '', attachments: AssetRef[] = [],
   ): Promise<BlockStep[]> {
     const steps: BlockStep[] = [];
     let carried = input;
@@ -507,8 +514,9 @@ export class StackRunner extends Service implements AgentsSeam {
       // The durable boundary. A stop lands BETWEEN children, after the event
       // that recorded the last one, and never inside a block.
       if (run.stopReason) break;
-      const ran = await this.walk(run, child, carried, session, done, scope);
+      const ran = await this.walk(run, child, carried, session, done, scope, attachments);
       steps.push(...ran);
+      attachments = mergeAssets(attachments, ...ran.map(step => step.outcome.attachments));
       const last = ran.at(-1);
       if (ran.some(step => step.outcome.status === 'failed')) break;
       if (child.kind === 'parallel') carried = parallelCarry(child, ran) ?? carried;
@@ -526,7 +534,7 @@ export class StackRunner extends Service implements AgentsSeam {
    */
   private async runParallel(
     run: Run, node: ParallelNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>, scope = '',
+    done: Map<string, BlockOutcome>, scope = '', attachments: AssetRef[] = [],
   ): Promise<BlockStep[]> {
     const lanes = node.children;
     const bound = Math.max(1, node.maxParallel ?? lanes.length);
@@ -551,7 +559,7 @@ export class StackRunner extends Service implements AgentsSeam {
           const prior = entry.get(id);
           if (prior) laneDone.set(id, prior);
         }
-        return this.walk(run, lane, input, session, laneDone, scope);
+        return this.walk(run, lane, input, session, laneDone, scope, [...attachments]);
       }));
       for (const laneSteps of ran) steps.push(...laneSteps);
       if (steps.some(s => s.outcome.status === 'failed')) break;
@@ -568,7 +576,7 @@ export class StackRunner extends Service implements AgentsSeam {
    */
   private async runRepeat(
     run: Run, node: RepeatNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>, scope = '',
+    done: Map<string, BlockOutcome>, scope = '', attachments: AssetRef[] = [],
   ): Promise<BlockStep[]> {
     const body: SequenceNode = { kind: 'sequence', id: node.id, children: node.children, position: node.position };
     const steps: BlockStep[] = [];
@@ -577,8 +585,9 @@ export class StackRunner extends Service implements AgentsSeam {
       if (run.stopReason) break;
       const attempt = new Map(done);
       for (const id of blockIds(body)) attempt.delete(id);
-      const walked = await this.runSequence(run, body, carried, session, attempt, `${scope}/${node.id}[${i}]`);
+      const walked = await this.runSequence(run, body, carried, session, attempt, `${scope}/${node.id}[${i}]`, attachments);
       steps.push(...walked);
+      attachments = mergeAssets(attachments, ...walked.map(step => step.outcome.attachments));
       const last = walked.at(-1);
       if (walked.some(step => step.outcome.status === 'failed')) break;
       if (last) carried = last.outcome.output;
@@ -628,7 +637,7 @@ export class StackRunner extends Service implements AgentsSeam {
    */
   private async runUntil(
     run: Run, node: UntilNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>, scope = '',
+    done: Map<string, BlockOutcome>, scope = '', attachments: AssetRef[] = [],
   ): Promise<BlockStep[]> {
     const steps: BlockStep[] = [];
     let carried = input;
@@ -637,8 +646,9 @@ export class StackRunner extends Service implements AgentsSeam {
       const attempt = new Map(done);
       const body: SequenceNode = { kind: 'sequence', id: node.id, children: node.children, position: node.position };
       for (const id of blockIds(body)) attempt.delete(id);
-      const ran = await this.runSequence(run, body, carried, session, attempt, `${scope}/${node.id}[${pass - 1}]`);
+      const ran = await this.runSequence(run, body, carried, session, attempt, `${scope}/${node.id}[${pass - 1}]`, attachments);
       steps.push(...ran);
+      attachments = mergeAssets(attachments, ...ran.map(step => step.outcome.attachments));
       const last = ran.at(-1);
       if (ran.some(step => step.outcome.status === 'failed')) return steps;
       if (last) carried = last.outcome.output;
@@ -668,7 +678,7 @@ export class StackRunner extends Service implements AgentsSeam {
 
   private async runForEach(
     run: Run, node: ForEachNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>, scope = '',
+    done: Map<string, BlockOutcome>, scope = '', attachments: AssetRef[] = [],
   ): Promise<BlockStep[]> {
     const dot = node.roster.indexOf('.');
     const record = done.get(node.roster.slice(0, dot))?.structured as Record<string, unknown> | undefined;
@@ -694,7 +704,7 @@ export class StackRunner extends Service implements AgentsSeam {
       const attempt = new Map(upstream);
       for (const id of blockIds(body)) attempt.delete(id);
       const itemInput = typeof item === 'string' ? item : JSON.stringify(item ?? null);
-      const ran = await this.runSequence(run, body, itemInput, session, attempt, `${scope}/${node.id}[${index}]`);
+      const ran = await this.runSequence(run, body, itemInput, session, attempt, `${scope}/${node.id}[${index}]`, [...attachments]);
       steps.push(...ran);
       if (ran.some(step => step.outcome.status === 'failed')) break;
       // Downstream structured consumers see the last completed element.
@@ -705,13 +715,13 @@ export class StackRunner extends Service implements AgentsSeam {
 
   private async runIf(
     run: Run, node: IfNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome>, scope = '',
+    done: Map<string, BlockOutcome>, scope = '', attachments: AssetRef[] = [],
   ): Promise<BlockStep[]> {
     const held = this.holds(node.predicate, done);
     const chosen = held ? node.children : (node.else ?? []);
     if (!chosen.length) return [];
     const body: SequenceNode = { kind: 'sequence', id: node.id, children: chosen, position: node.position };
-    return this.runSequence(run, body, input, session, done, scope);
+    return this.runSequence(run, body, input, session, done, scope, attachments);
   }
 
   private holds(predicate: IfPredicate, done: ReadonlyMap<string, BlockOutcome>): boolean {
@@ -746,7 +756,7 @@ export class StackRunner extends Service implements AgentsSeam {
   /** One block, through the registry and the other seams. */
   private async runBlock(
     run: Run, node: BlockNode, input: string, session: SessionHandle,
-    done: Map<string, BlockOutcome> = new Map(), scope = '',
+    done: Map<string, BlockOutcome> = new Map(), scope = '', attachments: AssetRef[] = [],
   ): Promise<BlockStep> {
     // Already settled, according to the log. Not run again, and not
     // re-logged: replaying a block that finished is how a resume charges
@@ -796,7 +806,7 @@ export class StackRunner extends Service implements AgentsSeam {
     context = { ...context, executionId };
     await session.append({ type: 'block.status', data: {
       blockId: node.id, executionId, status: 'active', use: node.use,
-      context: { ...context },
+      context: { ...context }, attachments,
     } });
     let outcome: BlockOutcome;
     try {
@@ -816,6 +826,7 @@ export class StackRunner extends Service implements AgentsSeam {
         config: node.config,
         input: goalContext + (restartGuidance ? `${input}\n\nSupervisor restart guidance:\n${restartGuidance}` : input),
         context,
+        attachments,
         ceiling,
         signal: run.signal,
       });
@@ -825,6 +836,13 @@ export class StackRunner extends Service implements AgentsSeam {
       outcome = { status: 'failed', output: '', error: String((err as Error)?.message ?? err) };
     }
 
+// Only this invocation's user answers can add references to its output scope.
+    for await (const event of session.read(context.after)) {
+      if (event.type === 'message.user' && (event.data as Record<string, JsonValue>).blockId === node.id && Array.isArray((event.data as Record<string, JsonValue>).attachments)) {
+        attachments = mergeAssets(attachments, (event.data as Record<string, JsonValue>).attachments as AssetRef[]);
+      }
+    }
+    outcome.attachments = mergeAssets(attachments, outcome.attachments);
     if (outcome.output) {
       await session.append({ type: 'block.output', data: { blockId: node.id, executionId, content: outcome.output } });
     }
@@ -833,6 +851,7 @@ export class StackRunner extends Service implements AgentsSeam {
       data: {
         blockId: node.id, executionId, status: run.stopReason && outcome.status === 'failed' ? 'pending' : outcome.status,
         ...(run.stopReason && outcome.status === 'failed' ? { reason: 'interrupted before this block settled' } : {}),
+        attachments: outcome.attachments,
         ...(outcome.error ? { error: outcome.error } : {}),
         ...(outcome.structured !== undefined ? { structured: outcome.structured as JsonValue } : {}),
       },

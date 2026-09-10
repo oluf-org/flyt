@@ -1,0 +1,21 @@
+.asset-composer { position: relative; display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border: 1px solid var(--border, #ddd); border-radius: 12px; margin-top: 12px; }
+.asset-composer textarea { flex: 1 0 100%; width: 100%; resize: vertical; background: transparent; color: inherit; border: 0; font: inherit; }
+.attachment-tools { flex: 1; min-width: 0; }
+.attachment-actions { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.attachment-actions button { border: 0; background: transparent; color: inherit; padding: 6px; font: inherit; cursor: pointer; opacity: .75; }
+.asset-list { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 0; }
+.asset-chip { display: flex; align-items: center; gap: 3px; border: 1px solid var(--border, #ddd); border-radius: 8px; max-width: 190px; overflow: hidden; }
+.asset-open { display: flex; align-items: center; gap: 7px; min-width: 0; background: transparent; color: inherit; border: 0; padding: 4px; cursor: pointer; }
+.asset-open img { width: 32px; height: 32px; object-fit: cover; border-radius: 4px; }
+.asset-open span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.asset-remove { background: transparent; border: 0; color: inherit; cursor: pointer; padding: 6px; }
+.asset-error { color: var(--danger, #bd4444); font-size: 12px; overflow-wrap: anywhere; }
+.asset-drop-hint { position: absolute; inset: 0; display: grid; place-items: center; border: 2px dashed var(--accent, #659976); border-radius: 12px; background: var(--bg, #f7f8f7); opacity: .95; pointer-events: none; z-index: 3; }
+.context-assets { grid-column: 1 / -1; width: 100%; font-size: 11px; color: inherit; padding: 3px 0; }
+.context-assets summary { cursor: pointer; width: fit-content; opacity: .7; }
+.context-assets summary span { font-variant-numeric: tabular-nums; margin-left: 3px; }
+.asset-preview { max-width: 90vw; max-height: 90vh; padding: 12px; border: 1px solid var(--border, #ddd); border-radius: 12px; background: var(--bg, #fff); color: var(--text, #222); }
+.asset-preview::backdrop { background: #0009; }
+.asset-preview header { display: flex; justify-content: space-between; gap: 30px; align-items: center; font-size: 12px; margin-bottom: 10px; }
+.asset-preview img { display: block; max-width: 85vw; max-height: 78vh; object-fit: contain; }
+.asset-preview header button { font-size: 22px; border: 0; background: transparent; color: inherit; cursor: pointer; }

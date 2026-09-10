@@ -33,6 +33,8 @@ files:
   # silently-diverging source of truth for the same templates.
   - "!**/*.map"
   - "!**/*.md"
+asarUnpack:
+  - node_modules/@img/**
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 publish:
   provider: github

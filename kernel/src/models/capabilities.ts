@@ -188,7 +188,17 @@ export class ModelCapabilityRegistry {
     if (direct) return structuredClone(direct);
     // OpenRouter and other relays retain their own provenance even when the
     // underlying model slug resembles a first-party id.
-    return unknownCapability(model, provider ?? explicit.split('/')[0] ?? 'unknown');
+    const profile = unknownCapability(model, provider ?? explicit.split('/')[0] ?? 'unknown');
+    const knownImages: Record<string, string[]> = {
+      openai: ['gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5.1', 'gpt-5.2', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o3', 'o4-mini'],
+      codex: ['gpt-5.2-codex', 'gpt-5.1-codex-mini', 'gpt-5.2', 'gpt-5.1', 'gpt-5'],
+      anthropic: ['claude-sonnet-5', 'claude-opus-5', 'claude-opus-4-5', 'claude-haiku-4-5', 'claude-sonnet-4-5', 'claude-opus-4-6', 'claude-sonnet-4-6'],
+    };
+    const id = model.startsWith(`${profile.provider}/`) ? model.slice(profile.provider.length + 1) : model;
+    if (knownImages[profile.provider]?.includes(id)) profile.modalities.image = fact(true, 'reported', profile.provider === 'openai'
+      ? 'https://developers.openai.com/api/docs/guides/images-vision'
+      : profile.provider === 'codex' ? 'Installed codex exec --help: --image native image input' : 'https://platform.claude.com/docs/en/build-with-claude/vision');
+    return profile;
   }
 
   list(): ModelCapabilityProfile[] { return [...this.#profiles.values()].map(profile => structuredClone(profile)); }

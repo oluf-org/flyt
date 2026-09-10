@@ -115,6 +115,7 @@ export interface LoopOptions {
   system: string;
   /** What entered the block. Appended as the user message. */
   input: string;
+  attachments?: import('../types.js').AssetRef[];
   /** The tools this block may reach — the ceiling, already applied. */
   tools?: readonly ToolDefinition[];
   /** The ceiling itself, carried onto each execution so the gate can read it. */
@@ -297,7 +298,17 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
   await session.append({ type: 'message.system', data: { blockId,
     content: wordLimit === undefined ? system : `${system}\n\nFinal answer limit: at most ${wordLimit} whitespace-delimited words. This limit is checked before the block can succeed.`,
   } });
-  await session.append({ type: 'message.user', data: { blockId, content: input } });
+  if (options.attachments?.some(asset => asset.kind !== 'image')) throw new Error('This model path does not support that asset kind yet.');
+  const previousImages = new Set(priorEvents.flatMap(event => {
+    const data = event.data as Record<string, JsonValue>;
+    return event.type === 'message.user' && data.blockId === blockId && Array.isArray(data.parts)
+      ? (data.parts as import('../types.js').MessagePart[]).flatMap(part => part.type === 'image' ? [part.assetId] : []) : [];
+  }));
+  await session.append({ type: 'message.user', data: { blockId, content: input,
+    ...(options.attachments?.length ? { attachments: options.attachments, parts: [
+      { type: 'text', text: input }, ...options.attachments.filter(asset => !previousImages.has(asset.assetId)).map(asset => ({ type: 'image', assetId: asset.assetId })),
+    ] } : {}),
+  } });
 
   const schemas = schemasFor(tools);
   let content = '';
@@ -465,6 +476,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
 
     const stream = ctx.llm.stream({
       model: requestModel, messages, signal,
+      assetContext: { runId, blockId, after: contextAfter },
       ...(requestFallbacks.length ? { fallbackModels: requestFallbacks } : {}),
       ...(requestSchemas.length ? { tools: requestSchemas } : {}),
       ...(maxTokens ? { maxTokens } : {}),

@@ -27,6 +27,7 @@ export function deterministicRunCapsule(snapshot, { workflowName = null } = {}) 
   })).filter(unit => unit.text);
   return {
     status,
+    attachments: snapshot?.meta?.attachments ?? [],
     workflow: workflowName ?? snapshot?.meta?.stackId ?? null,
     completed,
     failed,
@@ -96,11 +97,13 @@ export async function summarizeWorkflowRun({
         'You are the Conversation Supervisor for a completed workflow run.',
         'You have no tools and no authority to change anything.',
         'Write a concise final chat message: what was done, what failed or remains, important decisions, and the useful result.',
+        'You receive text results and attachment names, not image pixels. Attribute visual findings to the workflow; do not claim to have inspected the images yourself.',
         'Do not claim work that is not present in the run facts. Do not expose implementation metadata.',
       ].join('\n'),
       prompt: [
         `WORKFLOW: ${capsule.workflow ?? 'Workflow'}`,
         `STATUS: ${capsule.status}`,
+        ...(capsule.attachments.length ? [`REFERENCE ASSETS (retained for follow-up): ${capsule.attachments.map(asset => asset.name).join(', ')}`] : []),
         `COMPLETED: ${capsule.completed.join(', ') || 'none'}`,
         `FAILED: ${capsule.failed.join(', ') || 'none'}`,
         `OUTSTANDING: ${capsule.outstanding.join(', ') || 'none'}`,

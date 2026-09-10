@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  effortCopy, modelForWorkflow, queueTaskFromPrompt, workflowOutcome, workflowSteps,
+  effortCopy, modelForWorkflow, workflowOutcome, workflowSteps,
 } from '../src/v2/workflowUx.js';
 import { desktopWorkflowCeiling } from '../core/kernelHost.js';
 
@@ -22,14 +22,6 @@ test('the workflow preview separates reasoning effort from model selection', () 
     label: 'gpt-5', detail: 'Model-backed steps use openai unless a step override replaces it.',
   });
   assert.match(workflowOutcome(pipeline), /changes the project/i);
-});
-
-test('Add to Loop creates one explicit backlog task at the selected starting effort', () => {
-  const task = queueTaskFromPrompt('Fix the retry race\nKeep compatibility.', 'high');
-  assert.equal(task.title, 'Fix the retry race');
-  assert.equal(task.goal, 'Fix the retry race\nKeep compatibility.');
-  assert.equal(task.level, 'high');
-  assert.match(task.body, /Starting effort\n\nhigh/);
 });
 
 test('an attended workflow cannot write to the Loop queue', () => {

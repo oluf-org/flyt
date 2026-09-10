@@ -101,6 +101,7 @@ export interface LlmAdaptersConfig {
   /** What the seam can reach, for `models()`. */
   models?: () => Promise<ModelInfo[]> | ModelInfo[];
   capability?: (model: string, provider: string) => Promise<ModelCapabilityProfile> | ModelCapabilityProfile;
+  resolveAsset?: (assetId: string, request: LlmRequest) => Promise<{ dataUrl: string; estimatedTokens: number; byteLength: number }>;
   maxMessageChars?: number;
   checkpointInputTokens?: number;
 }
@@ -118,7 +119,7 @@ function toolsFor(request: LlmRequest): unknown {
 }
 
 /** Translate the kernel's provider-neutral messages to OpenAI chat wire shape. */
-function messagesFor(request: LlmRequest, messages = request.messages): unknown[] {
+function messagesFor(request: LlmRequest, messages = request.messages, assets = new Map<string, string>()): unknown[] {
   return messages.map(message => {
     if (message.role === 'assistant' && message.toolCalls?.length) {
       return {
@@ -138,7 +139,7 @@ function messagesFor(request: LlmRequest, messages = request.messages): unknown[
         ...(message.handle ? { handle: message.handle } : {}),
       };
     }
-    return { role: message.role, content: message.content, ...(message.replay ? { replay: message.replay } : {}) };
+    return { role: message.role, content: message.parts ? message.parts.map(part => part.type === 'text' ? part : { type: 'image_url', image_url: { url: assets.get(part.assetId) ?? `asset:${part.assetId}` } }) : message.content, ...(message.replay ? { replay: message.replay } : {}) };
   });
 }
 
@@ -258,6 +259,23 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
         });
         const profile = await config.capability?.(source.model, source.provider)
           ?? defaultModelCapabilityRegistry.get(source.model, source.provider);
+        const imageIds = request.messages.flatMap(message => message.parts?.filter(part => part.type === 'image').map(part => part.assetId) ?? []);
+        const assets = new Map<string, string>();
+        const imageBudgets: { handle: string; estimatedTokens: number }[] = [];
+        if (imageIds.length) {
+          if (!['openai', 'openrouter', 'anthropic', 'codex', 'mock'].includes(source.provider)) throw new Error(`Image transport is not implemented for ${source.provider}. Choose an image-capable API model; your attachments are retained.`);
+          if (source.provider !== 'mock' && profile.modalities.image.value !== true) throw new Error(`Image support for ${source.provider}/${source.model} is ${profile.modalities.image.value === false ? 'unavailable' : 'unknown'}. Choose a verified image-capable model; your attachments are retained.`);
+          if (source.provider === 'codex' && request.tools?.length) throw new Error('Codex image delegation cannot execute Flyt tools. Choose an API model for this worker.');
+          if (!config.resolveAsset) throw new Error('No scoped asset resolver is available');
+          let bytes = 0;
+          for (const id of new Set(imageIds)) {
+            const asset = await config.resolveAsset(id, request);
+            assets.set(id, asset.dataUrl); bytes += asset.byteLength;
+            imageBudgets.push({ handle: id, estimatedTokens: asset.estimatedTokens * imageIds.filter(value => value === id).length });
+          }
+          // Conservative wire limit, including base64 overhead; never truncate evidence.
+          if (imageIds.length > 10 || bytes * 4 / 3 > 20 * 1024 ** 2) throw new Error('Image request exceeds the transport budget (10 images / 20 MiB encoded). Use smaller images.');
+        }
         const offeredTools = [...(request.tools ?? [])];
         const structured = request.structuredOutput;
         const canSchema = structured && profile.structuredOutput.jsonSchema.value === true;
@@ -288,7 +306,7 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
         const budget = manageContextBudget({
           messages: candidateMessages,
           tools: offeredTools,
-          attachments: request.attachments,
+          attachments: [...(request.attachments ?? []), ...imageBudgets],
           requestedOutput: request.maxTokens,
           profile,
           checkpointInputTokens: Math.min(request.checkpointInputTokens ?? Infinity, config.checkpointInputTokens ?? Infinity),
@@ -318,10 +336,14 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           });
         }
         await request.onBudget?.(budget);
+        if (budget.messages.some(message => message.parts && message.parts.filter(part => part.type === 'text').map(part => part.text).join('') !== message.content)) throw new Error('Image message text exceeds the context budget. Shorten the message.');
+        const retainedImages = budget.messages.flatMap(message => message.parts?.filter(part => part.type === 'image').map(part => part.assetId) ?? []);
+        if (imageIds.some(id => !retainedImages.includes(id))) throw new Error('Context compaction would remove required images. Start a shorter conversation.');
+        if (imageIds.length) await request.onTelemetry?.({ kind: 'assets', mode: 'native', assetIds: [...new Set(imageIds)], provider: source.provider, model: source.model });
         answered = await config.callModel({
           provider: source.provider,
           model: source.model,
-          messages: messagesFor(request, budget.messages),
+          messages: messagesFor(request, budget.messages, assets),
           ...(source.apiKey ? { apiKey: source.apiKey } : {}),
           ...(source.keyKind ? { keyKind: source.keyKind } : {}),
           ...(source.cliHome ? { cliHome: source.cliHome } : {}),

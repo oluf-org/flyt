@@ -1050,46 +1050,20 @@ kbd.shortcut {
 }
 .lander-run .shortcut { opacity: .8; }
 
-/* The launch contract is visible before Enter: destination, model, steps and
-   result. A chat composer should never make the user infer whether Enter runs
-   now or hands work to an unattended queue. */
-.lander-submit-kind {
-  display: inline-flex; align-items: center; gap: 2px; padding: 2px;
-  border: 1px solid var(--border); border-radius: 8px; background: var(--side);
-}
-
 /* Renderer failures replace the white screen with a recoverable, inspectable state. */
 .fatal-renderer { min-height: 100vh; box-sizing: border-box; display: grid; place-content: center; justify-items: start; gap: 12px; padding: 40px; background: var(--canvas); color: var(--tx); }
 .fatal-renderer h1, .fatal-renderer p { margin: 0; max-width: 680px; }.fatal-renderer p { color: var(--dim); line-height: 1.55; }
 .fatal-renderer pre { box-sizing: border-box; width: min(760px, calc(100vw - 80px)); max-height: 280px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--err); white-space: pre-wrap; }
 .fatal-renderer > div { display: flex; gap: 8px; }.fatal-renderer button { border: 1px solid var(--border); border-radius: 7px; padding: 8px 12px; background: var(--card); color: var(--tx); cursor: pointer; }
-.lander-submit-kind button {
-  border: 0; border-radius: 6px; padding: 5px 8px; background: transparent;
-  color: var(--dim); font: inherit; font-size: 11px; cursor: pointer;
-}
-.lander-submit-kind button.active { color: var(--tx); background: var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
-.lander-queue-level { display: inline-flex; align-items: center; gap: 3px; color: var(--dim); font-size: 10.5px; }
-.lander-queue-level > span { margin-right: 3px; }
-.lander-queue-level button {
-  border: 1px solid transparent; border-radius: 7px; padding: 5px 8px;
-  background: var(--chip); color: var(--chip-tx); font: inherit; font-size: 11px; text-transform: capitalize; cursor: pointer;
-}
-.lander-queue-level button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+/* The selected workflow's model, steps and result are visible before Enter. */
 .lander-run-preview {
   display: flex; flex-direction: column; gap: 8px; padding: 13px 15px;
   border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--card) 86%, transparent);
   box-shadow: 0 5px 18px rgba(0,0,0,.035);
 }
-.lander-run-preview.queue { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
 .lander-preview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .lander-preview-head > div:first-child { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .lander-preview-head strong { font-size: 13px; }
-.lander-preview-model {
-  flex: none; max-width: 300px; display: flex; align-items: baseline; gap: 6px;
-  padding: 5px 8px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 11px;
-}
-.lander-preview-model > span { color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
-.lander-preview-model strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, ui-monospace, monospace); }
 .lander-preview-kind {
   flex: none; padding: 4px 7px; border-radius: 7px; background: var(--side);
   color: var(--faint); font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
@@ -1162,11 +1136,6 @@ kbd.shortcut {
 .lander-model-reset { justify-self: end; font-size: 9.5px; }
 .lander-preview-result { display: flex; align-items: center; gap: 7px; color: var(--tx); font-size: 11px; }
 .lander-preview-result > span { color: var(--accent); }
-.lander-queue-receipt {
-  display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-radius: 9px;
-  background: color-mix(in srgb, var(--ok) 10%, var(--card)); color: var(--tx); font-size: 11.5px;
-}
-.lander-queue-receipt > span:first-child { color: var(--ok); font-weight: 700; }
 .lander-return-run {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--tx); text-align: left; cursor: pointer;
@@ -1179,8 +1148,6 @@ kbd.shortcut {
 
 @media (max-width: 760px) {
   .lander-composer-footer { flex-wrap: wrap; }
-  .lander-submit-kind { order: 3; }
-  .lander-preview-model { max-width: 180px; }
   .lander-model-bar { grid-template-columns: auto 1fr; }
   .lander-model-tune { grid-column: 2; justify-self: start; }
   .lander-tier-grid { grid-template-columns: 1fr; }

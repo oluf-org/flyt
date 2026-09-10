@@ -118,7 +118,7 @@ export async function executeAiStep(
       ? run.config.modelFallbacks.filter((model): model is string => typeof model === 'string' && Boolean(model))
       : [],
     system,
-    input: run.input,
+    input: run.input, attachments: run.attachments,
     maxOutputWords: outputWordLimit(run.config.maxOutputWords, instructions) ?? outputWordLimit(undefined, run.input),
     maxTokens: typeof run.config.maxTokens === 'number' ? run.config.maxTokens : 16_384,
     continueOnLength: true,

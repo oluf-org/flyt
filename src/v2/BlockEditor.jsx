@@ -1,3 +1,4 @@
+import { ContextAssets } from '../AssetComposer.jsx';
 // One recursive renderer for Build and Run. Containment is the graph; the DOM
 // follows the YAML tree and stores no coordinates or layout sidecar.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -660,6 +661,7 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
     </span>}
     {run && <BlockStatus status={status} metrics={metrics} />}
     {editable && <button type="button" className="be-delete" aria-label={`Delete ${titleOf(node, blocks)}`} onClick={event => { event.stopPropagation(); onDelete(node); }}><Icon name="trash"/></button>}
+    {run && <ContextAssets assets={run.contextAssets?.[node.id] ?? []} projectId={run.projectId}/>}
     {run && <BlockMetrics metrics={metrics} status={status} />}
     {run && node.generated === true && <RecoveryFacts state={blockRun} status={status} />}
     {run && <BlockActivity items={blockRun?.activity} />}
@@ -816,7 +818,8 @@ export default function BlockEditor({
         <ResizeHandle side="palette" value={paletteWidth} onChange={setPaletteWidth} /></>}
       <main className="be-canvas" onClick={() => setSelected(null)}><div className={`be-stack${dragging ? ' is-dragging' : ''}`} role="tree" aria-label={`${stack.name} workflow`}>
         <article className="be-block be-input" tabIndex="0"><span className="be-block-glyph"><Icon name="input"/></span><span className="be-block-copy"><strong>Input</strong><small>{mode === 'run' ? 'Chat message' : 'The original chat message'}</small></span>
-          {mode === 'run' && run?.input && <p className="be-input-text">{run.input}</p>}</article>
+          {mode === 'run' && run?.input && <p className="be-input-text">{run.input}</p>}
+          {mode === 'run' && <ContextAssets assets={run?.attachments} projectId={run?.projectId} label="Attached assets"/>}</article>
         <ChildrenList parent={stack.root} root={stack.root} blocks={blocks} commands={editable ? commands : null}
           selected={selected} setSelected={setSelected} touched={touched} dragging={dragging} setDragging={setDragging}
           dropTarget={dropTarget} setDropTarget={setDropTarget} run={run} preview={previewedMode} onDelete={remove} onError={setRefusal} />

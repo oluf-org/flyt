@@ -4,15 +4,11 @@ import { defaultModeId, workflowModes } from '../workflowModes.js';
 // while the rule itself lives outside v2 where the composer can reach it too.
 export { defaultModeId, workflowModes };
 
-const QUEUE_LEVELS = new Set(['low', 'medium', 'high']);
-
 export const effortCopy = Object.freeze({
   low: 'Fast and focused. Low changes reasoning effort, not the model chosen for each step.',
   medium: 'Balanced depth for ordinary work. Medium changes reasoning effort, not the model chosen for each step.',
   high: 'More deliberate planning for substantial work. High changes reasoning effort, not the model chosen for each step.',
 });
-
-const clean = value => String(value ?? '').trim();
 
 /**
  * The mode a run will use: the one asked for, or the default.
@@ -50,17 +46,4 @@ export function modelForWorkflow(worker = null) {
   if (!worker?.model) return { label: 'No execution model selected', detail: 'Choose the executor model in Models.' };
   const provider = worker.provider && worker.provider !== 'auto' ? worker.provider : 'automatic provider';
   return { label: worker.model, detail: `Model-backed steps use ${provider} unless a step override replaces it.` };
-}
-
-export function queueTaskFromPrompt(prompt, level = 'low') {
-  const goal = clean(prompt);
-  const firstLine = goal.split(/\r?\n/).find(Boolean) ?? 'Untitled task';
-  const title = firstLine.replace(/^#+\s*/, '').replace(/\s+/g, ' ').slice(0, 96);
-  const normalizedLevel = QUEUE_LEVELS.has(level) ? level : 'low';
-  return {
-    title,
-    goal,
-    level: normalizedLevel,
-    body: ['## Goal', '', goal, '', `## Starting effort`, '', normalizedLevel].join('\n'),
-  };
 }

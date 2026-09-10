@@ -645,6 +645,7 @@ const mockHistorySummary = {
   facets: { models: ['gpt-5.2-codex', 'claude-sonnet-4-5', 'gemini-2.5-pro'], projects: ['appdata:fix-auth-flow', 'workspace:current-project'] },
 };
 
+const previewAssets = new Map();
 export function installDevMock() {
   window.flyt = {
     chatHistory: async projectId => (await window.flyt.listRuns(projectId)).map(row => ({ ...row, kind: 'workflow' })),
@@ -1290,7 +1291,16 @@ export function installDevMock() {
           ]
         }
       : { fields: [], declared: [] },
+    importAsset: async ({ name, base64, draftId }) => {
+      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+      const assetId = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(n => n.toString(16).padStart(2, '0')).join('');
+      const bitmap = await createImageBitmap(new Blob([bytes]));
+      const ref = { assetId, kind: 'image', name, mimeType: 'image/png', byteLength: bytes.length, width: bitmap.width, height: bitmap.height, draftId };
+      bitmap.close(); previewAssets.set(assetId, { ref, dataUrl: `data:image/png;base64,${base64}` }); return ref;
+    },
+    previewAsset: async ({ asset }) => { if (!previewAssets.has(asset.assetId)) throw new Error('Preview image no longer available'); return { dataUrl: previewAssets.get(asset.assetId).dataUrl }; },
     runWorkflow: async (_pid, workflowId, input) => {
+      const attachments = input?.attachments ?? []; input = typeof input === 'object' ? input.text : input;
       // The preview must launch what the composer actually submitted. Rotating
       // into an unrelated fixture made a successful click look like somebody
       // else's archived failure and could not exercise canonical event folding.
@@ -1311,11 +1321,11 @@ export function installDevMock() {
         : `# Verification result\n\nThe browser preview completed the ${workflow.name ?? workflowId} workflow for:\n\n${String(input ?? '')}`;
       const events = [];
       const add = (type, data) => events.push({ seq: events.length + 1, at: new Date().toISOString(), type, data });
-      add('run.created', { runId, stackId: workflowId, input: String(input ?? ''), profile: 'flyt-desktop' });
+      add('run.created', { runId, stackId: workflowId, input: String(input ?? ''), attachments, profile: 'flyt-desktop' });
       add('stack.resolved', { stackId: workflowId, stackName: workflow.name, stack: root });
       add('run.stage', { stage: 'execution' });
       for (const [index, step] of steps.entries()) {
-        add('block.status', { blockId: step.id, status: 'active' });
+        add('block.status', { blockId: step.id, status: 'active', attachments });
         const callId = `preview-call-${index + 1}`;
         add('turn.start', { runId, turn: index + 1, blockId: step.id });
         add('step.start', { runId, blockId: step.id, step: 1 });
@@ -1331,7 +1341,7 @@ export function installDevMock() {
       add('run.stage', { stage: 'done' });
       snapshots[runId] = {
         meta: {
-          runId, stage: 'done', stackId: workflowId, stackName: workflow.name,
+          runId, stage: 'done', stackId: workflowId, stackName: workflow.name, attachments, contextAssets: Object.fromEntries(steps.map(step => [step.id, attachments])),
           flowId: workflowId, flowName: workflow.name, createdAt, updatedAt: new Date().toISOString(),
           blockStatus: Object.fromEntries(steps.map(step => [step.id, 'done'])),
           nodeStatus: Object.fromEntries(steps.map(step => [step.id, 'done'])),

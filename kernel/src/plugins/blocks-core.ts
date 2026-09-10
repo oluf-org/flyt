@@ -216,7 +216,7 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
       ? run.config.modelFallbacks.filter((model): model is string => typeof model === 'string' && Boolean(model))
       : [],
     system: [systemPrompt, instructions, shellNote, EVIDENCE_INSTRUCTIONS].filter(Boolean).join('\n\n'),
-    input: run.input,
+    input: run.input, attachments: run.attachments,
     tools,
     ceiling,
     ...(permissionPolicy ? { permissionPolicy } : {}),

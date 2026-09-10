@@ -418,7 +418,7 @@ export function deriveMessages(events: readonly SessionEvent[], upTo?: number, b
         break;
 
       case 'message.user':
-        messages.push({ role: 'user', content: String(data.content ?? '') });
+        messages.push({ role: 'user', content: String(data.content ?? ''), ...(Array.isArray(data.parts) ? { parts: data.parts as import('../types.js').MessagePart[] } : {}) });
         break;
 
       case 'llm.response': {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification } from 'electron';
+import { clipboard, app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -452,6 +452,13 @@ bindIpc('tool:list');
 bindIpc('config:get');
 bindIpc('flow:run', (projectId, flowId, userInput = '', workspaceDir = null, approvalMode = null, launch = null) =>
   ({ projectId, flowId, userInput, workspaceDir, approvalMode, launch }));
+bindIpc('asset:import', args => args);
+bindIpc('asset:preview', args => args);
+ipcMain.handle('asset:clipboard', async (_event, args = {}) => {
+  const image = clipboard.readImage();
+  if (image.isEmpty()) throw new Error('There is no image on the clipboard');
+  return api.invoke('asset:import', { ...args, name: 'Clipboard image.png', base64: image.toPNG().toString('base64') });
+});
 bindIpc('workflow:list');
 for (const action of ['list', 'get', 'stats', 'create', 'start', 'control', 'revise', 'history', 'inspect', 'restore', 'clone', 'draft', 'author-open', 'author-read', 'author-edit', 'author-lock', 'author-ui', 'author-message', 'author-review', 'author-publish', 'review-result', 'author-cancel', 'author-list', 'author-delete', 'library', 'reuse', 'requirements', 'evaluators', 'benchmark-list', 'benchmark-get', 'benchmark-validate', 'benchmark-save', 'benchmark-export', 'benchmark-import', 'benchmark-case', 'evaluate', 'evaluation-evidence', 'evaluation-compare', 'reference-review']) {
   bindIpc(`goal:${action}`, args => args);

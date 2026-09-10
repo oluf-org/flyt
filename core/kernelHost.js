@@ -6,6 +6,7 @@
 // each wrapped behind the kernel seams. Every fact needed to reopen a run is
 // written in run.created before execution begins.
 import fs from 'node:fs';
+import { projectAssets } from './assets.js';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { bootKernel } from './v2.js';
@@ -185,6 +186,7 @@ export async function bootRunKernel({
       profile.limits.contextTokens = { value: facts.contextLength, confidence: 'reported', source: catalogSource };
       profile.limits.maxInputTokens = { value: facts.contextLength, confidence: 'inferred', source: catalogSource };
     }
+    if (Array.isArray(facts.inputModalities)) profile.modalities.image = { value: facts.inputModalities.includes('image'), confidence: 'reported', source: catalogSource };
     if (typeof facts.supportsTools === 'boolean') {
       profile.tools.native = { value: facts.supportsTools, confidence: 'reported', source: catalogSource };
       profile.structuredOutput.syntheticTool = { value: facts.supportsTools, confidence: 'inferred', source: catalogSource };
@@ -253,6 +255,17 @@ export async function bootRunKernel({
       } } : {}),
     } },
     { id: 'llm-adapters', name: kernel.BUILTIN.adapters, config: { callModel: callThrough, resolve, capability,
+      resolveAsset: async (assetId, request) => {
+        if (!request.assetContext) throw new Error('Image request has no invocation scope');
+        const { runId, blockId, after } = request.assetContext;
+        const session = await booted.ctx.sessions.read(runId);
+        const messages = await session.deriveMessages(undefined, blockId, after);
+        if (!messages.some(message => message.parts?.some(part => part.type === 'image' && part.assetId === assetId))) throw new Error('Image is outside this node context');
+        const asset = await projectAssets(runsRoot).read({ assetId }, 'display');
+        if (asset.bytes.length * 4 / 3 > 10 * 1024 ** 2 || asset.ref.width > 8000 || asset.ref.height > 8000) throw new Error(`Image "${asset.ref.name}" exceeds the native transport limits. Resize it before attaching.`);
+        return { dataUrl: `data:${asset.mimeType};base64,${asset.bytes.toString('base64')}`, byteLength: asset.bytes.length,
+          estimatedTokens: Math.max(4096, Math.ceil(asset.ref.width / 512) * Math.ceil(asset.ref.height / 512) * 1024) };
+      },
       ...(goalGuard ? { maxMessageChars: goalGuard.maxMessageChars, checkpointInputTokens: goalGuard.checkpointInputTokens } : {}),
     } },
   ]);
@@ -277,7 +290,12 @@ export async function bootRunKernel({
             options: Array.isArray(args?.options) ? args.options.map(String) : [],
             context: String(args?.context ?? ''),
           });
-          return { content: safeJson({ answered: true, answer: String(answer ?? '') }) };
+          if (answer?.attachments?.length) {
+            const session = await booted.ctx.sessions.open(execution.runId);
+            await session.append({ type: 'message.user', data: { blockId: execution.blockId, content: answer.text, attachments: answer.attachments,
+              parts: [{ type: 'text', text: answer.text }, ...answer.attachments.map(asset => ({ type: 'image', assetId: asset.assetId }))] } });
+          }
+          return { content: safeJson({ answered: true, answer: typeof answer === 'object' ? answer.text : String(answer ?? '') }) };
         }
         const record = await executeTool(tool.name, args, {
           store, runId: execution.runId, nodeId: execution.blockId,
@@ -340,10 +358,11 @@ export async function bootRunKernel({
     parseStack: kernel.parseStack,
     resolveBlock: use => booted.ctx.blocks.resolve(use),
   });
+  let resolveWorkflow;
   await booted.install([{ id: 'stack-runner', name: kernel.BUILTIN.stackRunner, config: {
     contextTools: goalGuard?.history ? ['goal_history'] : [],
     stacks: {
-      resolve(id) {
+      resolve: resolveWorkflow = function(id) {
         // Preserve parser/resolution diagnostics. Returning null here would
         // collapse a malformed stack, a missing block plugin, and a missing
         // file into the same "There is no stack" message precisely where the
@@ -393,6 +412,33 @@ export async function bootRunKernel({
       profile, requireLaunchable,
     },
     skillLoad,
+    async validateAssets(stackId, attachments) {
+      if (!attachments?.length) return;
+      await projectAssets(runsRoot).references(attachments);
+      let encodedBytes = 0;
+      for (const ref of attachments) {
+        const asset = await projectAssets(runsRoot).read(ref, 'display');
+        encodedBytes += asset.bytes.length * 4 / 3;
+        if (asset.bytes.length * 4 / 3 > 10 * 1024 ** 2 || ref.width > 8000 || ref.height > 8000) throw new Error(`Image "${ref.name}" exceeds the native transport limits. Resize it before attaching.`);
+      }
+      if (encodedBytes > 20 * 1024 ** 2) throw new Error('Images exceed the 20 MiB encoded request limit. Use smaller images.');
+      const visit = node => {
+        if (node.kind === 'block') {
+          const definition = booted.ctx.blocks.resolve(node.use);
+          if (!definition?.settings?.properties?.model && !node.config?.model) return;
+          const candidates = [node.config?.model, ...(node.config?.modelFallbacks ?? [])].filter(Boolean);
+          const supported = candidates.some(candidate => {
+            const source = resolve(candidate);
+            return source && ['openai', 'openrouter', 'anthropic', 'codex', 'mock'].includes(source.provider)
+              && (source.provider !== 'codex' || !(definition.ceiling?.length))
+              && (source.provider === 'mock' || capability(source.model, source.provider).modalities.image.value === true);
+          });
+          if (!supported) throw new Error(`Node "${node.title ?? node.id}" has no configured image-capable model and transport. Choose a vision-capable API model; your draft is retained.`);
+        }
+        for (const child of [...(node.children ?? []), ...(node.else ?? [])]) visit(child);
+      };
+      visit(resolveWorkflow(stackId));
+    },
     beginRun(id) { baselines.set(id, captureWorkspaceSignature(workspace.root)); },
   };
 }
@@ -401,6 +447,7 @@ export async function startStackRun({ host = null, ctx = host?.ctx, stackId, inp
   if (!ctx?.agents) {
     throw Object.assign(new Error('The kernel has no agents seam; the production run host did not compose.'), { code: 'kernel_unavailable' });
   }
+  await host?.validateAssets?.(stackId, metadata?.attachments);
   const startedId = id ?? newRunId();
   host?.beginRun?.(startedId);
   const run = await ctx.agents.start({

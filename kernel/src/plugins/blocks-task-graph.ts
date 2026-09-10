@@ -598,7 +598,7 @@ export async function executeTaskGraph(run: BlockRun, options: { plannerOnly?: b
     const planned = await runAgentLoop({
       ctx: run.ctx, session, runId: run.runId, blockId: `${run.blockId}.planner`, turn: 1,
       context: run.context,
-      model, fallbackModels, system, input: run.input,
+      model, fallbackModels, system, input: run.input, attachments: run.attachments,
       tools: [], ceiling: [], maxSteps: 1, maxTokens: PLANNER_MAX_TOKENS,
       structuredOutput: TASK_GRAPH_OUTPUT,
       temperature: 0.1, isolated: true, ...(run.signal ? { signal: run.signal } : {}),
@@ -633,7 +633,7 @@ export async function executeTaskGraph(run: BlockRun, options: { plannerOnly?: b
         ctx: run.ctx, session, runId: run.runId, blockId: `${run.blockId}.planner-repair-${attempt}`, turn: attempt + 1,
         context: run.context,
         model, fallbackModels, system,
-        input: taskGraphRepairPrompt(invalidPlan, diagnostics, run.input, attempt),
+        input: taskGraphRepairPrompt(invalidPlan, diagnostics, run.input, attempt), attachments: run.attachments,
         tools: [], ceiling: [], maxSteps: 1, maxTokens: PLANNER_REPAIR_MAX_TOKENS,
         structuredOutput: TASK_GRAPH_OUTPUT,
         temperature: 0, isolated: true, ...(run.signal ? { signal: run.signal } : {}),
@@ -775,7 +775,7 @@ export async function executeTaskGraph(run: BlockRun, options: { plannerOnly?: b
         } });
         await session.append({ type: 'block.status', data: {
           blockId: childId, parentId: run.blockId, taskId: task.id, title: task.title,
-          use: 'flyt-blocks-core:work', status: 'active', dependsOn: task.dependsOn,
+          use: 'flyt-blocks-core:work', status: 'active', dependsOn: task.dependsOn, attachments: run.attachments ?? [],
           sessionId: identity.sessionId, profileId, attempt, maxAttempts: maxTaskAttempts,
           retryState: recovery ? (recovery.mode === 'resume' ? 'resuming-checkpoint' : recovery.mode === 'continue' ? 'continuing-evidence' : 'restarting') : 'running',
           ...(before.lastDurableProgress ? { lastDurableProgress: before.lastDurableProgress } : {}),

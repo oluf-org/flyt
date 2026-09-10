@@ -1,3 +1,4 @@
+import { adoptAssetDraft } from '../AssetComposer.jsx';
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { hydrateDaily } from './dailyStartup.js';
 import { createHistoryFeed } from './historyFeed.js';
@@ -9,7 +10,7 @@ import TabStrip, { NewTabPage } from '../TabStrip.jsx';
 import Shell from './Shell.jsx';
 import { BUILD, CHATS, GOALS, INITIAL, MODELS, WORK } from './shellRouting.js';
 import { initialFlowId, initialModeId } from './dailyWorkModel.js';
-import { defaultModeId, queueTaskFromPrompt } from './workflowUx.js';
+import { defaultModeId } from './workflowUx.js';
 import {
   DEFAULT_WORKFLOW_MODEL_TIER, workflowModelSelection,
 } from '../modelTiers.js';
@@ -47,6 +48,8 @@ export default function DailyRoot() {
   const [pluginRevision, setPluginRevision] = useState(0);
   const [uiExtensionRevision, setUiExtensionRevision] = useState(0);
   const [location, setLocation] = useState(INITIAL);
+  const locationRef = useRef(location);
+  locationRef.current = location;
   const [projects, setProjects] = useState({ tabs: [], active: null });
   const [recents, setRecents] = useState([]);
   const [flows, setFlows] = useState([]);
@@ -81,9 +84,6 @@ export default function DailyRoot() {
   const [pauseBusy, setPauseBusy] = useState(false);
   const [resumeBusy, setResumeBusy] = useState(false);
   const [retryError, setRetryError] = useState('');
-  const [submitKind, setSubmitKind] = useState('run');
-  const [queueLevel, setQueueLevel] = useState('low');
-  const [queueReceipt, setQueueReceipt] = useState(null);
   const [workflowModels, setWorkflowModels] = useState({});
   const workflowModelsRef = useRef({});
   const activeRef = useRef(null);
@@ -344,15 +344,18 @@ export default function DailyRoot() {
   }
 
   async function launch(text) {
-    if (!startupReady || !flowId || busy) return;
+    const originProject = activeRef.current;
+    const originLocation = locationRef.current;
+    const stillAtOrigin = () => locationRef.current.dest === originLocation.dest && locationRef.current.run === originLocation.run;
+    if (!startupReady || !flowId || busy) return false;
     setBusy(true);
     setError('');
-    setQueueReceipt(null);
     try {
       let projectId = activeRef.current;
       if (!projectId) {
-        const projectPayload = await window.flyt.createProject(text);
-        acceptProjects(projectPayload);
+        const projectPayload = await window.flyt.createProject((typeof text === 'string' ? text : text.text) || 'Image conversation');
+        adoptAssetDraft('launch:new', `launch:${projectPayload.opened}`);
+        acceptProjects({ ...projectPayload, active: activeRef.current === originProject ? projectPayload.active : activeRef.current });
         projectId = projectPayload.opened;
         await window.flyt.saveProjectState?.(projectId, {
           runWorkflowId: flowId, runPresetId: modeId, workflowModelChoices: workflowModelsRef.current,
@@ -374,30 +377,17 @@ export default function DailyRoot() {
         projectId, flowId, text, settings?.approvalMode ?? null, modeId,
         routedModels,
       );
+      if (activeRef.current !== projectId || !stillAtOrigin()) return started;
       const [nextWatching, nextRuns, pending] = await Promise.all([
         readDailyRun(window.flyt, projectId, started.runId), window.flyt.listRuns(projectId),
         window.flyt.getPendingWorkflowInteractions?.(projectId, started.runId) ?? Promise.resolve([]),
       ]);
+      if (activeRef.current !== projectId || !stillAtOrigin()) return started;
       setRuns(nextRuns ?? []); watchingRef.current = nextWatching; setWatching(nextWatching);
       setWorkflowInteraction((pending ?? [])[0] ?? null);
       setLocation(current => ({ ...current, dest: WORK, run: started.runId }));
-    } catch (err) { setError(cleanIpcError(err)); }
-    finally { setBusy(false); }
-  }
-
-  async function enqueue(text) {
-    if (!startupReady || busy) return;
-    setBusy(true); setError(''); setQueueReceipt(null);
-    try {
-      let projectId = activeRef.current;
-      if (!projectId) {
-        const projectPayload = await window.flyt.createProject(text);
-        acceptProjects(projectPayload);
-        projectId = projectPayload.opened;
-      }
-      const task = await window.flyt.addTask(projectId, queueTaskFromPrompt(text, queueLevel));
-      setQueueReceipt({ id: task.id, title: task.title });
-    } catch (err) { setError(cleanIpcError(err)); }
+      return started;
+    } catch (err) { if (activeRef.current === originProject) setError(cleanIpcError(err)); throw err; }
     finally { setBusy(false); }
   }
 
@@ -456,6 +446,7 @@ export default function DailyRoot() {
     <>
       {error && <p className="daily-error" role="alert">{error}</p>}
       <Lander
+        projectId={projects.active}
         projectName={activeProject?.name ?? null}
         projectless={!activeProject}
         recents={recents}
@@ -476,11 +467,7 @@ export default function DailyRoot() {
         onOpenSettings={() => setLocation(current => ({ ...current, dest: MODELS }))}
         busy={busy}
         ready={startupReady}
-        onSubmit={submitKind === 'loop' ? enqueue : launch}
-        submitKind={submitKind}
-        onSubmitKind={setSubmitKind}
-        queueLevel={queueLevel}
-        onQueueLevel={setQueueLevel}
+        onSubmit={launch}
         fallbackWorker={settings?.workers?.executor ?? null}
         modelTiers={settings?.workflowModelTiers ?? {}}
         defaultTier={defaultTier}
@@ -492,7 +479,6 @@ export default function DailyRoot() {
         onModelTier={saveModelTier}
         onStepWorker={setStepWorker}
         onResetStepWorker={blockId => setStepTier(blockId, null)}
-        queueReceipt={queueReceipt}
         returnRun={watching && !location.run ? {
           name: watching.stack?.name ?? watching.snapshot?.meta?.stackId ?? 'Workflow run',
           stage: watching.snapshot?.meta?.stage ?? watching.trace?.stage ?? 'run',
@@ -651,22 +637,29 @@ export default function DailyRoot() {
         }}
         onWorkflowAnswer={async answer => {
           const at = workflowInteraction; if (!at) return;
-          await window.flyt.answerWorkflowQuestion(activeRef.current, at.runId, at.questionId, answer);
-          setWorkflowInteraction(null);
+          const result = await window.flyt.answerWorkflowQuestion(at.projectId, at.runId, at.questionId, answer);
+          if (result?.ok === false) throw new Error(result.error);
+          if (activeRef.current === at.projectId) setWorkflowInteraction(null);
+          return result;
         }}
         onWorkflowReply={async text => {
-          if (!watchingRef.current?.runId || replyBusy) return;
+          if (!watchingRef.current?.runId || replyBusy) return false;
+          const projectId = activeRef.current;
+          const parentRunId = watchingRef.current.runId;
           setReplyBusy(true); setError('');
           try {
-            const started = await window.flyt.replyWorkflow(activeRef.current, watchingRef.current.runId, text, settings?.approvalMode ?? null);
+            const started = await window.flyt.replyWorkflow(projectId, parentRunId, text, settings?.approvalMode ?? null);
             const [next, pending] = await Promise.all([
-              readDailyRun(window.flyt, activeRef.current, started.runId),
-              window.flyt.getPendingWorkflowInteractions?.(activeRef.current, started.runId) ?? Promise.resolve([]),
+              readDailyRun(window.flyt, projectId, started.runId),
+              window.flyt.getPendingWorkflowInteractions?.(projectId, started.runId) ?? Promise.resolve([]),
             ]);
+            if (activeRef.current !== projectId || locationRef.current.run !== parentRunId || locationRef.current.dest !== WORK) return started;
             watchingRef.current = next; setWatching(next); setLocation(current => ({ ...current, dest: WORK, run: started.runId }));
             setWorkflowInteraction((pending ?? [])[0] ?? null);
-            setRuns(await window.flyt.listRuns(activeRef.current));
-          } catch (err) { setError(cleanIpcError(err)); } finally { setReplyBusy(false); }
+            const runs = await window.flyt.listRuns(projectId);
+            if (activeRef.current === projectId) setRuns(runs);
+            return started;
+          } catch (err) { if (activeRef.current === projectId) setError(cleanIpcError(err)); throw err; } finally { setReplyBusy(false); }
         }}
         workflowReplyBusy={replyBusy}
         onRunBuild={async stack => {

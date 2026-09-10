@@ -42,6 +42,7 @@ export interface ReasoningRequest {
 
 /** One model request. */
 export interface LlmRequest {
+  assetContext?: { runId: string; blockId: string; after: number };
   /** The model id as the caller asked for it, before routing. */
   model: string;
   /** Ordered, same-budget alternatives. The seam tries these only if the

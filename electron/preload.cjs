@@ -83,6 +83,9 @@ const api = {
   openRunArtifact: (pid, runId, relPath) => ipcRenderer.invoke('run:openArtifact', pid, runId, relPath),
   pickWorkspace: () => ipcRenderer.invoke('workspace:pick'),
   openWorkspace: (pid, runId) => ipcRenderer.invoke('workspace:open', pid, runId),
+  importAsset: args => ipcRenderer.invoke('asset:import', args),
+  previewAsset: args => ipcRenderer.invoke('asset:preview', args),
+  pasteImage: args => ipcRenderer.invoke('asset:clipboard', args),
   listWorkflows: () => ipcRenderer.invoke('workflow:list'),
   runWorkflow: (pid, workflowId, input, approvalMode = null, presetId = null, modelSelection = null) =>
     ipcRenderer.invoke('workflow:run', pid, workflowId, input, approvalMode, presetId, modelSelection),

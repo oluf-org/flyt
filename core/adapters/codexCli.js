@@ -34,7 +34,7 @@ export function preflightCodexCli(override = null) {
   return preflightCli({ override, names: ['codex'], npmPkg: '@openai/codex', npmEntry: 'bin/codex.js' });
 }
 
-export function buildCodexArgs({ model, cwd, lastMessageFile }) {
+export function buildCodexArgs({ model, cwd, lastMessageFile, imagePaths = [] }) {
   const args = [
     'exec',
     '--json',
@@ -46,6 +46,7 @@ export function buildCodexArgs({ model, cwd, lastMessageFile }) {
     '-o', String(lastMessageFile)
   ];
   if (model) args.push('-m', String(model));
+  for (const image of imagePaths) args.push('--image', image);
   args.push('-'); // prompt from stdin
   return args;
 }
@@ -165,10 +166,36 @@ export function codexStreamReducer() {
   };
 }
 
+// Native transport: stage only validated inline image bytes in this call's
+// isolated read-only workspace. Never substitute a filename for an image flag.
+export function stageCodexImages(messages = []) {
+  const images = messages.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'image_url') : []);
+  if (!images.length) return null;
+  if (images.length > 10) throw new Error('Codex supports at most 10 attached images per call');
+  const root = fs.mkdtempSync(path.join(neutralCwd(), 'images-'));
+  const cleanup = () => {
+    if (path.dirname(root) !== path.resolve(neutralCwd()) || !path.basename(root).startsWith('images-')) throw new Error('Invalid image staging directory');
+    fs.rmSync(root, { recursive: true, force: true });
+  };
+  try {
+    let size = 0;
+    const imagePaths = images.map((part, index) => {
+      const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(part.image_url?.url ?? '');
+      if (!match) throw new Error('Codex requires validated inline PNG images');
+      size += match[1].length;
+      if (size > 20 * 1024 ** 2) throw new Error('Codex image payload exceeds 20 MiB');
+      const file = path.join(root, `image-${index + 1}.png`);
+      fs.writeFileSync(file, Buffer.from(match[1], 'base64'), { flag: 'wx' });
+      return file;
+    });
+    return { cwd: root, imagePaths, cleanup };
+  } catch (error) { cleanup(); throw error; }
+}
+
 // callModel contract. apiKey/maxTokens ignored by design (the CLI owns auth;
 // the plan owns limits). Extras stamped by the main process: cliHome
 // (CODEX_HOME account selection), cliPath (explicit binary).
-export async function codexAdapter({ model, system, prompt, onText, signal, cliHome = null, cliPath = null, timeoutMs }) {
+export async function codexAdapter({ model, system, prompt, messages, tools, onText, signal, cliHome = null, cliPath = null, timeoutMs }) {
   const cli = resolveCodexCli(cliPath);
   if (!cli) {
     throw new Error('Codex CLI not found. Install it (`npm i -g @openai/codex`), or set its path in Models → Model providers → ChatGPT subscription.');
@@ -178,7 +205,15 @@ export async function codexAdapter({ model, system, prompt, onText, signal, cliH
     throw new Error('Codex is not signed in. Run `codex login` in a terminal with your ChatGPT account, then try again.');
   }
 
+  const hasImages = messages?.some(message => Array.isArray(message.content) && message.content.some(part => part.type === 'image_url'));
+  if (hasImages && tools?.length) throw new Error('Codex image delegation cannot execute Flyt tools. Choose an API model for this worker.');
+  if (messages?.length) {
+    const text = message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'text').map(part => part.text).join('\n') : String(message.content ?? '');
+    system = messages.filter(message => message.role === 'system').map(text).join('\n\n');
+    prompt = messages.filter(message => message.role !== 'system').map(message => `${message.role.toUpperCase()}:\n${text(message)}`).join('\n\n');
+  }
   const harnessHome = createCodexHarnessHome(home);
+  let staged;
 
   // The most robust "final answer" channel exec offers: it writes the last
   // agent message to a file. The JSONL stream feeds onText along the way.
@@ -197,11 +232,12 @@ export async function codexAdapter({ model, system, prompt, onText, signal, cliH
   let stderr = '';
   let code;
   try {
+    staged = stageCodexImages(messages);
     ({ code } = await spawnCliCall({
       ...cli,
-      args: [...cli.args, ...buildCodexArgs({ model, cwd: neutralCwd(), lastMessageFile: lastMsgFile })],
+      args: [...cli.args, ...buildCodexArgs({ model, cwd: staged?.cwd ?? neutralCwd(), lastMessageFile: lastMsgFile, imagePaths: staged?.imagePaths })],
       stdinText: composeCodexPrompt(system, prompt),
-      cwd: neutralCwd(),
+      cwd: staged?.cwd ?? neutralCwd(),
       env,
       signal,
       ...(timeoutMs ? { timeoutMs } : {}),
@@ -225,6 +261,7 @@ export async function codexAdapter({ model, system, prompt, onText, signal, cliH
     return { text, usage: st.usage ?? null };
   } finally {
     try { fs.unlinkSync(lastMsgFile); } catch { /* never written */ }
+    staged?.cleanup();
     removeCodexHarnessHome(harnessHome);
   }
 }
