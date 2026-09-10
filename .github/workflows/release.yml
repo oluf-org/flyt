@@ -119,7 +119,8 @@ jobs:
             # Batch logon gives the standard user its own noninteractive
             # session, independent of the runner service's desktop ACLs.
             $action = New-ScheduledTaskAction -Execute $env:ComSpec -Argument "/c `"$scriptPath`"" -WorkingDirectory $pwd.Path
-            Register-ScheduledTask -TaskName $testUser -Action $action -User ".\$testUser" -Password $plainPassword -RunLevel Limited -Force | Out-Null
+            $testUserSid = (Get-LocalUser -Name $testUser).SID.Value
+            Register-ScheduledTask -TaskName $testUser -Action $action -User $testUserSid -Password $plainPassword -RunLevel Limited -Force | Out-Null
             Start-ScheduledTask -TaskName $testUser
             $deadline = (Get-Date).AddMinutes(5)
             while (!(Test-Path $exitPath)) {
