@@ -35,6 +35,26 @@ internal static class Program
         }
     }
 
+    private static SecurityIdentifier? ReadLogonSid(IntPtr token)
+    {
+        // WindowsIdentity.Groups intentionally filters SE_GROUP_LOGON_ID.
+        // TokenLogonSid returns a TOKEN_GROUPS containing the session SID.
+        const int TokenLogonSid = 28;
+        GetTokenInformation(token, TokenLogonSid, IntPtr.Zero, 0, out var size);
+        if (size == 0) ThrowWin32("GetTokenInformation(TokenLogonSid size)");
+        var buffer = Marshal.AllocHGlobal(checked((int)size));
+        try
+        {
+            if (!GetTokenInformation(token, TokenLogonSid, buffer, size, out _))
+                ThrowWin32("GetTokenInformation(TokenLogonSid)");
+            if (Marshal.ReadInt32(buffer) != 1) return null;
+            var offset = Marshal.OffsetOf<TOKEN_GROUPS_ONE>(nameof(TOKEN_GROUPS_ONE.Group)).ToInt32();
+            var group = Marshal.PtrToStructure<SID_AND_ATTRIBUTES>(IntPtr.Add(buffer, offset));
+            return new SecurityIdentifier(group.Sid);
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
     private static int Run(string[] args)
     {
         Stage = "parse"; Parse(args, out var mode, out var workspace, out var temp, out var command, out var allowElevatedParentForTest);
@@ -60,8 +80,7 @@ internal static class Program
         // and writable workspace/temp paths still need their private capability.
         Stage = "interactive session SID";
         var worldSid = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
-        var logonSid = identity.Groups?.OfType<SecurityIdentifier>()
-            .FirstOrDefault(sid => sid.Value.StartsWith("S-1-5-5-", StringComparison.Ordinal));
+        var logonSid = ReadLogonSid(identity.AccessToken.DangerousGetHandle());
         if (logonSid is null)
             throw new InvalidOperationException("Windows did not provide the logon identity required for confined command tools in this sign-in session");
         var workspaceSid = SidFromBytes(SHA256.HashData(Encoding.UTF8.GetBytes("flyt:workspace:v1:" + Canonical(workspace).ToUpperInvariant())));
@@ -286,6 +305,7 @@ internal static class Program
     }
 
     [StructLayout(LayoutKind.Sequential)] private struct SID_AND_ATTRIBUTES { public IntPtr Sid; public uint Attributes; }
+    [StructLayout(LayoutKind.Sequential)] private struct TOKEN_GROUPS_ONE { public uint Count; public SID_AND_ATTRIBUTES Group; }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] private struct STARTUPINFO { public int cb; public string? lpReserved, lpDesktop, lpTitle; public uint dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags; public ushort wShowWindow, cbReserved2; public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError; }
     [StructLayout(LayoutKind.Sequential)] private struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public uint dwProcessId, dwThreadId; }
     [StructLayout(LayoutKind.Sequential)] private struct IO_COUNTERS { public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount, ReadTransferCount, WriteTransferCount, OtherTransferCount; }
