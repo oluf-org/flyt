@@ -20,6 +20,10 @@ export function dailyProjectBridge(flyt) {
 
 export async function readDailyRun(flyt, projectId, runId) {
   if (!projectId || !runId) return null;
+  if (flyt.readRunView) {
+    const { snapshot, log } = await flyt.readRunView(projectId, runId);
+    return watchingFromRun(runId, snapshot, log);
+  }
   const [snapshot, log] = await Promise.all([
     flyt.getSnapshot(projectId, runId),
     flyt.readRunLog(projectId, runId).catch(() => []),

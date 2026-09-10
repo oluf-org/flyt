@@ -1319,11 +1319,14 @@ export function createApi(engine) {
 
     // Fetching a snapshot re-baselines the caller's diff channel at the same
     // instant, so the rev it gets back is the one subsequent patches build on.
-    'run:snapshot': async ({ projectId, runId }) => {
+    'run:snapshot': async ({ projectId, runId, includeLog = false }) => {
       const entry = proj(projectId);
       const signal = readSignal(projectId);
       const retired = entry.store.runRetirement(runId);
-      if (retired) return { retired: true, runId, ...retired };
+      if (retired) {
+        const snapshot = { retired: true, runId, ...retired };
+        return includeLog ? { snapshot, log: [] } : snapshot;
+      }
       if (!fs.existsSync(entry.store.runDir(runId))) {
         throw new ApiError(`Run "${runId}" was not found in this project.`, {
           status: 404, code: 'run_not_found',
@@ -1332,14 +1335,16 @@ export function createApi(engine) {
       await runController.reconcile(projectId, runId, { signal });
       signal.throwIfAborted();
       const chans = engine.pushStateFor(entry.id).channels;
-      const snapshot = runController.decorate(projectId, runId, isCanonicalRun(entry.store, runId)
-        ? await readWorker.request('snapshot', { root: entry.store.rootDir, runId }, { signal })
-        : entry.store.snapshot(runId));
+      const canonical = isCanonicalRun(entry.store, runId);
+      const value = canonical
+        ? await readWorker.request(includeLog ? 'snapshotAndLog' : 'snapshot', { root: entry.store.rootDir, runId }, { signal })
+        : entry.store.snapshot(runId);
+      const snapshot = runController.decorate(projectId, runId, canonical && includeLog ? value.snapshot : value);
       signal.throwIfAborted();
       const rev = (chans.get(runId)?.rev ?? 0) + 1;
       chans.set(runId, { snapshot, rev });
       const comparison = entry.store.listComparisons().find(rec => rec.runIds?.includes(runId));
-      return {
+      const result = {
         ...snapshot,
         meta: {
           ...(snapshot.meta ?? {}),
@@ -1350,6 +1355,7 @@ export function createApi(engine) {
         },
         rev,
       };
+      return includeLog ? { snapshot: result, log: canonical ? value.log : entry.store.readLog(runId) } : result;
     },
 
     // Development debugger: a no-tool investigator reads the immutable run

@@ -13,7 +13,7 @@ import { runView } from '../src/v2/runView.js';
 import { traceView } from '../src/v2/traceView.js';
 import { INITIAL, MODELS } from '../src/v2/shellRouting.js';
 import {
-  DAILY_PROJECT_ACTIONS, applyDailyRunUpdate, dailyProjectBridge, subscribeDailyRun,
+  DAILY_PROJECT_ACTIONS, applyDailyRunUpdate, dailyProjectBridge, subscribeDailyRun, readDailyRun,
 } from '../src/v2/dailyWorkBridge.js';
 
 const snapshot = {
@@ -163,6 +163,16 @@ test('every project tab action crosses the same behavior-tested bridge', async (
   await projects.reorderProjects(['p2', 'p1']);
   assert.deepEqual(calls.map(call => call[0]), DAILY_PROJECT_ACTIONS);
   assert.deepEqual(calls.at(-1), ['reorderProjects', ['p2', 'p1']]);
+});
+
+test('Work uses the combined canonical view and keeps the legacy bridge fallback', async () => {
+  const log = [{ seq: 1, at: 't1', type: 'run.created', data: {} }];
+  const flyt = { readRunView: async (projectId, runId) => {
+    assert.equal(projectId, 'p1'); assert.equal(runId, 'run-1');
+    return { snapshot, log };
+  }, getSnapshot: () => { throw new Error('duplicate snapshot'); }, readRunLog: () => { throw new Error('duplicate log'); } };
+  assert.deepEqual(await readDailyRun(flyt, 'p1', 'run-1'), watchingFromRun('run-1', snapshot, log));
+  assert.equal(await readDailyRun(flyt, null, 'run-1'), null);
 });
 
 test('live updates refresh only the run Work is actually following', async () => {

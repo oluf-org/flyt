@@ -98,19 +98,30 @@ function headerString(prefix: string, key: string): string | undefined {
 export function readSessionLogFile(file: string, {
   maxEventBytes = MAX_SESSION_EVENT_BYTES,
   maxInlinePromptBytes = MAX_INLINE_LEGACY_PROMPT_BYTES,
+  startOffset = 0, onEvent, onChunk,
 }: {
   /** Injectable for regression tests; production callers use the hard default. */
   maxEventBytes?: number;
   /** Injectable for regression tests; production callers use the hard default. */
   maxInlinePromptBytes?: number;
+  /** Caller must verify the preceding bytes and supply a newline boundary. */
+  startOffset?: number;
+  /** Stream parsed events instead of retaining a raw array. */
+  onEvent?: (event: SessionEvent) => void;
+  /** Synchronous byte observer; buffer is reused after the callback. */
+  onChunk?: (chunk: Buffer, position: number) => void;
 } = {}): SessionLogRead {
   const stat = fs.statSync(file);
+  if (!Number.isSafeInteger(startOffset) || startOffset < 0 || startOffset > stat.size) {
+    throw new RangeError('Session read offset must be within the file');
+  }
   const events: SessionEvent[] = [];
+  const emit = (event: SessionEvent): void => { if (onEvent) onEvent(event); else events.push(event); };
   const problems: LogProblem[] = [];
   const chunk = Buffer.allocUnsafe(Math.min(SESSION_READ_CHUNK_BYTES, Math.max(1, stat.size)));
   const fd = fs.openSync(file, 'r');
-  let position = 0;
-  let completeBytes = 0;
+  let position = startOffset;
+  let completeBytes = startOffset;
   let lineNumber = 1;
   let lineBytes = 0;
   let parts: Buffer[] = [];
@@ -162,7 +173,7 @@ export function readSessionLogFile(file: string, {
       } else {
         const blockId = headerString(header, 'blockId');
         const step = headerNumber(header, 'step');
-        events.push({
+        emit({
           seq,
           at: headerString(header, 'at') ?? '',
           type,
@@ -186,7 +197,7 @@ export function readSessionLogFile(file: string, {
       } else {
         head = Math.max(head, parsed.seq);
         if (typeof parsed.type === 'string') {
-          events.push({
+          emit({
             seq: parsed.seq,
             at: String(parsed.at ?? ''),
             type: parsed.type,
@@ -207,6 +218,7 @@ export function readSessionLogFile(file: string, {
     while (position < stat.size) {
       const read = fs.readSync(fd, chunk, 0, Math.min(chunk.length, stat.size - position), position);
       if (!read) break;
+      onChunk?.(chunk.subarray(0, read), position);
       let start = 0;
       for (let index = 0; index < read; index++) {
         if (chunk[index] !== 10) continue;

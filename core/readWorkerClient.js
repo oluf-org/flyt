@@ -19,12 +19,12 @@ export class ReadWorkerClient {
     this.#workerURL = workerURL;
   }
 
-  request(kind, args, { signal, onBatch } = {}) {
+  request(kind, args, { signal, onBatch, onMetrics } = {}) {
     if (this.#closed) return Promise.reject(new Error('Read worker is closed'));
     if (signal?.aborted) return Promise.reject(aborted());
     if (this.#queue.length >= 128) return Promise.reject(new Error('Read worker queue is full'));
     return new Promise((resolve, reject) => {
-      const job = { id: ++this.#nextId, kind, args, signal, onBatch, resolve, reject, rows: [] };
+      const job = { id: ++this.#nextId, kind, args, signal, onBatch, onMetrics, queuedAt: performance.now(), resolve, reject, rows: [] };
       job.abort = () => {
         if (this.#active === job) {
           const worker = this.#worker;
@@ -84,6 +84,8 @@ export class ReadWorkerClient {
           return;
         }
         for (const key of Object.keys(readWorkerMetrics)) readWorkerMetrics[key] += message.metrics?.[key] ?? 0;
+        try { job.onMetrics?.({ ...message.metrics, queueMs: job.startedAt - job.queuedAt, serviceMs: performance.now() - job.startedAt }); }
+        catch { /* Diagnostics must never fail a read. */ }
         const error = message.error && Object.assign(new Error(message.error.message), message.error);
         this.#finish(job, error, message.batched ? job.rows : message.value);
         this.#pump();
@@ -100,6 +102,7 @@ export class ReadWorkerClient {
     }
     const job = this.#queue.shift();
     this.#active = job;
+    job.startedAt = performance.now();
     this.#worker.ref();
     try { this.#worker.postMessage({ id: job.id, kind: job.kind, ...job.args }); }
     catch (error) { this.#finish(job, error); this.#pump(); }

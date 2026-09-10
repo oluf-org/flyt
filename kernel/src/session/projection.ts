@@ -155,6 +155,13 @@ function emptyMeta(runId: string): RunMeta {
  * @returns the projection.
  */
 export function projectRun(events: readonly SessionEvent[], runId: string): RunProjection {
+  const projector = createRunProjector(runId);
+  for (const event of events) projector.append(event);
+  return projector.snapshot();
+}
+
+/** Stateful form of the same fold. Finalization never mutates the live state. */
+export function createRunProjector(runId: string, { retainArtifacts = true } = {}) {
   const meta = emptyMeta(runId);
   const projection: RunProjection = {
     meta, stack: null, prompt: '', blocks: {}, tools: [], calls: [], sandboxDecisions: [], sandboxFailures: [], legacy: false,
@@ -163,7 +170,9 @@ export function projectRun(events: readonly SessionEvent[], runId: string): RunP
   const pending = new Map<string, Partial<CallRecord>>();
   let toolSeq = 0;
 
-  for (const event of events) {
+  let firstAt: string | undefined;
+  const append = (event: SessionEvent): void => {
+    firstAt ??= event.at;
     const data = asRecord(event.data);
     meta.updatedAt = event.at || meta.updatedAt;
 
@@ -215,11 +224,11 @@ export function projectRun(events: readonly SessionEvent[], runId: string): RunP
 
       case 'sandbox.decision':
       case 'sandbox.escalation':
-        projection.sandboxDecisions.push({ type: event.type, at: event.at, ...data } as JsonValue);
+        if (retainArtifacts) projection.sandboxDecisions.push({ type: event.type, at: event.at, ...data } as JsonValue);
         break;
 
       case 'sandbox.failure':
-        projection.sandboxFailures.push({ at: event.at, ...data } as JsonValue);
+        if (retainArtifacts) projection.sandboxFailures.push({ at: event.at, ...data } as JsonValue);
         break;
 
       case 'stack.resolved':
@@ -290,6 +299,7 @@ export function projectRun(events: readonly SessionEvent[], runId: string): RunP
       }
 
       case 'tool.result': {
+        if (!retainArtifacts) break;
         toolSeq += 1;
         projection.tools.push({
           seq: typeof data.seq === 'number' ? data.seq : toolSeq,
@@ -306,42 +316,46 @@ export function projectRun(events: readonly SessionEvent[], runId: string): RunP
       default:
         break;
     }
-  }
+  };
 
-  // A request whose response never arrived is still a call that happened. It
-  // belongs in the trace, marked as unsettled, rather than vanishing because
-  // the process died between the two events.
-  for (const half of pending.values()) {
-    projection.calls.push({
-      ts: String(half.ts ?? ''),
-      callId: half.callId ?? null,
-      blockId: half.blockId ?? null,
-      taskId: half.taskId ?? null,
-      provider: half.provider ?? null,
-      model: half.model ?? null,
-      ok: false,
-      ms: null,
-      finishReason: 'never_returned',
-      usage: null,
-    });
-  }
-
-  // The run lifecycle is authoritative over transient block markers. A crash
-  // or scheduler-level exception can occur after `active` was appended but
-  // before that block had a chance to append its own terminal status. Keeping
-  // that marker active makes every projection claim work is still happening
-  // after the run has explicitly ended.
-  if (['done', 'failed', 'stopped', 'interrupted', 'cancelled', 'rejected'].includes(meta.stage)) {
-    for (const [id, status] of Object.entries(meta.blockStatus)) {
-      if (status !== 'active') continue;
-      meta.blockStatus[id] = meta.stage === 'failed' ? 'failed' : 'pending';
+  const snapshot = (): RunProjection => {
+    const result = { ...projection, meta: { ...meta, blockStatus: { ...meta.blockStatus } }, calls: [...projection.calls] };
+    // A request whose response never arrived is still a call that happened. It
+    // belongs in the trace, marked as unsettled, rather than vanishing because
+    // the process died between the two events.
+    for (const half of pending.values()) {
+      result.calls.push({
+        ts: String(half.ts ?? ''),
+        callId: half.callId ?? null,
+        blockId: half.blockId ?? null,
+        taskId: half.taskId ?? null,
+        provider: half.provider ?? null,
+        model: half.model ?? null,
+        ok: false,
+        ms: null,
+        finishReason: 'never_returned',
+        usage: null,
+      });
     }
-    meta.currentBlockId = null;
-  }
 
-  if (!meta.createdAt) meta.createdAt = events[0]?.at ?? '';
-  if (!meta.updatedAt) meta.updatedAt = meta.createdAt;
-  return projection;
+    // The run lifecycle is authoritative over transient block markers. A crash
+    // or scheduler-level exception can occur after `active` was appended but
+    // before that block had a chance to append its own terminal status. Keeping
+    // that marker active makes every projection claim work is still happening
+    // after the run has explicitly ended.
+    if (['done', 'failed', 'stopped', 'interrupted', 'cancelled', 'rejected'].includes(result.meta.stage)) {
+      for (const [id, status] of Object.entries(result.meta.blockStatus)) {
+        if (status !== 'active') continue;
+        result.meta.blockStatus[id] = result.meta.stage === 'failed' ? 'failed' : 'pending';
+      }
+      result.meta.currentBlockId = null;
+    }
+
+    if (!result.meta.createdAt) result.meta.createdAt = firstAt ?? '';
+    if (!result.meta.updatedAt) result.meta.updatedAt = result.meta.createdAt;
+    return result;
+  };
+  return { append, snapshot };
 }
 
 /** One priced call, as the ledger records it. */

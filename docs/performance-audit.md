@@ -53,6 +53,8 @@ These are thresholded Event Timing samples grouped by interaction ID, omitting e
 
 ## Running the probes
 
+The [long-session snapshot review](reviews/snapshot-performance/README.md) records verified incremental replay, compact cache behavior beyond the raw-event budget, combined Work/Trace reads, memory and queue measurements, and Electron workflow/loop acceptance. Run its focused probe with `node scripts/probe-snapshot-performance.mjs` after building the kernel.
+
 ```powershell
 npm run test:perf
 npm run perf:check

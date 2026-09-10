@@ -74,6 +74,7 @@ const api = {
   retryRunCleanup: (pid, runId) => ipcRenderer.invoke('run:retryCleanup', pid, runId),
   deleteRun: (pid, runId) => ipcRenderer.invoke('run:delete', pid, runId),
   getSnapshot: (pid, runId) => ipcRenderer.invoke('run:snapshot', pid, runId),
+  readRunView: (pid, runId) => ipcRenderer.invoke('run:snapshot', pid, runId, { includeLog: true }),
   getBlockHistory: (pid, runIds) => ipcRenderer.invoke('run:block-history', pid, runIds),
   readRunLog: (pid, runId) => ipcRenderer.invoke('run:log', pid, runId),
   debugRun: (pid, runId) => ipcRenderer.invoke('run:debug', pid, runId),

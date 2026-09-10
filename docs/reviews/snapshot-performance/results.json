@@ -1,0 +1,1833 @@
+{
+  "at": "2026-09-10T09:05:02.091Z",
+  "node": "v22.12.0",
+  "cpu": "AMD Ryzen 7 3800X",
+  "units": "Elapsed/queue in ms; memory in MiB; reads in bytes. Memory samples are post-request, without forced GC. RSS is whole-process, not just worker.",
+  "stages": {
+    "snapshot-extended-baseline.json": [
+      {
+        "fixture": "small",
+        "sessionBytes": 84651,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 198.95,
+            "medianReadBytes": 84106,
+            "medianWorkerHeapMiB": 13.33,
+            "medianWorkerExternalMiB": 3.96,
+            "medianProcessRssMiB": 76.23
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.85,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 10.62,
+            "medianWorkerExternalMiB": 3.93,
+            "medianProcessRssMiB": 74.92
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 2.96,
+            "medianReadBytes": 84433,
+            "medianWorkerHeapMiB": 12.52,
+            "medianWorkerExternalMiB": 4.35,
+            "medianProcessRssMiB": 76.66
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 1.18,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 13.87,
+            "medianWorkerExternalMiB": 5.14,
+            "medianProcessRssMiB": 77.65
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 0.86,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 14.09,
+            "medianWorkerExternalMiB": 5.16,
+            "medianProcessRssMiB": 77.66,
+            "medianSmallRequestQueueMs": 0.46
+          }
+        }
+      },
+      {
+        "fixture": "23MB",
+        "sessionBytes": 23368725,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 347.67,
+            "medianReadBytes": 23368170,
+            "medianWorkerHeapMiB": 50.24,
+            "medianWorkerExternalMiB": 20.37,
+            "medianProcessRssMiB": 273.03
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 1.21,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 33.61,
+            "medianWorkerExternalMiB": 20.37,
+            "medianProcessRssMiB": 238.49
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 106.35,
+            "medianReadBytes": 23368503,
+            "medianWorkerHeapMiB": 112.09,
+            "medianWorkerExternalMiB": 42.94,
+            "medianProcessRssMiB": 343.95
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 39.63,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 135.45,
+            "medianWorkerExternalMiB": 43.96,
+            "medianProcessRssMiB": 351.54
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 1.36,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 135.66,
+            "medianWorkerExternalMiB": 19.7,
+            "medianProcessRssMiB": 364.34,
+            "medianSmallRequestQueueMs": 0.89
+          }
+        }
+      },
+      {
+        "fixture": "40MB",
+        "sessionBytes": 40145941,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 436.32,
+            "medianReadBytes": 40145386,
+            "medianWorkerHeapMiB": 49.58,
+            "medianWorkerExternalMiB": 36.18,
+            "medianProcessRssMiB": 385.8
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 174.64,
+            "medianReadBytes": 40145386,
+            "medianWorkerHeapMiB": 49.64,
+            "medianWorkerExternalMiB": 67.68,
+            "medianProcessRssMiB": 404.2
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 169.32,
+            "medianReadBytes": 40145719,
+            "medianWorkerHeapMiB": 118.94,
+            "medianWorkerExternalMiB": 35.44,
+            "medianProcessRssMiB": 466.24
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 411.61,
+            "medianReadBytes": 80291882,
+            "medianWorkerHeapMiB": 80.12,
+            "medianWorkerExternalMiB": 35.42,
+            "medianProcessRssMiB": 420.57
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 163.99,
+            "medianReadBytes": 40148964,
+            "medianWorkerHeapMiB": 119.17,
+            "medianWorkerExternalMiB": 67.44,
+            "medianProcessRssMiB": 451.45,
+            "medianSmallRequestQueueMs": 162.48
+          }
+        }
+      },
+      {
+        "fixture": "many-tools",
+        "sessionBytes": 42975270,
+        "toolCalls": 2000,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 544.77,
+            "medianReadBytes": 42974715,
+            "medianWorkerHeapMiB": 53.75,
+            "medianWorkerExternalMiB": 5.35,
+            "medianProcessRssMiB": 217.15
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 251.91,
+            "medianReadBytes": 42974715,
+            "medianWorkerHeapMiB": 98.86,
+            "medianWorkerExternalMiB": 7.85,
+            "medianProcessRssMiB": 338.75
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 235.16,
+            "medianReadBytes": 42975048,
+            "medianWorkerHeapMiB": 136.59,
+            "medianWorkerExternalMiB": 9.71,
+            "medianProcessRssMiB": 381.3
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 544.14,
+            "medianReadBytes": 85950540,
+            "medianWorkerHeapMiB": 174.31,
+            "medianWorkerExternalMiB": 10.54,
+            "medianProcessRssMiB": 412.18
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 227.98,
+            "medianReadBytes": 42978293,
+            "medianWorkerHeapMiB": 97.66,
+            "medianWorkerExternalMiB": 10.81,
+            "medianProcessRssMiB": 508.79,
+            "medianSmallRequestQueueMs": 226.79
+          }
+        }
+      }
+    ],
+    "snapshot-stage1.json": [
+      {
+        "fixture": "small",
+        "sessionBytes": 84651,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 198.53,
+            "medianReadBytes": 84106,
+            "medianWorkerHeapMiB": 13.37,
+            "medianWorkerExternalMiB": 3.93,
+            "medianProcessRssMiB": 75.77
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.64,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 10.63,
+            "medianWorkerExternalMiB": 3.91,
+            "medianProcessRssMiB": 74.6
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 2.11,
+            "medianReadBytes": 84433,
+            "medianWorkerHeapMiB": 10.82,
+            "medianWorkerExternalMiB": 4.15,
+            "medianProcessRssMiB": 75.03
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 1.07,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 11.04,
+            "medianWorkerExternalMiB": 4.81,
+            "medianProcessRssMiB": 75.65
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 0.72,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 11.28,
+            "medianWorkerExternalMiB": 4.83,
+            "medianProcessRssMiB": 75.65,
+            "medianSmallRequestQueueMs": 0.42
+          }
+        }
+      },
+      {
+        "fixture": "23MB",
+        "sessionBytes": 23368725,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 350.66,
+            "medianReadBytes": 23368170,
+            "medianWorkerHeapMiB": 50.27,
+            "medianWorkerExternalMiB": 20.33,
+            "medianProcessRssMiB": 272.45
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.58,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 33.62,
+            "medianWorkerExternalMiB": 20.33,
+            "medianProcessRssMiB": 238.9
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 17.46,
+            "medianReadBytes": 23368503,
+            "medianWorkerHeapMiB": 33.89,
+            "medianWorkerExternalMiB": 4.66,
+            "medianProcessRssMiB": 239.77
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 38.56,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 34.25,
+            "medianWorkerExternalMiB": 5.66,
+            "medianProcessRssMiB": 221.07
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 0.69,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 34.47,
+            "medianWorkerExternalMiB": 5.68,
+            "medianProcessRssMiB": 233.74,
+            "medianSmallRequestQueueMs": 0.39
+          }
+        }
+      },
+      {
+        "fixture": "40MB",
+        "sessionBytes": 40145941,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 439.31,
+            "medianReadBytes": 40145386,
+            "medianWorkerHeapMiB": 42.52,
+            "medianWorkerExternalMiB": 36.1,
+            "medianProcessRssMiB": 438.0
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.52,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 42.58,
+            "medianWorkerExternalMiB": 35.42,
+            "medianProcessRssMiB": 438.0
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 28.66,
+            "medianReadBytes": 40145719,
+            "medianWorkerHeapMiB": 42.91,
+            "medianWorkerExternalMiB": 36.92,
+            "medianProcessRssMiB": 438.38
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 248.22,
+            "medianReadBytes": 40145941,
+            "medianWorkerHeapMiB": 49.95,
+            "medianWorkerExternalMiB": 67.68,
+            "medianProcessRssMiB": 491.98
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 0.76,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 48.23,
+            "medianWorkerExternalMiB": 35.43,
+            "medianProcessRssMiB": 375.02,
+            "medianSmallRequestQueueMs": 0.49
+          }
+        }
+      },
+      {
+        "fixture": "many-tools",
+        "sessionBytes": 42975270,
+        "toolCalls": 2000,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 568.75,
+            "medianReadBytes": 42974715,
+            "medianWorkerHeapMiB": 14.37,
+            "medianWorkerExternalMiB": 11.06,
+            "medianProcessRssMiB": 154.67
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 5.48,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 15.86,
+            "medianWorkerExternalMiB": 4.25,
+            "medianProcessRssMiB": 154.68
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 37.17,
+            "medianReadBytes": 42975048,
+            "medianWorkerHeapMiB": 16.62,
+            "medianWorkerExternalMiB": 5.25,
+            "medianProcessRssMiB": 155.49
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 361.6,
+            "medianReadBytes": 42975270,
+            "medianWorkerHeapMiB": 99.15,
+            "medianWorkerExternalMiB": 7.82,
+            "medianProcessRssMiB": 300.05
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 5.84,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 54.03,
+            "medianWorkerExternalMiB": 8.45,
+            "medianProcessRssMiB": 526.75,
+            "medianSmallRequestQueueMs": 5.43
+          }
+        }
+      }
+    ],
+    "snapshot-stage2.json": [
+      {
+        "fixture": "small",
+        "sessionBytes": 85741,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 195.06,
+            "medianReadBytes": 84106,
+            "medianWorkerHeapMiB": 13.37,
+            "medianWorkerExternalMiB": 3.93,
+            "medianProcessRssMiB": 76.18
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.64,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 10.63,
+            "medianWorkerExternalMiB": 3.91,
+            "medianProcessRssMiB": 75.27
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 1.9,
+            "medianReadBytes": 84433,
+            "medianWorkerHeapMiB": 10.82,
+            "medianWorkerExternalMiB": 4.15,
+            "medianProcessRssMiB": 75.8
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 0.96,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 11.05,
+            "medianWorkerExternalMiB": 4.81,
+            "medianProcessRssMiB": 76.11
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 0.73,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 11.18,
+            "medianWorkerExternalMiB": 4.81,
+            "medianProcessRssMiB": 76.11
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 2.43,
+            "medianReadBytes": 85087,
+            "medianWorkerHeapMiB": 11.44,
+            "medianWorkerExternalMiB": 5.82,
+            "medianProcessRssMiB": 76.51,
+            "medianSmallRequestQueueMs": 2.06
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 2.28,
+            "medianReadBytes": 85523,
+            "medianWorkerHeapMiB": 11.67,
+            "medianWorkerExternalMiB": 7.48,
+            "medianProcessRssMiB": 77.37,
+            "medianSmallRequestQueueMs": 1.98
+          }
+        }
+      },
+      {
+        "fixture": "23MB",
+        "sessionBytes": 23369835,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 353.82,
+            "medianReadBytes": 23368170,
+            "medianWorkerHeapMiB": 50.24,
+            "medianWorkerExternalMiB": 20.28,
+            "medianProcessRssMiB": 274.39
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.58,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 33.63,
+            "medianWorkerExternalMiB": 20.28,
+            "medianProcessRssMiB": 241.88
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 18.23,
+            "medianReadBytes": 23368503,
+            "medianWorkerHeapMiB": 33.9,
+            "medianWorkerExternalMiB": 4.66,
+            "medianProcessRssMiB": 242.67
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 42.41,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 34.26,
+            "medianWorkerExternalMiB": 5.66,
+            "medianProcessRssMiB": 221.71
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 43.78,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 34.39,
+            "medianWorkerExternalMiB": 5.66,
+            "medianProcessRssMiB": 259.32
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 18.69,
+            "medianReadBytes": 23369169,
+            "medianWorkerHeapMiB": 34.71,
+            "medianWorkerExternalMiB": 7.18,
+            "medianProcessRssMiB": 221.65,
+            "medianSmallRequestQueueMs": 18.36
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 58.72,
+            "medianReadBytes": 23369613,
+            "medianWorkerHeapMiB": 35.05,
+            "medianWorkerExternalMiB": 9.68,
+            "medianProcessRssMiB": 278.29,
+            "medianSmallRequestQueueMs": 58.03
+          }
+        }
+      },
+      {
+        "fixture": "40MB",
+        "sessionBytes": 40147051,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 432.06,
+            "medianReadBytes": 40145386,
+            "medianWorkerHeapMiB": 42.52,
+            "medianWorkerExternalMiB": 36.18,
+            "medianProcessRssMiB": 317.23
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.51,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 42.59,
+            "medianWorkerExternalMiB": 35.42,
+            "medianProcessRssMiB": 317.24
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 29.11,
+            "medianReadBytes": 40145719,
+            "medianWorkerHeapMiB": 42.91,
+            "medianWorkerExternalMiB": 36.92,
+            "medianProcessRssMiB": 317.61
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 243.15,
+            "medianReadBytes": 40145941,
+            "medianWorkerHeapMiB": 49.95,
+            "medianWorkerExternalMiB": 67.68,
+            "medianProcessRssMiB": 411.0
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 248.26,
+            "medianReadBytes": 40145941,
+            "medianWorkerHeapMiB": 48.09,
+            "medianWorkerExternalMiB": 67.68,
+            "medianProcessRssMiB": 474.85
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 29.08,
+            "medianReadBytes": 40146385,
+            "medianWorkerHeapMiB": 48.41,
+            "medianWorkerExternalMiB": 36.93,
+            "medianProcessRssMiB": 373.7,
+            "medianSmallRequestQueueMs": 28.75
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 244.49,
+            "medianReadBytes": 40146829,
+            "medianWorkerHeapMiB": 48.11,
+            "medianWorkerExternalMiB": 67.69,
+            "medianProcessRssMiB": 478.09,
+            "medianSmallRequestQueueMs": 243.66
+          }
+        }
+      },
+      {
+        "fixture": "many-tools",
+        "sessionBytes": 42976380,
+        "toolCalls": 2000,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 559.5,
+            "medianReadBytes": 42974715,
+            "medianWorkerHeapMiB": 14.33,
+            "medianWorkerExternalMiB": 11.1,
+            "medianProcessRssMiB": 449.47
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 5.37,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 15.83,
+            "medianWorkerExternalMiB": 4.36,
+            "medianProcessRssMiB": 449.48
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 36.25,
+            "medianReadBytes": 42975048,
+            "medianWorkerHeapMiB": 16.76,
+            "medianWorkerExternalMiB": 5.36,
+            "medianProcessRssMiB": 449.94
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 362.64,
+            "medianReadBytes": 42975270,
+            "medianWorkerHeapMiB": 96.17,
+            "medianWorkerExternalMiB": 13.58,
+            "medianProcessRssMiB": 450.45
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 354.96,
+            "medianReadBytes": 42975270,
+            "medianWorkerHeapMiB": 97.17,
+            "medianWorkerExternalMiB": 14.67,
+            "medianProcessRssMiB": 658.22
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 35.93,
+            "medianReadBytes": 42975714,
+            "medianWorkerHeapMiB": 139.14,
+            "medianWorkerExternalMiB": 6.6,
+            "medianProcessRssMiB": 749.26,
+            "medianSmallRequestQueueMs": 35.57
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 341.13,
+            "medianReadBytes": 42976158,
+            "medianWorkerHeapMiB": 176.91,
+            "medianWorkerExternalMiB": 8.87,
+            "medianProcessRssMiB": 787.83,
+            "medianSmallRequestQueueMs": 336.95
+          }
+        }
+      }
+    ],
+    "snapshot-stage3.json": [
+      {
+        "fixture": "small",
+        "sessionBytes": 85741,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 207.24,
+            "medianReadBytes": 84106,
+            "medianWorkerHeapMiB": 13.36,
+            "medianWorkerExternalMiB": 3.97,
+            "medianProcessRssMiB": 76.42
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.67,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 10.62,
+            "medianWorkerExternalMiB": 3.94,
+            "medianProcessRssMiB": 75.15
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 1.91,
+            "medianReadBytes": 84433,
+            "medianWorkerHeapMiB": 10.81,
+            "medianWorkerExternalMiB": 4.15,
+            "medianProcessRssMiB": 75.54
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 1.03,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 11.04,
+            "medianWorkerExternalMiB": 4.81,
+            "medianProcessRssMiB": 76.08
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 0.81,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 11.18,
+            "medianWorkerExternalMiB": 4.81,
+            "medianProcessRssMiB": 76.08
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 2.1,
+            "medianReadBytes": 85087,
+            "medianWorkerHeapMiB": 11.43,
+            "medianWorkerExternalMiB": 5.82,
+            "medianProcessRssMiB": 76.48,
+            "medianSmallRequestQueueMs": 1.68
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 2.19,
+            "medianReadBytes": 85523,
+            "medianWorkerHeapMiB": 11.66,
+            "medianWorkerExternalMiB": 7.48,
+            "medianProcessRssMiB": 77.21,
+            "medianSmallRequestQueueMs": 1.88
+          }
+        }
+      },
+      {
+        "fixture": "23MB",
+        "sessionBytes": 23369835,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 351.77,
+            "medianReadBytes": 23368170,
+            "medianWorkerHeapMiB": 50.28,
+            "medianWorkerExternalMiB": 20.33,
+            "medianProcessRssMiB": 275.0
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.52,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 33.63,
+            "medianWorkerExternalMiB": 20.33,
+            "medianProcessRssMiB": 241.84
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 17.33,
+            "medianReadBytes": 23368503,
+            "medianWorkerHeapMiB": 33.91,
+            "medianWorkerExternalMiB": 4.66,
+            "medianProcessRssMiB": 242.63
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 38.31,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 34.26,
+            "medianWorkerExternalMiB": 5.66,
+            "medianProcessRssMiB": 221.75
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 38.81,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 34.39,
+            "medianWorkerExternalMiB": 5.66,
+            "medianProcessRssMiB": 256.97
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 18.05,
+            "medianReadBytes": 23369169,
+            "medianWorkerHeapMiB": 34.71,
+            "medianWorkerExternalMiB": 7.18,
+            "medianProcessRssMiB": 237.49,
+            "medianSmallRequestQueueMs": 17.67
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 58.72,
+            "medianReadBytes": 23369613,
+            "medianWorkerHeapMiB": 35.05,
+            "medianWorkerExternalMiB": 9.68,
+            "medianProcessRssMiB": 293.98,
+            "medianSmallRequestQueueMs": 57.86
+          }
+        }
+      },
+      {
+        "fixture": "40MB",
+        "sessionBytes": 40147051,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 439.08,
+            "medianReadBytes": 40145386,
+            "medianWorkerHeapMiB": 42.52,
+            "medianWorkerExternalMiB": 36.18,
+            "medianProcessRssMiB": 492.43
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.5,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 42.59,
+            "medianWorkerExternalMiB": 35.42,
+            "medianProcessRssMiB": 492.43
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 28.87,
+            "medianReadBytes": 40145719,
+            "medianWorkerHeapMiB": 42.91,
+            "medianWorkerExternalMiB": 36.92,
+            "medianProcessRssMiB": 493.05
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 234.83,
+            "medianReadBytes": 40145941,
+            "medianWorkerHeapMiB": 49.93,
+            "medianWorkerExternalMiB": 67.68,
+            "medianProcessRssMiB": 585.08
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 230.08,
+            "medianReadBytes": 40145941,
+            "medianWorkerHeapMiB": 48.05,
+            "medianWorkerExternalMiB": 67.68,
+            "medianProcessRssMiB": 485.64
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 30.47,
+            "medianReadBytes": 40146385,
+            "medianWorkerHeapMiB": 48.38,
+            "medianWorkerExternalMiB": 36.93,
+            "medianProcessRssMiB": 383.73,
+            "medianSmallRequestQueueMs": 29.41
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 246.35,
+            "medianReadBytes": 40146829,
+            "medianWorkerHeapMiB": 48.09,
+            "medianWorkerExternalMiB": 67.69,
+            "medianProcessRssMiB": 485.13,
+            "medianSmallRequestQueueMs": 245.63
+          }
+        }
+      },
+      {
+        "fixture": "many-tools",
+        "sessionBytes": 42976380,
+        "toolCalls": 2000,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 574.34,
+            "medianReadBytes": 42974715,
+            "medianWorkerHeapMiB": 14.19,
+            "medianWorkerExternalMiB": 10.89,
+            "medianProcessRssMiB": 456.47
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 5.67,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 15.67,
+            "medianWorkerExternalMiB": 4.13,
+            "medianProcessRssMiB": 456.48
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 37.45,
+            "medianReadBytes": 42975048,
+            "medianWorkerHeapMiB": 16.57,
+            "medianWorkerExternalMiB": 5.13,
+            "medianProcessRssMiB": 456.93
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 341.22,
+            "medianReadBytes": 42975270,
+            "medianWorkerHeapMiB": 94.18,
+            "medianWorkerExternalMiB": 13.66,
+            "medianProcessRssMiB": 457.32
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 342.37,
+            "medianReadBytes": 42975270,
+            "medianWorkerHeapMiB": 99.72,
+            "medianWorkerExternalMiB": 14.59,
+            "medianProcessRssMiB": 666.59
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 40.13,
+            "medianReadBytes": 42975714,
+            "medianWorkerHeapMiB": 137.51,
+            "medianWorkerExternalMiB": 6.82,
+            "medianProcessRssMiB": 749.7,
+            "medianSmallRequestQueueMs": 39.67
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 354.48,
+            "medianReadBytes": 42976158,
+            "medianWorkerHeapMiB": 101.46,
+            "medianWorkerExternalMiB": 12.36,
+            "medianProcessRssMiB": 788.58,
+            "medianSmallRequestQueueMs": 349.69
+          }
+        }
+      }
+    ],
+    "snapshot-final-baseline.json": [
+      {
+        "fixture": "small",
+        "sessionBytes": 85741,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 191.89,
+            "medianReadBytes": 84106,
+            "medianWorkerHeapMiB": 13.31,
+            "medianWorkerExternalMiB": 3.95,
+            "medianProcessRssMiB": 80.61
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.81,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 10.62,
+            "medianWorkerExternalMiB": 3.93,
+            "medianProcessRssMiB": 79.47
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 2.95,
+            "medianReadBytes": 84433,
+            "medianWorkerHeapMiB": 12.52,
+            "medianWorkerExternalMiB": 4.35,
+            "medianProcessRssMiB": 81.3
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 1.14,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 13.89,
+            "medianWorkerExternalMiB": 5.14,
+            "medianProcessRssMiB": 82.05
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 2.92,
+            "medianReadBytes": 85087,
+            "medianWorkerHeapMiB": 15.71,
+            "medianWorkerExternalMiB": 6.36,
+            "medianProcessRssMiB": 84.73,
+            "medianSmallRequestQueueMs": 2.56
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 2.94,
+            "medianReadBytes": 85523,
+            "medianWorkerHeapMiB": 12.69,
+            "medianWorkerExternalMiB": 4.38,
+            "medianProcessRssMiB": 84.24,
+            "medianSmallRequestQueueMs": 2.35
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 183.94,
+            "medianReadBytes": 85741,
+            "medianWorkerHeapMiB": 13.37,
+            "medianWorkerExternalMiB": 3.96,
+            "medianProcessRssMiB": 111.21
+          }
+        }
+      },
+      {
+        "fixture": "23MB",
+        "sessionBytes": 23369835,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 332.8,
+            "medianReadBytes": 23368170,
+            "medianWorkerHeapMiB": 50.32,
+            "medianWorkerExternalMiB": 20.41,
+            "medianProcessRssMiB": 257.78
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 1.27,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 33.62,
+            "medianWorkerExternalMiB": 20.41,
+            "medianProcessRssMiB": 224.46
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 117.66,
+            "medianReadBytes": 23368503,
+            "medianWorkerHeapMiB": 112.07,
+            "medianWorkerExternalMiB": 43.0,
+            "medianProcessRssMiB": 331.68
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 41.87,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 135.46,
+            "medianWorkerExternalMiB": 44.03,
+            "medianProcessRssMiB": 332.1
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 114.81,
+            "medianReadBytes": 23369169,
+            "medianWorkerHeapMiB": 174.56,
+            "medianWorkerExternalMiB": 20.44,
+            "medianProcessRssMiB": 384.69,
+            "medianSmallRequestQueueMs": 114.34
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 156.15,
+            "medianReadBytes": 23369613,
+            "medianWorkerHeapMiB": 174.7,
+            "medianWorkerExternalMiB": 19.94,
+            "medianProcessRssMiB": 471.55,
+            "medianSmallRequestQueueMs": 155.37
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 393.52,
+            "medianReadBytes": 23369835,
+            "medianWorkerHeapMiB": 50.37,
+            "medianWorkerExternalMiB": 20.26,
+            "medianProcessRssMiB": 564.37
+          }
+        }
+      },
+      {
+        "fixture": "40MB",
+        "sessionBytes": 40147051,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 428.71,
+            "medianReadBytes": 40145386,
+            "medianWorkerHeapMiB": 82.11,
+            "medianWorkerExternalMiB": 36.21,
+            "medianProcessRssMiB": 320.96
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 171.53,
+            "medianReadBytes": 40145386,
+            "medianWorkerHeapMiB": 49.65,
+            "medianWorkerExternalMiB": 67.68,
+            "medianProcessRssMiB": 306.17
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 172.72,
+            "medianReadBytes": 40145719,
+            "medianWorkerHeapMiB": 118.98,
+            "medianWorkerExternalMiB": 35.44,
+            "medianProcessRssMiB": 369.76
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 413.74,
+            "medianReadBytes": 80291882,
+            "medianWorkerHeapMiB": 80.12,
+            "medianWorkerExternalMiB": 35.42,
+            "medianProcessRssMiB": 403.0
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 172.82,
+            "medianReadBytes": 40149297,
+            "medianWorkerHeapMiB": 48.02,
+            "medianWorkerExternalMiB": 35.42,
+            "medianProcessRssMiB": 419.71,
+            "medianSmallRequestQueueMs": 171.68
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 223.17,
+            "medianReadBytes": 40149852,
+            "medianWorkerHeapMiB": 119.18,
+            "medianWorkerExternalMiB": 35.44,
+            "medianProcessRssMiB": 532.19,
+            "medianSmallRequestQueueMs": 221.19
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 668.43,
+            "medianReadBytes": 80294102,
+            "medianWorkerHeapMiB": 49.73,
+            "medianWorkerExternalMiB": 35.43,
+            "medianProcessRssMiB": 541.22
+          }
+        }
+      },
+      {
+        "fixture": "many-tools",
+        "sessionBytes": 42976380,
+        "toolCalls": 2000,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 508.71,
+            "medianReadBytes": 42974715,
+            "medianWorkerHeapMiB": 52.11,
+            "medianWorkerExternalMiB": 4.24,
+            "medianProcessRssMiB": 508.7
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 239.46,
+            "medianReadBytes": 42974715,
+            "medianWorkerHeapMiB": 132.11,
+            "medianWorkerExternalMiB": 6.47,
+            "medianProcessRssMiB": 637.0
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 230.96,
+            "medianReadBytes": 42975048,
+            "medianWorkerHeapMiB": 97.37,
+            "medianWorkerExternalMiB": 9.21,
+            "medianProcessRssMiB": 679.55
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 533.91,
+            "medianReadBytes": 85950540,
+            "medianWorkerHeapMiB": 91.93,
+            "medianWorkerExternalMiB": 11.21,
+            "medianProcessRssMiB": 468.63
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 228.07,
+            "medianReadBytes": 42978626,
+            "medianWorkerHeapMiB": 132.07,
+            "medianWorkerExternalMiB": 11.35,
+            "medianProcessRssMiB": 552.57,
+            "medianSmallRequestQueueMs": 226.72
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 312.14,
+            "medianReadBytes": 42979181,
+            "medianWorkerHeapMiB": 91.95,
+            "medianWorkerExternalMiB": 6.72,
+            "medianProcessRssMiB": 682.26,
+            "medianSmallRequestQueueMs": 307.34
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 839.87,
+            "medianReadBytes": 85952760,
+            "medianWorkerHeapMiB": 53.82,
+            "medianWorkerExternalMiB": 5.62,
+            "medianProcessRssMiB": 806.48
+          }
+        }
+      }
+    ],
+    "snapshot-final.json": [
+      {
+        "fixture": "small",
+        "sessionBytes": 85741,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 195.93,
+            "medianReadBytes": 84106,
+            "medianWorkerHeapMiB": 13.36,
+            "medianWorkerExternalMiB": 3.94,
+            "medianProcessRssMiB": 75.96
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.72,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 10.63,
+            "medianWorkerExternalMiB": 3.91,
+            "medianProcessRssMiB": 74.98
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 2.06,
+            "medianReadBytes": 84433,
+            "medianWorkerHeapMiB": 10.83,
+            "medianWorkerExternalMiB": 4.15,
+            "medianProcessRssMiB": 75.5
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 1.11,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 11.05,
+            "medianWorkerExternalMiB": 4.81,
+            "medianProcessRssMiB": 76.05
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 0.9,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 11.19,
+            "medianWorkerExternalMiB": 4.81,
+            "medianProcessRssMiB": 76.05
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 2.03,
+            "medianReadBytes": 85087,
+            "medianWorkerHeapMiB": 11.45,
+            "medianWorkerExternalMiB": 5.82,
+            "medianProcessRssMiB": 76.34,
+            "medianSmallRequestQueueMs": 1.71
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 2.34,
+            "medianReadBytes": 85523,
+            "medianWorkerHeapMiB": 11.68,
+            "medianWorkerExternalMiB": 7.48,
+            "medianProcessRssMiB": 76.95,
+            "medianSmallRequestQueueMs": 1.95
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 188.91,
+            "medianReadBytes": 85741,
+            "medianWorkerHeapMiB": 13.41,
+            "medianWorkerExternalMiB": 3.97,
+            "medianProcessRssMiB": 101.89
+          }
+        }
+      },
+      {
+        "fixture": "23MB",
+        "sessionBytes": 23369835,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 349.99,
+            "medianReadBytes": 23368170,
+            "medianWorkerHeapMiB": 50.25,
+            "medianWorkerExternalMiB": 20.29,
+            "medianProcessRssMiB": 253.34
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.52,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 33.65,
+            "medianWorkerExternalMiB": 20.29,
+            "medianProcessRssMiB": 220.11
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 17.64,
+            "medianReadBytes": 23368503,
+            "medianWorkerHeapMiB": 33.92,
+            "medianWorkerExternalMiB": 4.66,
+            "medianProcessRssMiB": 220.92
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 41.31,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 34.28,
+            "medianWorkerExternalMiB": 5.66,
+            "medianProcessRssMiB": 196.85
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 40.95,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 34.41,
+            "medianWorkerExternalMiB": 5.66,
+            "medianProcessRssMiB": 234.98
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 17.96,
+            "medianReadBytes": 23369169,
+            "medianWorkerHeapMiB": 34.72,
+            "medianWorkerExternalMiB": 7.18,
+            "medianProcessRssMiB": 215.18,
+            "medianSmallRequestQueueMs": 17.56
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 59.58,
+            "medianReadBytes": 23369613,
+            "medianWorkerHeapMiB": 35.07,
+            "medianWorkerExternalMiB": 9.68,
+            "medianProcessRssMiB": 272.65,
+            "medianSmallRequestQueueMs": 58.93
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 415.91,
+            "medianReadBytes": 23369835,
+            "medianWorkerHeapMiB": 50.45,
+            "medianWorkerExternalMiB": 20.26,
+            "medianProcessRssMiB": 436.71
+          }
+        }
+      },
+      {
+        "fixture": "40MB",
+        "sessionBytes": 40147051,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 437.49,
+            "medianReadBytes": 40145386,
+            "medianWorkerHeapMiB": 42.52,
+            "medianWorkerExternalMiB": 36.26,
+            "medianProcessRssMiB": 477.5
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.54,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 42.59,
+            "medianWorkerExternalMiB": 35.42,
+            "medianProcessRssMiB": 477.5
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 29.02,
+            "medianReadBytes": 40145719,
+            "medianWorkerHeapMiB": 42.91,
+            "medianWorkerExternalMiB": 36.92,
+            "medianProcessRssMiB": 478.1
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 218.62,
+            "medianReadBytes": 40145941,
+            "medianWorkerHeapMiB": 49.93,
+            "medianWorkerExternalMiB": 67.68,
+            "medianProcessRssMiB": 467.11
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 227.29,
+            "medianReadBytes": 40145941,
+            "medianWorkerHeapMiB": 48.05,
+            "medianWorkerExternalMiB": 67.68,
+            "medianProcessRssMiB": 452.24
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 29.86,
+            "medianReadBytes": 40146385,
+            "medianWorkerHeapMiB": 48.38,
+            "medianWorkerExternalMiB": 36.93,
+            "medianProcessRssMiB": 447.01,
+            "medianSmallRequestQueueMs": 29.08
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 248.21,
+            "medianReadBytes": 40146829,
+            "medianWorkerHeapMiB": 48.09,
+            "medianWorkerExternalMiB": 67.69,
+            "medianProcessRssMiB": 390.27,
+            "medianSmallRequestQueueMs": 247.19
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 477.29,
+            "medianReadBytes": 40147051,
+            "medianWorkerHeapMiB": 49.77,
+            "medianWorkerExternalMiB": 35.43,
+            "medianProcessRssMiB": 526.11
+          }
+        }
+      },
+      {
+        "fixture": "many-tools",
+        "sessionBytes": 42976380,
+        "toolCalls": 2000,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 534.04,
+            "medianReadBytes": 42974715,
+            "medianWorkerHeapMiB": 14.32,
+            "medianWorkerExternalMiB": 11.06,
+            "medianProcessRssMiB": 232.22
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 5.39,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 15.8,
+            "medianWorkerExternalMiB": 4.25,
+            "medianProcessRssMiB": 232.23
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 37.91,
+            "medianReadBytes": 42975048,
+            "medianWorkerHeapMiB": 16.66,
+            "medianWorkerExternalMiB": 5.25,
+            "medianProcessRssMiB": 227.25
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 319.79,
+            "medianReadBytes": 42975270,
+            "medianWorkerHeapMiB": 94.4,
+            "medianWorkerExternalMiB": 10.75,
+            "medianProcessRssMiB": 291.48
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 322.6,
+            "medianReadBytes": 42975270,
+            "medianWorkerHeapMiB": 99.42,
+            "medianWorkerExternalMiB": 12.03,
+            "medianProcessRssMiB": 661.59
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 37.09,
+            "medianReadBytes": 42975714,
+            "medianWorkerHeapMiB": 138.08,
+            "medianWorkerExternalMiB": 6.82,
+            "medianProcessRssMiB": 695.82,
+            "medianSmallRequestQueueMs": 36.64
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 362.26,
+            "medianReadBytes": 42976158,
+            "medianWorkerHeapMiB": 99.01,
+            "medianWorkerExternalMiB": 10.12,
+            "medianProcessRssMiB": 740.07,
+            "medianSmallRequestQueueMs": 357.3
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 627.83,
+            "medianReadBytes": 42976380,
+            "medianWorkerHeapMiB": 53.52,
+            "medianWorkerExternalMiB": 5.31,
+            "medianProcessRssMiB": 837.64
+          }
+        }
+      }
+    ],
+    "snapshot-final-log.json": [
+      {
+        "fixture": "small",
+        "sessionBytes": 85741,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 193.82,
+            "medianReadBytes": 84106,
+            "medianWorkerHeapMiB": 13.32,
+            "medianWorkerExternalMiB": 3.94,
+            "medianProcessRssMiB": 80.61
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.64,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 10.64,
+            "medianWorkerExternalMiB": 3.92,
+            "medianProcessRssMiB": 79.76
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 2.02,
+            "medianReadBytes": 84433,
+            "medianWorkerHeapMiB": 10.83,
+            "medianWorkerExternalMiB": 4.15,
+            "medianProcessRssMiB": 80.11
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 1.05,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 11.06,
+            "medianWorkerExternalMiB": 4.81,
+            "medianProcessRssMiB": 80.79
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 0.76,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 11.2,
+            "medianWorkerExternalMiB": 4.81,
+            "medianProcessRssMiB": 80.79
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 2.17,
+            "medianReadBytes": 85087,
+            "medianWorkerHeapMiB": 11.45,
+            "medianWorkerExternalMiB": 5.82,
+            "medianProcessRssMiB": 81.29,
+            "medianSmallRequestQueueMs": 1.87
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 2.2,
+            "medianReadBytes": 85523,
+            "medianWorkerHeapMiB": 11.69,
+            "medianWorkerExternalMiB": 7.48,
+            "medianProcessRssMiB": 82.21,
+            "medianSmallRequestQueueMs": 1.93
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 184.11,
+            "medianReadBytes": 85741,
+            "medianWorkerHeapMiB": 13.41,
+            "medianWorkerExternalMiB": 3.96,
+            "medianProcessRssMiB": 109.0
+          }
+        }
+      },
+      {
+        "fixture": "23MB",
+        "sessionBytes": 23369835,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 343.4,
+            "medianReadBytes": 23368170,
+            "medianWorkerHeapMiB": 50.32,
+            "medianWorkerExternalMiB": 20.33,
+            "medianProcessRssMiB": 258.33
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.63,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 33.65,
+            "medianWorkerExternalMiB": 20.33,
+            "medianProcessRssMiB": 224.95
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 17.93,
+            "medianReadBytes": 23368503,
+            "medianWorkerHeapMiB": 33.92,
+            "medianWorkerExternalMiB": 4.66,
+            "medianProcessRssMiB": 225.8
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 41.94,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 34.29,
+            "medianWorkerExternalMiB": 5.66,
+            "medianProcessRssMiB": 202.79
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 44.82,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 34.42,
+            "medianWorkerExternalMiB": 5.66,
+            "medianProcessRssMiB": 239.89
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 17.97,
+            "medianReadBytes": 23369169,
+            "medianWorkerHeapMiB": 34.74,
+            "medianWorkerExternalMiB": 7.18,
+            "medianProcessRssMiB": 235.23,
+            "medianSmallRequestQueueMs": 17.56
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 59.3,
+            "medianReadBytes": 23369613,
+            "medianWorkerHeapMiB": 35.09,
+            "medianWorkerExternalMiB": 9.68,
+            "medianProcessRssMiB": 300.93,
+            "medianSmallRequestQueueMs": 58.5
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 411.87,
+            "medianReadBytes": 23369835,
+            "medianWorkerHeapMiB": 50.45,
+            "medianWorkerExternalMiB": 20.26,
+            "medianProcessRssMiB": 404.26
+          }
+        }
+      },
+      {
+        "fixture": "40MB",
+        "sessionBytes": 40147051,
+        "toolCalls": 1,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 421.32,
+            "medianReadBytes": 40145386,
+            "medianWorkerHeapMiB": 75.24,
+            "medianWorkerExternalMiB": 36.22,
+            "medianProcessRssMiB": 474.54
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 0.62,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 42.53,
+            "medianWorkerExternalMiB": 36.22,
+            "medianProcessRssMiB": 409.91
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 28.92,
+            "medianReadBytes": 40145719,
+            "medianWorkerHeapMiB": 42.86,
+            "medianWorkerExternalMiB": 4.66,
+            "medianProcessRssMiB": 410.69
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 221.46,
+            "medianReadBytes": 40145941,
+            "medianWorkerHeapMiB": 49.93,
+            "medianWorkerExternalMiB": 67.68,
+            "medianProcessRssMiB": 538.01
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 218.73,
+            "medianReadBytes": 40145941,
+            "medianWorkerHeapMiB": 48.05,
+            "medianWorkerExternalMiB": 67.68,
+            "medianProcessRssMiB": 736.86
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 29.58,
+            "medianReadBytes": 40146385,
+            "medianWorkerHeapMiB": 48.38,
+            "medianWorkerExternalMiB": 36.93,
+            "medianProcessRssMiB": 803.94,
+            "medianSmallRequestQueueMs": 29.21
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 221.64,
+            "medianReadBytes": 40146829,
+            "medianWorkerHeapMiB": 48.07,
+            "medianWorkerExternalMiB": 67.69,
+            "medianProcessRssMiB": 921.01,
+            "medianSmallRequestQueueMs": 220.8
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 476.33,
+            "medianReadBytes": 40147051,
+            "medianWorkerHeapMiB": 49.77,
+            "medianWorkerExternalMiB": 35.43,
+            "medianProcessRssMiB": 630.65
+          }
+        }
+      },
+      {
+        "fixture": "many-tools",
+        "sessionBytes": 42976380,
+        "toolCalls": 2000,
+        "phases": {
+          "cold": {
+            "count": 1,
+            "medianMs": 544.51,
+            "medianReadBytes": 42974715,
+            "medianWorkerHeapMiB": 14.14,
+            "medianWorkerExternalMiB": 10.91,
+            "medianProcessRssMiB": 423.42
+          },
+          "unchanged": {
+            "count": 5,
+            "medianMs": 5.71,
+            "medianReadBytes": 0,
+            "medianWorkerHeapMiB": 15.64,
+            "medianWorkerExternalMiB": 4.13,
+            "medianProcessRssMiB": 423.43
+          },
+          "append": {
+            "count": 5,
+            "medianMs": 36.64,
+            "medianReadBytes": 42975048,
+            "medianWorkerHeapMiB": 16.53,
+            "medianWorkerExternalMiB": 5.13,
+            "medianProcessRssMiB": 424.49
+          },
+          "combined": {
+            "count": 5,
+            "medianMs": 320.39,
+            "medianReadBytes": 42975270,
+            "medianWorkerHeapMiB": 94.13,
+            "medianWorkerExternalMiB": 12.84,
+            "medianProcessRssMiB": 399.39
+          },
+          "paired": {
+            "count": 5,
+            "medianMs": 328.21,
+            "medianReadBytes": 42975270,
+            "medianWorkerHeapMiB": 99.98,
+            "medianWorkerExternalMiB": 11.52,
+            "medianProcessRssMiB": 665.04
+          },
+          "queue": {
+            "count": 5,
+            "medianMs": 40.19,
+            "medianReadBytes": 42975714,
+            "medianWorkerHeapMiB": 136.43,
+            "medianWorkerExternalMiB": 6.92,
+            "medianProcessRssMiB": 697.85,
+            "medianSmallRequestQueueMs": 38.85
+          },
+          "log-queue": {
+            "count": 5,
+            "medianMs": 326.16,
+            "medianReadBytes": 42976158,
+            "medianWorkerHeapMiB": 93.6,
+            "medianWorkerExternalMiB": 8.0,
+            "medianProcessRssMiB": 745.1,
+            "medianSmallRequestQueueMs": 320.76
+          },
+          "cold-open": {
+            "count": 5,
+            "medianMs": 628.19,
+            "medianReadBytes": 42976380,
+            "medianWorkerHeapMiB": 52.4,
+            "medianWorkerExternalMiB": 4.7,
+            "medianProcessRssMiB": 838.92
+          }
+        }
+      }
+    ]
+  },
+  "verification": {
+    "fullSuite": {
+      "passed": 2640,
+      "skipped": 4,
+      "failed": 0,
+      "durationMs": 123154.31
+    },
+    "finalFocusedTests": 8,
+    "finalWorkerTests": 15,
+    "performanceTests": 44,
+    "lint": "pass",
+    "build": "pass",
+    "perfCheck": "pass",
+    "perfApp": "pass",
+    "preChangeKernelReplayPrefixes": 500,
+    "computerUse": [
+      "Opened both 40 MB sessions; checked Work output/model/tool rows and Trace.",
+      "Switched between long runs.",
+      "Ran two-step workflow via production Electron UI with a local injected provider; both turns completed.",
+      "Created and started Snapshot loop acceptance through Goals; ALPHA failed its fixed check, ALPHA BETA passed on iteration two.",
+      "Opened successful loop iteration in Work and Trace.",
+      "Restarted the isolated profile and reopened a 40 MB run after workflow/loop activity."
+    ],
+    "uiLimitations": "Actual Electron production assets, isolated synthetic project, deterministic injected provider (displayed under its configured model label). No paid-provider performance claim. No browser frame-latency measurement from manual computer use.",
+    "finalAppPhases": [
+      {
+        "name": "app-entry-to-composer-dom",
+        "at": 1789031644658.4243,
+        "durationMs": 445.060546875
+      },
+      {
+        "name": "composer-typing",
+        "at": 1789031645125.6284,
+        "durationMs": 1369.435791015625
+      },
+      {
+        "name": "startup-through-composer-typing",
+        "at": 1789031644658.4243,
+        "durationMs": 1837.04736328125
+      },
+      {
+        "name": "chats-click-to-rows-observed",
+        "at": 1789031646495.4727,
+        "durationMs": 76.546142578125
+      },
+      {
+        "name": "history-polling",
+        "at": 1789031646572.02,
+        "durationMs": 11006.815185546875
+      },
+      {
+        "name": "history-row-to-reply-observed",
+        "at": 1789031657578.9001,
+        "durationMs": 74.147705078125
+      },
+      {
+        "name": "reply-typing",
+        "at": 1789031657658.6516,
+        "durationMs": 1169.3984375
+      }
+    ],
+    "finalAppLimitations": "Production dist with development Electron host; synthetic settled history and injected input. Online fonts and contention affect timings. CPU/Chromium tracing adds overhead and an initial blank navigation; compare separately from unprofiled repetitions. Event Timing is quantized to 8ms and thresholded at 16ms; reported interaction tails exclude faster interactions and are not INP. Presentation delay is the Event Timing estimate, not physical display latency. Input-to-RAF remains a separate proxy. No provider execution, live replay, or release-quality tail estimates."
+  }
+}

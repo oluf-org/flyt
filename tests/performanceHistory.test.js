@@ -166,6 +166,10 @@ test('the performance fixture produces a real Work view with model and tool acti
   const activity = runView(watching.trace, snapshot).blocks.work.activity;
   assert(activity.some(row => row.kind === 'chat' && row.content === 'Fixture complete.'));
   assert(activity.some(row => row.kind === 'tool' && row.result.length === 100));
+  const combined = await api.invoke('run:snapshot', { ...args, includeLog: true });
+  assert.deepEqual(combined.log, log);
+  assert.deepEqual(combined.snapshot, { ...snapshot, rev: snapshot.rev + 1 });
+  assert.equal(combined.snapshot.session.head, combined.log.at(-1).seq);
 });
 
 test('project switching cancels obsolete reads without publishing stale snapshot state', async t => {
@@ -175,7 +179,7 @@ test('project switching cancels obsolete reads without publishing stale snapshot
   seedPerformanceRuns(second.store.rootDir, 1, 0);
   const args = { projectId: project.id, runId };
   const log = assert.rejects(api.invoke('run:log', args), { name: 'AbortError' });
-  const snapshot = assert.rejects(api.invoke('run:snapshot', args), { name: 'AbortError' });
+  const snapshot = assert.rejects(api.invoke('run:snapshot', { ...args, includeLog: true }), { name: 'AbortError' });
   const executionValidation = engine.runController.reconcile(project.id, runId);
   api.activateReads(second.id);
   const rows = await api.invoke('run:list', { projectId: second.id });

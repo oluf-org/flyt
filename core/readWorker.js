@@ -26,6 +26,7 @@ function summaryStore(root) {
 
 parentPort.on('message', async ({ id, kind, root, runId, runIds }) => {
   const metrics = { syncReadBytes: 0, summaryReadCalls: 0 };
+  Object.defineProperty(metrics, 'memory', { enumerable: true, get: () => process.memoryUsage() });
   const read = fs.readSync, readFile = fs.readFileSync;
   fs.readSync = (...args) => { const n = read(...args); metrics.syncReadBytes += n; return n; };
   fs.readFileSync = (...args) => {
@@ -118,10 +119,11 @@ parentPort.on('message', async ({ id, kind, root, runId, runIds }) => {
         } catch { /* A deleted/unreadable run does not hide the other histories. */ }
       }
       parentPort.postMessage({ id, value: rows, metrics });
-    } else if (kind === 'snapshot' || kind === 'log') {
+    } else if (kind === 'snapshot' || kind === 'log' || kind === 'snapshotAndLog') {
       // Use the canonical store's confinement check before opening any file.
       new JsonlSessionStore(root).fileFor(runId);
-      const value = kind === 'log' ? snapshots.events(root, runId)
+      const value = kind === 'snapshotAndLog' ? await snapshots.snapshotAndLog(root, runId)
+        : kind === 'log' ? snapshots.events(root, runId)
         : await snapshots.snapshot(root, runId, null, { materialise: false });
       parentPort.postMessage({ id, value, metrics });
     } else throw new Error(`Unknown read operation: ${kind}`);
