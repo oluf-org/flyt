@@ -120,12 +120,15 @@ jobs:
             # session, independent of the runner service's desktop ACLs.
             $action = New-ScheduledTaskAction -Execute $env:ComSpec -Argument "/c `"$scriptPath`"" -WorkingDirectory $pwd.Path
             $testUserSid = (Get-LocalUser -Name $testUser).SID.Value
-            Register-ScheduledTask -TaskName $testUser -Action $action -User $testUserSid -Password $plainPassword -RunLevel Limited -Force | Out-Null
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+            Register-ScheduledTask -TaskName $testUser -Action $action -Settings $settings -User $testUserSid -Password $plainPassword -RunLevel Limited -Force | Out-Null
             Start-ScheduledTask -TaskName $testUser
             $deadline = (Get-Date).AddMinutes(5)
             while (!(Test-Path $exitPath)) {
               if ((Get-Date) -gt $deadline) {
                 Get-ScheduledTaskInfo -TaskName $testUser | Format-List
+                Get-ScheduledTask -TaskName $testUser | Format-List
+                Get-Content $stdoutPath, $stderrPath -ErrorAction SilentlyContinue
                 throw 'Windows sandbox tests did not complete within five minutes.'
               }
               Start-Sleep -Seconds 2
