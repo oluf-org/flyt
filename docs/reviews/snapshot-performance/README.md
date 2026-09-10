@@ -18,6 +18,12 @@ Every request checks the file fingerprint (device, inode, size, mtime, ctime). A
 
 Work's `readRunView` uses one `run:snapshot` request with `includeLog`. The API performs the existing retirement, confinement, ownership/recovery, lifecycle decoration, cancellation, and revision-baseline checks. The worker returns snapshot and Trace events from the same canonical pass. Legacy bridges retain their existing two-method fallback. A standalone oversized log request reads only Trace and preserves the previous compact generation for subsequent verified snapshot continuity.
 
+### Release validation: coarse filesystem timestamps
+
+Linux release validation exposed same-size rewrites sharing the same ctime within a filesystem clock tick, even with nanosecond stat fields. Newly cached snapshot generations now verify their complete content digest on reuse for a conservative one-second interval, including one verification after the interval expires. This catches a rewrite even when the next request arrives after the interval. Once verified as settled, unchanged snapshots retain zero-body-read reuse. A changed generation restarts verification. The guard targets local filesystem timestamp ticks; it is not a guarantee for arbitrary remote filesystems or backward wall-clock jumps.
+
+Deterministic regression tests hold the fingerprint constant across a rewrite and check both immediate and delayed combined snapshot/Trace reads. The measurements below predate this guard: initial repeated reads during settling now hash the file, so the zero-body-read figures apply after settling and verification.
+
 ## Extended worker measurements
 
 Five samples per warm action; one initial cold snapshot. `cold-open` uses a fresh worker and includes worker startup. The many-tool fixture is 42.98 MB with 10,000 stream events and 2,000 tool results of approximately 16 KiB each, plus model responses. The small fixture is 84 KiB. All fixtures are synthetic and the filesystem is warm.

@@ -10,6 +10,27 @@ import * as canonicalKernel from '#kernel';
 const { readSessionLogFile } = canonicalKernel;
 import { fileFingerprint } from './fileFingerprint.js';
 
+// Local filesystems can assign the same ctime to multiple writes in one clock
+// tick. Verify bytes until a cached generation has survived a conservative
+// one-second interval, including one verification after that interval expires.
+const SNAPSHOT_TIMESTAMP_SETTLE_MS = 1000;
+
+function hashFilePrefix(file, size) {
+  const hash = createHash('sha256');
+  const fd = fs.openSync(file, 'r');
+  const buffer = Buffer.allocUnsafe(256 * 1024);
+  let position = 0;
+  try {
+    while (position < size) {
+      const n = fs.readSync(fd, buffer, 0, Math.min(buffer.length, size - position), position);
+      if (!n) break;
+      hash.update(buffer.subarray(0, n));
+      position += n;
+    }
+  } finally { fs.closeSync(fd); }
+  return { hash, bytes: position };
+}
+
 async function eventsFor(ctx, id) {
   const session = await ctx.sessions.read(id);
   const events = [];
@@ -187,6 +208,15 @@ export class StoredStackSnapshotReader {
       const size = fs.statSync(file).size;
       const cached = this.#files.get(file);
       const raw = this.#raw.get(file);
+      if (cached?.fingerprint === fingerprint && !cached.timestampSettled) {
+        const verified = hashFilePrefix(file, size);
+        if (verified.bytes !== size || verified.hash.digest('hex') !== cached.digest
+          || fingerprint !== fileFingerprint(file)) {
+          this.#files.delete(file); this.#raw.delete(file);
+          continue;
+        }
+        cached.timestampSettled = performance.now() >= cached.verifyAfter;
+      }
       if (cached?.fingerprint === fingerprint && (!wantEvents || raw?.fingerprint === fingerprint)) {
         this.#retain(this.#files, file, cached, this.#maxProjectionBytes);
         if (raw) this.#retain(this.#raw, file, raw, this.#maxBytes);
@@ -212,18 +242,9 @@ export class StoredStackSnapshotReader {
       if (cached?.dense && cached.fingerprint && size > cached.size
         && fingerprint.split(':').slice(0, 2).join(':') === cached.fingerprint.split(':').slice(0, 2).join(':')
         && (!wantEvents || raw?.fingerprint === cached.fingerprint)) {
-        const fd = fs.openSync(file, 'r');
-        const buffer = Buffer.allocUnsafe(256 * 1024);
-        let position = 0;
-        try {
-          while (position < cached.size) {
-            const n = fs.readSync(fd, buffer, 0, Math.min(buffer.length, cached.size - position), position);
-            if (!n) break;
-            hash.update(buffer.subarray(0, n));
-            position += n;
-          }
-        } finally { fs.closeSync(fd); }
-        if (position === cached.size && hash.copy().digest('hex') === cached.digest) {
+        const verified = hashFilePrefix(file, cached.size);
+        hash = verified.hash;
+        if (verified.bytes === cached.size && hash.copy().digest('hex') === cached.digest) {
           state = cached;
           startOffset = cached.completeBytes;
           previousSize = cached.size;
@@ -249,7 +270,8 @@ export class StoredStackSnapshotReader {
         continue;
       }
       state.dense &&= !read.problems.some(p => p.reason !== 'torn final line');
-      Object.assign(state, { fingerprint, size, completeBytes: read.completeBytes, digest: hash.digest('hex'), snapshot: null });
+      Object.assign(state, { fingerprint, size, completeBytes: read.completeBytes, digest: hash.digest('hex'), snapshot: null,
+        timestampSettled: false, verifyAfter: performance.now() + SNAPSHOT_TIMESTAMP_SETTLE_MS });
       this.#retain(this.#files, file, state, this.#maxProjectionBytes);
       if (events) this.#retain(this.#raw, file, { fingerprint, events, bytes: size }, this.#maxBytes);
       return { state, events };

@@ -46,6 +46,7 @@ test('verified suffix parses no historical stream or tool body and large logs re
  add('run.created',{});add('tool.result',{name:'read_file',content:'x'.repeat(2*1024*1024)});
  for(let i=0;i<100;i++)add('llm.stream',{text:'token '.repeat(100)});
  await check();
+ await new Promise(resolve=>setTimeout(resolve,1050));await check();
  const warm=await measure('warm',()=>reader.snapshot(root,id,kernel,{materialise:false}));assert.equal(warm.sample.syncReadBytes,0);
  let parses=0;const parse=JSON.parse;JSON.parse=(...args)=>{parses++;return parse(...args);};
  try {add('block.output',{blockId:'work',content:'new'});await reader.snapshot(root,id,kernel,{materialise:false});} finally {JSON.parse=parse;}
@@ -80,6 +81,23 @@ test('growth is not append proof: prefix rewrites, restored mtime, replacement a
  fs.writeFileSync(file+'.replacement',original);fs.renameSync(file+'.replacement',file);assert.equal((await check()).prompt,'old');
  fs.truncateSync(file,original.indexOf('\n')+1);await check();
 });
+
+for (const readAt of [0, 2000]) {
+ test(`same-tick rewrites invalidate snapshot and raw caches even when next read is at ${readAt}ms`,async t=>{
+  let now=0;t.mock.method(performance,'now',()=>now);
+  const {add,check,file,reader,root,id}=setup(t);add('run.created',{prompt:'old'});await check();
+  const stat=fs.statSync,stamp=stat(file,{bigint:true});
+  t.mock.method(fs,'statSync',(target,options)=>target===file&&options?.bigint?stamp:stat(target,options));
+  // An early successful verification must not authorize timestamp-only reuse.
+  await check();
+  fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace('old','new'));now=readAt;
+  const combined=await reader.snapshotAndLog(root,id);
+  assert.equal(combined.snapshot.prompt,'new');assert.equal(combined.log[0].data.prompt,'new');await check();
+  now+=2000;await check();
+  const warm=await measure('settled',()=>reader.snapshot(root,id,kernel,{materialise:false}));
+  assert.equal(warm.sample.syncReadBytes,0,'verified settled generations retain zero-body-read caching');
+ });
+}
 
 test('concurrent writes discard mutated folds, retry, and never poison the next snapshot',async t=>{
  const {add,check,file,reader,root,id}=setup(t,{maxBytes:0});add('run.created',{prompt:'old'});await check();add('run.named',{name:'append'});
