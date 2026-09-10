@@ -51,13 +51,26 @@ jobs:
             # session, independent of the runner service's desktop ACLs.
             $action = New-ScheduledTaskAction -Execute $env:ComSpec -Argument "/c `"$scriptPath`"" -WorkingDirectory $pwd.Path
             $testUserSid = (Get-LocalUser -Name $testUser).SID.Value
+            # Blacksmith's image does not grant batch logon to new users.
+            # Preserve existing grants and add only this ephemeral test account.
+            $policyPath = Join-Path $testRoot 'user-rights.inf'
+            secedit /export /cfg $policyPath /areas USER_RIGHTS /quiet
+            if ($LASTEXITCODE -ne 0) { throw 'Could not export user rights.' }
+            $policy = Get-Content $policyPath -Raw
+            $grant = "SeBatchLogonRight = *$testUserSid"
+            if ($policy -match '(?m)^SeBatchLogonRight\s*=([^\r\n]*)') {
+              $grant = "SeBatchLogonRight = $($Matches[1].Trim()),*$testUserSid"
+            }
+            @("[Unicode]", "Unicode=yes", "[Version]", 'signature="$CHICAGO$"', "Revision=1", "[Privilege Rights]", $grant) | Set-Content $policyPath -Encoding Unicode
+            secedit /configure /db (Join-Path $testRoot 'user-rights.sdb') /cfg $policyPath /areas USER_RIGHTS /quiet
+            if ($LASTEXITCODE -ne 0) { throw 'Could not grant batch logon to the sandbox test account.' }
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
             Register-ScheduledTask -TaskName $testUser -Action $action -Settings $settings -User $testUserSid -Password $plainPassword -RunLevel Limited -Force | Out-Null
             Start-ScheduledTask -TaskName $testUser
             $deadline = (Get-Date).AddMinutes(1)
             while (!(Test-Path $exitPath)) {
               if ((Get-Date) -gt $deadline) {
-                Get-WinEvent -LogName Microsoft-Windows-TaskScheduler/Operational -MaxEvents 15 | Format-List TimeCreated,Id,Message
+                Get-WinEvent -LogName Microsoft-Windows-TaskScheduler/Operational -MaxEvents 10 | Format-List TimeCreated,Id,Message
                 Get-ScheduledTaskInfo -TaskName $testUser | Format-List
                 Get-ScheduledTask -TaskName $testUser | Format-List
                 Get-Content $stdoutPath, $stderrPath -ErrorAction SilentlyContinue
