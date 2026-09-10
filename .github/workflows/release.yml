@@ -115,6 +115,8 @@ jobs:
           set "TEMP=$testRoot"
           set "TMP=$testRoot"
           set "TMPDIR=$testRoot"
+          powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .github/scripts/grant-sandbox-desktop.ps1 -CurrentLogon
+          if errorlevel 1 exit /b 1
           "$((Get-Command node).Source)" --test tests/executionWorldPlatform.test.js
           exit /b %ERRORLEVEL%
           "@ | Set-Content $scriptPath -Encoding ASCII

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$UserName)
+param([string]$UserName, [switch]$CurrentLogon)
 
 # Alternate-credential processes need access to their parent's window station
 # and desktop, even when they only run console tests. Grant only the temporary
@@ -10,6 +10,8 @@ using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 public static class SandboxDesktopAccess {
+    [DllImport("advapi32.dll", SetLastError=true)]
+    static extern bool GetTokenInformation(IntPtr token, int kind, IntPtr data, uint length, out uint needed);
     [DllImport("user32.dll", SetLastError=true)]
     static extern IntPtr GetProcessWindowStation();
     [DllImport("user32.dll", SetLastError=true)]
@@ -42,6 +44,24 @@ public static class SandboxDesktopAccess {
         Grant(GetProcessWindowStation(), identity, 0xF037F);
         Grant(GetThreadDesktop(GetCurrentThreadId()), identity, 0xF01FF);
     }
+    public static void GrantLogon() {
+        using (var identity = WindowsIdentity.GetCurrent()) {
+            uint size;
+            GetTokenInformation(identity.Token, 28, IntPtr.Zero, 0, out size);
+            if (size == 0) throw new Win32Exception(Marshal.GetLastWin32Error());
+            var buffer = Marshal.AllocHGlobal((int)size);
+            try {
+                if (!GetTokenInformation(identity.Token, 28, buffer, size, out size))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                if (Marshal.ReadInt32(buffer) != 1) throw new InvalidOperationException("No logon SID");
+                Grant(new SecurityIdentifier(Marshal.ReadIntPtr(buffer, IntPtr.Size)).Value);
+            } finally { Marshal.FreeHGlobal(buffer); }
+        }
+    }
 }
 '@
-[SandboxDesktopAccess]::Grant((Get-LocalUser -Name $UserName).SID.Value)
+if ($CurrentLogon) {
+    [SandboxDesktopAccess]::GrantLogon()
+} else {
+    [SandboxDesktopAccess]::Grant((Get-LocalUser -Name $UserName).SID.Value)
+}
