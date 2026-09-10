@@ -19,7 +19,6 @@ jobs:
       - name: Test real Windows sandbox as a standard user
         shell: powershell
         run: |
-          wevtutil sl Microsoft-Windows-TaskScheduler/Operational /e:true
           $testUser = 'flytsandboxci'
           # Keep this at 14 characters so legacy `net user` never prompts.
           # The account exists only for this ephemeral runner job.
@@ -34,58 +33,23 @@ jobs:
             icacls.exe $pwd.Path /grant "${testUser}:(OI)(CI)RX" | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Could not grant repository read access ($LASTEXITCODE)." }
 
+            & ./.github/scripts/grant-sandbox-desktop.ps1 -UserName $testUser
+            $securePassword = ConvertTo-SecureString $plainPassword -AsPlainText -Force
+            $credential = [pscredential]::new(".\$testUser", $securePassword)
             $stdoutPath = Join-Path $testRoot 'stdout.log'
             $stderrPath = Join-Path $testRoot 'stderr.log'
-            $exitPath = Join-Path $testRoot 'exit-code.txt'
-            $scriptPath = Join-Path $testRoot 'run-tests.cmd'
-            @"
-          @echo off
-          set "FLYT_RELEASE_SANDBOX_E2E=1"
-          set "TEMP=$testRoot"
-          set "TMP=$testRoot"
-          set "TMPDIR=$testRoot"
-          cd /d "$($pwd.Path)"
-          "$((Get-Command node).Source)" --test tests/executionWorldPlatform.test.js > "$stdoutPath" 2> "$stderrPath"
-          echo %ERRORLEVEL% > "$exitPath"
-          "@ | Set-Content $scriptPath -Encoding ASCII
-            # Batch logon gives the standard user its own noninteractive
-            # session, independent of the runner service's desktop ACLs.
-            $action = New-ScheduledTaskAction -Execute $env:ComSpec -Argument "/c `"$scriptPath`"" -WorkingDirectory $pwd.Path
-            $testUserSid = (Get-LocalUser -Name $testUser).SID.Value
-            # Blacksmith's image does not grant batch logon to new users.
-            # Preserve existing grants and add only this ephemeral test account.
-            $policyPath = Join-Path $testRoot 'user-rights.inf'
-            secedit /export /cfg $policyPath /areas USER_RIGHTS /quiet
-            if ($LASTEXITCODE -ne 0) { throw 'Could not export user rights.' }
-            $policy = Get-Content $policyPath -Raw
-            $grant = "SeBatchLogonRight = *$testUserSid"
-            if ($policy -match '(?m)^SeBatchLogonRight\s*=([^\r\n]*)') {
-              $grant = "SeBatchLogonRight = $($Matches[1].Trim()),*$testUserSid"
-            }
-            @("[Unicode]", "Unicode=yes", "[Version]", 'signature="$CHICAGO$"', "Revision=1", "[Privilege Rights]", $grant) | Set-Content $policyPath -Encoding Unicode
-            secedit /configure /db (Join-Path $testRoot 'user-rights.sdb') /cfg $policyPath /areas USER_RIGHTS /quiet
-            if ($LASTEXITCODE -ne 0) { throw 'Could not grant batch logon to the sandbox test account.' }
-            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-            Register-ScheduledTask -TaskName $testUser -Action $action -Settings $settings -User $testUserSid -Password $plainPassword -RunLevel Limited -Force | Out-Null
-            Start-ScheduledTask -TaskName $testUser
-            $deadline = (Get-Date).AddMinutes(1)
-            while (!(Test-Path $exitPath)) {
-              if ((Get-Date) -gt $deadline) {
-                Get-WinEvent -LogName Microsoft-Windows-TaskScheduler/Operational -MaxEvents 10 | Format-List TimeCreated,Id,Message
-                Get-ScheduledTaskInfo -TaskName $testUser | Format-List
-                Get-ScheduledTask -TaskName $testUser | Format-List
-                Get-Content $stdoutPath, $stderrPath -ErrorAction SilentlyContinue
-                throw 'Windows sandbox tests did not complete within five minutes.'
-              }
-              Start-Sleep -Seconds 2
-            }
+            $env:FLYT_RELEASE_SANDBOX_E2E = '1'
+            $env:TEMP = $testRoot
+            $env:TMP = $testRoot
+            $env:TMPDIR = $testRoot
+            $process = Start-Process -FilePath (Get-Command node).Source `
+              -ArgumentList @('--test', 'tests/executionWorldPlatform.test.js') `
+              -WorkingDirectory $pwd.Path -Credential $credential -WindowStyle Hidden -Wait -PassThru `
+              -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
             Get-Content $stdoutPath
             Get-Content $stderrPath
-            $testExitCode = [int](Get-Content $exitPath)
-            if ($testExitCode -ne 0) { throw "Windows sandbox tests failed ($testExitCode)." }
+            if ($process.ExitCode -ne 0) { throw "Windows sandbox tests failed ($($process.ExitCode))." }
           }
           finally {
-            Get-ScheduledTask -TaskName $testUser -ErrorAction SilentlyContinue | Stop-ScheduledTask
-            Unregister-ScheduledTask -TaskName $testUser -Confirm:$false -ErrorAction SilentlyContinue
             net user $testUser /delete | Out-Null
           }
