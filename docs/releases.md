@@ -61,7 +61,7 @@ Repository: `oluf-org/flyt`.
 
 | Name | Kind | Required value/scope |
 |---|---|---|
-| `CLOUDFLARE_API_TOKEN` | Actions secret | Worker deployment permissions for this Cloudflare account/zone |
+| `CLOUDFLARE_API_TOKEN` | Actions secret | Worker deployment permissions for this account, plus Zone → Workers Routes → Edit and Zone → Zone → Read scoped to `flyt.pro` |
 | `R2_ACCESS_KEY_ID` | Actions secret | R2 Object Read & Write access key scoped to `production` |
 | `R2_SECRET_ACCESS_KEY` | Actions secret | Its paired secret |
 | `CLOUDFLARE_ACCOUNT_ID` | Actions variable | `6143fe81aa04b0ef7babd956d371bc5c` |
@@ -75,6 +75,10 @@ The Cloudflare plugin's OAuth session is separate from GitHub Actions authentica
 For staging publishing, use another R2 token scoped only to `staging` and the same variable/secret names in a local environment or separately configured GitHub environment. The included release workflows target production; they do not silently fall back from staging credentials to production credentials.
 
 To rotate: create a replacement with equivalent scope, update the Actions secret, dispatch the Update service workflow and verify the authentication step, then revoke the old credential. Signing/Store credentials are intentionally absent until those systems are implemented.
+
+If the credential job reports `Access Denied`, verify that the exact R2 token behind the two GitHub secrets has Object Read & Write access to `production`, and save the token changes in Cloudflare. Changing the bucket variable alone does not change a token's bucket scope. If a replacement token is created, update both GitHub secrets with its matching pair.
+
+If Wrangler uploads the Worker but fails on `/zones/<zone-id>/workers/routes` with error `10000`, check the deployment token's Workers Routes permission and included zone resources. Worker script upload permission alone does not authorize route management. See [Cloudflare's route API permissions](https://developers.cloudflare.com/api/resources/workers/subresources/routes/methods/list/). After correcting permissions, rerun the failed jobs in Update service; no new app tag is required.
 
 ## Workflows
 
