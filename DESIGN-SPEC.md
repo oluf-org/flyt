@@ -179,7 +179,7 @@ The benchmark runs fixed cases against throwaway clones and keeps `landed` separ
 
 ## 9. Delivery and known gaps
 
-Vite builds the renderer, electron-builder produces installers, GitHub Actions runs CI and release builds, and packaged apps check GitHub Releases for updates. Mutable stores never use the read-only application archive.
+Vite builds the renderer, electron-builder produces installers, and GitHub Actions uploads immutable release candidates to private Cloudflare R2 storage. The read-only update Worker serves separate beta/stable channels; stable promotion is explicit and platform eligibility is enforced. New packaged apps check the stable generic HTTPS feed. Existing GitHub-based installs require a bridge release or reinstall. Signing, Store integration and beta enrollment status are documented in [docs/releases.md](docs/releases.md); the separate website consumes [docs/release-api.md](docs/release-api.md). Mutable stores never use the read-only application archive.
 
 Current architectural gaps worth preserving as explicit choices:
 

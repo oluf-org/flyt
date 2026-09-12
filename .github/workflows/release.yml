@@ -1,4 +1,4 @@
-name: Release
+name: Release candidate
 
 on:
   push:
@@ -16,36 +16,33 @@ jobs:
   prepare:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
-    permissions:
-      contents: write
     steps:
-      - name: Prepare draft release
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Require a release tag from main
         if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
         run: |
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --generate-notes --title "$GITHUB_REF_NAME"
-          fi
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
   build:
     needs: prepare
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: blacksmith-4vcpu-windows-2025
+            platform: windows
             build_args: --win --x64
           - os: blacksmith-6vcpu-macos-15
+            platform: mac
             # macos-latest is ARM today; build Intel explicitly as well so the
             # release does not silently drop existing Intel installations.
             build_args: --mac --x64 --arm64
           - os: blacksmith-4vcpu-ubuntu-2404
+            platform: linux
             build_args: --linux --x64
     steps:
       - uses: actions/checkout@v7
@@ -138,21 +135,23 @@ jobs:
         run: npx electron-builder ${{ matrix.build_args }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      # Release assets do not consume Actions artifact storage. Keep the
-      # release in draft until all three platform jobs finish their uploads.
-      - name: Upload release assets
+      - name: Install release uploader
+        if: startsWith(github.ref, 'refs/tags/')
+        run: npm ci --omit=dev --prefix services/updates
+      # Uploads remain private until the final activation job succeeds.
+      - name: Upload and verify immutable R2 assets
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RELEASE_PLATFORM: ${{ matrix.platform }}
         run: |
-          assets=()
-          while IFS= read -r -d '' file; do
-            assets+=("$file")
-          done < <(find release -maxdepth 1 -type f ! -name 'builder-debug.yml' ! -name 'builder-effective-config.yaml' -print0)
-          test "${#assets[@]}" -gt 0
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          node services/updates/scripts/release.mjs upload --directory release \
+            --version "${GITHUB_REF_NAME#v}" --platform "$RELEASE_PLATFORM" \
+            --commit "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID"
       - name: Upload artifacts for an untagged manual build
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v7
@@ -167,19 +166,28 @@ jobs:
             !release/builder-effective-config.yaml
           retention-days: 14
 
-  # Publish only after every OS has built successfully. This avoids exposing a
-  # half-populated release when one matrix leg fails after another has uploaded.
+  # All platforms must be uploaded, hash-verified and from this run before beta
+  # changes. Stable promotion is a separate manually dispatched workflow.
   publish:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
-    permissions:
-      contents: write
+    timeout-minutes: 30
+    concurrency:
+      group: flyt-r2-channel-state
+      cancel-in-progress: false
     steps:
-      - name: Publish GitHub release atomically
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci --omit=dev --prefix services/updates
+      - name: Activate complete candidate on beta
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          gh release edit "$GITHUB_REF_NAME" --draft=false
+          node services/updates/scripts/release.mjs activate --version "${GITHUB_REF_NAME#v}" \
+            --commit "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID"

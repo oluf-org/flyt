@@ -1116,7 +1116,7 @@ ipcMain.handle('titlebar:setTheme', (_e, mode, projectColor = null) => {
 // The custom title bar replaces the native menu; drop the default one.
 Menu.setApplicationMenu(null);
 
-// Auto-update via GitHub Releases (DESIGN-SPEC.md §9). Packaged builds only;
+// Auto-update via the packaged generic feed (docs/releases.md). Packaged builds only;
 // dev runs skip this entirely. Failures are logged, never fatal.
 function setupAutoUpdate() {
   if (!app.isPackaged) return;

@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "flyt-updates",
+  "main": "src/worker.js",
+  "account_id": "6143fe81aa04b0ef7babd956d371bc5c",
+  "compatibility_date": "2026-09-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "routes": [{ "pattern": "updates.flyt.pro", "custom_domain": true }],
+  "r2_buckets": [{ "binding": "RELEASES", "bucket_name": "production" }],
+  "env": {
+    "staging": {
+      "name": "flyt-updates-staging",
+      "routes": [{ "pattern": "updates-staging.flyt.pro", "custom_domain": true }],
+      "r2_buckets": [{ "binding": "RELEASES", "bucket_name": "staging" }]
+    }
+  }
+}

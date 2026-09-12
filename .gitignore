@@ -8,6 +8,8 @@ kernel/native/**/obj/
 /release-ci*/
 runs/
 .env
+.dev.vars*
+.wrangler/
 settings.json
 # Runtime flow store. The four tiered pipelines are built from code
 # (core/flowstore.js compatibility seeding), and anything else here is the user's

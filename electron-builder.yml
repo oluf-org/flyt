@@ -37,9 +37,9 @@ asarUnpack:
   - node_modules/@img/**
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 publish:
-  provider: github
-  owner: oluf-org
-  repo: flyt
+  provider: generic
+  url: https://updates.flyt.pro/stable/
+  useMultipleRangeRequest: false
 # Icons are generated from the in-app mark's own geometry by
 # `npm run icons` (scripts/make-icons.mjs) — sage on transparent. Without these
 # entries packaged builds ship the default Electron icon.

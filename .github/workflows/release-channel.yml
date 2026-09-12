@@ -1,0 +1,55 @@
+name: Promote or withdraw release
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        options: [promote, withdraw]
+        required: true
+      version:
+        description: Existing version, without v prefix
+        type: string
+        required: true
+      platforms:
+        description: Comma-separated windows,mac,linux. Stable currently supports linux only.
+        type: string
+        default: linux
+        required: true
+      channel:
+        description: Withdrawal channel (promotion always targets stable)
+        type: choice
+        options: [stable, beta]
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flyt-r2-channel-state
+  cancel-in-progress: false
+
+jobs:
+  change:
+    if: github.ref == 'refs/heads/main'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci --omit=dev --prefix services/updates
+      - name: Verify artifacts and change channel
+        env:
+          RELEASE_ACTION: ${{ inputs.action }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_PLATFORMS: ${{ inputs.platforms }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          node services/updates/scripts/release.mjs "$RELEASE_ACTION" \
+            --version "$RELEASE_VERSION" --platforms "$RELEASE_PLATFORMS" --channel "$RELEASE_CHANNEL"
