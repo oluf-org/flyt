@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
-import { changeChannel, prepareRecord, uploadPlatform } from '../scripts/release.mjs';
+import { Storage, changeChannel, prepareRecord, uploadPlatform } from '../scripts/release.mjs';
 import { STATE_KEY, emptyState, releaseKey, assetKey } from '../src/model.js';
 
 export const content = Buffer.from('0123456789');
@@ -25,6 +25,21 @@ class MemoryStorage {
   add(release) { this.values.set(releaseKey(release.version, release.platform), release); for (const asset of release.assets) this.binaries.set(assetKey(release.version, release.platform, asset.name), asset.sha512); }
 }
 const activate = (store, version = '2.1.23', platforms = ['linux']) => changeChannel(store, { action: 'activate', version, platforms, commit: 'a'.repeat(40), runId: '123' });
+
+test('credential probe preserves the original failure when cleanup also fails', async t => {
+  const store = Object.create(Storage.prototype);
+  const calls = [];
+  store.bucket = 'test';
+  store.client = { async send(command) {
+    calls.push(command);
+    throw new Error(command.constructor.name === 'DeleteObjectCommand' ? 'Cleanup denied' : 'Original write denied');
+  } };
+  const log = t.mock.method(console, 'error', () => {});
+  await assert.rejects(store.check(), /conditional creation: Original write denied/);
+  assert.deepEqual(calls.map(c => c.constructor.name), ['PutObjectCommand', 'DeleteObjectCommand']);
+  assert.equal(calls[0].input.Key, calls[1].input.Key);
+  assert.match(log.mock.calls[0].arguments[0], /Cleanup denied/);
+});
 
 test('candidate -> promotion -> next candidate preserves stable and history', async () => {
   const store = new MemoryStorage(); store.add(record());

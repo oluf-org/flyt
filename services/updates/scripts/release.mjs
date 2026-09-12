@@ -70,6 +70,8 @@ export class Storage {
   async check() {
     // Exercise read/write and conditional publication without touching releases or channels.
     const key = `flyt/checks/${randomUUID()}.json`;
+    let stage = 'conditional creation';
+    let failure;
     try {
       await this.immutable(key, { probe: 1 });
       let rejected = false;
@@ -80,14 +82,24 @@ export class Storage {
       if (!rejected) throw new Error('R2 did not enforce conditional creation');
       const initial = await this.read(key);
       if (initial.value.probe !== 1) throw new Error('R2 conditional creation changed existing bytes');
+      stage = 'conditional replacement';
       try {
         await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: '{"probe":3}', IfMatch: '"wrong-etag"' }));
         throw new Error('R2 did not enforce conditional replacement');
       } catch (err) { if (!conflict(err)) throw err; }
       await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: '{"probe":2}', IfMatch: initial.etag }));
       if ((await this.read(key)).value.probe !== 2) throw new Error('R2 replacement verification failed');
+    } catch (err) {
+      failure = new Error(`R2 probe failed during ${stage}: ${err.message}`, { cause: err });
+      throw failure;
     } finally {
-      await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+      try {
+        await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+      } catch (err) {
+        const message = `R2 probe cleanup failed for ${key}: ${err.message}`;
+        if (!failure) throw new Error(message, { cause: err });
+        console.error(message); // Preserve the original failure if cleanup also fails.
+      }
     }
   }
 }

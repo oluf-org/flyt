@@ -81,7 +81,7 @@ To rotate: create a replacement with equivalent scope, update the Actions secret
 ### Update service (`.github/workflows/updates.yml`)
 
 1. On relevant PRs: install the locked service dependencies, generate bindings, type-check, run release/Worker tests, and perform a deployment dry run. PRs receive no deployment secrets.
-2. On relevant pushes to main or manual dispatch on main: run the same checks, verify production S3 credentials, deploy staging, smoke-test staging, deploy production, smoke-test production.
+2. On relevant pushes to main or manual dispatch on main: run the same checks, then independently verify production S3 credentials and deploy the read-only service. Deployment proceeds staging → staging smoke test → production → production smoke test. The overall workflow fails if either credentials or deployment fails; successful Worker deployment alone does not establish release-upload readiness.
 3. Deployment does not publish any app release or modify channel state.
 
 ### Release candidate (`.github/workflows/release.yml`)
