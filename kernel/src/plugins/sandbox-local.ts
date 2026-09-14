@@ -63,7 +63,8 @@ export function createLocalSandbox(
     }
     if (process.platform === 'linux') {
       const args = [
-        executable, '--die-with-parent', '--new-session', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev',
+        // Namespace teardown also kills children detached by --new-session.
+        executable, '--die-with-parent', '--unshare-pid', '--new-session', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev',
         ...(policy.mode === 'workspace-write' ? ['--bind', policy.workspaceRoot, policy.workspaceRoot, '--bind', policy.privateTemp, policy.privateTemp] : []),
         '--chdir', policy.workspaceRoot, '--', ...argv,
       ];

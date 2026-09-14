@@ -49,7 +49,7 @@ test('generated workers share persistent history; failed tools and successive ed
   assert.equal(report.files[0].status, 'created');
   assert.equal(report.files[0].added, 2);
   assert.deepEqual(report.files[0].tools, ['create_file', 'bash']);
-  assert.equal(resolveChangedRepoPath(store, 'parent', 'new.txt'), path.join(workspace, 'new.txt'));
+  assert.equal(resolveChangedRepoPath(store, 'parent', 'new.txt'), fs.realpathSync(path.join(workspace, 'new.txt')));
   assert.throws(() => resolveChangedRepoPath(store, 'parent', '../outside.txt'), /not recorded/);
   await tracker.observe('parent', 'delete_file', 'worker', async () => fs.unlinkSync(path.join(workspace, 'new.txt')));
   assert.equal(readRepoChanges(store, 'parent').files[0].status, 'created then deleted');

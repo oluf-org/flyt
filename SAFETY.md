@@ -15,6 +15,14 @@ packaged write-restricted-token, ACL capability, and kill-on-close Job Object
 runner and reports `partial` enforcement. Flyt refuses confined execution when
 elevated or when the target filesystem cannot express the required ACLs.
 
+The Windows runner includes a private-pipe compatibility adapter so Node/libuv
+can launch piped children under the same restricted token. New pipes without
+an explicit descriptor use the token's default DACL and a per-invocation IPC
+capability with no filesystem grants. Both x64 and x86 descendants retain the
+existing write restrictions. Adapter initialization failure blocks launch.
+Linux uses a private PID namespace so cancelling the sandbox tears down its
+descendants even when they start a separate session.
+
 This is file-effect confinement, not a general machine-security boundary.
 Networking is ambient in every mode. The sandbox does not promise read secrecy,
 network isolation, IPC/process isolation, syscall or kernel isolation, defense
@@ -35,7 +43,7 @@ machine's installed sandbox backend.
 
 - Linux: install Bubblewrap and enable the user-namespace support it requires.
 - macOS: ensure `/usr/bin/sandbox-exec` is present and accepts the generated Seatbelt profile.
-- Windows: do not run Flyt elevated; use NTFS; reinstall if `flyt-sandbox-win.exe` is missing.
+- Windows: do not run Flyt elevated; use NTFS; reinstall if the sandbox runner or either `flyt-sandbox-pipes` DLL is missing.
 - Run `flyt doctor --refresh` to repeat the functional probe after fixing the host.
 
 Forwarded environment names are an explicit settings allow-list. Credential-

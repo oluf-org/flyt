@@ -85,6 +85,7 @@ internal static class Program
             throw new InvalidOperationException("Windows did not provide the logon identity required for confined command tools in this sign-in session");
         var workspaceSid = SidFromBytes(SHA256.HashData(Encoding.UTF8.GetBytes("flyt:workspace:v1:" + Canonical(workspace).ToUpperInvariant())));
         var tempSid = SidFromBytes(RandomNumberGenerator.GetBytes(32));
+        var ipcSid = SidFromBytes(RandomNumberGenerator.GetBytes(32));
         var granted = new List<(string Path, SecurityIdentifier Sid)>();
         try
         {
@@ -92,7 +93,7 @@ internal static class Program
             // objects usable; the private SIDs are the writable path grants.
             // This is still partial enforcement because ambient World ACEs
             // also satisfy the second write access check.
-            var restrictionSids = new List<SecurityIdentifier> { logonSid, worldSid };
+            var restrictionSids = new List<SecurityIdentifier> { logonSid, worldSid, ipcSid };
             if (mode == "workspace-write")
             {
                 Stage = "workspace ACL"; AddWriteAce(workspace, workspaceSid); granted.Add((workspace, workspaceSid));
@@ -101,7 +102,7 @@ internal static class Program
                 Environment.SetEnvironmentVariable("TEMP", temp);
                 Environment.SetEnvironmentVariable("TMP", temp);
             }
-            Stage = "restricted token"; using var restricted = RestrictedToken(restrictionSids, mode == "workspace-write" ? tempSid : worldSid);
+            Stage = "restricted token"; using var restricted = RestrictedToken(restrictionSids, ipcSid);
             Stage = "process launch";
             return StartOwned(restricted.DangerousGetHandle(), command);
         }
@@ -192,12 +193,12 @@ internal static class Program
     private static void AddDefaultDaclGrant(IntPtr token, SecurityIdentifier sid)
     {
         // Preserve the source token's ordinary default DACL and add only the
-        // revocable per-call temp capability. Replacing the DACL breaks runtime
+        // unique per-call IPC capability. Replacing the DACL breaks runtime
         // initialization, while adding the standing workspace SID would let
         // unrelated calls in the same workspace open one another's objects.
-        // CreateNamedPipe with no explicit descriptor uses a separate Windows
-        // template, NOT this token DACL. Do not add the user's SID as a
-        // restricting SID to fix libuv pipes: that defeats filesystem denial.
+        // The pipe adapter makes new named pipes use this DACL as well. The
+        // IPC SID has no filesystem grants and is shared only by this call's
+        // descendants. Never add the user's SID to the restricting SID list.
         GetTokenInformation(token, 6, IntPtr.Zero, 0, out var infoBytes);
         if (infoBytes == 0) ThrowWin32("GetTokenInformation(TokenDefaultDacl size)");
         var info = Marshal.AllocHGlobal((int)infoBytes);
@@ -276,6 +277,9 @@ internal static class Program
         using var processHandle = new SafeKernel(process.hProcess);
         using var threadHandle = new SafeKernel(process.hThread);
         if (!AssignProcessToJobObject(job.DangerousGetHandle(), process.hProcess)) ThrowWin32("AssignProcessToJobObject");
+        Stage = "private pipe compatibility";
+        if (!FlytAttachPipeCompatibility(process.hProcess)) ThrowWin32("FlytAttachPipeCompatibility");
+        Stage = "process execution";
         if (ResumeThread(process.hThread) == uint.MaxValue) ThrowWin32("ResumeThread");
         WaitForSingleObject(process.hProcess, INFINITE);
         if (!GetExitCodeProcess(process.hProcess, out var code)) ThrowWin32("GetExitCodeProcess");
@@ -337,6 +341,9 @@ internal static class Program
     [DllImport("kernel32", SetLastError = true)] private static extern bool SetInformationJobObject(IntPtr hJob, int infoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
     [DllImport("kernel32", SetLastError = true)] private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
     [DllImport("kernel32", SetLastError = true)] private static extern uint ResumeThread(IntPtr hThread);
+    [DllImport("flyt-sandbox-pipes64", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.ApplicationDirectory | DllImportSearchPath.System32)]
+    private static extern bool FlytAttachPipeCompatibility(IntPtr process);
     [DllImport("kernel32", SetLastError = true)] private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
     [DllImport("kernel32", SetLastError = true)] private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
     [DllImport("kernel32", SetLastError = true)] private static extern IntPtr GetStdHandle(int nStdHandle);

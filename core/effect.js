@@ -177,7 +177,9 @@ const isGitRepo = root => {
     // an ignored directory. Parent-relative Git paths cannot describe effects
     // in that bound project; use its bounded file scan instead.
     const top = gitOut(['rev-parse', '--show-toplevel'], root);
-    return fs.realpathSync(top) === fs.realpathSync(root);
+    // Native realpath expands Windows 8.3 aliases used by runner TEMP paths;
+    // path.relative also respects Windows drive/path casing.
+    return path.relative(fs.realpathSync.native(top), fs.realpathSync.native(root)) === '';
   } catch { return false; }
 };
 

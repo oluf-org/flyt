@@ -64,9 +64,11 @@ export default async function verifyPackagedApp(context) {
   const archive = path.join(resources, 'app.asar');
   verifyPackagedArchive(archive);
   if (context.electronPlatformName === 'win32') {
-    const runner = path.join(resources, 'flyt-sandbox-win.exe');
-    try { fs.accessSync(runner); }
-    catch { throw new Error(`Packaged app is missing the Windows sandbox runner: ${runner}`); }
+    for (const name of ['flyt-sandbox-win.exe', 'flyt-sandbox-pipes64.dll', 'flyt-sandbox-pipes32.dll']) {
+      const runner = path.join(resources, name);
+      try { fs.accessSync(runner); }
+      catch { throw new Error(`Packaged app is missing a Windows sandbox component: ${runner}`); }
+    }
   }
   console.log(`  • verified packaged app  requiredFiles=${REQUIRED_PACKAGE_ENTRIES.length}`);
 }

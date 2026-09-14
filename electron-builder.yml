@@ -48,6 +48,10 @@ win:
   extraResources:
     - from: kernel/native/windows/Flyt.Sandbox.Runner/bin/Release/net8.0-windows/win-x64/publish/flyt-sandbox-win.exe
       to: flyt-sandbox-win.exe
+    - from: kernel/native/windows/Flyt.Sandbox.Runner/bin/Release/net8.0-windows/win-x64/publish/flyt-sandbox-pipes64.dll
+      to: flyt-sandbox-pipes64.dll
+    - from: kernel/native/windows/Flyt.Sandbox.Runner/bin/Release/net8.0-windows/win-x64/publish/flyt-sandbox-pipes32.dll
+      to: flyt-sandbox-pipes32.dll
   target:
     - nsis
 nsis:

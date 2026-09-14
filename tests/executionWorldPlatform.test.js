@@ -131,6 +131,56 @@ test('the probe reports whether the native Node test runner can use piped childr
   } finally { await world.dispose(); }
 });
 
+test('Windows piped grandchildren retain file restrictions across native and 32-bit shell launches', { skip: process.platform !== 'win32' }, async t => {
+  for (const mode of ['workspace-write', 'read-only']) {
+    const local = await localWorld(t, mode);
+    if (!local) return;
+    const { root, world } = local;
+    const outsideRoot = temp('flyt-piped-outside-');
+    try {
+      const outside = path.join(outsideRoot, 'denied.txt');
+      const inside = path.join(root, 'child.txt');
+      const leaf = `const f=require('fs');let inside=false,outside=false;try{f.writeFileSync(${JSON.stringify(inside)},'ok');inside=true}catch{};try{f.writeFileSync(${JSON.stringify(outside)},'bad');outside=true}catch{};console.log(JSON.stringify({inside,outside}))`;
+      const script = `const c=require('child_process');const r=c.spawnSync(process.execPath,['-e',${JSON.stringify(leaf)}],{encoding:'utf8'});if(r.error)throw r.error;process.stdout.write(r.stdout);process.stderr.write(r.stderr);process.exit(r.status??1)`;
+      const policy = await world.sandboxPolicy.resolve({ runId: 'piped-child', callId: mode, tool: 'platform-test', attended: false });
+      const handle = await spawnConfined(world, policy, script);
+      assert.equal((await handle.done).exitCode, 0, handle.stderr.text);
+      assert.deepEqual(JSON.parse(handle.stdout.text), { inside: mode === 'workspace-write', outside: false });
+      assert.equal(fs.existsSync(outside), false);
+      // cmd.exe is a 32-bit descendant, which then starts the ordinary 64-bit
+      // Node executable. The adapter must cross both architecture transitions.
+      const shell32 = path.join(process.env.SystemRoot, 'SysWOW64', 'cmd.exe');
+      const mixed = await world.shell.run(`"${shell32}" /d /s /c "\"${process.execPath}\" -e \"require('child_process').execFileSync(process.execPath,['-e','console.log(42)'],{stdio:'pipe'});console.log('mixed-pipes-ok')\""`, {
+        execution: { owner: { runId: 'mixed-child', callId: mode }, tool: 'bash', attended: false }, timeoutMs: 15_000,
+      });
+      assert.equal(mixed.code, 0, mixed.stderr + mixed.stdout);
+      assert.match(mixed.stdout, /mixed-pipes-ok/);
+      assert.equal(mixed.sandbox.escalated, false);
+    } finally { await world.dispose(); fs.rmSync(outsideRoot, { recursive: true, force: true }); }
+  }
+});
+
+test('Windows default pipes work for their own descendants and deny a sibling invocation', { skip: process.platform !== 'win32' }, async t => {
+  const local = await localWorld(t);
+  if (!local) return;
+  const { world } = local;
+  try {
+    const pipe = `\\\\.\\pipe\\flyt-private-${process.pid}-${Date.now()}`;
+    const first = await world.sandboxPolicy.resolve({ runId: 'pipes', callId: 'first', tool: 'platform-test', attended: false });
+    const second = await world.sandboxPolicy.resolve({ runId: 'pipes', callId: 'second', tool: 'platform-test', attended: false });
+    const ownClient = `const n=require('net');const c=n.connect(${JSON.stringify(pipe)},()=>{console.log('own-connected');c.end()});c.on('error',e=>{console.error(e);process.exit(1)})`;
+    const script = `require('net').createServer(s=>s.end()).listen(${JSON.stringify(pipe)},()=>{const c=require('child_process').spawnSync(process.execPath,['-e',${JSON.stringify(ownClient)}],{encoding:'utf8'});if(c.status!==0)throw new Error(c.stderr);console.log('pipe-ready')});`;
+    const owner = await spawnConfined(world, first, script);
+    const deadline = Date.now() + 5_000;
+    while (!owner.stdout.text.includes('pipe-ready') && Date.now() < deadline) await delay(20);
+    assert.match(owner.stdout.text, /pipe-ready/, owner.stderr.text);
+    const sibling = await spawnConfined(world, second, `const c=require('net').connect(${JSON.stringify(pipe)},()=>{console.log('unexpected access');c.end();process.exitCode=1});c.on('error',e=>{console.log(e.code);process.exitCode=['EPERM','EACCES'].includes(e.code)?0:2})`);
+    assert.equal((await sibling.done).exitCode, 0, sibling.stderr.text + sibling.stdout.text);
+    assert.match(sibling.stdout.text, /EPERM|EACCES/);
+    await owner.terminate('pipe test complete');
+  } finally { await world.dispose(); }
+});
+
 test('the installed platform backend permits workspace writes and denies external writes', async t => {
   const local = await localWorld(t);
   if (!local) return;
