@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { collectReleaseAssets, verifyExistingAssets } from '../scripts/publish-github-release.mjs';
+import { collectReleaseAssets, verifyExistingAssets, findOrCreateRelease } from '../scripts/publish-github-release.mjs';
 
 test('GitHub publication requires every platform and generates checksums for the actual bytes', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'flyt-release-'));
@@ -31,4 +31,27 @@ test('GitHub reruns reuse identical draft assets and refuse changed or incomplet
   assert.throws(() => verifyExistingAssets(local, [], { published: true }), /Published release is incomplete/);
   assert.throws(() => verifyExistingAssets(local, [{ ...existing[0], digest: 'sha256:changed' }]), /Immutable GitHub asset differs/);
   assert.throws(() => verifyExistingAssets(local, [{ ...existing[0], state: 'starter' }]), /Immutable GitHub asset differs/);
+});
+
+test('first publication retrieves the new draft through the authenticated release list', () => {
+  const draft = { id: 123, tag_name: 'v2.1.23', draft: true };
+  let created = false;
+  const calls = [];
+  const gh = args => {
+    calls.push(args);
+    if (args[0] === 'api') {
+      assert.equal(args.at(-1), 'repos/example/flyt/releases?per_page=100');
+      return JSON.stringify([created ? [draft] : []]);
+    }
+    assert.deepEqual(args.slice(0, 3), ['release', 'create', 'v2.1.23']);
+    assert.ok(args.includes('--draft'));
+    assert.ok(args.includes('--verify-tag'));
+    created = true;
+    return '';
+  };
+  const options = { repo: 'example/flyt', tag: 'v2.1.23', version: '2.1.23', notesArgs: ['--generate-notes'] };
+  assert.deepEqual(findOrCreateRelease(gh, options), draft);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(findOrCreateRelease(gh, options), draft);
+  assert.equal(calls.length, 4, 'rerunning publication reuses the draft');
 });

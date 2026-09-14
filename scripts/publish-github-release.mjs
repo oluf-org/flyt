@@ -50,6 +50,20 @@ export function verifyExistingAssets(local, remote, { published = false } = {}) 
   return missing;
 }
 
+export function findOrCreateRelease(gh, { repo, tag, version, notesArgs }) {
+  // The by-tag REST endpoint returns 404 for drafts. The authenticated release
+  // list includes drafts, including the one just created by this workflow.
+  const find = () => JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repo}/releases?per_page=100`]))
+    .flat().find(candidate => candidate.tag_name === tag);
+  let release = find();
+  if (!release) {
+    gh(['release', 'create', tag, '--repo', repo, '--verify-tag', '--draft', '--title', `Flyt ${version}`, ...notesArgs]);
+    release = find();
+    if (!release) throw new Error(`Created release ${tag} is not visible in the authenticated release list`);
+  }
+  return release;
+}
+
 async function main() {
   const { version } = JSON.parse(await readFile('package.json', 'utf8'));
   const tag = process.env.GITHUB_REF_NAME;
@@ -57,16 +71,9 @@ async function main() {
   if (tag !== `v${version}` || !repo) throw new Error('Release tag, package version and repository are required');
   const assets = await collectReleaseAssets('release', version);
   const gh = args => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
-  const api = suffix => JSON.parse(gh(['api', `repos/${repo}/${suffix}`]));
-  // Listing distinguishes absence from an authentication/network failure.
-  const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repo}/releases?per_page=100`]));
-  let release = pages.flat().find(candidate => candidate.tag_name === tag);
-  if (!release) {
-    const notes = path.join('docs', 'release-notes', `${version}.md`);
-    const notesArgs = await stat(notes).then(() => ['--notes-file', notes], () => ['--generate-notes']);
-    gh(['release', 'create', tag, '--repo', repo, '--verify-tag', '--draft', '--title', `Flyt ${version}`, ...notesArgs]);
-    release = api(`releases/tags/${tag}`);
-  }
+  const notes = path.join('docs', 'release-notes', `${version}.md`);
+  const notesArgs = await stat(notes).then(() => ['--notes-file', notes], () => ['--generate-notes']);
+  const release = findOrCreateRelease(gh, { repo, tag, version, notesArgs });
   const remote = () => JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repo}/releases/${release.id}/assets?per_page=100`])).flat();
   const missing = verifyExistingAssets(assets, remote(), { published: !release.draft });
   for (const asset of missing) {
